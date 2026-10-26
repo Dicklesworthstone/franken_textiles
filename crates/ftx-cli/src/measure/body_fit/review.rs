@@ -61,6 +61,15 @@ impl Bundle {
     }
 
     pub(super) fn publish(self, path: &Path, report: &Value) -> Result<(), Refusal> {
+        self.publish_report(path, report, "fit.json")
+    }
+
+    pub(super) fn publish_report(
+        self,
+        path: &Path,
+        report: &Value,
+        report_name: &str,
+    ) -> Result<(), Refusal> {
         // Prepare every byte before reserving output; a completion report is always the last write.
         let report_bytes = workspace::json_bytes(report)?;
         if self
@@ -87,8 +96,153 @@ impl Bundle {
         for (name, bytes) in self.files {
             workspace::write_new(&path.join(name), &bytes)?;
         }
-        workspace::write_new(&path.join("fit.json"), &report_bytes)
+        workspace::write_new(&path.join(report_name), &report_bytes)
     }
+}
+
+fn source_image(
+    bundle: &mut Bundle,
+    capture: &Value,
+    frame: &FitFrame,
+    i: usize,
+) -> Result<Value, Refusal> {
+    let record = capture["frames"]
+        .as_array()
+        .and_then(|frames| {
+            frames
+                .iter()
+                .find(|entry| entry["frame"] == json!(frame.frame))
+        })
+        .ok_or_else(|| bad_input("capture review has no matching source frame"))?;
+    let manifest = capture["selection"]["source_manifest"]
+        .as_str()
+        .ok_or_else(|| bad_input("capture review has no source manifest"))?;
+    let base = Path::new(manifest)
+        .parent()
+        .ok_or_else(|| bad_input("capture manifest has no parent"))?;
+    let source = &record["source"];
+    let name = source["image"]
+        .as_str()
+        .ok_or_else(|| bad_input("capture source image is missing"))?;
+    let bytes = super::super::video::read_limited(&base.join(name), 128 * 1024 * 1024)?;
+    if json!(sha256_hex(&bytes)) != source["image_sha256"] {
+        return Err(bad_input(
+            "capture image changed during preparation; no review was published",
+        ));
+    }
+    let extension = if bytes.starts_with(&[0xff, 0xd8]) {
+        "jpg"
+    } else {
+        "png"
+    };
+    bundle.push(format!("source-{i:04}.{extension}"), bytes)
+}
+
+pub(super) fn prepare_capture(
+    request: &super::Request,
+    capture: &Value,
+    original: &[u8],
+    replay: &Value,
+) -> Result<Bundle, Refusal> {
+    let mut bundle = Bundle {
+        manifest: Value::Null,
+        files: Vec::new(),
+    };
+    let original_entry = bundle.push("original-input.json".into(), original.to_vec())?;
+    let replay_entry = bundle.push("capture.json".into(), workspace::json_bytes(replay)?)?;
+    let mut page = String::from(
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src 'self'; style-src 'unsafe-inline'\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+         <title>Review capture before fitting</title>\
+         <style>body{font:16px system-ui;max-width:1100px;margin:2em auto;padding:0 1em}svg{width:100%;max-height:75vh;border:1px solid #888}\
+         section{margin:2em 0}td,th{padding:.4em;text-align:left;overflow-wrap:anywhere}table{width:100%;table-layout:fixed}p{line-height:1.5}</style>\
+         <h1>Review capture before fitting</h1>\
+         <p>PREPARED means current source selection and sheet cameras passed their checks. No body model was loaded or fitted. \
+         Orange points are FIT; blue points are CHECK (held out). Review names, target definitions, visibility and coordinates \
+         on each original image. Edit the capture input for mistakes, then generate a new review directory. \
+         No points or partitions were inferred. Pixels retain their stored orientation and lens distortion.</p>\
+         <p>This does not establish anatomical correspondence, observability, physical accuracy, READY measurements or garment fit. \
+         Supplied silhouette constraints are retained in the input but are not reviewed by these keypoint overlays.</p>\
+         <p><a href=\"capture.json\">Input for fit-body (requires original source files)</a> · \
+         <a href=\"original-input.json\">Original input bytes</a> · <a href=\"review.json\">Complete preparation evidence</a></p>",
+    );
+    let mut frames = Vec::new();
+    for (i, frame) in request.fit.frames.iter().enumerate() {
+        let [w, h] = frame.image_size_px;
+        if frame.keypoints.len() > 128 {
+            return Err(bad_input(
+                "capture review supports at most 128 keypoints per frame",
+            ));
+        }
+        let photograph = source_image(&mut bundle, capture, frame, i)?;
+        let name = photograph["file"].as_str().unwrap();
+        let mut svg = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {h}\" role=\"img\">\
+            <title>{} @ {} us: supplied keypoints before fitting</title>\
+            <image href=\"{name}\" width=\"{w}\" height=\"{h}\" preserveAspectRatio=\"none\"/>",
+            label(&frame.frame.stream),
+            frame.frame.timestamp_us
+        );
+        let mut rows = String::new();
+        let mut names = std::collections::BTreeSet::new();
+        for point in &frame.keypoints {
+            let target =
+                request.model.keypoints.get(&point.name).ok_or_else(|| {
+                    bad_input("capture review has an unknown model correspondence")
+                })?;
+            let p = point.pixel_px;
+            if !names.insert(&point.name)
+                || point.name.trim().is_empty()
+                || point.name.len() > 4096
+                || !p.is_finite()
+                || p.x < 0.0
+                || p.y < 0.0
+                || p.x > f64::from(w - 1)
+                || p.y > f64::from(h - 1)
+                || !point.sigma_px.is_finite()
+                || !(1e-6..=1e6).contains(&point.sigma_px)
+            {
+                return Err(bad_input(
+                    "capture review needs unique named keypoints, valid pixels and positive sigmas",
+                ));
+            }
+            frame.camera.ray(p)?;
+            let (partition, color) = match point.partition {
+                ftx_measure::triangulate::Partition::Fit => ("FIT", "#b45309"),
+                ftx_measure::triangulate::Partition::HeldOut => ("CHECK", "#0369a1"),
+            };
+            let target =
+                label(&serde_json::to_string(target).map_err(|e| bad_input(e.to_string()))?);
+            let point_name = label(&point.name);
+            write!(svg, "<g data-partition=\"{partition}\"><title>{point_name}: {partition}; sigma {} px; {target}</title>\
+                <circle cx=\"{}\" cy=\"{}\" r=\"5\" fill=\"none\" stroke=\"{color}\" stroke-width=\"2\"/>\
+                <text x=\"{}\" y=\"{}\" fill=\"{color}\" font-family=\"sans-serif\" font-size=\"12\">{point_name} ({partition})</text></g>",
+                point.sigma_px, p.x, p.y, p.x + 7.0, p.y - 7.0).unwrap();
+            write!(rows, "<tr><td>{point_name}</td><td>{partition}</td><td>{}, {}</td><td>{}</td><td>{target}</td></tr>",
+                p.x, p.y, point.sigma_px).unwrap();
+        }
+        svg.push_str("</svg>\n");
+        let svg_name = format!("frame-{i:04}.svg");
+        let overlay = bundle.push(svg_name.clone(), svg.as_bytes().to_vec())?;
+        write!(page, "<section><h2>{} @ {} us</h2><p>{w} × {h} stored pixels; {}° clockwise rotation already applied. \
+            <a href=\"{svg_name}\">Keypoint SVG</a></p>{svg}\
+            <table><thead><tr><th>Name</th><th>Partition</th><th>Pixel x, y</th><th>Sigma px</th><th>Model target</th></tr></thead><tbody>{rows}</tbody></table></section>",
+            label(&frame.frame.stream), frame.frame.timestamp_us, frame.rotation_cw_deg).unwrap();
+        frames.push(
+            json!({"frame":frame.frame,"image_size_px":frame.image_size_px,
+            "rotation_cw_deg":frame.rotation_cw_deg,"keypoints":frame.keypoints,
+            "source_image":photograph,"keypoint_svg":overlay}),
+        );
+    }
+    page.push_str("</html>\n");
+    let viewer = bundle.push("index.html".into(), page.into_bytes())?;
+    bundle.manifest = json!({"schema":"ftx-capture-review/1","status":"PREPARED",
+        "body_model_loaded":false,"body_fitted":false,"input_sha256":sha256_hex(original),
+        "model_sha256":request.model.model_sha256,"original_input":original_entry,
+        "replay_input":replay_entry,"viewer":viewer,"frames":frames,"capture_input":capture,
+        "no_claim":"Source/camera preparation and supplied keypoint visualization only. No anatomy, silhouette, observability, physical camera, READY measurement or real-wearer fit approval."});
+    Ok(bundle)
 }
 
 fn obj(vertices: &[Vec3], faces: &[[u32; 3]]) -> Result<Vec<u8>, Refusal> {
@@ -386,38 +540,7 @@ pub(super) fn prepare(
             obj(&body.vertices, &adapter.model.data().faces)?,
         )?;
         let photograph = capture
-            .map(|capture| {
-                let record = capture["frames"]
-                    .as_array()
-                    .and_then(|frames| {
-                        frames
-                            .iter()
-                            .find(|entry| entry["frame"] == json!(frame.frame))
-                    })
-                    .ok_or_else(|| bad_input("capture review has no matching source frame"))?;
-                let manifest = capture["selection"]["source_manifest"]
-                    .as_str()
-                    .ok_or_else(|| bad_input("capture review has no source manifest"))?;
-                let base = Path::new(manifest)
-                    .parent()
-                    .ok_or_else(|| bad_input("capture manifest has no parent"))?;
-                let source = &record["source"];
-                let name = source["image"]
-                    .as_str()
-                    .ok_or_else(|| bad_input("capture source image is missing"))?;
-                let bytes = super::super::video::read_limited(&base.join(name), 128 * 1024 * 1024)?;
-                if json!(sha256_hex(&bytes)) != source["image_sha256"] {
-                    return Err(bad_input(
-                        "capture image changed during fitting; no review was published",
-                    ));
-                }
-                let extension = if bytes.starts_with(&[0xff, 0xd8]) {
-                    "jpg"
-                } else {
-                    "png"
-                };
-                bundle.push(format!("source-{i:04}.{extension}"), bytes)
-            })
+            .map(|capture| source_image(&mut bundle, capture, frame, i))
             .transpose()?;
         let (svg, projected) = projections(
             adapter,

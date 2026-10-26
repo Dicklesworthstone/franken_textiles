@@ -16,6 +16,31 @@ photo URL, runs an external detector or uploads data. `model.model_sha256` must 
 SHA-256 of the exact converted file. The reader also verifies the file's individual array
 hashes. Keep private photos, measurements and fitted bodies outside the repository.
 
+Before running the model fit on a reviewed capture input, inspect its actual images and named
+points locally:
+
+```sh
+ftx measure capture-review capture/input.json --out capture-review-001 --json
+# Open capture-review-001/index.html and review every FIT/CHECK point and model target.
+ftx measure fit-body capture-review-001/capture.json --model /path/to/anny.ftxbody \
+    --mesh-out fitted-review-001 --json
+```
+
+The first command needs no body model. It reruns selection and camera checks, copies the exact
+selected images, and overlays the supplied points at stored image coordinates without another
+rotation or rectification. The table shows every name, FIT/CHECK assignment, pixel, sigma and
+authored model target. It retains silhouette inputs but does not display or validate them.
+Edit the original capture document to correct mistakes, then use a new review directory.
+
+`review.json` says `PREPARED`, not accepted shape or READY. It retains the original input bytes'
+SHA-256 and complete source/camera evidence. `capture.json` rebases only local paths and adds
+`reviewed_sources_sha256`; the ordinary fitter rechecks that evidence and refuses later source,
+selection-policy or sheet-point changes. It still needs the original images, masks, calibration,
+reference and manifest at those paths; the review directory is not a portable capture archive.
+All files are private (0700 directory, 0600 files on Unix), create-only, and the completion report
+is written last. The static HTML needs no server, scripts, network or installed viewer. Visual
+agreement does not establish correct anatomy, lens accuracy, observability or physical fit.
+
 ## Input structure
 
 ### Join reviewed capture sources locally

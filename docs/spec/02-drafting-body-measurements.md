@@ -2023,6 +2023,29 @@ Letter 0.000143 (f 2871.5), as A4 0.000074 (f 4691.5).
 8. **Never port:** any real person's measurements or photos; ASTM size tables; non-commercial body models (SMPL family
    and similar) as defaults.
 
+### E.1 Native capture review extension (not reference parity)
+
+`ftx measure capture-review CAPTURE.json --out NEW_DIR` runs the existing
+`ftx-anny-capture-input/1` source-selection and checked-calibration/sheet-pose join without
+loading a body model or fitting. Its private create-only directory contains original input
+bytes, current preparation evidence, hash-checked copies of selected images, and overlays of
+every supplied named keypoint with its original FIT/CHECK partition, sigma and model target.
+Pixels and coordinates are neither rotated nor rectified again. Unknown/duplicate labels,
+nonpositive sigmas and out-of-image points refuse rather than disappear from the overlay.
+
+`capture.json` retains the original capture document except its local manifest/calibration/
+reference paths are rebased to absolute paths and `reviewed_sources_sha256` binds the current
+selection and per-frame source/camera preparation evidence. The existing `fit-body` consumer
+reruns those checks from any working directory and refuses a changed evidence digest. This
+optional binding is absent from older inputs; it does not change their behavior or the fitter.
+The digest excludes the capture request's own pathname/bytes to avoid a recursive identity.
+The copied images are review artifacts;
+fitting still requires the original current sources. `review.json` is the last publication
+write and reports `PREPARED`, never accepted shape, observable fit or READY. This review does
+not validate target anatomy against model topology, silhouettes, decoding, stationary reference,
+physical camera accuracy or wearer fit. Its original input hash and full preparation evidence
+identify the source; a changed source must be reviewed and prepared again.
+
 ## F. Quirks to preserve (or change deliberately with a fixture update)
 
 - bisection has no bracket check and treats f = 0 as negative (C.0, 0.3).

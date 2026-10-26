@@ -103,6 +103,7 @@ const USAGE: &str = "usage:
   ftx measure bundle-adjust FILE [--iterations N] [--out FILE] [--json]
   ftx measure fit-body FILE --model PATH [--out REPORT | --mesh-out NEW_DIR]
       [--iterations N] [--max-evaluations N] [--silhouettes MANIFEST] [--json]
+  ftx measure capture-review FILE --out NEW_DIR [--json]
   ftx measure still-window FILE [--out FILE] [--json]
   ftx measure video-select FILE [--out FILE] [--json]
   ftx measure fuse FILES... [--no-priors] [--out FILE] [--json]

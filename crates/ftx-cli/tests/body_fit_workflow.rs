@@ -421,6 +421,286 @@ fn reviewed_capture_joins_actual_selection_cameras_and_articulated_fit() {
     }
 }
 
+fn capture_review(dir: &Path, output: &str, code: i32) -> Value {
+    let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(dir)
+        .args([
+            "measure",
+            "capture-review",
+            "input.json",
+            "--out",
+            output,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(code),
+        "{} / {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+#[test]
+fn capture_review_runs_without_model_and_replays_the_original_fit() {
+    let dir = setup();
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("input.json")).unwrap()).unwrap();
+    let input = capture::wrap(&dir, original);
+    save(&dir, &input);
+    let bytes = std::fs::read(dir.join("input.json")).unwrap();
+    // Move, never delete, the test model: the review must not depend on its availability.
+    std::fs::rename(dir.join("model.ftxbody"), dir.join("unused-model.ftxbody")).unwrap();
+    let report = capture_review(&dir, "before-fit", 0)["result"].clone();
+    assert_eq!(report["status"], "PREPARED");
+    assert_eq!(report["body_model_loaded"], false);
+    assert_eq!(report["body_fitted"], false);
+    assert!(report.get("solution").is_none());
+    assert_eq!(report["input_sha256"], sha256_hex(&bytes));
+    assert_eq!(
+        std::fs::read(dir.join("before-fit/original-input.json")).unwrap(),
+        bytes
+    );
+    assert_eq!(report["capture_input"]["input"], input);
+    assert!(!dir.join("before-fit/fit.json").exists());
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("before-fit/review.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved, report);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(dir.join("before-fit"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        for entry in std::fs::read_dir(dir.join("before-fit")).unwrap() {
+            assert_eq!(
+                entry.unwrap().metadata().unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+    for (i, frame) in report["frames"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(frame["keypoints"], input["fit"]["frames"][i]["keypoints"]);
+        assert_eq!(
+            frame["frame"],
+            input["fit"]["frames"][i]["source"]["metadata"]["frame"]
+        );
+        for key in ["source_image", "keypoint_svg"] {
+            let artifact = &frame[key];
+            let data = std::fs::read(
+                dir.join("before-fit")
+                    .join(artifact["file"].as_str().unwrap()),
+            )
+            .unwrap();
+            assert_eq!(sha256_hex(&data), artifact["sha256"]);
+        }
+        let svg = std::fs::read_to_string(
+            dir.join("before-fit")
+                .join(frame["keypoint_svg"]["file"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            svg.matches("<circle ").count(),
+            frame["keypoints"].as_array().unwrap().len()
+        );
+        assert!(svg.contains("data-partition=\"FIT\""));
+        assert!(svg.contains("data-partition=\"CHECK\""));
+        assert!(!svg.contains("predicted"));
+        assert_eq!(
+            frame["source_image"]["sha256"],
+            input["fit"]["frames"][i]["source"]["image_sha256"]
+        );
+    }
+    let replay: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("before-fit/capture.json")).unwrap())
+            .unwrap();
+    let mut expected = input.clone();
+    expected["video_manifest"] = json!(dir.join("capture-frames.json"));
+    expected["reviewed_sources_sha256"] = report["capture_input"]["sources_sha256"].clone();
+    for (i, f) in expected["fit"]["frames"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        f["calibration"] = json!(dir.join("capture-calibration.json"));
+        f["reference"] = json!(dir.join(format!("capture-reference-{i}.json")));
+    }
+    assert_eq!(replay, expected);
+    capture_review(&dir, "before-fit", 3);
+    assert_eq!(
+        std::fs::read(dir.join("before-fit/original-input.json")).unwrap(),
+        bytes
+    );
+    std::fs::rename(dir.join("unused-model.ftxbody"), dir.join("model.ftxbody")).unwrap();
+    let original_fit = run(&dir, &[], 0)["result"].clone();
+    // A different cwd exposes accidental dependence on the review output's relative paths.
+    let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(dir.join("before-fit"))
+        .args([
+            "measure",
+            "fit-body",
+            "capture.json",
+            "--model",
+            "../model.ftxbody",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{} / {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let replayed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let mut replay_fit = replayed["result"].clone();
+    assert_eq!(
+        replay_fit["input_sha256"],
+        sha256_hex(&std::fs::read(dir.join("before-fit/capture.json")).unwrap())
+    );
+    assert_eq!(replay_fit["capture_input"]["input"], replay);
+    // Only the request's exact byte identity, location and explicitly rebased local paths differ.
+    replay_fit["input_sha256"] = original_fit["input_sha256"].clone();
+    replay_fit["capture_input"]["source"] = original_fit["capture_input"]["source"].clone();
+    replay_fit["capture_input"]["input"] = original_fit["capture_input"]["input"].clone();
+    assert_eq!(replay_fit, original_fit);
+    let reference_path = dir.join("capture-reference-0.json");
+    let mut changed_reference = std::fs::read(&reference_path).unwrap();
+    changed_reference.push(b'\n');
+    std::fs::write(&reference_path, changed_reference).unwrap();
+    let stale = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(dir.join("before-fit"))
+        .args([
+            "measure",
+            "fit-body",
+            "capture.json",
+            "--model",
+            "absent.ftxbody",
+            "--out",
+            "stale-fit.json",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(stale.status.code(), Some(3));
+    let stale: Value = serde_json::from_slice(&stale.stdout).unwrap();
+    assert!(
+        stale["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("reviewed capture sources changed")
+    );
+    assert!(!dir.join("before-fit/stale-fit.json").exists());
+    // Optional durable copy for inspecting these actual generated bytes in Chromium after RCH retires its tree.
+    if let Some(destination) = std::env::var_os("FTX_PREFIT_REVIEW_DIR") {
+        let destination = PathBuf::from(destination);
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&destination).unwrap();
+        for entry in std::fs::read_dir(dir.join("before-fit")).unwrap() {
+            let entry = entry.unwrap();
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut output = options.open(destination.join(entry.file_name())).unwrap();
+            std::io::copy(&mut std::fs::File::open(entry.path()).unwrap(), &mut output).unwrap();
+        }
+        eprintln!("PREFIT_REVIEW={}", destination.display());
+    }
+}
+
+#[test]
+fn capture_review_refuses_stale_sources_bad_points_and_escaped_targets_are_literal() {
+    let dir = setup();
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("input.json")).unwrap()).unwrap();
+    let input = capture::wrap(&dir, original);
+    let point = input["fit"]["frames"][0]["keypoints"][0].clone();
+    let mut outside = point.clone();
+    outside["pixel_px"] = json!([-1, 20]);
+    let mut sigma = point.clone();
+    sigma["sigma_px"] = json!(0);
+    for (i, change) in [
+        ("source", json!(null)),
+        ("lens_id", json!("another-lens")),
+        ("calibration_sha256", json!("wrong-hash")),
+        (
+            "keypoints",
+            json!([{"name":"missing","pixel_px":[10,20],"sigma_px":1,"partition":"fit"}]),
+        ),
+        ("keypoints", json!([outside])),
+        ("keypoints", json!([sigma])),
+        ("keypoints", json!([point, point])),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut changed = input.clone();
+        changed["fit"]["frames"][0][change.0] = change.1;
+        save(&dir, &changed);
+        let output = format!("refused-{i}");
+        capture_review(&dir, &output, 3);
+        assert!(!dir.join(output).exists());
+    }
+    let mut labelled = input;
+    let name = labelled["fit"]["frames"][0]["keypoints"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let target = labelled["model"]["keypoints"]
+        .as_object_mut()
+        .unwrap()
+        .remove(&name)
+        .unwrap();
+    let hostile = "<script>bad()</script>&\"\0";
+    labelled["model"]["keypoints"][hostile] = target;
+    labelled["fit"]["frames"][0]["keypoints"][0]["name"] = json!(hostile);
+    // Other frames may still name the original correspondence; keep both explicit definitions.
+    labelled["model"]["keypoints"][&name] = labelled["model"]["keypoints"][hostile].clone();
+    save(&dir, &labelled);
+    let result = capture_review(&dir, "escaped", 0);
+    assert_eq!(
+        result["result"]["frames"][0]["keypoints"][0]["name"],
+        hostile
+    );
+    let svg = std::fs::read_to_string(dir.join("escaped/frame-0000.svg")).unwrap();
+    assert!(svg.contains("&lt;script&gt;bad()&lt;/script&gt;&amp;&quot;"));
+    assert!(!svg.contains("<script>"));
+    let before = std::fs::read(dir.join("escaped/review.json")).unwrap();
+    let path = dir.join("capture-frame-0.png");
+    let changed = Gray {
+        w: 1280,
+        h: 960,
+        data: vec![0; 1280 * 960],
+    };
+    std::fs::write(path, encode_png_gray(&changed)).unwrap();
+    let refused = capture_review(&dir, "stale-image", 3);
+    assert!(refused["refusal"].is_object());
+    assert!(!dir.join("stale-image").exists());
+    assert_eq!(
+        std::fs::read(dir.join("escaped/review.json")).unwrap(),
+        before
+    );
+}
+
 #[test]
 fn capture_source_identity_lens_and_epoch_conflicts_never_publish_output() {
     let dir = setup();

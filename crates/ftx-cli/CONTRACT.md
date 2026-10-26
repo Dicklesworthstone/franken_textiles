@@ -7,6 +7,14 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
 `ftx outfit`, `ftx materials` and immutable `ftx round` workspaces with their local review.
 
 **Commands.**
+- `ftx measure capture-review CAPTURE.json --out NEW_DIR [--json]`: reuse decoded source selection
+  and checked same-lens sheet cameras without a model or body fit. The private create-only review
+  shows original images and every supplied named FIT/CHECK keypoint, sigma and model target. Original
+  bytes and source/camera evidence remain in `review.json` (`PREPARED`); its replay `capture.json`
+  rebases local paths and binds `reviewed_sources_sha256`. The ordinary fitter reruns the checks and
+  refuses changed evidence before loading a model. Original sources remain required. No anatomy,
+  silhouette, observability, READY or physical-fit approval follows. See `docs/multi-frame-body-fit.md`
+  and the real-binary `body_fit_workflow` regressions. This is an extension, not Python parity.
 - `ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]`: the
   reference's `drafting.py` on `ftx_pattern::draft`. Writes `DIR/pattern.json` and `DIR/fit_spec.json`
   (replacing them, as the reference does; Python's number formatting, keys sorted) and prints

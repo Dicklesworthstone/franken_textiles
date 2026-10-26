@@ -27,6 +27,10 @@ use crate::{Args, bad_input, known_options, read_json, required};
 mod capture;
 mod review;
 
+pub(super) fn capture_review(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    capture::run(args)
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Target {

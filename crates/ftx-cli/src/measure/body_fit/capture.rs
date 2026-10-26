@@ -17,11 +17,62 @@ use serde_json::{Value, json};
 use super::{Configuration, Request};
 use crate::bad_input;
 
+pub(super) fn run(args: &crate::Args) -> Result<(Value, i32, String), Refusal> {
+    crate::known_options(args, "measure capture-review", &["out"])?;
+    let output = Path::new(crate::required(args, "out")?);
+    super::review::preflight(output)?;
+    let file = super::super::single(args, "capture-review")?;
+    let (original, bytes) = super::super::intrinsics::read_document(file)?;
+    let (request, receipt) = prepare(Path::new(file), original.clone())?;
+    let source = receipt["source"]
+        .as_str()
+        .ok_or_else(|| bad_input("capture source path must be UTF-8"))?;
+    let base = Path::new(source)
+        .parent()
+        .ok_or_else(|| bad_input("capture needs a parent directory"))?;
+    // Rebase paths and bind prepared sources. Every source/observation and model target stays exact.
+    let mut replay = original;
+    let absolute = |value: &Value| -> Result<Value, Refusal> {
+        let path = local(
+            base,
+            value
+                .as_str()
+                .ok_or_else(|| bad_input("missing capture path"))?,
+        )?;
+        Ok(json!(
+            path.to_str()
+                .ok_or_else(|| bad_input("capture path must be UTF-8"))?
+        ))
+    };
+    replay["video_manifest"] = absolute(&replay["video_manifest"])?;
+    replay["reviewed_sources_sha256"] = receipt["sources_sha256"].clone();
+    for frame in replay["fit"]["frames"].as_array_mut().unwrap() {
+        for key in ["calibration", "reference"] {
+            frame[key] = absolute(&frame[key])?;
+        }
+    }
+    let bundle = super::review::prepare_capture(&request, &receipt, &bytes, &replay)?;
+    let result = bundle.manifest.clone();
+    bundle.publish_report(output, &result, "review.json")?;
+    Ok((
+        result,
+        0,
+        format!(
+            "CAPTURE REVIEW: PREPARED ({} frames; no body model loaded or fitted)\nOpen {}/index.html; review the points before fitting {}/capture.json",
+            request.fit.frames.len(),
+            output.display(),
+            output.display()
+        ),
+    ))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Capture {
     schema: String,
     video_manifest: String,
+    #[serde(default)]
+    reviewed_sources_sha256: Option<String>,
     reference_id: String,
     model: Configuration,
     fit: Observations,
@@ -177,7 +228,22 @@ pub(super) fn prepare(path: &Path, original: Value) -> Result<(Request, Value), 
             "calibration":calibration,"reference_input_sha256":sha256_hex(&reference_bytes),
             "sheet_pose":pose}));
     }
+    // Exclude request path/bytes: the review's replay input necessarily has its own identity.
+    let sources_sha256 = sha256_hex(
+        &serde_json::to_vec(&json!({"selection":selection,"frames":receipts}))
+            .map_err(|e| bad_input(e.to_string()))?,
+    );
+    if input
+        .reviewed_sources_sha256
+        .as_ref()
+        .is_some_and(|expected| expected != &sources_sha256)
+    {
+        return Err(bad_input(
+            "reviewed capture sources changed; prepare and review a new capture",
+        ));
+    }
     let receipt = json!({"schema":"ftx-anny-capture/1","source":source,"input":original,
+        "sources_sha256":sources_sha256,
         "selection":selection,"frames":receipts,
         "no_claim":"Source consistency and conditional camera reconstruction only. Caller-reviewed anatomy, stationary reference, decoding/orientation and physical accuracy are not authenticated; sharpness is not stillness and acceptance does not make measurements READY."});
     if serde_json::to_vec(&receipt)

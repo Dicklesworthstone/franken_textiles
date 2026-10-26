@@ -191,6 +191,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if command == "video-select" {
         return video::run(args);
     }
+    if command == "capture-review" {
+        return body_fit::capture_review(args);
+    }
     if command == "still-window" {
         return still::run(args);
     }
@@ -399,7 +402,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         _ => {
             return Err(bad_input(format!(
-                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, calib-sheet, calibrate-camera, photo-scale, measure-photo, sheet-pose, girth-from-section, triangulate, bundle-adjust, fit-body, still-window or video-select"
+                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, calib-sheet, calibrate-camera, photo-scale, measure-photo, sheet-pose, girth-from-section, triangulate, bundle-adjust, fit-body, capture-review, still-window or video-select"
             )));
         }
     };
