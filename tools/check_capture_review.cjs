@@ -141,6 +141,113 @@ async function displayed(page, i, j) {
       }
     }
     assert(await page.locator("#applyPoint").isDisabled());
+    // Start with the actual native zero-observation review. Coordinates, roles and sigmas below
+    // come from the independent synthetic good input, never from the candidate editor/fitter.
+    const emptyDir = path.join(root, "empty-review"), empty = read("empty-review/capture.json");
+    const emptyReport = read("empty-review/review.json");
+    assert(empty.fit.frames.every(f => f.keypoints.length === 0));
+    assert.equal(emptyReport.capture_input.sources_sha256, report.capture_input.sources_sha256);
+    const initialHashes = new Map(["empty.json", "good.json", "input.json", "empty-review/capture.json",
+      "empty-review/review.json", "empty-review/index.html", "empty-review/review.js",
+      ...emptyReport.frames.map(f => "empty-review/" + f.source_image.file)]
+      .map(file => [file, hash(fs.readFileSync(path.join(root, file)))]));
+    const placing = await context.newPage();
+    await placing.goto(pathToFileURL(path.join(emptyDir, "index.html")).href);
+    await placing.waitForFunction(() => !document.getElementById("newPointFields").disabled);
+    assert.deepEqual(await placing.locator("#captureInput").evaluate(n => JSON.parse(n.textContent)), empty);
+    assert.equal(await placing.locator("tbody tr, svg circle").count(), 0);
+    await hidden(placing);
+    // Every declaration is explicit; an incomplete/invalid one creates no observation.
+    for (const [id, value] of [[null, null], ["newFrame", "0"], ["newTarget", "p0"], ["newPartition", "fit"]]) {
+      if (id) await placing.locator("#" + id).selectOption(value);
+      await placing.locator("#preparePoint").click();
+      assert(await placing.locator("#applyPoint").isDisabled());
+      await hidden(placing);
+    }
+    for (const sigma of ["0", "-1", "0.0000001", "1000001", "1e309"]) {
+      await placing.locator("#newSigma").fill(sigma);
+      await placing.locator("#preparePoint").click(); await hidden(placing);
+      assert(await placing.locator("#applyPoint").isDisabled());
+    }
+    async function declare(i, p) {
+      await placing.locator("#newFrame").selectOption(String(i));
+      await placing.locator("#newTarget").selectOption(p.name);
+      await placing.locator("#newPartition").selectOption(p.partition);
+      await placing.locator("#newSigma").fill(String(p.sigma_px));
+      await placing.locator("#preparePoint").click();
+      assert(await placing.locator("#applyPoint").isEnabled());
+      await hidden(placing);
+    }
+    const p0 = good.fit.frames[0].keypoints[0];
+    await declare(0, p0);
+    // Image placement uses the same real screen transform as correction, including scrolling.
+    const svg = placing.locator("section").nth(0).locator("svg");
+    await svg.scrollIntoViewIfNeeded();
+    const screen = await svg.evaluate((n, xy) => {
+      n.addEventListener("click", e => {
+        const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(n.getScreenCTM().inverse());
+        globalThis.__placedPixel = [p.x, p.y];
+      }, {once: true, capture: true});
+      const p = new DOMPoint(...xy).matrixTransform(n.getScreenCTM()); return [p.x, p.y];
+    }, p0.pixel_px);
+    await placing.mouse.click(...screen);
+    const clickPixel = await placing.evaluate(() => globalThis.__placedPixel);
+    assert.deepEqual(await displayed(placing, 0, 0), clickPixel);
+    const partial = structuredClone(empty);
+    partial.fit.frames[0].keypoints.push({...p0, pixel_px: clickPixel});
+    await download(placing, "partial-placement.json", partial);
+    // Changing a declaration revokes prior output. Cancelling does not append the pending point.
+    const partialUrl = await placing.locator("#correctedInput").getAttribute("href");
+    await declare(0, good.fit.frames[0].keypoints[1]);
+    assert(await placing.evaluate(url => globalThis.__revoked.includes(url), partialUrl));
+    await placing.locator("#cancelPoint").click(); await hidden(placing);
+    assert.equal(await placing.locator("tbody tr").count(), 1);
+    // The chooser omits already used names; the click guard also refuses a forged DOM option.
+    assert.equal(await placing.locator('#newTarget option[value="p0"]').count(), 0);
+    for (const name of [p0.name, "undeclared-target"]) {
+      await placing.evaluate(({name, sigma}) => {
+        const target = document.getElementById("newTarget"); target.add(new Option(name, name)); target.value = name;
+        document.getElementById("newPartition").value = "fit";
+        document.getElementById("newSigma").value = sigma;
+      }, {name, sigma: String(p0.sigma_px)});
+      await placing.locator("#preparePoint").click(); await hidden(placing);
+      assert(await placing.locator("#applyPoint").isDisabled());
+      assert.equal(await placing.locator("tbody tr").count(), 1);
+    }
+    await placing.locator("#resetPoints").click(); await hidden(placing);
+    assert.equal(await placing.locator("tbody tr, svg circle").count(), 0);
+    // A new point follows the same refusal bounds as a correction; no hidden zero gets inserted.
+    await declare(0, p0);
+    for (const [x, y] of [["-1", "200"], ["1280", "200"], ["200", "960"], ["", "200"]]) {
+      await placing.locator("#editX").fill(x); await placing.locator("#editY").fill(y);
+      await placing.locator("#applyPoint").click(); await hidden(placing);
+      assert.equal(await placing.locator("tbody tr, svg circle").count(), 0);
+    }
+    await placing.locator("#resetPoints").click();
+    for (let i = 0; i < good.fit.frames.length; ++i) {
+      for (let j = 0; j < good.fit.frames[i].keypoints.length; ++j) {
+        const p = good.fit.frames[i].keypoints[j];
+        await declare(i, p);
+        await placing.locator("#editX").fill(String(p.pixel_px[0]));
+        await placing.locator("#editY").fill(String(p.pixel_px[1]));
+        await placing.locator("#applyPoint").click();
+        assert.deepEqual(await displayed(placing, i, j), p.pixel_px);
+        const row = placing.locator("section").nth(i).locator("tbody tr").nth(j);
+        assert.equal(await row.locator("td").nth(1).innerText(), p.partition === "fit" ? "FIT" : "CHECK");
+        assert.equal(Number(await row.locator("td").nth(3).innerText()), p.sigma_px);
+      }
+    }
+    const annotated = structuredClone(empty);
+    annotated.fit.frames.forEach((f, i) => f.keypoints = structuredClone(good.fit.frames[i].keypoints));
+    const annotatedFile = await download(placing, "capture-annotated.json", annotated);
+    assert.equal(await placing.evaluate(() => globalThis.captureInjection), undefined);
+    assert.equal(await placing.locator("svg circle").count(), 20);
+    await placing.screenshot({path: path.join(out, "annotated.png"), fullPage: true});
+    await placing.locator("#resetPoints").click(); await hidden(placing);
+    assert.equal(await placing.locator("tbody tr, svg circle").count(), 0);
+    for (const [file, expectedHash] of initialHashes) {
+      assert.equal(hash(fs.readFileSync(path.join(root, file))), expectedHash);
+    }
     const staticContext = await browser.newContext({javaScriptEnabled: false, userAgent});
     observe(staticContext);
     const staticPage = await staticContext.newPage();
@@ -155,14 +262,17 @@ async function displayed(page, i, j) {
     assert.match(await unsafePage.locator("#editStatus").innerText(), /Editor unavailable:.*safe browser numeric precision/);
     await hidden(unsafePage);
     assert(await unsafePage.locator("#applyPoint").isDisabled());
+    assert(await unsafePage.locator("#preparePoint").isDisabled());
+    assert.equal(await unsafePage.locator("#newPointFields").evaluate(n => n.disabled), true);
     assert.equal(await unsafePage.locator("svg circle").count(), 20);
     assert((await unsafePage.locator("#captureInput").textContent()).includes("9007199254740993"));
     assert.deepEqual(errors, []);
-    const allowed = [reviewDir, path.join(root, "numeric-unsafe/review")].map(dir => pathToFileURL(dir + path.sep).href);
+    const allowed = [reviewDir, emptyDir, path.join(root, "numeric-unsafe/review")].map(dir => pathToFileURL(dir + path.sep).href);
     assert(requests.every(r => r.method === "GET" && allowed.some(prefix => r.url.startsWith(prefix))));
     verifyFiles();
     console.log(JSON.stringify({status: "PASS", frames: 2, points: 20, clickLayouts: 3,
-      invalidEdits: 5, correctedFile: final, sha256: hash(fs.readFileSync(final)), errors, requests,
+      invalidEdits: 5, correctedFile: final, sha256: hash(fs.readFileSync(final)),
+      initiallyPlaced: 20, annotatedFile, annotatedSha256: hash(fs.readFileSync(annotatedFile)), errors, requests,
       boundary: "Synthetic actual page and data only; fit acceptance is a separate ordinary CLI run"}, null, 2));
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

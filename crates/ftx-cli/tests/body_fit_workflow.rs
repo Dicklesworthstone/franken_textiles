@@ -795,6 +795,45 @@ fn capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_referenc
         std::fs::read(dir.join("edit-review/original-input.json")).unwrap(),
         std::fs::read(dir.join("input.json")).unwrap()
     );
+    // Initial placement starts with no guessed or placeholder observations. Cameras, model
+    // targets and all decoded-source identities are the same independently authored fixture.
+    let mut empty = good.clone();
+    for frame in empty["fit"]["frames"].as_array_mut().unwrap() {
+        frame["keypoints"] = json!([]);
+    }
+    std::fs::write(
+        dir.join("empty.json"),
+        serde_json::to_vec_pretty(&empty).unwrap(),
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "measure",
+            "capture-review",
+            "empty.json",
+            "--out",
+            "empty-review",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let prepared: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(prepared["result"]["status"], "PREPARED");
+    assert_eq!(prepared["result"]["body_fitted"], false);
+    assert_eq!(prepared["result"]["capture_input"]["input"], empty);
+    assert_eq!(
+        prepared["result"]["capture_input"]["sources_sha256"],
+        review["capture_input"]["sources_sha256"]
+    );
+    for frame in prepared["result"]["frames"].as_array().unwrap() {
+        assert_eq!(frame["keypoints"], json!([]));
+    }
     eprintln!("CAPTURE_EDITOR_CASE={}", dir.display());
     let unsafe_dir = dir.join("numeric-unsafe");
     std::fs::create_dir(&unsafe_dir).unwrap();

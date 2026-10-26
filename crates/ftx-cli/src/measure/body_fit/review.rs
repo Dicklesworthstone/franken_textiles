@@ -177,6 +177,16 @@ pub(super) fn prepare_capture(
         <p>Select a point in a table, then click its image or enter stored-pixel coordinates. Names, targets, \
         uncertainty and FIT/CHECK assignments stay fixed. Changes affect only your downloaded input; the original \
         images, SVGs and preparation evidence on disk stay unchanged. Correct points before fitting, not to tune a CHECK result.</p>\
+        <fieldset id=\"newPointFields\" disabled><legend>Place a new observation</legend>\
+        <p>Choose an existing model target and declare its role and pixel uncertainty before placement. \
+        No anatomy is inferred. The fitter still checks observability and every held-out observation.</p>\
+        <label>Frame <select id=\"newFrame\"><option value=\"\">Choose frame</option></select></label>\
+        <label>Declared target <select id=\"newTarget\"><option value=\"\">Choose target</option></select></label>\
+        <label>Role <select id=\"newPartition\"><option value=\"\">Choose FIT or CHECK</option>\
+        <option value=\"fit\">FIT</option><option value=\"held_out\">CHECK</option></select></label>\
+        <label>Sigma (px) <input id=\"newSigma\" type=\"number\" step=\"any\" min=\"0.000001\" max=\"1000000\"></label>\
+        <p id=\"targetDefinition\"></p><button id=\"preparePoint\" type=\"button\">Prepare new point</button> \
+        <button id=\"cancelPoint\" type=\"button\" disabled>Cancel placement</button></fieldset>\
         <p id=\"editStatus\" role=\"status\"></p><form id=\"coordinateForm\" novalidate>\
         <label>X (px) <input id=\"editX\" type=\"number\" step=\"any\" disabled></label>\
         <label>Y (px) <input id=\"editY\" type=\"number\" step=\"any\" disabled></label>\

@@ -33,8 +33,15 @@ authored model target. It retains silhouette inputs but does not display or vali
 To correct a keypoint, select it in its table, then click that image or enter full-resolution
 X/Y coordinates and choose **Apply coordinates**. The image transform accounts for display size,
 scroll and zoom; numeric entry retains the supplied precision. Invalid/out-of-image values refuse.
-Only coordinates change: target definitions, names, sigmas, FIT/CHECK assignments and all source
+Existing observations allow coordinates only: their names, sigmas and FIT/CHECK assignments stay
+fixed. To start from an empty frame or add a missing observation, use **Place a new observation**:
+choose the frame and an unused name already declared in `model.keypoints`, explicitly choose FIT
+or CHECK and a sigma in `1e-6..1e6` pixels, then **Prepare new point**. Click that frame or apply
+numeric coordinates. The target definition is shown for review; no anatomical mapping is inferred.
+Duplicate names and more than 128 observations per frame refuse. Target definitions and all source
 identities stay fixed. Correct annotations before fitting; do not tune held-out checks to a result.
+Partial annotation drafts can be saved; the ordinary fitter still enforces observability, sufficient
+FIT/CHECK evidence and acceptance. A saved draft does not establish a usable body fit.
 
 Download `capture-edited.json`, then make a new immutable review before fitting:
 
@@ -42,8 +49,9 @@ Download `capture-edited.json`, then make a new immutable review before fitting:
 ftx measure capture-review /path/to/capture-edited.json --out capture-review-002 --json
 ```
 
-Pending/invalid edits withdraw the old download. **Reset all corrections** restores the original
-points and revokes the corrected input. Original files and preparation evidence stay unchanged;
+Pending/invalid edits or **Cancel placement** withdraw the old download. **Reset all corrections**
+restores the original point lists, removing in-memory additions, and revokes the corrected input.
+Original files and preparation evidence stay unchanged;
 SVG/report links explicitly refer to that original review. Nothing is stored in browser storage.
 If any input integer exceeds JavaScript's exact range, the editor refuses and the original native
 review remains available. Use an integer-preserving JSON tool for that document; do not round timestamps.
