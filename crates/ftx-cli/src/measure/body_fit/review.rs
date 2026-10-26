@@ -150,23 +150,40 @@ pub(super) fn prepare_capture(
     };
     let original_entry = bundle.push("original-input.json".into(), original.to_vec())?;
     let replay_entry = bundle.push("capture.json".into(), workspace::json_bytes(replay)?)?;
+    let editor = bundle.push(
+        "review.js".into(),
+        include_bytes!("capture_review.js").to_vec(),
+    )?;
     let mut page = String::from(
         "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">\
-         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src 'self'; style-src 'unsafe-inline'\">\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src 'self'; script-src 'self'; style-src 'unsafe-inline'\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
          <title>Review capture before fitting</title>\
          <style>body{font:16px system-ui;max-width:1100px;margin:2em auto;padding:0 1em}svg{width:100%;max-height:75vh;border:1px solid #888}\
-         section{margin:2em 0}td,th{padding:.4em;text-align:left;overflow-wrap:anywhere}table{width:100%;table-layout:fixed}p{line-height:1.5}</style>\
+         section{margin:2em 0}td,th{padding:.4em;text-align:left;overflow-wrap:anywhere}table{width:100%;table-layout:fixed}p{line-height:1.5}\
+         button,input{font:inherit;padding:.3em}input{width:9em}label{margin-right:1em}tr[data-changed=true]{background:#fff2cf}\
+         button[aria-pressed=true]{outline:3px solid #0369a1}svg[data-editing=true]{cursor:crosshair}[hidden]{display:none!important}</style>\
          <h1>Review capture before fitting</h1>\
          <p>PREPARED means current source selection and sheet cameras passed their checks. No body model was loaded or fitted. \
          Orange points are FIT; blue points are CHECK (held out). Review names, target definitions, visibility and coordinates \
-         on each original image. Edit the capture input for mistakes, then generate a new review directory. \
+         on each original image. Correct coordinates below, then generate a new review directory from the downloaded input. \
          No points or partitions were inferred. Pixels retain their stored orientation and lens distortion.</p>\
          <p>This does not establish anatomical correspondence, observability, physical accuracy, READY measurements or garment fit. \
          Supplied silhouette constraints are retained in the input but are not reviewed by these keypoint overlays.</p>\
-         <p><a href=\"capture.json\">Input for fit-body (requires original source files)</a> · \
+         <p><a href=\"capture.json\">Original input for fit-body (requires original source files)</a> · \
          <a href=\"original-input.json\">Original input bytes</a> · <a href=\"review.json\">Complete preparation evidence</a></p>",
     );
+    page.push_str("<div id=\"captureEditor\" hidden><h2>Correct point coordinates</h2>\
+        <p>Select a point in a table, then click its image or enter stored-pixel coordinates. Names, targets, \
+        uncertainty and FIT/CHECK assignments stay fixed. Changes affect only your downloaded input; the original \
+        images, SVGs and preparation evidence on disk stay unchanged. Correct points before fitting, not to tune a CHECK result.</p>\
+        <p id=\"editStatus\" role=\"status\"></p><form id=\"coordinateForm\" novalidate>\
+        <label>X (px) <input id=\"editX\" type=\"number\" step=\"any\" disabled></label>\
+        <label>Y (px) <input id=\"editY\" type=\"number\" step=\"any\" disabled></label>\
+        <button id=\"applyPoint\" type=\"submit\" disabled>Apply coordinates</button></form>\
+        <p><button id=\"resetPoints\" type=\"button\">Reset all corrections</button> · \
+        <a id=\"correctedInput\" download=\"capture-edited.json\" hidden>Download corrected input</a></p></div>\
+        <noscript><p>Point editing needs the supplied local script. The original review and input remain usable.</p></noscript>");
     let mut frames = Vec::new();
     for (i, frame) in request.fit.frames.iter().enumerate() {
         let [w, h] = frame.image_size_px;
@@ -186,7 +203,7 @@ pub(super) fn prepare_capture(
         );
         let mut rows = String::new();
         let mut names = std::collections::BTreeSet::new();
-        for point in &frame.keypoints {
+        for (j, point) in frame.keypoints.iter().enumerate() {
             let target =
                 request.model.keypoints.get(&point.name).ok_or_else(|| {
                     bad_input("capture review has an unknown model correspondence")
@@ -215,18 +232,19 @@ pub(super) fn prepare_capture(
             let target =
                 label(&serde_json::to_string(target).map_err(|e| bad_input(e.to_string()))?);
             let point_name = label(&point.name);
-            write!(svg, "<g data-partition=\"{partition}\"><title>{point_name}: {partition}; sigma {} px; {target}</title>\
+            write!(svg, "<g data-point=\"{j}\" data-partition=\"{partition}\"><title>{point_name}: {partition}; sigma {} px; {target}</title>\
                 <circle cx=\"{}\" cy=\"{}\" r=\"5\" fill=\"none\" stroke=\"{color}\" stroke-width=\"2\"/>\
                 <text x=\"{}\" y=\"{}\" fill=\"{color}\" font-family=\"sans-serif\" font-size=\"12\">{point_name} ({partition})</text></g>",
                 point.sigma_px, p.x, p.y, p.x + 7.0, p.y - 7.0).unwrap();
-            write!(rows, "<tr><td>{point_name}</td><td>{partition}</td><td>{}, {}</td><td>{}</td><td>{target}</td></tr>",
+            write!(rows, "<tr><td><button type=\"button\" class=\"edit-point\" data-frame=\"{i}\" data-point=\"{j}\" aria-pressed=\"false\" hidden>Select</button> \
+                {point_name}</td><td>{partition}</td><td class=\"point-coordinates\">{}, {}</td><td>{}</td><td>{target}</td></tr>",
                 p.x, p.y, point.sigma_px).unwrap();
         }
         svg.push_str("</svg>\n");
         let svg_name = format!("frame-{i:04}.svg");
         let overlay = bundle.push(svg_name.clone(), svg.as_bytes().to_vec())?;
         write!(page, "<section><h2>{} @ {} us</h2><p>{w} × {h} stored pixels; {}° clockwise rotation already applied. \
-            <a href=\"{svg_name}\">Keypoint SVG</a></p>{svg}\
+            <a href=\"{svg_name}\">Original keypoint SVG</a></p>{svg}\
             <table><thead><tr><th>Name</th><th>Partition</th><th>Pixel x, y</th><th>Sigma px</th><th>Model target</th></tr></thead><tbody>{rows}</tbody></table></section>",
             label(&frame.frame.stream), frame.frame.timestamp_us, frame.rotation_cw_deg).unwrap();
         frames.push(
@@ -235,12 +253,21 @@ pub(super) fn prepare_capture(
             "source_image":photograph,"keypoint_svg":overlay}),
         );
     }
-    page.push_str("</html>\n");
+    // Inert JSON must not terminate its script element through a caller-authored label.
+    let payload = serde_json::to_string(replay)
+        .map_err(|e| bad_input(e.to_string()))?
+        .replace('<', "\\u003c");
+    writeln!(
+        page,
+        "<script type=\"application/json\" id=\"captureInput\">{payload}</script>\
+        <script src=\"review.js\" defer></script></html>"
+    )
+    .unwrap();
     let viewer = bundle.push("index.html".into(), page.into_bytes())?;
     bundle.manifest = json!({"schema":"ftx-capture-review/1","status":"PREPARED",
         "body_model_loaded":false,"body_fitted":false,"input_sha256":sha256_hex(original),
         "model_sha256":request.model.model_sha256,"original_input":original_entry,
-        "replay_input":replay_entry,"viewer":viewer,"frames":frames,"capture_input":capture,
+        "replay_input":replay_entry,"viewer":viewer,"editor":editor,"frames":frames,"capture_input":capture,
         "no_claim":"Source/camera preparation and supplied keypoint visualization only. No anatomy, silhouette, observability, physical camera, READY measurement or real-wearer fit approval."});
     Ok(bundle)
 }

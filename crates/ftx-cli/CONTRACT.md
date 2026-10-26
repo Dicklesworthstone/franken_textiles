@@ -15,6 +15,10 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   refuses changed evidence before loading a model. Original sources remain required. No anatomy,
   silhouette, observability, READY or physical-fit approval follows. See `docs/multi-frame-body-fit.md`
   and the real-binary `body_fit_workflow` regressions. This is an extension, not Python parity.
+  The local page can correct existing pixel coordinates by image click or numeric entry; names,
+  target definitions, sigmas, partitions and all other input values stay fixed. A current correction
+  downloads as `capture-edited.json`, with pending/invalid/reset states revoking previous URLs.
+  Original files remain unchanged and script-disabled original review remains available.
 - `ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]`: the
   reference's `drafting.py` on `ftx_pattern::draft`. Writes `DIR/pattern.json` and `DIR/fit_spec.json`
   (replacing them, as the reference does; Python's number formatting, keys sorted) and prints

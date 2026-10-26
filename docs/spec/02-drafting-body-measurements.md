@@ -2046,6 +2046,19 @@ not validate target anatomy against model topology, silhouettes, decoding, stati
 physical camera accuracy or wearer fit. Its original input hash and full preparation evidence
 identify the source; a changed source must be reviewed and prepared again.
 
+The local review optionally edits existing keypoint coordinates in memory: select a named point,
+click its image in stored-pixel coordinates or apply finite numeric coordinates within the image.
+No clamping, inferred anatomy, added/removed target, sigma or FIT/CHECK reassignment is permitted.
+Every other capture input value and its source-evidence binding remain unchanged. Reset restores
+the original coordinates. Pending/invalid edits and reset withdraw/revoke corrected downloads.
+Only a current changed input is downloadable as `capture-edited.json`; original on-disk input,
+SVG and preparation evidence stay unchanged and are labelled original. A new immutable review can
+be generated from the correction before fitting. No body computation or acceptance occurs in the
+editor. Static original review remains usable with scripts disabled; editing uses only its local
+external script, safely embedded inert JSON and in-memory Blob downloads, without network/storage.
+Documents containing integers outside JavaScript's exact safe range refuse browser editing;
+the native static review retains their original values. No timestamp is rounded to enable an edit.
+
 ## F. Quirks to preserve (or change deliberately with a fixture update)
 
 - bisection has no bracket check and treats f = 0 as negative (C.0, 0.3).

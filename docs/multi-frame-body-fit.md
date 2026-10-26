@@ -30,7 +30,23 @@ The first command needs no body model. It reruns selection and camera checks, co
 selected images, and overlays the supplied points at stored image coordinates without another
 rotation or rectification. The table shows every name, FIT/CHECK assignment, pixel, sigma and
 authored model target. It retains silhouette inputs but does not display or validate them.
-Edit the original capture document to correct mistakes, then use a new review directory.
+To correct a keypoint, select it in its table, then click that image or enter full-resolution
+X/Y coordinates and choose **Apply coordinates**. The image transform accounts for display size,
+scroll and zoom; numeric entry retains the supplied precision. Invalid/out-of-image values refuse.
+Only coordinates change: target definitions, names, sigmas, FIT/CHECK assignments and all source
+identities stay fixed. Correct annotations before fitting; do not tune held-out checks to a result.
+
+Download `capture-edited.json`, then make a new immutable review before fitting:
+
+```sh
+ftx measure capture-review /path/to/capture-edited.json --out capture-review-002 --json
+```
+
+Pending/invalid edits withdraw the old download. **Reset all corrections** restores the original
+points and revokes the corrected input. Original files and preparation evidence stay unchanged;
+SVG/report links explicitly refer to that original review. Nothing is stored in browser storage.
+If any input integer exceeds JavaScript's exact range, the editor refuses and the original native
+review remains available. Use an integer-preserving JSON tool for that document; do not round timestamps.
 
 `review.json` says `PREPARED`, not accepted shape or READY. It retains the original input bytes'
 SHA-256 and complete source/camera evidence. `capture.json` rebases only local paths and adds
@@ -38,8 +54,10 @@ SHA-256 and complete source/camera evidence. `capture.json` rebases only local p
 selection-policy or sheet-point changes. It still needs the original images, masks, calibration,
 reference and manifest at those paths; the review directory is not a portable capture archive.
 All files are private (0700 directory, 0600 files on Unix), create-only, and the completion report
-is written last. The static HTML needs no server, scripts, network or installed viewer. Visual
-agreement does not establish correct anatomy, lens accuracy, observability or physical fit.
+is written last. The original static review needs no scripts; editing uses its supplied local
+`review.js`. Neither needs a server, network or installed viewer. Its content policy permits only
+local images/scripts and no network connections. Visual agreement does not establish correct anatomy,
+lens accuracy, observability or physical fit.
 
 ## Input structure
 

@@ -702,6 +702,120 @@ fn capture_review_refuses_stale_sources_bad_points_and_escaped_targets_are_liter
 }
 
 #[test]
+fn capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_reference() {
+    // The same assertions run normally; the optional path only retains this synthetic workspace
+    // beyond RCH source retirement for the real browser -> ordinary CLI replay.
+    let dir = if let Some(path) = std::env::var_os("FTX_CAPTURE_EDITOR_DIR") {
+        let path = PathBuf::from(path);
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&path).unwrap();
+        let (bytes, input) = fixture();
+        std::fs::write(path.join("model.ftxbody"), bytes).unwrap();
+        save(&path, &input);
+        path
+    } else {
+        setup()
+    };
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("input.json")).unwrap()).unwrap();
+    let mut good = capture::wrap(&dir, original);
+    let hostile = "</script><script>globalThis.captureInjection=1</script>&\"";
+    let target = good["model"]["keypoints"]
+        .as_object_mut()
+        .unwrap()
+        .remove("p9")
+        .unwrap();
+    good["model"]["keypoints"][hostile] = target;
+    for frame in good["fit"]["frames"].as_array_mut().unwrap() {
+        frame["keypoints"][9]["name"] = json!(hostile);
+    }
+    std::fs::write(
+        dir.join("good.json"),
+        serde_json::to_vec_pretty(&good).unwrap(),
+    )
+    .unwrap();
+    let mut bad = good.clone();
+    assert_eq!(
+        bad["fit"]["frames"][0]["keypoints"][3]["partition"],
+        "held_out"
+    );
+    bad["fit"]["frames"][0]["keypoints"][3]["pixel_px"][0] = json!(
+        good["fit"]["frames"][0]["keypoints"][3]["pixel_px"][0]
+            .as_f64()
+            .unwrap()
+            + 12.0
+    );
+    save(&dir, &bad);
+    let review = capture_review(&dir, "edit-review", 0)["result"].clone();
+    assert_eq!(review["status"], "PREPARED");
+    assert_eq!(review["body_fitted"], false);
+    let script = std::fs::read(dir.join("edit-review/review.js")).unwrap();
+    assert_eq!(review["editor"]["sha256"], sha256_hex(&script));
+    assert_eq!(
+        script,
+        include_bytes!("../src/measure/body_fit/capture_review.js")
+    );
+    let page = std::fs::read_to_string(dir.join("edit-review/index.html")).unwrap();
+    assert!(page.contains("script-src 'self'"));
+    assert!(page.contains("\\u003c/script>"));
+    assert!(!page.contains(hostile));
+    let rejected = run(&dir, &["--out", "bad-fit.json"], 2);
+    assert!(rejected["result"]["solution"].is_null());
+    let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "measure",
+            "fit-body",
+            "good.json",
+            "--model",
+            "model.ftxbody",
+            "--out",
+            "expected-fit.json",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{} / {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let expected: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(expected["result"]["status"], "ACCEPTED");
+    assert!((expected["result"]["solution"]["shape"][0].as_f64().unwrap() - 0.6).abs() < 1e-5);
+    assert!((expected["result"]["solution"]["shape"][1].as_f64().unwrap() - 0.45).abs() < 1e-5);
+    assert_eq!(review["capture_input"]["input"], bad);
+    assert_eq!(
+        std::fs::read(dir.join("edit-review/original-input.json")).unwrap(),
+        std::fs::read(dir.join("input.json")).unwrap()
+    );
+    eprintln!("CAPTURE_EDITOR_CASE={}", dir.display());
+    let unsafe_dir = dir.join("numeric-unsafe");
+    std::fs::create_dir(&unsafe_dir).unwrap();
+    let (_, mut unsafe_input) = fixture();
+    for i in 0..2 {
+        let timestamp = 9_007_199_254_740_993u64 + i as u64 * 200_000;
+        unsafe_input["fit"]["frames"][i]["frame"]["timestamp_us"] = json!(timestamp);
+        for start in unsafe_input["fit"]["starts"].as_array_mut().unwrap() {
+            start["poses"][i]["frame"]["timestamp_us"] = json!(timestamp);
+        }
+    }
+    let unsafe_input = capture::wrap(&unsafe_dir, unsafe_input);
+    save(&unsafe_dir, &unsafe_input);
+    let unsafe_review = capture_review(&unsafe_dir, "review", 0);
+    assert_eq!(
+        unsafe_review["result"]["frames"][0]["frame"]["timestamp_us"].as_u64(),
+        Some(9_007_199_254_740_993)
+    );
+}
+
+#[test]
 fn capture_source_identity_lens_and_epoch_conflicts_never_publish_output() {
     let dir = setup();
     let original: Value =
