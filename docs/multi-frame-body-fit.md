@@ -109,6 +109,30 @@ the declared lens, oriented image dimensions and rotation; one stream/epoch
 cannot silently switch calibration. Declared focal metadata, when present,
 must equal the checked calibration's focal lengths.
 
+For the first review, copying those full records and computing calibration hashes is optional.
+Use an explicit frame declaration instead:
+
+```json
+{
+  "frame": {"stream":"camera-1", "timestamp_us":133333},
+  "lens_id":"the declared calibrated lens",
+  "calibration":"calibration.json",
+  "reference":"sheet-points-for-this-image.json",
+  "keypoints":[]
+}
+```
+
+Run `capture-review` on this new, unbound input. It resolves only the exact declared timestamps
+through the current selector, verifies the declared calibration and sheet references, and writes
+complete `source` records and `calibration_sha256` values into `capture.json`. The original input
+and bytes remain in the review evidence. Add observations in the local page, download the edited
+input, and make its next review before fitting as above. Model targets, measurements, starts and
+their frame identities are still caller-authored; no pose or anatomy is guessed.
+Declare exactly one of `frame` and `source`. Supplied hashes must match. Full source records still
+require hashes. Frame declarations cannot be fitted directly or used in an input with an existing
+`reviewed_sources_sha256` binding; use the complete replay for that route. Unselected/missing or
+duplicate identities refuse instead of substituting another view.
+
 The command reruns selection on current pixels, requires every requested source
 to match exactly and still be selected, recomputes the retained calibration and
 sheet pose, and then calls the unchanged articulated fitter. Original capture,

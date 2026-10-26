@@ -145,9 +145,14 @@ async function displayed(page, i, j) {
     // come from the independent synthetic good input, never from the candidate editor/fitter.
     const emptyDir = path.join(root, "empty-review"), empty = read("empty-review/capture.json");
     const emptyReport = read("empty-review/review.json");
+    const declarations = read("initial.json");
+    assert(declarations.fit.frames.every(f => f.frame && !f.source && !f.calibration_sha256));
+    assert.deepEqual(emptyReport.capture_input.input, declarations);
+    assert(empty.fit.frames.every(f => !f.frame && f.source && f.calibration_sha256));
+    assert.deepEqual(empty, read("empty-full-review/capture.json"));
     assert(empty.fit.frames.every(f => f.keypoints.length === 0));
     assert.equal(emptyReport.capture_input.sources_sha256, report.capture_input.sources_sha256);
-    const initialHashes = new Map(["empty.json", "good.json", "input.json", "empty-review/capture.json",
+    const initialHashes = new Map(["empty.json", "initial.json", "good.json", "input.json", "empty-review/capture.json",
       "empty-review/review.json", "empty-review/index.html", "empty-review/review.js",
       ...emptyReport.frames.map(f => "empty-review/" + f.source_image.file)]
       .map(file => [file, hash(fs.readFileSync(path.join(root, file)))]));

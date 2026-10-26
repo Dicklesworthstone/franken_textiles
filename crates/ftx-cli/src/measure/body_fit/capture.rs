@@ -42,7 +42,7 @@ pub(super) fn run(args: &crate::Args) -> Result<(Value, i32, String), Refusal> {
         );
     }
     let mut replay = prepared.clone();
-    let (request, mut receipt) = prepare(Path::new(file), prepared)?;
+    let (request, mut receipt) = prepare_input(Path::new(file), prepared, true)?;
     // The option augments the replay, not the original document named by this receipt.
     receipt["input"] = original;
     let source = receipt["source"]
@@ -69,9 +69,24 @@ pub(super) fn run(args: &crate::Args) -> Result<(Value, i32, String), Refusal> {
     if replay.get("silhouettes").is_some_and(|v| !v.is_null()) {
         replay["silhouettes"] = absolute(&replay["silhouettes"])?;
     }
-    for frame in replay["fit"]["frames"].as_array_mut().unwrap() {
+    for (i, frame) in replay["fit"]["frames"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        let object = frame
+            .as_object_mut()
+            .ok_or_else(|| bad_input("capture frames must be objects"))?;
+        object.remove("frame");
+        object.insert("source".into(), receipt["frames"][i]["source"].clone());
+        object.insert(
+            "calibration_sha256".into(),
+            receipt["frames"][i]["calibration_sha256"].clone(),
+        );
         for key in ["calibration", "reference"] {
-            frame[key] = absolute(&frame[key])?;
+            let path = absolute(&object[key])?;
+            object.insert(key.into(), path);
         }
     }
     let bundle = super::review::prepare_capture(&request, &receipt, &bytes, &replay)?;
@@ -117,10 +132,14 @@ struct Observations {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Frame {
-    source: Value,
+    #[serde(default)]
+    source: Option<Value>,
+    #[serde(default)]
+    frame: Option<FrameId>,
     lens_id: String,
     calibration: String,
-    calibration_sha256: String,
+    #[serde(default)]
+    calibration_sha256: Option<String>,
     reference: String,
     keypoints: Vec<Keypoint>,
     #[serde(default)]
@@ -143,6 +162,10 @@ fn document(base: &Path, name: &str) -> Result<(Value, Vec<u8>), Refusal> {
 }
 
 pub(super) fn prepare(path: &Path, original: Value) -> Result<(Request, Value), Refusal> {
+    prepare_input(path, original, false)
+}
+
+fn prepare_input(path: &Path, original: Value, review: bool) -> Result<(Request, Value), Refusal> {
     let input: Capture = serde_json::from_value(original.clone())
         .map_err(|e| bad_input(format!("invalid reviewed capture: {e}")))?;
     if input.schema != "ftx-anny-capture-input/1"
@@ -169,23 +192,49 @@ pub(super) fn prepare(path: &Path, original: Value) -> Result<(Request, Value), 
     let mut identities = BTreeSet::new();
     let mut epochs = BTreeMap::new();
     for entry in input.fit.frames {
+        let declaration = entry.frame.is_some();
+        if declaration && (!review || input.reviewed_sources_sha256.is_some()) {
+            return Err(bad_input(
+                "frame declarations require a new unbound capture-review; fitting needs its complete replay input",
+            ));
+        }
+        let selected_source = match (entry.source, entry.frame) {
+            (Some(source), None) => source,
+            (None, Some(id)) => selected
+                .iter()
+                .find(|source| source["metadata"]["frame"] == json!(id))
+                .cloned()
+                .ok_or_else(|| bad_input("declared capture frame is not currently selected"))?,
+            _ => {
+                return Err(bad_input(
+                    "declare exactly one capture frame identity or complete source",
+                ));
+            }
+        };
         // Match the entire record, including masks and focal/epoch metadata, to the
         // exact current buffers scored by the selector. No second image read or resampling.
-        if !selected.contains(&entry.source) {
+        if !selected.contains(&selected_source) {
             return Err(bad_input(
                 "capture source changed or is not currently selected; rerun video-select and review the capture",
             ));
         }
-        let metadata: FrameMetadata = serde_json::from_value(entry.source["metadata"].clone())
-            .map_err(|e| bad_input(format!("invalid selected-frame metadata: {e}")))?;
+        let metadata: FrameMetadata =
+            serde_json::from_value(selected_source["metadata"].clone())
+                .map_err(|e| bad_input(format!("invalid selected-frame metadata: {e}")))?;
         let id: FrameId = metadata.frame.clone();
         if !identities.insert(id.clone()) {
             return Err(bad_input("duplicate capture frame identity"));
         }
-        let size: [u32; 2] = serde_json::from_value(entry.source["image_size_px"].clone())
+        let size: [u32; 2] = serde_json::from_value(selected_source["image_size_px"].clone())
             .map_err(|e| bad_input(format!("invalid oriented image size: {e}")))?;
         let (calibration, calibration_bytes) = document(base, &entry.calibration)?;
-        if sha256_hex(&calibration_bytes) != entry.calibration_sha256 {
+        let calibration_sha256 = sha256_hex(&calibration_bytes);
+        if entry
+            .calibration_sha256
+            .as_ref()
+            .is_some_and(|expected| expected != &calibration_sha256)
+            || (entry.calibration_sha256.is_none() && !declaration)
+        {
             return Err(bad_input(
                 "capture calibration bytes changed; review a new capture input",
             ));
@@ -200,7 +249,7 @@ pub(super) fn prepare(path: &Path, original: Value) -> Result<(Request, Value), 
             ));
         }
         let epoch = (id.stream.clone(), metadata.camera_epoch.clone());
-        let binding = (entry.lens_id.clone(), entry.calibration_sha256.clone());
+        let binding = (entry.lens_id.clone(), calibration_sha256.clone());
         if let Some(previous) = epochs.insert(epoch, binding.clone())
             && previous != binding
         {
@@ -222,7 +271,7 @@ pub(super) fn prepare(path: &Path, original: Value) -> Result<(Request, Value), 
         if !reference.is_object()
             || reference.get("intrinsics").is_some()
             || reference["reference_id"] != input.reference_id
-            || reference["image"] != entry.source["image"]
+            || reference["image"] != selected_source["image"]
             || reference["image_size_px"] != json!(size)
             || reference["rotation_applied_degrees"] != metadata.rotation_cw_deg
         {
@@ -248,8 +297,8 @@ pub(super) fn prepare(path: &Path, original: Value) -> Result<(Request, Value), 
             keypoints: entry.keypoints,
             silhouette: entry.silhouette,
         });
-        receipts.push(json!({"frame":id,"source":entry.source,
-            "lens_id":entry.lens_id,"calibration_sha256":entry.calibration_sha256,
+        receipts.push(json!({"frame":id,"source":selected_source,
+            "lens_id":entry.lens_id,"calibration_sha256":calibration_sha256,
             "calibration":calibration,"reference_input_sha256":sha256_hex(&reference_bytes),
             "sheet_pose":pose}));
     }

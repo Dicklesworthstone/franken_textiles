@@ -29,6 +29,11 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   Replay rereads source masks and binds manifest bytes, samples and decoded hashes; changed sources
   refuse. No-manifest digests are unchanged. Neither a manifest nor inline constraints can be
   overwritten by another declaration. No segmentation, full-mask or occlusion approval follows.
+  New unbound reviews may declare explicit `frame` identities instead of full `source` records,
+  omitting calibration hashes. Existing selection/camera checks resolve those exact timestamps;
+  replay contains full sources/hashes and preserves authored targets, observations and starts.
+  Direct fitting, bound declarations, ambiguous frame/source pairs and incomplete full records
+  refuse. No frame, pose or anatomy is inferred. Original input and bytes remain exact.
 - `ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]`: the
   reference's `drafting.py` on `ftx_pattern::draft`. Writes `DIR/pattern.json` and `DIR/fit_spec.json`
   (replacing them, as the reference does; Python's number formatting, keys sorted) and prints

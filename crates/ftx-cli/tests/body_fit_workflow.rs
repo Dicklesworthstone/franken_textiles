@@ -805,12 +805,27 @@ fn capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_referenc
         serde_json::to_vec_pretty(&empty).unwrap(),
     )
     .unwrap();
+    let full_empty =
+        capture_review_args(&dir, &["empty.json", "--out", "empty-full-review"], 0)["result"]
+            .clone();
+    let mut declarations = empty.clone();
+    for frame in declarations["fit"]["frames"].as_array_mut().unwrap() {
+        frame["frame"] = frame["source"]["metadata"]["frame"].clone();
+        let object = frame.as_object_mut().unwrap();
+        object.remove("source");
+        object.remove("calibration_sha256");
+    }
+    std::fs::write(
+        dir.join("initial.json"),
+        serde_json::to_vec_pretty(&declarations).unwrap(),
+    )
+    .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(&dir)
         .args([
             "measure",
             "capture-review",
-            "empty.json",
+            "initial.json",
             "--out",
             "empty-review",
             "--json",
@@ -825,7 +840,27 @@ fn capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_referenc
     let prepared: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(prepared["result"]["status"], "PREPARED");
     assert_eq!(prepared["result"]["body_fitted"], false);
-    assert_eq!(prepared["result"]["capture_input"]["input"], empty);
+    assert_eq!(prepared["result"]["capture_input"]["input"], declarations);
+    assert_eq!(full_empty["status"], "PREPARED");
+    assert_eq!(full_empty["body_fitted"], false);
+    assert_eq!(full_empty["capture_input"]["input"], empty);
+    assert_eq!(prepared["result"]["frames"], full_empty["frames"]);
+    let replay: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("empty-review/capture.json")).unwrap())
+            .unwrap();
+    let full_replay: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("empty-full-review/capture.json")).unwrap())
+            .unwrap();
+    assert_eq!(replay, full_replay);
+    assert_eq!(
+        std::fs::read(dir.join("empty-review/original-input.json")).unwrap(),
+        std::fs::read(dir.join("initial.json")).unwrap()
+    );
+    for frame in replay["fit"]["frames"].as_array().unwrap() {
+        assert!(frame.get("frame").is_none());
+        assert!(frame["source"].is_object());
+        assert_eq!(frame["calibration_sha256"].as_str().unwrap().len(), 64);
+    }
     assert_eq!(
         prepared["result"]["capture_input"]["sources_sha256"],
         review["capture_input"]["sources_sha256"]
@@ -833,6 +868,52 @@ fn capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_referenc
     for frame in prepared["result"]["frames"].as_array().unwrap() {
         assert_eq!(frame["keypoints"], json!([]));
     }
+    let refused = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "measure",
+            "fit-body",
+            "initial.json",
+            "--model",
+            "model.ftxbody",
+            "--out",
+            "unprepared-fit.json",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        refused.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&refused.stdout)
+    );
+    assert!(!dir.join("unprepared-fit.json").exists());
+    let mut ambiguous = declarations.clone();
+    ambiguous["fit"]["frames"][0]["source"] = empty["fit"]["frames"][0]["source"].clone();
+    let mut missing = declarations.clone();
+    missing["fit"]["frames"][0]["frame"]["timestamp_us"] = json!(1);
+    let mut duplicate = declarations.clone();
+    duplicate["fit"]["frames"][1]["frame"] = duplicate["fit"]["frames"][0]["frame"].clone();
+    let mut wrong_hash = declarations.clone();
+    wrong_hash["fit"]["frames"][0]["calibration_sha256"] = json!("0".repeat(64));
+    let mut bound = declarations.clone();
+    bound["reviewed_sources_sha256"] = review["capture_input"]["sources_sha256"].clone();
+    let mut incomplete = empty.clone();
+    incomplete["fit"]["frames"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("calibration_sha256");
+    for (i, invalid) in [ambiguous, missing, duplicate, wrong_hash, bound, incomplete]
+        .iter()
+        .enumerate()
+    {
+        save(&dir, invalid);
+        let output = format!("invalid-declaration-{i}");
+        capture_review(&dir, &output, 3);
+        assert!(!dir.join(output).exists());
+    }
+    save(&dir, &bad);
     eprintln!("CAPTURE_EDITOR_CASE={}", dir.display());
     let unsafe_dir = dir.join("numeric-unsafe");
     std::fs::create_dir(&unsafe_dir).unwrap();

@@ -2025,6 +2025,17 @@ Letter 0.000143 (f 2871.5), as A4 0.000074 (f 4691.5).
 
 ### E.1 Native capture review extension (not reference parity)
 
+For a new, unbound review only, a frame may declare `frame: {stream, timestamp_us}` instead of
+`source`; its `calibration_sha256` may be omitted. The review resolves that exact identity through
+the current decoded-frame selector and hashes the declared calibration file, then performs all
+ordinary lens/size/rotation/epoch/sheet checks. It never chooses another frame or infers a pose,
+camera, model target or observation. The input must declare exactly one of `frame` and `source`.
+Complete source records still require their declared calibration hash. Supplied hashes always
+must match. Declarations are refused by `fit-body` and whenever `reviewed_sources_sha256` is present;
+they cannot refresh a previously bound capture silently. The replay replaces declarations with
+complete selected-source records and calibration hashes, retaining the original parsed input and
+bytes separately. It then follows the existing source-bound review, annotation and fitting route.
+
 `ftx measure capture-review CAPTURE.json --out NEW_DIR` runs the existing
 `ftx-anny-capture-input/1` source-selection and checked-calibration/sheet-pose join without
 loading a body model or fitting. Its private create-only directory contains original input
