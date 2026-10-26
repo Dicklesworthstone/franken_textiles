@@ -23,6 +23,10 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   A current edit downloads as `capture-edited.json`; pending/invalid/cancel/reset revoke old URLs,
   and reset restores the complete original point lists.
   Original files remain unchanged and script-disabled original review remains available.
+  Each frame's read-only stationary-sheet review shows the exact admitted correspondences,
+  FIT/CHECK roles, metric positions, camera projections and residuals on the same stored pixels.
+  Lens/reference identities and calibration/reference hashes remain visible. No camera refit,
+  sheet edit/detection, physical reference or calibration accuracy approval occurs in the page.
   Optional capture `silhouettes` paths or the review flag reuse the strict mask reader without a
   body model. Inline/imported slices pass existing rectification and interval checks, then appear
   as read-only observed FIT/CHECK foreground/background lines with original sigma/evidence.

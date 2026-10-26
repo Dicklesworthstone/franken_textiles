@@ -34,6 +34,15 @@ existing rectified-camera and interval checks. Dashed lines show sampled slices;
 show foreground, and empty slices explicitly assert background. Every slice retains its original
 FIT/CHECK role, axis, position, sigma and evidence. This does not validate the segmentation,
 occluders or clothing against a body.
+Before body annotation, expand **Review stationary sheet and camera** on every frame. Purple
+circles show the original sheet observations; green crosses show the checked camera's projections.
+The list retains each metric (x, z) position, observed/projected pixel, FIT/CHECK role and residual,
+along with reference/lens identifiers and calibration/reference hashes. Verify that the points
+actually identify the same stationary reference. Small residuals cannot establish flatness,
+physical print scale or lens accuracy. This is read-only: correct the original reference input
+before generating another review, preserving the predeclared held-out roles. No detector or
+camera refitting runs in the page. The sheet SVG and script-disabled review remain available.
+
 To correct a keypoint, select it in its table, then click that image or enter full-resolution
 X/Y coordinates and choose **Apply coordinates**. The image transform accounts for display size,
 scroll and zoom; numeric entry retains the supplied precision. Invalid/out-of-image values refuse.

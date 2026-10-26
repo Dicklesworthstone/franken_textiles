@@ -19,7 +19,7 @@ assert.equal(read("expected-fit.json").status, "ACCEPTED");
 fs.mkdirSync(out, {mode: 0o700});
 function verifyFiles(directory = reviewDir, records = report) {
   for (const item of [records.original_input, records.replay_input, records.viewer, records.editor,
-    ...records.frames.flatMap(f => [f.source_image, f.keypoint_svg])]) {
+    ...records.frames.flatMap(f => [f.source_image, f.keypoint_svg, f.sheet_svg])]) {
     const b = fs.readFileSync(path.join(directory, item.file));
     assert.equal(b.length, item.bytes); assert.equal(hash(b), item.sha256);
   }
@@ -42,6 +42,41 @@ async function hidden(page) {
 async function displayed(page, i, j) {
   const g = page.locator("section").nth(i).locator('g[data-point="' + j + '"]');
   return [Number(await g.locator("circle").getAttribute("cx")), Number(await g.locator("circle").getAttribute("cy"))];
+}
+async function sheetReview(page, records = report) {
+  let count = 0;
+  for (let i = 0; i < records.frames.length; ++i) {
+    const section = page.locator("section").nth(i), sheet = section.locator(".sheet-review");
+    const cameraRecord = records.capture_input.frames[i], pose = cameraRecord.sheet_pose;
+    await sheet.locator("summary").click();
+    assert(await sheet.locator("svg").isVisible());
+    const text = await sheet.innerText();
+    for (const identity of [pose.reference_id, cameraRecord.lens_id,
+      cameraRecord.calibration_sha256, cameraRecord.reference_input_sha256]) assert(text.includes(identity));
+    assert.equal(await sheet.locator("svg image").getAttribute("href"), records.frames[i].source_image.file);
+    assert.equal(await sheet.locator("svg g[data-sheet-point]").count(), pose.input.points.length);
+    assert.equal(await sheet.locator("ol li").count(), pose.input.points.length);
+    // Independent pinhole projection of this synthetic, zero-distortion camera. This checks
+    // display coordinates, not a new numerical calibration oracle or a real camera claim.
+    assert.deepEqual(pose.camera.intrinsics.distortion.radial, [0, 0, 0]);
+    assert.deepEqual(pose.camera.intrinsics.distortion.tangential, [0, 0]);
+    for (let j = 0; j < pose.input.points.length; ++j) {
+      const p = pose.input.points[j], marker = sheet.locator('svg g[data-sheet-point="' + j + '"]');
+      const role = p.held_out ? "CHECK" : "FIT";
+      assert.equal(await marker.getAttribute("data-partition"), role);
+      assert.deepEqual(await marker.locator("circle").evaluate(n => [Number(n.getAttribute("cx")), Number(n.getAttribute("cy"))]), p.pixel_px);
+      const delta = [p.sheet_xz_m[0], 0, p.sheet_xz_m[1]].map((x, k) => x - pose.camera.center_m[k]);
+      const q = pose.camera.world_to_camera.rows.map(r => r.reduce((sum, x, k) => sum + x * delta[k], 0));
+      const expected = [0, 1].map(k => pose.camera.intrinsics.principal_px[k] + pose.camera.intrinsics.focal_px[k] * q[k] / q[2]);
+      const projected = await marker.locator("path.projected").evaluate(n => [Number(n.dataset.x), Number(n.dataset.y)]);
+      projected.forEach((x, k) => assert(Math.abs(x - expected[k]) < 1e-9));
+      const row = sheet.locator('li[data-sheet-point="' + j + '"]');
+      assert.equal(await row.getAttribute("data-partition"), role);
+      assert.equal(Number(await row.getAttribute("data-error-px")), pose.reprojection[j].error_px);
+      ++count;
+    }
+  }
+  return count;
 }
 (async () => {
   verifyFiles();
@@ -73,9 +108,18 @@ async function displayed(page, i, j) {
     const policy = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute("content");
     assert.equal(policy.split(";").map(s => s.trim()).find(s => s.startsWith("script-src")), "script-src 'self'");
     assert.equal(await page.locator("section").count(), report.frames.length);
+    const sheetPoints = await sheetReview(page);
+    assert.equal(sheetPoints, 18);
+    const sheetBefore = await page.locator(".sheet-review").evaluateAll(nodes => nodes.map(n => n.innerHTML));
+    await page.locator('.edit-point[data-frame="0"][data-point="3"]').click();
+    const bodyBeforeSheetClick = await displayed(page, 0, 3);
+    await page.locator("section").nth(0).locator(".sheet-review svg").click();
+    await hidden(page);
+    assert.deepEqual(await displayed(page, 0, 3), bodyBeforeSheetClick);
+    await page.locator("#resetPoints").click();
     for (let i = 0; i < report.frames.length; ++i) {
       const section = page.locator("section").nth(i), f = report.frames[i];
-      const image = await section.locator("image").getAttribute("href");
+      const image = await section.locator(":scope > svg image").getAttribute("href");
       assert.equal(image, f.source_image.file);
       assert.deepEqual(await page.evaluate(url => new Promise((resolve, reject) => {
         const image = new Image(); image.onload = () => resolve([image.naturalWidth, image.naturalHeight]);
@@ -94,7 +138,7 @@ async function displayed(page, i, j) {
       await page.evaluate(z => document.body.style.zoom = z, zoom);
       await page.locator("#resetPoints").click();
       await page.locator('.edit-point[data-frame="0"][data-point="3"]').click();
-      const svg = page.locator("section").nth(0).locator("svg");
+      const svg = page.locator("section").nth(0).locator(":scope > svg");
       await svg.scrollIntoViewIfNeeded();
       const location = await svg.evaluate(n => {
         n.addEventListener("click", e => {
@@ -141,6 +185,7 @@ async function displayed(page, i, j) {
       }
     }
     assert(await page.locator("#applyPoint").isDisabled());
+    assert.deepEqual(await page.locator(".sheet-review").evaluateAll(nodes => nodes.map(n => n.innerHTML)), sheetBefore);
     // Start with the actual native zero-observation review. Coordinates, roles and sigmas below
     // come from the independent synthetic good input, never from the candidate editor/fitter.
     const emptyDir = path.join(root, "empty-review"), empty = read("empty-review/capture.json");
@@ -160,7 +205,7 @@ async function displayed(page, i, j) {
     await placing.goto(pathToFileURL(path.join(emptyDir, "index.html")).href);
     await placing.waitForFunction(() => !document.getElementById("newPointFields").disabled);
     assert.deepEqual(await placing.locator("#captureInput").evaluate(n => JSON.parse(n.textContent)), empty);
-    assert.equal(await placing.locator("tbody tr, svg circle").count(), 0);
+    assert.equal(await placing.locator("tbody tr, section > svg circle").count(), 0);
     await hidden(placing);
     // Every declaration is explicit; an incomplete/invalid one creates no observation.
     for (const [id, value] of [[null, null], ["newFrame", "0"], ["newTarget", "p0"], ["newPartition", "fit"]]) {
@@ -186,7 +231,7 @@ async function displayed(page, i, j) {
     const p0 = good.fit.frames[0].keypoints[0];
     await declare(0, p0);
     // Image placement uses the same real screen transform as correction, including scrolling.
-    const svg = placing.locator("section").nth(0).locator("svg");
+    const svg = placing.locator("section").nth(0).locator(":scope > svg");
     await svg.scrollIntoViewIfNeeded();
     const screen = await svg.evaluate((n, xy) => {
       n.addEventListener("click", e => {
@@ -220,13 +265,13 @@ async function displayed(page, i, j) {
       assert.equal(await placing.locator("tbody tr").count(), 1);
     }
     await placing.locator("#resetPoints").click(); await hidden(placing);
-    assert.equal(await placing.locator("tbody tr, svg circle").count(), 0);
+    assert.equal(await placing.locator("tbody tr, section > svg circle").count(), 0);
     // A new point follows the same refusal bounds as a correction; no hidden zero gets inserted.
     await declare(0, p0);
     for (const [x, y] of [["-1", "200"], ["1280", "200"], ["200", "960"], ["", "200"]]) {
       await placing.locator("#editX").fill(x); await placing.locator("#editY").fill(y);
       await placing.locator("#applyPoint").click(); await hidden(placing);
-      assert.equal(await placing.locator("tbody tr, svg circle").count(), 0);
+      assert.equal(await placing.locator("tbody tr, section > svg circle").count(), 0);
     }
     await placing.locator("#resetPoints").click();
     for (let i = 0; i < good.fit.frames.length; ++i) {
@@ -246,10 +291,10 @@ async function displayed(page, i, j) {
     annotated.fit.frames.forEach((f, i) => f.keypoints = structuredClone(good.fit.frames[i].keypoints));
     const annotatedFile = await download(placing, "capture-annotated.json", annotated);
     assert.equal(await placing.evaluate(() => globalThis.captureInjection), undefined);
-    assert.equal(await placing.locator("svg circle").count(), 20);
+    assert.equal(await placing.locator("section > svg circle").count(), 20);
     await placing.screenshot({path: path.join(out, "annotated.png"), fullPage: true});
     await placing.locator("#resetPoints").click(); await hidden(placing);
-    assert.equal(await placing.locator("tbody tr, svg circle").count(), 0);
+    assert.equal(await placing.locator("tbody tr, section > svg circle").count(), 0);
     for (const [file, expectedHash] of initialHashes) {
       assert.equal(hash(fs.readFileSync(path.join(root, file))), expectedHash);
     }
@@ -309,9 +354,10 @@ async function displayed(page, i, j) {
     const staticPage = await staticContext.newPage();
     await staticPage.goto(pathToFileURL(path.join(reviewDir, "index.html")).href);
     assert(await staticPage.locator("#captureEditor").isHidden());
-    assert.equal(await staticPage.locator("svg circle").count(), 20);
+    assert.equal(await staticPage.locator("section > svg circle").count(), 20);
     assert.equal(await staticPage.locator("tbody tr").count(), 20);
     assert(await staticPage.locator("noscript").isVisible());
+    assert.equal(await sheetReview(staticPage), 18);
     const staticMasks = await staticContext.newPage();
     await staticMasks.goto(pathToFileURL(path.join(maskDir, "index.html")).href);
     assert.equal(await staticMasks.locator("g[data-silhouette]").count(), 10);
@@ -324,7 +370,7 @@ async function displayed(page, i, j) {
     assert(await unsafePage.locator("#applyPoint").isDisabled());
     assert(await unsafePage.locator("#preparePoint").isDisabled());
     assert.equal(await unsafePage.locator("#newPointFields").evaluate(n => n.disabled), true);
-    assert.equal(await unsafePage.locator("svg circle").count(), 20);
+    assert.equal(await unsafePage.locator("section > svg circle").count(), 20);
     assert((await unsafePage.locator("#captureInput").textContent()).includes("9007199254740993"));
     assert.deepEqual(errors, []);
     verifyFiles(maskDir, maskReport);
@@ -335,7 +381,7 @@ async function displayed(page, i, j) {
     console.log(JSON.stringify({status: "PASS", frames: 2, points: 20, clickLayouts: 3,
       invalidEdits: 5, correctedFile: final, sha256: hash(fs.readFileSync(final)),
       initiallyPlaced: 20, annotatedFile, annotatedSha256: hash(fs.readFileSync(annotatedFile)), errors, requests,
-      observedSlices: 10, maskedFile, maskedSha256: hash(fs.readFileSync(maskedFile)),
+      observedSlices: 10, sheetPoints, maskedFile, maskedSha256: hash(fs.readFileSync(maskedFile)),
       boundary: "Synthetic actual page and data only; fit acceptance is a separate ordinary CLI run"}, null, 2));
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

@@ -2043,6 +2043,12 @@ bytes, current preparation evidence, hash-checked copies of selected images, and
 every supplied named keypoint with its original FIT/CHECK partition, sigma and model target.
 Pixels and coordinates are neither rotated nor rectified again. Unknown/duplicate labels,
 nonpositive sigmas and out-of-image points refuse rather than disappear from the overlay.
+Each frame also exposes a separate read-only stationary-sheet overlay on the same stored image.
+It shows every original metric/pixel correspondence and FIT/CHECK role, its projection through
+the already checked camera, and the existing per-point residual. Reference/lens identity and
+calibration/reference hashes remain visible. This display neither redetects nor edits sheet
+points, changes camera admission, rectifies pixels, nor authenticates a physically stationary,
+flat, correctly sized reference. Body annotation and replay remain unchanged.
 
 `capture.json` retains the original capture document except its local manifest/calibration/
 reference paths are rebased to absolute paths and `reviewed_sources_sha256` binds the current

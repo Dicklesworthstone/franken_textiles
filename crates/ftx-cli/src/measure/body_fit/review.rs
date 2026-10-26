@@ -198,6 +198,80 @@ fn observed_silhouette(frame: &FitFrame) -> Result<(String, String), Refusal> {
     Ok((svg, text))
 }
 
+fn sheet_review(
+    bundle: &mut Bundle,
+    capture: &Value,
+    frame: &FitFrame,
+    i: usize,
+    image: &str,
+) -> Result<(Value, String), Refusal> {
+    #[derive(serde::Deserialize)]
+    struct Point {
+        sheet_xz_m: ftx_core::Vec2,
+        pixel_px: ftx_core::Vec2,
+        #[serde(default)]
+        held_out: bool,
+    }
+    let record = capture["frames"]
+        .as_array()
+        .and_then(|records| records.iter().find(|r| r["frame"] == json!(frame.frame)))
+        .ok_or_else(|| bad_input("sheet review has no matching camera evidence"))?;
+    let pose = &record["sheet_pose"];
+    let points: Vec<Point> = serde_json::from_value(pose["input"]["points"].clone())
+        .map_err(|e| bad_input(format!("invalid checked sheet points: {e}")))?;
+    let [w, h] = frame.image_size_px;
+    let mut svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {h}\" role=\"img\">\
+         <title>Stationary sheet: observed circles, camera-projected crosses</title>\
+         <image href=\"{image}\" width=\"{w}\" height=\"{h}\" preserveAspectRatio=\"none\"/>"
+    );
+    let mut rows = String::new();
+    for (j, point) in points.iter().enumerate() {
+        // Display the admitted camera on its original distorted pixel frame, never refit or
+        // omit held-out points. The stored residual remains the camera gate's own result.
+        let p = point.pixel_px;
+        let projected =
+            frame
+                .camera
+                .project(Vec3::new(point.sheet_xz_m.x, 0.0, point.sheet_xz_m.y))?;
+        let error = pose["reprojection"][j]["error_px"]
+            .as_f64()
+            .ok_or_else(|| bad_input("checked sheet residual is missing"))?;
+        let role = if point.held_out { "CHECK" } else { "FIT" };
+        let (x, y) = (projected.x, projected.y);
+        write!(svg, "<g data-sheet-point=\"{j}\" data-partition=\"{role}\"><title>Sheet point {j}: {role}; residual {error} px</title>\
+            <line x1=\"{}\" y1=\"{}\" x2=\"{x}\" y2=\"{y}\" stroke=\"#555\"/>\
+            <circle class=\"observed\" cx=\"{}\" cy=\"{}\" r=\"5\" fill=\"none\" stroke=\"#9333ea\" stroke-width=\"2\"/>\
+            <path class=\"projected\" data-x=\"{x}\" data-y=\"{y}\" d=\"M {} {y} h 8 M {x} {} v 8\" stroke=\"#15803d\" stroke-width=\"2\"/>\
+            <text x=\"{}\" y=\"{}\" font-size=\"12\">{j} {role}</text></g>",
+            p.x, p.y, p.x, p.y, x - 4.0, y - 4.0, p.x + 7.0, p.y - 7.0).unwrap();
+        write!(rows, "<li data-sheet-point=\"{j}\" data-partition=\"{role}\" data-error-px=\"{error}\">Point {j} · {role} · sheet (x, z) [{}, {}] m · \
+            observed [{}, {}] px · projected [{x}, {y}] px · residual {error} px</li>",
+            point.sheet_xz_m.x, point.sheet_xz_m.y, p.x, p.y).unwrap();
+    }
+    svg.push_str("</svg>\n");
+    let name = format!("sheet-{i:04}.svg");
+    let artifact = bundle.push(name.clone(), svg.as_bytes().to_vec())?;
+    let text = format!(
+        "<details class=\"sheet-review\"><summary>Review stationary sheet and camera ({} points)</summary>\
+         <p>Reference: <code>{}</code> · lens: <code>{}</code>. Sheet coordinates are metres in the common \
+         stationary plane (x, 0, z), z up. Purple circles are observed pixels; green crosses are \
+         projections through the checked camera. FIT and CHECK roles remain as originally declared.</p>\
+         <p>Read-only: check every named location against the actual sheet before body annotation. \
+         A small residual does not verify stationary placement, flatness, print scale or lens accuracy. \
+         Correct source reference points before a new capture review; do not tune CHECK points to a fit.</p>\
+         <p>Calibration SHA-256: <code>{}</code><br>Reference input SHA-256: <code>{}</code></p>\
+         <a href=\"{name}\">Original sheet SVG</a>{svg}\
+         <ol>{rows}</ol></details>",
+        points.len(),
+        label(pose["reference_id"].as_str().unwrap_or("")),
+        label(record["lens_id"].as_str().unwrap_or("")),
+        label(record["calibration_sha256"].as_str().unwrap_or("")),
+        label(record["reference_input_sha256"].as_str().unwrap_or(""))
+    );
+    Ok((artifact, text))
+}
+
 pub(super) fn prepare_capture(
     request: &super::Request,
     capture: &Value,
@@ -265,6 +339,7 @@ pub(super) fn prepare_capture(
         let photograph = source_image(&mut bundle, capture, frame, i)?;
         let (silhouette_svg, silhouette_text) = observed_silhouette(frame)?;
         let name = photograph["file"].as_str().unwrap();
+        let (sheet_svg, sheet_text) = sheet_review(&mut bundle, capture, frame, i, name)?;
         let mut svg = format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {h}\" role=\"img\">\
             <title>{} @ {} us: supplied keypoints before fitting</title>\
@@ -317,11 +392,11 @@ pub(super) fn prepare_capture(
         let overlay = bundle.push(svg_name.clone(), svg.as_bytes().to_vec())?;
         write!(page, "<section><h2>{} @ {} us</h2><p>{w} × {h} stored pixels; {}° clockwise rotation already applied. \
             <a href=\"{svg_name}\">Original keypoint SVG</a></p>{svg}\
-            <table><thead><tr><th>Name</th><th>Partition</th><th>Pixel x, y</th><th>Sigma px</th><th>Model target</th></tr></thead><tbody>{rows}</tbody></table>{silhouette_text}</section>",
+            <table><thead><tr><th>Name</th><th>Partition</th><th>Pixel x, y</th><th>Sigma px</th><th>Model target</th></tr></thead><tbody>{rows}</tbody></table>{silhouette_text}{sheet_text}</section>",
             label(&frame.frame.stream), frame.frame.timestamp_us, frame.rotation_cw_deg).unwrap();
         let mut record = json!({"frame":frame.frame,"image_size_px":frame.image_size_px,
             "rotation_cw_deg":frame.rotation_cw_deg,"keypoints":frame.keypoints,
-            "source_image":photograph,"keypoint_svg":overlay});
+            "source_image":photograph,"keypoint_svg":overlay,"sheet_svg":sheet_svg});
         if let Some(silhouette) = &frame.silhouette {
             record["silhouette"] = json!(silhouette);
         }

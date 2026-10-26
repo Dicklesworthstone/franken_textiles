@@ -448,7 +448,17 @@ fn capture_review_runs_without_model_and_replays_the_original_fit() {
     let dir = setup();
     let original: Value =
         serde_json::from_slice(&std::fs::read(dir.join("input.json")).unwrap()).unwrap();
-    let input = capture::wrap(&dir, original);
+    let mut input = capture::wrap(&dir, original);
+    input["reference_id"] = json!("sheet </script><script>globalThis.sheetInjection=1</script>&\"");
+    for i in 0..2 {
+        let path = dir.join(format!("capture-reference-{i}.json"));
+        let mut reference: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        reference["reference_id"] = input["reference_id"].clone();
+        // Retain a small nonzero CHECK residual; the display must not round it away.
+        reference["points"][1]["pixel_px"][0] =
+            json!(reference["points"][1]["pixel_px"][0].as_f64().unwrap() + 0.25);
+        std::fs::write(path, serde_json::to_vec_pretty(&reference).unwrap()).unwrap();
+    }
     save(&dir, &input);
     let bytes = std::fs::read(dir.join("input.json")).unwrap();
     // Move, never delete, the test model: the review must not depend on its availability.
@@ -493,7 +503,7 @@ fn capture_review_runs_without_model_and_replays_the_original_fit() {
             frame["frame"],
             input["fit"]["frames"][i]["source"]["metadata"]["frame"]
         );
-        for key in ["source_image", "keypoint_svg"] {
+        for key in ["source_image", "keypoint_svg", "sheet_svg"] {
             let artifact = &frame[key];
             let data = std::fs::read(
                 dir.join("before-fit")
@@ -514,11 +524,42 @@ fn capture_review_runs_without_model_and_replays_the_original_fit() {
         assert!(svg.contains("data-partition=\"FIT\""));
         assert!(svg.contains("data-partition=\"CHECK\""));
         assert!(!svg.contains("predicted"));
+        let sheet = &report["capture_input"]["frames"][i]["sheet_pose"];
+        let sheet_svg = std::fs::read_to_string(
+            dir.join("before-fit")
+                .join(frame["sheet_svg"]["file"].as_str().unwrap()),
+        )
+        .unwrap();
+        let camera: Camera = serde_json::from_value(sheet["camera"].clone()).unwrap();
+        let points = sheet["input"]["points"].as_array().unwrap();
+        assert_eq!(
+            sheet_svg.matches("<g data-sheet-point=").count(),
+            points.len()
+        );
+        assert_eq!(sheet_svg.matches("data-partition=\"CHECK\"").count(), 3);
+        for (j, point) in points.iter().enumerate() {
+            let p: Vec2 = serde_json::from_value(point["pixel_px"].clone()).unwrap();
+            let xz: Vec2 = serde_json::from_value(point["sheet_xz_m"].clone()).unwrap();
+            let projected = camera.project(Vec3::new(xz.x, 0.0, xz.y)).unwrap();
+            let residual = sheet["reprojection"][j]["error_px"].as_f64().unwrap();
+            assert!(
+                sheet_svg.contains(&format!("class=\"observed\" cx=\"{}\" cy=\"{}\"", p.x, p.y))
+            );
+            assert!(sheet_svg.contains(&format!(
+                "class=\"projected\" data-x=\"{}\" data-y=\"{}\"",
+                projected.x, projected.y
+            )));
+            assert!(sheet_svg.contains(&format!("residual {residual} px")));
+        }
+        assert!(sheet["reprojection"][1]["error_px"].as_f64().unwrap() > 0.24);
         assert_eq!(
             frame["source_image"]["sha256"],
             input["fit"]["frames"][i]["source"]["image_sha256"]
         );
     }
+    let html = std::fs::read_to_string(dir.join("before-fit/index.html")).unwrap();
+    assert!(html.contains("sheet &lt;/script&gt;&lt;script&gt;"));
+    assert!(!html.contains("<script>globalThis.sheetInjection"));
     let replay: Value =
         serde_json::from_slice(&std::fs::read(dir.join("before-fit/capture.json")).unwrap())
             .unwrap();
