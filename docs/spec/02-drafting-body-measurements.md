@@ -921,6 +921,19 @@ This conservative aggregate cannot establish per-record freshness; source dates
 remain inspectable. No provenance, sigma, definition, conflict or readiness rule changes. Source/body
 edits withdraw outputs and wearer consent. Evidence import is local and never enters browser storage.
 
+Browser body-check extension: after a round saves its current measurements, the same verified Anny
+model can be checked without a pattern placement or cloth simulation. The ordinary path uses the
+existing tape fitter at its standing drape pose and retains raw target/body/signed residual mm, supplied
+weight residual kg, iterations and all predicted readings. An explicitly associated accepted image-fit
+report instead uses the exact-shape importer, never a fallback tape fit; current targets are compared
+without changing that shape. Record-bearing inputs are validated and re-fused. Measurement text and
+accepted-report text are limited to 16 MiB each; the result binds exact input/model digests.
+The `ftx-body-check/1` result contains `body`, `measurements_sha256` and `cloth_simulated: false`.
+Predictions remain MODEL_FIT, unavailable anatomy stays unavailable, and no readiness or physical-fit
+approval is added. This is separate from drape flags and exports. Round, model or evidence replacement
+withdraws the check's display/download; superseded requests cannot publish. A flat-only garment can
+use this check even though folding remains unavailable.
+
 ---
 
 ## Part B: Body frames, landmarks and the analytic form (`body.py`)

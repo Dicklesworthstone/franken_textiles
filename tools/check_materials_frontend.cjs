@@ -1853,17 +1853,19 @@ test('original drafting worker also retains replayable drape JSON and frees its 
   assert.ok(read('index.html').includes('new Blob([msg.reportText]'));
 });
 
-test('drafting worker discards refused replacements, frees failed rounds and checks fold sources', async () => {
-  const sent=[], freed=[], calls=[]; let failure;
+test('drafting worker discards refused replacements, frees failed rounds and checks fold and body sources', async () => {
+  const sent=[], freed=[], calls=[]; let failure, flatOnly=false;
   const values={default:async()=>{},program_info:()=> '{}',calibration_dictionaries:()=> '["DICT_4X4_50"]',
     run:()=> {
       if(failure==='run') throw Error('run refused');
       return {page:()=>{if(failure==='page') throw Error('page refused');return '{"status":"CONVERGED","zip":"round.zip"}';},
         zip:()=>{if(failure==='zip') throw Error('zip refused');return new Uint8Array([1]);},
-        file:n=>{if(failure===n) throw Error('file refused');return new TextEncoder().encode(n==='pattern.json'?'{"pieces":[{"placement":{"part":"torso"}}]}':'{}');},
+        file:n=>{if(failure===n) throw Error('file refused');return new TextEncoder().encode(n==='pattern.json'?(flatOnly?'{"pieces":[]}':'{"pieces":[{"placement":{"part":"torso"}}]}'):'{}');},
         free:()=>freed.push('round')};
     },
     WebBody:class {constructor(bytes){if(bytes[0]===0)throw Error('body refused');}free(){freed.push('body');}},
+    inspect_body:(_body,measurements,source)=>{calls.push({inspect:measurements,source});
+      if(source==='refused')throw Error('import refused');return '{"cloth_simulated":false,"raw":-0.0}';},
     fold_up:()=>{calls.push('fold');return {report:()=>'{"gating":[]}',viewer:()=>'<html/>',free:()=>freed.push('fold')};},
     fold_up_with_body_fit:(_body,_pattern,_measurements,_fit,mm,source,angle)=>{
       calls.push({source,mm,angle});if(source==='refused')throw Error('import refused');
@@ -1901,6 +1903,21 @@ test('drafting worker discards refused replacements, frees failed rounds and che
   assert.equal(calls.filter(x=>x==='fold').length,tapeCalls); // never fall back on import failure
   assert.match((await fold({bodyFit:{},bodyFitConsent:true})).message,/JSON text/);
   assert.equal((await fold()).type,'folded');assert.equal(sent.at(-1).bodyFitText,null);
+  flatOnly=true;await run();assert.equal(sent.at(-1).foldable,false);assert.equal(sent.at(-1).bodyCheckable,true);
+  const inspect=extra=>send({type:'inspectBody',request:8,round:3,body:2,...extra});
+  const foldCalls=()=>calls.filter(x=>x==='fold'||(typeof x==='object'&&Object.hasOwn(x,'mm'))).length;
+  const folds=foldCalls();
+  const checked=await inspect();assert.equal(checked.type,'bodyChecked');
+  assert.equal(checked.reportText,'{"cloth_simulated":false,"raw":-0.0}');
+  assert.deepEqual(calls.at(-1),{inspect:'{}',source:undefined});
+  assert.equal((await inspect({round:9})).type,'error');
+  assert.match((await inspect({bodyFit:exact})).message,/associate/);
+  const accepted=await inspect({bodyFit:exact,bodyFitConsent:true});assert.equal(accepted.bodyFitText,exact);
+  assert.deepEqual(calls.at(-1),{inspect:'{}',source:exact});
+  assert.match((await inspect({bodyFit:'refused',bodyFitConsent:true})).message,/import refused/);
+  assert.equal(foldCalls(),folds); // body checking never calls either cloth path, including failure
+  failure='run';assert.equal((await run()).type,'error');assert.match((await inspect()).message,/run a round first/);
+  failure=undefined;await run();await send({type:'clearBody'});assert.match((await inspect()).message,/load the body model/);
 });
 
 // The original inline workshop script, using a small DOM transport double. These tests inspect
@@ -1930,8 +1947,8 @@ function draftingPage() {
   const sheetDictionaries=['DICT_4X4_50','DICT_5X5_50'];
   emit({type:'ready',info:{zouave_bolero:{style:{}}},sheetDictionaries,version:'test',dxf:'test'});
   assert.deepEqual(e.sheetDictionaries.children.map(option=>option.value),sheetDictionaries);
-  const result=request=>emit({type:'result',request:request??last('run').request,foldable:true,
-    res:{title:'current',status:'CONVERGED',basis:{},zip:'round.zip',files:[],validation:{}},blobs:{zip:new Uint8Array([1])}});
+  const result=(request,extra={})=>emit({type:'result',request:request??last('run').request,foldable:true,bodyCheckable:true,
+    res:{title:'current',status:'CONVERGED',basis:{},zip:'round.zip',files:[],validation:{}},blobs:{zip:new Uint8Array([1])},...extra});
   const body=async()=>{e.bodyFile.files=[{arrayBuffer:async()=>new ArrayBuffer(1)}];await e.bodyFile.handlers.change();
     emit({type:'bodyReady',request:last('body').request});};
   const dispatch=(id,event)=>e[id].handlers[event]?.();
@@ -2004,6 +2021,42 @@ test('primary workshop rejects invalid evidence bytes and superseded reads witho
   await p.e.go.handlers.click();assert.match(p.e.errorText.textContent,/16 MiB/);
   p.e.supplementalFiles.files=Array(9).fill({size:1,arrayBuffer:()=>{throw Error('must not read');}});
   await p.e.go.handlers.click();assert.match(p.e.errorText.textContent,/at most 8/);
+});
+
+test('standalone body checks work without fold placements and retain exact reports without changing readiness', async () => {
+  const p=draftingPage();await p.e.go.handlers.click();p.result(undefined,{foldable:false});await p.body();
+  assert.equal(p.e.foldGo.disabled,true);assert.equal(p.e.bodyCheckGo.disabled,false);
+  const gate=p.e.resGate.innerHTML;p.e.bodyCheckGo.handlers.click();const request=p.last('inspectBody');
+  assert.equal(request.round,p.last('run').request);assert.equal(request.body,p.last('body').request);
+  assert.equal(p.e.bodyCheckGo.disabled,true);assert.equal(p.last('fold'),undefined);
+  const report={cloth_simulated:false,body:{provenance:'MODEL_FIT',mass_kg:12,readings_mm:{chest:500.0000003},
+    fit:{tape:{chest:{target_mm:500,body_mm:500.0000003,residual_mm:0.0000003}}}}};
+  const raw=JSON.stringify(report);
+  p.emit({type:'bodyChecked',request:request.request,report,reportText:raw});
+  assert.match(p.e.bodyCheckSummary.innerHTML,/MODEL_FIT/);assert.match(p.e.bodyCheckSummary.innerHTML,/500.0000003/);
+  assert.equal(p.e.resGate.innerHTML,gate);assert.equal(p.e.foldGo.disabled,true);
+  const saved=[...p.live.values()].find(b=>b.type==='application/json');assert.equal(await saved.text(),raw);
+  p.dispatch('stature','input');assert.equal(p.live.size,0);assert.equal(p.e.bodyCheckGo.disabled,true);
+  p.emit({type:'bodyChecked',request:request.request,report,reportText:raw});assert.equal(p.live.size,0);
+  p.emit({type:'error',op:'inspectBody',request:request.request,message:'old refusal'});
+  assert.notEqual(p.e.errorText.textContent,'old refusal');
+});
+
+test('body checks require current accepted-source association and withdraw failed or replaced results', async () => {
+  const p=draftingPage();await p.e.go.handlers.click();p.result();await p.body();
+  const raw=' {"schema":"ftx-body-fit/1","value":-0.0}\n',bytes=Buffer.from(raw);
+  p.e.bodyFitFile.files=[{size:bytes.length,arrayBuffer:async()=>bytes}];await p.e.bodyFitFile.handlers.change();
+  assert.equal(p.e.bodyCheckGo.disabled,true);p.e.bodyFitConsent.checked=true;p.dispatch('bodyFitConsent','change');
+  p.e.bodyCheckGo.handlers.click();const current=p.last('inspectBody');
+  assert.equal(current.bodyFit,raw);assert.equal(current.bodyFitConsent,true);
+  p.emit({type:'bodyChecked',request:current.request,report:{body:{}},reportText:'{}',bodyFitText:raw});
+  assert.equal(p.live.size,3);assert.ok([...p.live.values()].some(b=>b.size===bytes.length));
+  p.e.bodyFitConsent.checked=false;p.dispatch('bodyFitConsent','change');assert.equal(p.live.size,1);
+  p.e.bodyFitConsent.checked=true;p.dispatch('bodyFitConsent','change');p.e.bodyCheckGo.handlers.click();
+  const refused=p.last('inspectBody');p.emit({type:'error',op:'inspectBody',request:refused.request,message:'import refused'});
+  assert.equal(p.live.size,1);assert.equal(p.e.errorText.textContent,'import refused');assert.equal(p.last('fold'),undefined);
+  p.e.bodyFitFile.files=[{size:1,arrayBuffer:async()=>{throw Error('replacement read failed');}}];
+  await p.e.bodyFitFile.handlers.change();assert.equal(p.e.bodyCheckGo.disabled,true);assert.equal(p.live.size,1);
 });
 
 test('primary workshop preserves signed body-fit precision, escapes targets and leaves readiness separate', async () => {

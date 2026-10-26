@@ -185,19 +185,18 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     <details><summary>Seam walk and truing</summary><div class="scroll"><table id="resSeams"></table></div></details>
     <details><summary>Export checks</summary><div id="resChecks"></div></details>
     <details><summary>Solved drafting values</summary><pre id="resSolved"></pre></details>
-    <div id="foldBox" class="hidden">
-      <h2 style="margin-top:14px">Fold it up on a fitted body</h2>
-      <p class="mut">Sews and drapes this pattern on an Anny body fitted to the measurements above, as
-        <code>ftx drape</code> does (cloth self-contact at Blender's 2 mm). It needs the converted body model,
+    <div>
+      <h2 style="margin-top:14px">Check the fitted body</h2>
+      <p class="mut">Compare the selected body with this round's targets before running cloth.
+        This also works for patterns with no fold-up placement. It needs the converted body model,
         <code>anny-0.6.1-default.ftxbody</code> (about 150 MB, made by FrankenTextiles'
-        <code>tools/body-model/convert_anny.py</code>); the file stays in this page. A bolero takes about half a
-        minute, trousers a minute or two.</p>
+        <code>tools/body-model/convert_anny.py</code>); the file stays in this page.
+        Body predictions remain MODEL_FIT; neither these differences nor an accepted shape establish physical fit.</p>
       <p class="row"><label>Body model <input type="file" id="bodyFile" accept=".ftxbody"></label>
-        <label><input type="checkbox" id="selfContact" checked> cloth self-contact</label>
-        <button id="foldGo" disabled>Fold it up</button></p>
+        <button id="bodyCheckGo" disabled>Check body against targets</button></p>
       <details><summary>Reuse an accepted image-fit shape</summary>
         <p>Optional saved <code>ftx-body-fit/1</code> report from <code>ftx measure fit-body</code>.
-          This preserves its shape without tape refitting. It changes only the draped body;
+          This preserves its shape without tape refitting. It selects the checked and draped body;
           the draft and measurement-readiness verdict remain separate. The model file must match.</p>
         <p><label>Accepted fit <input type="file" id="bodyFitFile" accept=".json,application/json"></label></p>
         <p><label><input type="checkbox" id="bodyFitConsent"> I associate this fit with the current wearer</label></p>
@@ -206,6 +205,15 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
           A refused start needs review. Neither an accepted shape nor a settled drape establishes physical fit.
           Clear the fit file to return to tape fitting.</p>
       </details>
+      <div id="bodyCheckSummary"></div>
+      <div id="bodyCheckFiles" class="files"></div>
+    </div>
+    <div id="foldBox" class="hidden">
+      <h2 style="margin-top:14px">Fold it up on the selected body</h2>
+      <p class="mut">Sews and drapes this pattern as <code>ftx drape</code> does. Cloth self-contact
+        uses Blender's 2 mm separation. Numerical settling does not establish physical fit.</p>
+      <p class="row"><label><input type="checkbox" id="selfContact" checked> cloth self-contact</label>
+        <button id="foldGo" disabled>Fold it up</button></p>
       <pre id="foldLog" class="mut" style="white-space:pre-wrap;max-height:9em;overflow:auto"></pre>
       <div id="foldSummary"></div>
       <iframe id="foldView" class="hidden" title="the fold-up" style="width:100%;height:560px;border:1px solid var(--line);border-radius:8px"></iframe>
@@ -225,6 +233,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   };
   let info = {}, program = store.get("program", "zouave_bolero"), fields = [], urls = [], ready = false;
   let foldable = false, bodyLoaded = false, folding = false, dead = false;
+  let bodyCheckable = false, bodyChecking = false, bodyCheckRequest = 0, bodyCheckUrls = [];
   let bodyFitText = null, bodyFitReady = true, bodyFitRead = 0;
   let nextRequest = 0, roundRequest = 0, bodyRequest = 0, foldRequest = 0, fieldsRequest = 0;
   const worker = new Worker(new URL("worker.js", location.href), { type: "module" });
@@ -385,8 +394,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   }
   // a round or a fold-up has finished (successfully or not): tests wait on this counter
   function finished() { document.body.dataset.runs = String((+document.body.dataset.runs || 0) + 1); }
-  function foldButton() { $("foldGo").disabled = dead || folding || !(foldable && bodyLoaded && bodyFitReady)
-    || (bodyFitText !== null && !$("bodyFitConsent").checked); }
+  function foldButton() {
+    const available = !dead && !folding && !bodyChecking && bodyLoaded && bodyFitReady
+      && (bodyFitText === null || $("bodyFitConsent").checked);
+    $("foldGo").disabled = !available || !foldable;
+    $("bodyCheckGo").disabled = !available || !bodyCheckable;
+  }
   function bodyFitSummary(body) {
     const imported = body?.shape_source?.kind === "accepted_multi_frame_fit";
     const tape = imported && Array.isArray(body.measurement_comparison)
@@ -406,6 +419,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       + "</details>";
   }
   let foldUrls = [];
+  function dropBodyCheck() {
+    bodyCheckRequest = ++nextRequest; bodyChecking = false;
+    bodyCheckUrls.forEach(u => URL.revokeObjectURL(u)); bodyCheckUrls = [];
+    $("bodyCheckSummary").textContent = ""; $("bodyCheckFiles").textContent = "";
+  }
   function dropFold() {                                     // the last fold-up's viewer, links and their URLs
     $("foldLog").textContent = ""; $("foldSummary").textContent = "";
     $("foldView").classList.add("hidden"); $("foldView").removeAttribute("src");
@@ -413,10 +431,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   }
   function invalidateFold() {
     foldRequest = ++nextRequest; folding = false;
-    dropFold(); foldButton(); status("");
+    dropFold(); dropBodyCheck(); foldButton(); status("");
   }
   function invalidateRound() {
-    roundRequest = ++nextRequest; foldable = false;
+    roundRequest = ++nextRequest; foldable = false; bodyCheckable = false;
     if (bodyFitText !== null) $("bodyFitConsent").checked = false;
     urls.forEach((u) => URL.revokeObjectURL(u)); urls = [];
     $("results").classList.add("hidden"); $("resFiles").innerHTML = "";
@@ -433,11 +451,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   worker.onmessage = (ev) => {
     const msg = ev.data;
     if (dead) return;
-    const expected = { fields: fieldsRequest, result: roundRequest, bodyReady: bodyRequest,
+    const expected = { fields: fieldsRequest, result: roundRequest, bodyReady: bodyRequest, bodyChecked: bodyCheckRequest,
       foldProgress: foldRequest, folded: foldRequest };
     if (msg.type in expected && msg.request !== expected[msg.type]) return;
     if (msg.type === "error" && !msg.fatal) {
-      const request = { fields: fieldsRequest, run: roundRequest, body: bodyRequest, fold: foldRequest }[msg.op];
+      const request = { fields: fieldsRequest, run: roundRequest, body: bodyRequest, fold: foldRequest, inspectBody: bodyCheckRequest }[msg.op];
       if (request !== undefined && msg.request !== request) return;
     }
     if (msg.type === "progress") status(msg.text);
@@ -458,12 +476,31 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       dropFold();
       // a validated, to-scale garment with fold-up placements can be draped once the body model is loaded
       foldable = msg.foldable;
+      bodyCheckable = msg.bodyCheckable === true;
       $("foldBox").classList.toggle("hidden", !foldable);
       foldButton();
       finished();
     } else if (msg.type === "bodyReady") {
       bodyLoaded = true; foldButton(); status("Body model loaded.");
       $("errorBox").classList.add("hidden");
+    } else if (msg.type === "bodyChecked") {
+      bodyChecking = false; foldButton(); status("Body checked; cloth was not simulated.");
+      if (typeof msg.reportText !== "string") {
+        dropBodyCheck(); showError("Reload this page and its worker: the body-check report is missing."); finished(); return;
+      }
+      $("errorBox").classList.add("hidden");
+      const body = msg.report.body;
+      $("bodyCheckSummary").innerHTML = bodyFitSummary(body)
+        + `<details><summary>All available body estimates (MODEL_FIT)</summary><div class="scroll"><table id="bodyCheckReadings"><tr><th>Dimension</th><th>Body mm (MODEL_FIT)</th></tr>`
+        + Object.entries(body?.readings_mm || {}).map(([name, value]) => `<tr><td>${esc(human(name))}</td><td>${typeof value === "number" && Number.isFinite(value) ? esc(value) : "unavailable"}</td></tr>`).join("")
+        + "</table></div></details>";
+      const u = URL.createObjectURL(new Blob([msg.reportText], { type: "application/json" })); bodyCheckUrls.push(u);
+      $("bodyCheckFiles").innerHTML = `<a download="body_check.json" href="${u}">Download body check</a>`;
+      if (typeof msg.bodyFitText === "string") {
+        const source = URL.createObjectURL(new Blob([msg.bodyFitText], { type: "application/json" })); bodyCheckUrls.push(source);
+        $("bodyCheckFiles").innerHTML += ` · <a download="body_fit.json" href="${source}">Original accepted body fit</a>`;
+      }
+      finished();
     } else if (msg.type === "foldProgress") {
       $("foldLog").textContent += msg.text + "\n"; $("foldLog").scrollTop = $("foldLog").scrollHeight;
     } else if (msg.type === "folded") {
@@ -500,9 +537,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         $("go").disabled = false;
       }
       if (msg.op === "fold") folding = false;
+      if (msg.op === "inspectBody") dropBodyCheck();
       foldButton();
       showError(msg.message, msg.detail);
-      if (msg.op === "run" || msg.op === "fold") finished();
+      if (msg.op === "run" || msg.op === "fold" || msg.op === "inspectBody") finished();
     }
   };
   worker.onerror = (e) => {
@@ -558,7 +596,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     bodyLoaded = false; invalidateFold();
     worker.postMessage({ type: "clearBody" });
     const f = $("bodyFile").files[0];
-    if (!f) { status("Choose a body model to fold the garment."); return; }
+    if (!f) { status("Choose a body model to check or fold."); return; }
     status("Reading the body model…");
     try {
       const buf = await f.arrayBuffer();
@@ -583,7 +621,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (bytes.byteLength > 16 * 1024 * 1024) throw new Error("accepted body-fit report exceeds 16 MiB");
       const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
       bodyFitText = text; bodyFitReady = true; foldButton();
-      status("Fit report read; associate it with the current wearer. Its model and evidence are checked when folding.");
+      status("Fit report read; associate it with the current wearer. Its model and evidence are checked before use.");
     } catch (e) {
       if (request !== bodyFitRead || dead) return;
       showError(e.message); foldButton();
@@ -591,6 +629,13 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   });
   for (const id of ["bodyFitConsent", "bodyArmDeg"]) $(id).addEventListener("change", invalidateFold);
   $("bodyArmDeg").addEventListener("input", invalidateFold);
+  $("bodyCheckGo").addEventListener("click", () => {
+    if ($("bodyCheckGo").disabled) return;
+    dropBodyCheck(); bodyChecking = true; foldButton();
+    $("errorBox").classList.add("hidden"); status("Checking the body against current targets…");
+    worker.postMessage({ type: "inspectBody", request: bodyCheckRequest, round: roundRequest, body: bodyRequest,
+      bodyFit: bodyFitText, bodyFitConsent: $("bodyFitConsent").checked });
+  });
   $("foldGo").addEventListener("click", () => {
     if ($("foldGo").disabled) return;
     if (bodyFitText !== null && $("bodyArmDeg").value.trim() === "") {

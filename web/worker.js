@@ -4,6 +4,7 @@
 let ftx = null;
 let body = null; // the parsed body model, kept for every fold-up
 let docs = null; // the last round's pattern, measurements and fit spec (JSON text)
+let bodyRound = null; // body checking also works when the garment has no fold-up placement
 let bodyRequest, foldRequest;
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -43,6 +44,7 @@ onmessage = async (ev) => {
     }
     if (msg.type === "run") {
       docs = null; // a refused replacement must never leave the previous garment available
+      bodyRound = null;
       const { today, created } = clock();
       const round = ftx.run(JSON.stringify(msg.req), today, created);
       try {
@@ -55,10 +57,13 @@ onmessage = async (ev) => {
         // a fold-up needs a pattern that validates, is to scale and has a piece with a fold-up placement
         const foldable = !!data && res.status !== "BLOCKED" && (data.meta || {}).scale_status !== "UNSCALED"
           && (data.pieces || []).some((p) => truthy(p.placement) && p.sim !== false);
+        const measurements = text(round.file("measurements.json"));
         if (foldable) {
-          docs = { request: msg.request, pattern, measurements: text(round.file("measurements.json")), fit: text(round.file("fit_spec.json")) };
+          docs = { request: msg.request, pattern, measurements, fit: text(round.file("fit_spec.json")) };
         }
-        return postMessage({ type: "result", request: msg.request, res, blobs, foldable }, Object.values(blobs).map((b) => b.buffer));
+        if (!res.errors && measurements) bodyRound = { request: msg.request, measurements };
+        return postMessage({ type: "result", request: msg.request, res, blobs, foldable,
+          bodyCheckable: !!bodyRound }, Object.values(blobs).map((b) => b.buffer));
       } finally { round.free(); }
     }
     if (msg.type === "clearBody") {
@@ -71,6 +76,17 @@ onmessage = async (ev) => {
       body = null; bodyRequest = msg.request;
       body = new ftx.WebBody(new Uint8Array(msg.bytes));
       return postMessage({ type: "bodyReady", request: msg.request });
+    }
+    if (msg.type === "inspectBody") {
+      if (!body || !bodyRound) throw new Error("load the body model and run a round first");
+      if (msg.round !== bodyRound.request || msg.body !== bodyRequest) throw new Error("the round or body changed: check the current sources");
+      if (msg.bodyFit != null && (typeof msg.bodyFit !== "string" || msg.bodyFit.length > 16 * 1024 * 1024)) {
+        throw new Error("accepted body-fit report must be JSON text of at most 16 MiB");
+      }
+      if (msg.bodyFit != null && msg.bodyFitConsent !== true) throw new Error("associate the accepted fit with this wearer before checking");
+      const reportText = ftx.inspect_body(body, bodyRound.measurements, msg.bodyFit ?? undefined);
+      return postMessage({ type: "bodyChecked", request: msg.request, reportText,
+        report: JSON.parse(reportText), bodyFitText: msg.bodyFit ?? null });
     }
     if (msg.type === "fold") {
       if (!body || !docs) throw new Error("load the body model and run a round first");

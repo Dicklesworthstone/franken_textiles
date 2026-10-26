@@ -98,6 +98,65 @@ fn unmeasured_readings_come_back_as_model_fit() {
     doc["records"] = Value::Array(records.clone());
     let fused = ftx_measure::fuse(&doc, false).unwrap();
     assert_eq!(fused["fused"]["head"]["primary_provenance"], "MODEL_FIT");
+
+    // A flat-only garment's current tape round can expose body diagnostics without any cloth solve.
+    let request = json!({"program":"fez","body":{"mode":"tape","stature_cm":92,
+        "age_months":30,"sex":"F","tape":{"head":48}}});
+    let round =
+        ftx_wasm::page::run(&request.to_string(), "2026-10-13", "2026-10-13T12:00").unwrap();
+    let saved = &round
+        .files
+        .iter()
+        .find(|(name, _)| name == "measurements.json")
+        .unwrap()
+        .1;
+    let saved_text = std::str::from_utf8(saved).unwrap();
+    let data: Value = serde_json::from_slice(saved).unwrap();
+    let model_bytes = std::fs::read(ftx_body::default_model_path().unwrap()).unwrap();
+    let hash = sha256_hex(&model_bytes);
+    let model = ftx_wasm::fold::load_body(&model_bytes).unwrap();
+    let check = ftx_wasm::fold::inspect_body(&model, &hash, saved_text, None).unwrap();
+    let wearer = ftx_body::Wearer::from_measurements(&data).unwrap();
+    let fit = ftx_body::fit_tape(
+        &model,
+        &wearer,
+        &ftx_body::tape_targets(&data),
+        &Pose::drape(),
+    )
+    .unwrap();
+    assert_eq!(check["cloth_simulated"], false);
+    assert_eq!(check["body"]["provenance"], "MODEL_FIT");
+    assert_eq!(check["measurements_sha256"], sha256_hex(saved));
+    assert_eq!(check["body"]["fit"]["iterations"], fit.iterations);
+    for (name, value) in ftx_body::TAPE_FIELDS.iter().zip(fit.readings) {
+        assert_eq!(check["body"]["readings_mm"][name], value);
+    }
+    for residual in &fit.residuals {
+        assert_eq!(
+            check["body"]["fit"]["tape"][&residual.name],
+            json!({
+            "target_mm":residual.target_mm,"body_mm":residual.body_mm,
+            "residual_mm":residual.body_mm-residual.target_mm})
+        );
+    }
+    if let Some(dir) = std::env::var_os("FTX_BODY_CHECK_PRODUCTION_DIR") {
+        use std::io::Write;
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, bytes) in [
+            ("model.ftxbody", model_bytes),
+            ("request.json", request.to_string().into_bytes()),
+            ("measurements.json", saved.clone()),
+            ("body_check.json", serde_json::to_vec(&check).unwrap()),
+        ] {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(dir.join(name))
+                .unwrap();
+            file.write_all(&bytes).unwrap();
+        }
+    }
 }
 
 fn production_command(dir: &Path, args: &[&str], expected: i32, receipt: &str) -> Value {

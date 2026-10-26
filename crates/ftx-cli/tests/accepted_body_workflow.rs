@@ -1306,6 +1306,93 @@ fn drape_and_round_reach_shape_reuse_without_falling_back_to_tape() {
 }
 
 #[test]
+fn standalone_body_check_reuses_the_exact_shape_without_a_garment_or_tape_fallback() {
+    let bytes = model_bytes_with_rig(true);
+    let hash = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let source = serde_json::to_string_pretty(&receipt(&hash)).unwrap() + "\n";
+    let measurements = json!({"wearer":{"age_months":30,"sex":"F","stature_mm":1111}});
+    let text = format!("\n{measurements}\n");
+    let check = ftx_wasm::fold::inspect_body(&model, &hash, &text, Some(&source)).unwrap();
+    let (_, expected) =
+        ftx_body::accepted_shape::prepare(&model, &hash, source.as_bytes(), Some(&measurements))
+            .unwrap();
+    assert_eq!(check["body"], Value::Object(expected));
+    assert_eq!(check["body"]["readings_mm"]["stature"], 1300.0);
+    assert_eq!(
+        check["body"]["measurement_comparison"][0]["residual_mm"],
+        189.0
+    );
+    assert_eq!(check["body"]["shape_source"]["refitted"], false);
+    assert_eq!(check["measurements_sha256"], sha256_hex(text.as_bytes()));
+    assert_eq!(check["cloth_simulated"], false);
+    // This model has no tape-fitting local changes: an accidental fallback cannot pass.
+    assert!(ftx_wasm::fold::inspect_body(&model, &hash, &text, None).is_err());
+    for (digest, raw, data) in [
+        ("c".repeat(64), source.clone(), text.clone()),
+        (
+            hash.clone(),
+            source.replace("ACCEPTED", "REJECTED"),
+            text.clone(),
+        ),
+        (hash.clone(), source.clone(), text.replace("30", "31")),
+        (hash.clone(), " ".repeat(16 * 1024 * 1024 + 1), text.clone()),
+        (
+            hash.clone(),
+            source.clone(),
+            " ".repeat(16 * 1024 * 1024 + 1),
+        ),
+        (hash.clone(), source.clone(), "[]".into()),
+    ] {
+        assert!(ftx_wasm::fold::inspect_body(&model, &digest, &data, Some(&raw)).is_err());
+    }
+    let input = json!({"schema":"fabric-measurements/1", "wearer":measurements["wearer"],
+        "records":[ftx_measure::make_record("stature",1111.0,1.0,"MEASURED_TAPE",
+            "synthetic independent target",None,"").unwrap()],"fused":{"stature":{"value_mm":9999}}});
+    let request = json!({"body":{"mode":"file","measurements":input},"program":"fez"});
+    let round =
+        ftx_wasm::page::run(&request.to_string(), "2026-10-13", "2026-10-13T12:00").unwrap();
+    let saved = &round
+        .files
+        .iter()
+        .find(|(name, _)| name == "measurements.json")
+        .unwrap()
+        .1;
+    let saved_text = std::str::from_utf8(saved).unwrap();
+    let check = ftx_wasm::fold::inspect_body(&model, &hash, saved_text, Some(&source)).unwrap();
+    let saved_data: Value = serde_json::from_slice(saved).unwrap();
+    let (_, expected) =
+        ftx_body::accepted_shape::prepare(&model, &hash, source.as_bytes(), Some(&saved_data))
+            .unwrap();
+    assert_eq!(check["body"], Value::Object(expected));
+    assert!(
+        check["body"]["measurement_comparison"][0]["target_mm"]
+            .as_f64()
+            .unwrap()
+            < 1200.0
+    );
+    if let Some(dir) = std::env::var_os("FTX_BODY_CHECK_CAPTURE_DIR") {
+        use std::io::Write;
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, data) in [
+            ("model.ftxbody", bytes),
+            ("accepted_fit.json", source.into_bytes()),
+            ("request.json", request.to_string().into_bytes()),
+            ("measurements.json", saved.clone()),
+            ("body_check.json", serde_json::to_vec(&check).unwrap()),
+        ] {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(dir.join(name))
+                .unwrap();
+            file.write_all(&data).unwrap();
+        }
+    }
+}
+
+#[test]
 fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
     let dir = setup();
     eprintln!("browser fold replay artifacts: {}", dir.display());

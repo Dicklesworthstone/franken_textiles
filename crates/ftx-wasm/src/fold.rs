@@ -63,6 +63,52 @@ fn body_report(wearer: &Wearer, fit: &TapeFit) -> Value {
         "no_claim":"Predicted body dimensions are MODEL_FIT. Supplied targets may include priors; residuals do not establish measurement readiness or physical fit."})
 }
 
+/// Check the selected body against current targets without a garment or cloth simulation.
+/// The model and digest must come from the same array-verified input bytes.
+///
+/// # Errors
+/// Excessive/invalid measurements, missing tape-fit age, refused fitting or an inconsistent imported
+/// report. A refused accepted report never falls back to tape fitting.
+pub fn inspect_body(
+    model: &AnnyModel,
+    model_sha256: &str,
+    measurements: &str,
+    accepted_report: Option<&str>,
+) -> Result<Value, String> {
+    if measurements.len() > 16 * 1024 * 1024 {
+        return Err("body-check measurements exceed 16 MiB".into());
+    }
+    let mut data: Value = serde_json::from_str(measurements).map_err(|e| e.to_string())?;
+    if !data.is_object() {
+        return Err("body-check measurements must be an object".into());
+    }
+    if data.get("records").is_some() || data.get("schema").is_some() {
+        let errors = ftx_measure::validate(&data);
+        if !errors.is_empty() {
+            return Err(format!("body-check measurements: {}", errors.join("; ")));
+        }
+        data = ftx_measure::fuse(&data, true).map_err(|e| e.message)?;
+    }
+    let mut body = if let Some(report) = accepted_report {
+        let (_, description) =
+            ftx_body::accepted_shape::prepare(model, model_sha256, report.as_bytes(), Some(&data))
+                .map_err(|e| e.message)?;
+        Value::Object(description)
+    } else {
+        if !data["wearer"]["age_months"].is_number() {
+            return Err("the body check needs the wearer's age (months)".into());
+        }
+        let wearer = Wearer::from_measurements(&data).map_err(|e| e.message)?;
+        let fit = fit_tape(model, &wearer, &tape_targets(&data), &Pose::drape())
+            .map_err(|e| e.message)?;
+        body_report(&wearer, &fit)
+    };
+    body["model_sha256"] = json!(model_sha256);
+    Ok(json!({"schema":"ftx-body-check/1", "body":body,
+        "measurements_sha256":ftx_core::receipt::sha256_hex(measurements.as_bytes()),
+        "cloth_simulated":false}))
+}
+
 /// Drapes `pattern` on `model` fitted to `measurements`, judged by `fit_spec`. `self_contact_mm` > 0 turns
 /// on cloth self-contact at that thickness (the skill passes Blender's 2 mm); progress lines go to
 /// `progress`.

@@ -277,6 +277,26 @@ impl WebBody {
     }
 }
 
+/// Check a body against the current round's targets, without running cloth or changing readiness.
+///
+/// # Errors
+/// Invalid/bounded evidence, a failed tape fit or an inconsistent accepted shape; no fallback.
+#[wasm_bindgen]
+pub fn inspect_body(
+    body: &WebBody,
+    measurements: &str,
+    accepted_report: Option<String>,
+) -> Result<String, JsError> {
+    fold::inspect_body(
+        &body.inner,
+        &body.source_sha256,
+        measurements,
+        accepted_report.as_deref(),
+    )
+    .and_then(|value| serde_json::to_string(&value).map_err(|e| e.to_string()))
+    .map_err(|e| JsError::new(&e))
+}
+
 /// Recompute manufacturing, fresh drapes and requested heat consumers for each material alternative.
 /// Fits this source-identified body only once; no earlier material's state is reused.
 ///

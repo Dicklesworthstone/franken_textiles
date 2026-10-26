@@ -65,6 +65,15 @@ reuse. It checks the same model/wearer identity and exposes the existing native
 arm-angle choice. Report replacement, edits and failed reads invalidate the fold;
 no stale shape or tape fallback is allowed. Draft/readiness remain independent.
 
+**Standalone body check.** `fold::inspect_body` and the WASM `inspect_body` export use the same tape
+fitter/raw diagnostics or exact accepted-shape importer without constructing or simulating a garment.
+The `ftx-body-check/1` result retains the body description, exact measurement/model hashes and
+`cloth_simulated: false`. Record-bearing inputs are validated and re-fused; each JSON source is bounded
+at 16 MiB. The worker checks round/model identity and explicit accepted-report association. Shared
+model/report controls remain available for flat-only garments; source edits and stale responses withdraw
+the separate check. MODEL_FIT predictions and residuals cannot change measurement readiness or certify
+physical fit. The ordinary fold-up remains a separate action with its existing placement/contact gates.
+
 **The page.** `web/index.html` is the skill's `browser/index.html` with its Pyodide worker replaced by
 `web/worker.js` (a module worker loading `web/pkg`, built by `tools/build_web.sh`: release wasm32 build plus
 `wasm-bindgen --target web`, 3.2 MB). A round (draft, checks, every export, the zip) takes about a second.
