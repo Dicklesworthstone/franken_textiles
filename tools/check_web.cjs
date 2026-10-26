@@ -48,7 +48,7 @@ const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
 let failed = 0;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) failed++; };
 
-async function measurementEvidence(page, settle, bytes, work, nativeDir) {
+async function measurementEvidence(page, settle, work, nativeDir) {
   const assert = require("node:assert/strict");
   const request = JSON.parse(fs.readFileSync(path.join(nativeDir, "request.json")));
   const source = fs.readFileSync(path.join(nativeDir, "photo-measurements.json"));
@@ -67,12 +67,15 @@ async function measurementEvidence(page, settle, bytes, work, nativeDir) {
   await upload("photo-measurements.json", source);
   assert.match(await settle("#go",120000), /same wearer/);await absent();
   await page.check("#supplementalConsent");assert.equal(await settle("#go",120000), "");
-  const dir=path.join(work,"measurement-evidence");fs.mkdirSync(dir);
-  // Save an actual Chromium download, then compare its documents with the native shared-round run.
-  const waiting=page.waitForEvent("download");await page.click("#resFiles a[download$='.zip']");
-  const download=await waiting;assert.equal(await download.failure(),null);
-  fs.copyFileSync(await download.path(),path.join(dir,"round.zip"));
-  execFileSync("unzip",["-q","round.zip"],{cwd:dir});
+  const saveRound=async dir=>{
+    fs.mkdirSync(dir);
+    // JSON round documents are in the actual ZIP download, not individual export links.
+    const waiting=page.waitForEvent("download");await page.click("#resFiles a[download$='.zip']");
+    const download=await waiting;assert.equal(await download.failure(),null);
+    fs.copyFileSync(await download.path(),path.join(dir,"round.zip"));
+    execFileSync("unzip",["-q","round.zip"],{cwd:dir});
+  };
+  const dir=path.join(work,"measurement-evidence");await saveRound(dir);
   for(const name of ["measurements.json","pattern.json","readiness.json","fit_spec.json"]) {
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir,name))),JSON.parse(fs.readFileSync(path.join(nativeDir,name))),name);
   }
@@ -81,8 +84,11 @@ async function measurementEvidence(page, settle, bytes, work, nativeDir) {
   assert.equal(measured.fused.arm_length.primary_provenance,"PHOTO_ESTIMATED");assert.equal(measured.taken_on,null);
   assert.ok(measured.records.some(r=>r.provenance==="MEASURED_TAPE"));
   await page.click("#clearSupplemental");assert.equal(await settle("#go",120000),"");
-  assert.notDeepEqual(JSON.parse(await bytes('a[download="pattern.json"]')),
-    JSON.parse(fs.readFileSync(path.join(dir,"pattern.json"))),"photo arm length must change the actual drafted pattern");
+  const baselineDir=path.join(work,"measurement-baseline");await saveRound(baselineDir);
+  const baseline=JSON.parse(fs.readFileSync(path.join(baselineDir,"pattern.json")));
+  const withPhoto=JSON.parse(fs.readFileSync(path.join(dir,"pattern.json")));
+  assert.notDeepEqual(baseline.pieces.find(p=>p.id==="sleeve").vertices,
+    withPhoto.pieces.find(p=>p.id==="sleeve").vertices,"photo arm length must change the actual sleeve vertices");
   await upload("photo-measurements.json",source);await page.check("#supplementalConsent");
   assert.equal(await settle("#go",120000),"");
   await page.evaluate(()=>{window.__holdEvidence=true;});await page.click("#go");
@@ -109,7 +115,8 @@ async function measurementEvidence(page, settle, bytes, work, nativeDir) {
   await page.check('input[name=bodyMode][value=file]');
   await page.setInputFiles("#measFile",path.join(dir,"measurements.json"));
   assert.equal(await settle("#go",120000),"");
-  const replay=JSON.parse(await bytes('a[download="measurements.json"]'));
+  const replayDir=path.join(work,"measurement-replay");await saveRound(replayDir);
+  const replay=JSON.parse(fs.readFileSync(path.join(replayDir,"measurements.json")));
   assert.deepEqual(replay,measured);
   const imageHash=JSON.parse(source).photo.image_input.sha256;
   assert.equal(await page.evaluate(hash=>Object.values(localStorage).some(s=>s.includes(hash)),imageHash),false);
@@ -331,6 +338,11 @@ async function offlineViewer(browser, file) {
     return;
   }
   const page = await browser.newPage({ userAgent });
+  if (evidenceReplay) await page.route("**/worker.js",async route=>{
+    const response=await route.fetch();
+    // Freeze the caller's date, not numerical results, to the native page fixture's clock.
+    await route.fulfill({response,body:"const NativeDate=Date; globalThis.Date=class extends NativeDate { constructor(...a) { super(...(a.length?a:[2026,9,13,12,0])); } };\n"+await response.text()});
+  });
   if (evidenceReplay) await page.addInitScript(()=>{
     const Original=window.Worker;
     window.Worker=class extends Original {
@@ -489,7 +501,7 @@ async function offlineViewer(browser, file) {
     await page.setInputFiles("#measFile", { name: "invalid.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(invalid)) });
     check(/sigma/.test(await settle("#go", 120000)), "valid cache cannot hide an invalid uploaded record");
     check(await page.locator("#results").evaluate(e => e.classList.contains("hidden")), "refused upload exposes no prior round downloads");
-    if (evidenceReplay) await measurementEvidence(page, settle, bytes, work, path.resolve(evidenceReplay));
+    if (evidenceReplay) await measurementEvidence(page, settle, work, path.resolve(evidenceReplay));
     await page.check("input[name=program][value=zouave_trousers]");
     await page.check("input[name=bodyMode][value=tape]");
     await page.waitForFunction(() => document.querySelectorAll("#tapeRows input").length > 0, null, { timeout: 30000 });

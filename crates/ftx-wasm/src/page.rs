@@ -246,6 +246,9 @@ pub fn body_file(body: &PyJson, today: &str) -> Result<Value, String> {
         Some(_) => return Err("measurement_imports must be an array".into()),
     };
     let mut bytes = 0usize;
+    if data.get("measurement_primary_taken_on").is_none() {
+        data["measurement_primary_taken_on"] = data["taken_on"].clone();
+    }
     for source in sources {
         let PyJson::Str(text) = source else {
             return Err("supplemental measurements must be original JSON text".into());

@@ -39,6 +39,7 @@ strings (16 MiB total, 4096 combined records), with explicit same-wearer associa
 and fusion consume their records, never cached values; source text and photo uncertainty reports remain
 in `measurement_imports`. Reference/demo mixing refuses. An unknown source date keeps the aggregate date
 unknown; otherwise the oldest date is retained. This is no per-record freshness or independence proof.
+The original primary date remains in `measurement_primary_taken_on` when the aggregate date changes.
 Source/body edits reset consent, invalidate downloads and discard superseded reads/replies. The imports
 remain local and never enter browser storage. The numerical fusion and readiness rules are unchanged.
 

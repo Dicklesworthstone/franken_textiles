@@ -268,14 +268,14 @@ fn photo_body() -> (Value, String) {
     let text = serde_json::to_string_pretty(&photo).unwrap() + "\n";
     (
         json!({"mode":"tape","stature_cm":92,"age_months":30,
-            "tape":{"chest":54,"waist":50,"waist_height":56},
+            "tape":{"chest":54,"waist":50},
             "supplemental_same_wearer":true,"supplemental_measurements":[text]}),
         text,
     )
 }
 
 #[test]
-fn real_photo_records_join_tape_through_ordinary_fusion_and_the_full_round() {
+fn supplemental_photo_records_join_tape_through_ordinary_fusion_and_the_full_round() {
     let (body, text) = photo_body();
     let original = body.clone();
     let got = ftx_wasm::page::body_file(&PyJson::from_value(&body), TODAY).unwrap();
@@ -294,6 +294,7 @@ fn real_photo_records_join_tape_through_ordinary_fusion_and_the_full_round() {
     assert_eq!(got["records"], expected["records"]);
     assert_eq!(got["measurement_imports"], json!([text]));
     assert!(got["taken_on"].is_null());
+    assert_eq!(got["measurement_primary_taken_on"], TODAY);
     assert_eq!(
         got["fused"]["arm_length"]["primary_provenance"],
         "PHOTO_ESTIMATED"

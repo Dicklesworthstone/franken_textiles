@@ -916,7 +916,8 @@ fusion from the combined original records, ignoring every cached `fused` value. 
 supplemental text in the saved measurements' `measurement_imports` array, including photo source and
 uncertainty reports. Existing imports are retained, not re-applied as new observations.
 For this mixed-source extension, `taken_on` is the oldest input date only if every input has a known
-date, otherwise null. This conservative aggregate cannot establish per-record freshness; source dates
+date, otherwise null. The original primary date is retained in `measurement_primary_taken_on`.
+This conservative aggregate cannot establish per-record freshness; source dates
 remain inspectable. No provenance, sigma, definition, conflict or readiness rule changes. Source/body
 edits withdraw outputs and wearer consent. Evidence import is local and never enters browser storage.
 
