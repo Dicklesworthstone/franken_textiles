@@ -17,10 +17,10 @@ assert.equal(replay.fit.frames[frame].keypoints[point].partition, "held_out");
 assert.equal(read("bad-fit.json").solution, null);
 assert.equal(read("expected-fit.json").status, "ACCEPTED");
 fs.mkdirSync(out, {mode: 0o700});
-function verifyFiles() {
-  for (const item of [report.original_input, report.replay_input, report.viewer, report.editor,
-    ...report.frames.flatMap(f => [f.source_image, f.keypoint_svg])]) {
-    const b = fs.readFileSync(path.join(reviewDir, item.file));
+function verifyFiles(directory = reviewDir, records = report) {
+  for (const item of [records.original_input, records.replay_input, records.viewer, records.editor,
+    ...records.frames.flatMap(f => [f.source_image, f.keypoint_svg])]) {
+    const b = fs.readFileSync(path.join(directory, item.file));
     assert.equal(b.length, item.bytes); assert.equal(hash(b), item.sha256);
   }
 }
@@ -248,6 +248,57 @@ async function displayed(page, i, j) {
     for (const [file, expectedHash] of initialHashes) {
       assert.equal(hash(fs.readFileSync(path.join(root, file))), expectedHash);
     }
+    // The pre-fit page shows exactly the sampled constraints the ordinary mask reader supplied.
+    const maskDir = path.join(root, "mask-review"), maskReport = read("mask-review/review.json");
+    const maskReplay = read("mask-review/capture.json"), maskedPage = await context.newPage();
+    verifyFiles(maskDir, maskReport);
+    const maskSources = ["masks/manifest.json", "masks/mask-0.png", "masks/mask-1.png"];
+    const maskHashes = maskSources.map(file => hash(fs.readFileSync(path.join(root, file))));
+    assert.equal(maskHashes[0], maskReport.capture_input.silhouette_input.manifest_sha256);
+    assert.equal(read("masked-bad-fit.json").solution, null);
+    assert.equal(read("expected-masked-fit.json").status, "ACCEPTED");
+    assert.equal(maskReplay.reviewed_sources_sha256, maskReport.capture_input.sources_sha256);
+    assert.equal(maskReplay.reviewed_sources_sha256, read("expected-masked-fit.json").capture_input.sources_sha256);
+    assert.equal(typeof maskReplay.silhouettes, "string");
+    await maskedPage.goto(pathToFileURL(path.join(maskDir, "index.html")).href);
+    await maskedPage.waitForFunction(() => !document.getElementById("captureEditor").hidden);
+    for (let i = 0; i < maskReport.frames.length; ++i) {
+      const section = maskedPage.locator("section").nth(i), f = maskReport.frames[i];
+      const slices = section.locator("g[data-silhouette]");
+      assert.equal(await slices.count(), 5);
+      assert.equal(await section.locator(".silhouette-review li").count(), 5);
+      assert((await section.locator(".silhouette-review").innerText()).includes(f.silhouette.evidence));
+      for (let j = 0; j < f.silhouette.lines.length; ++j) {
+        const line = f.silhouette.lines[j], group = slices.nth(j), segments = group.locator("line");
+        assert.equal(await group.getAttribute("data-silhouette"), line.partition);
+        assert.equal(await group.getAttribute("pointer-events"), "none");
+        assert.equal(await segments.count(), line.intervals_px.length + 1);
+        const along = line.axis === "horizontal" ? 0 : 1;
+        const intervals = [[0, f.image_size_px[along] - 1], ...line.intervals_px];
+        for (let k = 0; k < intervals.length; ++k) {
+          const [lo, hi] = intervals[k];
+          const expected = along === 0 ? [lo, line.at_px, hi, line.at_px] : [line.at_px, lo, line.at_px, hi];
+          assert.deepEqual(await segments.nth(k).evaluate(n => ["x1", "y1", "x2", "y2"].map(a => Number(n.getAttribute(a)))), expected);
+        }
+        const text = await section.locator(".silhouette-review li").nth(j).innerText();
+        assert(text.includes(line.partition === "fit" ? "FIT" : "CHECK"));
+        assert(text.includes("sigma " + line.sigma_px + " px"));
+        if (!line.intervals_px.length) assert(text.includes("empty (background)"));
+      }
+    }
+    const observedMarkup = await maskedPage.locator("g[data-silhouette]").evaluateAll(ns => ns.map(n => n.outerHTML));
+    await maskedPage.locator('.edit-point[data-frame="0"][data-point="3"]').click();
+    await maskedPage.locator("#editX").fill(String(target[0]));
+    await maskedPage.locator("#editY").fill(String(target[1]));
+    await maskedPage.locator("#applyPoint").click();
+    const maskedExpected = structuredClone(maskReplay);
+    maskedExpected.fit.frames[0].keypoints[3].pixel_px = target;
+    const maskedFile = await download(maskedPage, "capture-masked.json", maskedExpected);
+    assert.equal(await maskedPage.locator("g[data-silhouette]").count(), 10);
+    assert.deepEqual(await maskedPage.locator("g[data-silhouette]").evaluateAll(ns => ns.map(n => n.outerHTML)), observedMarkup);
+    await maskedPage.screenshot({path: path.join(out, "sampled-silhouettes.png"), fullPage: true});
+    await maskedPage.locator("#resetPoints").click(); await hidden(maskedPage);
+    assert.deepEqual(await maskedPage.locator("g[data-silhouette]").evaluateAll(ns => ns.map(n => n.outerHTML)), observedMarkup);
     const staticContext = await browser.newContext({javaScriptEnabled: false, userAgent});
     observe(staticContext);
     const staticPage = await staticContext.newPage();
@@ -256,6 +307,10 @@ async function displayed(page, i, j) {
     assert.equal(await staticPage.locator("svg circle").count(), 20);
     assert.equal(await staticPage.locator("tbody tr").count(), 20);
     assert(await staticPage.locator("noscript").isVisible());
+    const staticMasks = await staticContext.newPage();
+    await staticMasks.goto(pathToFileURL(path.join(maskDir, "index.html")).href);
+    assert.equal(await staticMasks.locator("g[data-silhouette]").count(), 10);
+    assert(await staticMasks.locator("#captureEditor").isHidden());
     const unsafePage = await context.newPage();
     await unsafePage.goto(pathToFileURL(path.join(root, "numeric-unsafe/review/index.html")).href);
     await unsafePage.waitForFunction(() => !document.getElementById("captureEditor").hidden);
@@ -267,12 +322,15 @@ async function displayed(page, i, j) {
     assert.equal(await unsafePage.locator("svg circle").count(), 20);
     assert((await unsafePage.locator("#captureInput").textContent()).includes("9007199254740993"));
     assert.deepEqual(errors, []);
-    const allowed = [reviewDir, emptyDir, path.join(root, "numeric-unsafe/review")].map(dir => pathToFileURL(dir + path.sep).href);
+    verifyFiles(maskDir, maskReport);
+    assert.deepEqual(maskSources.map(file => hash(fs.readFileSync(path.join(root, file)))), maskHashes);
+    const allowed = [reviewDir, emptyDir, maskDir, path.join(root, "numeric-unsafe/review")].map(dir => pathToFileURL(dir + path.sep).href);
     assert(requests.every(r => r.method === "GET" && allowed.some(prefix => r.url.startsWith(prefix))));
     verifyFiles();
     console.log(JSON.stringify({status: "PASS", frames: 2, points: 20, clickLayouts: 3,
       invalidEdits: 5, correctedFile: final, sha256: hash(fs.readFileSync(final)),
       initiallyPlaced: 20, annotatedFile, annotatedSha256: hash(fs.readFileSync(annotatedFile)), errors, requests,
+      observedSlices: 10, maskedFile, maskedSha256: hash(fs.readFileSync(maskedFile)),
       boundary: "Synthetic actual page and data only; fit acceptance is a separate ordinary CLI run"}, null, 2));
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

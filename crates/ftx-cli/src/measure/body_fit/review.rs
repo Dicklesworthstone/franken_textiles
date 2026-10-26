@@ -1,4 +1,4 @@
-//! Accepted fitted-frame geometry, not a second fit or a collision-ready skin.
+//! Local source/constraint review and accepted fitted geometry; never a second fit or collision skin.
 
 use std::{fmt::Write as _, fs, path::Path};
 
@@ -138,6 +138,66 @@ fn source_image(
     bundle.push(format!("source-{i:04}.{extension}"), bytes)
 }
 
+fn observed_silhouette(frame: &FitFrame) -> Result<(String, String), Refusal> {
+    let Some(observed) = &frame.silhouette else {
+        return Ok((String::new(), String::new()));
+    };
+    silhouette::require_rectified(&frame.camera)?;
+    observed.validate(frame.image_size_px)?;
+    let mut svg = String::new();
+    let mut text = format!(
+        "<div class=\"silhouette-review\"><h3>Observed silhouette samples</h3><p>{}</p>\
+         <p>Dashed lines show sampled slices; thick segments show observed foreground. Empty slices \
+         assert background. Orange is FIT, blue is CHECK. Read-only constraints; no predicted contour \
+         or segmentation/occlusion approval.</p><ul>",
+        label(&observed.evidence)
+    );
+    for line in &observed.lines {
+        let (partition, role, color) = match line.partition {
+            ftx_measure::triangulate::Partition::Fit => ("fit", "FIT", "#b45309"),
+            ftx_measure::triangulate::Partition::HeldOut => ("held_out", "CHECK", "#0369a1"),
+        };
+        let (axis, end) = match line.axis {
+            Axis::Horizontal => ("horizontal", frame.image_size_px[0] - 1),
+            Axis::Vertical => ("vertical", frame.image_size_px[1] - 1),
+        };
+        write!(svg, "<g data-silhouette=\"{partition}\" pointer-events=\"none\"><title>{role}: {axis} @ {} px; sigma {} px</title>",
+            line.at_px, line.sigma_px).unwrap();
+        for (runs, style) in [
+            (
+                &[[0.0, f64::from(end)]][..],
+                "stroke-width=\"1\" stroke-dasharray=\"5 5\"",
+            ),
+            (
+                line.intervals_px.as_slice(),
+                "stroke-width=\"6\" stroke-opacity=\"0.6\"",
+            ),
+        ] {
+            for &[lo, hi] in runs {
+                let [x1, y1, x2, y2] = match line.axis {
+                    Axis::Horizontal => [lo, line.at_px, hi, line.at_px],
+                    Axis::Vertical => [line.at_px, lo, line.at_px, hi],
+                };
+                write!(svg, "<line x1=\"{x1}\" y1=\"{y1}\" x2=\"{x2}\" y2=\"{y2}\" stroke=\"{color}\" {style}/>").unwrap();
+            }
+        }
+        svg.push_str("</g>");
+        let intervals = if line.intervals_px.is_empty() {
+            "empty (background)".to_owned()
+        } else {
+            serde_json::to_string(&line.intervals_px).map_err(|e| bad_input(e.to_string()))?
+        };
+        write!(
+            text,
+            "<li>{role} · {axis} @ {} px · sigma {} px · foreground {intervals}</li>",
+            line.at_px, line.sigma_px
+        )
+        .unwrap();
+    }
+    text.push_str("</ul></div>");
+    Ok((svg, text))
+}
+
 pub(super) fn prepare_capture(
     request: &super::Request,
     capture: &Value,
@@ -169,7 +229,7 @@ pub(super) fn prepare_capture(
          on each original image. Correct coordinates below, then generate a new review directory from the downloaded input. \
          No points or partitions were inferred. Pixels retain their stored orientation and lens distortion.</p>\
          <p>This does not establish anatomical correspondence, observability, physical accuracy, READY measurements or garment fit. \
-         Supplied silhouette constraints are retained in the input but are not reviewed by these keypoint overlays.</p>\
+         Supplied silhouette samples appear as read-only scanlines; segmentation and occlusion remain caller-reviewed.</p>\
          <p><a href=\"capture.json\">Original input for fit-body (requires original source files)</a> · \
          <a href=\"original-input.json\">Original input bytes</a> · <a href=\"review.json\">Complete preparation evidence</a></p>",
     );
@@ -203,6 +263,7 @@ pub(super) fn prepare_capture(
             ));
         }
         let photograph = source_image(&mut bundle, capture, frame, i)?;
+        let (silhouette_svg, silhouette_text) = observed_silhouette(frame)?;
         let name = photograph["file"].as_str().unwrap();
         let mut svg = format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {h}\" role=\"img\">\
@@ -250,18 +311,21 @@ pub(super) fn prepare_capture(
                 {point_name}</td><td>{partition}</td><td class=\"point-coordinates\">{}, {}</td><td>{}</td><td>{target}</td></tr>",
                 p.x, p.y, point.sigma_px).unwrap();
         }
+        svg.push_str(&silhouette_svg);
         svg.push_str("</svg>\n");
         let svg_name = format!("frame-{i:04}.svg");
         let overlay = bundle.push(svg_name.clone(), svg.as_bytes().to_vec())?;
         write!(page, "<section><h2>{} @ {} us</h2><p>{w} × {h} stored pixels; {}° clockwise rotation already applied. \
             <a href=\"{svg_name}\">Original keypoint SVG</a></p>{svg}\
-            <table><thead><tr><th>Name</th><th>Partition</th><th>Pixel x, y</th><th>Sigma px</th><th>Model target</th></tr></thead><tbody>{rows}</tbody></table></section>",
+            <table><thead><tr><th>Name</th><th>Partition</th><th>Pixel x, y</th><th>Sigma px</th><th>Model target</th></tr></thead><tbody>{rows}</tbody></table>{silhouette_text}</section>",
             label(&frame.frame.stream), frame.frame.timestamp_us, frame.rotation_cw_deg).unwrap();
-        frames.push(
-            json!({"frame":frame.frame,"image_size_px":frame.image_size_px,
+        let mut record = json!({"frame":frame.frame,"image_size_px":frame.image_size_px,
             "rotation_cw_deg":frame.rotation_cw_deg,"keypoints":frame.keypoints,
-            "source_image":photograph,"keypoint_svg":overlay}),
-        );
+            "source_image":photograph,"keypoint_svg":overlay});
+        if let Some(silhouette) = &frame.silhouette {
+            record["silhouette"] = json!(silhouette);
+        }
+        frames.push(record);
     }
     // Inert JSON must not terminate its script element through a caller-authored label.
     let payload = serde_json::to_string(replay)
@@ -278,7 +342,7 @@ pub(super) fn prepare_capture(
         "body_model_loaded":false,"body_fitted":false,"input_sha256":sha256_hex(original),
         "model_sha256":request.model.model_sha256,"original_input":original_entry,
         "replay_input":replay_entry,"viewer":viewer,"editor":editor,"frames":frames,"capture_input":capture,
-        "no_claim":"Source/camera preparation and supplied keypoint visualization only. No anatomy, silhouette, observability, physical camera, READY measurement or real-wearer fit approval."});
+        "no_claim":"Source/camera preparation and supplied keypoint/sampled silhouette visualization only. No anatomy, segmentation, full-mask, observability, physical camera, READY measurement or real-wearer fit approval."});
     Ok(bundle)
 }
 
@@ -730,6 +794,16 @@ mod tests {
             }),
         };
         let original = serde_json::to_value(&frame).unwrap();
+        let (observed, text) = observed_silhouette(&frame).unwrap();
+        assert_eq!(observed.matches("data-silhouette=").count(), 3);
+        assert!(observed.contains("x1=\"20\" y1=\"0\" x2=\"20\" y2=\"99\""));
+        assert!(observed.contains("x1=\"50\" y1=\"40\" x2=\"70\" y2=\"40\""));
+        assert!(text.contains("empty (background)"));
+        assert!(text.contains("sigma 2 px"));
+        assert!(!text.contains("<source>"));
+        frame.camera.intrinsics.distortion.radial[0] = 0.01;
+        assert!(observed_silhouette(&frame).is_err());
+        frame.camera.intrinsics.distortion.radial[0] = 0.;
         let (svg, data) = contours(&mesh, &frame).unwrap();
         assert!(svg.contains("x1=\"10\" y1=\"40\" x2=\"30\" y2=\"40\""));
         assert!(svg.contains("x1=\"50\" y1=\"40\" x2=\"70\" y2=\"40\""));

@@ -18,12 +18,33 @@ use super::{Configuration, Request};
 use crate::bad_input;
 
 pub(super) fn run(args: &crate::Args) -> Result<(Value, i32, String), Refusal> {
-    crate::known_options(args, "measure capture-review", &["out"])?;
+    crate::known_options(args, "measure capture-review", &["out", "silhouettes"])?;
     let output = Path::new(crate::required(args, "out")?);
     super::review::preflight(output)?;
     let file = super::super::single(args, "capture-review")?;
     let (original, bytes) = super::super::intrinsics::read_document(file)?;
-    let (request, receipt) = prepare(Path::new(file), original.clone())?;
+    let mut prepared = original.clone();
+    if let Some(path) = super::option(args, "silhouettes") {
+        let object = prepared
+            .as_object_mut()
+            .ok_or_else(|| bad_input("capture input must be an object"))?;
+        if object.contains_key("silhouettes") {
+            return Err(bad_input("cannot replace a capture silhouette manifest"));
+        }
+        let path = std::fs::canonicalize(path)
+            .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
+        object.insert(
+            "silhouettes".into(),
+            json!(
+                path.to_str()
+                    .ok_or_else(|| bad_input("mask manifest path must be UTF-8"))?
+            ),
+        );
+    }
+    let mut replay = prepared.clone();
+    let (request, mut receipt) = prepare(Path::new(file), prepared)?;
+    // The option augments the replay, not the original document named by this receipt.
+    receipt["input"] = original;
     let source = receipt["source"]
         .as_str()
         .ok_or_else(|| bad_input("capture source path must be UTF-8"))?;
@@ -31,7 +52,6 @@ pub(super) fn run(args: &crate::Args) -> Result<(Value, i32, String), Refusal> {
         .parent()
         .ok_or_else(|| bad_input("capture needs a parent directory"))?;
     // Rebase paths and bind prepared sources. Every source/observation and model target stays exact.
-    let mut replay = original;
     let absolute = |value: &Value| -> Result<Value, Refusal> {
         let path = local(
             base,
@@ -46,6 +66,9 @@ pub(super) fn run(args: &crate::Args) -> Result<(Value, i32, String), Refusal> {
     };
     replay["video_manifest"] = absolute(&replay["video_manifest"])?;
     replay["reviewed_sources_sha256"] = receipt["sources_sha256"].clone();
+    if replay.get("silhouettes").is_some_and(|v| !v.is_null()) {
+        replay["silhouettes"] = absolute(&replay["silhouettes"])?;
+    }
     for frame in replay["fit"]["frames"].as_array_mut().unwrap() {
         for key in ["calibration", "reference"] {
             frame[key] = absolute(&frame[key])?;
@@ -71,6 +94,8 @@ pub(super) fn run(args: &crate::Args) -> Result<(Value, i32, String), Refusal> {
 struct Capture {
     schema: String,
     video_manifest: String,
+    #[serde(default)]
+    silhouettes: Option<String>,
     #[serde(default)]
     reviewed_sources_sha256: Option<String>,
     reference_id: String,
@@ -228,11 +253,33 @@ pub(super) fn prepare(path: &Path, original: Value) -> Result<(Request, Value), 
             "calibration":calibration,"reference_input_sha256":sha256_hex(&reference_bytes),
             "sheet_pose":pose}));
     }
-    // Exclude request path/bytes: the review's replay input necessarily has its own identity.
-    let sources_sha256 = sha256_hex(
-        &serde_json::to_vec(&json!({"selection":selection,"frames":receipts}))
-            .map_err(|e| bad_input(e.to_string()))?,
-    );
+    let mut fit = BodyFitInput {
+        schema: input.fit.schema,
+        metric_scale_source: input.fit.metric_scale_source,
+        observation_evidence: input.fit.observation_evidence,
+        frames,
+        measurements: input.fit.measurements,
+        starts: input.fit.starts,
+    };
+    let masks = input
+        .silhouettes
+        .map(|name| {
+            let path = local(base, &name)?;
+            super::import_masks(
+                path.to_str()
+                    .ok_or_else(|| bad_input("mask manifest path must be UTF-8"))?,
+                &mut fit,
+            )
+        })
+        .transpose()?;
+    // No manifest means byte-identical old source evidence. Bind imported mask bytes/samples
+    // and decoded buffers when present, never the request's own recursive path/byte identity.
+    let mut evidence = json!({"selection":selection,"frames":receipts});
+    if let Some(masks) = &masks {
+        evidence["silhouette_input"] = masks.clone();
+    }
+    let sources_sha256 =
+        sha256_hex(&serde_json::to_vec(&evidence).map_err(|e| bad_input(e.to_string()))?);
     if input
         .reviewed_sources_sha256
         .as_ref()
@@ -242,10 +289,13 @@ pub(super) fn prepare(path: &Path, original: Value) -> Result<(Request, Value), 
             "reviewed capture sources changed; prepare and review a new capture",
         ));
     }
-    let receipt = json!({"schema":"ftx-anny-capture/1","source":source,"input":original,
+    let mut receipt = json!({"schema":"ftx-anny-capture/1","source":source,"input":original,
         "sources_sha256":sources_sha256,
         "selection":selection,"frames":receipts,
         "no_claim":"Source consistency and conditional camera reconstruction only. Caller-reviewed anatomy, stationary reference, decoding/orientation and physical accuracy are not authenticated; sharpness is not stillness and acceptance does not make measurements READY."});
+    if let Some(masks) = masks {
+        receipt["silhouette_input"] = masks;
+    }
     if serde_json::to_vec(&receipt)
         .map_err(|e| bad_input(e.to_string()))?
         .len()
@@ -260,14 +310,7 @@ pub(super) fn prepare(path: &Path, original: Value) -> Result<(Request, Value), 
         Request {
             schema: "ftx-anny-body-fit-input/1".into(),
             model: input.model,
-            fit: BodyFitInput {
-                schema: input.fit.schema,
-                metric_scale_source: input.fit.metric_scale_source,
-                observation_evidence: input.fit.observation_evidence,
-                frames,
-                measurements: input.fit.measurements,
-                starts: input.fit.starts,
-            },
+            fit,
         },
         receipt,
     ))

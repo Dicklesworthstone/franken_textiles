@@ -29,7 +29,11 @@ ftx measure fit-body capture-review-001/capture.json --model /path/to/anny.ftxbo
 The first command needs no body model. It reruns selection and camera checks, copies the exact
 selected images, and overlays the supplied points at stored image coordinates without another
 rotation or rectification. The table shows every name, FIT/CHECK assignment, pixel, sigma and
-authored model target. It retains silhouette inputs but does not display or validate them.
+authored model target. Supplied silhouettes are shown as read-only observed scanlines after the
+existing rectified-camera and interval checks. Dashed lines show sampled slices; thick segments
+show foreground, and empty slices explicitly assert background. Every slice retains its original
+FIT/CHECK role, axis, position, sigma and evidence. This does not validate the segmentation,
+occluders or clothing against a body.
 To correct a keypoint, select it in its table, then click that image or enter full-resolution
 X/Y coordinates and choose **Apply coordinates**. The image transform accounts for display size,
 scroll and zoom; numeric entry retains the supplied precision. Invalid/out-of-image values refuse.
@@ -247,6 +251,24 @@ body tape implementation at its standard 35-degree A-pose. They do not change as
 move. Give actual independent tape evidence, not a size-chart guess masquerading as tape.
 
 ## Silhouettes from rectified masks
+
+Review these constraints before loading a body model or fitting:
+
+```sh
+ftx measure capture-review capture/input.json --silhouettes masks/manifest.json \
+    --out capture-review-with-masks --json
+# Review capture-review-with-masks/index.html, then fit its capture.json without another mask flag.
+```
+
+The flag adds an absolute `silhouettes` manifest path to the replay capture document. A capture
+document may instead declare that path itself, relative to the document. The flag cannot replace
+an existing declaration, and masks cannot replace inline silhouettes. The ordinary fitter rereads
+the manifest and masks; the review's source digest binds manifest bytes, samples and decoded mask
+hashes, so later changes refuse. Keep the original mask files available. Captures without a mask
+manifest retain their original source-digest calculation. Original input bytes and masks stay unchanged.
+The masks used for video-selection sharpness remain separate from these body constraints.
+
+For prepared ordinary observations, the original direct fitting route also remains available:
 
 ```sh
 ftx measure fit-body observations.json --model /path/to/anny-0.6.1-default.ftxbody \

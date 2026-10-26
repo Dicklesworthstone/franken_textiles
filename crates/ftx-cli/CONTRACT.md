@@ -7,13 +7,13 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
 `ftx outfit`, `ftx materials` and immutable `ftx round` workspaces with their local review.
 
 **Commands.**
-- `ftx measure capture-review CAPTURE.json --out NEW_DIR [--json]`: reuse decoded source selection
+- `ftx measure capture-review CAPTURE.json --out NEW_DIR [--silhouettes MANIFEST] [--json]`: reuse decoded source selection
   and checked same-lens sheet cameras without a model or body fit. The private create-only review
   shows original images and every supplied named FIT/CHECK keypoint, sigma and model target. Original
   bytes and source/camera evidence remain in `review.json` (`PREPARED`); its replay `capture.json`
   rebases local paths and binds `reviewed_sources_sha256`. The ordinary fitter reruns the checks and
   refuses changed evidence before loading a model. Original sources remain required. No anatomy,
-  silhouette, observability, READY or physical-fit approval follows. See `docs/multi-frame-body-fit.md`
+  segmentation, observability, READY or physical-fit approval follows. See `docs/multi-frame-body-fit.md`
   and the real-binary `body_fit_workflow` regressions. This is an extension, not Python parity.
   The local page corrects existing coordinates by image click or numeric entry, keeping existing
   names, sigmas and partitions fixed. It can append observations for unused declared model targets
@@ -23,6 +23,12 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   A current edit downloads as `capture-edited.json`; pending/invalid/cancel/reset revoke old URLs,
   and reset restores the complete original point lists.
   Original files remain unchanged and script-disabled original review remains available.
+  Optional capture `silhouettes` paths or the review flag reuse the strict mask reader without a
+  body model. Inline/imported slices pass existing rectification and interval checks, then appear
+  as read-only observed FIT/CHECK foreground/background lines with original sigma/evidence.
+  Replay rereads source masks and binds manifest bytes, samples and decoded hashes; changed sources
+  refuse. No-manifest digests are unchanged. Neither a manifest nor inline constraints can be
+  overwritten by another declaration. No segmentation, full-mask or occlusion approval follows.
 - `ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]`: the
   reference's `drafting.py` on `ftx_pattern::draft`. Writes `DIR/pattern.json` and `DIR/fit_spec.json`
   (replacing them, as the reference does; Python's number formatting, keys sorted) and prints

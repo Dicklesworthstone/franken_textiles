@@ -422,16 +422,15 @@ fn reviewed_capture_joins_actual_selection_cameras_and_articulated_fit() {
 }
 
 fn capture_review(dir: &Path, output: &str, code: i32) -> Value {
+    capture_review_args(dir, &["input.json", "--out", output], code)
+}
+
+fn capture_review_args(dir: &Path, args: &[&str], code: i32) -> Value {
     let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(dir)
-        .args([
-            "measure",
-            "capture-review",
-            "input.json",
-            "--out",
-            output,
-            "--json",
-        ])
+        .args(["measure", "capture-review"])
+        .args(args)
+        .arg("--json")
         .output()
         .unwrap();
     assert_eq!(
@@ -852,6 +851,214 @@ fn capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_referenc
         unsafe_review["result"]["frames"][0]["frame"]["timestamp_us"].as_u64(),
         Some(9_007_199_254_740_993)
     );
+    // Same authored rays on the checked capture sensor, independently rasterized into masks.
+    let mut mask_input = fixture().1;
+    for i in 0..2 {
+        mask_input["fit"]["frames"][i]["keypoints"] = good["fit"]["frames"][i]["keypoints"].clone();
+    }
+    let mut masks = mask_manifest_for(&dir, &mask_input);
+    let manifest_path = dir.join("masks/manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    for frame in manifest["frames"].as_array_mut().unwrap() {
+        frame["samples"].as_array_mut().unwrap().extend([
+            json!({"axis":"vertical","index":640,"sigma_px":1.0,"partition":"held_out"}),
+            json!({"axis":"horizontal","index":50,"sigma_px":2.0,"partition":"fit"}),
+        ]);
+    }
+    // Retain the near-edge column as a failed CHECK case: small raster/fit differences amplify
+    // along a steep contour there. The positive route samples an interior column instead.
+    std::fs::write(
+        dir.join("masks/edge-column.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    for frame in manifest["frames"].as_array_mut().unwrap() {
+        frame["samples"][3]["index"] = json!(700);
+    }
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let original_manifest = std::fs::read(&manifest_path).unwrap();
+    let masked = capture_review_args(
+        &dir,
+        &[
+            "input.json",
+            "--out",
+            "mask-review",
+            "--silhouettes",
+            "masks/manifest.json",
+        ],
+        0,
+    )["result"]
+        .clone();
+    assert_eq!(masked["body_model_loaded"], false);
+    assert_eq!(masked["body_fitted"], false);
+    assert_eq!(masked["capture_input"]["input"], bad);
+    assert_eq!(
+        std::fs::read(dir.join("mask-review/original-input.json")).unwrap(),
+        std::fs::read(dir.join("input.json")).unwrap()
+    );
+    let masks_receipt = &masked["capture_input"]["silhouette_input"];
+    assert_eq!(
+        masks_receipt["manifest_sha256"],
+        sha256_hex(&original_manifest)
+    );
+    assert_eq!(
+        masks_receipt["masks"][0]["decoded_mask_sha256"],
+        sha256_hex(&masks[0].data)
+    );
+    assert_ne!(
+        masked["capture_input"]["sources_sha256"],
+        review["capture_input"]["sources_sha256"]
+    );
+    for frame in masked["frames"].as_array().unwrap() {
+        let lines = frame["silhouette"]["lines"].as_array().unwrap();
+        assert_eq!(lines.len(), 5);
+        assert!(lines.iter().any(|l| l["intervals_px"] == json!([])));
+        let svg = std::fs::read_to_string(
+            dir.join("mask-review")
+                .join(frame["keypoint_svg"]["file"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(svg.matches("data-silhouette=").count(), lines.len());
+    }
+    let mut masked_good = good.clone();
+    masked_good["silhouettes"] = json!("masks/manifest.json");
+    std::fs::write(
+        dir.join("masked-good.json"),
+        serde_json::to_vec_pretty(&masked_good).unwrap(),
+    )
+    .unwrap();
+    let fit = |input: &str, output: &str, extra: &[&str], code| {
+        let result = Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args([
+                "measure",
+                "fit-body",
+                input,
+                "--model",
+                "model.ftxbody",
+                "--out",
+                output,
+                "--json",
+            ])
+            .args(extra)
+            .output()
+            .unwrap();
+        assert_eq!(
+            result.status.code(),
+            Some(code),
+            "{} / {}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        serde_json::from_slice::<Value>(&result.stdout).unwrap()["result"].clone()
+    };
+    let reference = fit("masked-good.json", "expected-masked-fit.json", &[], 0);
+    let old_route = fit(
+        "good.json",
+        "old-mask-fit.json",
+        &["--silhouettes", "masks/manifest.json"],
+        0,
+    );
+    assert_eq!(reference["input"], old_route["input"]);
+    assert_eq!(reference["solution"], old_route["solution"]);
+    assert_eq!(reference["attempts"], old_route["attempts"]);
+    let edge = fit(
+        "good.json",
+        "edge-column-fit.json",
+        &["--silhouettes", "masks/edge-column.json"],
+        2,
+    );
+    assert!(edge["attempts"].as_array().unwrap().iter().all(|attempt| {
+        attempt["checks"].as_array().unwrap().iter().any(|check| {
+            check["name"] == "silhouette:Vertical:640"
+                && check["partition"] == "held_out"
+                && check["passed"] == false
+        })
+    }));
+    assert_eq!(
+        reference["capture_input"]["silhouette_input"],
+        old_route["silhouette_input"]
+    );
+    assert_eq!(
+        reference["capture_input"]["sources_sha256"],
+        masked["capture_input"]["sources_sha256"]
+    );
+    fit("mask-review/capture.json", "masked-bad-fit.json", &[], 2);
+    // A valid JSON whitespace change and an unsampled interior pixel still change source identity.
+    let mut changed = original_manifest.clone();
+    changed.push(b'\n');
+    std::fs::write(&manifest_path, changed).unwrap();
+    fit(
+        "mask-review/capture.json",
+        "stale-manifest-fit.json",
+        &[],
+        3,
+    );
+    assert!(!dir.join("stale-manifest-fit.json").exists());
+    std::fs::write(&manifest_path, &original_manifest).unwrap();
+    let original_mask = std::fs::read(dir.join("masks/mask-0.png")).unwrap();
+    masks[0].data[1281] = 255;
+    std::fs::write(dir.join("masks/mask-0.png"), encode_png_gray(&masks[0])).unwrap();
+    fit("mask-review/capture.json", "stale-mask-fit.json", &[], 3);
+    assert!(!dir.join("stale-mask-fit.json").exists());
+    masks[0].data[1281] = 127;
+    std::fs::write(dir.join("masks/mask-0.png"), encode_png_gray(&masks[0])).unwrap();
+    capture_review_args(
+        &dir,
+        &[
+            "good.json",
+            "--out",
+            "soft-mask-review",
+            "--silhouettes",
+            "masks/manifest.json",
+        ],
+        3,
+    );
+    assert!(!dir.join("soft-mask-review").exists());
+    std::fs::write(dir.join("masks/mask-0.png"), original_mask).unwrap();
+    manifest["frames"][1]["frame"] = manifest["frames"][0]["frame"].clone();
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    capture_review_args(
+        &dir,
+        &[
+            "good.json",
+            "--out",
+            "duplicate-mask-review",
+            "--silhouettes",
+            "masks/manifest.json",
+        ],
+        3,
+    );
+    assert!(!dir.join("duplicate-mask-review").exists());
+    std::fs::write(&manifest_path, &original_manifest).unwrap();
+    capture_review_args(
+        &dir,
+        &[
+            "masked-good.json",
+            "--out",
+            "overwrite-mask-review",
+            "--silhouettes",
+            "masks/manifest.json",
+        ],
+        3,
+    );
+    assert!(!dir.join("overwrite-mask-review").exists());
+    let mut inline = masked_good.clone();
+    inline["fit"]["frames"][0]["silhouette"] = masked["frames"][0]["silhouette"].clone();
+    save(&dir, &inline);
+    capture_review(&dir, "inline-conflict-review", 3);
+    assert!(!dir.join("inline-conflict-review").exists());
+    inline.as_object_mut().unwrap().remove("silhouettes");
+    inline["fit"]["frames"][0]["silhouette"]["lines"][0]["sigma_px"] = json!(0);
+    save(&dir, &inline);
+    capture_review(&dir, "invalid-inline-review", 3);
+    assert!(!dir.join("invalid-inline-review").exists());
+    save(&dir, &bad);
 }
 
 #[test]
@@ -993,6 +1200,10 @@ fn model_identity_correspondence_and_parameter_typos_refuse_before_output() {
 // candidate's scanline projection, interval union, residuals or mask sampler to construct evidence.
 fn mask_manifest(dir: &Path) -> Vec<Gray> {
     let input = fixture().1;
+    mask_manifest_for(dir, &input)
+}
+
+fn mask_manifest_for(dir: &Path, input: &Value) -> Vec<Gray> {
     std::fs::create_dir(dir.join("masks")).unwrap();
     let mut frames = Vec::new();
     let mut masks = Vec::new();

@@ -2039,10 +2039,24 @@ selection and per-frame source/camera preparation evidence. The existing `fit-bo
 reruns those checks from any working directory and refuses a changed evidence digest. This
 optional binding is absent from older inputs; it does not change their behavior or the fitter.
 The digest excludes the capture request's own pathname/bytes to avoid a recursive identity.
+An optional top-level `silhouettes` local manifest path reuses the existing strict
+`ftx-body-silhouettes/1` reader during capture preparation, before loading a body model.
+`capture-review --silhouettes MANIFEST` adds that path to the replay document; it refuses to
+replace an existing manifest declaration. Replay rebases the path and ordinary fitting rereads
+the same manifest and masks. The receipt's `input` remains the original file's parsed document;
+the replay carries the added declaration and preparation retains the mask-import receipt.
+When present, the source digest additionally binds the manifest bytes,
+sample definitions and decoded mask hashes; changed evidence refuses. Inputs without a manifest
+retain their original source-digest calculation. Inline silhouettes cannot be overwritten by masks.
+The review validates supplied inline/imported silhouettes through the existing rectified-camera
+and scanline checks, then displays every observed slice and foreground interval, including explicit
+empty/background lines, original FIT/CHECK role, axis, location, sigma and evidence. These are
+read-only observed constraints, not predicted contours. No segmentation, rectification, clothing
+or occlusion inference, full-mask validation or body fitting occurs in this step.
 The copied images are review artifacts;
 fitting still requires the original current sources. `review.json` is the last publication
 write and reports `PREPARED`, never accepted shape, observable fit or READY. This review does
-not validate target anatomy against model topology, silhouettes, decoding, stationary reference,
+not validate target anatomy against model topology, segmentation, decoding, stationary reference,
 physical camera accuracy or wearer fit. Its original input hash and full preparation evidence
 identify the source; a changed source must be reviewed and prepared again.
 
