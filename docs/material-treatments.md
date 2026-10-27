@@ -165,6 +165,11 @@ worker replies. The worker uses the shared Rust exports `material_treatment` and
 `material_treatment_pattern`; an older bundle without them asks for a rebuild instead of inventing
 a browser implementation.
 
+Manufacturing and scenario studies also display treatment stages for ordinary alternatives and
+screened/adaptive trials. Download links use the exact retained stage strings, including completed
+stages of a later-refused design. The final geometry/fit/binding result determines admission;
+merely displaying a stage never marks that candidate selected or physically validated.
+
 ## Evidence and remaining physical scope
 
 The built-in five denim pairs document construction, directional dimensional change, areal mass

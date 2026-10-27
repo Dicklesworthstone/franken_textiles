@@ -2797,6 +2797,60 @@ test('design alternatives retain baseline, refused geometry and exact altered an
   assert.ok([...urls].every(url => !p.live.has(url)));
 });
 
+test('treatment-aware designs retain exact intermediate patterns and refused-stage evidence in both workflows', async function treatmentDesignStages() {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  for(const op of ['study','scenario']) {
+    const report=designReport(), treated=treatmentReport(true), compensated=structuredClone(treated);
+    compensated.mode='compensate';
+    report.alternatives[1].design.treatments=[{operation_index:1,report:treated}];
+    report.alternatives[2].design.treatments=[{operation_index:0,report:compensated}];
+    await p.e[op].onclick();
+    p.emit(op==='study'?report:{...scenarioReport(),manufacturing:report});
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    assert.match(visibleText(s),/operation 2 — Material treatment/);
+    assert.match(visibleText(s),/operation 1 — Cutting compensation/);
+    assert.match(visibleText(s),/Review final geometry, fit and material binding admission/);
+    assert.match(visibleText(s),/Completed stages can remain available for inspection/);
+    assert.match(visibleText(s),/Alteration refused: missing piece <front>/);
+    assert.match(visibleText(s),/0.9517/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    for(const [index,step,r] of [[2,2,treated],[3,1,compensated]]) {
+      for(const [suffix,field] of [['before-pattern','source_pattern_json'],['after-pattern','pattern_json'],['request','frozen_request_json']]) {
+        const matches=descendants(s).filter(n=>n.download===`alternative-${index}-treatment-${step}-${suffix}.json`);
+        assert.equal(matches.length,1); assert.equal(await p.blobs.get(matches[0].href).text(),r[field]);
+      }
+    }
+    const names=descendants(s).filter(n=>n.download).map(n=>n.download);
+    assert.equal(names.some(name=>name.startsWith('alternative-1-treatment-')),false);
+    assert.equal(new Set(names).size,names.length);
+  }
+  p.e.studyRequest.handlers.change(); assert.equal(p.live.size,0);
+});
+
+test('screened and adaptive treatment trials expose exact stage snapshots without marking them selected', async function treatmentSearchStages() {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  for(const adaptive of [false,true]) {
+    const report=designReport(), design=structuredClone(report.alternatives[1].design);
+    design.key='screened treatment'; design.treatments=[{operation_index:2,report:treatmentReport(true)}];
+    design.fit=outcome({passed:true,body_identity:{provenance:'supplied body'},validation:{points:[]}});
+    const rows=[{design,selected:false,max_fit_band_violation_mm:0,total_fit_band_violation_mm:0}];
+    report.design_search=adaptive?{schema:'ftx-design-adaptive-search/1',evaluations:1,qualified_designs:1,
+      selected_designs:0,stop_reason:'evaluation_limit',rows}:
+      {schema:'ftx-design-grid-search/1',total_grid_points:2,fit_screening:{screened_designs:1,qualified_designs:1,
+        rejected_designs:0,selected_designs:0,qualified_designs_omitted:1,unvisited_designs:1,
+        complete_fit_screening:false,all_qualified_designs_selected:false,rows}};
+    await p.e.study.onclick(); p.emit(report);
+    const s=section(p,'Fixed-pattern manufacturing alternatives');
+    assert.match(visibleText(s),/Not selected/); assert.match(visibleText(s),/operation 3 — Material treatment/);
+    const prefix=adaptive?'adaptive':'screened';
+    for(const [suffix,field] of [['before-pattern','source_pattern_json'],['after-pattern','pattern_json'],['request','frozen_request_json']]) {
+      const link=descendants(s).find(n=>n.download===`${prefix}-design-1-treatment-3-${suffix}.json`);
+      assert.ok(link); assert.equal(await p.blobs.get(link.href).text(),design.treatments[0].report[field]);
+    }
+    p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+  }
+});
+
 test('design scenario matrices display shared geometry once and keep every case separate', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   const report = scenarioMatrixReport(), designs = designReport();
@@ -2968,6 +3022,46 @@ test('compiled WASM thread-cost recipe and study results equal both native comma
       assert.equal(result.files.find(file=>file.name==='study-request.json').text,input(`${name}-study.json`));
     }
   });
+
+test('finite sewing fixtures retain capacities, operation lifecycles and source locks across all result views', async function finiteFixtureViews() {
+  const plan={schema:'ftx-sewing-plan/13',seams:[],hardware_execution_authorized:false,
+    options:{production:{workholding:{source:{note:'<observed fixture inventory>'},machine_sha256:'full-machine-lock'}}},
+    production:{production_copies:3,feed_seconds:24,workholding:{schema:'ftx-sewing-workholding/1',
+      fixture_geometry_and_access_validated:false,resources:[{id:'<jig>',capacity:2}],
+      baseline:{peak_occupancy:{'<jig>':1},operations:[]},
+      selected:{peak_occupancy:{'<jig>':2},operations:[
+        {operation:'1/join',occupied_before:{'<jig>':1},acquired:['1/held'],occupied_during:{'<jig>':2},
+          released:[],occupied_after:{'<jig>':2}},
+        {operation:'0/reinforce',occupied_before:{'<jig>':2},acquired:[],occupied_during:{'<jig>':2},
+          released:['0/held'],occupied_after:{'<jig>':1}}]}}}};
+  const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('limited fixtures'); row.sewing=outcome(plan);
+    const study=studyReport([row]);
+    const report=op==='sew'?{schema:'ftx-sewing-program/4',stitches:[],plan}:
+      op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=JSON.stringify(report), file=`${op}-exact-workholding.json`;
+    await p.e[op].onclick(); p.emit(report,[{name:file,text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    assert.deepEqual(plain(table('finite fixture inventory').children[2].children.map(n=>n.textContent)),['<jig>','2','1','2']);
+    assert.deepEqual(plain(table('selected fixture occupancy').children[2].children.map(n=>n.textContent)),
+      ['1/join','<jig>: 1','1/held','<jig>: 2','None','<jig>: 2']);
+    assert.deepEqual(plain(table('selected fixture occupancy').children[3].children.map(n=>n.textContent)),
+      ['0/reinforce','<jig>: 2','None','<jig>: 2','0/held','<jig>: 1']);
+    assert.match(visibleText(s),/acquires its units before the named operation starts/);
+    assert.match(visibleText(s),/Fixture geometry, seam access, handling duration and hardware execution remain unvalidated/);
+    const detail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('both complete timelines'));
+    detail.open=true; detail.handlers.toggle(); assert.match(visibleText(detail),/<observed fixture inventory>/);
+    assert.match(visibleText(detail),/full-machine-lock/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    const link=descendants(s).find(n=>n.download===file); assert.equal(await p.blobs.get(link.href).text(),raw);
+    if(op==='sew') assert.equal(JSON.parse(s.children[1].textContent).finite_workholding_enforced,true);
+  }
+  p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
 
 test('study timing separates sourced setup duration from feed time and preserves missing evidence', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
@@ -3573,7 +3667,7 @@ test('compiled WASM measured treatment and batch sewing replay through the actua
       assert.ok(inspection.capabilities.mechanical_coefficients.refusal);
     }
     const panel=fixture('synthetic-sewing-pattern.json'), input=JSON.parse(treatmentRequest);
-    const bound=JSON.parse(ftx.material_bind(panel,JSON.stringify({default:input.before}))).pattern_json;
+    const bound=JSON.parse(ftx.material_bind(panel,JSON.stringify({schema:'ftx-material-bindings/1',default:input.before}))).pattern_json;
     const request=JSON.stringify({schema:'ftx-pattern-treatment/1',mode:'treat',
       transitions:{launder:input},pieces:{front:'launder',back:'launder'}});
     const expected=ftx.material_treatment_pattern(bound,request);
@@ -3587,6 +3681,23 @@ test('compiled WASM measured treatment and batch sewing replay through the actua
     assert.equal(ftx.material_treatment_pattern(r.source_pattern_json,r.frozen_request_json),expected);
     const vertices=JSON.parse(r.pattern_json).pieces[0].vertices;
     assert.ok(Math.abs(vertices.c[0]-18.9)<1e-12); assert.ok(Math.abs(vertices.c[1]-95.17)<1e-12);
+    const studyRequest=JSON.stringify({schema:'ftx-design-study/1',
+      designs:[{key:'washed',operations:[{op:'treatment',request:JSON.parse(request)}]}],
+      variants:[{key:'retained',changes:{schema:'ftx-material-bindings/1'}}],
+      assembly_mass:{schema:'ftx-assembly-mass/1',inventory_complete:true,extras:[],seam_allowance_mm:0}});
+    const study=await w.send({type:'study',request:196,pattern:bound,studyRequest});
+    assert.equal(study.type,'result',study.message);
+    assert.deepEqual(study.result,JSON.parse(ftx.material_study(bound,studyRequest)));
+    assert.equal(study.files.find(f=>f.name==='study-request.json').text,studyRequest);
+    const washed=study.result.alternatives.find(row=>row.design.key==='washed');
+    assert.equal(washed.binding.status,'available'); assert.equal(washed.assembly_mass.status,'available');
+    assert.equal(washed.design.treatments.length,1); assert.equal(washed.design.treatments[0].operation_index,0);
+    const stage=washed.design.treatments[0].report;
+    assert.deepEqual(JSON.parse(ftx.material_treatment_pattern(stage.source_pattern_json,
+      stage.frozen_request_json)),stage);
+    assert.ok(Math.abs(washed.metrics.assembly_mass_kg-0.004*0.9517*0.945*0.37010)<1e-12);
+    assert.equal(JSON.parse(ftx.material_bind(washed.design.altered_pattern_json,
+      JSON.stringify(washed.frozen_changes))).pattern_json,washed.binding.result.pattern_json);
     const options=fs.readFileSync(path.join(__dirname,'../examples/sewing-production-options.json'),'utf8');
     const sewing=await w.send({type:'sew',request:195,pattern:panel,options});
     assert.equal(sewing.type,'result',sewing.message);
@@ -3596,6 +3707,21 @@ test('compiled WASM measured treatment and batch sewing replay through the actua
     assert.deepEqual(batch.ordering.selected_order,['0/join','1/join','2/join','0/reinforce','1/reinforce','2/reinforce']);
     assert.equal(batch.ordering.timing.selected_setup_milliseconds,1500); assert.equal(batch.ordering.optimality_proven,true);
     assert.equal(sewing.result.plan.hardware_execution_authorized,false);
+    const heldOptions=JSON.parse(fs.readFileSync(path.join(__dirname,'../examples/sewing-workholding-options.json'),'utf8'));
+    for(const [capacity,setup] of [[1,6500],[2,4000],[3,1500]]) {
+      heldOptions.production.workholding.resources[0].capacity=capacity;
+      const options=JSON.stringify(heldOptions);
+      const held=await w.send({type:'sew',request:196+capacity,pattern:panel,options});
+      assert.equal(held.type,'result',held.message); assert.deepEqual(held.result,JSON.parse(ftx.sew_stitches(panel,options)));
+      assert.equal(held.result.plan.schema,'ftx-sewing-plan/13');
+      const batch=held.result.plan.production, report=batch.workholding, id=report.resources[0].id;
+      assert.equal(batch.feed_seconds,24); assert.equal(batch.stitch_intervals,240);
+      assert.equal(batch.ordering.timing.selected_setup_milliseconds,setup);
+      assert.equal(batch.ordering.optimality_proven,true); assert.equal(report.selected.peak_occupancy[id],capacity);
+      assert.deepEqual(report.selected.operations.map(step=>step.operation),batch.ordering.selected_order);
+      assert.equal(report.selected.operations.at(-1).occupied_after[id],0);
+      assert.equal(report.fixture_geometry_and_access_validated,false);
+    }
   });
 
 test('compiled WASM authored designs replay real stock and sewing while excluding invalid geometry',

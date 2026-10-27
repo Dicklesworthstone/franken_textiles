@@ -3468,7 +3468,8 @@ retained as explicit discrepancies rather than silently joined across specimen I
 gauge thickness remains `reported_thickness`, separate from contact/sewing thickness. No curve fit,
 stiffness, friction, thermal property or uncertainty interval is manufactured from these metadata.
 The cylinder force/torque experiments need a separately justified forward model, raw timing/tare
-and geometry qualification, and independent CHECK evidence before they can supply solver laws.
+and geometry qualification, and independent CHECK evidence before they can supply solver laws
+(`ftx-tm2.1`).
 See [fabric101-materials.md](docs/fabric101-materials.md) for exact sources, exclusions and usage.
 This useful data expansion leaves the principal measured substitution gates `ftx-tm2` and `ftx-tm8`
 open; source-backed mass is not complete garment simulation readiness.
@@ -3489,8 +3490,10 @@ downstream consumers while preserving completed stages for inspection. A materia
 does not claim changed geometry. Work reservations include all attempted grid/adaptive operations
 and replicated per-piece material/history records, not only selected candidates.
 
-Both native commands and the existing portable study interfaces use this same authority. The
-laundered-denim example can emit a complete comparison of untreated, treated, compensated and
+Both native commands and the existing portable study interfaces use this same authority. Browser
+studies expose exact intermediate before/after/request downloads for alternatives and screened or
+adaptive trials, retaining final admission/refusal status and withdrawing obsolete links on edits.
+The laundered-denim example can emit a complete comparison of untreated, treated, compensated and
 compensated-then-treated panels. This implements the software scope of `ftx-care1.3`; measured sewn
 restraint, process-dependent contact and held-out garment behavior remain under `ftx-care1`.
 
@@ -3517,7 +3520,11 @@ The resource graph, integer demands, qualification references and expanded holds
 Omitted policy preserves prior output. See [sewing-production.md](docs/sewing-production.md) and
 the complete `examples/sewing-workholding-options.json`.
 
-This implements finite reusable inventory within `ftx-pb2.2`. Multi-machine assignment/transfers,
+Direct sewing and manufacturing/scenario browser views show capacities, baseline/selected peaks
+and actual before/during/after occupancy. Source evidence and both complete timelines remain
+inspectable; the page does not rerun the optimizer or grant physical qualification.
+
+This implements finite reusable inventory under `ftx-pb2.2.1`. Multi-machine assignment/transfers,
 fixture geometry and grip mechanics, seam access, measured handling and real execution qualification
 remain open. Counting available jigs does not establish those physical capabilities.
 

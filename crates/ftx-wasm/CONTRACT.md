@@ -19,6 +19,15 @@ or property fill is introduced. Existing sewing/study APIs accept the shared opt
 policy and retain copy-scoped traversal, actual batch totals and qualified ordering proof. Tests:
 `material_treatment`, `sewing_production`, and the material worker/page regressions.
 
+The existing study boundary also accepts canonical treatment design operations, including
+grid/adaptive post-operations, without a separate browser law. Exact intermediate stage strings
+remain in the ordinary report. The page exposes before/after/request downloads for selected,
+screened and adaptive designs while retaining final admission/refusal status; stale edits revoke
+their links. Sewing and study pages show finite fixture capacities and before/during/after
+occupancy from the source-qualified production report. They do not recompute scheduling or infer
+fixture geometry/hardware approval. Native command parity cases and the opt-in compiled-WASM
+worker case cover measured treatment studies and capacity-dependent constrained schedules.
+
 **Clock.** An input, never read: `today` (`YYYY-MM-DD`) dates tape files and judges staleness, `created`
 (`YYYY-MM-DDTHH:MM`) stamps the exports and the zip entries. The worker passes the wearer's local date and
 minute, as `webapp.py` reads them.

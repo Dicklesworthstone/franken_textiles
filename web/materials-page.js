@@ -921,6 +921,25 @@ function scenarioMatrixComparison(op, parent, r) {
     physical_validation_claim: r.manufacturing.physical_validation_claim,
     scope: "Fixed-input named cases, with their native outcomes, refusals and policies retained independently." };
 }
+function designTreatments(op, parent, design, prefix, label) {
+  if (!Array.isArray(design?.treatments) || !design.treatments.length) return;
+  const note = document.createElement("p");
+  note.textContent = "These are exact intermediate treatment stages. Review final geometry, fit and material binding admission before using a design. " +
+    "Completed stages can remain available for inspection if a later operation refuses.";
+  parent.append(note);
+  for (const stage of design.treatments) {
+    const step = stage.operation_index + 1, report = stage.report;
+    const heading = document.createElement("h4");
+    heading.textContent = `${label}: operation ${step} — ${report.mode === "compensate" ? "Cutting compensation" : "Material treatment"}`;
+    parent.append(heading);
+    treatmentResult(parent, report);
+    const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
+    for (const [suffix, field] of [["before-pattern", "source_pattern_json"], ["after-pattern", "pattern_json"], ["request", "frozen_request_json"]]) {
+      if (typeof report[field] === "string") link(op, actions, { name: `${prefix}-treatment-${step}-${suffix}.json`,
+        text: report[field], mime: "application/json" });
+    }
+  }
+}
 function designComparison(op, parent, study) {
   if (!study.alternatives.some(row => row.design)) return;
   const note = document.createElement("p");
@@ -956,6 +975,7 @@ function designComparison(op, parent, study) {
           const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
           link(op, actions, {name: `adaptive-design-${i + 1}-pattern.json`, text: design.altered_pattern_json, mime: "application/json"});
         }
+        designTreatments(op, parent, design, `adaptive-design-${i + 1}`, design.key ?? "Unknown design");
         detail(parent, `${design.key ?? "Unknown design"}: adaptive trial, unrounded fit and body identity (display only)`, row);
       }
     } else if (grid.fit_screening) {
@@ -989,6 +1009,7 @@ function designComparison(op, parent, study) {
           const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
           link(op, actions, {name: `screened-design-${i + 1}-pattern.json`, text: design.altered_pattern_json, mime: "application/json"});
         }
+        designTreatments(op, parent, design, `screened-design-${i + 1}`, design.key ?? "Unknown design");
         detail(parent, `${design.key ?? "Unknown design"}: screened operations, body identity and fit evidence (display only)`, row);
       }
     } else {
@@ -1039,10 +1060,11 @@ function designComparison(op, parent, study) {
       link(op, actions, { name: `alternative-${i + 1}-design-pattern.json`,
         text: design.altered_pattern_json, mime: "application/json" });
     }
+    designTreatments(op, parent, design, `alternative-${i + 1}`, row.key);
     detail(parent, `${row.key}: exact alteration inputs, geometry identities and validation (display only)`, {
       key: design.key, material_key: design.material_key, operations: design.operations, variables_mm: design.variables_mm,
       source_pattern_sha256: design.source_pattern_sha256, altered_pattern_sha256: design.altered_pattern_sha256,
-      geometry_changed: design.geometry_changed, validation: design.validation, fit: design.fit,
+      geometry_changed: design.geometry_changed, validation: design.validation, fit: design.fit, treatments: design.treatments,
       refusal: row.binding?.refusal });
   }
 }
@@ -1075,6 +1097,7 @@ function manufacturingComparison(op, parent, study, computed) {
     if (purchase?.schema === "ftx-cut-procurement/3") {
       splitProcurementResult(parent, purchase, `${row.key}: whole-marker supplier allocation`);
     }
+    sewingWorkholding(parent, available(row.sewing), row.key);
   }
   if (study.alternatives.some(row => row.finite_stock && row.finite_stock.status !== "not_requested")) {
     const stock = table(parent, "Finite hides and remnants — used physical inventory", ["Alternative", "Finite stock",
@@ -1444,6 +1467,28 @@ function treatmentResult(parent, r) {
     next: r.pattern_json ? "Review the seam checks and downloads, then use the derived pattern to recompute fit, drape and manufacturing." :
       "Download the exact material selections or use this transition in a piece-treatment request." };
 }
+function sewingWorkholding(parent, plan, label = "Selected sewing plan") {
+  const report = plan?.production?.workholding;
+  if (!report) return;
+  const resources = table(parent, `${label}: finite fixture inventory`,
+    ["Resource", "Available units", "Original order peak", "Selected order peak"]);
+  for (const resource of report.resources) cells(resources, [resource.id, metric(resource.capacity),
+    metric(report.baseline.peak_occupancy[resource.id]), metric(report.selected.peak_occupancy[resource.id])]);
+  const occupancy = values => Object.entries(values).map(([id, units]) => `${id}: ${metric(units)}`).join("; ");
+  const timeline = table(parent, `${label}: selected fixture occupancy`,
+    ["Operation", "Occupied before", "Acquired before start", "Occupied during", "Released after completion", "Occupied after"]);
+  for (const step of report.selected.operations) cells(timeline, [step.operation,
+    occupancy(step.occupied_before), step.acquired.join(", ") || "None", occupancy(step.occupied_during),
+    step.released.join(", ") || "None", occupancy(step.occupied_after)]);
+  const note = document.createElement("p");
+  note.textContent = "The complete selected order respects the declared finite fixture inventory. " +
+    "Each garment acquires its units before the named operation starts and releases them after the named operation completes. " +
+    "The inventory and holds are tied to the exact machine configuration and admitted material/process qualifications. " +
+    "Fixture geometry, seam access, handling duration and hardware execution remain unvalidated.";
+  parent.append(note);
+  detail(parent, `${label}: fixture source, qualification locks and both complete timelines`, {
+    policy: plan.options?.production?.workholding, report });
+}
 function sewingResult(parent, r) {
   const plan = r.plan, production = plan?.production, order = production?.ordering || plan?.ordering;
   if (order) {
@@ -1467,7 +1512,7 @@ function sewingResult(parent, r) {
     const note = document.createElement("p");
     const objective = order.timing ? "declared setup duration" : "setup-change count";
     note.textContent = (order.optimality_proven ?
-      `Minimum ${objective} proven for the declared operations, dependencies and initial setup. ` :
+      `Minimum ${objective} proven for the declared operations, dependencies, initial setup${production?.workholding ? " and finite fixtures" : ""}. ` :
       `Best complete feasible schedule found; minimum ${objective} has not been proven. `) +
       (order.budget_exhausted ? "The search reached its declared work limit. " : "") +
       "Needle and thread changes each count once. Handling, rethreading duration, assembly access and total manufacturing time are not inferred. " +
@@ -1476,6 +1521,7 @@ function sewingResult(parent, r) {
     parent.append(note);
     detail(parent, "Baseline order, selected order and bounded search result", order);
   }
+  sewingWorkholding(parent, plan);
   if (plan?.seams.some(row => row.source_span)) {
     const spans = table(parent, "Partial-seam operations — original source correspondence",
       ["Operation", "Source seam", "Side A range", "Side B range", "Full source lengths (mm)", "Traveled lengths (mm)", "Direction"]);
@@ -1501,6 +1547,7 @@ function sewingResult(parent, r) {
     setup_changes: order?.selected_changes,
     ordering_objective: order ? (order.timing ? "minimize_setup_time" : "minimize_setup_changes") : undefined,
     ordering_optimality_proven: order?.optimality_proven,
+    finite_workholding_enforced: production?.workholding ? true : undefined,
     search_nodes: order?.search_nodes, hardware_execution_authorized: plan?.hardware_execution_authorized };
 }
 function permanentStretchResult(parent, r) {
