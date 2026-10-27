@@ -38,6 +38,96 @@ fn changes(default: Value) -> Value {
 }
 
 #[test]
+fn fixed_liquid_inspection_qualifies_wet_thickness_and_keeps_capabilities_independent() {
+    let inspect = |selected: &Value| -> Value {
+        serde_json::from_str(&materials::inspect(&selected.to_string()).unwrap()).unwrap()
+    };
+    let mut wet = selection(1.6, 0.6);
+    wet["record"]["structure"]["mechanical_mass_model"] =
+        json!(ftx_pattern::material_mass::RETAINED_LIQUID_MODEL);
+    let conditions = json!({"specimen_id":"synthetic-wet-inspection", "conditioning":"closed wet test",
+        "retained_liquid_kg_m2":"0.1"});
+    for observation in wet["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        observation["conditions"] = conditions.clone();
+    }
+    wet["record"]["properties"]["areal_density"]["conditions"]["reference_area_basis"] =
+        json!("dry_textile_reference_area");
+    wet["record"]["properties"]["areal_density"]["conditions"]["mass_basis"] =
+        json!("dry_textile_excluding_retained_liquid");
+    wet["record"]["properties"]["retained_liquid_areal_density"] = json!({
+        "value":0.1,"unit":"kg/m2","evidence":"estimate","source":"test",
+        "method":"Independent synthetic retained-liquid mass",
+        "conditions":{"specimen_id":"synthetic-wet-inspection","conditioning":"closed wet test",
+            "reference_area_basis":"dry_textile_reference_area","mass_basis":"additional_retained_liquid",
+            "retention_basis":"closed_co_moving_no_exchange",
+            "qualification":"Synthetic no-exchange co-moving liquid experiment"}});
+    let detail = inspect(&wet);
+    assert_eq!(detail["capabilities"]["sewing_thickness_m"]["ready"], true);
+    assert_eq!(
+        detail["capabilities"]["mechanical_coefficients"]["ready"],
+        true
+    );
+    assert!(
+        (detail["capabilities"]["mechanical_coefficients"]["value"]["areal_kg_m2"]
+            .as_f64()
+            .unwrap()
+            - 0.3)
+            .abs()
+            < 1e-15
+    );
+    assert_eq!(detail["capabilities"]["steady_conduction"]["ready"], false);
+    assert_eq!(detail["capabilities"]["transient_thermal"]["ready"], false);
+    assert_eq!(detail, inspect(&detail["selection"]));
+
+    for (key, stale) in [
+        ("retained_liquid_kg_m2", "0"),
+        ("specimen_id", "different-specimen"),
+    ] {
+        let mut selected = wet.clone();
+        selected["record"]["properties"]["thickness"]["conditions"][key] = json!(stale);
+        let detail = inspect(&selected);
+        let capability = &detail["capabilities"]["sewing_thickness_m"];
+        assert_eq!(capability["ready"], false);
+        let resolved = ftx_pattern::textile_import::catalog()
+            .unwrap()
+            .resolve(&serde_json::from_value(selected).unwrap())
+            .unwrap();
+        let refusal = resolved
+            .material()
+            .qualify_retained_liquid_property("thickness", resolved.allows_estimates())
+            .unwrap_err();
+        assert_eq!(
+            capability["refusal"],
+            serde_json::to_value(refusal).unwrap()
+        );
+        assert_eq!(detail["capabilities"]["stock_width_m"]["ready"], true);
+    }
+
+    // Sewing-only records need no unrelated membrane law or dry transport observations.
+    for mut partial in [selection(1.6, 0.6), wet] {
+        partial["record"]["properties"]
+            .as_object_mut()
+            .unwrap()
+            .retain(|key, _| {
+                matches!(
+                    key.as_str(),
+                    "thickness" | "areal_density" | "retained_liquid_areal_density"
+                )
+            });
+        let detail = inspect(&partial);
+        assert_eq!(detail["capabilities"]["sewing_thickness_m"]["ready"], true);
+        assert_eq!(
+            detail["capabilities"]["mechanical_coefficients"]["ready"],
+            false
+        );
+    }
+}
+
+#[test]
 fn linear_and_bending_identification_reach_the_actual_material_binding() {
     let linear = include_str!("../../../tests/fixtures/materials/synthetic-swatch.json");
     let bending = include_str!("../../../tests/fixtures/materials/synthetic-bending-coupons.json");

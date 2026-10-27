@@ -59,7 +59,12 @@ fn detail(m: &ResolvedMaterial) -> Result<Value, Refusal> {
             "Pressure-conditioned thickness does not establish uncompressed sewing-stack clearance.",
         ))
     } else {
-        material.require("thickness", "m", policy)
+        material
+            .require("thickness", "m", policy)
+            .and_then(|thickness| {
+                material.qualify_retained_liquid_property("thickness", policy)?;
+                Ok(thickness)
+            })
     };
     let selection = m.frozen_selection();
     let selection_json = serde_json::to_string(&selection).map_err(invalid)?;

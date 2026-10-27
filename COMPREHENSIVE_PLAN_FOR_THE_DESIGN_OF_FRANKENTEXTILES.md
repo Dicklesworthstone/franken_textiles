@@ -3918,6 +3918,9 @@ provide usable bounds. Attached accessories remain independent. Material studies
 actual combined results and include liquid acquisition/retention protocols in their admission.
 Static membrane experiments and sewing thickness also enforce the selected wet state without
 forcing otherwise independent dry consumers to acquire unrelated properties.
+The browser material inspector uses that same wet-thickness qualification, so a stale dry
+measurement cannot advertise sewing readiness. Actual generated WebAssembly and native strip
+histories agree completely on dry/wet mass, dynamics, frozen-source replay and source refusals.
 
 This completes the bounded software scope of `ftx-vc2.2`, with source, conservation, motion,
 stock-accounting and consumer-refusal regressions. It supplies no new empirical wet-textile
