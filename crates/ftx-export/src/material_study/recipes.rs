@@ -16,24 +16,48 @@ pub(super) fn production_options(
     options: &SewOptions,
     cutting_copies: Option<usize>,
 ) -> Result<Cow<'_, SewOptions>, Refusal> {
-    let Some(consumables) = &options.consumables else {
+    if options.consumables.is_none() && options.production.is_none() {
         return Ok(Cow::Borrowed(options));
-    };
-    if let (Some(thread), Some(cut)) = (consumables.production_copies, cutting_copies)
-        && thread != cut
-    {
+    }
+    let thread = options
+        .consumables
+        .as_ref()
+        .and_then(|c| c.production_copies);
+    let schedule = options
+        .production
+        .as_ref()
+        .and_then(|p| p.production_copies);
+    let counts: Vec<_> = [cutting_copies, thread, schedule]
+        .into_iter()
+        .flatten()
+        .collect();
+    if counts.windows(2).any(|pair| pair[0] != pair[1]) {
         return Err(invalid(
-            "thread production_copies must match every requested cutting quantity",
+            "thread production_copies and sewing schedule production_copies must match every requested cutting quantity",
         ));
     }
-    if consumables.production_copies.is_none()
-        && let Some(copies) = cutting_copies.filter(|copies| *copies != 1)
-    {
-        let mut resolved = options.clone();
-        resolved.consumables.as_mut().unwrap().production_copies = Some(copies);
-        return Ok(Cow::Owned(resolved));
+    let Some(copies) = counts.first().copied() else {
+        return Ok(Cow::Borrowed(options));
+    };
+    let needs_threads = options
+        .consumables
+        .as_ref()
+        .is_some_and(|c| c.production_copies.is_none() && (copies != 1 || schedule.is_some()));
+    let needs_schedule = options
+        .production
+        .as_ref()
+        .is_some_and(|p| p.production_copies.is_none());
+    if !needs_threads && !needs_schedule {
+        return Ok(Cow::Borrowed(options));
     }
-    Ok(Cow::Borrowed(options))
+    let mut resolved = options.clone();
+    if needs_threads {
+        resolved.consumables.as_mut().unwrap().production_copies = Some(copies);
+    }
+    if needs_schedule {
+        resolved.production.as_mut().unwrap().production_copies = Some(copies);
+    }
+    Ok(Cow::Owned(resolved))
 }
 
 /// Recipe-selection receipt for one material-study alternative. Its selected complete plan is
@@ -89,8 +113,7 @@ pub(super) fn check_budget(
     }
     if request
         .options
-        .ordering
-        .as_ref()
+        .ordering_policy()
         .is_some_and(|policy| plans.saturating_mul(policy.max_search_nodes) > 200_000)
     {
         return Err(budget(

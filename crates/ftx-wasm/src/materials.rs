@@ -158,6 +158,52 @@ pub fn material_compression_stack(request: &str) -> Result<String, wasm_bindgen:
     compression_stack(request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
+/// Resolve source-qualified treatment observations without inheriting unsupported pre-treatment properties.
+///
+/// # Errors
+/// Oversized input, invalid frozen selections, unsupported dimensional or post-state qualification.
+pub fn treatment(request: &str) -> Result<String, Refusal> {
+    budget(&[request])?;
+    let input: ftx_pattern::material_treatment::Input =
+        serde_json::from_str(request).map_err(invalid)?;
+    serde_json::to_string(&ftx_pattern::material_treatment::evaluate(&input)?).map_err(invalid)
+}
+
+/// Apply directional treatment or compensation to ordinary pattern rest geometry and materials.
+///
+/// # Errors
+/// Combined input over 64 MiB or any refusal from the shared treatment/pattern authority.
+pub fn treatment_pattern(pattern: &str, request: &str) -> Result<String, Refusal> {
+    budget(&[pattern, request])?;
+    let pattern = Pattern::from_json(pattern).map_err(invalid)?;
+    let input: ftx_pattern::material_treatment::geometry::Input =
+        serde_json::from_str(request).map_err(invalid)?;
+    serde_json::to_string(&input.apply(&pattern)?).map_err(invalid)
+}
+
+/// Browser material-state treatment through the same evaluator used by both native commands.
+///
+/// # Errors
+/// Same refusals as [`treatment`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_treatment(request: &str) -> Result<String, wasm_bindgen::JsError> {
+    treatment(request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
+/// Browser garment treatment with exact frozen request and ordinary-pattern download bytes.
+///
+/// # Errors
+/// Same refusals as [`treatment_pattern`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_treatment_pattern(
+    pattern: &str,
+    request: &str,
+) -> Result<String, wasm_bindgen::JsError> {
+    treatment_pattern(pattern, request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Inspect complete retained strip acquisitions without converting grip extension to local strain.
 /// Original source text reaches the shared parser without a numerical JSON round trip.
 ///

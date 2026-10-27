@@ -75,6 +75,8 @@ ftx-materials thermal STACK.json
 ftx-materials thermal-at ID TEMPERATURE-C [--allow-estimates]
 ftx-materials pressure-condition REQUEST.json
 ftx-materials compression-stack REQUEST.json
+ftx-materials treatment REQUEST.json
+ftx-materials treatment-pattern PATTERN.json REQUEST.json [NEW-PATTERN.json]
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-nonlinear SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
@@ -122,6 +124,8 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
 `pressure-condition` prepares a frozen material at a declared normal pressure from qualified observations; it does not infer contact pressure.
 `compression-stack` infers common pressure from a rigid-face stack clearance and qualified branches, returning one frozen selection per layer; it is not a garment-contact or recovery simulation.
+`treatment` resolves exact source-qualified before/after material states and directional shrinkage.
+`treatment-pattern` applies treatment or cutting compensation in declared material axes, with ordinary frozen pattern output and fresh seam checks.
 `thermal-steady` solves source-qualified conduction without requiring mass or heat capacity; its frozen request replays offline.
 `thermal-steady-surface` evaluates source-locked drape triangles without requiring heat storage; no inferred body coverage.
 `thermal-steady-coverage` recomputes layered body coverage and heat directly from retained drape materials, without invented storage.
@@ -253,6 +257,13 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["calibrate-strip", path, "--allow-estimates"] => strips::run(path, true),
         ["pressure-condition", path] => screening::pressure_condition(path),
         ["compression-stack", path] => screening::compression_stack(path),
+        ["treatment", path] => screening::treatment(path),
+        ["treatment-pattern", pattern, request] => {
+            screening::treatment_pattern(pattern, request, None)
+        }
+        ["treatment-pattern", pattern, request, out] => {
+            screening::treatment_pattern(pattern, request, Some(out))
+        }
         ["study", pattern, request] => screening::study(pattern, request),
         ["study-on-body", pattern, request, body, model] => {
             scenarios::manufacturing(pattern, request, body, model)
@@ -293,20 +304,8 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["sew-select", pattern, request] => {
             sewing_selection::run(pattern, request).map(|(report, _, _)| report)
         }
-        ["sew-plan", pattern, options] => {
-            let pattern = Pattern::new(read::<Value>(pattern)?);
-            let options = read::<ftx_export::sewing::SewOptions>(options)?;
-            serde_json::to_value(ftx_export::sewing::SewPlan::build(&pattern, &options)?)
-                .map_err(|e| invalid(e.to_string()))
-        }
-        ["sew-stitches", pattern, options] => {
-            let pattern = Pattern::new(read::<Value>(pattern)?);
-            let options = read::<ftx_export::sewing::SewOptions>(options)?;
-            serde_json::to_value(ftx_export::sewing::program::SewProgram::build(
-                &pattern, &options,
-            )?)
-            .map_err(|e| invalid(e.to_string()))
-        }
+        ["sew-plan", pattern, options] => sewing_selection::plan(pattern, options, false),
+        ["sew-stitches", pattern, options] => sewing_selection::plan(pattern, options, true),
         ["sew-svg", pattern, options, operation, out] => {
             let pattern = Pattern::new(read::<Value>(pattern)?);
             let options = read::<ftx_export::sewing::SewOptions>(options)?;

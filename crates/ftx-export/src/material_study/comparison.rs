@@ -1626,7 +1626,7 @@ impl Policy {
             let times = row
                 .sewing
                 .value()
-                .and_then(|plan| plan.options.ordering.as_ref())
+                .and_then(|plan| plan.options.ordering_policy())
                 .and_then(|ordering| ordering.setup_times.as_ref())
                 .ok_or_else(|| invalid("source-qualified sewing setup times unavailable"))?;
             base = hash(&(

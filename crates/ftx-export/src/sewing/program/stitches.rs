@@ -1,6 +1,8 @@
 //! Expand a freshly built source-locked plan, never an unvalidated edited report. Operation/run
 //! boundaries are retained; no joining movement, needle action or robot-coordinate transform is guessed.
 
+use std::collections::BTreeMap;
+
 use ftx_core::{Refusal, RefusalCode, Vec2};
 use ftx_pattern::Pattern;
 use serde::Serialize;
@@ -13,6 +15,10 @@ use super::compile;
 pub struct StitchStep {
     /// Index into the retained plan's operation-ordered `seams` array.
     pub operation: usize,
+    /// Zero-based physical garment copy when a production schedule was explicitly requested.
+    /// Omission retains the existing single-garment program representation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copy: Option<usize>,
     /// Index into that operation's directed `runs` array; its phase identifies lock travel.
     pub run: usize,
     /// Canonical station before this interval, on both material sides.
@@ -39,7 +45,7 @@ pub struct StitchStep {
 /// Fully expanded geometric stitch travel for software/CAM review. No device commands or permission.
 #[derive(Clone, Debug, Serialize)]
 pub struct SewProgram {
-    /// `/1` centerline, `/2` offset geometry, `/3` shared flat-fold needle/material correspondence.
+    /// `/1` centerline, `/2` offset geometry, `/3` flat-fold correspondence, `/4` production copies.
     pub schema: &'static str,
     /// Original inputs, frozen source materials, paired station tables and directed operation order.
     pub plan: SewPlan,
@@ -55,7 +61,8 @@ impl SewProgram {
     /// Every [`SewPlan::build`] refusal, or expansion beyond the shared 250000 interval budget.
     pub fn build(pattern: &Pattern, options: &SewOptions) -> Result<Self, Refusal> {
         let mut plan = SewPlan::build(pattern, options)?;
-        if plan.stitch_intervals > MAX_STATIONS {
+        let total_intervals = plan.total_stitch_intervals();
+        if total_intervals > MAX_STATIONS {
             return Err(Refusal::new(
                 RefusalCode::BudgetExceeded,
                 "expanded sewing program exceeds stitch budget",
@@ -69,8 +76,7 @@ impl SewProgram {
         if plan.schema == "ftx-sewing-plan/1" {
             plan.schema = "ftx-sewing-plan/2";
         }
-        let mut stitches = Vec::with_capacity(plan.stitch_intervals);
-        for (operation, seam) in plan.seams.iter_mut().enumerate() {
+        for seam in &mut plan.seams {
             if seam.runs.is_empty() {
                 seam.runs = compile(
                     &seam.stations,
@@ -79,6 +85,28 @@ impl SewProgram {
                     &options.machine,
                 )?;
             }
+        }
+        let sequence: Vec<_> = if let Some(production) = &plan.production {
+            let by_id: BTreeMap<_, _> = production
+                .operations
+                .iter()
+                .map(|operation| (operation.id.as_str(), operation))
+                .collect();
+            production
+                .ordering
+                .selected_order
+                .iter()
+                .map(|id| {
+                    let operation = by_id[id.as_str()];
+                    (Some(operation.copy), operation.seam_index)
+                })
+                .collect()
+        } else {
+            (0..plan.seams.len()).map(|i| (None, i)).collect()
+        };
+        let mut stitches = Vec::with_capacity(total_intervals);
+        for (copy, operation) in sequence {
+            let seam = &plan.seams[operation];
             for (run, travel) in seam.runs.iter().enumerate() {
                 let mut from = travel.from_station;
                 while from != travel.to_station {
@@ -93,6 +121,7 @@ impl SewProgram {
                     ];
                     stitches.push(StitchStep {
                         operation,
+                        copy,
                         run,
                         from_station: from,
                         to_station: to,
@@ -108,11 +137,13 @@ impl SewProgram {
                 }
             }
         }
-        if stitches.len() != plan.stitch_intervals {
+        if stitches.len() != total_intervals {
             return Err(bad("inconsistent sewing program interval accounting"));
         }
         Ok(Self {
-            schema: if assembly {
+            schema: if plan.production.is_some() {
+                "ftx-sewing-program/4"
+            } else if assembly {
                 "ftx-sewing-program/3"
             } else if offset {
                 "ftx-sewing-program/2"

@@ -1,0 +1,454 @@
+{
+  "schema": "ftx-material-treatment/1",
+  "before": {
+    "id": "kanat-ozdil-2026/denim-5/before-washing",
+    "record": {
+      "id": "kanat-ozdil-2026/denim-5/before-washing",
+      "name": "Kanat-Ozdil 2026 cotton/elastane denim 5, reported 0.50% elastane, before washing",
+      "form": "woven",
+      "composition": [],
+      "composition_complete": false,
+      "structure": {
+        "composition_scope": "Table 2 reports fabric elastane ratio (%) without an explicit mass denominator or composition test; no complete dry-mass composition or post-wash compositional invariance is assigned",
+        "source_initial_elastane_ratio_percent": "0.50",
+        "source_sample_mark": "KanatOzdil2026:fabric-5",
+        "thermal_scope": "Measured effective resistance for the existing constant-property steady consumer; no inferred conductivity, heat capacity, temperature response or wearer comfort",
+        "treatment_scope": "One observed before/after-five-cycles transition; no intermediate cycle interpolation, repeat application, mass conservation, mechanical law, shrinkage under sewn constraints or qualified sewing clearance",
+        "warp_yarn": "100% cotton; Ne 8; twist coefficient alpha_e 4.5",
+        "weave": "2/1 Z twill denim",
+        "weft_arrangement": "1 core-spun yarn + 2 plain yarns",
+        "weft_yarn": "Ne 14; twist coefficient alpha_e 4.2; core-spun yarn has cotton sheath and 78 dtex elastane filament core at draft ratio 5.2"
+      },
+      "properties": {
+        "areal_density": {
+          "value": 339.08,
+          "unit": "g/m2",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3, page 5; TS EN 12127; specimen conditioning retained; uncertainty and replicate count not reported",
+          "conditions": {
+            "conditioning": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-BW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_air_permeability": {
+          "value": 44.21,
+          "unit": "L/(m2*s)",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; TS 391 EN ISO 9237; FX3300; arithmetic mean of seven measurements",
+          "conditions": {
+            "conditioning": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "pressure_difference_and_test_area": "Not reported; no pressure-dependent flow law is inferred",
+            "source_row": "5-BW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_air_permeability_sd": {
+          "value": 2.11,
+          "unit": "L/(m2*s)",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; reported sample standard deviation, not a confidence interval",
+          "conditions": {
+            "conditioning": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-BW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_fractional_cover": {
+          "value": 0.8651,
+          "unit": "1",
+          "evidence": "published",
+          "source": "paper",
+          "method": "Table 3, page 5; fractional fabric cover computed by the source using Equation 1; not a measured porosity",
+          "conditions": {
+            "conditioning": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-BW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_relative_water_vapor_permeability": {
+          "value": 53.35,
+          "unit": "%",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; Permetest; ISO 11092:2014; arithmetic mean of three measurements",
+          "conditions": {
+            "conditioning": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "quantity_scope": "Relative water vapor permeability; not evaporative resistance in m2*Pa/W",
+            "source_row": "5-BW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_relative_water_vapor_permeability_sd": {
+          "value": 0.45,
+          "unit": "%",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; reported sample standard deviation, not a confidence interval",
+          "conditions": {
+            "conditioning": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-BW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_thermal_resistance_sd": {
+          "value": 0.00032,
+          "unit": "m2*K/W",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; reported sample standard deviation, not a confidence interval",
+          "conditions": {
+            "conditioning": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-BW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_thickness": {
+          "value": 0.75,
+          "unit": "mm",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3, page 5; Alambeta; three measurements per fabric sample; numerical uncertainty not reported",
+          "conditions": {
+            "conditioning": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "measurement_pressure": "Not reported; this observation does not establish unloaded contact or sewing clearance thickness",
+            "source_row": "5-BW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "thermal_resistance": {
+          "value": 0.0124,
+          "unit": "m2*K/W",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; Alambeta; arithmetic mean of three measurements",
+          "conditions": {
+            "conditioning": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "measurement_pressure_and_plate_temperatures": "Not reported; ambient conditioning is not a thermal-response domain",
+            "sample_count": "3",
+            "source_row": "5-BW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied",
+            "uncertainty": "Table 5 sample standard deviation retained separately; not a bound or confidence interval"
+          },
+          "bounds": null
+        },
+        "thread_density_warp": {
+          "value": 27.0,
+          "unit": "1/cm",
+          "evidence": "published",
+          "source": "paper",
+          "method": "Section 2.1, page 3; source-declared initial weaving density; no independent count method reported",
+          "conditions": {
+            "conditioning": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-BW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "thread_density_weft": {
+          "value": 20.0,
+          "unit": "1/cm",
+          "evidence": "published",
+          "source": "paper",
+          "method": "Section 2.1, page 3; source-declared initial weaving density; no independent count method reported",
+          "conditions": {
+            "conditioning": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-BW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        }
+      },
+      "sources": {
+        "paper": {
+          "reference": "https://doi.org/10.3390/ma19153264",
+          "accessed_on": "2026-10-26",
+          "note": "Zehra Evrim Kanat and Nilgun Ozdil (2026), Influence of Washing on the Thermal Comfort Parameters of Denim Fabrics with Varying Elastane Content, Materials 19(15), 3264; published 2026-08-02, CC BY. Sections 2.1-2.2 and Tables 1-5, PDF pages 3-6, visually checked. Publisher PDF: https://mdpi-res.com/d_attachment/materials/materials-19-03264/article_deploy/materials-19-03264.pdf; SHA-256 0d9fc029c60b79745b2c123a4d4d9bc34fa69734b511cf20d1bccc94fef01e2c. Selected numerical facts and original attribution only; no source article or images redistributed. BW/AW are fabric-code group observations, not individually identified coupons or retail SKUs."
+        }
+      }
+    },
+    "overrides": {},
+    "sources": {},
+    "allow_estimates": false,
+    "expected_sha256": "36057c9c699b82db797ad7f0c3bd832af7ec865f4210e357f4577576cfc6b9cc"
+  },
+  "after": {
+    "id": "kanat-ozdil-2026/denim-5/after-5-washes",
+    "record": {
+      "id": "kanat-ozdil-2026/denim-5/after-5-washes",
+      "name": "Kanat-Ozdil 2026 cotton/elastane denim 5, reported 0.50% elastane, after five washes",
+      "form": "woven",
+      "composition": [],
+      "composition_complete": false,
+      "structure": {
+        "composition_scope": "Table 2 reports fabric elastane ratio (%) without an explicit mass denominator or composition test; no complete dry-mass composition or post-wash compositional invariance is assigned",
+        "source_initial_elastane_ratio_percent": "0.50",
+        "source_sample_mark": "KanatOzdil2026:fabric-5",
+        "thermal_scope": "Measured effective resistance for the existing constant-property steady consumer; no inferred conductivity, heat capacity, temperature response or wearer comfort",
+        "treatment_cycles": "5",
+        "treatment_process": "ISO 6330 household laundering; Type A washer; 100 g standard 3-ECE reference detergent; 2 kg fabric load; 30 degrees C; 40 minutes per cycle; flat drying before testing",
+        "treatment_scope": "One observed before/after-five-cycles transition; no intermediate cycle interpolation, repeat application, mass conservation, mechanical law, shrinkage under sewn constraints or qualified sewing clearance",
+        "warp_yarn": "100% cotton; Ne 8; twist coefficient alpha_e 4.5",
+        "weave": "2/1 Z twill denim",
+        "weft_arrangement": "1 core-spun yarn + 2 plain yarns",
+        "weft_yarn": "Ne 14; twist coefficient alpha_e 4.2; core-spun yarn has cotton sheath and 78 dtex elastane filament core at draft ratio 5.2"
+      },
+      "properties": {
+        "areal_density": {
+          "value": 344.7,
+          "unit": "g/m2",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3, page 5; TS EN 12127; specimen conditioning retained; uncertainty and replicate count not reported",
+          "conditions": {
+            "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-AW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_air_permeability": {
+          "value": 32.67,
+          "unit": "L/(m2*s)",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; TS 391 EN ISO 9237; FX3300; arithmetic mean of seven measurements",
+          "conditions": {
+            "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "pressure_difference_and_test_area": "Not reported; no pressure-dependent flow law is inferred",
+            "source_row": "5-AW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_air_permeability_sd": {
+          "value": 2.6,
+          "unit": "L/(m2*s)",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; reported sample standard deviation, not a confidence interval",
+          "conditions": {
+            "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-AW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_fractional_cover": {
+          "value": 0.8792,
+          "unit": "1",
+          "evidence": "published",
+          "source": "paper",
+          "method": "Table 3, page 5; fractional fabric cover computed by the source using Equation 1; not a measured porosity",
+          "conditions": {
+            "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-AW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_relative_water_vapor_permeability": {
+          "value": 55.59,
+          "unit": "%",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; Permetest; ISO 11092:2014; arithmetic mean of three measurements",
+          "conditions": {
+            "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "quantity_scope": "Relative water vapor permeability; not evaporative resistance in m2*Pa/W",
+            "source_row": "5-AW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_relative_water_vapor_permeability_sd": {
+          "value": 0.47,
+          "unit": "%",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; reported sample standard deviation, not a confidence interval",
+          "conditions": {
+            "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-AW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_thermal_resistance_sd": {
+          "value": 0.00069,
+          "unit": "m2*K/W",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; reported sample standard deviation, not a confidence interval",
+          "conditions": {
+            "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "source_row": "5-AW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "reported_thickness": {
+          "value": 1.01,
+          "unit": "mm",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3, page 5; Alambeta; three measurements per fabric sample; numerical uncertainty not reported",
+          "conditions": {
+            "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "measurement_pressure": "Not reported; this observation does not establish unloaded contact or sewing clearance thickness",
+            "source_row": "5-AW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "shrinkage_warp": {
+          "value": 1.6,
+          "unit": "%",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 4, page 5; TS EN ISO 5077; total dimensional shrinkage after five washing cycles; positive contraction; no reported uncertainty or replicate count",
+          "conditions": {
+            "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "conditioning_after": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "conditioning_before": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "cycles": "5",
+            "direction": "warp",
+            "process": "ISO 6330 household laundering; Type A washer; 100 g standard 3-ECE reference detergent; 2 kg fabric load; 30 degrees C; 40 minutes per cycle; flat drying before testing",
+            "source_row": "5-AW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "shrinkage_weft": {
+          "value": 3.0,
+          "unit": "%",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 4, page 5; TS EN ISO 5077; total dimensional shrinkage after five washing cycles; positive contraction; no reported uncertainty or replicate count",
+          "conditions": {
+            "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "conditioning_after": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "conditioning_before": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "cycles": "5",
+            "direction": "weft",
+            "process": "ISO 6330 household laundering; Type A washer; 100 g standard 3-ECE reference detergent; 2 kg fabric load; 30 degrees C; 40 minutes per cycle; flat drying before testing",
+            "source_row": "5-AW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+          },
+          "bounds": null
+        },
+        "thermal_resistance": {
+          "value": 0.0196,
+          "unit": "m2*K/W",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 5, pages 5-6; Alambeta; arithmetic mean of three measurements",
+          "conditions": {
+            "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+            "measurement_pressure_and_plate_temperatures": "Not reported; ambient conditioning is not a thermal-response domain",
+            "sample_count": "3",
+            "source_row": "5-AW",
+            "specimen": "KanatOzdil2026:fabric-5",
+            "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied",
+            "uncertainty": "Table 5 sample standard deviation retained separately; not a bound or confidence interval"
+          },
+          "bounds": null
+        }
+      },
+      "sources": {
+        "paper": {
+          "reference": "https://doi.org/10.3390/ma19153264",
+          "accessed_on": "2026-10-26",
+          "note": "Zehra Evrim Kanat and Nilgun Ozdil (2026), Influence of Washing on the Thermal Comfort Parameters of Denim Fabrics with Varying Elastane Content, Materials 19(15), 3264; published 2026-08-02, CC BY. Sections 2.1-2.2 and Tables 1-5, PDF pages 3-6, visually checked. Publisher PDF: https://mdpi-res.com/d_attachment/materials/materials-19-03264/article_deploy/materials-19-03264.pdf; SHA-256 0d9fc029c60b79745b2c123a4d4d9bc34fa69734b511cf20d1bccc94fef01e2c. Selected numerical facts and original attribution only; no source article or images redistributed. BW/AW are fabric-code group observations, not individually identified coupons or retail SKUs."
+        }
+      }
+    },
+    "overrides": {},
+    "sources": {},
+    "allow_estimates": false,
+    "expected_sha256": "62f9699d2e04c39ab258fed53baba7e5dd7abe64aeade55f137f5053fe3a826d"
+  },
+  "specimen": "KanatOzdil2026:fabric-5",
+  "process": "ISO 6330 household laundering; Type A washer; 100 g standard 3-ECE reference detergent; 2 kg fabric load; 30 degrees C; 40 minutes per cycle; flat drying before testing",
+  "cycles": 5,
+  "conditioning_before": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+  "conditioning_after": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+  "shrinkage_warp": {
+    "value": 1.6,
+    "unit": "%",
+    "evidence": "measured",
+    "source": "paper",
+    "method": "Table 4, page 5; TS EN ISO 5077; total dimensional shrinkage after five washing cycles; positive contraction; no reported uncertainty or replicate count",
+    "conditions": {
+      "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+      "conditioning_after": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+      "conditioning_before": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+      "cycles": "5",
+      "direction": "warp",
+      "process": "ISO 6330 household laundering; Type A washer; 100 g standard 3-ECE reference detergent; 2 kg fabric load; 30 degrees C; 40 minutes per cycle; flat drying before testing",
+      "source_row": "5-AW",
+      "specimen": "KanatOzdil2026:fabric-5",
+      "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+    },
+    "bounds": null
+  },
+  "shrinkage_weft": {
+    "value": 3.0,
+    "unit": "%",
+    "evidence": "measured",
+    "source": "paper",
+    "method": "Table 4, page 5; TS EN ISO 5077; total dimensional shrinkage after five washing cycles; positive contraction; no reported uncertainty or replicate count",
+    "conditions": {
+      "conditioning": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+      "conditioning_after": "After five specified washing cycles and flat drying; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+      "conditioning_before": "Before the study's five washing cycles; tested at 20 +/- 2 degrees C and 65 +/- 4 percent RH; conditioning duration not reported",
+      "cycles": "5",
+      "direction": "weft",
+      "process": "ISO 6330 household laundering; Type A washer; 100 g standard 3-ECE reference detergent; 2 kg fabric load; 30 degrees C; 40 minutes per cycle; flat drying before testing",
+      "source_row": "5-AW",
+      "specimen": "KanatOzdil2026:fabric-5",
+      "specimen_scope": "Fabric-code group; lot, individual coupon identity and raw replicates not supplied"
+    },
+    "bounds": null
+  },
+  "sources": {
+    "paper": {
+      "reference": "https://doi.org/10.3390/ma19153264",
+      "accessed_on": "2026-10-26",
+      "note": "Zehra Evrim Kanat and Nilgun Ozdil (2026), Influence of Washing on the Thermal Comfort Parameters of Denim Fabrics with Varying Elastane Content, Materials 19(15), 3264; published 2026-08-02, CC BY. Sections 2.1-2.2 and Tables 1-5, PDF pages 3-6, visually checked. Publisher PDF: https://mdpi-res.com/d_attachment/materials/materials-19-03264/article_deploy/materials-19-03264.pdf; SHA-256 0d9fc029c60b79745b2c123a4d4d9bc34fa69734b511cf20d1bccc94fef01e2c. Selected numerical facts and original attribution only; no source article or images redistributed. BW/AW are fabric-code group observations, not individually identified coupons or retail SKUs."
+    }
+  },
+  "allow_estimates": false
+}

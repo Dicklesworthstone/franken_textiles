@@ -46,6 +46,10 @@ as described below. Explicit offset stitch lines and their review preview are al
 Physical folding and automatic assembly-order inference remain separate work: a declared
 ply count or offset does not establish how the folded layers meet under a needle.
 
+For several garment copies, [production scheduling](sewing-production.md) expands per-copy
+dependencies and shares qualified needle/thread setups across the complete batch. It uses these same
+material and process checks, keeps source geometry once, and emits actual repeated stitch travel.
+
 ## What follows a material change
 
 Each seam side resolves `piece.fabric` or the inherited global selection through

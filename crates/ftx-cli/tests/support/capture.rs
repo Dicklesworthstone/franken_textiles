@@ -31,6 +31,7 @@ pub(super) fn wrap(dir: &Path, mut request: Value) -> Value {
     request
 }
 
+/// Optional rendered marker pixels enter the native detector; body correspondences stay synthetic.
 pub(super) fn wrap_images(dir: &Path, request: &mut Value, charuco: bool) {
     // Reuse the independent analytical calibration input, with its original fit/held-out partitions.
     let calibration_input: Value = serde_json::from_slice(include_bytes!(
@@ -124,7 +125,7 @@ pub(super) fn wrap_images(dir: &Path, request: &mut Value, charuco: bool) {
                     let lx = world_x - origin.x;
                     let ly = origin.y + height_m - z;
                     image.data[y * w + x] =
-                        if lx >= 0.0 && lx < width_m && ly >= 0.0 && ly < height_m {
+                        if (0.0..width_m).contains(&lx) && (0.0..height_m).contains(&ly) {
                             let px = (b["origin_px"][0].as_f64().unwrap()
                                 + lx / width_m * b["size_px"][0].as_f64().unwrap())
                             .floor() as usize;

@@ -3344,6 +3344,10 @@ active contact policy and selected source instances. Moving bodies keep those sa
 Explicit vertex and candidate-pair allowances bound the additional evaluation; optional refusal
 preserves independently available motion, thermal and manufacturing outputs.
 
+Initial reaction receipts bind the completed material report, including retained per-piece instance
+and triangle ownership. Heterogeneous-garment regressions compare the complete receipt against the
+ordinary production contact calculation; native and portable comparisons exercise this per-piece path.
+
 Four nominal comparison metrics cover the initial resultant, initial maximum nodal force and their
 peaks across accepted motion. Admission reconciles complete sample histories, source ownership,
 independent initial collider identity, force-vector reductions, extrema witnesses and work totals.
@@ -3386,6 +3390,67 @@ Expand per-copy operation dependencies and qualified machine/fixture setup trans
 material and tool constraints, and expose a bounded incumbent when scheduling is incomplete. Batch
 thread demand is already aggregated; per-garment feed/setup durations must not masquerade as a
 validated cross-garment schedule. Keep hardware execution behind explicit machine/process qualification.
+
+### 25.83 Source-qualified treatment reaches ordinary pattern geometry
+
+`material_treatment` implements the first functional slice of `ftx-care1`: an exact specimen,
+process, cycle count and before/after conditioning bind two embedded, content-locked ordinary
+material selections to directional dimensional-change observations. Both material states must
+qualify the same specimen and their respective conditioning, in addition to valid content locks.
+Post-treatment properties and
+response laws require their own qualified evidence; no original coefficient or mass conservation
+is inferred. Negative dimensional change can express expansion. Five-cycle observations are one
+complete transition, not an invented per-cycle law.
+
+The shared geometry operation transforms seam lines, absolute curve controls, physical notch
+locations and material marks in each source piece's grain frame. Treat mode selects the AFTER
+record; compensation uses the inverse dimensions while retaining the BEFORE material for cutting.
+The output is an ordinary frozen pattern, so the existing fit, drape, thermal, cutting and sewing
+authorities consume its changed geometry and material without special-case physics. Fresh seam
+checks expose differential shrinkage. Mirrored pieces and principal-axis folds are supported;
+ambiguous oblique folds and noncommuting simulation scales refuse. Seam-allowance/tool widths
+remain authored manufacturing choices. Constrained washing of an assembled garment is still an
+independent physical problem, not established by free coupon dimensional changes.
+
+The built-in catalog adds ten measured before/after denim states from Kanat and Ozdil (2026),
+DOI `10.3390/ma19153264`, taking the corpus to 275 records. Five fabric-code groups preserve their
+reported construction, five-cycle shrinkage, areal mass and thermal resistance, original units,
+source conditions and separate reported deviations. Unqualified gauge thickness remains a reported
+attribute, not contact or sewing clearance. The exact source adapter produces ordinary frozen
+treatment requests; no new materials database or law is introduced. See
+[laundered-denim-materials.md](docs/laundered-denim-materials.md). This sourced tranche and numerical
+round-trip checks do not close `ftx-tm2`, `ftx-tm8` or measured sewn-garment treatment acceptance.
+
+### 25.84 Production sewing is a batch optimization and replay problem
+
+The first functional slice of `ftx-pb2` expands source operations into physical copy/operation pairs,
+scoping every dependency to its garment. One shared-machine schedule can retain a compatible
+needle/thread setup across copies. The existing bounded solver optimizes identity changes or
+explicitly qualified directed setup durations, charging the declared initial setup only once.
+It retains complete baseline and selected schedules, lower bounds and honest incumbent/budget
+status. The expanded graph is bounded at 63 operations; complete stitch output remains bounded
+before allocation. No source station geometry is duplicated merely to schedule another copy.
+
+Cutting, thread purchasing and sewing scheduling share a reconciled production count. The count
+also propagates when no thread inventory is requested. Material-study metrics, qualified recipe
+selection and comparisons use actual batch feed and setup totals; a three-copy regression changes
+the selected recipe because shared setup changes its objective. Conflicting quantities refuse the
+affected sewing consumer while independent cutting remains available. Thread-only requests retain
+their existing per-garment timing meaning. Actual stitch programs expand the chosen copy-scoped
+schedule, preserving partial seams, backtacks, reverse travel and qualification identities.
+
+Both native commands and the materials browser consume these authorities. The browser distinguishes
+setup-duration optimality from setup-count optimality and shows physical copy IDs. The same native
+and portable interfaces expose treatment/compensation, exact frozen replay and ordinary downstream
+mass/thermal consumption; the browser can adopt a derived pattern and withdraw stale results when
+its source changes. See [material-treatments.md](docs/material-treatments.md) and
+[sewing-production.md](docs/sewing-production.md) for runnable examples and limits.
+
+The remaining high-impact work is empirical and mechanical: matched real linen/leather/performance
+material laws and held-out sewn treatment behavior; then qualified multi-machine, fixture,
+workholding, seam-access and handling constraints. Synthetic timings and complete software schedules
+do not establish physical execution readiness. `ftx-care1`, `ftx-pb2`, `ftx-tm2`, `ftx-tm8` and
+`ftx-sp2` retain those unsatisfied physical requirements; no hardware authorization is created.
 
 ## Appendix A. Sources
 

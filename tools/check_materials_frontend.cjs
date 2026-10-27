@@ -8,6 +8,23 @@ const vm = require('node:vm');
 const read = name => fs.readFileSync(path.join(__dirname, '../web', name), 'utf8');
 const plain = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+// Retained Rust result doubles: these tests verify transport and UI lifecycle, not treatment physics.
+function treatmentReport(pattern = false) {
+  const before=' {"id":"denim-before","expected_sha256":"before-lock","x":-0.0}\n',
+    after=' {"id":"denim-after","expected_sha256":"after-lock","value":1.0}\n';
+  const transition={schema:'ftx-material-treatment-report/1',input_sha256:'transition-lock',
+    input:{specimen:'denim-1',cycles:5,process:'ISO 6330; <literal source>',conditioning_after:'20 C, 65% RH'},
+    stretch:[0.9517,0.945],area_scale:0.8993565,
+    properties_no_longer_available:['thread_density_warp','thread_density_weft'],responses_no_longer_available:[],
+    before_selection_json:before,after_selection_json:after};
+  if (!pattern) return transition;
+  return {schema:'ftx-pattern-treatment-report/1',mode:'treat',transitions:{front:transition},
+    source_pattern_sha256:'source-lock',pattern_sha256:'derived-lock',
+    source_pattern_json:' {"pieces":[{"id":"front","x":-0.0}],"value":1.0}\n',
+    pattern_json:' {"pieces":[{"id":"front","x":-0.0}],"derived":1.0}\n',
+    frozen_request_json:' {"schema":"ftx-pattern-treatment/1","frozen":1.0,"x":-0.0}\n',
+    seams_before:[{seam:'side',status:'compatible'}],seams_after:[{seam:'side',status:'incompatible',residual_mm:2.5}]};
+}
 const calibrationSelection = admission => `{"id":"identified","expected_sha256":"locked","allow_estimates":${admission},"value":-0.0,"coefficient":1.0}`;
 function vaporReport() {
   const replay = '{"schema":"ftx-vapor-stack/1","area_m2":1.0,"source_value":-0.0}';
@@ -274,6 +291,44 @@ async function workerModule({ failFold = false, failExport = false, trap = false
   };
   return { send, sent, called, freed };
 }
+
+test('treatment worker preserves exact requests, reports, selections and derived pattern bytes', async () => {
+  const calls=[], bindings={default:()=>Promise.resolve()}, source=' {"pieces":[],"x":-0.0,"n":1.0}\n';
+  for (const pattern of [false,true]) {
+    const report=treatmentReport(pattern), raw=` ${JSON.stringify(report)}\n`;
+    bindings[pattern?'material_treatment_pattern':'material_treatment']=(...args)=>{calls.push(args);return raw;};
+  }
+  const w=await workerModule({bindings});
+  for (const pattern of [false,true]) {
+    const schema=pattern?'ftx-pattern-treatment/1':'ftx-material-treatment/1',
+      treatmentRequest=` {"schema":"${schema}","x":-0.0,"n":1.0}\n`, report=treatmentReport(pattern);
+    const result=await w.send({type:'treatment',request:191,pattern:source,treatmentRequest});
+    assert.equal(result.type,'result',result.message);
+    assert.deepEqual(calls.at(-1),pattern?[source,treatmentRequest]:[treatmentRequest]);
+    assert.deepEqual(plain(result.files.map(f=>[f.name,f.text])),pattern?[
+      ['treatment-report.json',` ${JSON.stringify(report)}\n`],['treatment-source-pattern.json',report.source_pattern_json],
+      ['treatment-request.json',report.frozen_request_json],['treat-pattern.json',report.pattern_json]]:[
+      ['treatment-report.json',` ${JSON.stringify(report)}\n`],['treatment-request.json',treatmentRequest],
+      ['before-treatment-selection.json',report.before_selection_json],['after-treatment-selection.json',report.after_selection_json]]);
+  }
+});
+
+test('treatment dispatch refuses unknown schemas, old WASM and incomplete frozen results without partial files', async () => {
+  for (const [schema,bindings,pattern,reason] of [
+    ['ftx-material-treatment-report/1',{},'{}',/Choose a material treatment/],
+    ['ftx-material-treatment/1',{},'{}',/missing material treatment engine/],
+    ['ftx-pattern-treatment/1',{},'{}',/missing pattern treatment engine/],
+    ['ftx-pattern-treatment/1',{},undefined,/Load a pattern/],
+    ['ftx-material-treatment/1',{material_treatment:()=>'{}'},'{}',/missing frozen treatment selections/],
+    ['ftx-pattern-treatment/1',{material_treatment_pattern:()=>'{}'},'{}',/incomplete frozen treatment result/]
+  ]) {
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),...bindings}}),
+      result=await w.send({type:'treatment',request:192,pattern,treatmentRequest:JSON.stringify({schema})});
+    assert.equal(result.type,'error'); assert.match(result.message,reason);
+    assert.equal(result.request,192); assert.equal(result.files,undefined);
+    assert.equal(w.sent.some(m=>m.type==='result'),false);
+  }
+});
 
 test('material worker calls the shared consumers with exact current inputs and complete outputs', async () => {
   const w = await workerModule();
@@ -768,6 +823,68 @@ async function pageModule() {
   const bind = async () => { await e.bind.onclick(); emit({ pattern, pattern_json:JSON.stringify(pattern), pieces: [], pattern_sha256: 'test' }, [{ name: 'pattern.json', text: '{}', mime: 'application/json' }]); };
   return { e, current, workers, ready, select, emit, load, inspect, bind, live, blobs, windowEvents };
 }
+test('treatment page uses the current bound basis, displays measured changes and adopts exact derived bytes', async () => {
+  const p=await pageModule(), report=treatmentReport(true), original=report.source_pattern_json,
+    bound=' {"pieces":[{"id":"front"}],"bound":1.0,"x":-0.0}\n', request=' {"schema":"ftx-pattern-treatment/1","x":-0.0}\n';
+  p.select('patternFile',original); await p.e.patternFile.onchange();
+  p.select('treatmentRequest',request); await p.e.treatment.onclick();
+  assert.equal(p.current().messages.at(-1).pattern,original);
+  p.emit(treatmentReport()); assert.equal(p.e.useTreatment.disabled,true);
+  await p.e.bind.onclick(); p.emit({pattern:JSON.parse(bound),pattern_json:bound,pieces:[],pattern_sha256:'bound'});
+  await p.e.treatment.onclick(); const sent=p.current().messages.at(-1);
+  assert.equal(sent.pattern,bound); assert.equal(sent.treatmentRequest,request);
+  const raw=` ${JSON.stringify(report)}\n`;
+  p.emit(report,[{name:'treatment-report.json',text:raw,mime:'application/json'},
+    {name:'treat-pattern.json',text:report.pattern_json,mime:'application/json'}]);
+  const s=section(p,'Laundering and dimensional treatment'), tables=descendants(s).filter(n=>n.tag==='table');
+  assert.deepEqual(plain(tables[0].children[2].children.map(n=>n.textContent)),
+    ['front','5','0.9517','0.945','0.8993565','thread_density_warp, thread_density_weft']);
+  assert.deepEqual(plain(tables[1].children[2].children.map(n=>n.textContent)),['side','compatible','incompatible','2.5']);
+  const source=descendants(s).find(n=>n.tag==='details'); source.open=true; source.handlers.toggle();
+  assert.match(visibleText(source),/<literal source>/); assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  for (const [name,text] of [['treatment-report.json',raw],['treat-pattern.json',report.pattern_json]]) {
+    const link=descendants(s).find(n=>n.download===name); assert.equal(await p.blobs.get(link.href).text(),text);
+  }
+  assert.equal(p.e.useTreatment.disabled,false); p.e.useTreatment.onclick();
+  assert.equal(s.hidden,true); assert.equal(p.e.useTreatment.disabled,true); assert.equal(p.e.cut.disabled,true);
+  assert.equal(p.live.size,0); await p.e.bind.onclick();
+  assert.equal(p.current().messages.at(-1).pattern,report.pattern_json);
+});
+
+test('request, source pattern and material assignment changes withdraw prepared treatment adoption', async () => {
+  for (const change of ['request','source','material']) {
+    const p=await pageModule(); await p.load(); await p.inspect('replacement');
+    p.select('treatmentRequest','{"schema":"ftx-pattern-treatment/1"}'); await p.e.treatment.onclick();
+    const report=treatmentReport(true); p.emit(report,[{name:'treat-pattern.json',text:report.pattern_json,mime:'application/json'}]);
+    assert.equal(p.e.useTreatment.disabled,false);
+    if (change==='request') p.e.treatmentRequest.handlers.change();
+    else if (change==='source') await p.load();
+    else {p.e.target.value='front';p.e.assign.onclick();}
+    assert.equal(p.e.useTreatment.disabled,true,change);
+    assert.equal(section(p,'Laundering and dimensional treatment').hidden,true,change); assert.equal(p.live.size,0);
+    p.e.useTreatment.onclick(); await p.e.bind.onclick();
+    assert.notEqual(p.current().messages.at(-1).pattern,report.pattern_json);
+  }
+});
+
+test('changed treatment requests, source patterns and material interfaces cancel delayed reads and late workers', async () => {
+  for (const change of ['request','source','interfaces']) {
+    const p=await pageModule(), delay=deferred(); await p.load();
+    p.select('treatmentRequest','{"schema":"ftx-pattern-treatment/1"}');
+    p.e.treatmentRequest.files[0].text=()=>delay.promise;
+    const old=p.current(), running=p.e.treatment.onclick();
+    if(change==='request') p.e.treatmentRequest.handlers.change();
+    else if(change==='source') await p.load();
+    else {p.select('interfacesFile','[]');await p.e.interfacesFile.onchange();}
+    assert.equal(old.dead,true,change); p.ready();
+    delay.resolve('{"schema":"ftx-pattern-treatment/1"}'); await running;
+    assert.equal(old.messages.filter(m=>m.type==='treatment').length,0);
+    old.emit({type:'result',request:1,result:treatmentReport(true),files:[{name:'stale.json',text:'{}'}]});
+    assert.equal(p.e.useTreatment.disabled,true); assert.equal(p.live.size,0);
+    assert.equal(section(p,'Laundering and dimensional treatment').hidden,true);
+  }
+});
+
 test('selected-body manufacturing is opt-in and invalidates only current body-dependent outputs', async () => {
   const p=await pageModule();await p.load();p.select('studyRequest',' {"schema":"ftx-design-study/1","x":1.0}');
   p.e.studyRequest.handlers.change();assert.equal(p.e.study.disabled,false);
@@ -983,6 +1100,45 @@ test('sewing setup results retain Rust order, proof scope and complete downloads
   assert.match(visibleText(s),/search reached its declared work limit/);
   p.e.sewOptions.handlers.change(); assert.equal(s.hidden,true);
   assert.equal(p.live.size,1); // only the still-current bound pattern remains
+});
+
+test('batch sewing displays production ordering, scoped copy dependencies and actual batch feed with objective-specific proof', async () => {
+  const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions');
+  const changes=n=>({needle_changes:n,thread_changes:n,total_changes:2*n});
+  for (const timed of [false,true]) {
+    const order={baseline_order:['0/a','0/b','1/a','1/b'],selected_order:['1/a','0/a','1/b','0/b'],
+      baseline_changes:changes(3),selected_changes:changes(1),optimality_proven:true,budget_exhausted:false,search_nodes:17,
+      ...(timed?{timing:{selected_setup_milliseconds:3500,feed_and_setup_seconds:28.5}}:{})};
+    const report={schema:'ftx-sewing-program/1',stitches:[],plan:{feed_seconds:12,hardware_execution_authorized:false,
+      options:{production:{ordering:{objective:timed?'minimize_setup_time':'minimize_setup_changes',initial_setup:{needle:'N0',thread:'T0'}}}},
+      seams:[{pass:{id:'a',seam:'join',needle:'N1',thread:'T1',after:[]}},{pass:{id:'b',seam:'hem',needle:'N2',thread:'T2',after:['a']}}],
+      ordering:{baseline_changes:changes(99),selected_changes:changes(98)},
+      production:{production_copies:2,feed_seconds:25,ordering:order,operations:[
+        {id:'0/a',seam_index:0,after:[]},{id:'0/b',seam_index:1,after:['0/a']},
+        {id:'1/a',seam_index:0,after:[]},{id:'1/b',seam_index:1,after:['1/a']}]}}};
+    await p.e.sew.onclick(); const raw=JSON.stringify(report);
+    p.emit(report,[{name:'sewing.json',text:raw,mime:'application/json'}]);
+    const s=section(p,'sew'), tables=descendants(s).filter(n=>n.tag==='table'), summary=JSON.parse(s.children[1].textContent);
+    assert.deepEqual(plain(tables[0].children[3].children.map(n=>n.textContent)),['Selected order','1','1','2']);
+    assert.deepEqual(plain(tables[1].children.slice(2).map(row=>row.children[1].textContent)),order.selected_order);
+    assert.deepEqual(plain(tables[1].children[4].children.map(n=>n.textContent)),['3','1/b','hem','N2','T2','1/a']);
+    assert.equal(summary.production_copies,2); assert.equal(summary.feed_seconds,25);
+    assert.deepEqual(summary.setup_changes,changes(1));
+    assert.equal(summary.ordering_objective,timed?'minimize_setup_time':'minimize_setup_changes');
+    assert.equal(summary.ordering_optimality_proven,true);
+    if(timed) {
+      assert.equal(summary.setup_seconds,3.5); assert.equal(summary.feed_and_setup_seconds,28.5);
+      assert.match(visibleText(s),/Minimum declared setup duration proven/);
+      assert.doesNotMatch(visibleText(s),/Minimum setup-change count proven/);
+      assert.notEqual(summary.minimum_setup_changes_proven,true);
+    } else assert.match(visibleText(s),/Minimum setup-change count proven/);
+    assert.match(visibleText(s),/supplied initial setup is included/);
+    const link=descendants(s).find(n=>n.download==='sewing.json'); assert.equal(await p.blobs.get(link.href).text(),raw);
+    await p.e.sew.onclick(); order.optimality_proven=false; order.budget_exhausted=true; p.emit(report);
+    assert.equal(JSON.parse(s.children[1].textContent).ordering_optimality_proven,false);
+    assert.match(visibleText(s),timed?/minimum declared setup duration has not been proven/:/minimum setup-change count has not been proven/);
+    assert.match(visibleText(s),/search reached its declared work limit/);
+  }
 });
 
 test('partial sewing spans display both source sides without an ordering policy or new geometry', async () => {
@@ -3396,6 +3552,52 @@ test('assembly mass and finite stock retain independent totals and refusals in m
 // Opt in after tools/build_web.sh. This executes the real production WASM through the actual
 // worker module, with only the Node transport/module loader adapted. It is not HTTP/browser or
 // native parity, successful anatomical body fitting, or empirical textile validation.
+test('compiled WASM measured treatment and batch sewing replay through the actual worker',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const fixture=name=>fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials',name),'utf8');
+    const w=await workerModule({bindings:ftx}), treatmentRequest=fixture('kanat-ozdil-2026-denim-1-treatment.json');
+    const transition=JSON.parse(ftx.material_treatment(treatmentRequest));
+    assert.equal(transition.input.cycles,5); assert.ok(Math.abs(transition.stretch[0]-0.9517)<1e-14);
+    assert.ok(Math.abs(transition.stretch[1]-0.945)<1e-14);
+    const material=await w.send({type:'treatment',request:193,treatmentRequest});
+    assert.equal(material.type,'result',material.message); assert.deepEqual(material.result,transition);
+    assert.equal(material.files.find(f=>f.name==='treatment-request.json').text,treatmentRequest);
+    for(const side of ['before','after']) {
+      const selection=transition[`${side}_selection_json`];
+      assert.equal(material.files.find(f=>f.name===`${side}-treatment-selection.json`).text,selection);
+      const inspection=JSON.parse(ftx.material_inspect(selection));
+      assert.equal(inspection.capabilities.mechanical_coefficients.ready,false);
+      assert.ok(inspection.capabilities.mechanical_coefficients.refusal);
+    }
+    const panel=fixture('synthetic-sewing-pattern.json'), input=JSON.parse(treatmentRequest);
+    const bound=JSON.parse(ftx.material_bind(panel,JSON.stringify({default:input.before}))).pattern_json;
+    const request=JSON.stringify({schema:'ftx-pattern-treatment/1',mode:'treat',
+      transitions:{launder:input},pieces:{front:'launder',back:'launder'}});
+    const expected=ftx.material_treatment_pattern(bound,request);
+    const treated=await w.send({type:'treatment',request:194,pattern:bound,treatmentRequest:request});
+    assert.equal(treated.type,'result',treated.message); assert.deepEqual(treated.result,JSON.parse(expected));
+    const r=treated.result;
+    assert.equal(treated.files.find(f=>f.name==='treatment-report.json').text,expected);
+    for(const [name,text] of [['treatment-source-pattern.json',r.source_pattern_json],
+      ['treatment-request.json',r.frozen_request_json],['treat-pattern.json',r.pattern_json]])
+      assert.equal(treated.files.find(f=>f.name===name).text,text);
+    assert.equal(ftx.material_treatment_pattern(r.source_pattern_json,r.frozen_request_json),expected);
+    const vertices=JSON.parse(r.pattern_json).pieces[0].vertices;
+    assert.ok(Math.abs(vertices.c[0]-18.9)<1e-12); assert.ok(Math.abs(vertices.c[1]-95.17)<1e-12);
+    const options=fs.readFileSync(path.join(__dirname,'../examples/sewing-production-options.json'),'utf8');
+    const sewing=await w.send({type:'sew',request:195,pattern:panel,options});
+    assert.equal(sewing.type,'result',sewing.message);
+    assert.deepEqual(sewing.result,JSON.parse(ftx.sew_stitches(panel,options)));
+    const batch=sewing.result.plan.production;
+    assert.equal(batch.production_copies,3); assert.equal(batch.stitch_intervals,240); assert.equal(batch.feed_seconds,24);
+    assert.deepEqual(batch.ordering.selected_order,['0/join','1/join','2/join','0/reinforce','1/reinforce','2/reinforce']);
+    assert.equal(batch.ordering.timing.selected_setup_milliseconds,1500); assert.equal(batch.ordering.optimality_proven,true);
+    assert.equal(sewing.result.plan.hardware_execution_authorized,false);
+  });
+
 test('compiled WASM authored designs replay real stock and sewing while excluding invalid geometry',
   { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');

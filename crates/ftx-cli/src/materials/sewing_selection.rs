@@ -32,3 +32,21 @@ pub(super) fn run(pattern: &str, request: &str) -> Result<(Value, i32, String), 
     };
     Ok((value, status, text))
 }
+
+pub(super) fn plan(pattern: &str, options: &str, stitches: bool) -> Result<Value, Refusal> {
+    let mut remaining = 64 * 1024 * 1024;
+    let invalid = |e: serde_json::Error| Refusal::new(RefusalCode::InvalidDocument, e.to_string());
+    let pattern = ftx_pattern::Pattern::new(
+        serde_json::from_str(&read(pattern, &mut remaining)?).map_err(invalid)?,
+    );
+    let options = serde_json::from_str(&read(options, &mut remaining)?).map_err(invalid)?;
+    if stitches {
+        serde_json::to_value(ftx_export::sewing::program::SewProgram::build(
+            &pattern, &options,
+        )?)
+        .map_err(invalid)
+    } else {
+        serde_json::to_value(ftx_export::sewing::SewPlan::build(&pattern, &options)?)
+            .map_err(invalid)
+    }
+}

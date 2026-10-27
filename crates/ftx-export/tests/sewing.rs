@@ -741,10 +741,7 @@ fn directed_time_search_matches_independent_permutations_with_dependencies_and_z
         let best = feasible.iter().map(|o| duration(o)).min().unwrap();
         let result = plan(pattern(), job.clone()).unwrap();
         let r = result.ordering.unwrap();
-        assert_eq!(
-            r.timing.as_ref().unwrap().selected_setup_milliseconds as u64,
-            best
-        );
+        assert_eq!(r.timing.as_ref().unwrap().selected_setup_milliseconds, best);
         assert!(r.optimality_proven);
         job["passes"].as_array_mut().unwrap().reverse();
         job["ordering"]["setup_times"]["transitions"]

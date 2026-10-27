@@ -11,6 +11,14 @@ basis; the documents (`pattern.json`, `fit_spec.json`, `measurements.json`, `val
 `form_fields(args, today)` and `run(req, today, created)` → `WebRound {page(), zip_name(), zip(), file(name)}`
 to the page's worker as JSON text and bytes. The numerical crates never see browser types.
 
+**Material treatments and production.** `materials::treatment` and `treatment_pattern` expose the
+shared source-qualified before/after state and grain-axis geometry consumers within a combined
+64 MiB input budget. Browser exports `material_treatment` and `material_treatment_pattern` retain
+exact report, selection, source and derived-pattern JSON for replay; no browser-side physics law
+or property fill is introduced. Existing sewing/study APIs accept the shared optional production
+policy and retain copy-scoped traversal, actual batch totals and qualified ordering proof. Tests:
+`material_treatment`, `sewing_production`, and the material worker/page regressions.
+
 **Clock.** An input, never read: `today` (`YYYY-MM-DD`) dates tape files and judges staleness, `created`
 (`YYYY-MM-DDTHH:MM`) stamps the exports and the zip entries. The worker passes the wearer's local date and
 minute, as `webapp.py` reads them.

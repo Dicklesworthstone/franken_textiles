@@ -6,9 +6,10 @@ use std::collections::BTreeMap;
 use ftx_core::{Refusal, RefusalCode};
 use serde::{Deserialize, Serialize};
 
-use super::{PlannedSeam, SewingPass, bad, qualified_text};
+use super::{PlannedSeam, bad, qualified_text};
 
 const MAX_PASSES: usize = 20;
+const MAX_PRODUCTION_PASSES: usize = 63;
 const MAX_SEARCH_NODES: usize = 200_000;
 
 mod timing;
@@ -40,7 +41,8 @@ impl Setup {
     }
 }
 
-/// Opt-in search over at most 20 admitted operations. Larger legacy jobs remain supported without it.
+/// Bounded scheduling policy. One-garment ordering admits 20 operations; explicit production admits 63.
+/// Larger legacy jobs remain supported without ordering.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
@@ -58,10 +60,20 @@ pub struct Policy {
 
 impl Policy {
     pub(super) fn validate(&self, passes: usize, machine: &str) -> Result<(), Refusal> {
-        if passes > MAX_PASSES || !(1..=MAX_SEARCH_NODES).contains(&self.max_search_nodes) {
+        self.validate_count(passes, MAX_PASSES, machine)
+    }
+
+    pub(super) fn validate_production(&self, passes: usize, machine: &str) -> Result<(), Refusal> {
+        self.validate_count(passes, MAX_PRODUCTION_PASSES, machine)
+    }
+
+    fn validate_count(&self, passes: usize, maximum: usize, machine: &str) -> Result<(), Refusal> {
+        if passes > maximum || !(1..=MAX_SEARCH_NODES).contains(&self.max_search_nodes) {
             return Err(Refusal::new(
                 RefusalCode::BudgetExceeded,
-                "sewing ordering supports at most 20 passes and 1..200000 search nodes",
+                format!(
+                    "sewing ordering supports at most {maximum} passes and 1..200000 search nodes"
+                ),
             ));
         }
         if self
@@ -104,7 +116,7 @@ pub struct Changes {
 pub struct Report {
     /// Same declared objective as the retained input policy.
     pub objective: Objective,
-    /// The normal lexicographic topological schedule, before optimization.
+    /// Admitted baseline: normal lexicographic topology, or complete garments in copy order.
     pub baseline_order: Vec<String>,
     /// Every admitted operation exactly once, in the returned plan's order.
     pub selected_order: Vec<String>,
@@ -129,30 +141,39 @@ pub struct Report {
     pub tie_break: &'static str,
 }
 
+/// Borrowed identity/dependency view of an already admitted operation. Geometry stays with its plan.
+#[derive(Clone, Copy)]
+pub(super) struct Operation<'a> {
+    pub id: &'a str,
+    pub after: &'a [String],
+    pub needle: &'a str,
+    pub thread: &'a str,
+}
+
 struct Task<'a> {
-    pass: &'a SewingPass,
-    predecessors: u32,
-    needle: u32,
-    thread: u32,
+    id: &'a str,
+    predecessors: u64,
+    needle: u64,
+    thread: u64,
 }
 
 struct Search<'a> {
     tasks: Vec<Task<'a>>,
-    initial: Option<(u32, u32)>,
-    all: u32,
-    times: Option<Vec<Vec<usize>>>,
+    initial: Option<(u64, u64)>,
+    all: u64,
+    times: Option<Vec<Vec<u64>>>,
 }
 
 struct Frame {
-    mask: u32,
+    mask: u64,
     last: Option<usize>,
-    cost: usize,
+    cost: u64,
     candidates: Vec<usize>,
     next: usize,
 }
 
 impl Search<'_> {
-    fn setup(&self, last: Option<usize>) -> Option<(u32, u32)> {
+    fn setup(&self, last: Option<usize>) -> Option<(u64, u64)> {
         last.map(|i| (self.tasks[i].needle, self.tasks[i].thread))
             .or(self.initial)
     }
@@ -186,15 +207,15 @@ impl Search<'_> {
     // Each still-needed identity requires at least one transition, except the currently installed
     // identity. With unknown initial setup the first identity in each component is uncharged.
     // Ignoring prerequisites only weakens this bound; summing the component bounds stays valid.
-    fn count_lower_bound(&self, mask: u32, last: Option<usize>) -> usize {
-        let (mut needles, mut threads) = (0_u32, 0_u32);
+    fn count_lower_bound(&self, mask: u64, last: Option<usize>) -> usize {
+        let (mut needles, mut threads) = (0_u64, 0_u64);
         for (i, task) in self.tasks.iter().enumerate() {
             if mask & (1 << i) == 0 {
                 needles |= task.needle;
                 threads |= task.thread;
             }
         }
-        let component = |remaining: u32, current: Option<u32>| {
+        let component = |remaining: u64, current: Option<u64>| {
             remaining.count_ones() as usize
                 - usize::from(remaining != 0 && current.is_none_or(|v| remaining & v != 0))
         };
@@ -202,14 +223,14 @@ impl Search<'_> {
         component(needles, setup.map(|v| v.0)) + component(threads, setup.map(|v| v.1))
     }
 
-    fn cost(&self, last: Option<usize>, next: usize) -> usize {
+    fn cost(&self, last: Option<usize>, next: usize) -> u64 {
         self.times.as_ref().map_or_else(
-            || self.changes(last, next).total_changes,
+            || self.changes(last, next).total_changes as u64,
             |times| times[last.unwrap_or(self.tasks.len())][next],
         )
     }
 
-    fn total_cost(&self, order: &[usize]) -> usize {
+    fn total_cost(&self, order: &[usize]) -> u64 {
         let mut last = None;
         order
             .iter()
@@ -221,9 +242,9 @@ impl Search<'_> {
             .sum()
     }
 
-    fn lower_bound(&self, mask: u32, last: Option<usize>) -> usize {
+    fn lower_bound(&self, mask: u64, last: Option<usize>) -> u64 {
         if self.times.is_none() {
-            return self.count_lower_bound(mask, last);
+            return self.count_lower_bound(mask, last) as u64;
         }
         // Every remaining operation needs one incoming transition, from the current setup or
         // another remaining operation. Independent minima relax order/degree/dependency constraints,
@@ -234,12 +255,12 @@ impl Search<'_> {
                 (0..self.tasks.len())
                     .filter(|&i| i != j && mask & (1 << i) == 0)
                     .map(|i| self.cost(Some(i), j))
-                    .fold(self.cost(last, j), usize::min)
+                    .fold(self.cost(last, j), u64::min)
             })
             .sum()
     }
 
-    fn frame(&self, mask: u32, last: Option<usize>, cost: usize) -> Frame {
+    fn frame(&self, mask: u64, last: Option<usize>, cost: u64) -> Frame {
         let mut candidates: Vec<_> = self
             .tasks
             .iter()
@@ -262,14 +283,42 @@ impl Search<'_> {
 }
 
 pub(super) fn optimize(policy: &Policy, seams: &[PlannedSeam]) -> Result<Report, Refusal> {
-    let mut passes: Vec<_> = seams.iter().map(|s| &s.pass).collect();
-    passes.sort_by_key(|p| p.operation_id());
+    optimize_operations(
+        policy,
+        &seams
+            .iter()
+            .map(|seam| Operation {
+                id: seam.pass.operation_id(),
+                after: &seam.pass.after,
+                needle: &seam.pass.needle,
+                thread: &seam.pass.thread,
+            })
+            .collect::<Vec<_>>(),
+        seams.iter().map(|s| s.feed_seconds).sum(),
+    )
+}
+
+// The caller has admitted the complete operation graph and bounded its size. Production copies
+// change operation identities/prerequisites only; station geometry is not duplicated for search.
+pub(super) fn optimize_operations(
+    policy: &Policy,
+    baseline_passes: &[Operation<'_>],
+    feed_seconds: f64,
+) -> Result<Report, Refusal> {
+    let mut passes = baseline_passes.to_vec();
+    passes.sort_by_key(|p| p.id);
     let times = policy
         .setup_times
         .as_ref()
         .map(|times| {
             times.matrix(
-                &passes,
+                &passes
+                    .iter()
+                    .map(|pass| Setup {
+                        needle: pass.needle.to_string(),
+                        thread: pass.thread.to_string(),
+                    })
+                    .collect::<Vec<_>>(),
                 policy
                     .initial_setup
                     .as_ref()
@@ -280,29 +329,29 @@ pub(super) fn optimize(policy: &Policy, seams: &[PlannedSeam]) -> Result<Report,
     let ids: BTreeMap<_, _> = passes
         .iter()
         .enumerate()
-        .map(|(i, pass)| (pass.operation_id(), i))
+        .map(|(i, pass)| (pass.id, i))
         .collect();
     let mut needles = BTreeMap::new();
     let mut threads = BTreeMap::new();
     let mut tasks = Vec::with_capacity(passes.len());
     for pass in passes {
-        let next_needle = 1_u32 << needles.len();
-        let needle = *needles.entry(pass.needle.as_str()).or_insert(next_needle);
-        let next_thread = 1_u32 << threads.len();
-        let thread = *threads.entry(pass.thread.as_str()).or_insert(next_thread);
+        let next_needle = 1_u64 << needles.len();
+        let needle = *needles.entry(pass.needle).or_insert(next_needle);
+        let next_thread = 1_u64 << threads.len();
+        let thread = *threads.entry(pass.thread).or_insert(next_thread);
         let predecessors = pass
             .after
             .iter()
             .fold(0, |mask, id| mask | (1 << ids[id.as_str()]));
         tasks.push(Task {
-            pass,
+            id: pass.id,
             predecessors,
             needle,
             thread,
         });
     }
     let search = Search {
-        all: (1_u32 << tasks.len()) - 1,
+        all: (1_u64 << tasks.len()) - 1,
         tasks,
         times,
         // An explicitly installed identity absent from the job is a known different setup (zero),
@@ -314,7 +363,7 @@ pub(super) fn optimize(policy: &Policy, seams: &[PlannedSeam]) -> Result<Report,
             )
         }),
     };
-    let baseline: Vec<_> = seams.iter().map(|s| ids[s.pass.operation_id()]).collect();
+    let baseline: Vec<_> = baseline_passes.iter().map(|pass| ids[pass.id]).collect();
     let baseline_changes = search.count(&baseline);
     let mut best = baseline.clone();
     let baseline_cost = search.total_cost(&baseline);
@@ -323,8 +372,8 @@ pub(super) fn optimize(policy: &Policy, seams: &[PlannedSeam]) -> Result<Report,
     let mut search_nodes = 0;
     let mut budget_exhausted = false;
     let mut stack = vec![search.frame(0, None, 0)];
-    let mut path = Vec::with_capacity(seams.len());
-    // Iterative depth-first branch-and-bound: at most 20 frames, each with at most 20 candidates.
+    let mut path = Vec::with_capacity(baseline_passes.len());
+    // Iterative depth-first branch-and-bound: at most 63 frames, each with at most 63 candidates.
     // A budget stop cannot replace the incumbent with an unfinished prefix.
     while best_cost > root_bound && !stack.is_empty() {
         let frame = stack.last_mut().expect("nonempty search stack");
@@ -357,7 +406,7 @@ pub(super) fn optimize(policy: &Policy, seams: &[PlannedSeam]) -> Result<Report,
     let names = |order: &[usize]| {
         order
             .iter()
-            .map(|&i| search.tasks[i].pass.operation_id().to_string())
+            .map(|&i| search.tasks[i].id.to_string())
             .collect()
     };
     Ok(Report {
@@ -373,9 +422,9 @@ pub(super) fn optimize(policy: &Policy, seams: &[PlannedSeam]) -> Result<Report,
         lower_bound_total_changes: if search.times.is_some() {
             search.count_lower_bound(0, None)
         } else if budget_exhausted {
-            root_bound
+            root_bound as usize
         } else {
-            best_cost
+            best_cost as usize
         },
         timing: search.times.as_ref().map(|_| TimingReport {
             baseline_setup_milliseconds: baseline_cost,
@@ -385,8 +434,7 @@ pub(super) fn optimize(policy: &Policy, seams: &[PlannedSeam]) -> Result<Report,
             } else {
                 best_cost
             },
-            feed_and_setup_seconds: seams.iter().map(|s| s.feed_seconds).sum::<f64>()
-                + best_cost as f64 / 1000.0,
+            feed_and_setup_seconds: feed_seconds + best_cost as f64 / 1000.0,
         }),
         tie_break: if search.times.is_some() {
             "Retain the incumbent on equal integer setup milliseconds; start with the lexicographic topological schedule, then explore by immediate duration and operation ID."

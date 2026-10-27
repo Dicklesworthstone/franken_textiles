@@ -77,6 +77,21 @@ Omitted policy preserves legacy wire output; requested policy uses `ftx-sewing-p
 through ordinary plan, stitch-program and study consumers. Tests: `sewing` and
 `sewing_program`, including independent exhaustive schedule comparisons.
 
+**Cross-copy sewing production** (`sewing::production`, `ftx-pb2`). Optional
+`SewOptions.production` expands each already admitted operation and its predecessors within each
+physical garment copy, then reuses the same count/directed-time scheduler over at most 63 operations
+and 200000 examined prefixes. Explicit production and thread quantities must agree; studies also
+resolve their common cutting count before admission. The effective quantity is frozen into options.
+Source station geometry stays once in `seams`; `production.operations` retains copy/pass/qualification
+identity and scoped dependencies. Initial setup is charged once across the batch, and millisecond
+totals use u64 on native and WASM. Per-garment plan totals remain unchanged; shared total/order methods
+select the explicit batch scope for consumers. The version-4 stitch program emits every selected
+copy's real runs, charging the complete 250000-interval cap before expansion. Missing timing or stale
+material qualification refuses; a search stop preserves a complete incumbent with no optimality claim.
+Existing absent-policy output is unchanged. This single-configuration slice infers no fixture changes,
+workholding capacity, handling, seam access, machine execution or physical quality. Tests:
+`sewing_production`, existing `sewing` and `sewing_program`; see `docs/sewing-production.md`.
+
 **Material-following recipe selection** (`material_study::recipes`, plan §25.10 / `ftx-ms2`).
 Optional `Request.sewing_selection` is exclusive with fixed `sewing` and reruns the existing
 qualified recipe selector on every freshly bound material alternative. Its unmodified selected
@@ -117,7 +132,8 @@ length orders apply dated quotes, minimums, increments, price tiers, capacity an
 Transitive supplier aliases across current market observations cannot duplicate cross-yarn inventory.
 No splitting, universal thread ratio or retained-mass conversion is inferred. Studies expose nominal
 `thread_required_length_m` and `thread_observed_order_cost`, with independent required consumers and
-the thread market's own currency; cutting copies do not multiply this one sewing job. Comparison
+the thread market's own currency. Thread quantities follow the resolved production count; geometric
+and duration totals remain per garment unless cross-copy scheduling is explicitly requested. Comparison
 protocols use only selected qualifications. All expanded material/design rows and configured recipe
 trials reserve at most 200000 purchasing work units. Tests: `sewing_consumables`, canonical
 `material_cost` units and workbench lifecycle checks. See `docs/material-sewing-plans.md`.
