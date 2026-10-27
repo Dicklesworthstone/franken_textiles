@@ -7,6 +7,16 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
 `ftx outfit`, `ftx materials` and immutable `ftx round` workspaces with their local review.
 
 **Commands.**
+- `ftx measure video-mask-review MANIFEST.json --out NEW_DIR [--json]` and
+  `ftx measure video-masks POLYGONS.json --out NEW_DIR [--json]`: author person/sheet sharpness
+  regions in a private offline editor, then materialize opaque binary PNGs using the existing native
+  rasterizer. Manifest bytes, image bytes, decoded pixels and dimensions bind every annotation;
+  native code restores all original acquisition metadata, including full-width timestamps, without
+  a JavaScript numeric round trip. Unreviewed regions refuse; explicitly invisible regions become
+  zero masks and retain their frames for ordinary selector diagnostics. Components union after
+  subtracting their own holes; integer bounds/topology and aggregate work/output limits refuse
+  before publication. Original images are copied exactly, every frame is retained, and selection
+  remains the existing `video-select` authority. No inferred anatomy, silhouette or stillness.
 - `ftx measure video-decode REQUEST.json --out NEW_DIR [--json]`: explicitly invoke locally installed
   FFmpeg/ffprobe on a private snapshot of one local clip. The caller supplies stream/lens identity
   and a quarter-turn rotation; the existing selector receives original PTS-derived microseconds,

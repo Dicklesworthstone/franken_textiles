@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_measure::video::{FrameMetadata, SelectionOptions, score_frame, select_frames};
@@ -19,9 +19,9 @@ use crate::{Args, bad_input, known_options};
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct FrameFiles {
-    metadata: FrameMetadata,
-    image: String,
+pub(super) struct FrameFiles {
+    pub(super) metadata: FrameMetadata,
+    pub(super) image: String,
     person_mask: Mask,
     sheet_mask: Mask,
 }
@@ -41,12 +41,12 @@ struct Rectangle {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Manifest {
+pub(super) struct Manifest {
     schema: String,
     decode_receipt: String,
     #[serde(default)]
     options: SelectionOptions,
-    frames: Vec<FrameFiles>,
+    pub(super) frames: Vec<FrameFiles>,
 }
 
 fn io(path: &Path, error: impl std::fmt::Display) -> Refusal {
@@ -80,6 +80,12 @@ pub(super) fn load(base: &Path, name: &str, mask: bool) -> Result<Gray, Refusal>
 }
 
 pub(super) fn load_hashed(base: &Path, name: &str, mask: bool) -> Result<(Gray, String), Refusal> {
+    let (gray, bytes) = load_pixels(base, name, mask)?;
+    Ok((gray, sha256_hex(&bytes)))
+}
+
+/// The source bytes and decoded pixels belong to the same read; review snapshots must not race it.
+pub(super) fn load_pixels(base: &Path, name: &str, mask: bool) -> Result<(Gray, Vec<u8>), Refusal> {
     if name.trim().is_empty() || name.len() > 4096 {
         return Err(bad_input(
             "image and mask paths must be nonempty and at most 4096 bytes",
@@ -100,7 +106,7 @@ pub(super) fn load_hashed(base: &Path, name: &str, mask: bool) -> Result<(Gray, 
                 path.display()
             )));
         }
-        return Ok((bgr_to_gray(&photo.image), sha256_hex(&bytes)));
+        return Ok((bgr_to_gray(&photo.image), bytes));
     }
     // Restrict the evidence boundary to explicit 8-bit pixels. In particular, alpha compositing
     // on white would silently turn transparent mask backgrounds into foreground evidence.
@@ -164,7 +170,7 @@ pub(super) fn load_hashed(base: &Path, name: &str, mask: bool) -> Result<(Gray, 
             path.display()
         )));
     }
-    Ok((gray, sha256_hex(&bytes)))
+    Ok((gray, bytes))
 }
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
@@ -206,8 +212,9 @@ fn load_mask(
     }
 }
 
-pub(super) fn analyze(path: &Path) -> Result<(Value, i32, String), Refusal> {
-    let bytes = read_limited(path, 16 * 1024 * 1024)?;
+pub(super) fn read_manifest(path: &Path) -> Result<(Manifest, Vec<u8>, PathBuf), Refusal> {
+    let source = std::fs::canonicalize(path).map_err(|e| io(path, e))?;
+    let bytes = read_limited(&source, 16 * 1024 * 1024)?;
     let mut input: Manifest = serde_json::from_slice(&bytes)
         .map_err(|e| bad_input(format!("{}: {e}", path.display())))?;
     if input.schema != "ftx-video-frames/1"
@@ -221,6 +228,9 @@ pub(super) fn analyze(path: &Path) -> Result<(Value, i32, String), Refusal> {
         ));
     }
     input.options.validate()?;
+    for frame in &input.frames {
+        frame.metadata.validate()?;
+    }
     input
         .frames
         .sort_by(|a, b| a.metadata.frame.cmp(&b.metadata.frame));
@@ -231,7 +241,11 @@ pub(super) fn analyze(path: &Path) -> Result<(Value, i32, String), Refusal> {
     {
         return Err(bad_input("duplicate decoded stream/timestamp identity"));
     }
-    let source = std::fs::canonicalize(path).map_err(|e| io(path, e))?;
+    Ok((input, bytes, source))
+}
+
+pub(super) fn analyze(path: &Path) -> Result<(Value, i32, String), Refusal> {
+    let (input, _, source) = read_manifest(path)?;
     let base = source
         .parent()
         .ok_or_else(|| bad_input("manifest needs a parent directory"))?;

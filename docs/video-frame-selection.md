@@ -21,8 +21,10 @@ guesses them from a phone model or nominal frame rate.
 
 ```sh
 ftx measure video-decode decode-input.json --out capture-decode
-# Supply reviewed masks or explicit rectangle regions in capture-decode/frames.json.
-ftx measure video-select capture-decode/frames.json --out selection.json
+ftx measure video-mask-review capture-decode/frames.json --out mask-review
+# Open mask-review/index.html and download mask-polygons.json after reviewing the regions.
+ftx measure video-masks mask-polygons.json --out masked-frames
+ftx measure video-select masked-frames/frames.json --out selection.json
 ```
 
 The video path resolves relative to the request file. `video_stream_index` optionally chooses
@@ -62,6 +64,49 @@ lens, stillness, anatomical correspondence, calibrated physical accuracy or body
 The opt-in `video_decode_workflow` integration test exercises real external variable-rate clips,
 large source-clock epochs, explicit rotation, private output, budget refusal and the ordinary
 selector; it uses synthetic media and makes no real-camera accuracy claim.
+
+## Author person and sheet masks locally
+
+`video-mask-review` accepts the ordinary decoded manifest before masks exist. Open its private
+`index.html` to draw person and sheet **sharpness regions** on exact source-image snapshots. These
+regions determine which pixels contribute to blur scoring; they do not assert an anatomical
+silhouette or become body-fit observations. The editor works offline and uploads nothing.
+
+Choose a frame and target, add a component, click its vertices, and finish the ring. Additional
+components include disconnected visible regions; holes remove pixels from their own component.
+Overlapping components form a union. Clicks round to integer stored-image pixel coordinates,
+regardless of display scaling. The native rasterizer draws inclusive 8-connected boundaries and
+binary interiors; the browser vector overlay is an annotation preview rather than an antialiased
+mask authority. Every coordinate must remain inside `0..width-1`, `0..height-1`.
+
+Use the explicit **not visible** action for an occluded or absent person/sheet. It records an empty
+region list, which becomes a zero mask; the original frame remains in the manifest and the selector
+reports insufficient interior. An unreviewed target is `null` and cannot be materialized. Drafts can
+be saved and imported into the same source-bound review. An unfinished polygon or invalid import
+withdraws the download; no unfinished edit silently becomes a completed mask.
+
+The downloaded document uses `ftx-video-mask-polygons/1`. Each frame has its canonical ordinal,
+encoded-image hash, decoded-gray hash, dimensions, and nullable `person_regions`/`sheet_regions`.
+Reviewed regions are arrays of `{ "outer": [[x,y], ...], "holes": [[[x,y], ...], ...] }`; `[]` is
+explicitly invisible. The original absolute manifest path and exact byte hash bind the entire
+frame set, options, receipt and acquisition metadata. Timestamps are displayed as native strings;
+JavaScript edits only ordinals and polygons, preserving even timestamps above its safe-integer
+range when native code reconstructs the final manifest.
+
+`video-masks` rereads and verifies those sources, refuses missing/duplicate frames, stale hashes,
+changed dimensions, noninteger/out-of-bounds coordinates, zero-area rings and self-intersections,
+then writes a new self-contained directory. It contains exact image copies, `person-NNNN.png`,
+`sheet-NNNN.png`, the authored annotations, original manifest bytes, ordinary `frames.json`, and a
+final `masks.json` completion report. Input masks, images and previous rounds are never overwritten.
+The success status is `MASKS_MATERIALIZED`; run `video-select` to determine eligibility.
+
+Each ring admits 3–256 distinct vertices, without a repeated closing vertex. Each mask admits up to
+16 components and 16 holes per component, with 4,096 total vertices per frame. Preparation retains
+all input frames and is bounded to 40 million pixels per frame, 200 million source pixels total,
+a 256 MiB complete bundle, and two billion accounted raster/topology work units. Excess work
+refuses; prepare an explicitly shorter source manifest instead of silently dropping frames.
+Directories/files are private (0700/0600 on Unix), publication is create-only, and a completion
+report is written last. A filesystem failure may retain an incomplete directory for diagnosis.
 
 ## Select prepared frames
 

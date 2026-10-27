@@ -110,6 +110,8 @@ const USAGE: &str = "usage:
   ftx measure still-window FILE [--out FILE] [--json]
   ftx measure video-select FILE [--out FILE] [--json]
   ftx measure video-decode REQUEST.json --out NEW_DIR [--json]
+  ftx measure video-mask-review MANIFEST.json --out NEW_DIR [--json]
+  ftx measure video-masks POLYGONS.json --out NEW_DIR [--json]
   ftx measure fuse FILES... [--no-priors] [--out FILE] [--json]
   ftx measure ready FILES... --garment KIND [--as-of DATE] [--no-priors] [--closed-cuff] [--passes-hip]
       [--nappies|--no-nappies] [--elastic-waist] [--cuff-level knee|calf|ankle] [--cuff-opening] [--out FILE] [--json]
