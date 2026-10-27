@@ -103,7 +103,11 @@ references use the emitted native IDs (`p0000`, `e0000`, etc.), available in the
 mapping. Import checks those references against the emitted pattern; ordinary validation evaluates
 the points and their measurement targets. Unknown panel or
 stitch annotation fields and source references refuse, as do geometry-changing cut overrides.
-`sim: true` requires explicit native placement.
+`sim: true` requires explicit native placement. Only `placement.part: "torso"` is admitted:
+the current native draper chooses a left limb through a generated mirror-pair instance, while an
+imported physical panel has quantity one. Arm/leg placement hints therefore refuse until explicit
+physical-side placement exists; otherwise both sides could silently wrap onto the right limb.
+Limb outlines, roles and source transforms remain valid flat import/export data without those hints.
 
 An optional top-level `provenance` object is retained verbatim in the report and pattern import
 metadata as unverified caller assertions. Source `fabric_pattern_export` metadata is retained as

@@ -427,8 +427,14 @@ fn annotate_panel(p: &mut Panel, a: &Value) -> Result<(), Refusal> {
                     ],
                     "placement",
                 )?;
-                if !matches!(v["part"].as_str(), Some("torso" | "arm" | "leg")) {
-                    return Err(invalid("placement.part must be torso, arm or leg"));
+                if matches!(v["part"].as_str(), Some("arm" | "leg")) {
+                    return Err(invalid(
+                        "expanded GarmentCode panels need explicit physical limb-side placement; native quantity-one limb wrapping would use the right frame",
+                    )
+                    .repair("Omit limb placement for a flat-only import; qualify explicit native limb-side support before draping."));
+                }
+                if v["part"] != "torso" {
+                    return Err(invalid("imported placement.part must be torso"));
                 }
                 for (key, value) in object(v, "placement")? {
                     match key.as_str() {
@@ -1091,6 +1097,22 @@ mod tests {
         import_garmentcode(&v, None).unwrap();
         v["pattern"]["stitches"][0][1]["edge"] = json!(1);
         assert!(import_garmentcode(&v, None).is_err());
+    }
+
+    #[test]
+    fn expanded_limb_placement_never_silently_uses_the_right_frame() {
+        for part in ["arm", "leg"] {
+            let a = json!({"schema":"fabric-garmentcode-annotations/1",
+                "panels":{"front.R":{"placement":{"part":part},"sim":true}}});
+            let refusal = import_garmentcode(&source(), Some(&a)).unwrap_err();
+            assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+            assert!(refusal.message.contains("physical limb-side"));
+        }
+        let a = json!({"schema":"fabric-garmentcode-annotations/1",
+            "panels":{"front.R":{"placement":{"part":"torso"},"sim":true}}});
+        let imported = import_garmentcode(&source(), Some(&a)).unwrap();
+        assert_eq!(imported.pattern["pieces"][0]["placement"]["part"], "torso");
+        assert_eq!(imported.report["status"], "REVIEW_REQUIRED");
     }
 
     #[test]
