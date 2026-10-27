@@ -92,6 +92,11 @@ stays absent. Start with the [catalog guide](docs/material-catalog.md) and
   retain the exposed face temperature, separate signed heat contributions and reference-mass storage.
 - [Material studies](docs/material-scenario-studies.md): compare substitutions through shared scenario
   execution and explicit objectives, retaining the material and geometry used by each result.
+- [Material treatments](docs/material-treatments.md): apply source-qualified shrinkage or compensate
+  cutting patterns in the grain frame, using explicit before/after material states. Five measured
+  denim pairs are included; missing mechanical and process evidence remains visible.
+- [Production sewing](docs/sewing-production.md): schedule operations across garment copies, share
+  qualified setups, select recipes against batch totals and emit the actual ordered stitch program.
 
 Try the self-contained synthetic heat example (its numbers demonstrate the solver, not a real fabric):
 

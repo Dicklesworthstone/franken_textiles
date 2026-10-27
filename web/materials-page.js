@@ -2,12 +2,13 @@
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "price", "sew"];
-const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "vapor", "calibrate",
+const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "treatment", "vapor", "calibrate",
   "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit"];
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
 let preparedBy = null;
+let preparedTreatment = null;
 let sourceText = null, outfit = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
@@ -21,7 +22,7 @@ for (const op of operations) {
   const section = document.createElement("div"); section.hidden = true;
   const title = document.createElement("h3"); title.textContent = ({ screen: "Source-qualified screening",
     study: "Fixed-pattern manufacturing alternatives", scenario: "Fresh drape and heat alternatives",
-    pressure: "Pressure-conditioned material", vapor: "Potential evaporative transfer", calibrate: "Identified material behavior",
+    pressure: "Pressure-conditioned material", treatment: "Laundering and dimensional treatment", vapor: "Potential evaporative transfer", calibrate: "Identified material behavior",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
     stripHistory: "Strip loading and recovery", vaporSurface: "Vapor transfer on this drape",
     stripFit: "Clamped-strip identification", outfit: "Imported joint outfit" })[op] || op;
@@ -43,6 +44,8 @@ function controls() {
   for (const op of boundOperations) $(op).disabled ||= !bound;
   $("screen").disabled ||= !has("screenRequest");
   $("pressure").disabled ||= !has("compressionRequest");
+  $("treatment").disabled ||= !has("treatmentRequest");
+  $("useTreatment").disabled = !!pending || !preparedTreatment;
   $("vapor").disabled ||= !has("vaporRequest");
   $("calibrate").disabled ||= !has("calibrationRequest");
   $("stageInterface").disabled ||= !source || !interfaceReady || !calibratedPair;
@@ -67,6 +70,7 @@ function controls() {
   $("cancel").disabled = !pending;
 }
 function clear(keys) {
+  if (keys.includes("bind") && !keys.includes("treatment")) keys = [...keys, "treatment"];
   for (const key of keys) {
     for (const url of urls.get(key) || []) URL.revokeObjectURL(url);
     urls.delete(key);
@@ -75,6 +79,7 @@ function clear(keys) {
     if (key === "cut") { $("marker").hidden = true; $("marker").removeAttribute("src"); }
     if (key === "stock") { $("stockMarker").hidden = true; $("stockMarker").removeAttribute("src"); }
     if (key === "bind") { bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren(); }
+    if (key === "treatment") preparedTreatment = null;
     if (key === "calibrate") {
       calibratedPair = null;
       $("calibratedInterfaceSummary").textContent = "No current calibrated contact pair.";
@@ -1127,7 +1132,8 @@ function manufacturingComparison(op, parent, study, computed) {
       const m = row.metrics || {};
       cells(timing, [row.key, state(row.sewing), metric(m.feed_seconds),
         metric(m.sewing_setup_seconds), metric(m.sewing_feed_and_setup_seconds)]);
-      const source = available(row.sewing)?.ordering?.timing;
+      const sewing = available(row.sewing);
+      const source = (sewing?.production?.ordering || sewing?.ordering)?.timing;
       if (source) detail(parent, `${row.key}: setup timing evidence and selected schedule (display only)`, source);
     }
     const note = document.createElement("p");
@@ -1417,8 +1423,29 @@ function vaporSurfaceResult(parent, r) {
     scope: r.scope, physical_validation_claim: r.physical_validation_claim,
     next: "Download the complete report, frozen replay, original conditions and retained drape below." };
 }
+function treatmentResult(parent, r) {
+  const transitions = r.schema === "ftx-pattern-treatment-report/1" ? Object.entries(r.transitions) : [[r.input.specimen, r]];
+  const rows = table(parent, "Source-qualified dimensional change", ["Specimen / transition", "Cycles",
+    "Warp / wale remaining length", "Weft / course remaining length", "Area ratio", "Unsupported post-treatment properties"]);
+  for (const [name, transition] of transitions) {
+    cells(rows, [name, metric(transition.input.cycles), metric(transition.stretch[0]),
+      metric(transition.stretch[1]), metric(transition.area_scale),
+      [...transition.properties_no_longer_available, ...transition.responses_no_longer_available].join(", ") || "No original field lost"]);
+    detail(parent, `${name}: exact process, conditioning, observations and before/after materials`, transition);
+  }
+  if (r.seams_after) {
+    const seams = table(parent, "Seam compatibility after dimensional change", ["Seam", "Before", "After", "Length mismatch (mm)"]);
+    for (const [i, row] of r.seams_after.entries()) cells(seams,
+      [row.seam, r.seams_before[i]?.status ?? "Unknown", row.status, metric(row.residual_mm)]);
+  }
+  return { schema: r.schema, mode: r.mode, source_pattern_sha256: r.source_pattern_sha256,
+    pattern_sha256: r.pattern_sha256, input_sha256: r.input_sha256,
+    scope: r.scope || "Measured free dimensional change between two explicit material states; no old property is inherited.",
+    next: r.pattern_json ? "Review the seam checks and downloads, then use the derived pattern to recompute fit, drape and manufacturing." :
+      "Download the exact material selections or use this transition in a piece-treatment request." };
+}
 function sewingResult(parent, r) {
-  const plan = r.plan, order = plan?.ordering;
+  const plan = r.plan, production = plan?.production, order = production?.ordering || plan?.ordering;
   if (order) {
     const counts = table(parent, "Sewing setup changes — declared needle and thread identities",
       ["Schedule", "Needle changes", "Thread changes", "Total changes"]);
@@ -1426,19 +1453,25 @@ function sewingResult(parent, r) {
       ["Selected order", order.selected_changes]]) {
       cells(counts, [label, metric(changes.needle_changes), metric(changes.thread_changes), metric(changes.total_changes)]);
     }
-    const operations = table(parent, "Selected sewing operation order",
+    const operations = table(parent, production ? "Selected cross-garment sewing order" : "Selected sewing operation order",
       ["Position", "Operation", "Source seam", "Needle", "Thread", "Required predecessors"]);
-    for (const [i, row] of plan.seams.entries()) {
+    const selected = production ? order.selected_order.map(id => {
+      const operation = production.operations.find(o => o.id === id);
+      return { ...plan.seams[operation.seam_index], productionOperation: operation };
+    }) : plan.seams;
+    for (const [i, row] of selected.entries()) {
       const pass = row.pass;
-      cells(operations, [metric(i + 1), pass.id || pass.seam, pass.seam, pass.needle, pass.thread, pass.after.join(", ") || "None declared"]);
+      cells(operations, [metric(i + 1), row.productionOperation?.id || pass.id || pass.seam,
+        pass.seam, pass.needle, pass.thread, (row.productionOperation?.after || pass.after).join(", ") || "None declared"]);
     }
     const note = document.createElement("p");
+    const objective = order.timing ? "declared setup duration" : "setup-change count";
     note.textContent = (order.optimality_proven ?
-      "Minimum setup-change count proven for the declared operations, dependencies and initial setup. " :
-      "Best complete feasible schedule found; minimum setup-change count has not been proven. ") +
+      `Minimum ${objective} proven for the declared operations, dependencies and initial setup. ` :
+      `Best complete feasible schedule found; minimum ${objective} has not been proven. `) +
       (order.budget_exhausted ? "The search reached its declared work limit. " : "") +
       "Needle and thread changes each count once. Handling, rethreading duration, assembly access and total manufacturing time are not inferred. " +
-      (plan.options.ordering.initial_setup ? "The supplied initial setup is included in the counts." :
+      ((plan.options.production?.ordering || plan.options.ordering).initial_setup ? "The supplied initial setup is included in the counts." :
         "No initial setup was supplied, so installing the first setup is not counted.");
     parent.append(note);
     detail(parent, "Baseline order, selected order and bounded search result", order);
@@ -1461,8 +1494,13 @@ function sewingResult(parent, r) {
   }
   if (plan?.consumables) sewingConsumablesComparison(parent,
     [{ key: "Selected sewing plan", sewing: { status: "available", result: plan } }]);
-  return { schema: r.schema, stitches: r.stitches?.length, feed_seconds: plan?.feed_seconds,
-    setup_changes: order?.selected_changes, minimum_setup_changes_proven: order?.optimality_proven,
+  return { schema: r.schema, stitches: r.stitches?.length, production_copies: production?.production_copies,
+    feed_seconds: production?.feed_seconds ?? plan?.feed_seconds,
+    setup_seconds: order?.timing ? order.timing.selected_setup_milliseconds / 1000 : undefined,
+    feed_and_setup_seconds: order?.timing?.feed_and_setup_seconds,
+    setup_changes: order?.selected_changes,
+    ordering_objective: order ? (order.timing ? "minimize_setup_time" : "minimize_setup_changes") : undefined,
+    ordering_optimality_proven: order?.optimality_proven,
     search_nodes: order?.search_nodes, hardware_execution_authorized: plan?.hardware_execution_authorized };
 }
 function permanentStretchResult(parent, r) {
@@ -1956,6 +1994,7 @@ function show(op, msg) {
     $("interfacesSummary").textContent = `Staged calibrated pair in ${JSON.parse(r.interfaces_json).length} retained contact pair(s). Freeze selections & bind to apply.`;
   } else {
     const pairCalibration = op === "calibrate" && r.binding?.kind === "interface";
+    if (op === "treatment") preparedTreatment = typeof r.pattern_json === "string" ? r.pattern_json : null;
     if (pairCalibration) {
       calibratedPair = r.interface_json;
       $("calibratedInterfaceSummary").textContent = `Calibrated pair: ${r.binding.interface.materials.join(" / ")}. Stage this pair after assigning those exact materials.`;
@@ -1988,6 +2027,7 @@ function show(op, msg) {
           gross_area_m2: m.gross_area_m2, defect_free_area_m2: m.defect_free_area_m2, utilization: m.utilization,
           stock_mass_kg: m.stock_mass_kg, mass_unavailable: m.mass_unavailable })), limitations: r.limitations } :
       op === "sew" ? sewingResult(s.comparison, r) :
+      op === "treatment" ? treatmentResult(s.comparison, r) :
       op === "vapor" ? vaporResult(s.comparison, r) :
       op === "vaporSurface" ? vaporSurfaceResult(s.comparison, r) :
       op === "heat" || op === "coverage" ? { steady: r.steady, comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim } :
@@ -2112,6 +2152,10 @@ async function execute(op) {
       msg.compressionLayer = $("compressionLayer").value;
       msg.compressionRequest = await read("compressionRequest");
     }
+    else if (op === "treatment") {
+      msg.pattern = bound?.pattern_json || sourceText;
+      msg.treatmentRequest = await read("treatmentRequest");
+    }
     else if (op === "vapor") msg.vaporRequest = await read("vaporRequest");
     else if (op === "calibrate") {
       msg.calibrationMode = $("calibrationMode").value;
@@ -2231,6 +2275,18 @@ $("assign").onclick = () => {
   edits(); invalidate(["bind", ...boundOperations]);
 };
 $("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits(); invalidate(["bind", ...boundOperations]); };
+$("useTreatment").onclick = () => {
+  if (!preparedTreatment || pending) return;
+  const raw = preparedTreatment;
+  ++patternRead; outfit = null; defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
+  outfitTargets.clear(); combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
+  $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
+  base.textContent = "Pattern default (preserve explicit piece choices)"; $("target").append(base);
+  invalidate(["bind", ...boundOperations, "study", "scenario", "outfit"]);
+  installPattern(raw, "Derived treatment pattern");
+  $("status").textContent = "Derived pattern loaded. Freeze selections and bind to recompute its consumers.";
+  controls();
+};
 $("addCombination").onclick = () => {
   if (!inspected || !source || pending) return;
   try {
@@ -2294,7 +2350,7 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
   stockRequest:["stock"], sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
-  screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:["scenario"] })) {
+  treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:["scenario"] })) {
   $(id).addEventListener("change", () => {
     const affected = id === "measurements" && has("scenarioBody") ? keys.filter(k => k !== "scenario") : [...keys];
     if ($("studyOnBody").checked && (id === "body" || id === "scenarioBody" || (id === "measurements" && !has("scenarioBody")))) affected.push("study");

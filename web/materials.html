@@ -51,6 +51,16 @@ across prescribed gap changes and thermal holds. Version 2 also requires explici
 links for loading/unloading branch changes. Review chronological heat and external work separately,
 and keep the full report with its original input; a final selection alone is not saved heat state.
 These local column calculations do not solve 3D garment contact or qualify presser-foot clearance.</p>
+<h3>Laundering and dimensional treatment</h3>
+<label>Qualified before/after material or piece-treatment request <input id="treatmentRequest" type="file" accept=".json,application/json"></label>
+<button id="treatment" data-command="treatment" disabled>Evaluate treatment or cutting compensation</button>
+<button id="useTreatment" disabled>Use the derived pattern for subsequent work</button>
+<p class="note">A material request retains the exact fabric, process, cycle count and measured directional change.
+A piece-treatment request uses the current frozen pattern when available, otherwise the original loaded pattern.
+Treat mode applies shrinkage and selects the independently characterized post-treatment material; compensate mode
+enlarges the cutting seam lines in the original material. Review fresh seam checks and download both the original
+and derived patterns. Missing post-treatment properties remain unavailable. Seam allowances remain authored
+manufacturing choices; this does not simulate washing forces or constrained shrinkage of an assembled garment.</p>
 <h3>Potential evaporative transfer</h3>
 <label>Vapor stack, layered coverage or motion-history replay JSON <input id="vaporRequest" type="file" accept=".json,application/json"></label>
 <button id="vapor" data-command="vapor" disabled>Calculate potential vapor transfer</button>

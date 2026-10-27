@@ -69,6 +69,17 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         };
         return sewing_selection::run(pattern, request);
     }
+    if matches!(action, "sew-plan" | "sew-stitches") {
+        known_options(args, "materials", &[])?;
+        let [pattern, options] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials sew-plan|sew-stitches PATTERN.json OPTIONS.json [--json]",
+            ));
+        };
+        let result = sewing_selection::plan(pattern, options, action == "sew-stitches")?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if matches!(action, "strip-experiment" | "strip-history") {
         known_options(args, "materials", &[])?;
         let [path] = &args.positional[2..] else {
@@ -161,20 +172,33 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     if matches!(
         action,
-        "screen" | "study" | "pressure-condition" | "compression-stack" | "bind-changes"
+        "screen"
+            | "study"
+            | "pressure-condition"
+            | "compression-stack"
+            | "bind-changes"
+            | "treatment"
+            | "treatment-pattern"
     ) {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {
             ("screen", [path]) => screen::run(path)?,
             ("pressure-condition", [path]) => screen::pressure_condition(path)?,
             ("compression-stack", [path]) => screen::compression_stack(path)?,
+            ("treatment", [path]) => screen::treatment(path)?,
+            ("treatment-pattern", [pattern, request]) => {
+                screen::treatment_pattern(pattern, request, None)?
+            }
+            ("treatment-pattern", [pattern, request, out]) => {
+                screen::treatment_pattern(pattern, request, Some(out))?
+            }
             ("bind-changes", [pattern, changes, out]) => {
                 screen::bind_changes(pattern, changes, out)?
             }
             ("study", [pattern, request]) => screen::study(pattern, request)?,
             _ => {
                 return Err(bad_input(
-                    "usage: ftx materials screen REQUEST.json | study PATTERN.json REQUEST.json | pressure-condition REQUEST.json | compression-stack REQUEST.json | bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json",
+                    "usage: ftx materials screen REQUEST.json | study PATTERN.json REQUEST.json | pressure-condition REQUEST.json | compression-stack REQUEST.json | treatment REQUEST.json | treatment-pattern PATTERN.json REQUEST.json [NEW-PATTERN.json] | bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json",
                 ));
             }
         };

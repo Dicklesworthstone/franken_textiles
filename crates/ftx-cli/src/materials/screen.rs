@@ -44,6 +44,39 @@ pub(super) fn compression_stack(path: &str) -> Result<Value, Refusal> {
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
 }
 
+pub(super) fn treatment(path: &str) -> Result<Value, Refusal> {
+    let request: ftx_pattern::material_treatment::Input = read(path, &mut (64 * 1024 * 1024))?;
+    serde_json::to_value(ftx_pattern::material_treatment::evaluate(&request)?)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
+}
+
+pub(super) fn treatment_pattern(
+    pattern: &str,
+    request: &str,
+    out: Option<&str>,
+) -> Result<Value, Refusal> {
+    let mut remaining = 64 * 1024 * 1024;
+    let pattern = Pattern::new(read(pattern, &mut remaining)?);
+    let request: ftx_pattern::material_treatment::geometry::Input = read(request, &mut remaining)?;
+    let mut result = request.apply(&pattern)?;
+    if let Some(path) = out {
+        let bytes = result["pattern_json"].as_str().ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::InvalidDocument,
+                "treatment omitted its exact pattern",
+            )
+        })?;
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .and_then(|mut file| file.write_all(bytes.as_bytes()))
+            .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
+        result["out"] = Value::String(path.to_owned());
+    }
+    Ok(result)
+}
+
 pub(super) fn bind_changes(pattern: &str, changes: &str, out: &str) -> Result<Value, Refusal> {
     let mut remaining = 64 * 1024 * 1024;
     let pattern = Pattern::new(read(pattern, &mut remaining)?);

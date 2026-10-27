@@ -2,7 +2,9 @@
 
 **Source-qualified treatment** (`material_treatment`, `ftx-care1`). Frozen before/after selections,
 exact process/cycles/conditioning and sourced directional dimensional changes produce one nominal
-material-axis map. The AFTER record independently qualifies every retained physical observation;
+material-axis map. Both states qualify the specimen and their respective conditioning on every
+retained observation or response; a content lock cannot admit an unrelated BEFORE specimen.
+The AFTER record independently qualifies every retained physical observation;
 missing properties and response laws never inherit old coefficients. `geometry::Input::apply`
 derives an ordinary pattern for treatment or inverse cutting compensation, preserves source topology,
 transforms absolute curve geometry and physical notch positions, and recomputes the existing seam

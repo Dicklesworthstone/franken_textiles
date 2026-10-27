@@ -146,6 +146,27 @@ self.onmessage = async ({ data: msg }) => {
       }
       case "catalog": result = json(ftx.material_catalog(msg.query)); break;
       case "inspect": result = json(ftx.material_inspect(msg.selection)); break;
+      case "treatment": {
+        const schema = json(msg.treatmentRequest).schema;
+        if (schema === "ftx-pattern-treatment/1") {
+          if (typeof msg.pattern !== "string") throw Error("Load a pattern with the exact BEFORE material selections first.");
+          if (typeof ftx.material_treatment_pattern !== "function") throw Error("Rebuild web/pkg: missing pattern treatment engine.");
+          raw = ftx.material_treatment_pattern(msg.pattern, msg.treatmentRequest); result = json(raw);
+          if (typeof result.pattern_json !== "string" || typeof result.source_pattern_json !== "string" ||
+              typeof result.frozen_request_json !== "string") throw Error("Rebuild web/pkg: incomplete frozen treatment result.");
+          files = [file("treatment-report.json", raw), file("treatment-source-pattern.json", result.source_pattern_json),
+            file("treatment-request.json", result.frozen_request_json), file(`${result.mode}-pattern.json`, result.pattern_json)];
+        } else if (schema === "ftx-material-treatment/1") {
+          if (typeof ftx.material_treatment !== "function") throw Error("Rebuild web/pkg: missing material treatment engine.");
+          raw = ftx.material_treatment(msg.treatmentRequest); result = json(raw);
+          if (typeof result.before_selection_json !== "string" || typeof result.after_selection_json !== "string") {
+            throw Error("Rebuild web/pkg: missing frozen treatment selections.");
+          }
+          files = [file("treatment-report.json", raw), file("treatment-request.json", msg.treatmentRequest),
+            file("before-treatment-selection.json", result.before_selection_json), file("after-treatment-selection.json", result.after_selection_json)];
+        } else throw Error("Choose a material treatment or pattern treatment request.");
+        break;
+      }
       case "vapor": {
         const schema = json(msg.vaporRequest).schema;
         const engine = schema === "ftx-vapor-coverage-history/1" ? "thermal_vapor_coverage_history" :

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use ftx_pattern::{
-    material_catalog::Selection,
+    material_catalog::{Selection, laundered_denim},
     material_thermal::ThermalLaw,
     material_treatment::{Input, SCHEMA, evaluate},
     materials::{
@@ -160,14 +160,14 @@ fn close(actual: f64, expected: f64) {
     );
 }
 
-fn response_material() -> Material {
-    let mut after = material(true);
-    let conditions = after.properties["thickness"].conditions.clone();
+fn response_material(after: bool) -> Material {
+    let mut record = material(after);
+    let conditions = record.properties["thickness"].conditions.clone();
     let curve = |points| {
         json!({"points": points, "source": "synthetic", "evidence": "estimate",
-            "method": "Independent synthetic post-treatment response", "conditions": conditions})
+            "method": "Independent synthetic state response", "conditions": conditions})
     };
-    after.membrane_response = Some(
+    record.membrane_response = Some(
         serde_json::from_value(json!({
             "model": "tabulated_green_strain/1", "interpolation": "piecewise_linear",
             "warp": curve(json!([[-0.2,-20.],[0.,0.],[0.2,30.]])),
@@ -178,9 +178,9 @@ fn response_material() -> Material {
         }))
         .unwrap(),
     );
-    after.thermal_response = Some(
+    record.thermal_response = Some(
         serde_json::from_value(json!({
-            "specimen": SPECIMEN, "conditioning":"after-conditioned",
+            "specimen": SPECIMEN, "conditioning":conditions["conditioning"],
             "specific_heat": {"unit":"J/(kg*K)", "source":"synthetic", "evidence":"estimate",
                 "method":"Synthetic temperature observations", "conditions":conditions,
                 "points":[{"temperature_c":10.,"mean":1000.},{"temperature_c":30.,"mean":1200.}]}
@@ -194,9 +194,9 @@ fn response_material() -> Material {
         "shear_stiffness",
         "specific_heat",
     ] {
-        after.properties.remove(key);
+        record.properties.remove(key);
     }
-    after
+    record
 }
 
 #[test]
@@ -310,7 +310,7 @@ fn absent_after_evidence_stays_absent_and_independent_heat_still_works() {
 #[test]
 fn qualified_post_treatment_nonlinear_and_temperature_laws_reach_existing_compilers() {
     let mut input = fixture();
-    input.after = freeze(response_material());
+    input.after = freeze(response_material(true));
     let report = evaluate(&input).unwrap();
     let resolved = catalog().resolve(&report.after).unwrap();
     assert!(resolved.mechanics().is_ok());
@@ -320,7 +320,7 @@ fn qualified_post_treatment_nonlinear_and_temperature_laws_reach_existing_compil
     close(response.energy, 0.75);
     let thermal = ThermalLaw::from_material(resolved.material(), true).unwrap();
     close(thermal.sensible_change(10., 30.).unwrap(), 0.21 * 22000.);
-    let mut mismatched = response_material();
+    let mut mismatched = response_material(true);
     mismatched
         .membrane_response
         .as_mut()
@@ -335,7 +335,7 @@ fn qualified_post_treatment_nonlinear_and_temperature_laws_reach_existing_compil
 #[test]
 fn original_response_blocks_are_reported_missing_instead_of_inherited() {
     let mut input = fixture();
-    let mut before = response_material();
+    let mut before = response_material(false);
     before.id = "synthetic/response-before".into();
     input.before = freeze(before);
     let report = evaluate(&input).unwrap();
@@ -421,6 +421,74 @@ fn source_qualification_and_material_locks_are_not_replaceable_by_an_identity_la
         .insert("conditioning".into(), "before-conditioned".into());
     input.after = freeze(after);
     assert!(evaluate(&input).is_err());
+}
+
+#[test]
+fn freshly_locked_before_observations_must_match_the_observed_specimen_and_conditioning() {
+    let original = fixture();
+    for (key, different) in [
+        ("specimen", "independent unrelated source specimen"),
+        (
+            "conditioning",
+            "another initial moisture and temperature state",
+        ),
+    ] {
+        let mut before = material(false);
+        before
+            .properties
+            .get_mut("thickness")
+            .unwrap()
+            .conditions
+            .insert(key.into(), different.into());
+        let mut input = original.clone();
+        input.before = freeze(before);
+        assert_ne!(
+            input.before.expected_sha256,
+            original.before.expected_sha256
+        );
+        // The ordinary source record and fresh digest are valid; treatment-pair admission refuses.
+        assert!(catalog().resolve(&input.before).is_ok());
+        let refused = evaluate(&input).unwrap_err();
+        assert!(refused.message.contains("BEFORE"), "{refused}");
+    }
+    let mut input = original;
+    let mut before = response_material(false);
+    input.before = freeze(before.clone());
+    assert!(evaluate(&input).is_ok());
+    before
+        .membrane_response
+        .as_mut()
+        .unwrap()
+        .warp
+        .conditions
+        .insert("conditioning".into(), "different conditioning".into());
+    input.before = freeze(before);
+    assert!(catalog().resolve(&input.before).is_ok());
+    let refused = evaluate(&input).unwrap_err();
+    assert!(
+        refused.message.contains("BEFORE warp response"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn measured_transition_preserves_its_pair_and_cannot_borrow_another_denim_specimen() {
+    let mut input = laundered_denim::treatment_request(1).unwrap();
+    let original = serde_json::to_value(&input).unwrap();
+    let report = evaluate(&input).unwrap();
+    assert_eq!(
+        serde_json::to_value(&report.before).unwrap(),
+        original["before"]
+    );
+    assert_eq!(
+        serde_json::to_value(&report.after).unwrap(),
+        original["after"]
+    );
+    assert_eq!(serde_json::to_value(&input).unwrap(), original);
+    input.before = laundered_denim::treatment_request(5).unwrap().before;
+    assert!(catalog().resolve(&input.before).is_ok());
+    let refused = evaluate(&input).unwrap_err();
+    assert!(refused.message.contains("BEFORE"), "{refused}");
 }
 
 #[test]

@@ -342,13 +342,20 @@ impl Input {
                 &serde_json::to_vec(&self.transitions[transition_name])
                     .map_err(|e| bad(e.to_string()))?,
             );
-            if self.mode == Mode::Compensate && pattern.raw()["meta"]["material_treatment_history"]
-                .as_array()
-                .is_some_and(|history| {
-                    history.iter().rev().find(|entry| entry["pieces"].as_array()
-                        .is_some_and(|pieces| pieces.iter().any(|p| p["piece_id"] == *id)))
-                        .is_some_and(|entry| entry["mode"] == "compensate")
-                })
+            if self.mode == Mode::Compensate
+                && pattern.raw()["meta"]["material_treatment_history"]
+                    .as_array()
+                    .is_some_and(|history| {
+                        history
+                            .iter()
+                            .rev()
+                            .find(|entry| {
+                                entry["pieces"].as_array().is_some_and(|pieces| {
+                                    pieces.iter().any(|p| p["piece_id"] == *id)
+                                })
+                            })
+                            .is_some_and(|entry| entry["mode"] == "compensate")
+                    })
             {
                 return Err(bad(format!(
                     "{id}: compensation was already applied; derive revised compensation from the original target pattern"

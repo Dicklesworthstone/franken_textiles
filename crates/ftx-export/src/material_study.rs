@@ -399,7 +399,10 @@ impl Request {
     }
 
     fn sewing_copies(&self) -> Result<Option<usize>, Refusal> {
-        if self.sewing_options().is_none_or(|s| s.consumables.is_none() && s.production.is_none()) {
+        if self
+            .sewing_options()
+            .is_none_or(|s| s.consumables.is_none() && s.production.is_none())
+        {
             return Ok(None);
         }
         let mut copies = None;
@@ -782,10 +785,14 @@ impl Request {
             recipes::check_budget(selection, variants.len())?;
         }
         if let Some(options) = self.sewing_options() {
-            if self.sewing_selection.is_none() && options.ordering_policy().is_some_and(|policy|
-                policy.max_search_nodes.saturating_mul(variants.len()) > 200_000)
+            if self.sewing_selection.is_none()
+                && options.ordering_policy().is_some_and(|policy| {
+                    policy.max_search_nodes.saturating_mul(variants.len()) > 200_000
+                })
             {
-                return Err(budget("material study exceeds 200000 aggregate sewing ordering nodes"));
+                return Err(budget(
+                    "material study exceeds 200000 aggregate sewing ordering nodes",
+                ));
             }
             let configured_work = self.sewing_selection.as_ref().map_or_else(
                 || crate::sewing::consumables::purchasing_work_bound(options),

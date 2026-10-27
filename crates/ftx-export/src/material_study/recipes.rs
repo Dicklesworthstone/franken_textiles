@@ -19,19 +19,37 @@ pub(super) fn production_options(
     if options.consumables.is_none() && options.production.is_none() {
         return Ok(Cow::Borrowed(options));
     }
-    let thread = options.consumables.as_ref().and_then(|c| c.production_copies);
-    let schedule = options.production.as_ref().and_then(|p| p.production_copies);
-    let counts: Vec<_> = [cutting_copies, thread, schedule].into_iter().flatten().collect();
+    let thread = options
+        .consumables
+        .as_ref()
+        .and_then(|c| c.production_copies);
+    let schedule = options
+        .production
+        .as_ref()
+        .and_then(|p| p.production_copies);
+    let counts: Vec<_> = [cutting_copies, thread, schedule]
+        .into_iter()
+        .flatten()
+        .collect();
     if counts.windows(2).any(|pair| pair[0] != pair[1]) {
-        return Err(invalid("thread production_copies and sewing schedule production_copies must match every requested cutting quantity"));
+        return Err(invalid(
+            "thread production_copies and sewing schedule production_copies must match every requested cutting quantity",
+        ));
     }
     let Some(copies) = counts.first().copied() else {
         return Ok(Cow::Borrowed(options));
     };
-    let needs_threads = options.consumables.as_ref().is_some_and(|c|
-        c.production_copies.is_none() && (copies != 1 || schedule.is_some()));
-    let needs_schedule = options.production.as_ref().is_some_and(|p| p.production_copies.is_none());
-    if !needs_threads && !needs_schedule { return Ok(Cow::Borrowed(options)); }
+    let needs_threads = options
+        .consumables
+        .as_ref()
+        .is_some_and(|c| c.production_copies.is_none() && (copies != 1 || schedule.is_some()));
+    let needs_schedule = options
+        .production
+        .as_ref()
+        .is_some_and(|p| p.production_copies.is_none());
+    if !needs_threads && !needs_schedule {
+        return Ok(Cow::Borrowed(options));
+    }
     let mut resolved = options.clone();
     if needs_threads {
         resolved.consumables.as_mut().unwrap().production_copies = Some(copies);

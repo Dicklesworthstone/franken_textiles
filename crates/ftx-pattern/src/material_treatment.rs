@@ -2,6 +2,7 @@
 //!
 //! Directional shrinkage defines a homogeneous, freely treated reference geometry. It does not
 //! infer washing forces, constrained seam shrinkage, a constitutive history or material conservation.
+//! Both material states explicitly qualify the same specimen under their own observed conditioning.
 //! The caller supplies an independently qualified AFTER selection: no original mechanical, thermal,
 //! optical or purchasing observation is copied across the treatment merely because it existed.
 
@@ -28,13 +29,13 @@ pub struct Input {
     pub before: Selection,
     /// Embedded, content-locked treated state. Its own missing properties remain missing.
     pub after: Selection,
-    /// Exact fabric variant/lot or specimen shared by dimensional and post-treatment observations.
+    /// Exact fabric variant/lot or specimen shared by dimensional and both material-state observations.
     pub specimen: String,
     /// Exact treatment protocol, including washing/drying/finishing conditions as applicable.
     pub process: String,
     /// Positive number of cycles measured as one complete transition; never exponentiated or scaled.
     pub cycles: u32,
-    /// State/protocol in which the initial reference dimensions were measured.
+    /// State/protocol in which the initial reference dimensions and properties were measured.
     pub conditioning_before: String,
     /// State/protocol in which the final reference dimensions and properties were measured.
     pub conditioning_after: String,
@@ -146,27 +147,80 @@ fn dimension_conditions(input: &Input, quantity: &Quantity) -> Result<(), Refusa
     Ok(())
 }
 
-fn post_conditions(
+fn material_state(
     input: &Input,
-    conditions: &BTreeMap<String, String>,
-    label: &str,
+    material: &Material,
+    state: &str,
+    conditioning: &str,
 ) -> Result<(), Refusal> {
-    if !conditions_ok(conditions)
-        || conditions.get("specimen") != Some(&input.specimen)
-        || conditions.get("conditioning") != Some(&input.conditioning_after)
-    {
-        return Err(invalid(format!(
-            "treatment AFTER {label} must explicitly qualify its specimen and final conditioning"
-        )));
+    let check_conditions = |conditions: &BTreeMap<String, String>, label: &str| {
+        if !conditions_ok(conditions)
+            || conditions.get("specimen") != Some(&input.specimen)
+            || conditions.get("conditioning").map(String::as_str) != Some(conditioning)
+        {
+            return Err(invalid(format!(
+                "treatment {state} {label} must explicitly qualify its specimen and conditioning"
+            )));
+        }
+        Ok(())
+    };
+    let check_identity = |specimen: &str, actual_conditioning: &str| {
+        if specimen != input.specimen || actual_conditioning != conditioning {
+            return Err(invalid(format!(
+                "treatment {state} response must match the exact specimen and conditioning"
+            )));
+        }
+        Ok(())
+    };
+    for (key, quantity) in &material.properties {
+        check_conditions(&quantity.conditions, key)?;
     }
-    Ok(())
-}
-
-fn post_identity(input: &Input, specimen: &str, conditioning: &str) -> Result<(), Refusal> {
-    if specimen != input.specimen || conditioning != input.conditioning_after {
-        return Err(invalid(
-            "treatment AFTER response must match the exact specimen and final conditioning",
-        ));
+    if let Some(law) = &material.membrane_response {
+        for (name, conditions) in [
+            ("warp response", &law.warp.conditions),
+            ("weft response", &law.weft.conditions),
+            ("shear response", &law.shear.conditions),
+            ("membrane coupling", &law.coupling.conditions),
+        ] {
+            check_conditions(conditions, name)?;
+        }
+        if let Some(area) = &law.area_response {
+            check_conditions(&area.conditions, "area response")?;
+            check_conditions(&area.quadratic.conditions, "area quadratic coefficient")?;
+            check_conditions(&area.log_squared.conditions, "area log coefficient")?;
+        }
+    }
+    if let Some(law) = &material.membrane_relaxation {
+        check_conditions(&law.conditions, "relaxation response")?;
+        for branch in &law.branches {
+            check_conditions(&branch.stiffness_ratio.conditions, "relaxation ratio")?;
+            check_conditions(&branch.relaxation_time.conditions, "relaxation time")?;
+        }
+        for branch in &law.orthotropic_branches {
+            for quantity in [
+                &branch.stiffness.warp,
+                &branch.stiffness.weft,
+                &branch.stiffness.coupling,
+                &branch.stiffness.shear,
+                &branch.relaxation_time,
+            ] {
+                check_conditions(&quantity.conditions, "directional relaxation")?;
+            }
+        }
+    }
+    if let Some(law) = &material.thermal_response {
+        check_identity(&law.specimen, &law.conditioning)?;
+        // ThermalResponse's own validator binds its scalar companions to this identity. Each
+        // retained series still needs explicit applicability to this observed conditioning state.
+        for series in [&law.conductivity, &law.specific_heat]
+            .into_iter()
+            .flatten()
+        {
+            check_conditions(&series.conditions, "temperature response")?;
+        }
+    }
+    if let Some(faces) = &material.optical_faces {
+        check_identity(&faces.specimen, &faces.conditioning)?;
     }
     Ok(())
 }
@@ -179,65 +233,7 @@ fn post_state(input: &Input, material: &Material) -> Result<(), Refusal> {
             "treatment AFTER record must name its exact treatment_process and treatment_cycles",
         ));
     }
-    for (key, quantity) in &material.properties {
-        post_conditions(input, &quantity.conditions, key)?;
-    }
-    if let Some(law) = &material.membrane_response {
-        for (name, conditions) in [
-            ("warp response", &law.warp.conditions),
-            ("weft response", &law.weft.conditions),
-            ("shear response", &law.shear.conditions),
-            ("membrane coupling", &law.coupling.conditions),
-        ] {
-            post_conditions(input, conditions, name)?;
-        }
-        if let Some(area) = &law.area_response {
-            post_conditions(input, &area.conditions, "area response")?;
-            post_conditions(
-                input,
-                &area.quadratic.conditions,
-                "area quadratic coefficient",
-            )?;
-            post_conditions(input, &area.log_squared.conditions, "area log coefficient")?;
-        }
-    }
-    if let Some(law) = &material.membrane_relaxation {
-        post_conditions(input, &law.conditions, "relaxation response")?;
-        for branch in &law.branches {
-            post_conditions(
-                input,
-                &branch.stiffness_ratio.conditions,
-                "relaxation ratio",
-            )?;
-            post_conditions(input, &branch.relaxation_time.conditions, "relaxation time")?;
-        }
-        for branch in &law.orthotropic_branches {
-            for quantity in [
-                &branch.stiffness.warp,
-                &branch.stiffness.weft,
-                &branch.stiffness.coupling,
-                &branch.stiffness.shear,
-                &branch.relaxation_time,
-            ] {
-                post_conditions(input, &quantity.conditions, "directional relaxation")?;
-            }
-        }
-    }
-    if let Some(law) = &material.thermal_response {
-        post_identity(input, &law.specimen, &law.conditioning)?;
-        // ThermalResponse's own validator binds its scalar companions to this identity. Each
-        // retained series still needs explicit applicability to the final conditioning state.
-        for series in [&law.conductivity, &law.specific_heat]
-            .into_iter()
-            .flatten()
-        {
-            post_conditions(input, &series.conditions, "temperature response")?;
-        }
-    }
-    if let Some(faces) = &material.optical_faces {
-        post_identity(input, &faces.specimen, &faces.conditioning)?;
-    }
-    Ok(())
+    material_state(input, material, "AFTER", &input.conditioning_after)
 }
 
 fn stretches(quantity: &Quantity) -> Result<(f64, Option<[f64; 2]>), Refusal> {
@@ -262,7 +258,7 @@ fn stretches(quantity: &Quantity) -> Result<(f64, Option<[f64; 2]>), Refusal> {
 ///
 /// # Errors
 /// Missing/stale material locks, unresolved or mismatched evidence, unsupported sheet levels,
-/// unqualified AFTER observations, nonpositive dimensions or nonfinite derived scales. No input
+/// unqualified state observations, nonpositive dimensions or nonfinite derived scales. No input
 /// or catalog is changed; physics readiness remains the responsibility of each ordinary consumer.
 pub fn evaluate(input: &Input) -> Result<Report, Refusal> {
     if input.schema != SCHEMA
@@ -306,6 +302,12 @@ pub fn evaluate(input: &Input) -> Result<Report, Refusal> {
     }
     dimension_conditions(input, &input.shrinkage_warp)?;
     dimension_conditions(input, &input.shrinkage_weft)?;
+    material_state(
+        input,
+        before.material(),
+        "BEFORE",
+        &input.conditioning_before,
+    )?;
     post_state(input, after.material())?;
     // Reuse the material authority's source, bounds and dimensional normalization checks. This
     // observation record is not published as an extra textile or passed into a physics consumer.
