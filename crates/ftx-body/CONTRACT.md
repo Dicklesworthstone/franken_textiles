@@ -29,10 +29,19 @@ from the side neck point to the shoulder point, taken as the top of the shoulder
 back (the back of the outermost horizontal section containing the torso axis 15 mm below the shoulder
 points, between them, as a hull; disconnected arm sections are excluded and a missing torso section
 yields no reading), total
-crotch length (the lower hull of the median sagittal sections within ±15 mm, waist to waist: a snug tape
-bridges the gluteal cleft) and outseam (from the waist's side point over the hip, as a hull of the
+crotch length (the lower hull of the outermost median sagittal loops containing the declared waist
+axis, within ±15 mm and clipped below the waist: a snug waist-to-waist tape bridges the gluteal cleft).
+Sections belonging only to a lower foot or an offset arm do not belong to that path; absent
+waist-containing loops yield no reading. The independent rectangular-path regression requires
+180 mm (50 down, 80 across, 50 up), unchanged by detached or nested sections, translation and triangle
+order; the previous unfiltered hull returned 236.619 mm with an unrelated lower section. This
+qualifies geometric section selection, not the anatomical waist axis. Outseam runs from the waist's
+side point over the hip, as a hull of the
 right-side torso and leg seen from the front, to the hip's widest point, then straight down to the
-floor). `fit_stature` bisects the height parameter to a stature. `fit_tape` runs Levenberg–Marquardt
+floor. A straight or two-vertex projected outseam is a valid open tape path; only a missing waist
+section or fewer than two profile points makes it unavailable. Independent box/frustum controls
+check 100 mm vertical paths and a known diagonal plus its floor drop under translation and triangle
+reordering. `fit_stature` bisects the height parameter to a stature. `fit_tape` runs Levenberg–Marquardt
 (central differences, step 1e-3; stops when a step gains less than 1e-5 of the cost) over four phenotype
 parameters (height, weight, muscle, proportions; prior 1σ = 0.5 about 0.5) and nineteen local changes
 (fifteen `measure-*`, `measure-neck-circ-incr`, `measure-shoulder-dist-incr`, and both head scales, so the

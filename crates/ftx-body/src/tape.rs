@@ -429,8 +429,8 @@ pub fn shoulder_and_back(
 }
 
 /// Total crotch length (ISO 8559-1 5.4.18): from the centre-front waist down between the legs to the
-/// centre-back waist, as a snug tape bridging hollows: the lower convex hull of the median sagittal sections
-/// within 15 mm either side of the body's centre line, below the waist line.
+/// centre-back waist, as a snug tape bridging hollows: the lower convex hull of the outermost median
+/// sagittal loops containing the waist axis, within 15 mm of the centre line and below the waist.
 #[must_use]
 pub fn crotch_length(mm: &[Vec3], faces: &[[usize; 3]], frames: &BodyFrames) -> Option<f64> {
     let waist = frames.floor_z + frames.landmarks.get("waist")?;
@@ -446,9 +446,11 @@ pub fn crotch_length(mm: &[Vec3], faces: &[[usize; 3]], frames: &BodyFrames) -> 
     let s = Slicer::new(&sagittal, faces, 5.0);
     let mut pts: Vec<[f64; 2]> = Vec::new();
     for h in [-15.0, -7.5, 0.0, 7.5, 15.0] {
-        for l in s.loops(h) {
+        let loops = s.loops(h);
+        // A foot or offset arm can cut this plane without belonging to the waist-to-waist path.
+        if let Some(l) = outermost_around(&loops, [frames.torso.origin.y, waist]) {
             pts.extend(l.iter().copied().filter(|p| p[1] <= waist));
-            pts.extend(crossings(&l, 1, waist));
+            pts.extend(crossings(l, 1, waist));
         }
     }
     let hull = convex_hull(&pts);
@@ -493,7 +495,7 @@ pub fn outseam(torso: &Slicer, frames: &BodyFrames) -> Option<f64> {
         .collect();
     pts.push(top);
     let hull = convex_hull(&pts);
-    if hull.len() < 3 {
+    if hull.len() < 2 {
         return None;
     }
     let start = (0..hull.len()).find(|&i| hull[i] == top)?;
@@ -758,6 +760,126 @@ mod tests {
                         missing_torso.torso.origin.x = 500.0;
                         assert_eq!(shoulder_and_back(&v, &t, &s, &missing_torso, snp), None);
                     }
+                    t.reverse();
+                }
+            }
+        }
+    }
+
+    fn waist_frames() -> BodyFrames {
+        use crate::landmarks::Frame;
+
+        let frame = Frame {
+            origin: Vec3::ZERO,
+            up: Vec3::new(0.0, 0.0, 1.0),
+            front: Vec3::new(0.0, -1.0, 0.0),
+            lat: Vec3::new(1.0, 0.0, 0.0),
+        };
+        BodyFrames {
+            torso: frame,
+            arm_r: frame,
+            leg_r: frame,
+            floor_z: 0.0,
+            tip_h: 0.0,
+            upper_arm_radius: 0.0,
+            arm_length: 0.0,
+            landmarks: std::collections::BTreeMap::from([
+                ("waist".into(), 100.0),
+                ("crotch".into(), 50.0),
+            ]),
+            neck: frame,
+            head_bone: Vec3::ZERO,
+            shoulder_joint_r: Vec3::ZERO,
+            torso_points: Vec::new(),
+            leg_points: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn qualification_crotch_excludes_sections_away_from_the_waist_axis() {
+        let mut frames = waist_frames();
+        let sagittal_prism = |base: &[[f64; 2]]| {
+            let (v, t) = prism(base);
+            (
+                v.into_iter()
+                    .map(|p| Vec3::new(40.0 * p.z - 20.0, p.x, p.y))
+                    .collect::<Vec<_>>(),
+                t,
+            )
+        };
+        let extras = [
+            [[-10.0, 0.0], [10.0, 0.0], [10.0, 20.0], [-10.0, 20.0]],
+            [[120.0, 40.0], [150.0, 40.0], [150.0, 140.0], [120.0, 140.0]],
+            [[-10.0, 60.0], [10.0, 60.0], [10.0, 130.0], [-10.0, 130.0]],
+        ];
+        for shift in [Vec3::ZERO, Vec3::new(200.0, 300.0, 125.0)] {
+            frames.torso.origin = shift;
+            frames.floor_z = shift.z;
+            for mask in 0..8usize {
+                let (mut v, mut t) =
+                    sagittal_prism(&[[-40.0, 50.0], [40.0, 50.0], [40.0, 150.0], [-40.0, 150.0]]);
+                for (index, base) in extras.iter().enumerate() {
+                    if mask & (1 << index) != 0 {
+                        let (part, faces) = sagittal_prism(base);
+                        let offset = v.len();
+                        v.extend(part);
+                        t.extend(faces.iter().map(|f| f.map(|i| i + offset)));
+                    }
+                }
+                for point in &mut v {
+                    *point += shift;
+                }
+                for _ in 0..2 {
+                    // Independent waist-to-waist path: 50 mm down, 80 mm across, 50 mm up.
+                    // A lower foot, a waist-height arm or an inner shell must not lengthen it.
+                    let measured = crotch_length(&v, &t, &frames).unwrap();
+                    assert!(
+                        (measured - 180.0).abs() < 1e-10,
+                        "{measured}, mask={mask}, shift={shift:?}"
+                    );
+                    t.reverse();
+                }
+            }
+            for base in &extras[..2] {
+                let (mut v, t) = sagittal_prism(base);
+                for point in &mut v {
+                    *point += shift;
+                }
+                assert_eq!(crotch_length(&v, &t, &frames), None);
+            }
+        }
+    }
+
+    #[test]
+    fn qualification_outseam_accepts_straight_and_two_vertex_profiles() {
+        for shift in [Vec3::ZERO, Vec3::new(200.0, 300.0, 125.0)] {
+            let mut frames = waist_frames();
+            frames.torso.origin = shift;
+            frames.floor_z = shift.z;
+            for (bottom_scale, top_scale, expected) in [
+                (1.0, 1.0, 100.0),
+                (1.5, 0.5, 50.0_f64.hypot(20.0) + 50.0),
+                (0.5, 1.5, 100.0),
+            ] {
+                let (mut v, mut t) =
+                    prism(&[[-40.0, -30.0], [40.0, -30.0], [40.0, 30.0], [-40.0, 30.0]]);
+                for p in &mut v {
+                    let scale = bottom_scale + (top_scale - bottom_scale) * p.z;
+                    *p = Vec3::new(p.x * scale, p.y, 50.0 + 100.0 * p.z) + shift;
+                }
+                frames.torso_points = v.clone();
+                for _ in 0..2 {
+                    let s = Slicer::new(&v, &t, 5.0);
+                    // A hanging tape is vertical for a straight or narrowing hip; a widening
+                    // hip adds its independently known diagonal, then 50 mm down to the floor.
+                    let measured = outseam(&s, &frames).expect("valid two-vertex outer profile");
+                    assert!(
+                        (measured - expected).abs() < 1e-10,
+                        "{measured} vs {expected}, shift={shift:?}"
+                    );
+                    let mut missing = frames.clone();
+                    missing.torso.origin.x += 1000.0;
+                    assert_eq!(outseam(&s, &missing), None);
                     t.reverse();
                 }
             }
