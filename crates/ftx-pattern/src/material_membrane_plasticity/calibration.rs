@@ -1,6 +1,6 @@
-//! Identify only yield and hardening of the existing permanent membrane law. Elasticity and
-//! strain/accumulation limits are independently supplied. Every trial replays complete FIT paths
-//! from their explicitly pristine reference; CHECK paths cannot choose or alter parameters.
+//! Identify only yield and hardening of the existing permanent membrane law. Elasticity, domains
+//! and any qualified parallel Maxwell spectrum are independently supplied and remain fixed. Every
+//! trial replays complete FIT paths; CHECK paths cannot choose or alter parameters.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::{AXES, ELASTIC, MODEL, PlasticMembrane};
 use crate::material_calibration::{Partition, Quality, fitted_domain};
 use crate::material_catalog::normalize;
+use crate::material_relaxation::{CompiledRelaxation, parallel};
 use crate::material_response::StrainDomain;
 use crate::materials::{Evidence, Form, Material, Quantity, Source};
 
@@ -31,7 +32,8 @@ pub enum Initialization {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sample {
-    /// Strictly increasing elapsed seconds, starting at zero. The fitted law is rate independent.
+    /// Strictly increasing elapsed seconds, starting at zero. A fixed parallel Maxwell spectrum
+    /// uses every recorded interval; without it the fitted permanent law is rate independent.
     pub time_seconds: f64,
     /// Raw Green strain [E11, E22, 2 E12], not engineering extension or a deformation gradient.
     pub green_strain: [f64; 3],
@@ -75,10 +77,11 @@ pub struct Parameters {
 pub struct Input {
     /// Must equal [`SCHEMA`].
     pub schema: String,
-    /// Independently characterized four elastic and six strain/accumulation limit quantities.
+    /// Independently characterized four elastic and six strain/accumulation limit quantities,
+    /// and optionally an explicitly qualified parallel Maxwell spectrum that remains fixed.
     /// Other mass, contact, thermal or bending properties are retained, never inferred.
     pub material: Material,
-    /// Admit estimated elastic/domain observations, separately from acquired load histories.
+    /// Admit estimated elastic/domain/spectrum/network observations, separately from load histories.
     #[serde(default)]
     pub allow_estimated_material: bool,
     /// Admit estimated or explicitly synthetic histories.
@@ -132,7 +135,7 @@ pub struct Prediction {
     pub time_seconds: f64,
     /// Recorded material-frame strain.
     pub green_strain: [f64; 3],
-    /// Predicted accepted second-Piola sheet resultants.
+    /// Predicted accepted TOTAL second-Piola resultants, including any fixed Maxwell branches.
     pub second_piola_n_m: [f64; 3],
     /// Predicted minus observed; unobserved channels remain null.
     pub residual_n_m: [Option<f64>; 3],
@@ -144,6 +147,26 @@ pub struct Prediction {
     pub stored_j_m2: f64,
     /// Cumulative irreversible work per reference area, not an automatic thermal source.
     pub plastic_dissipation_j_m2: f64,
+    /// Present only for an explicitly qualified fixed parallel Maxwell spectrum. The existing
+    /// stored_j_m2 remains equilibrium elastic/hardening storage; measured stress is the TOTAL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_history: Option<ParallelHistory>,
+}
+
+/// Additional fixed-spectrum response, separate from the identified equilibrium plastic branch.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ParallelHistory {
+    /// Sum of the accepted Maxwell branch stresses, N/m, in [S11,S22,S12] order.
+    pub maxwell_second_piola_n_m: [f64; 3],
+    /// Actual accepted Maxwell spring storage, J/m²; excludes numerical/physical dissipation.
+    pub maxwell_stored_j_m2: f64,
+    /// Cumulative physical dashpot work under the canonical backward-Euler quadrature, J/m².
+    /// No thermal conversion or numerical integration loss is inferred.
+    pub maxwell_dissipation_j_m2: f64,
+    /// Accepted viscous [E11,E22,2E12] per branch, in the original material's authored order.
+    pub viscous_green_strains: Vec<[f64; 3]>,
+    /// Equilibrium elastic/hardening plus Maxwell spring storage, each counted once, J/m².
+    pub total_stored_j_m2: f64,
 }
 
 /// One fixed-order optimization attempt, including failed starts.
@@ -165,9 +188,15 @@ pub struct StartReport {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Diagnostics {
     /// Forward objective, finite-difference probe and final partition replay calls, including refusals.
+    /// Each fixed-spectrum FIT/CHECK partition precomputation also costs one call.
     pub evaluations: usize,
-    /// Reserved recorded-node advances, charged before a replay including refused attempts.
+    /// Reserved constitutive work: plastic recorded nodes plus fixed Maxwell branch-node states.
+    /// Every partition is charged before replay, including refused attempts.
     pub history_steps: usize,
+    /// Fixed-spectrum branch-node states charged within history_steps. Each whole FIT/CHECK
+    /// partition is precomputed once; absent for ordinary rate-independent identification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_maxwell_branch_steps: Option<usize>,
     /// Caller-supplied whole-operation forward-call limit.
     pub evaluation_limit: usize,
     /// Fixed whole-operation recorded-node limit.
@@ -235,6 +264,51 @@ struct Prepared {
     strain_limit: [f64; 3],
     accumulation_limit: [f64; 3],
     bounds: [[f64; 2]; 6],
+    relaxation: Option<CompiledRelaxation>,
+    branch_count: usize,
+    fixed_histories: Vec<Option<Vec<FixedState>>>,
+}
+
+struct FixedState {
+    stress: [f64; 3],
+    stored: f64,
+    dissipated: f64,
+    viscous: Vec<[f64; 3]>,
+}
+
+fn fixed_history(
+    law: &CompiledRelaxation,
+    experiment: &Experiment,
+) -> Result<Vec<FixedState>, Refusal> {
+    let mut memory = law.initialize([0.0; 3])?;
+    let mut dissipated = 0.0;
+    let mut result = Vec::with_capacity(experiment.samples.len());
+    for (index, sample) in experiment.samples.iter().enumerate() {
+        if index > 0 {
+            let update = memory
+                .advance(
+                    sample.green_strain,
+                    sample.time_seconds - experiment.samples[index - 1].time_seconds,
+                )
+                .map_err(|mut e| {
+                    e.message = format!("{}: Maxwell node {index}: {}", experiment.id, e.message);
+                    e
+                })?;
+            memory = update.memory;
+            dissipated += update.dissipated_j_m2;
+        }
+        let response = memory.response(sample.green_strain, None)?;
+        if !dissipated.is_finite() {
+            return Err(bad("fixed Maxwell history dissipation overflows"));
+        }
+        result.push(FixedState {
+            stress: response.stress,
+            stored: response.energy,
+            dissipated,
+            viscous: memory.viscous_strains().to_vec(),
+        });
+    }
+    Ok(result)
 }
 
 impl Prepared {
@@ -278,7 +352,6 @@ fn prepare(input: &Input) -> Result<Prepared, Refusal> {
             .any(|v| !v.is_finite() || *v <= 0.0)
         || matches!(input.material.form, Form::Fiber | Form::Yarn | Form::Fill)
         || input.material.membrane_response.is_some()
-        || input.material.membrane_relaxation.is_some()
     {
         return Err(bad(
             "permanent membrane identification needs its schema, characterized sheet, scalar elasticity, matched conditions and finite positive residual/work policy",
@@ -354,7 +427,7 @@ fn prepare(input: &Input) -> Result<Prepared, Refusal> {
             ));
         }
     }
-    let prepared = Prepared {
+    let mut prepared = Prepared {
         tensor: [
             [warp / d, poisson * weft / d, 0.0],
             [poisson * weft / d, weft / d, 0.0],
@@ -364,8 +437,28 @@ fn prepare(input: &Input) -> Result<Prepared, Refusal> {
         strain_limit: domains[0],
         accumulation_limit: domains[1],
         bounds,
+        relaxation: None,
+        branch_count: 0,
+        fixed_histories: Vec::new(),
     };
     let law = prepared.law([0.5; 6])?;
+    if let Some(relaxation) = &material.membrane_relaxation {
+        if relaxation
+            .conditions
+            .iter()
+            .any(|(key, value)| input.conditions.get(key) != Some(value))
+        {
+            return Err(bad(
+                "fixed Maxwell spectrum must match the complete acquisition conditions",
+            ));
+        }
+        prepared.relaxation = Some(parallel::compile_for_calibration(
+            &material,
+            input.allow_estimated_material,
+            &law,
+        )?);
+        prepared.branch_count = relaxation.branches.len() + relaxation.orthotropic_branches.len();
+    }
     let mut ids = BTreeSet::new();
     let mut nodes = 0usize;
     let mut fit_observations = 0usize;
@@ -374,6 +467,7 @@ fn prepare(input: &Input) -> Result<Prepared, Refusal> {
             "permanent identification requires 1..32 complete acquisition histories",
         ));
     }
+    prepared.fixed_histories = (0..input.experiments.len()).map(|_| None).collect();
     for experiment in &input.experiments {
         nodes = nodes.saturating_add(experiment.samples.len());
         if !text_ok(&experiment.id)
@@ -395,6 +489,17 @@ fn prepare(input: &Input) -> Result<Prepared, Refusal> {
             {
                 return Err(bad(format!(
                     "{}: history node {i} outside fitted equilibrium strain domain",
+                    experiment.id
+                )));
+            }
+            if experiment.partition == Partition::Fit
+                && prepared
+                    .relaxation
+                    .as_ref()
+                    .is_some_and(|law| !law.contains(sample.green_strain))
+            {
+                return Err(bad(format!(
+                    "{}: history node {i} outside qualified parallel strain domain",
                     experiment.id
                 )));
             }
@@ -446,12 +551,59 @@ struct Work<'a> {
 }
 
 impl Work<'_> {
+    // The fixed spectrum depends only on the original total strain/time history. Reserve its
+    // entire partition before evaluation, reuse FIT for all coefficient probes, and leave CHECK
+    // untouched until after parameter selection and excitation. No failed work is refunded.
+    fn prepare_fixed_partition(&mut self, partition: Partition) -> Result<(), Failure> {
+        let Some(law) = &self.prepared.relaxation else {
+            return Ok(());
+        };
+        let pending: Vec<_> = self
+            .input
+            .experiments
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| {
+                e.partition == partition && self.prepared.fixed_histories[*i].is_none()
+            })
+            .map(|(i, e)| (i, e.samples.len()))
+            .collect();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let work =
+            pending.iter().map(|(_, nodes)| nodes).sum::<usize>() * self.prepared.branch_count;
+        if self.diagnostics.evaluations == self.input.max_evaluations
+            || self.diagnostics.history_steps + work > MAX_HISTORY_STEPS
+        {
+            return Err(Failure::Budget);
+        }
+        self.diagnostics.evaluations += 1;
+        self.diagnostics.history_steps += work;
+        *self
+            .diagnostics
+            .fixed_maxwell_branch_steps
+            .as_mut()
+            .expect("qualified spectrum work") += work;
+        for (i, _) in pending {
+            match fixed_history(law, &self.input.experiments[i]) {
+                Ok(history) => self.prepared.fixed_histories[i] = Some(history),
+                Err(refusal) => {
+                    self.diagnostics.trials_refused += 1;
+                    return Err(Failure::Physical(refusal));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn evaluate(
         &mut self,
         x: [f64; 6],
         partition: Partition,
         retain: bool,
     ) -> Result<Evaluation, Failure> {
+        self.prepare_fixed_partition(partition)?;
         let nodes = self
             .input
             .experiments
@@ -482,11 +634,12 @@ impl Work<'_> {
         let law = self.prepared.law(x)?;
         let mut residual = Vec::new();
         let mut predictions = Vec::new();
-        for experiment in self
+        for (experiment_index, experiment) in self
             .input
             .experiments
             .iter()
-            .filter(|e| e.partition == partition)
+            .enumerate()
+            .filter(|(_, e)| e.partition == partition)
         {
             let mut memory = law.pristine();
             let mut dissipated = 0.0;
@@ -514,8 +667,18 @@ impl Work<'_> {
                 if !dissipated.is_finite() {
                     return Err(bad("history dissipation overflows"));
                 }
+                let fixed = self.prepared.fixed_histories[experiment_index]
+                    .as_ref()
+                    .map(|states| &states[i]);
+                let stress = fixed.map_or(response.stress, |state| {
+                    std::array::from_fn(|j| response.stress[j] + state.stress[j])
+                });
+                let total_storage = response.energy + fixed.map_or(0.0, |state| state.stored);
+                if stress.iter().any(|s| !s.is_finite()) || !total_storage.is_finite() {
+                    return Err(bad("combined material response overflows"));
+                }
                 let errors = std::array::from_fn(|i| {
-                    sample.second_piola_n_m[i].map(|observed| response.stress[i] - observed)
+                    sample.second_piola_n_m[i].map(|observed| stress[i] - observed)
                 });
                 residual.extend(errors.iter().flatten().map(|r| r / sample.scale_n_m));
                 if retain {
@@ -524,12 +687,19 @@ impl Work<'_> {
                         partition,
                         time_seconds: sample.time_seconds,
                         green_strain: sample.green_strain,
-                        second_piola_n_m: response.stress,
+                        second_piola_n_m: stress,
                         residual_n_m: errors,
                         plastic_strain: memory.plastic_strain(),
                         accumulated_strain: memory.accumulated_strain(),
                         stored_j_m2: response.energy,
                         plastic_dissipation_j_m2: dissipated,
+                        parallel_history: fixed.map(|state| ParallelHistory {
+                            maxwell_second_piola_n_m: state.stress,
+                            maxwell_stored_j_m2: state.stored,
+                            maxwell_dissipation_j_m2: state.dissipated,
+                            viscous_green_strains: state.viscous.clone(),
+                            total_stored_j_m2: total_storage,
+                        }),
                     });
                 }
             }
@@ -598,17 +768,24 @@ fn algebraic_seed(input: &Input, prepared: &Prepared) -> [f64; 6] {
     let mut rows: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
     let mut forces: [Vec<f64>; 3] = std::array::from_fn(|_| Vec::new());
     let q = prepared.tensor;
-    for e in input
+    for (experiment_index, e) in input
         .experiments
         .iter()
-        .filter(|e| e.partition == Partition::Fit)
+        .enumerate()
+        .filter(|(_, e)| e.partition == Partition::Fit)
     {
         let mut old = [0.0; 3];
         let mut accumulated = [0.0; 3];
-        for sample in &e.samples {
-            let [Some(s0), Some(s1), Some(s2)] = sample.second_piola_n_m else {
+        for (sample_index, sample) in e.samples.iter().enumerate() {
+            let [Some(mut s0), Some(mut s1), Some(mut s2)] = sample.second_piola_n_m else {
                 break;
             };
+            if let Some(history) = &prepared.fixed_histories[experiment_index] {
+                let fixed = history[sample_index].stress;
+                s0 -= fixed[0];
+                s1 -= fixed[1];
+                s2 -= fixed[2];
+            }
             let elastic1 =
                 (s1 - q[0][1] / q[0][0] * s0) / (q[1][1] - q[0][1] * (q[0][1] / q[0][0]));
             let elastic = [
@@ -805,7 +982,7 @@ fn fitted_material(
 /// denied evidence/replacement, or nonrepresentable input/output. Numerical fit failures are reports.
 pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     let prepared = prepare(input)?;
-    let seed = algebraic_seed(input, &prepared);
+    let fixed_steps = prepared.relaxation.as_ref().map(|_| 0);
     let input_sha256 = sha256_hex(&serde_json::to_vec(input).map_err(|e| bad(e.to_string()))?);
     let has_check = input.experiments.iter().any(|e| {
         e.partition == Partition::Check
@@ -819,6 +996,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         diagnostics: Diagnostics {
             evaluations: 0,
             history_steps: 0,
+            fixed_maxwell_branch_steps: fixed_steps,
             evaluation_limit: input.max_evaluations,
             history_step_limit: MAX_HISTORY_STEPS,
             starts_attempted: 0,
@@ -831,6 +1009,43 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             starts: Vec::new(),
         },
     };
+    let mut report = Report {
+        schema: "ftx-membrane-plasticity-calibration-report/1".into(),
+        input: input.clone(),
+        input_sha256,
+        status: Status::Rejected,
+        decision_reasons: Vec::new(),
+        parameters: None,
+        fit: None,
+        check: None,
+        check_status: if has_check {
+            "NOT_EVALUATED"
+        } else {
+            "NOT_PROVIDED"
+        }
+        .into(),
+        check_refusal: None,
+        predictions: Vec::new(),
+        diagnostics: work.diagnostics.clone(),
+        material: None,
+    };
+    if let Err(failure) = work.prepare_fixed_partition(Partition::Fit) {
+        match failure {
+            Failure::Budget => {
+                report.status = Status::BudgetExhausted;
+                report.decision_reasons.push(
+                    "shared work budget cannot complete the fixed FIT Maxwell histories".into(),
+                );
+            }
+            Failure::Physical(refusal) => report.decision_reasons.push(format!(
+                "fixed FIT Maxwell history refused: {}",
+                refusal.message
+            )),
+        }
+        report.diagnostics = work.diagnostics;
+        return Ok(report);
+    }
+    let seed = algebraic_seed(input, &work.prepared);
     let mut best: Option<([f64; 6], Evaluation)> = None;
     let mut candidates = Vec::new();
     let mut exhausted = false;
@@ -865,26 +1080,6 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             break;
         }
     }
-    let mut report = Report {
-        schema: "ftx-membrane-plasticity-calibration-report/1".into(),
-        input: input.clone(),
-        input_sha256,
-        status: Status::Rejected,
-        decision_reasons: Vec::new(),
-        parameters: None,
-        fit: None,
-        check: None,
-        check_status: if has_check {
-            "NOT_EVALUATED"
-        } else {
-            "NOT_PROVIDED"
-        }
-        .into(),
-        check_refusal: None,
-        predictions: Vec::new(),
-        diagnostics: work.diagnostics.clone(),
-        material: None,
-    };
     if let Some((x, e)) = best {
         report.parameters = Some(work.prepared.parameters(x));
         report.fit = e.quality.clone();

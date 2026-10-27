@@ -3744,6 +3744,36 @@ refinement of the plastic path. Joint identification of plastic and viscous coef
 temperature/moisture-dependent constitutive laws, measured specimen agreement and garment acceptance
 remain open under `ftx-rc1`, `ftx-tm4`, `ftx-tm2` and `ftx-tm8`.
 
+### 25.96 Identify permanent stretch alongside an independently known recovery spectrum
+
+The existing whole-history permanent membrane calibration now admits an explicitly qualified
+parallel Maxwell spectrum. Only the six directional yield and hardening coefficients vary;
+the equilibrium tensor, recovery tensors/times, initialization, source records and operating
+domains remain independently supplied. Every recorded signed strain/time node advances the
+fixed recovery state, including unobserved force nodes and irregular dwells. Fits and held-out
+residuals compare the complete parallel-network second-Piola load.
+
+The fixed spectrum is replayed once per FIT/CHECK partition through the canonical forward law,
+with its work charged to the existing whole-operation budgets. Algebraic starts remove its
+known stress before estimating the permanent branch; final predictions add both stresses once.
+CHECK is prepared only after FIT selection and excitation analysis and cannot choose a different
+candidate. Accepted publication runs the complete ordinary material compiler, retaining the
+source-locked spectrum and independent mass, bending, contact and thermal requirements.
+
+Reports keep equilibrium storage and plastic loss unchanged and separately expose Maxwell
+stress, spring storage, viscous strains, dashpot work and total storage. The original pure-plastic
+wire representation and arithmetic remain unchanged. The complete artificial example
+`examples/material-parallel-calibration.json` supplies 27 FIT and five CHECK nodes with two
+fixed branches; independent recurrence, irregular-dwell, qualification, domain and budget tests
+pass through the existing native calibration suite. See
+[material-membrane-plasticity.md](docs/material-membrane-plasticity.md).
+
+This implements the software scope of `ftx-tm4.4`. Together with section 25.95, either branch
+can now be identified conditional on independently characterized coefficients for the other;
+neither operation simultaneously identifies both unknown branches or resolves that inverse
+problem's possible nonuniqueness. Synthetic recovery does not close measured cyclic textile,
+damage/rupture or unchanged-pattern garment acceptance.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

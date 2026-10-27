@@ -93,6 +93,31 @@ pub(crate) fn compile(
     plastic: &PlasticMembrane,
     material_sha256: String,
 ) -> Result<CompiledRelaxation, Refusal> {
+    compile_inner(material, allow, plastic, material_sha256, false)
+}
+
+// Identification already validates the independent elastic/domain observations. Its six unknown
+// yield/hardening coefficients are trial parameters, not fabricated source observations. This
+// compiler only supplies a fixed transient response to that private calibration path; it cannot
+// create a paired plastic law or publish a material. Publication uses the full compiler above.
+pub(crate) fn compile_for_calibration(
+    material: &Material,
+    allow: bool,
+    plastic: &PlasticMembrane,
+) -> Result<CompiledRelaxation, Refusal> {
+    let identity = sha256_hex(&serde_json::to_vec(material).map_err(|e| bad(e.to_string()))?);
+    let mut compiled = compile_inner(material, allow, plastic, identity, true)?;
+    compiled.parallel = None;
+    Ok(compiled)
+}
+
+fn compile_inner(
+    material: &Material,
+    allow: bool,
+    plastic: &PlasticMembrane,
+    material_sha256: String,
+    calibration: bool,
+) -> Result<CompiledRelaxation, Refusal> {
     let relaxation = material
         .membrane_relaxation
         .as_ref()
@@ -103,11 +128,10 @@ pub(crate) fn compile(
         .ok_or_else(|| bad("parallel network requires an explicit joint qualification"))?;
     declaration.validate(&material.sources, allow)?;
     if material.membrane_response.is_some()
-        || material
-            .structure
-            .get("membrane_plasticity_model")
-            .map(String::as_str)
-            != Some(PLASTIC_MODEL)
+        || match material.structure.get("membrane_plasticity_model") {
+            Some(model) => model != PLASTIC_MODEL,
+            None => !calibration,
+        }
         || relaxation.conditions != declaration.conditions
     {
         return Err(bad(
@@ -130,6 +154,9 @@ pub(crate) fn compile(
         )?;
     }
     for (family, _) in PROPERTY_FAMILIES {
+        if calibration && matches!(family, "membrane_yield" | "membrane_hardening") {
+            continue;
+        }
         for axis in AXES {
             declaration.matches(
                 &material
