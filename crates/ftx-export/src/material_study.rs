@@ -399,11 +399,7 @@ impl Request {
     }
 
     fn sewing_copies(&self) -> Result<Option<usize>, Refusal> {
-        if self
-            .sewing_options()
-            .and_then(|s| s.consumables.as_ref())
-            .is_none()
-        {
+        if self.sewing_options().is_none_or(|s| s.consumables.is_none() && s.production.is_none()) {
             return Ok(None);
         }
         let mut copies = None;
@@ -786,6 +782,11 @@ impl Request {
             recipes::check_budget(selection, variants.len())?;
         }
         if let Some(options) = self.sewing_options() {
+            if self.sewing_selection.is_none() && options.ordering_policy().is_some_and(|policy|
+                policy.max_search_nodes.saturating_mul(variants.len()) > 200_000)
+            {
+                return Err(budget("material study exceeds 200000 aggregate sewing ordering nodes"));
+            }
             let configured_work = self.sewing_selection.as_ref().map_or_else(
                 || crate::sewing::consumables::purchasing_work_bound(options),
                 sewing_selection::Request::purchasing_work_bound,
@@ -898,7 +899,7 @@ impl Request {
             .sewing_options()
             .is_some_and(|s| s.consumables.is_some())
         {
-            notes.push("Thread demand uses the selected plan's actual traversals, independently qualified channel coefficients and once-per-operation/channel allowances on every production copy. Requested cutting quantities must agree and supply the thread count when omitted; an explicit conflicting count refuses sewing. Each exact yarn is aggregated across all copies before canonical whole-order pricing, while continuous-length requirements remain per operation/channel. Sewing geometry, feed and setup time remain per garment; thread purchasing does not establish a batch schedule, retained assembly mass or a combined cut-and-sew cost. Missing consumption or offers keep the complete metric unknown. Recipe selection follows its explicit objective; only thread-cost selection searches these order totals, and its separate proof and unresolved-trial status remain authoritative.");
+            notes.push("Thread demand uses the selected plan's actual traversals, independently qualified channel coefficients and once-per-operation/channel allowances on every production copy. Requested cutting quantities must agree and supply omitted thread/schedule counts; an explicit conflicting count refuses sewing. Each exact yarn is aggregated across all copies before canonical whole-order pricing, while continuous-length requirements remain per operation/channel. Without an explicit production schedule, sewing feed and setup metrics remain per garment. A requested production schedule supplies complete batch feed, setup and stitch metrics from its selected traversal. Thread purchasing alone does not establish a batch schedule, retained assembly mass or a combined cut-and-sew cost. Missing consumption or offers keep the complete metric unknown. Recipe selection follows its explicit objective; only thread-cost selection searches these order totals, and its separate proof and unresolved-trial status remain authoritative.");
         }
         if self.vapor.is_some() {
             notes.push("Potential vapor transport uses explicit common-area layer occurrences resolved from each final material assignment. It infers no overlap, body coverage, air-gap resistance, sweat supply, evaporation or coupled heat; canonical source qualifications and boundary assumptions remain in every available result.");
@@ -1151,8 +1152,8 @@ impl Request {
             }
         }
         if let Some(plan) = row.sewing.value() {
-            row.metrics.stitch_intervals = Some(plan.stitch_intervals);
-            row.metrics.feed_seconds = Some(plan.feed_seconds);
+            row.metrics.stitch_intervals = Some(plan.total_stitch_intervals());
+            row.metrics.feed_seconds = Some(plan.total_feed_seconds());
             if let Some(consumables) = plan
                 .consumables
                 .as_ref()
@@ -1166,8 +1167,7 @@ impl Request {
                     .and_then(|p| p.least_observed_independent_order_total);
             }
             if let Some(timing) = plan
-                .ordering
-                .as_ref()
+                .ordering_report()
                 .and_then(|order| order.timing.as_ref())
             {
                 row.metrics.sewing_setup_seconds =

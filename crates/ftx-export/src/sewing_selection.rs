@@ -228,7 +228,7 @@ impl Request {
         }
         // Ordering is separate from recipe selection. Bound its aggregate configured work without
         // reducing the caller's per-job budget or confusing ordering exhaustion with recipe proof.
-        if self.options.ordering.as_ref().is_some_and(|policy| {
+        if self.options.ordering_policy().is_some_and(|policy| {
             self.max_plan_evaluations
                 .checked_mul(policy.max_search_nodes)
                 .is_none_or(|n| n > MAX_ORDERING_NODES)
@@ -288,7 +288,7 @@ impl Request {
         groups.sort_by(|a, b| a.operation.cmp(b.operation));
         let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds;
         if timed
-            && self.options.ordering.as_ref().is_none_or(|policy| {
+            && self.options.ordering_policy().is_none_or(|policy| {
                 policy.objective != ordering::Objective::MinimizeSetupTime
                     || policy.initial_setup.is_none()
                     || policy.setup_times.is_none()
@@ -298,7 +298,7 @@ impl Request {
                 "joint timed selection requires minimize_setup_time ordering with initial_setup and source setup_times",
             ));
         }
-        if let Some(policy) = &self.options.ordering
+        if let Some(policy) = self.options.ordering_policy()
             && let Some(times) = &policy.setup_times
         {
             let initial = policy.initial_setup.as_ref().ok_or_else(|| {
@@ -385,8 +385,8 @@ impl Request {
             };
             match SewPlan::build(pattern, &options) {
                 Ok(plan) => {
-                    trial.feed_seconds = Some(plan.feed_seconds);
-                    trial.stitch_intervals = Some(plan.stitch_intervals);
+                    trial.feed_seconds = Some(plan.total_feed_seconds());
+                    trial.stitch_intervals = Some(plan.total_stitch_intervals());
                     let score = if let Some(currency) = objective_currency.as_deref() {
                         match thread_cost::score(&plan, currency) {
                             Ok(score) => {
@@ -400,8 +400,7 @@ impl Request {
                         }
                     } else if timed {
                         let schedule = plan
-                            .ordering
-                            .as_ref()
+                            .ordering_report()
                             .ok_or_else(|| invalid("admitted timed recipe lost its schedule"))?;
                         let time = schedule.timing.as_ref().ok_or_else(|| {
                             invalid("admitted timed recipe lost its duration accounting")
@@ -410,7 +409,7 @@ impl Request {
                         trial.ordering_optimality_proven = Some(schedule.optimality_proven);
                         Some(time.feed_and_setup_seconds)
                     } else {
-                        Some(plan.feed_seconds)
+                        Some(plan.total_feed_seconds())
                     };
                     if score.is_some_and(|score| !score.is_finite()) {
                         return Err(invalid("nonrepresentable sewing selection objective"));

@@ -17,6 +17,7 @@ pub mod consumables;
 pub mod ordering;
 pub mod pressure;
 pub mod preview;
+pub mod production;
 pub mod program;
 use assembly::{AssemblyReceipt, FlatAssembly};
 use program::{Backtack, FeedDirection, ReverseFeed, StitchRun};
@@ -108,6 +109,10 @@ pub struct SewOptions {
     /// Omission preserves the existing lexicographic topological order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ordering: Option<ordering::Policy>,
+    /// Optional cross-garment schedule on this machine. Exclusive with one-garment `ordering`.
+    /// The qualified geometry remains once per pass; production operations reference copy and pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production: Option<production::Policy>,
     /// Source-bearing process envelopes tied to exact resolved material stacks.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub qualifications: Vec<SewingQualification>,
@@ -122,6 +127,17 @@ pub struct SewOptions {
     /// Default export allowance override; edge and piece allowances still take precedence.
     #[serde(default)]
     pub seam_allowance_mm: Option<f64>,
+}
+
+impl SewOptions {
+    /// Active scheduling policy. Production and one-garment ordering are exclusive at admission.
+    #[must_use]
+    pub fn ordering_policy(&self) -> Option<&ordering::Policy> {
+        self.production
+            .as_ref()
+            .map(|production| &production.ordering)
+            .or(self.ordering.as_ref())
+    }
 }
 
 /// Source-locked process envelope from an external seam/coupon qualification.
@@ -227,7 +243,7 @@ pub struct PlannedSeam {
 pub struct SewPlan {
     /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` qualifications, `/6` ordering,
     /// `/7` pressure, `/8` clearance, `/9` timed ordering, `/10` partial source spans,
-    /// `/11` source-qualified thread consumption and purchasing.
+    /// `/11` source-qualified thread consumption and purchasing, `/12` cross-copy production schedule.
     /// Capabilities compose rather than replace.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
@@ -241,6 +257,9 @@ pub struct SewPlan {
     /// Setup counts, optional times and bounded-search result; absent without an ordering policy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ordering: Option<ordering::Report>,
+    /// Complete repeated operation graph and selected batch order, with independently scoped totals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub production: Option<production::Report>,
     /// Optional complete thread BOM; missing consumption never becomes a zero requirement.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumables: Option<consumables::Report>,
@@ -370,6 +389,34 @@ impl SewingPass {
 }
 
 impl SewPlan {
+    /// Active admitted order, including the complete batch when production scheduling was requested.
+    #[must_use]
+    pub fn ordering_report(&self) -> Option<&ordering::Report> {
+        self.production
+            .as_ref()
+            .map(|production| &production.ordering)
+            .or(self.ordering.as_ref())
+    }
+
+    /// Actual feed scope: the complete explicitly scheduled batch, otherwise one garment.
+    /// A thread-purchasing quantity alone never implies a production schedule.
+    #[must_use]
+    pub fn total_feed_seconds(&self) -> f64 {
+        self.production
+            .as_ref()
+            .map_or(self.feed_seconds, |production| production.feed_seconds)
+    }
+
+    /// Actual traversal scope, matching [`Self::total_feed_seconds`].
+    #[must_use]
+    pub fn total_stitch_intervals(&self) -> usize {
+        self.production
+            .as_ref()
+            .map_or(self.stitch_intervals, |production| {
+                production.stitch_intervals
+            })
+    }
+
     /// Plan every seam using the shared material resolver and the pattern's actual seam geometry.
     /// Changes to thickness, per-piece material, grain/mirror geometry and notches are read afresh.
     /// `sim:false` and simulation scaling do not omit or deform manufacturing pieces or seams.
@@ -393,6 +440,8 @@ impl SewPlan {
                 "implicit fabric layers need explicit sewing sides; ply counts cannot invent a layer stack",
             ));
         }
+        let resolved_options = production::resolve_options(options)?;
+        let options = resolved_options.as_ref();
         let machine = &options.machine;
         if machine.id.trim().is_empty()
             || !range(machine.stitch_mm)
@@ -528,7 +577,9 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if options.consumables.is_some()
+            schema: if options.production.is_some() {
+                "ftx-sewing-plan/12"
+            } else if options.consumables.is_some()
                 || options
                     .qualifications
                     .iter()
@@ -587,6 +638,7 @@ impl SewPlan {
             materials: BTreeMap::new(),
             seams: Vec::new(),
             ordering: None,
+            production: None,
             consumables: None,
             stitch_intervals: 0,
             feed_seconds: 0.0,
@@ -874,6 +926,9 @@ impl SewPlan {
         }
         if let Some(request) = &options.consumables {
             out.consumables = Some(consumables::evaluate(&out, request)?);
+        }
+        if let Some(policy) = &options.production {
+            out.production = Some(production::evaluate(&out, policy)?);
         }
         Ok(out)
     }

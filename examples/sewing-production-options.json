@@ -1,0 +1,76 @@
+{
+  "machine": {
+    "id": "example-configuration-not-a-qualified-machine",
+    "stitch_mm": [0.5, 5.0],
+    "feed_b_over_a": [0.5, 2.0],
+    "max_stack_mm": 3.0,
+    "max_stitches_per_minute": 1000.0
+  },
+  "seam_tolerance_mm": 0.5,
+  "passes": [
+    {
+      "id": "join",
+      "seam": "side",
+      "max_stitch_mm": 2.5,
+      "plies": [1, 1],
+      "minimum_allowance_mm": 6.0,
+      "stitches_per_minute": 600.0,
+      "needle": "example-needle",
+      "thread": "example-thread-a",
+      "after": []
+    },
+    {
+      "id": "reinforce",
+      "seam": "side",
+      "max_stitch_mm": 2.5,
+      "plies": [1, 1],
+      "minimum_allowance_mm": 6.0,
+      "stitches_per_minute": 600.0,
+      "needle": "example-needle",
+      "thread": "example-thread-b",
+      "after": ["join"]
+    }
+  ],
+  "production": {
+    "production_copies": 3,
+    "ordering": {
+      "objective": "minimize_setup_time",
+      "max_search_nodes": 2000,
+      "initial_setup": {"needle": "example-needle", "thread": "initial-thread"},
+      "setup_times": {
+        "machine": "example-configuration-not-a-qualified-machine",
+        "source": {
+          "reference": "test:sewing-production-example",
+          "accessed_on": "2026-10-26",
+          "note": "Invented software demonstration; no physical machine or seam measurement"
+        },
+        "method": "Synthetic directed whole needle/thread changes, excluding handling and fixture transitions",
+        "conditions": {"scope": "One declared machine configuration; software arithmetic only"},
+        "evidence": "estimate",
+        "allow_estimates": true,
+        "transitions": [
+          {
+            "from": {"needle": "example-needle", "thread": "initial-thread"},
+            "to": {"needle": "example-needle", "thread": "example-thread-a"},
+            "milliseconds": 1000
+          },
+          {
+            "from": {"needle": "example-needle", "thread": "initial-thread"},
+            "to": {"needle": "example-needle", "thread": "example-thread-b"},
+            "milliseconds": 3000
+          },
+          {
+            "from": {"needle": "example-needle", "thread": "example-thread-a"},
+            "to": {"needle": "example-needle", "thread": "example-thread-b"},
+            "milliseconds": 500
+          },
+          {
+            "from": {"needle": "example-needle", "thread": "example-thread-b"},
+            "to": {"needle": "example-needle", "thread": "example-thread-a"},
+            "milliseconds": 2000
+          }
+        ]
+      }
+    }
+  }
+}

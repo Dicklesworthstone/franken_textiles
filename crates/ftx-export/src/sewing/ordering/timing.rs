@@ -7,13 +7,13 @@ use ftx_pattern::materials::{Evidence, Source};
 use serde::{Deserialize, Serialize};
 
 use super::Setup;
-use crate::sewing::{SewingPass, bad, qualified_text};
+use crate::sewing::{bad, qualified_text};
 
 const MAX_TRANSITIONS: usize = 4096;
 const MAX_MILLISECONDS: u32 = 86_400_000;
-type Durations<'a> = BTreeMap<(&'a Setup, &'a Setup), usize>;
+type Durations<'a> = BTreeMap<(&'a Setup, &'a Setup), u64>;
 
-fn duration(rows: &Durations<'_>, from: &Setup, to: &Setup) -> Result<usize, Refusal> {
+fn duration(rows: &Durations<'_>, from: &Setup, to: &Setup) -> Result<u64, Refusal> {
     if from == to {
         Ok(0)
     } else {
@@ -66,7 +66,7 @@ impl SetupTimes {
     fn rows(&self) -> Durations<'_> {
         self.transitions
             .iter()
-            .map(|row| ((&row.from, &row.to), row.milliseconds as usize))
+            .map(|row| ((&row.from, &row.to), u64::from(row.milliseconds)))
             .collect()
     }
 
@@ -138,26 +138,14 @@ impl SetupTimes {
     /// rows remain legal so a recipe search can reuse one evidence table across all its candidates.
     pub(super) fn matrix(
         &self,
-        passes: &[&SewingPass],
+        setups: &[Setup],
         initial: &Setup,
-    ) -> Result<Vec<Vec<usize>>, Refusal> {
+    ) -> Result<Vec<Vec<u64>>, Refusal> {
         let rows = self.rows();
-        let mut setups: Vec<_> = passes
-            .iter()
-            .map(|p| Setup {
-                needle: p.needle.clone(),
-                thread: p.thread.clone(),
-            })
-            .collect();
-        setups.push(initial.clone());
         setups
             .iter()
-            .map(|from| {
-                setups[..passes.len()]
-                    .iter()
-                    .map(|to| duration(&rows, from, to))
-                    .collect()
-            })
+            .chain(std::iter::once(initial))
+            .map(|from| setups.iter().map(|to| duration(&rows, from, to)).collect())
             .collect()
     }
 }
@@ -165,12 +153,13 @@ impl SetupTimes {
 /// Timed objective diagnostics alongside, never substituted for, the existing setup-change counts.
 #[derive(Clone, Debug, Serialize)]
 pub struct TimingReport {
-    /// Duration of the ordinary lexicographic topological schedule under the same source table.
-    pub baseline_setup_milliseconds: usize,
+    /// Duration of the admitted baseline under the same source table. Integer milliseconds use u64
+    /// so complete production batches remain exact on wasm32 as well as native targets.
+    pub baseline_setup_milliseconds: u64,
     /// Duration of the selected complete schedule, including initial setup and excluding final reset.
-    pub selected_setup_milliseconds: usize,
+    pub selected_setup_milliseconds: u64,
     /// Proved lower bound for the setup objective; equals the selected value only when proved.
-    pub lower_bound_setup_milliseconds: usize,
+    pub lower_bound_setup_milliseconds: u64,
     /// Generated feed duration plus selected setup duration. Not total manufacturing time.
     pub feed_and_setup_seconds: f64,
 }
