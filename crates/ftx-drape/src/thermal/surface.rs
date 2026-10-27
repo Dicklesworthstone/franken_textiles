@@ -216,11 +216,10 @@ impl Surface {
         &self.patches
     }
 
-    pub(crate) fn require_constant_liquid_model(&self) -> Result<(), Refusal> {
-        for column in &self.columns {
-            column.with_inner_liquid_capacity(0.)?;
-        }
-        Ok(())
+    pub(crate) fn requires_enthalpy_inverse(&self) -> bool {
+        self.columns
+            .iter()
+            .any(|column| column.temperature_domain().is_some())
     }
 
     /// Initialize every material cell to the same specified temperature. Changing a material

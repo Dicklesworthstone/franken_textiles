@@ -363,7 +363,6 @@ impl Water {
         initial_c: f64,
     ) -> Result<Self, Refusal> {
         request.validate(request.outside_vapor_pressure_pa.len())?;
-        model.require_constant_liquid_model()?;
         request.pressure(initial_c)?;
         if instances.len() != request.bindings.len()
             || instances
@@ -862,7 +861,7 @@ impl Water {
                 }
             }
             result["scope"] = json!(
-                "Source-qualified initial free liquid shares the inner textile cell temperature. Constant dry thermal and effective Ret properties are explicitly qualified over the authored temperature/loading domain. Pressure and vapor sensible export sample each substep's initial temperature; dry conduction is implicit. Earliest dryout splits the step and the dry remainder uses the same heat solver. Reference area owns water; current area conducts vapor. No replenishment, condensation, sorption, wicking, absorbed moisture, wet-property inference, added mechanical mass, body-water transfer or empirical/comfort claim. Time/space refinement remains required."
+                "Source-qualified initial free liquid shares the inner textile cell temperature. Frozen dry thermal laws and effective Ret are explicitly qualified over the authored temperature/loading domain. Dry storage integrates the selected constant or temperature-dependent specific heat against reference mass; remaining liquid adds its own sensible capacity. Pressure and vapor sensible export sample each substep's initial temperature; dry conduction is implicit. Earliest dryout splits the step and the dry remainder uses the same heat solver. Reference area owns water; current area conducts vapor. No replenishment, condensation, sorption, wicking, absorbed moisture, wet-property inference, added mechanical mass, body-water transfer or empirical/comfort claim. Time/space refinement remains required."
             );
             if self.request.supply.is_some() {
                 result["scope"] = json!(

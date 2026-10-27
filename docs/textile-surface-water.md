@@ -10,8 +10,9 @@ vapor demand. Water remains attached to its source material triangles as the clo
 
 This is a conditional numerical model. No repository material is automatically qualified for this
 coupling. The request must cite evidence for the liquid/boundary inputs and for retaining the exact
-selected material's constant dry thermal and effective vapor resistance across the entire specified
-temperature and water-loading domain. This does not identify absorption, sorption, capillary flow,
+selected material's frozen dry thermal law and effective vapor resistance across the specified
+temperature and water-loading domain. The dry law can retain its independently characterized
+temperature dependence. This does not identify absorption, sorption, capillary flow,
 changing wet conductivity, physiology or real garment performance.
 
 ## Authored request
@@ -45,9 +46,44 @@ defaulted from fiber names, a saturation formula or a different measured conditi
 | `qualification` | Source basis for retaining locked dry thermal/Ret observations throughout the full temperature/loading domain |
 
 The selected materials still need their ordinary source-qualified dry heat capacity, areal mass,
-thermal resistance and `vapor_resistance`. This first slice accepts **constant** dry thermal properties.
-Temperature-dependent dry laws refuse explicitly. A material substitution changes its hash and requires
-new coupling qualification; the old binding cannot silently authorize a new specimen.
+thermal resistance and `vapor_resistance`. Constant properties and the canonical `thermal_response`
+conductivity/specific-heat laws are accepted. The latter retain their exact source domains and
+integrated enthalpy; a temperature-dependent material cannot fall back to a scalar average.
+A material substitution changes its hash and requires new coupling qualification; the old binding
+cannot silently authorize a new specimen.
+
+### Temperature-dependent textile storage and transport
+
+All three water versions use the existing nonlinear dry thermal authority when the selected material
+has a tabulated or polynomial temperature law. No extra conductivity or heat-capacity fit is created.
+The coupling qualification must support retaining those exact profiles over the declared liquid
+loading range; dry characterization alone does not establish wet-property invariance.
+
+For reference dry mass `md` in the inner cell and remaining liquid mass `m1`, the step's storage law is
+
+```text
+Hcombined(T1) - Hcombined(T0)
+  = md * integral(Cp_dry(T), T0..T1) + m1 * cp_liquid * (T1 - T0).
+```
+
+The source-preload inverse uses this strictly increasing combined enthalpy for either heating or
+cooling. It brackets against the applicable measured temperature endpoint and refuses an unsupported
+preload instead of extending the source law. The same implicit finite-volume solver evaluates
+conductivity at the solved cell temperatures. The liquid term appears only in the inner cell;
+every other cell retains its dry enthalpy. Dry storage in reports removes the added liquid term,
+so liquid storage, supplied/condensed enthalpy and latent exchange still reconcile separately.
+At exact dryout the remaining capacity is zero and the ordinary dry law advances the rest of the
+interval. The frozen dry material/model identity remains unchanged throughout.
+
+Variable-law liquid histories reserve the existing 129 cell-operation allowance per cell and
+thermal substep, covering the bounded enthalpy inversion. Constant-only histories keep their
+previous work accounting. A late domain, inversion or budget failure rolls back the whole accepted
+mechanical interval, including water, temperature and source counters.
+
+Material/scenario comparison reconstructs final dry storage from the same source integrals. Sampled
+temperature ranges bound each material's enthalpy inside its own qualified domain; `Cp(Tfinal)*ΔT`
+is not admitted as a substitute. This enables the existing native, portable and browser scenario
+consumers without changing the water request schemas or inventing a wet constitutive law.
 
 ### Prescribed liquid supply
 

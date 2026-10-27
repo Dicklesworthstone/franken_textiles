@@ -56,6 +56,244 @@ fn fixture(loading: f64, step: f64) -> SurfaceHistory {
     history
 }
 
+fn variable_fixture(
+    history: SurfaceHistory,
+    cells: usize,
+    conductivity: [f64; 2],
+    domain: [f64; 2],
+) -> SurfaceHistory {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../../tests/fixtures/materials/synthetic-variable-thermal.json"
+    ))
+    .unwrap();
+    let mut selected = fixture["layers"][0].clone();
+    selected["record"]["properties"]["vapor_resistance"] = json!({
+        "value":8.,"unit":"m2*Pa/W","evidence":"estimate","source":"test",
+        "method":"Synthetic fixed Ret for independent enthalpy checks"});
+    selected["record"]["thermal_response"]["conductivity"]["points"] = json!([
+        {"temperature_c":domain[0],"mean":conductivity[0]},
+        {"temperature_c":domain[1],"mean":conductivity[1]}]);
+    selected["record"]["thermal_response"]["specific_heat"]["points"] = json!([
+        {"temperature_c":domain[0],"mean":1000. + 20. * domain[0]},
+        {"temperature_c":domain[1],"mean":1000. + 20. * domain[1]}]);
+    let record = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    }
+    .resolve(&serde_json::from_value(selected).unwrap())
+    .unwrap();
+    let model = Surface::new(
+        vec![DryThermalModel::new(vec![record.clone()], vec![], cells).unwrap()],
+        3,
+        vec![Patch {
+            vertices: [0, 1, 2],
+            reference_area_m2: 0.5,
+            column: 0,
+        }],
+    )
+    .unwrap();
+    let mut policy = history.request;
+    policy.cells_per_layer = cells;
+    let water = policy.surface_water.as_mut().unwrap();
+    water.bindings.get_mut("sheet").unwrap().material_sha256 = record.sha256().into();
+    water.qualification = "Synthetic dry conductivity/Cp profiles and fixed Ret retained throughout the declared loading domain; no measured wet-property evidence".into();
+    let bound = Water::from_materials(
+        water.clone(),
+        &model,
+        &[record],
+        &["sheet".into()],
+        &[0],
+        policy.initial_temperature_c,
+    )
+    .unwrap();
+    let mut history = SurfaceHistory::new(policy, model).unwrap();
+    history.water = Some(bound);
+    history
+}
+
+#[test]
+fn variable_dry_enthalpy_and_evaporating_liquid_match_an_independent_quadratic() {
+    for area in [0.5, 1.0] {
+        let mut history = variable_fixture(fixture(0.1, 1.), 1, [0.0025; 2], [0., 60.]);
+        let before = history.model.snapshot();
+        // Cp=1000+20*T, reference mass=.1 kg. With d=T-20 the dry change is 140*d+d².
+        // At old T=20, p=4000 Pa and R=10 gives evaporation .03*current_area kg/s.
+        let evaporated = 0.03 * area;
+        let remaining = 0.05 - evaporated;
+        let latent = 10000. * evaporated;
+        let linear: f64 = 140. + remaining * 1000. + area * 2. / 1.2;
+        let delta = -2. * latent / (linear + (linear * linear - 4. * latent).sqrt());
+        advance(&mut history, area, 1.).unwrap();
+        let temperature = history.state.temperature_c()[0][0];
+        near(temperature, 20. + delta);
+        near(history.stored_j, 140. * delta + delta * delta);
+        near(history.water.as_ref().unwrap().evaporated[0], evaporated);
+        near(history.water.as_ref().unwrap().remaining[0], remaining);
+        variable_energy_balance(&history);
+        assert_eq!(history.model.snapshot(), before);
+        // Endpoint Cp*delta would double-count the quadratic term and does not pass this answer.
+        assert!((history.stored_j - 0.1 * (1000. + 20. * temperature) * delta).abs() > 0.1);
+    }
+}
+
+#[test]
+fn variable_enthalpy_condensation_and_hot_supply_share_the_same_conserved_state() {
+    let mut base = condensing_fixture(0., 1., vec![6000.], vec![40.]);
+    let supply = base
+        .request
+        .surface_water
+        .as_mut()
+        .unwrap()
+        .supply
+        .as_mut()
+        .unwrap();
+    supply.bindings.get_mut("sheet").unwrap().rate_kg_m2_s[0] = 0.01;
+    supply.bindings.get_mut("sheet").unwrap().temperature_c[0] = 30.;
+    let mut history = variable_fixture(base, 1, [0.0025; 2], [0., 60.]);
+    // .01 kg condenses and .005 kg of liquid is delivered. Latent+mixing is 100+200+50 J.
+    // Remaining liquid has 15 J/K; the exact dry enthalpy change stays 140*d+d².
+    let linear: f64 = 140. + 15. + 1. / 1.2;
+    let delta = 700. / (linear + (linear * linear + 1400.).sqrt());
+    advance(&mut history, 0.5, 1.).unwrap();
+    near(history.state.temperature_c()[0][0], 20. + delta);
+    near(history.stored_j, 140. * delta + delta * delta);
+    let water = history.water.as_ref().unwrap();
+    near(water.condensed[0], 0.01);
+    near(water.supplied[0], 0.005);
+    near(water.remaining[0], 0.015);
+    near(water.condensation_latent_j, 100.);
+    near(water.incoming_vapor_sensible_j[0], 400.);
+    near(water.supplied_sensible_j[0], 150.);
+    variable_energy_balance(&history);
+}
+
+#[test]
+fn variable_liquid_dryout_reuses_the_source_law_and_charges_bounded_inversion_work() {
+    let mut history = variable_fixture(fixture(0.015, 1.), 1, [0.0025; 2], [0., 60.]);
+    // .0075 kg dries exactly at .5 s. Solve that quadratic independently, then ask the ordinary
+    // dry authority for the remaining .5 s; no liquid capacity survives the event.
+    let linear: f64 = 140. + 0.5 / 1.2;
+    let delta = -150. / (linear + (linear * linear - 300.).sqrt());
+    let dry_state = history.model.initial(20. + delta).unwrap();
+    let expected = history
+        .model
+        .advance(
+            &dry_state,
+            &geometry(0.5),
+            0.5,
+            &[super::super::boundary(history.request.boundaries[0]).unwrap()],
+        )
+        .unwrap();
+    history.request.max_cell_steps = 258;
+    advance(&mut history, 0.5, 1.).unwrap();
+    near(
+        history.state.temperature_c()[0][0],
+        expected.state.temperature_c()[0][0],
+    );
+    assert_eq!(history.water.as_ref().unwrap().remaining, vec![0.]);
+    assert_eq!(history.water.as_ref().unwrap().dryout_events, 1);
+    assert_eq!(history.cell_steps, 258);
+    assert_eq!(history.thermal_steps, 2);
+    variable_energy_balance(&history);
+
+    let mut refused = variable_fixture(fixture(0.015, 1.), 1, [0.0025; 2], [0., 60.]);
+    refused.request.max_cell_steps = 257;
+    assert!(advance(&mut refused, 0.5, 1.).is_err());
+    assert_eq!(refused.state.temperature_c(), &[vec![20.]]);
+    assert_eq!(refused.water.as_ref().unwrap().remaining, vec![0.0075]);
+    assert_eq!(refused.cell_steps, 0);
+    assert_eq!(refused.time_s, 0.);
+}
+
+#[test]
+fn variable_liquid_source_domains_refuse_cooling_and_heating_transactionally() {
+    for (base, domain) in [
+        (fixture(0.1, 0.1), [19.5, 60.]),
+        (
+            condensing_fixture(0., 0.1, vec![6000.], vec![40.]),
+            [0., 20.5],
+        ),
+    ] {
+        let mut history = variable_fixture(base, 1, [0.0025; 2], domain);
+        let before = history
+            .water
+            .as_ref()
+            .unwrap()
+            .snapshot(history.state.temperature_c(), true, 0.)
+            .unwrap();
+        // Several source-admitted subdivisions precede the boundary crossing. The complete
+        // accepted mechanical interval must retain its original temperature and water inventory.
+        assert!(advance(&mut history, 0.5, 1.).is_err());
+        assert_eq!(history.state.temperature_c(), &[vec![20.]]);
+        assert_eq!(history.thermal_steps, 0);
+        assert_eq!(history.cell_steps, 0);
+        assert_eq!(history.time_s, 0.);
+        assert_eq!(
+            history
+                .water
+                .as_ref()
+                .unwrap()
+                .snapshot(history.state.temperature_c(), true, 0.)
+                .unwrap(),
+            before
+        );
+    }
+}
+
+#[test]
+fn temperature_dependent_transport_and_storage_remain_active_across_wet_cells() {
+    let run = |conductivity, step| {
+        let mut history = variable_fixture(fixture(0.1, step), 3, conductivity, [0., 60.]);
+        history.request.max_cell_steps = 1_000_000;
+        advance(&mut history, 0.5, 1.).unwrap();
+        variable_energy_balance(&history);
+        let dry = history.state.temperature_c()[0]
+            .iter()
+            .map(|&t| (140. * (t - 20.) + (t - 20.).powi(2)) / 3.)
+            .sum::<f64>();
+        near(history.stored_j, dry);
+        history
+    };
+    let constant = run([0.0025; 2], 0.125);
+    let variable = run([0.00125, 0.005], 0.125);
+    assert!(
+        (constant.state.temperature_c()[0][0] - variable.state.temperature_c()[0][0]).abs() > 1e-5
+    );
+    let reference = run([0.00125, 0.005], 1. / 256.).state.temperature_c()[0][0];
+    let coarse = run([0.00125, 0.005], 0.25).state.temperature_c()[0][0];
+    let fine = variable.state.temperature_c()[0][0];
+    assert!((fine - reference).abs() < 0.7 * (coarse - reference).abs());
+}
+
+fn variable_energy_balance(history: &SurfaceHistory) {
+    let water = history.water.as_ref().unwrap();
+    // The enthalpy inverse retains its numerical residual. The coupled solver's declared bound
+    // is 1e-8 times the step's absolute energy terms, accumulated over the accepted substeps.
+    // These monotone synthetic source paths have no hidden cancellation in phase/supply totals.
+    // Temperature, independent integrated storage and mass keep their separate tight checks.
+    let scale = 1.0
+        + [
+            history.stored_j,
+            history.inside_j,
+            history.outside_j,
+            water.liquid_stored_j,
+            water.exported_sensible_j,
+            water.latent_j,
+            water.condensation_latent_j,
+        ]
+        .iter()
+        .chain(&water.supplied_sensible_j)
+        .chain(&water.incoming_vapor_sensible_j)
+        .map(|value| value.abs())
+        .sum::<f64>();
+    let tolerance = 1e-8 * history.thermal_steps as f64 * scale;
+    assert!(
+        history.balance_error_j().abs() <= tolerance,
+        "variable enthalpy residual {} exceeds energy/work bound {tolerance}",
+        history.balance_error_j()
+    );
+}
+
 fn geometry(area: f64) -> [Vec3; 3] {
     [
         Vec3::ZERO,

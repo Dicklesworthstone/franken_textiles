@@ -393,12 +393,15 @@ impl SurfaceHistory {
             })
             .transpose()?;
         let count = (seconds / self.request.max_step_s).ceil();
-        let cell_cost =
-            if self.plastic.is_some() || self.relaxation.is_some() || self.bending.is_some() {
-                129
-            } else {
-                1
-            };
+        let cell_cost = if self.plastic.is_some()
+            || self.relaxation.is_some()
+            || self.bending.is_some()
+            || (self.water.is_some() && self.model.requires_enthalpy_inverse())
+        {
+            129
+        } else {
+            1
+        };
         let available =
             (self.request.max_cell_steps - self.cell_steps) / (self.model.cells() * cell_cost);
         if !count.is_finite() || count < 1. || count > available as f64 {

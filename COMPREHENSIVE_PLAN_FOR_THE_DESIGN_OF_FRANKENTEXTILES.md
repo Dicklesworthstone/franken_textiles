@@ -3932,6 +3932,34 @@ outgoing momentum, wet constitutive domains and conservative energy accounting. 
 rollback must include every coupled state. A thermal history computed after a dry mechanical
 run cannot establish this two-way behavior. See [attached-mass.md](docs/attached-mass.md).
 
+### 25.103 Temperature-dependent textile laws participate in free-water heat exchange
+
+The existing textile free-film consumer now accepts the canonical temperature-dependent dry
+conductivity and specific-heat laws in all three water versions: evaporation, prescribed supply,
+and qualified condensation/re-evaporation. The remaining liquid augments only the inner cell's
+capacity. Dry storage follows the source enthalpy integral, while liquid storage, latent exchange
+and incoming/outgoing sensible energy remain separate conserved quantities.
+
+Signed enthalpy inversion handles cooling and heating within the characterized temperature domain.
+It refuses an unsupported preload rather than extrapolating the source law. Exact dryout resumes
+the same frozen dry authority; the reference textile mass and material identity do not change.
+Bounded inversion work is charged to the existing cell-step cap, and late failures roll back the
+whole thermal/water interval. Constant-property histories retain their existing arithmetic and
+work allowance.
+
+Material/scenario decisions reconstruct dry storage with the same source integral and constrain
+sampled thermal ranges to each material's domain. A substituted temperature profile therefore
+reaches motion, evaporation/condensation and decision metrics through the ordinary material
+selection. Independent analytic quadratics, source-domain refusals, dryout, multicell transport
+and actual selected-body workflows verify the composition. Both native commands and the portable
+adapter agree on single and named-case reports; missing Ret still refuses heat without erasing
+manufacturing results. See [textile-surface-water.md](docs/textile-surface-water.md).
+
+This delivers `ftx-vc2.4`. The coupling still requires independent qualification for retaining the
+exact dry profiles over the declared liquid-loading domain. It does not infer sorption, wet-property
+changes, liquid transport between layers, added water mass in mechanical dynamics, thermoregulation
+or empirical garment warmth. Those coupled models and matched measurements remain open.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

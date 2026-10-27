@@ -1,6 +1,6 @@
 //! Decision admission for the existing textile-water producer; no second transport/heat solve.
 use super::*;
-use ftx_pattern::{material_vapor, materials::Evidence};
+use ftx_pattern::{material_thermal::ThermalLaw, material_vapor, materials::Evidence};
 
 fn fail() -> Refusal {
     invalid(
@@ -32,6 +32,34 @@ fn near(a: f64, b: f64, scale: f64) -> bool {
 fn inside(value: f64, lo: f64, hi: f64, scale: f64, steps: u64) -> bool {
     (value >= lo || accumulated_near(value, lo, scale, steps))
         && (value <= hi || accumulated_near(value, hi, scale, steps))
+}
+
+// Positive source heat capacity makes enthalpy monotone. A global temperature range bounds each
+// column only inside that column's own characterized domain; no endpoint is extrapolated.
+fn dry_heat_bounds(
+    laws: &[ThermalLaw],
+    areas: &[f64],
+    initial: f64,
+    range: [f64; 2],
+) -> Result<[f64; 2], Refusal> {
+    if range.iter().any(|t| !t.is_finite()) || range[0] > range[1] {
+        return Err(fail());
+    }
+    let mut bounds = [0.0; 2];
+    for (law, &area) in laws.iter().zip(areas) {
+        let [lo, hi] = law
+            .domain()
+            .map_or(range, |[lo, hi]| [range[0].max(lo), range[1].min(hi)]);
+        if lo > hi {
+            return Err(fail());
+        }
+        bounds[0] += area * law.sensible_change(initial, lo)?;
+        bounds[1] += area * law.sensible_change(initial, hi)?;
+    }
+    if bounds.iter().any(|v| !v.is_finite()) {
+        return Err(fail());
+    }
+    Ok(bounds)
 }
 
 fn hashed(value: &Value) -> Result<(), Refusal> {
@@ -346,11 +374,11 @@ pub(super) fn admit(
         return Err(fail());
     }
     let mut selections = Vec::with_capacity(columns.len());
-    let mut capacities = Vec::with_capacity(columns.len());
+    let mut laws = Vec::with_capacity(columns.len());
+    let mut dry_areas = vec![0.0; columns.len()];
     for (i, column) in columns.iter().enumerate() {
         let layers = array(column, "layers")?;
-        if column["schema"] != "ftx-dry-thermal-model/1"
-            || layers.len() != 1
+        if layers.len() != 1
             || column["layers"] != frame["model"]["columns"][i]["layers"]
             || column["cells_per_layer"] != heat_request["cells_per_layer"]
             || !array(column, "interface_resistance_m2_k_w")?.is_empty()
@@ -366,30 +394,33 @@ pub(super) fn admit(
             ..Selection::default()
         };
         let material = catalog.resolve(&selection)?;
-        if serde_json::to_value(&material).map_err(|_| fail())? != *retained
-            || material.material().thermal_response.is_some()
-        {
+        if serde_json::to_value(&material).map_err(|_| fail())? != *retained {
             return Err(fail());
         }
-        let c =
-            material
-                .material()
-                .require("areal_density", "kg/m2", material.allows_estimates())?
-                * material.material().require(
-                    "specific_heat",
-                    "J/(kg*K)",
-                    material.allows_estimates(),
-                )?
-                / cells as f64;
-        let r = material.thermal_resistance()? / cells as f64;
-        if !c.is_finite()
-            || c <= 0.
-            || !r.is_finite()
-            || r <= 0.
-            || column["cell_capacity_j_m2_k"] != json!(vec![c; cells])
-            || column["cell_resistance_m2_k_w"] != json!(vec![r; cells])
-        {
-            return Err(fail());
+        let law = ThermalLaw::from_material(material.material(), material.allows_estimates())?;
+        law.check_temperature(initial_temperature)?;
+        if material.material().thermal_response.is_some() {
+            if column["schema"] != "ftx-dry-thermal-model/2"
+                || column["temperature_domain_c"]
+                    != json!(law.domain().unwrap_or([-273.15, f64::MAX]))
+                || column.get("cell_capacity_j_m2_k").is_some()
+                || column.get("cell_resistance_m2_k_w").is_some()
+            {
+                return Err(fail());
+            }
+        } else {
+            let c = law.capacity_at(initial_temperature)? / cells as f64;
+            let r = material.thermal_resistance()? / cells as f64;
+            if column["schema"] != "ftx-dry-thermal-model/1"
+                || !c.is_finite()
+                || c <= 0.
+                || !r.is_finite()
+                || r <= 0.
+                || column["cell_capacity_j_m2_k"] != json!(vec![c; cells])
+                || column["cell_resistance_m2_k_w"] != json!(vec![r; cells])
+            {
+                return Err(fail());
+            }
         }
         let network = material_vapor::Request {
             schema: material_vapor::SCHEMA.into(),
@@ -414,7 +445,7 @@ pub(super) fn admit(
             return Err(fail());
         }
         selections.push(serde_json::to_value(material.frozen_selection()).map_err(|_| fail())?);
-        capacities.push(c);
+        laws.push(law);
     }
     admit_vapor_assignments(alternative, instances, owners, patches, &selections)?;
     admit_vapor_material(
@@ -429,7 +460,6 @@ pub(super) fn admit(
     let mut areas = BTreeMap::new();
     let mut liquid_storage = 0.;
     let mut dry_storage = 0.;
-    let mut dry_capacity = 0.;
     let mut final_range = [f64::INFINITY, f64::NEG_INFINITY];
     for (i, patch) in patches.iter().enumerate() {
         let instance = instances
@@ -517,6 +547,7 @@ pub(super) fn admit(
         }
         used.insert(instance);
         *areas.entry(instance).or_insert(0.) += area;
+        dry_areas[column] += area;
         dryouts += u64::from(initial > 0. && remaining == 0.);
         for (total, value) in totals.iter_mut().zip([
             initial,
@@ -553,8 +584,8 @@ pub(super) fn admit(
                 .ok_or_else(fail)?;
             final_range[0] = final_range[0].min(t);
             final_range[1] = final_range[1].max(t);
-            dry_storage += area * capacities[column] * (t - initial_temperature);
-            dry_capacity += area * capacities[column];
+            dry_storage +=
+                area * laws[column].sensible_change(initial_temperature, t)? / cells as f64;
         }
     }
     if used.len() != bindings.len()
@@ -629,6 +660,8 @@ pub(super) fn admit(
         }
     }
 
+    let dry_domain_bounds = dry_heat_bounds(&laws, &dry_areas, initial_temperature, domain)?;
+    let dry_enthalpy_span = dry_domain_bounds[1] - dry_domain_bounds[0];
     let mut previous = [totals[0], 0., 0., 0.];
     let mut previous_incoming_j = 0.;
     let mut previous_dryouts = 0;
@@ -686,8 +719,9 @@ pub(super) fn admit(
         };
         // Bound the sum of the producer's per-substep 1e-8 energy tolerances, including
         // temperature excursions that cancel in a cumulative receipt. No substep is solved here.
+        let dry_bounds = dry_heat_bounds(&laws, &dry_areas, initial_temperature, range)?;
         let energy_scale = steps as f64
-            * (1. + (dry_capacity + cp * available_mass) * (domain[1] - domain[0]))
+            * (1. + dry_enthalpy_span + cp * available_mass * (domain[1] - domain[0]))
             + 2. * enthalpy_scale(evaporated + supplied_mass + condensed)
             + cp * (supplied_mass + condensed) * (domain[1] - domain[0])
             + latent_j
@@ -805,9 +839,9 @@ pub(super) fn admit(
             )
             || !inside(
                 number(row, "stored_change_j")?,
-                dry_capacity * (range[0] - initial_temperature),
-                dry_capacity * (range[1] - initial_temperature),
-                dry_capacity * (domain[1] - domain[0]),
+                dry_bounds[0],
+                dry_bounds[1],
+                dry_enthalpy_span,
                 steps,
             )
             || w["balance_error_j"] != row["balance_error_j"]

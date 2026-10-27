@@ -16,6 +16,9 @@ pub(super) struct Variable {
     domain: [f64; 2],
     resistance_factors: Vec<f64>,
     capacity_factors: Vec<f64>,
+    // Temporary remaining free-liquid capacity per model area, belonging only to the inner cell.
+    // It does not modify the frozen dry law or reference textile mass.
+    inner_liquid_capacity: f64,
 }
 
 impl Variable {
@@ -43,6 +46,7 @@ impl Variable {
         Ok(Self {
             resistance_factors: vec![1.0; laws.len()],
             capacity_factors: vec![1.0; laws.len()],
+            inner_liquid_capacity: 0.0,
             laws,
             interfaces: interfaces.to_vec(),
             per_layer,
@@ -59,6 +63,15 @@ impl Variable {
         self.domain
     }
 
+    pub(super) fn add_inner_liquid_capacity(&mut self, capacity: f64) -> Result<(), Refusal> {
+        nonnegative("remaining liquid capacity", capacity)?;
+        self.inner_liquid_capacity = nonnegative(
+            "combined liquid capacity",
+            self.inner_liquid_capacity + capacity,
+        )?;
+        Ok(())
+    }
+
     pub(super) fn check(&self, t: f64) -> Result<(), Refusal> {
         temperature(t)?;
         if t < self.domain[0] || t > self.domain[1] {
@@ -71,18 +84,34 @@ impl Variable {
     }
 
     pub(super) fn capacity(&self, i: usize, t: f64) -> Result<f64, Refusal> {
-        positive(
+        let dry = positive(
             "cell heat capacity",
             self.laws[i / self.per_layer].capacity_at(t)? / self.per_layer as f64
                 * self.capacity_factors[i / self.per_layer],
-        )
+        )?;
+        if i != 0 || self.inner_liquid_capacity == 0.0 {
+            return Ok(dry);
+        }
+        let combined = positive("dry plus liquid capacity", dry + self.inner_liquid_capacity)?;
+        if combined <= dry {
+            return Err(invalid(
+                "liquid heat capacity is lost in floating-point addition",
+            ));
+        }
+        Ok(combined)
     }
 
     pub(super) fn heat(&self, i: usize, old: f64, new: f64) -> Result<f64, Refusal> {
-        Ok(
-            self.laws[i / self.per_layer].sensible_change(old, new)? / self.per_layer as f64
-                * self.capacity_factors[i / self.per_layer],
-        )
+        let dry = self.laws[i / self.per_layer].sensible_change(old, new)? / self.per_layer as f64
+            * self.capacity_factors[i / self.per_layer];
+        if i != 0 || self.inner_liquid_capacity == 0.0 {
+            return Ok(dry);
+        }
+        let combined = dry + self.inner_liquid_capacity * (new - old);
+        if !combined.is_finite() {
+            return Err(invalid("dry plus liquid enthalpy change overflows"));
+        }
+        Ok(combined)
     }
 
     fn conductances(&self, t: &[f64], b: Boundary) -> Result<Vec<f64>, Refusal> {

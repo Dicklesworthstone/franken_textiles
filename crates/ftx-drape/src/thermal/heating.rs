@@ -17,12 +17,11 @@ impl DryThermalModel {
         capacity: f64,
     ) -> Result<Self, Refusal> {
         nonnegative("remaining liquid capacity", capacity)?;
-        if self.variable.is_some() {
-            return Err(invalid(
-                "surface liquid currently requires constant dry thermal properties",
-            ));
-        }
         let mut model = self.clone();
+        if let Some(variable) = &mut model.variable {
+            variable.add_inner_liquid_capacity(capacity)?;
+            return Ok(model);
+        }
         model.capacity[0] = positive("dry plus liquid capacity", model.capacity[0] + capacity)?;
         if capacity > 0. && model.capacity[0] <= self.capacity[0] {
             return Err(invalid(
@@ -41,13 +40,12 @@ impl DryThermalModel {
         heat: &[f64],
     ) -> Result<(State, Option<super::exterior::ExteriorFlux>), Refusal> {
         positive("thermal time step", seconds)?;
-        if self.variable.is_some()
-            || old.len() != self.cells()
+        if old.len() != self.cells()
             || heat.len() != self.cells()
             || heat.iter().any(|v| !v.is_finite())
         {
             return Err(invalid(
-                "signed liquid heat needs constant dry properties and one finite energy per cell",
+                "signed liquid heat needs one finite energy and temperature per cell",
             ));
         }
         let heated = old
@@ -188,17 +186,20 @@ impl DryThermalModel {
             self.check_temperature(heated)?;
             return Ok(heated);
         };
-        let mut low = old;
-        let mut high = variable.domain()[1];
-        let available = self.cell_heat(cell, old, high)?;
-        if energy > available {
+        // Integrated enthalpy is strictly increasing. Cooling uses the lower measured endpoint;
+        // neither sign may extrapolate the dry law to manufacture an adiabatic source state.
+        let endpoint = variable.domain()[usize::from(energy > 0.0)];
+        let available = self.cell_heat(cell, old, endpoint)?;
+        if (energy > 0.0 && energy > available) || (energy < 0.0 && energy < available) {
             return Err(invalid(
                 "internal heat exceeds the adiabatic enthalpy available inside the characterized temperature domain",
             ));
         }
         if energy == available {
-            return Ok(high);
+            return Ok(endpoint);
         }
+        let mut low = old.min(endpoint);
+        let mut high = old.max(endpoint);
         for _ in 0..128 {
             let mid = low / 2.0 + high / 2.0;
             let received = self.cell_heat(cell, old, mid)?;

@@ -127,8 +127,18 @@ fn replay(
         assert_eq!(
             report["comparison"]["frontier"],
             json!(["qualified"]),
-            "{}",
-            report["comparison"]
+            "{}; thermal outcomes: {:?}",
+            report["comparison"],
+            report["simulations"].as_array().map(|rows| rows
+                .iter()
+                .map(|row| {
+                    let motion = &row["evaluation"]["result"]["motion"];
+                    let thermal = &motion["result"]["transient_surface"];
+                    json!({"key":row["key"],"evaluation_status":row["evaluation"]["status"],
+                    "motion_status":motion["status"],"thermal_status":thermal["status"],
+                    "thermal_refusal":thermal["refusal"]})
+                })
+                .collect::<Vec<_>>())
         );
         for row in report["manufacturing"]["alternatives"].as_array().unwrap() {
             assert_eq!(row["cutting"]["status"], "available");
@@ -178,6 +188,134 @@ fn replay(
             save(&capture.join(format!("{name}-report.json")), &report);
         }
     }
+}
+
+#[test]
+fn variable_textile_water_replays_native_portable_and_named_case_enthalpy_decisions() {
+    let (pattern, mut study, mut single) = inputs();
+    for variant in study["variants"].as_array_mut().unwrap() {
+        let record = &mut variant["changes"]["default"]["record"];
+        let properties = record["properties"].as_object_mut().unwrap();
+        properties.remove("specific_heat");
+        properties.remove("thermal_conductivity");
+        for key in ["areal_density", "thickness"] {
+            properties.get_mut(key).unwrap()["conditions"] = json!({
+                "specimen":"synthetic-scenario-sheet","conditioning":"synthetic-dry"});
+        }
+        record["thermal_response"] = json!({
+            "specimen":"synthetic-scenario-sheet","conditioning":"synthetic-dry",
+            "conductivity":{"unit":"W/(m*K)","evidence":"estimate","source":"test",
+                "method":"Synthetic k(T)=.04+.0005*T, no measured textile claim",
+                "points":[{"temperature_c":0.,"mean":0.04},{"temperature_c":60.,"mean":0.07}]},
+            "specific_heat":{"unit":"J/(kg*K)","evidence":"estimate","source":"test",
+                "method":"Synthetic Cp(T)=1000+20*T, no measured textile claim",
+                "points":[{"temperature_c":0.,"mean":1000.},{"temperature_c":60.,"mean":2200.}]}});
+    }
+    let selection: Selection =
+        serde_json::from_value(study["variants"][0]["changes"]["default"].clone()).unwrap();
+    let material = Catalog::builtin().unwrap().resolve(&selection).unwrap();
+    let triangles = ftx_drape::garment::build_garment(
+        &ftx_pattern::Pattern::from_json(&pattern).unwrap(),
+        single["options"]["spacing"].as_f64().unwrap(),
+    )
+    .unwrap()
+    .faces
+    .len();
+    let duration = single["motion"]["keyframes"][0]["time_s"].as_f64().unwrap();
+    let thermal_step = single["motion"]["transient_surface"]["max_step_s"]
+        .as_f64()
+        .unwrap();
+    let regular_steps = (duration / thermal_step).ceil() as usize
+        + single["motion"]["max_trials"].as_u64().unwrap() as usize;
+    // Two cells per retained triangle, 129 operations per variable enthalpy inverse, at most
+    // one dryout per initially wet triangle, plus regular steps split by accepted motion samples.
+    // Four named-case/variant histories must still fit the existing 20-million session allowance.
+    let work = 2 * triangles * 129 * (triangles + regular_steps);
+    assert!(
+        work <= 5_000_000,
+        "variable fixture exceeds the scenario reservation: {work}"
+    );
+    let heat = &mut single["motion"]["transient_surface"];
+    heat["cells_per_layer"] = json!(2);
+    heat["max_cell_steps"] = json!(work);
+    heat["surface_water"]["bindings"]["band"]["material_sha256"] = json!(material.sha256());
+    heat["surface_water"]["qualification"] = json!(
+        "Synthetic exact dry k(T)/Cp(T) profiles and fixed Ret retained over the declared water-loading domain; both dry laws restricted to [0,60] C"
+    );
+    replay(
+        &pattern,
+        &study,
+        single,
+        "FTX_VARIABLE_WATER_REPLAY",
+        |report| {
+            let result = &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
+            let outcome = &result["motion"]["result"]["transient_surface"];
+            assert_eq!(outcome["status"], "available", "{outcome}");
+            let heat = &outcome["result"];
+            let water = &heat["surface_water"];
+            let temperatures = heat["final"]["temperature_c"].as_array().unwrap();
+            let mut dry_enthalpy = 0.;
+            for (patch, ts) in heat["model"]["patches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(temperatures)
+            {
+                let area = patch["reference_area_m2"].as_f64().unwrap();
+                for t in ts.as_array().unwrap() {
+                    let t = t.as_f64().unwrap();
+                    // Independent integral of .2 kg/m² * Cp(T), divided between two cells.
+                    dry_enthalpy += area * 0.1 * (1000. + 10. * (t + 20.)) * (t - 20.);
+                }
+            }
+            assert!((dry_enthalpy - heat["stored_change_j"].as_f64().unwrap()).abs() < 1e-8);
+            for column in heat["model"]["columns"].as_array().unwrap() {
+                assert_eq!(column["schema"], "ftx-dry-thermal-model/2");
+                assert_eq!(column["temperature_domain_c"], json!([0., 60.]));
+                assert_eq!(column["layers"][0]["sha256"], material.sha256());
+                assert!(column.get("cell_capacity_j_m2_k").is_none());
+            }
+            assert_eq!(water["remaining_liquid_kg"], 0.);
+            let initial = water["initial_liquid_kg"].as_f64().unwrap();
+            assert!(
+                (initial - water["evaporated_liquid_kg"].as_f64().unwrap()).abs()
+                    <= 1e-12 * initial
+            );
+            for sample in heat["trace"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .chain(std::iter::once(heat))
+            {
+                let w = &sample["surface_water"];
+                let energy = sample["stored_change_j"].as_f64().unwrap()
+                    + w["liquid_stored_change_j"].as_f64().unwrap()
+                    + w["exported_vapor_sensible_energy_j"].as_f64().unwrap()
+                    + w["latent_energy_j"].as_f64().unwrap()
+                    - sample["net_boundary_energy_j"].as_f64().unwrap();
+                assert!(
+                    energy.abs() < 1e-8,
+                    "variable-film energy residual {energy}"
+                );
+            }
+            let readings = &keyed(&report["comparison"]["alternatives"], "qualified")["readings"];
+            assert_eq!(
+                readings["textile_water_evaporated_mass_kg"]["value"],
+                water["evaporated_liquid_kg"]
+            );
+            assert!(
+                readings["transient_surface_final_min_temperature_c"]["value"]
+                    .as_f64()
+                    .unwrap()
+                    < 20.
+            );
+            assert_eq!(
+                keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"]["result"]
+                    ["transient_surface"]["status"],
+                "refused"
+            );
+        },
+    );
 }
 
 #[test]

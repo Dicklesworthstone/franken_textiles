@@ -2,6 +2,10 @@
 use super::*;
 
 fn case() -> (Alternative, Value, Value, Value) {
+    case_with_variable_heat(false)
+}
+
+fn case_with_variable_heat(variable: bool) -> (Alternative, Value, Value, Value) {
     let (mut alternative, mut descriptor, mut motion) = super::super::heating_tests::case(false);
     let mut raw = serde_json::to_value(
         alternative
@@ -16,6 +20,23 @@ fn case() -> (Alternative, Value, Value, Value) {
     raw["expected_sha256"] = Value::Null;
     raw["record"]["properties"]["vapor_resistance"] = json!({"value":7.,"unit":"m2*Pa/W",
         "source":"test","evidence":"estimate","method":"Synthetic canonical Ret; no empirical claim"});
+    if variable {
+        raw["record"]["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("specific_heat");
+        for key in ["areal_density", "thermal_resistance"] {
+            raw["record"]["properties"][key]["conditions"]["specimen"] =
+                json!("synthetic-maxwell-heating-A");
+            raw["record"]["properties"][key]["conditions"]["conditioning"] =
+                json!("synthetic constant dry state");
+        }
+        raw["record"]["thermal_response"] = json!({
+            "specimen":"synthetic-maxwell-heating-A","conditioning":"synthetic constant dry state",
+            "specific_heat":{"unit":"J/(kg*K)","evidence":"estimate","source":"test",
+                "method":"Synthetic Cp(T)=1000+20*T; not measured textile data",
+                "points":[{"temperature_c":0.,"mean":1000.},{"temperature_c":60.,"mean":2200.}]}});
+    }
     let catalog = Catalog {
         schema: CATALOG_SCHEMA.into(),
         materials: vec![],
@@ -50,19 +71,18 @@ fn case() -> (Alternative, Value, Value, Value) {
     let patches = json!([{"vertices":[0,1,2],"reference_area_m2":0.001,"column":0},
         {"vertices":[3,4,5],"reference_area_m2":0.001,"column":0}]);
     let cells = 2;
-    let c = material
-        .material()
-        .require("areal_density", "kg/m2", true)
-        .unwrap()
-        * material
-            .material()
-            .require("specific_heat", "J/(kg*K)", true)
-            .unwrap()
-        / cells as f64;
+    let law = ThermalLaw::from_material(material.material(), true).unwrap();
+    let c = law.capacity_at(20.).unwrap() / cells as f64;
     let r = material.thermal_resistance().unwrap() / cells as f64;
-    let column = json!({"schema":"ftx-dry-thermal-model/1","layers":[material],
+    let column = if variable {
+        json!({"schema":"ftx-dry-thermal-model/2","layers":[material],
+            "cells_per_layer":cells,"interface_resistance_m2_k_w":[],
+            "temperature_domain_c":[0.,60.]})
+    } else {
+        json!({"schema":"ftx-dry-thermal-model/1","layers":[material],
         "cells_per_layer":cells,"interface_resistance_m2_k_w":[],
-        "cell_capacity_j_m2_k":vec![c;cells],"cell_resistance_m2_k_w":vec![r;cells]});
+        "cell_capacity_j_m2_k":vec![c;cells],"cell_resistance_m2_k_w":vec![r;cells]})
+    };
     let mut model = json!({"schema":"ftx-thermal-surface/1","vertex_count":6,
         "columns":[column],"patches":patches});
     model["sha256"] = json!(hash(&model).unwrap());
@@ -118,8 +138,16 @@ fn case() -> (Alternative, Value, Value, Value) {
     heat["model"] = model;
     heat["final"] = json!({"temperature_c":[[21.,21.],[21.,21.]]});
     heat["thermal_steps"] = json!(2);
-    heat["cell_steps"] = json!(8);
-    let storage = 2. * 0.001 * c * cells as f64;
+    heat["cell_steps"] = json!(if variable { 1032 } else { 8 });
+    if variable {
+        heat["request"]["max_cell_steps"] = json!(2000);
+    }
+    let storage = if variable {
+        // Independent integral: two .001 m² patches, .2 kg/m², Cp=1000+20*T, from 20 to 21 C.
+        2. * 0.001 * 0.2 * (1000. + 10. * (21_f64.powi(2) - 20_f64.powi(2)))
+    } else {
+        2. * 0.001 * c * cells as f64
+    };
     let net = storage + initial * 2500000. - 3.; // Maxwell heat is independently admitted.
     for row in [
         "inside_energy_j",
@@ -158,6 +186,47 @@ fn case() -> (Alternative, Value, Value, Value) {
     descriptor["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
     motion["initial_membrane_history"]["elements"][0]["law_sha256"] = json!(law);
     (alternative, descriptor, simulation, motion)
+}
+
+#[test]
+fn variable_water_histories_admit_integrated_dry_storage_not_endpoint_capacity() {
+    let (a, d, s, m) = case_with_variable_heat(true);
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+    assert!(
+        (m["transient_surface"]["result"]["stored_change_j"]
+            .as_f64()
+            .unwrap()
+            - 0.564)
+            .abs()
+            < 1e-14
+    );
+
+    for trace_only in [false, true] {
+        let mut changed = m.clone();
+        let heat = &mut changed["transient_surface"]["result"];
+        // Reconcile the forged boundary ledger too: a generic conservation check would accept
+        // endpoint Cp(21)*delta instead of the source's integrated dry enthalpy.
+        let wrong = 2. * 0.001 * 0.2 * (1000. + 20. * 21.);
+        let row = if trace_only {
+            &mut heat["trace"][0]
+        } else {
+            heat
+        };
+        let increment = wrong - row["stored_change_j"].as_f64().unwrap();
+        row["stored_change_j"] = json!(wrong);
+        row["net_boundary_energy_j"] =
+            json!(row["net_boundary_energy_j"].as_f64().unwrap() + increment);
+        row["outside_energy_j"] = json!(row["outside_energy_j"].as_f64().unwrap() - increment);
+        assert!(admit_heat(&a, &d, &s, &changed, Consumer::TransientSurface).is_err());
+    }
+}
+
+#[test]
+fn variable_water_temperature_receipts_cannot_extrapolate_a_material_law() {
+    let (a, d, s, mut m) = case_with_variable_heat(true);
+    m["transient_surface"]["result"]["final"]["temperature_c"] = json!([[61., 61.], [61., 61.]]);
+    m["transient_surface"]["result"]["trace"][0]["temperature_range_c"] = json!([61., 61.]);
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err());
 }
 
 #[test]
