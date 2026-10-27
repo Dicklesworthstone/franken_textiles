@@ -211,6 +211,22 @@ exercise this model. Source timing does not establish safe physical autonomy or 
 Tests: exhaustive and bounded `sewing_parallel`, native/portable `sewing_production_workflow`.
 Declared windows do not imply calendar reservations, shared labor, preemption or physical execution.
 
+**Shared fixture pools** (`production.parallel.shared_workholding`). Optional
+`shared_workholding_pools/1` maps qualified cell-local workholding resources to finite common
+inventories under the existing one-operator dispatch model. Exact cell locks, separate source and
+estimate consent, and the explicit feed-completion/access-in-handling release protocol are required.
+The actual search acquires units before handling, retains cross-operation holds through waiting and
+feed, and releases them at their declared release operation's feed completion. It waits for pending
+releases or rejects blocked dispatch branches. All local lifecycles and cell/operator windows remain
+enforced. Parallel `/5` retains baseline and selected global-copy reservation intervals; an independent
+sweep verifies capacities, same-time release-before-acquire ordering and zero final inventory held.
+Unbound local resources remain independent and omission preserves prior output. Ordinary selected
+stitch geometry, consumption, purchasing and study metrics use the constrained assignment. Restricted
+serial-incumbent search never proves unrestricted infeasibility merely because pooled dispatch fails.
+No physical pool access, inter-cell garment transport, factory timing or machine permission is inferred.
+Tests: capacity, spanning holds, source invalidation, windows and bounded replay in `sewing_parallel`;
+actual native/portable geometry, inventory, study and replay in `sewing_production_workflow`.
+
 **Planar sewing access** (`passes[].access`). Optional `planar_disk_sweep/1` requires an explicit
 flat assembly and an admitted source process qualification. Full machine and qualification hashes
 bind the independent tool/fixture acquisition to the current configuration and material stack.

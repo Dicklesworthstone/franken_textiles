@@ -101,6 +101,45 @@ fn shared_operator(options: &mut Value, work: usize) {
     refresh_operator_locks(options);
 }
 
+fn shared_fixtures(options: &mut Value, capacity: u32) {
+    let release = options["passes"].as_array().unwrap().last().unwrap()["id"].clone();
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        if cell["workholding"].is_null() {
+            cell["workholding"] = json!({
+                "machine_sha256":cell["handling"]["machine_sha256"],
+                "qualifications":cell["handling"]["qualifications"],
+                "resources":[{"id":"holding-jig","capacity":2}],
+                "holds":[{"id":"garment-in-jig","resource":"holding-jig","units":1,
+                    "acquire":"join","release":release}],
+                "source":{"reference":"test:local-pooled-fixture-use","accessed_on":"2026-10-27",
+                    "note":"Synthetic local fixture applicability, not physical workholding evidence"},
+                "method":"Declared local acquisition and completion boundaries for pool admission",
+                "evidence":"estimate","allow_estimates":true
+            });
+        }
+    }
+    shared_operator(options, 40000);
+    let parallel = &mut options["production"]["parallel"];
+    parallel["independence"] =
+        json!("independent_machines_shared_operator_and_workholding_pools/1");
+    parallel["shared_workholding"] = json!({
+        "model":"shared_workholding_pools/1",
+        "release_protocol":"available_at_feed_completion_with_access_in_cell_handling/1",
+        "cells":parallel["shared_operator"]["cells"],
+        "resources":[{"id":"common-jigs","capacity":capacity}],
+        "bindings":[{"cell":"cell-a","resource":"holding-jig","pool":"common-jigs"},
+            {"cell":"cell-b","resource":"holding-jig","pool":"common-jigs"}],
+        "source":{"reference":"test:finite-shared-fixtures","accessed_on":"2026-10-27",
+            "note":"Synthetic shared inventory and access timing, not measured production or fixture fit"},
+        "method":"The declared pool is available after release-operation feed; all access is covered by qualified cell handling",
+        "conditions":{"scope":"Whole garments stay in their physical cells; only explicitly bound fixture inventory is shared"},
+        "evidence":"estimate","allow_estimates":true
+    });
+}
+
 // One 40-interval, four-second operation per garment. Its attended phases are independently known:
 // first loading/setup 1100 ms, each later garment handling 5000 ms, final unloading 200 ms.
 fn one_operation(copies: usize) -> (Pattern, Value) {
@@ -1342,6 +1381,316 @@ fn shared_operator_overlaps_only_autonomous_feed_and_replays_every_attended_phas
                 .as_ref()
                 .unwrap()
                 .max_search_nodes
+    );
+}
+
+#[test]
+fn shared_fixture_capacity_controls_actual_feed_overlap_and_replays_complete_stitches() {
+    for (capacity, finish) in [(1, 10400), (2, 6400)] {
+        let (pattern, mut options) = one_operation(2);
+        shared_fixtures(&mut options, capacity);
+        let typed: SewOptions = serde_json::from_value(options).unwrap();
+        let program = SewProgram::build(&pattern, &typed).unwrap();
+        let report = program
+            .plan
+            .production
+            .as_ref()
+            .unwrap()
+            .parallel
+            .as_ref()
+            .unwrap();
+        assert_eq!(report.schema, "ftx-sewing-parallel/5");
+        assert_eq!(report.selected.makespan_milliseconds, finish);
+        assert!(report.lower_bound_makespan_milliseconds <= finish);
+        let resources = report.shared_workholding.as_ref().unwrap();
+        assert_eq!(resources.schema, "ftx-sewing-shared-workholding/1");
+        assert!(!resources.physical_pool_access_validated);
+        assert_eq!(resources.selected.holds.len(), 2);
+        assert_eq!(resources.selected.peak_occupancy["common-jigs"], capacity);
+        assert_eq!(resources.selected.final_occupancy["common-jigs"], 0);
+        assert_eq!(resources.baseline.final_occupancy["common-jigs"], 0);
+        let labor = report.shared_operator.as_ref().unwrap();
+        let mut holds: Vec<_> = resources.selected.holds.iter().collect();
+        holds.sort_by_key(|hold| hold.acquired_at_milliseconds);
+        for hold in &holds {
+            let step = labor
+                .selected
+                .steps
+                .iter()
+                .find(|step| {
+                    step.cell == hold.cell && step.operation.as_ref() == Some(&hold.acquire)
+                })
+                .unwrap();
+            assert_eq!(step.copy, Some(hold.copy));
+            assert_eq!(
+                step.handling_start_milliseconds,
+                hold.acquired_at_milliseconds
+            );
+            assert_eq!(step.feed_finish_milliseconds, hold.released_at_milliseconds);
+            assert_eq!(hold.acquire, hold.release);
+            assert_eq!(hold.units, 1);
+            assert!(hold.released_at_milliseconds > step.operator_release_milliseconds);
+        }
+        if capacity == 1 {
+            // Reuse is legal exactly at feed completion, before the first cell's final unload.
+            assert_eq!(holds[0].released_at_milliseconds, 5100);
+            assert_eq!(
+                holds[1].acquired_at_milliseconds,
+                holds[0].released_at_milliseconds
+            );
+        } else {
+            assert!(holds[1].acquired_at_milliseconds < holds[0].released_at_milliseconds);
+        }
+        assert_eq!(program.stitches.len(), 80);
+        assert_eq!(
+            program
+                .stitches
+                .iter()
+                .map(|stitch| stitch.copy.unwrap())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([0, 1])
+        );
+        assert_eq!(
+            serde_json::to_value(&program).unwrap(),
+            serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap())
+                .unwrap()
+        );
+    }
+}
+
+#[test]
+fn shared_fixtures_stay_with_a_garment_until_its_declared_release_operation_finishes() {
+    for (capacity, finish) in [(1, 19600), (2, 11000)] {
+        let (pattern, mut options) = fixture(2);
+        shared_fixtures(&mut options, capacity);
+        let plan = build(&pattern, options.clone()).unwrap();
+        let report = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+        assert_eq!(report.selected.makespan_milliseconds, finish);
+        let resources = report.shared_workholding.as_ref().unwrap();
+        let labor = report.shared_operator.as_ref().unwrap();
+        for hold in &resources.selected.holds {
+            let acquisition = labor
+                .selected
+                .steps
+                .iter()
+                .find(|step| {
+                    step.cell == hold.cell && step.operation.as_ref() == Some(&hold.acquire)
+                })
+                .unwrap();
+            let release = labor
+                .selected
+                .steps
+                .iter()
+                .find(|step| {
+                    step.cell == hold.cell && step.operation.as_ref() == Some(&hold.release)
+                })
+                .unwrap();
+            assert!(hold.acquire.ends_with("/join"));
+            assert!(hold.release.ends_with("/reinforce"));
+            assert_eq!(
+                hold.acquired_at_milliseconds,
+                acquisition.handling_start_milliseconds
+            );
+            assert_eq!(
+                hold.released_at_milliseconds,
+                release.feed_finish_milliseconds
+            );
+            assert!(hold.released_at_milliseconds > acquisition.feed_finish_milliseconds);
+        }
+        if capacity == 1 {
+            let mut holds: Vec<_> = resources.selected.holds.iter().collect();
+            holds.sort_by_key(|hold| hold.acquired_at_milliseconds);
+            assert_eq!(holds[0].released_at_milliseconds, 9700);
+            assert_eq!(holds[1].acquired_at_milliseconds, 9700);
+            // An identical local resource name does not share inventory without an explicit binding.
+            options["production"]["parallel"]["shared_workholding"]["bindings"]
+                .as_array_mut()
+                .unwrap()
+                .truncate(1);
+            let independent_b = build(&pattern, options).unwrap();
+            let report = independent_b.production.unwrap().parallel.unwrap();
+            assert_eq!(report.selected.makespan_milliseconds, 11000);
+            assert_eq!(report.shared_workholding.unwrap().selected.holds.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn shared_pool_counts_units_across_different_local_resource_names() {
+    for (capacity, finish) in [(2, 19600), (3, 11000)] {
+        let (pattern, mut options) = fixture(2);
+        let cells = options["production"]["parallel"]["cells"]
+            .as_array_mut()
+            .unwrap();
+        cells[0]["workholding"]["holds"][0]["units"] = json!(2);
+        cells[1]["workholding"]["resources"][0] = json!({"id":"other-local-jig","capacity":1});
+        cells[1]["workholding"]["holds"][0]["resource"] = json!("other-local-jig");
+        shared_fixtures(&mut options, capacity);
+        options["production"]["parallel"]["shared_workholding"]["bindings"][1]["resource"] =
+            json!("other-local-jig");
+        let plan = build(&pattern, options).unwrap();
+        let report = plan.production.unwrap().parallel.unwrap();
+        assert_eq!(report.selected.makespan_milliseconds, finish);
+        let resources = report.shared_workholding.unwrap();
+        assert_eq!(resources.selected.peak_occupancy["common-jigs"], capacity);
+        assert_eq!(resources.selected.final_occupancy["common-jigs"], 0);
+        assert_eq!(
+            resources
+                .selected
+                .holds
+                .iter()
+                .map(|hold| (hold.cell.as_str(), hold.units))
+                .collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([("cell-a", 2), ("cell-b", 1)])
+        );
+    }
+}
+
+#[test]
+fn shared_fixture_waiting_obeys_inclusive_cell_windows_and_final_unloading() {
+    for (end, accepted) in [(10400, true), (10399, false)] {
+        let (pattern, mut options) = one_operation(2);
+        for cell in options["production"]["parallel"]["cells"]
+            .as_array_mut()
+            .unwrap()
+        {
+            cell["available_until_milliseconds"] = json!(end);
+        }
+        shared_fixtures(&mut options, 1);
+        match build(&pattern, options) {
+            Ok(plan) => {
+                assert!(accepted);
+                let report = plan.production.unwrap().parallel.unwrap();
+                assert_eq!(report.selected.makespan_milliseconds, 10400);
+                assert!(report.shared_operator.unwrap().baseline_replaced);
+                assert!(
+                    report
+                        .selected
+                        .cells
+                        .iter()
+                        .all(|cell| cell.finish_milliseconds.is_some_and(|finish| finish <= end))
+                );
+            }
+            Err(refusal) => {
+                assert!(!accepted);
+                assert_eq!(refusal.code, RefusalCode::NotConverged);
+                assert!(refusal.message.contains("infeasibility is not proved"));
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_fixture_bounded_search_keeps_a_complete_resource_feasible_seed() {
+    let (pattern, mut options) = one_operation(2);
+    shared_fixtures(&mut options, 1);
+    options["production"]["parallel"]["shared_operator"]["max_search_nodes"] = json!(3);
+    let plan = build(&pattern, options).unwrap();
+    let report = plan.production.unwrap().parallel.unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 14300);
+    assert!(report.budget_exhausted);
+    assert!(!report.optimality_proven);
+    let labor = report.shared_operator.unwrap();
+    assert_eq!(labor.search_nodes, 3);
+    assert!(!labor.search_complete);
+    let resources = report.shared_workholding.unwrap();
+    assert_eq!(resources.selected.holds.len(), 2);
+    assert_eq!(resources.selected.peak_occupancy["common-jigs"], 1);
+    assert_eq!(resources.selected.final_occupancy["common-jigs"], 0);
+    assert!(
+        resources
+            .selected
+            .holds
+            .windows(2)
+            .all(|holds| holds[0].released_at_milliseconds <= holds[1].acquired_at_milliseconds)
+    );
+}
+
+#[test]
+fn shared_pool_blocked_serial_seed_is_replaced_by_a_complete_feasible_allocation() {
+    let (pattern, mut options) = fixture(2);
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        for row in cell["handling"]["transitions"].as_array_mut().unwrap() {
+            if row["relation"] == "different_copy" {
+                row["milliseconds"] = json!(0);
+            }
+        }
+    }
+    // Local inventory admits a cheaper grouped-join incumbent. That order needs two pool units
+    // simultaneously, so the one-unit pool must find and retain another complete allocation.
+    shared_fixtures(&mut options, 1);
+    let plan = build(&pattern, options).unwrap();
+    let report = plan.production.unwrap().parallel.unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 19600);
+    assert!(
+        report
+            .selected
+            .cells
+            .iter()
+            .all(|cell| cell.copies.len() == 1)
+    );
+    assert!(report.shared_operator.unwrap().baseline_replaced);
+    let resources = report.shared_workholding.unwrap();
+    assert_eq!(resources.baseline.holds.len(), 2);
+    assert_eq!(resources.baseline.peak_occupancy["common-jigs"], 1);
+    assert_eq!(resources.baseline.final_occupancy["common-jigs"], 0);
+}
+
+#[test]
+fn shared_fixture_source_policy_refuses_unlocked_or_unqualified_inventory() {
+    let (pattern, mut original) = one_operation(2);
+    shared_fixtures(&mut original, 1);
+    for (field, value) in [
+        ("allow_estimates", json!(false)),
+        ("model", json!("automatic-inventory")),
+        ("release_protocol", json!("release-at-operator-departure")),
+        ("cells", json!({})),
+        ("resources", json!([{ "id":"common-jigs", "capacity":0 }])),
+        (
+            "resources",
+            json!([{ "id":"common-jigs", "capacity":1 }, { "id":"common-jigs", "capacity":1 }]),
+        ),
+        (
+            "bindings",
+            json!([{ "cell":"cell-a", "resource":"unknown", "pool":"common-jigs" }]),
+        ),
+        (
+            "bindings",
+            json!([{ "cell":"unknown", "resource":"holding-jig", "pool":"common-jigs" }]),
+        ),
+        (
+            "bindings",
+            json!([{ "cell":"cell-a", "resource":"holding-jig", "pool":"unknown" }]),
+        ),
+        (
+            "bindings",
+            json!([{ "cell":"cell-a", "resource":"holding-jig", "pool":"common-jigs" },
+            { "cell":"cell-a", "resource":"holding-jig", "pool":"common-jigs" }]),
+        ),
+    ] {
+        let mut wrong = original.clone();
+        wrong["production"]["parallel"]["shared_workholding"][field] = value;
+        assert!(build(&pattern, wrong).is_err(), "{field}");
+    }
+    let mut wrong = original.clone();
+    wrong["production"]["parallel"]["shared_operator"] = Value::Null;
+    assert!(build(&pattern, wrong).is_err());
+    let mut wrong = original.clone();
+    wrong["production"]["parallel"]["independence"] =
+        json!("independent_machines_and_fixtures_shared_operator/1");
+    assert!(build(&pattern, wrong).is_err());
+    // Refreshing labor evidence cannot silently refresh independent fixture source qualification.
+    let mut wrong = original;
+    wrong["production"]["parallel"]["cells"][1]["available_at_milliseconds"] = json!(1);
+    refresh_operator_locks(&mut wrong);
+    assert!(
+        build(&pattern, wrong)
+            .unwrap_err()
+            .message
+            .contains("content lock mismatch")
     );
 }
 

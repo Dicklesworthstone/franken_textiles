@@ -7,7 +7,9 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_pattern::materials::{Evidence, Source};
 use serde::{Deserialize, Serialize};
 
-use super::{Assignment, Cell, MAX_EXACT_MILLISECONDS, MAX_WORK, Trial, budget, sum_time};
+use super::{
+    Assignment, Cell, MAX_EXACT_MILLISECONDS, MAX_WORK, Trial, budget, shared_workholding, sum_time,
+};
 use crate::sewing::{SewOptions, SewPlan, bad, ordering::Setup, qualified_text, sha256_text};
 
 /// A separately qualified one-person operating protocol. Every operation is handled, set up and
@@ -241,6 +243,7 @@ pub(super) struct Phase {
     handling: u64,
     setup: u64,
     feed: u64,
+    shared_workholding: Option<Box<shared_workholding::Phase>>,
 }
 
 impl Phase {
@@ -257,7 +260,12 @@ pub(super) fn phases(
     cell: &Cell,
     schedule: &super::super::Report,
     total_feed: u64,
+    shared_workholding: Option<&shared_workholding::Policy>,
 ) -> Result<Vec<Phase>, Refusal> {
+    let mut resource_phases = shared_workholding
+        .map(|policy| policy.phases(cell, schedule))
+        .transpose()?
+        .map(Vec::into_iter);
     let times = cell
         .ordering
         .setup_times
@@ -307,6 +315,10 @@ pub(super) fn phases(
             handling: handling.steps[position].milliseconds,
             setup: duration,
             feed,
+            shared_workholding: resource_phases
+                .as_mut()
+                .and_then(Iterator::next)
+                .map(Box::new),
         });
         scheduled_feed = sum_time(scheduled_feed, feed)?;
         previous = setup;
@@ -321,6 +333,10 @@ pub(super) fn phases(
         handling: handling.steps.last().expect("final unloading").milliseconds,
         setup: 0,
         feed: 0,
+        shared_workholding: resource_phases
+            .as_mut()
+            .and_then(Iterator::next)
+            .map(Box::new),
     });
     Ok(result)
 }
@@ -411,6 +427,7 @@ struct Search<'a> {
     exhausted: bool,
     best: Option<Candidate>,
     lower: u64,
+    shared_workholding: Option<&'a shared_workholding::Policy>,
 }
 
 impl Search<'_> {
@@ -445,7 +462,24 @@ impl Search<'_> {
             .previous
             .map_or(self.arrivals[cell], |from| self.transfers[from][cell]);
         let arrival = sum_time(state.free, travel)?;
-        let start = arrival.max(state.ready[cell]);
+        let mut start = arrival.max(state.ready[cell]);
+        if let Some(policy) = self.shared_workholding {
+            let Some(available) = policy.earliest_start(
+                state
+                    .shared_workholding
+                    .as_ref()
+                    .expect("shared pool state"),
+                phase
+                    .shared_workholding
+                    .as_ref()
+                    .expect("shared pool phase"),
+                start,
+            )?
+            else {
+                return Ok(None);
+            };
+            start = available;
+        }
         let release = sum_time(start, phase.attended()?)?;
         let finish = sum_time(release, phase.feed)?;
         if self
@@ -481,7 +515,30 @@ impl Search<'_> {
             previous: None,
             free: u64::from(self.policy.available_at_milliseconds),
             steps: Vec::new(),
+            shared_workholding: self
+                .shared_workholding
+                .map(|_| shared_workholding::State::default()),
         }
+    }
+
+    fn push(&self, state: &mut State, counts: &[usize], dispatch: Dispatch) -> Result<(), Refusal> {
+        if let Some(policy) = self.shared_workholding {
+            let phase = self.phase(counts, dispatch.cell, dispatch.phase);
+            policy.acquire(
+                state
+                    .shared_workholding
+                    .as_mut()
+                    .expect("shared pool state"),
+                phase
+                    .shared_workholding
+                    .as_ref()
+                    .expect("shared pool phase"),
+                dispatch.start,
+                dispatch.finish,
+            )?;
+        }
+        state.push(dispatch);
+        Ok(())
     }
 
     fn next_cells(&self, state: &State, counts: &[usize]) -> Vec<usize> {
@@ -503,18 +560,22 @@ impl Search<'_> {
         choices
     }
 
-    fn candidate(&self, state: &State, counts: &[usize]) -> Candidate {
+    fn candidate(&self, state: &State, counts: &[usize]) -> Result<Candidate, Refusal> {
         let finishes: Vec<_> = counts
             .iter()
             .enumerate()
             .map(|(cell, &count)| (count > 0).then_some(state.ready[cell]))
             .collect();
-        Candidate {
+        let makespan = finishes.iter().flatten().copied().max().unwrap_or(0);
+        if let Some(workholding) = &state.shared_workholding {
+            workholding.complete(makespan)?;
+        }
+        Ok(Candidate {
             counts: counts.to_vec(),
-            makespan: finishes.iter().flatten().copied().max().unwrap_or(0),
+            makespan,
             finishes,
             steps: state.steps.clone(),
-        }
+        })
     }
 
     fn retain(&mut self, candidate: Candidate) {
@@ -531,7 +592,7 @@ impl Search<'_> {
         let mut state = self.initial();
         loop {
             let Some(cell) = self.next_cells(&state, counts).first().copied() else {
-                let candidate = self.candidate(&state, counts);
+                let candidate = self.candidate(&state, counts)?;
                 self.retain(candidate.clone());
                 return Ok(Some(candidate));
             };
@@ -541,7 +602,7 @@ impl Search<'_> {
             let Some(dispatch) = self.dispatch(&state, counts, cell)? else {
                 return Ok(None);
             };
-            state.push(dispatch);
+            self.push(&mut state, counts, dispatch)?;
         }
     }
 
@@ -593,7 +654,7 @@ impl Search<'_> {
         }
         let choices = self.next_cells(state, counts);
         if choices.is_empty() {
-            self.retain(self.candidate(state, counts));
+            self.retain(self.candidate(state, counts)?);
             return Ok(());
         }
         for cell in choices {
@@ -606,13 +667,15 @@ impl Search<'_> {
             let old_ready = state.ready[cell];
             let old_free = state.free;
             let old_previous = state.previous;
-            state.push(dispatch);
+            let old_workholding = state.shared_workholding.clone();
+            self.push(state, counts, dispatch)?;
             self.interleave(state, counts)?;
             state.steps.pop();
             state.positions[cell] -= 1;
             state.ready[cell] = old_ready;
             state.free = old_free;
             state.previous = old_previous;
+            state.shared_workholding = old_workholding;
             if self.exhausted || self.proved() {
                 break;
             }
@@ -674,6 +737,7 @@ struct State {
     previous: Option<usize>,
     free: u64,
     steps: Vec<Dispatch>,
+    shared_workholding: Option<shared_workholding::State>,
 }
 
 impl State {
@@ -693,6 +757,7 @@ pub(super) fn evaluate(
     copies: usize,
     independent_counts: &[usize],
     independent_lower: u64,
+    shared_workholding: Option<&shared_workholding::Policy>,
 ) -> Result<Outcome, Refusal> {
     let (attended, bound_work) = attended_bound(cells, trials, copies);
     if attended == u64::MAX {
@@ -742,6 +807,7 @@ pub(super) fn evaluate(
         exhausted: false,
         best: None,
         lower,
+        shared_workholding,
     };
     let mut baseline_counts = vec![0; cells.len()];
     baseline_counts[0] = copies;

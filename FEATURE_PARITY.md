@@ -16,6 +16,7 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
 | `fabric-pattern/1` document read/write round trip | 01 §2 | present | oracle `pattern/drafts` (9 drafted garments, semantic equality) |
+| Evaluated GarmentCode import (native extension) | plan §6; `ftx-pattern` CONTRACT | partial | `garmentcode_import.rs`: core regressions cover relative quadratic/cubic controls, winding/stitch correspondence, expanded physical panels, invalid geometry/references, explicit seam intent and exact input hashes. Independent `tests/fixtures/import/synthetic-sleeve.*` supplies known 100 mm cuffs and 200 mm sides for native validation. CLI `ftx import garmentcode` and the file-free `ftx-wasm` API share this converter; every result remains `REVIEW_REQUIRED`. Parameter evaluation, circular arcs and a browser import form are outside this subset; conversion makes no physical-fit claim |
 | `fabric-fit/1` document | 01 §3 | present | read with the reference's dictionary semantics by validation; oracle `validate/validation` |
 | Curve geometry (chord-relative cubic/quadratic, sampling counts) | 01 §4 | present | oracle `pattern/geometry` (abs_to_rel, rel_to_abs, curve_points, mirror/reverse_curve); F1–F3 |
 | Numeric helpers (lengths, fractions, tangents, areas, widths) | 01 §5 | present | oracle `pattern/geometry` (polyline_length, cumulative, at_fractions, tangent_at, signed_area, horizontal_width, point_in_polygon); F4–F6 |

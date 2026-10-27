@@ -264,11 +264,42 @@ ftx body --measurements M.json --out DIR                       # fit Anny to tap
 ftx measure fit-body OBS.json --model MODEL.ftxbody --out accepted-fit.json  # prepared multi-frame observations
 ftx drape P.json --measurements M.json --fit F.json --out DIR  # the cloth solver on its own
 ftx export all P.json --out DIR                                # all files + 51 acceptance checks
+ftx import garmentcode G.json --out NEW_DIR --annotations A.json # evaluated panels + optional sewing annotations
 ftx trace sheet.png --out DIR                                  # trace a PNG/JPEG/WebP pattern sheet
 ```
 
 Every command prints human text and, with `--json`, a stable JSON envelope. The agent skill calls `ftx`
 subsystem by subsystem as each reaches parity.
+
+### Import an evaluated GarmentCode pattern
+
+`ftx import garmentcode INPUT.json --out NEW_DIR` converts evaluated panels and stitches into
+`pattern.json`, with an `import.json` report and the original `source.garmentcode.json` bytes.
+`--annotations A.json` supplies construction information using `fabric-garmentcode-annotations/1`;
+the original annotations are retained, and an included fit contract is written to `fit_spec.json`.
+The destination must be new. Successful conversion exits 0 and always reports `REVIEW_REQUIRED`.
+
+The importer preserves line, quadratic and cubic geometry, converts declared units to millimetres,
+and keeps every expanded panel as one physical piece. Optional annotations supply grain, seam
+allowances, notches, roles, placement and explicit seam ratios; they cannot turn an already expanded
+panel into a mirror pair or an on-fold piece. Review the missing-information report before ordinary
+flat validation, draping and export checks. Conversion does not establish fit or recover pieces omitted
+from a simulation shell. See the [pattern contract](crates/ftx-pattern/CONTRACT.md)
+for the supported subset, annotation coordinates and refusal boundaries.
+
+In the [materials workbench](web/materials.html), section 2 accepts an evaluated GarmentCode file
+and optional annotations, each at most 4 MiB. Choose **Convert & review imported pattern**, inspect the source mapping,
+missing construction information and `REVIEW_REQUIRED` report, then choose **Use imported pattern**
+to make that geometry the original pattern for material binding and manufacturing. Conversion alone
+does not replace the current pattern. The exact original inputs, converted native pattern and import
+report remain downloadable. If annotations supply a fit contract, download it and select it under
+**Fit specification** before using consumers that require one; it does not establish measurement
+readiness or physical fit.
+
+The browser uses the same portable importer and Rust-generated JSON strings as the CLI. It preserves
+numeric details in downloads and downstream pattern input. Editing either import file withdraws its
+old review and, after adoption, that imported pattern and its dependent results. All conversion stays
+local to the browser; no pattern or annotation file is uploaded.
 
 ---
 

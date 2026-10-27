@@ -19,6 +19,72 @@ pub mod web;
 pub mod web_tracing;
 pub mod zip;
 
+/// Import evaluated GarmentCode JSON without files or network access. Returns the native pattern
+/// and review report, including hashes of the exact input texts. The additional `pattern_json`,
+/// `report_json` and optional `fit_spec_json` strings match native artifact bytes, preserving Rust's
+/// floating-point serialization without a JavaScript rewrite. Annotations are optional native
+/// manufacturing semantics; conversion never certifies garment completeness or physical fit.
+///
+/// # Errors
+/// Unsupported or invalid geometry, annotations, units, or the shared input/work budgets.
+pub fn import_garmentcode(
+    input: &str,
+    annotations: Option<&str>,
+) -> Result<String, ftx_core::Refusal> {
+    let imported = ftx_pattern::garmentcode_import::import_garmentcode_json(input, annotations)?;
+    let native_json = |value: &serde_json::Value| -> Result<String, ftx_core::Refusal> {
+        let mut text = serde_json::to_string_pretty(value).map_err(|e| {
+            ftx_core::Refusal::new(ftx_core::RefusalCode::InvalidDocument, e.to_string())
+        })?;
+        text.push('\n');
+        Ok(text)
+    };
+    #[derive(serde::Serialize)]
+    struct Download<'a> {
+        pattern: &'a serde_json::Value,
+        report: &'a serde_json::Value,
+        pattern_json: String,
+        report_json: String,
+        fit_spec_json: Option<String>,
+    }
+    let download = Download {
+        pattern: &imported.pattern,
+        report: &imported.report,
+        pattern_json: native_json(&imported.pattern)?,
+        report_json: native_json(&imported.report)?,
+        fit_spec_json: imported
+            .report
+            .get("fit_spec")
+            .filter(|value| !value.is_null())
+            .map(native_json)
+            .transpose()?,
+    };
+    let text = serde_json::to_string(&download).map_err(|e| {
+        ftx_core::Refusal::new(ftx_core::RefusalCode::InvalidDocument, e.to_string())
+    })?;
+    if text.len() > 16 * 1024 * 1024 {
+        return Err(ftx_core::Refusal::new(
+            ftx_core::RefusalCode::BudgetExceeded,
+            "GarmentCode import output exceeds 16 MiB",
+        ));
+    }
+    Ok(text)
+}
+
+/// Browser binding for the same bounded GarmentCode conversion used by the CLI.
+///
+/// # Errors
+/// The same refusals as [`import_garmentcode`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = import_garmentcode)]
+pub fn web_import_garmentcode(
+    input: &str,
+    annotations: Option<String>,
+) -> Result<String, wasm_bindgen::JsError> {
+    import_garmentcode(input, annotations.as_deref())
+        .map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Select a complete source-qualified sewing recipe using the same bounded native planner.
 /// Returns the report and lossless selected options text; never authorizes machine execution.
 ///

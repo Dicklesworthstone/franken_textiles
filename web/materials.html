@@ -175,6 +175,21 @@ wrinkling, grip slip, bending, rate dependence or hysteresis.</p>
 </section>
 <section><h2>2. Bind the same pattern</h2>
 <label>Original pattern or joint outfit JSON <input id="patternFile" type="file" accept=".json,application/json"></label>
+<details><summary>Import evaluated GarmentCode panels and stitches</summary>
+<label>Evaluated GarmentCode JSON <input id="garmentcodeSource" type="file" accept=".json,application/json"></label>
+<label>Optional construction annotations (<code>fabric-garmentcode-annotations/1</code>)
+<input id="garmentcodeAnnotations" type="file" accept=".json,application/json"></label>
+<button id="clearGarmentcodeAnnotations" type="button" disabled>Clear annotations</button>
+<button id="garmentcode" data-command="garmentcode" disabled>Convert &amp; review imported pattern</button>
+<button id="useGarmentcode" type="button" disabled>Use imported pattern</button>
+<p class="note">Supply UTF-8 JSON; each input is limited to 4 MiB. This imports already evaluated panels and stitches, not a design program or a garment mesh.
+Review the missing construction information, source mapping and limitations below before choosing Use imported pattern.
+Every imported panel remains one physical piece. Conversion stays <code>REVIEW_REQUIRED</code>; it does not establish fit,
+recover omitted garment components, or supply missing material properties.</p>
+<p class="note">Download the original inputs, converted pattern and import report. If annotations include a fit specification,
+download it and choose it under Fit, exports and mechanical drape. After adopting the pattern, assign materials and freeze selections
+to use the existing consumers. Changing an import input withdraws its review and any adopted imported pattern.</p>
+</details>
 <p class="note">A <code>ftx-outfit-drape/1</code> request composes independently authored garments for one contact solve.
 The original request and source correspondence remain downloadable; the exact composed pattern drives assignments and every consumer below.
 Choose a whole garment, every outfit piece, or an individual piece for substitution. Garment-prefixed piece names keep independent seams and accessory attachments separate. Joint drapes require cloth self-contact;

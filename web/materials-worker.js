@@ -135,6 +135,34 @@ self.onmessage = async ({ data: msg }) => {
     }
     let result, files = [], viewer = null, picture = null, raw, reportText = null;
     switch (msg.type) {
+      case "garmentcode": {
+        if (typeof ftx.import_garmentcode !== "function") throw Error("Rebuild web/pkg: missing GarmentCode import engine.");
+        if (typeof msg.source !== "string" || (msg.annotations !== undefined && typeof msg.annotations !== "string")) {
+          throw Error("GarmentCode import needs original source and optional annotation text.");
+        }
+        for (const input of [msg.source, msg.annotations]) {
+          if (input !== undefined && new TextEncoder().encode(input).byteLength > 4 * 1024 * 1024) throw Error("Each GarmentCode input is limited to 4 MiB.");
+        }
+        raw = ftx.import_garmentcode(msg.source, msg.annotations); result = json(raw);
+        if (typeof result.pattern_json !== "string" || typeof result.report_json !== "string" ||
+            result.report?.schema !== "ftx-garmentcode-import/1" || result.report.status !== "REVIEW_REQUIRED" ||
+            result.pattern?.schema !== "fabric-pattern/1") throw Error("Rebuild web/pkg: incomplete source-preserving GarmentCode import result.");
+        const pattern = json(result.pattern_json), report = json(result.report_json);
+        if (pattern.schema !== "fabric-pattern/1" || report.schema !== "ftx-garmentcode-import/1" ||
+            report.status !== "REVIEW_REQUIRED" || pattern.meta?.import?.status !== "REVIEW_REQUIRED" ||
+            pattern.meta.import.source_sha256 !== report.source_sha256 ||
+            pattern.meta.import.annotations_sha256 !== report.annotations_sha256) throw Error("GarmentCode pattern and review source identities disagree.");
+        if (report.fit_spec != null && typeof result.fit_spec_json !== "string") throw Error("Rebuild web/pkg: missing exact imported fit specification.");
+        if (typeof result.fit_spec_json === "string" && (report.fit_spec == null || json(result.fit_spec_json).schema !== "fabric-fit/1")) {
+          throw Error("GarmentCode import returned an inconsistent fit specification.");
+        }
+        result.pattern = pattern; result.report = report;
+        files = [file("garmentcode-source.json", msg.source), file("garmentcode-pattern.json", result.pattern_json),
+          file("garmentcode-import.json", result.report_json)];
+        if (msg.annotations !== undefined) files.push(file("garmentcode-annotations.json", msg.annotations));
+        if (typeof result.fit_spec_json === "string") files.push(file("garmentcode-fit-spec.json", result.fit_spec_json));
+        break;
+      }
       case "outfit": {
         if (typeof ftx.material_outfit_prepare !== "function") throw Error("Rebuild web/pkg: missing joint outfit preparation.");
         raw = ftx.material_outfit_prepare(msg.outfitRequest); result = json(raw);

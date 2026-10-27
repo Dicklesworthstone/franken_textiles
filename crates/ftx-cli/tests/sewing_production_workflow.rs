@@ -60,50 +60,61 @@ fn portable(text: String) -> Value {
     serde_json::from_str(&text).unwrap()
 }
 
+fn refresh_shared_cell_locks(options: &mut Value) {
+    let typed: ftx_export::sewing::SewOptions = serde_json::from_value(options.clone()).unwrap();
+    let locks: std::collections::BTreeMap<_, _> = typed
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap()
+        .cells
+        .iter()
+        .map(|cell| {
+            (
+                cell.id.clone(),
+                ftx_export::sewing::production::parallel::operator::cell_sha256(cell, &typed)
+                    .unwrap(),
+            )
+        })
+        .collect();
+    options["production"]["parallel"]["shared_operator"]["cells"] = json!(locks);
+    if options["production"]["parallel"]["shared_workholding"].is_object() {
+        options["production"]["parallel"]["shared_workholding"]["cells"] = json!(locks);
+    }
+}
+
+fn shared_operator_options(windowed: bool) -> Value {
+    let mut options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
+    let parallel = &mut options["production"]["parallel"];
+    parallel["time_basis"] = json!("ceil_operation_feed_milliseconds/1");
+    parallel["independence"] = json!("independent_machines_and_fixtures_shared_operator/1");
+    parallel["max_search_nodes"] = json!(60000);
+    if windowed {
+        parallel["cells"][0]["available_until_milliseconds"] = json!(9899);
+        parallel["cells"][1]["available_until_milliseconds"] = json!(11104);
+    }
+    parallel["shared_operator"] = json!({
+        "model":"exclusive_setup_handling_autonomous_feed/1","operator":"synthetic-worker",
+        "available_at_milliseconds":0,"available_until_milliseconds":if windowed {11104} else {50000},
+        "cells":{},"initial_arrival_milliseconds":{"cell-a":0,"cell-b":0},
+        "transfers":[{"from":"cell-a","to":"cell-b","milliseconds":0},
+            {"from":"cell-b","to":"cell-a","milliseconds":0}],"max_search_nodes":40000,
+        "source":{"reference":"test:portable-shared-operator","accessed_on":"2026-10-27",
+            "note":"Invented one-worker protocol, zero travel and unattended feed; no measured machine claim"},
+        "method":"Nonpreemptive travel, handling and setup followed by qualified unattended feed; safe waiting explicitly assumed",
+        "evidence":"estimate","allow_estimates":true
+    });
+    refresh_shared_cell_locks(&mut options);
+    options
+}
+
 #[test]
 fn shared_operator_replays_actual_heterogeneous_geometry_inventory_and_bound_material_study() {
     for windowed in [false, true] {
         let directory = workspace();
-        let mut options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
-        let parallel = &mut options["production"]["parallel"];
-        parallel["time_basis"] = json!("ceil_operation_feed_milliseconds/1");
-        parallel["independence"] = json!("independent_machines_and_fixtures_shared_operator/1");
-        parallel["max_search_nodes"] = json!(60000);
-        if windowed {
-            parallel["cells"][0]["available_until_milliseconds"] = json!(9899);
-            parallel["cells"][1]["available_until_milliseconds"] = json!(11104);
-        }
-        parallel["shared_operator"] = json!({
-            "model":"exclusive_setup_handling_autonomous_feed/1","operator":"synthetic-worker",
-            "available_at_milliseconds":0,"available_until_milliseconds":if windowed {11104} else {50000},
-            "cells":{},"initial_arrival_milliseconds":{"cell-a":0,"cell-b":0},
-            "transfers":[{"from":"cell-a","to":"cell-b","milliseconds":0},
-                {"from":"cell-b","to":"cell-a","milliseconds":0}],"max_search_nodes":40000,
-            "source":{"reference":"test:portable-shared-operator","accessed_on":"2026-10-27",
-                "note":"Invented one-worker protocol, zero travel and unattended feed; no measured machine claim"},
-            "method":"Nonpreemptive travel, handling and setup followed by qualified unattended feed; safe waiting explicitly assumed",
-            "evidence":"estimate","allow_estimates":true
-        });
-        let typed: ftx_export::sewing::SewOptions =
-            serde_json::from_value(options.clone()).unwrap();
-        let locks: std::collections::BTreeMap<_, _> = typed
-            .production
-            .as_ref()
-            .unwrap()
-            .parallel
-            .as_ref()
-            .unwrap()
-            .cells
-            .iter()
-            .map(|cell| {
-                (
-                    cell.id.clone(),
-                    ftx_export::sewing::production::parallel::operator::cell_sha256(cell, &typed)
-                        .unwrap(),
-                )
-            })
-            .collect();
-        options["production"]["parallel"]["shared_operator"]["cells"] = json!(locks);
+        let options = shared_operator_options(windowed);
         let text = options.to_string();
         let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &text).unwrap());
         let plan = &program["plan"];
@@ -215,6 +226,242 @@ fn shared_operator_replays_actual_heterogeneous_geometry_inventory_and_bound_mat
                 .is_empty()
         );
     }
+}
+
+#[test]
+fn shared_fixture_pools_change_actual_cell_geometry_and_replay_through_both_commands() {
+    let directory = workspace();
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    for (capacity, milliseconds, intervals, yarn_m) in [(1, 11104, 120, 2.4), (2, 9900, 160, 3.0)] {
+        let mut options = shared_operator_options(false);
+        let parallel = &mut options["production"]["parallel"];
+        parallel["independence"] =
+            json!("independent_machines_shared_operator_and_workholding_pools/1");
+        parallel["source"]["note"] = json!(
+            "Synthetic independent machines with one shared worker and the explicitly mapped jig pool"
+        );
+        parallel["method"] = json!(
+            "Synthetic whole-garment cells sharing the declared operator and pooled reusable fixtures"
+        );
+        parallel["conditions"] =
+            json!({"sharing":"Only the declared jig units and operator are shared"});
+        for cell in parallel["cells"].as_array_mut().unwrap() {
+            cell["workholding"]["resources"][0]["capacity"] = json!(1);
+            cell["workholding"]["source"]["note"] = json!(
+                "Synthetic local concurrent-hold limit; units come from the explicitly shared pool"
+            );
+            cell["handling"]["method"] = json!(
+                "Synthetic source includes local pool access and return in existing handling; a jig is available when the release feed completes"
+            );
+            cell["handling"]["source"]["note"] = json!(
+                "Synthetic phase durations attended by the common operator, including declared pool movement"
+            );
+            cell["ordering"]["setup_times"]["method"] = json!(
+                "Synthetic complete needle/thread changes attended by the common operator, excluding feed and handling"
+            );
+        }
+        parallel["shared_workholding"] = json!({
+            "model":"shared_workholding_pools/1",
+            "release_protocol":"available_at_feed_completion_with_access_in_cell_handling/1",
+            "cells":{},"resources":[{"id":"shared-jigs","capacity":capacity}],
+            "bindings":[{"cell":"cell-a","resource":"jigs-a","pool":"shared-jigs"},
+                {"cell":"cell-b","resource":"jigs-b","pool":"shared-jigs"}],
+            "source":{"reference":"test:native-shared-fixture-pool","accessed_on":"2026-10-27",
+                "note":"Invented common fixture inventory; no measured handling or hardware qualification"},
+            "method":"Continuous shared occupancy from initial handling until reinforcement feed completion; pool access and return included in each cell handling source",
+            "evidence":"estimate","allow_estimates":true
+        });
+        refresh_shared_cell_locks(&mut options);
+        let text = options.to_string();
+        let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &text).unwrap());
+        let plan = &program["plan"];
+        let parallel = &plan["production"]["parallel"];
+        // Cell B's six feeds each ceil to 1334 ms. One jig makes its three complete
+        // garments preferable to the A/B split; two jigs admit A's 9900 ms completion.
+        assert_eq!(parallel["selected"]["makespan_milliseconds"], milliseconds);
+        assert_eq!(program["stitches"].as_array().unwrap().len(), intervals);
+        assert!(
+            (plan["consumables"]["total_required_length_m"]
+                .as_f64()
+                .unwrap()
+                - yarn_m)
+                .abs()
+                < 1e-12
+        );
+        assert_eq!(
+            parallel["selected"]["cells"][0]["copies"],
+            if capacity == 1 { json!([]) } else { json!([0]) }
+        );
+        assert_eq!(
+            parallel["selected"]["cells"][1]["copies"],
+            if capacity == 1 {
+                json!([0, 1, 2])
+            } else {
+                json!([1, 2])
+            }
+        );
+        let pools = &parallel["shared_workholding"];
+        assert_eq!(pools["schema"], "ftx-sewing-shared-workholding/1");
+        assert_eq!(pools["resources"][0]["capacity"], capacity);
+        assert_eq!(pools["selected"]["peak_occupancy"]["shared-jigs"], capacity);
+        assert_eq!(pools["selected"]["final_occupancy"]["shared-jigs"], 0);
+        assert_eq!(pools["physical_pool_access_validated"], false);
+        let holds = pools["selected"]["holds"].as_array().unwrap();
+        let phases = parallel["shared_operator"]["selected"]["steps"]
+            .as_array()
+            .unwrap();
+        assert_eq!(holds.len(), 3);
+        let mut events = Vec::new();
+        let mut copies = std::collections::BTreeSet::new();
+        for hold in holds {
+            assert!(copies.insert(hold["copy"].as_u64().unwrap()));
+            assert_eq!(hold["pool"], "shared-jigs");
+            assert_eq!(hold["units"], 1);
+            let acquire = phases
+                .iter()
+                .find(|phase| {
+                    phase["cell"] == hold["cell"] && phase["operation"] == hold["acquire"]
+                })
+                .unwrap();
+            let release = phases
+                .iter()
+                .find(|phase| {
+                    phase["cell"] == hold["cell"] && phase["operation"] == hold["release"]
+                })
+                .unwrap();
+            assert_eq!(acquire["copy"], hold["copy"]);
+            assert_eq!(release["copy"], hold["copy"]);
+            assert_eq!(
+                hold["acquired_at_milliseconds"],
+                acquire["handling_start_milliseconds"]
+            );
+            assert_eq!(
+                hold["released_at_milliseconds"],
+                release["feed_finish_milliseconds"]
+            );
+            events.push((hold["acquired_at_milliseconds"].as_u64().unwrap(), 1));
+            events.push((hold["released_at_milliseconds"].as_u64().unwrap(), -1));
+        }
+        assert_eq!(copies, std::collections::BTreeSet::from([0, 1, 2]));
+        // Independent interval sweep: completion releases precede equal-time acquisitions.
+        events.sort_unstable();
+        let mut occupied = 0;
+        for (_, change) in events {
+            occupied += change;
+            assert!((0..=capacity).contains(&occupied));
+        }
+        assert_eq!(occupied, 0);
+        assert_eq!(plan["hardware_execution_authorized"], false);
+        let replay = plan["options"].to_string();
+        assert_eq!(
+            portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &replay).unwrap()),
+            *plan
+        );
+        assert_eq!(
+            portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &replay).unwrap()),
+            program
+        );
+
+        let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+        let study = json!({"schema":"ftx-material-study/1",
+            "variants":[{"key":"pooled-fixtures","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern["fabric"]["material"]}}],"sewing":options,
+            "comparison":{"basis":"nominal","required_consumers":["sewing","sewing_consumables","sewing_purchasing"],
+                "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"}]}});
+        let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+        let row = &report["alternatives"][0];
+        let bound = row["binding"]["result"]["pattern_json"].as_str().unwrap();
+        let rebound = portable(ftx_wasm::manufacturing::sew_plan(bound, &text).unwrap());
+        assert_eq!(row["sewing"]["result"], rebound);
+        assert_eq!(
+            rebound["production"]["parallel"]["shared_workholding"],
+            *pools
+        );
+        assert_eq!(
+            row["metrics"]["sewing_parallel_makespan_seconds"],
+            f64::from(milliseconds) / 1000.0
+        );
+        assert_eq!(report["comparison"]["frontier"], json!(["pooled-fixtures"]));
+        let filename = format!("shared-fixtures-{capacity}.json");
+        let study_filename = format!("shared-fixture-study-{capacity}.json");
+        let replay_filename = format!("shared-fixture-replay-{capacity}.json");
+        fs::write(directory.join(&filename), &text).unwrap();
+        fs::write(directory.join(&study_filename), study.to_string()).unwrap();
+        fs::write(directory.join(&replay_filename), &replay).unwrap();
+        for main in [false, true] {
+            assert_eq!(
+                run(main, &directory, "sew-plan", "pattern.json", &filename),
+                *plan
+            );
+            assert_eq!(
+                run(main, &directory, "sew-stitches", "pattern.json", &filename),
+                program
+            );
+            assert_eq!(
+                run(
+                    main,
+                    &directory,
+                    "sew-stitches",
+                    "pattern.json",
+                    &replay_filename
+                ),
+                program
+            );
+            assert_eq!(
+                run(main, &directory, "study", "pattern.json", &study_filename),
+                report
+            );
+        }
+
+        // Even a cell left idle by the scarce-pool allocation remains source-locked.
+        // Updating the operator lock alone must not bless an old fixture qualification.
+        let mut changed = options.clone();
+        changed["production"]["parallel"]["cells"][0]["handling"]["initial_milliseconds"]["join"] =
+            json!(101);
+        let stale_pool_locks =
+            changed["production"]["parallel"]["shared_workholding"]["cells"].clone();
+        refresh_shared_cell_locks(&mut changed);
+        changed["production"]["parallel"]["shared_workholding"]["cells"] = stale_pool_locks;
+        assert!(ftx_wasm::manufacturing::sew_plan(PATTERN, &changed.to_string()).is_err());
+        assert!(ftx_wasm::manufacturing::sew_stitches(PATTERN, &changed.to_string()).is_err());
+        let refused_filename = format!("shared-fixture-stale-{capacity}.json");
+        fs::write(directory.join(&refused_filename), changed.to_string()).unwrap();
+        for main in [false, true] {
+            for action in ["sew-plan", "sew-stitches"] {
+                let mut command = Command::new(if main {
+                    env!("CARGO_BIN_EXE_ftx")
+                } else {
+                    env!("CARGO_BIN_EXE_ftx-materials")
+                });
+                command.current_dir(&directory);
+                if main {
+                    command.args(["--json", "materials"]);
+                }
+                let refused = command
+                    .args([action, "pattern.json", &refused_filename])
+                    .output()
+                    .unwrap();
+                assert!(!refused.status.success());
+                let message = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&refused.stdout),
+                    String::from_utf8_lossy(&refused.stderr)
+                );
+                assert!(message.contains("content lock mismatch"), "{message}");
+            }
+        }
+        let mut refused_study = study;
+        refused_study["sewing"] = changed;
+        let refused =
+            portable(ftx_wasm::materials::study(PATTERN, &refused_study.to_string()).unwrap());
+        assert_eq!(refused["alternatives"][0]["sewing"]["status"], "refused");
+        assert_eq!(refused["comparison"]["frontier"], json!([]));
+        assert_eq!(fs::read_to_string(directory.join(filename)).unwrap(), text);
+    }
+    assert_eq!(
+        fs::read_to_string(directory.join("pattern.json")).unwrap(),
+        PATTERN
+    );
 }
 
 #[test]

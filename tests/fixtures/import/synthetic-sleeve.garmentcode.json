@@ -1,0 +1,41 @@
+{
+  "pattern": {
+    "panels": {
+      "outer": {
+        "vertices": [[0, 0], [10, 0], [10, 20], [0, 20]],
+        "edges": [
+          {"endpoints": [0, 1]},
+          {"endpoints": [1, 2]},
+          {"endpoints": [2, 3], "curvature": {"type": "cubic", "params": [[0.25, -0.1], [0.75, -0.1]]}},
+          {"endpoints": [3, 0]}
+        ],
+        "translation": [0, 0, 0],
+        "rotation": [0, 0, 0]
+      },
+      "under": {
+        "vertices": [[0, 0], [0, 20], [10, 20], [10, 0]],
+        "edges": [
+          {"endpoints": [0, 1]},
+          {"endpoints": [1, 2], "curvature": {"type": "cubic", "params": [[0.25, -0.1], [0.75, -0.1]]}},
+          {"endpoints": [2, 3]},
+          {"endpoints": [3, 0]}
+        ],
+        "translation": [0, 0, 1],
+        "rotation": [0, 180, 0]
+      }
+    },
+    "panel_order": ["outer", "under"],
+    "stitches": [
+      [{"panel": "outer", "edge": 1}, {"panel": "under", "edge": 0}, "right_wrong"],
+      [{"panel": "outer", "edge": 3}, {"panel": "under", "edge": 2}, "right_wrong"]
+    ]
+  },
+  "parameters": {},
+  "parameter_order": [],
+  "properties": {
+    "units_in_meter": 100,
+    "curvature_coords": "relative",
+    "normalized_edge_loops": false,
+    "normalize_panel_translation": false
+  }
+}

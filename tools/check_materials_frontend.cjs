@@ -8,6 +8,28 @@ const vm = require('node:vm');
 const read = name => fs.readFileSync(path.join(__dirname, '../web', name), 'utf8');
 const plain = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+// Transport/display doubles, not a geometric or physical validation of the imported garment.
+const garmentcodeSource = ' {"pattern":{"panels":{},"stitches":[]},"label":"café 🧵","x":-0.0,"n":1.0}\n';
+const garmentcodeAnnotations = ' {"schema":"fabric-garmentcode-annotations/1","note":"évidence <literal>"}\n';
+function garmentcodeImport(annotated = true) {
+  const identity={schema:'ftx-garmentcode-import/1',status:'REVIEW_REQUIRED',source_sha256:'01'.repeat(32),
+    ...(annotated?{annotations_sha256:'02'.repeat(32)}:{})};
+  const pattern_json=` {"schema":"fabric-pattern/1","meta":{"import":${JSON.stringify(identity)}},"pieces":[{"id":"p0000","x":-0.0},{"id":"p0001","n":1.0}],"seams":[]}\n`;
+  const fit_spec_json=annotated?' {"schema":"fabric-fit/1","garment":"synthetic import","points":[],"seam_tol_mm":1.0,"x":-0.0}\n':null;
+  const report={...identity,scope:'evaluated_net_seam_lines',source_units_per_meter:100,counts:{panels:2,edges:8,stitches:2},
+    panels:[{source_panel:'<outer café>',piece:'p0000',winding_reversed:false},{source_panel:'under',piece:'p0001',winding_reversed:true}],
+    stitches:[],missing_semantics:['p0000:simulation_scope',...(annotated?[]:['fit_spec'])],
+    limitations:['Original cut/fold layout and omitted components are not reconstructed.','No physical fit is established.'],
+    provenance:{note:'<literal unverified source>'},provenance_status:'caller_supplied_unverified',
+    ...(annotated?{fit_spec:JSON.parse(fit_spec_json)}:{})};
+  const report_json=` ${JSON.stringify(report).replace('"source_units_per_meter":100','"source_units_per_meter":100.0')}\n`;
+  return {pattern:JSON.parse(pattern_json),report,pattern_json,report_json,fit_spec_json};
+}
+function garmentcodeFile(p,id,value) {
+  const bytes=Buffer.from(value);
+  p.e[id].files=[{name:`${id}.json`,size:bytes.length,
+    arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)}];
+}
 const thermalFrozenSelection = ' {"id":"<thermal specimen>","expected_sha256":"thermal-lock","allow_estimates":true,"record":{"source":"<literal source>","value":1.0,"x":-0.0}}\n';
 const thermalHistoryInput = ' {"schema":"ftx-thermal-transient/1","layers":[{"id":"<thermal specimen>","allow_estimates":true}],"interface_resistance_m2_k_w":[],"cells_per_layer":4,"area_m2":1.0,"inside_c":20.0,"outside_c":35.0,"inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.1,"initial_temperature_c":50.0,"step_seconds":0.5,"steps":52,"record_every":1}\n';
 // Explicit transport/display doubles, not empirical thermal predictions.
@@ -314,6 +336,45 @@ async function workerModule({ failFold = false, failExport = false, trap = false
   return { send, sent, called, freed };
 }
 
+test('GarmentCode worker retains optional annotations and exact native pattern, review and fit bytes', async () => {
+  for (const annotated of [false,true]) {
+    const result=garmentcodeImport(annotated),calls=[];
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),import_garmentcode:(...args)=>{
+      calls.push(args);return JSON.stringify(result);
+    }}});
+    const message={type:'garmentcode',request:401,source:garmentcodeSource,
+      ...(annotated?{annotations:garmentcodeAnnotations}:{})};
+    const response=await w.send(message);assert.equal(response.type,'result',response.message);
+    assert.deepEqual(calls,[[garmentcodeSource,annotated?garmentcodeAnnotations:undefined]]);
+    assert.equal(response.result.report.status,'REVIEW_REQUIRED');
+    const files=Object.fromEntries(response.files.map(f=>[f.name,f.text]));
+    assert.deepEqual(files,{'garmentcode-source.json':garmentcodeSource,'garmentcode-pattern.json':result.pattern_json,
+      'garmentcode-import.json':result.report_json,...(annotated?{
+        'garmentcode-annotations.json':garmentcodeAnnotations,'garmentcode-fit-spec.json':result.fit_spec_json}:{})});
+    assert.deepEqual(plain(response.result.report),JSON.parse(result.report_json));
+    assert.ok(Object.is(response.result.pattern.pieces[0].x,-0));
+  }
+});
+test('GarmentCode worker refuses missing engines, incomplete exact artifacts and inconsistent identities without files', async () => {
+  const cases=[
+    [null,/missing GarmentCode import engine/],
+    [()=>{throw Error('unsupported panel curvature');},/unsupported panel curvature/],
+    [()=>{const r=garmentcodeImport();delete r.pattern_json;return JSON.stringify(r);},/incomplete source-preserving/],
+    [()=>{const r=garmentcodeImport();r.fit_spec_json=null;return JSON.stringify(r);},/missing exact imported fit/],
+    [()=>{const r=garmentcodeImport();r.pattern_json=r.pattern_json.replace('01'.repeat(32),'03'.repeat(32));return JSON.stringify(r);},/identities disagree/],
+    [()=>{const r=garmentcodeImport();r.report_json=r.report_json.replace('REVIEW_REQUIRED','READY');return JSON.stringify(r);},/identities disagree/]
+  ];
+  for (const [engine,reason] of cases) {
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),...(engine?{import_garmentcode:engine}:{})}});
+    const r=await w.send({type:'garmentcode',request:402,source:garmentcodeSource,annotations:garmentcodeAnnotations});
+    assert.equal(r.type,'error');assert.match(r.message,reason);assert.equal(r.files,undefined);
+    assert.equal(w.sent.some(message=>message.type==='result'),false);
+  }
+  let calls=0;
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),import_garmentcode:()=>{calls++;return '{}';}}});
+  const r=await w.send({type:'garmentcode',source:'é'.repeat(2*1024*1024+1)});
+  assert.equal(r.type,'error');assert.match(r.message,/4 MiB/);assert.equal(calls,0);
+});
 test('treatment worker preserves exact requests, reports, selections and derived pattern bytes', async () => {
   const calls=[], bindings={default:()=>Promise.resolve()}, source=' {"pieces":[],"x":-0.0,"n":1.0}\n';
   for (const pattern of [false,true]) {
@@ -925,7 +986,7 @@ async function pageModule() {
   class LocalURL extends URL {}
   LocalURL.createObjectURL = blob => { const id = `blob:${++next}`; live.add(id); blobs.set(id, blob); return id; };
   LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true); blobs.delete(id); };
-  const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, document: {
+  const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder, document: {
     getElementById: id => { assert.ok(e[id], `HTML missing ${id}`); return e[id]; },
     querySelectorAll: () => commands, createElement: tag => Object.assign(new Element(), { tag }),
   }, window: { addEventListener: (name, fn) => { windowEvents[name] = fn; } } });
@@ -940,6 +1001,121 @@ async function pageModule() {
   const bind = async () => { await e.bind.onclick(); emit({ pattern, pattern_json:JSON.stringify(pattern), pieces: [], pattern_sha256: 'test' }, [{ name: 'pattern.json', text: '{}', mime: 'application/json' }]); };
   return { e, current, workers, ready, select, emit, load, inspect, bind, live, blobs, windowEvents };
 }
+test('GarmentCode review preserves the current pattern until explicit use resets its material and downstream state', async () => {
+  const p=await pageModule(),r=garmentcodeImport(),outfit=outfitImport();
+  p.select('patternFile',outfit.request_json);await p.e.patternFile.onchange();p.emit(outfit);
+  await p.inspect('old-material');p.e.target.value='@garment:1';p.e.assign.onclick();
+  p.select('interfacesFile','[]');await p.e.interfacesFile.onchange();
+  p.e.combinationScope.value='pieces';p.e.combinationPieces.children[0].selected=true;
+  p.e.combinationGroup.value='old-group';p.e.combinationChoice.value='old-choice';p.e.addCombination.onclick();
+  await p.bind();p.select('cutOptions');await p.e.cut.onclick();p.emit({rolls:[]},[{name:'old-cut.json',text:'{}'}]);
+  p.select('fit',' {"schema":"fabric-fit/1","garment":"previous user choice"}\n');const oldFit=p.e.fit.files[0];
+  const oldUrls=new Set(p.live),oldName=p.e.patternName.textContent;
+  garmentcodeFile(p,'garmentcodeSource',garmentcodeSource);p.e.garmentcodeSource.handlers.change();
+  garmentcodeFile(p,'garmentcodeAnnotations',garmentcodeAnnotations);p.e.garmentcodeAnnotations.handlers.change();
+  await p.e.garmentcode.onclick();const request=p.current().messages.at(-1);
+  assert.equal(request.source,garmentcodeSource);assert.equal(request.annotations,garmentcodeAnnotations);
+  assert.equal(request.pattern,undefined);assert.equal(p.e.patternName.textContent,oldName);
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),import_garmentcode:()=>JSON.stringify(r)}});
+  const response=await w.send(request);assert.equal(response.type,'result',response.message);p.current().emit(response);
+  const s=section(p,'Imported GarmentCode pattern — review required');
+  assert.equal(s.hidden,false);assert.equal(p.e.useGarmentcode.disabled,false);
+  assert.equal(p.e.patternName.textContent,oldName);assert.equal(section(p,'cut').hidden,false);
+  assert.match(visibleText(s),/REVIEW_REQUIRED/);assert.match(visibleText(s),/does not establish garment completeness or fit/);
+  assert.match(visibleText(s),/p0000:simulation_scope/);assert.match(visibleText(s),/<outer café>/);
+  const details=descendants(s).find(n=>n.tag==='details');details.open=true;details.handlers.toggle();
+  assert.match(visibleText(details),/<literal unverified source>/);assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  for (const file of response.files) {
+    const link=descendants(s).find(n=>n.download===file.name);assert.equal(await p.blobs.get(link.href).text(),file.text);
+  }
+  p.e.useGarmentcode.onclick();
+  assert.match(p.e.patternName.textContent,/REVIEW_REQUIRED/);assert.equal(p.e.useGarmentcode.disabled,true);
+  assert.equal(p.e.bind.disabled,false);assert.equal(p.e.cut.disabled,true);assert.equal(section(p,'cut').hidden,true);
+  assert.equal(section(p,'Imported joint outfit').hidden,true);assert.equal(p.e.selfContact.disabled,false);
+  assert.equal(p.e.combinationGroups.children.length,0);assert.deepEqual(JSON.parse(p.e.edits.textContent),{schema:'ftx-material-bindings/1',default:null,pieces:{}});
+  assert.equal(p.e.fit.files[0],oldFit);assert.equal(s.hidden,false);
+  assert.ok([...oldUrls].every(url=>!p.live.has(url)));assert.equal(p.live.size,response.files.length);
+  await p.e.bind.onclick();const binding=p.current().messages.at(-1);
+  assert.equal(binding.pattern,r.pattern_json);assert.equal(binding.outfit,undefined);
+  assert.deepEqual(JSON.parse(binding.changes),{schema:'ftx-material-bindings/1',default:null,pieces:{}});
+});
+test('GarmentCode refusals and pre-adoption edits preserve unrelated patterns; adopted source edits withdraw them', async () => {
+  const p=await pageModule(),r=garmentcodeImport(false);await p.load();await p.bind();const oldName=p.e.patternName.textContent;
+  garmentcodeFile(p,'garmentcodeSource',garmentcodeSource);p.e.garmentcodeSource.handlers.change();
+  await p.e.garmentcode.onclick();p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'malformed source panel'});
+  assert.equal(p.e.patternName.textContent,oldName);assert.equal(p.e.bind.disabled,false);assert.equal(p.e.useGarmentcode.disabled,true);assert.equal(p.live.size,1);
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),import_garmentcode:()=>JSON.stringify(r)}});
+  await p.e.garmentcode.onclick();let response=await w.send(p.current().messages.at(-1));p.current().emit(response);
+  const s=section(p,'Imported GarmentCode pattern — review required');assert.match(visibleText(s),/No fit specification was supplied/);
+  p.e.garmentcodeAnnotations.handlers.change();assert.equal(s.hidden,true);assert.equal(p.e.useGarmentcode.disabled,true);assert.equal(p.e.patternName.textContent,oldName);assert.equal(p.live.size,1);
+  await p.e.garmentcode.onclick();response=await w.send(p.current().messages.at(-1));p.current().emit(response);p.e.useGarmentcode.onclick();await p.bind();
+  p.e.garmentcodeSource.handlers.change();assert.equal(p.e.bind.disabled,true);assert.equal(p.e.cut.disabled,true);assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  assert.match(p.e.patternName.textContent,/withdrawn/);
+  await p.e.garmentcode.onclick();response=await w.send(p.current().messages.at(-1));p.current().emit(response);p.e.useGarmentcode.onclick();await p.bind();
+  garmentcodeFile(p,'garmentcodeAnnotations',garmentcodeAnnotations);p.e.garmentcodeAnnotations.handlers.change();
+  assert.equal(p.e.bind.disabled,true);assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  Object.defineProperty(p.e.garmentcodeAnnotations,'value',{set(value){assert.equal(value,'');this.files=[];}});
+  p.e.clearGarmentcodeAnnotations.onclick();assert.equal(p.e.clearGarmentcodeAnnotations.disabled,true);
+  await p.e.garmentcode.onclick();assert.equal(p.current().messages.at(-1).annotations,undefined);
+});
+test('GarmentCode strict file decoding refuses invalid UTF-8 and BOM without replacing the current pattern', async () => {
+  for (const bytes of [Buffer.from([0x7b,0x22,0xff,0x22,0x3a,0x31,0x7d]),Buffer.from('\ufeff'+garmentcodeSource)]) {
+    const p=await pageModule();await p.load();await p.bind();const oldName=p.e.patternName.textContent;
+    garmentcodeFile(p,'garmentcodeSource',bytes);p.e.garmentcodeSource.handlers.change();
+    const worker=p.current(),before=worker.messages.length;await p.e.garmentcode.onclick();
+    assert.equal(worker.messages.length,before);assert.equal(p.e.useGarmentcode.disabled,true);
+    assert.equal(p.e.patternName.textContent,oldName);assert.equal(p.live.size,1);
+    assert.match(p.e.error.textContent,/UTF-8|JSON|Unexpected|unexpected/);
+  }
+});
+test('GarmentCode changes, cancellation and native pattern replacement defeat delayed reads and stale replies', async () => {
+  for (const change of ['source','annotations','cancel','native']) {
+    const p=await pageModule(),delay=deferred();await p.load();
+    garmentcodeFile(p,'garmentcodeSource',garmentcodeSource);p.e.garmentcodeSource.handlers.change();
+    garmentcodeFile(p,'garmentcodeAnnotations',garmentcodeAnnotations);p.e.garmentcodeAnnotations.handlers.change();
+    p.e.garmentcodeSource.files[0].arrayBuffer=()=>delay.promise;
+    const old=p.current(),running=p.e.garmentcode.onclick();
+    if(change==='source')p.e.garmentcodeSource.handlers.change();
+    else if(change==='annotations')p.e.garmentcodeAnnotations.handlers.change();
+    else if(change==='cancel')p.e.cancel.onclick();
+    else await p.load();
+    assert.equal(old.dead,true,change);p.ready();
+    const bytes=Buffer.from(garmentcodeSource);delay.resolve(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.length));await running;
+    assert.equal(old.messages.some(message=>message.type==='garmentcode'),false);
+    old.emit({type:'result',request:1,result:garmentcodeImport(),files:[{name:'stale.json',text:'{}'}]});
+    assert.equal(p.e.useGarmentcode.disabled,true);assert.equal(p.live.size,0);
+    assert.equal(section(p,'Imported GarmentCode pattern — review required').hidden,true);
+  }
+  const p=await pageModule();await p.load();garmentcodeFile(p,'garmentcodeSource',garmentcodeSource);
+  await p.e.garmentcode.onclick();const old=p.current(),request=old.messages.at(-1).request;
+  await p.load();p.ready();old.emit({type:'result',request,result:garmentcodeImport(),files:[{name:'stale.json',text:'{}'}]});
+  assert.equal(p.e.useGarmentcode.disabled,true);assert.equal(p.live.size,0);
+  await p.e.bind.onclick();assert.equal(JSON.parse(p.current().messages.at(-1).pattern).pieces[0].id,'front');
+});
+test('compiled WASM GarmentCode sleeve conversion reaches review and exact explicit adoption',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const source=fs.readFileSync(path.join(__dirname,'../tests/fixtures/import/synthetic-sleeve.garmentcode.json'),'utf8').replaceAll('"outer"','"extérieur"');
+    const notes=fs.readFileSync(path.join(__dirname,'../tests/fixtures/import/synthetic-sleeve.annotations.json'),'utf8').replaceAll('"outer"','"extérieur"');
+    const hash=text=>require('node:crypto').createHash('sha256').update(text).digest('hex');
+    for(const annotated of [false,true]) {
+      const p=await pageModule(),w=await workerModule({bindings:ftx});
+      garmentcodeFile(p,'garmentcodeSource',source);p.e.garmentcodeSource.handlers.change();
+      if(annotated){garmentcodeFile(p,'garmentcodeAnnotations',notes);p.e.garmentcodeAnnotations.handlers.change();}
+      await p.e.garmentcode.onclick();const response=await w.send(p.current().messages.at(-1));assert.equal(response.type,'result',response.message);p.current().emit(response);
+      const native=JSON.parse(ftx.import_garmentcode(source,annotated?notes:undefined));
+      assert.equal(response.result.pattern_json,native.pattern_json);assert.equal(response.result.report_json,native.report_json);
+      assert.equal(response.result.report.status,'REVIEW_REQUIRED');assert.equal(response.result.report.source_sha256,hash(source));
+      assert.equal(response.result.pattern.pieces.length,2);assert.equal(response.result.pattern.seams.length,2);
+      if(annotated){assert.equal(response.result.report.annotations_sha256,hash(notes));assert.equal(JSON.parse(response.result.fit_spec_json).schema,'fabric-fit/1');}
+      else {assert.equal(response.result.fit_spec_json,null);assert.ok(response.result.report.missing_semantics.includes('fit_spec'));}
+      assert.equal(p.e.bind.disabled,true);assert.equal(p.e.fit.files.length,0);p.e.useGarmentcode.onclick();
+      assert.equal(p.e.fit.files.length,0);assert.match(p.e.patternName.textContent,/REVIEW_REQUIRED/);
+      await p.e.bind.onclick();assert.equal(p.current().messages.at(-1).pattern,native.pattern_json);
+    }
+  });
 test('treatment page uses the current bound basis, displays measured changes and adopts exact derived bytes', async () => {
   const p=await pageModule(), report=treatmentReport(true), original=report.source_pattern_json,
     bound=' {"pieces":[{"id":"front"}],"bound":1.0,"x":-0.0}\n', request=' {"schema":"ftx-pattern-treatment/1","x":-0.0}\n';
@@ -1436,6 +1612,42 @@ test('shared operator timelines preserve resource waits, restricted proof and ce
     const download=descendants(s).find(n=>n.download==='operator-report.json');
     assert.equal(await p.blobs.get(download.href).text(),raw);
     assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    parallel.schema='ftx-sewing-parallel/5';
+    const pool='<shared jig>', poolHold=(cell,copy,start,end)=>({cell,copy,local_copy:0,hold:'0/<hold>',
+      resource:'<local fixture>',pool,units:1,acquire:'0/join',release:'0/join',
+      acquired_at_milliseconds:start,released_at_milliseconds:end});
+    const reservations={holds:[poolHold('cell-a',0,0,5100),poolHold('cell-b',1,1100,6200)],
+      peak_occupancy:{[pool]:2},final_occupancy:{[pool]:0}};
+    parallel.shared_workholding={schema:'ftx-sewing-shared-workholding/1',
+      release_protocol:'available_at_feed_completion_with_access_in_cell_handling/1',
+      cells:{'cell-a':'source-lock-a','cell-b':'source-lock-b'},resources:[{id:pool,capacity:2}],
+      bindings:[{cell:'cell-a',resource:'<local fixture>',pool},{cell:'cell-b',resource:'<local fixture>',pool}],
+      baseline:reservations,selected:reservations,physical_pool_access_validated:false};
+    plan.options.production.parallel.shared_workholding={source:{note:'<qualified pool access and return>'}};
+    const pooledRaw=JSON.stringify(report);
+    await p.e[op].onclick(); p.emit(report,[{name:'shared-pool-report.json',text:pooledRaw,mime:'application/json'}]);
+    assert.deepEqual(plain(table('shared fixture pools').children[2].children.map(n=>n.textContent)),
+      [pool,'2','2','2','0']);
+    assert.deepEqual(plain(table('cell fixtures using shared inventory').children[3].children.map(n=>n.textContent)),
+      ['cell-b','<local fixture>',pool]);
+    assert.deepEqual(plain(table('selected shared fixture reservations').children[3].children.map(n=>n.textContent)),
+      [pool,'cell-b','1','0/<hold>','1','0/join','0/join','1.1','6.2']);
+    assert.equal(table('cell-only window relaxation').children[2].children.at(-1).textContent,
+      'Fits without shared-resource contention');
+    assert.match(visibleText(s),/remain held through intervening operations and waits/);
+    assert.match(visibleText(s),/release can supply an acquisition at the same instant/);
+    const poolSource=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('shared pool source, exact cell locks and both reservation histories'));
+    poolSource.open=true; poolSource.handlers.toggle();
+    assert.match(visibleText(s),/qualified pool access and return/);
+    assert.match(visibleText(s),/enforces cell, operator and pool limits/);
+    assert.match(visibleText(s),/physical pool access, garment transfers and hardware execution/);
+    const pooledDownload=descendants(s).find(n=>n.download==='shared-pool-report.json');
+    assert.equal(await p.blobs.get(pooledDownload.href).text(),pooledRaw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    if(op==='sew') assert.equal(JSON.parse(s.children[1].textContent).shared_fixture_pools_enforced,true);
+    delete parallel.shared_workholding;
+    delete plan.options.production.parallel.shared_workholding;
+    parallel.schema='ftx-sewing-parallel/4';
   }
   p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
   assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);

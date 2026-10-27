@@ -3,12 +3,13 @@ const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "price", "sew"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "treatment", "vapor", "calibrate",
-  "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory"];
+  "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode"];
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
 let preparedBy = null;
 let preparedTreatment = null;
+let preparedImport = null, adoptedImport = false;
 let sourceText = null, outfit = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
@@ -26,7 +27,7 @@ for (const op of operations) {
     thermalPoint: "Material at the stated temperature", thermalHistory: "Dry heating and cooling history",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
     stripHistory: "Strip loading and recovery", vaporSurface: "Vapor transfer on this drape",
-    stripFit: "Clamped-strip identification", outfit: "Imported joint outfit" })[op] || op;
+    stripFit: "Clamped-strip identification", outfit: "Imported joint outfit", garmentcode: "Imported GarmentCode pattern — review required" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
   section.append(title, summary, comparison, links); $("outputs").append(section);
@@ -47,6 +48,9 @@ function controls() {
   $("pressure").disabled ||= !has("compressionRequest");
   $("treatment").disabled ||= !has("treatmentRequest");
   $("useTreatment").disabled = !!pending || !preparedTreatment;
+  $("garmentcode").disabled ||= !has("garmentcodeSource");
+  $("useGarmentcode").disabled = !!pending || !preparedImport;
+  $("clearGarmentcodeAnnotations").disabled = !has("garmentcodeAnnotations");
   $("vapor").disabled ||= !has("vaporRequest");
   $("thermalPoint").disabled ||= !$("selection").value.trim() || !$("thermalPointTemperature").value.trim() ||
     !Number.isFinite(Number($("thermalPointTemperature").value));
@@ -85,6 +89,7 @@ function clear(keys) {
     if (key === "stock") { $("stockMarker").hidden = true; $("stockMarker").removeAttribute("src"); }
     if (key === "bind") { bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren(); }
     if (key === "treatment") preparedTreatment = null;
+    if (key === "garmentcode") preparedImport = null;
     if (key === "calibrate") {
       calibratedPair = null;
       $("calibratedInterfaceSummary").textContent = "No current calibrated contact pair.";
@@ -1673,12 +1678,40 @@ function sewingHandling(parent, plan, label = "Selected sewing plan") {
   detail(parent, `${label}: handling evidence, exact qualifications and complete timelines`,
     { policy: plan.options?.production?.handling, report, timing });
 }
+function sewingSharedWorkholding(parent, plan, label) {
+  const report = plan.production.parallel.shared_workholding;
+  if (!report) return;
+  const inventory = table(parent, `${label}: shared fixture pools`,
+    ["Pool", "Available units", "Baseline peak", "Selected peak", "Held after completion"]);
+  for (const resource of report.resources) cells(inventory, [resource.id, metric(resource.capacity),
+    metric(report.baseline?.peak_occupancy?.[resource.id]), metric(report.selected?.peak_occupancy?.[resource.id]),
+    metric(report.selected?.final_occupancy?.[resource.id])]);
+  const bindings = table(parent, `${label}: cell fixtures using shared inventory`,
+    ["Cell", "Local fixture resource", "Shared pool"]);
+  for (const binding of report.bindings) cells(bindings, [binding.cell, binding.resource, binding.pool]);
+  const holds = table(parent, `${label}: selected shared fixture reservations`,
+    ["Pool", "Cell", "Global garment copy", "Local hold", "Units", "Acquire operation", "Release operation",
+      "Held from (s)", "Available again (s)"]);
+  for (const hold of report.selected?.holds || []) cells(holds, [hold.pool, hold.cell, metric(hold.copy),
+    hold.hold, metric(hold.units), hold.acquire, hold.release,
+    metric(typeof hold.acquired_at_milliseconds === "number" ? hold.acquired_at_milliseconds / 1000 : null),
+    metric(typeof hold.released_at_milliseconds === "number" ? hold.released_at_milliseconds / 1000 : null)]);
+  const note = document.createElement("p");
+  note.textContent = "These cells share the declared finite fixture inventory. Units are reserved before handling starts, " +
+    "remain held through intervening operations and waits, and become available at the release operation's feed completion. " +
+    "A release can supply an acquisition at the same instant. The qualified protocol includes pool access and return in cell handling. " +
+    "The computed allocation respects pool capacities; physical pool access, garment transfers and hardware execution still require their own qualification.";
+  parent.append(note);
+  detail(parent, `${label}: shared pool source, exact cell locks and both reservation histories`, {
+    policy: plan.options?.production?.parallel?.shared_workholding, report });
+}
 function sewingParallel(parent, plan, label = "Selected sewing plan") {
   const report = plan?.production?.parallel;
   if (!report) return;
   const heterogeneous = Boolean(report.cell_plans?.length);
   const windowed = Boolean(report.availability);
   const operator = report.shared_operator;
+  const pools = report.shared_workholding;
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: parallel completion and aggregate work`,
     ["Allocation", "Completion (s)", "Total feed work (s)", "Scheduled feed work (s)", "Total setup work (s)", "Total handling work (s)"]);
@@ -1729,7 +1762,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       for (const count of cell.counts || []) cells(windows, [cell.cell, metric(count.copies),
         typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended",
         metric(seconds(count.incumbent_finish_milliseconds)), metric(seconds(count.lower_bound_finish_milliseconds)),
-        count.feasible ? (operator ? "Fits without operator contention" : "Fits") : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
+        count.feasible ? (pools ? "Fits without shared-resource contention" : operator ? "Fits without operator contention" : "Fits") : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
     }
   }
   if (operator) {
@@ -1747,6 +1780,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
         metric(seconds(step.handling_start_milliseconds)), metric(seconds(step.setup_start_milliseconds)),
         metric(seconds(step.operator_release_milliseconds)), metric(seconds(step.feed_finish_milliseconds))]);
   }
+  sewingSharedWorkholding(parent, plan, label);
   const note = document.createElement("p");
   note.textContent = (report.optimality_proven ?
     "Minimum parallel completion time proved under the declared millisecond planning model. " :
@@ -1755,11 +1789,13 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     (report.budget_exhausted ? (operator ? "At least one serial or operator search reached its work limit. " : "At least one inner schedule reached its work limit. ") : "") +
     (windowed ? "Every used cell finishes inside its inclusive qualified availability window, including final unloading. " +
       "A lower bound that still fits leaves an over-limit incumbent unresolved. " : "") +
-    (report.availability?.baseline_replaced || operator?.baseline_replaced ? "The first-cell baseline failed a qualified cell or operator window; the displayed replacement is the complete selected feasible assignment. " : "") +
+    (report.availability?.baseline_replaced || operator?.baseline_replaced ?
+      `The first-cell baseline failed a qualified cell or operator window${pools ? " or shared fixture constraint" : ""}; the displayed replacement is the complete selected feasible assignment. ` : "") +
     "Every garment stays in one physical cell. " +
     (operator ? "One qualified operator performs exclusive travel, handling, setup and final unloading while explicitly qualified autonomous machine feed may overlap. " +
       "The operator search considers the retained serial operation orders; completing that search alone does not prove an unrestricted joint optimum. " +
-      "Cell-only window receipts ignore operator contention; the selected timeline enforces both cell and operator limits. " +
+      (pools ? "Cell-only window receipts ignore shared operator and fixture contention; the selected timeline enforces cell, operator and pool limits. " :
+        "Cell-only window receipts ignore operator contention; the selected timeline enforces both cell and operator limits. ") +
       "Each positive feed operation keeps its own upward-rounded time slot, including after attended work or waiting. " :
       "Concurrent operation requires independently qualified machines, fixtures and handling labor. Feed is rounded upward once per used cell. ") +
     "Each used cell includes its own availability, initial setup and final unloading; raw feed and padding remain separate. " +
@@ -1873,6 +1909,7 @@ function sewingResult(parent, r) {
       order.timing ? "minimize_setup_time" : "minimize_setup_changes") : undefined,
     ordering_optimality_proven: order?.optimality_proven,
     finite_workholding_enforced: (parallel ? parallel.selected.cells.some(cell => cell.schedule?.workholding) : production?.workholding) ? true : undefined,
+    shared_fixture_pools_enforced: parallel?.shared_workholding ? true : undefined,
     planar_access_checked_operations: (parallel?.cell_plans?.length ? parallel.selected.cells
       .filter(cell => cell.copies.length).reduce((count, cell) => count +
         (parallel.cell_plans.find(source => source.cell === cell.cell)?.plan.seams.filter(row => row.access).length || 0), 0) :
@@ -2439,6 +2476,22 @@ function show(op, msg) {
     }
   } else if (op === "inspect") {
     preparedBy = null; inspectResult(r);
+  } else if (op === "garmentcode") {
+    preparedImport = r.pattern_json;
+    const report = r.report, s = sections.get(op); s.section.hidden = false;
+    s.summary.textContent = text({ status: report.status, scope: report.scope,
+      source_units_per_meter: report.source_units_per_meter, counts: report.counts,
+      source_sha256: report.source_sha256, annotations_sha256: report.annotations_sha256,
+      missing_semantics: report.missing_semantics, limitations: report.limitations });
+    const note = document.createElement("p");
+    note.textContent = "REVIEW_REQUIRED: conversion preserves supported evaluated geometry; it does not establish garment completeness or fit. " +
+      "Review the missing construction information, then choose Use imported pattern to replace the current workbench pattern. " +
+      (r.fit_spec_json ? "A supplied fit specification is available to download and select in section 3." : "No fit specification was supplied.");
+    s.comparison.append(note);
+    const panels = table(s.comparison, "Original panels and native physical pieces", ["Source panel", "Native piece", "Winding reversed"]);
+    for (const panel of report.panels) cells(panels, [panel.source_panel, panel.piece, panel.winding_reversed ? "Yes" : "No"]);
+    detail(s.comparison, "Complete panel, edge, stitch, geometry and source review", report);
+    for (const f of msg.files) link(op, s.links, f);
   } else if (op === "outfit") {
     outfit = { request_json: r.request_json, composition_json: r.composition_json };
     installPattern(r.pattern_json, `${r.composition.garments.length} garments in one composed outfit`, r.composition.garments);
@@ -2541,6 +2594,18 @@ async function read(id, binary = false) {
   if (!binary) JSON.parse(data);
   return data;
 }
+async function readGarmentcode(id) {
+  const f = $(id).files[0]; if (!f) throw Error(`Choose ${id} first.`);
+  if (f.size > 4 * 1024 * 1024) throw Error("Each GarmentCode input is limited to 4 MiB.");
+  const bytes = await f.arrayBuffer();
+  if (bytes.byteLength > 4 * 1024 * 1024) throw Error("Each GarmentCode input is limited to 4 MiB.");
+  let raw;
+  try { raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
+  catch { throw Error(`${id} must be valid UTF-8; no replacement characters were substituted.`); }
+  // Preserve every valid source byte. Retaining a BOM also preserves the native JSON refusal.
+  JSON.parse(raw);
+  return raw;
+}
 function changes() {
   const pieces = [...pieceChanges].map(([id, selection]) => `${JSON.stringify(id)}:${selection}`).join(",");
   const interfaces = interfaceChange === null ? "" : `,"interfaces":${interfaceChange}`;
@@ -2617,6 +2682,10 @@ async function execute(op) {
       msg.selection = $("selection").value; msg.temperatureC = Number($("thermalPointTemperature").value);
     }
     else if (op === "thermalHistory") msg.thermalRequest = await read("thermalRequest");
+    else if (op === "garmentcode") {
+      msg.source = await readGarmentcode("garmentcodeSource");
+      if (has("garmentcodeAnnotations")) msg.annotations = await readGarmentcode("garmentcodeAnnotations");
+    }
     else if (op === "bind") {
       if (!interfaceReady) throw Error("Load a valid replacement interface list or choose Keep original interfaces.");
       msg.pattern = sourceText; msg.changes = changes();
@@ -2732,13 +2801,19 @@ function installPattern(raw, label, garments = []) {
     }
   }
 }
-$("patternFile").onchange = async () => {
-  const rev = ++patternRead; source = null; sourceText = null; outfit = null; defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
+function resetPatternInput(keepImport = false) {
+  ++patternRead; source = null; sourceText = null; outfit = null; adoptedImport = false;
+  defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
   outfitTargets.clear();
   combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
-  invalidate(["bind", ...boundOperations, "study", "scenario", "outfit"]); $("patternName").textContent = "No pattern loaded.";
+  invalidate(["bind", ...boundOperations, "study", "scenario", "outfit", ...(keepImport ? [] : ["garmentcode"])]);
+  $("patternName").textContent = "No pattern loaded.";
   $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
   base.textContent = "Pattern default (preserve explicit piece choices)"; $("target").append(base);
+  return patternRead;
+}
+$("patternFile").onchange = async () => {
+  const rev = resetPatternInput();
   try { const raw = await read("patternFile"), data = JSON.parse(raw); if (rev !== patternRead) return;
     if (data.schema === "ftx-outfit-drape/1") {
       const id = ++sequence; pending = { id, op: "outfit" };
@@ -2762,15 +2837,29 @@ $("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); resetIn
 $("useTreatment").onclick = () => {
   if (!preparedTreatment || pending) return;
   const raw = preparedTreatment;
-  ++patternRead; outfit = null; defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
-  outfitTargets.clear(); combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
-  $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
-  base.textContent = "Pattern default (preserve explicit piece choices)"; $("target").append(base);
-  invalidate(["bind", ...boundOperations, "study", "scenario", "outfit"]);
+  resetPatternInput();
   installPattern(raw, "Derived treatment pattern");
   $("status").textContent = "Derived pattern loaded. Freeze selections and bind to recompute its consumers.";
   controls();
 };
+$("useGarmentcode").onclick = () => {
+  if (!preparedImport || pending) return;
+  const raw = preparedImport;
+  resetPatternInput(true); preparedImport = null;
+  $("patternFile").value = "";
+  installPattern(raw, "Imported GarmentCode pattern — REVIEW_REQUIRED");
+  adoptedImport = true;
+  $("status").textContent = "Imported pattern loaded for review. Assign materials and freeze selections to recompute its consumers. Conversion does not establish fit.";
+  controls();
+};
+function invalidateGarmentcode() {
+  if (adoptedImport) {
+    resetPatternInput();
+    $("patternName").textContent = "Imported pattern withdrawn. Convert the changed inputs and review the new result before adopting it.";
+  } else invalidate(["garmentcode"]);
+}
+for (const id of ["garmentcodeSource", "garmentcodeAnnotations"]) $(id).addEventListener("change", invalidateGarmentcode);
+$("clearGarmentcodeAnnotations").onclick = () => { $("garmentcodeAnnotations").value = ""; invalidateGarmentcode(); };
 $("addCombination").onclick = () => {
   if (!inspected || !source || pending) return;
   try {

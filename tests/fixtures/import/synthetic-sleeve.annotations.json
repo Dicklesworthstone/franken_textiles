@@ -1,0 +1,30 @@
+{
+  "schema": "fabric-garmentcode-annotations/1",
+  "panels": {
+    "outer": {
+      "role": "sleeve",
+      "grain": [[50, 20], [50, 180]],
+      "sa": 10,
+      "note": "Synthetic fixture only: 100 mm cuff edge, 200 mm side seams; no wearer or historical-source claim.",
+      "notches": [{"edge": 1, "s": 0.25}, {"edge": 3, "s": 0.75}]
+    },
+    "under": {
+      "role": "sleeve",
+      "grain": [[50, 20], [50, 180]],
+      "sa": 10,
+      "notches": [{"edge": 0, "s": 0.25}, {"edge": 2, "s": 0.75}]
+    }
+  },
+  "stitches": {
+    "0": {"ratio": 1, "tol_mm": 0.01, "kind": "plain"},
+    "1": {"ratio": 1, "tol_mm": 0.01, "kind": "plain"}
+  },
+  "fit": {
+    "schema": "fabric-fit/1",
+    "garment": "synthetic_sleeve",
+    "seam_tol_mm": 0.01,
+    "points": [
+      {"id": "cuff", "kind": "path", "refs": ["p0000/e0000", "p0001/e0003"], "body": "cuff_pass", "target_mm": [0, 0, 0], "label": "Synthetic 200 mm cuff perimeter"}
+    ]
+  }
+}
