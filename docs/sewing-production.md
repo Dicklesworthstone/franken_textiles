@@ -515,6 +515,60 @@ Every garment still stays in one cell, with independently qualified machines, fi
 handling labor. Shared-worker overlap, inter-cell transfer, hardware control and empirical seam
 qualification remain outside this model.
 
+## Finite cell availability windows
+
+Either shared-configuration or separately configured cells can now supply
+`available_until_milliseconds` alongside `available_at_milliseconds`. Both instants use the same
+job origin. The end is inclusive: a used cell must finish its initial setup/loading, complete
+generated feed, every setup and handling transition, and **final unloading** by that instant.
+The complete parallel policy's retained source must qualify the declared window for that physical
+cell and its independently available labor/fixtures. A date, shift label or assumed opening time
+does not supply a duration. Omission preserves the previous open-ended behavior.
+
+For example, in `examples/sewing-heterogeneous-options.json`, adding these two fields to the
+existing respective cells changes the actual manufacturing decision:
+
+```json
+{
+  "cell-a": {"available_until_milliseconds": 9899},
+  "cell-b": {"available_until_milliseconds": 11100}
+}
+```
+
+These keyed objects illustrate which fields to add; the actual policy keeps its existing `cells`
+array and full machine/process/source qualifications. The artificial slow cell needs 9900 ms for
+even one garment including unloading, so the 9899 ms window admits none. All three garments move
+to the faster configuration and complete at exactly 11100 ms. Its actual recipes produce 120 stitch
+intervals and 2.4 m of qualified yarn demand, changing the previous 160 intervals and 3 m. The same
+one-order minimum/increment rules still yield a synthetic USD 14 order. These values describe the
+software example and its supplied observations, not a measured factory shift.
+
+The report uses `ftx-sewing-parallel/3`. Every baseline/selected cell retains the supplied end, and
+`availability.cells[].counts[]` exposes the complete cached incumbent finish, valid lower bound,
+feasibility and proved-infeasibility status for every positive copy count. The same two bounded
+allocation passes operate on actual feasible finishes and valid lower bounds respectively. A
+window that excludes a slow incumbent must not exclude a potentially feasible shorter schedule
+from the lower-bound pass. Thus an incomplete search cannot manufacture infeasibility or a proof
+that its current assignment is optimal.
+
+If the previous all-copies-on-first-cell baseline exceeds its window, the planner returns the
+complete selected feasible allocation as the baseline too and sets `availability.baseline_replaced`.
+Both reported assignments satisfy the windows; the out-of-window count remains visible in the
+bounded admission receipts. Reconstruction still consumes the existing shared work reservation.
+If no complete incumbent fits, but the lower-bound allocation still permits one, the planner
+returns `not_converged` and identifies the unresolved search. If even the full allocation over
+valid lower bounds cannot fit, it definitively refuses the requested quantity and windows.
+
+An end equal to the start represents a cell with no usable interval and leaves it idle. An end
+before the start refuses even if that cell would have been unused. Ends above the exact JSON
+integer limit 9007199254740991 refuse. The explicit once-per-cell millisecond feed ceiling remains
+part of the planning convention, and the final unload cannot be hidden behind a boundary rounding.
+
+The ordinary stitch program, selected thread inventory, material studies, both native commands
+and portable/browser APIs all consume this same constrained assignment and frozen replay options.
+No calendar lookup, reservation, source update or hardware execution is implied. Shared labor,
+machine breaks/preemption and transfers between cells still require separate qualified models.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **63 copy/operation pairs** and 1–200000 examined search nodes.

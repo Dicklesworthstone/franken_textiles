@@ -42,7 +42,8 @@ pub struct Policy {
     pub qualifications: BTreeMap<String, Vec<workholding::QualificationRef>>,
     /// One to eight separately identified physical cells, including their independent inventories.
     pub cells: Vec<Cell>,
-    /// Source qualifying these instances, their declared configurations and concurrent independence.
+    /// Source qualifying these instances, configurations, declared availability windows and
+    /// concurrent independence.
     pub source: Source,
     /// Qualification protocol; must distinguish machine, fixtures and handling labor.
     pub method: String,
@@ -64,6 +65,11 @@ pub struct Cell {
     pub id: String,
     /// Explicit time at which this cell is available, from the common job origin, at most one day.
     pub available_at_milliseconds: u32,
+    /// Optional inclusive end of this source-qualified availability window, from the common job
+    /// origin. Every used-cell phase, including final unloading, must finish by this instant.
+    /// Omission preserves an open-ended window; equality with the start leaves the cell idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_until_milliseconds: Option<u64>,
     /// Its explicit initial setup and complete directed time table; objective must include handling.
     pub ordering: ordering::Policy,
     /// Independent observed loading, transitions and final unloading for this cell.
@@ -183,6 +189,9 @@ pub struct CellSchedule {
     pub copies: Vec<usize>,
     /// Declared common-origin availability; unused cells perform no work and have no finish time.
     pub available_at_milliseconds: u32,
+    /// Inclusive source-qualified finish limit, when supplied. An idle cell consumes no window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_until_milliseconds: Option<u64>,
     /// Exact inner search cap used, retained alongside the unchanged source policy for replay.
     pub schedule_node_limit: usize,
     /// Once-per-used-cell ceiling of generated feed under the explicitly chosen millisecond model.
@@ -216,10 +225,47 @@ pub struct Assignment {
     pub handling_milliseconds: u64,
 }
 
+/// Bounded timing evidence for one cell/count choice under its declared availability window.
+#[derive(Clone, Debug, Serialize)]
+pub struct CountAvailability {
+    /// Whole garments assigned to this cell in the independently solved subproblem.
+    pub copies: usize,
+    /// Finish of the complete retained serial incumbent, including final unloading.
+    pub incumbent_finish_milliseconds: u64,
+    /// Valid finish lower bound; an incomplete search may still find a shorter serial schedule.
+    pub lower_bound_finish_milliseconds: u64,
+    /// The complete incumbent finishes inside this cell's inclusive window.
+    pub feasible: bool,
+    /// Even the valid lower bound exceeds the window. False with `feasible: false` means unresolved.
+    pub infeasibility_proven: bool,
+}
+
+/// All cell/count admission evidence. Count receipts never duplicate operation or stitch histories.
+#[derive(Clone, Debug, Serialize)]
+pub struct CellAvailability {
+    /// Source-qualified physical identity, including cells left idle in the chosen assignment.
+    pub cell: String,
+    /// Inclusive end, absent for an open-ended cell in an otherwise window-constrained job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_until_milliseconds: Option<u64>,
+    /// One receipt for every positive count considered, in ascending count order.
+    pub counts: Vec<CountAvailability>,
+}
+
+/// Availability constraints applied by the same complete assignment and lower-bound solvers.
+#[derive(Clone, Debug, Serialize)]
+pub struct AvailabilityReport {
+    /// Every positive cell/count choice, including proven exclusions and unresolved searches.
+    pub cells: Vec<CellAvailability>,
+    /// The old all-garments-on-first-cell baseline exceeded its window. The returned baseline then
+    /// equals the complete selected feasible assignment; no infeasible schedule is published as a seed.
+    pub baseline_replaced: bool,
+}
+
 /// Bounded assignment with exact replay and proof conditional on the declared integer time model.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` shared source geometry; `/2` separately configured cell source plans.
+    /// `/1` shared source geometry; `/2` configured cell source plans; `/3` finite availability.
     pub schema: &'static str,
     /// Same explicit time convention as the qualified input.
     pub time_basis: &'static str,
@@ -231,10 +277,14 @@ pub struct Report {
     /// Version 1 omits this field and references the parent plan's single source station table.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cell_plans: Vec<CellPlan>,
-    /// All copies on the first lexicographic cell, with its complete selected serial schedule.
+    /// All copies on the first lexicographic cell when feasible. An availability-constrained job
+    /// otherwise retains its selected complete feasible assignment as the explicit replacement.
     pub baseline: Assignment,
     /// Complete best feasible assignment, retaining every used cell's full schedule.
     pub selected: Assignment,
+    /// Present only when at least one cell has an explicit end to its availability window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability: Option<AvailabilityReport>,
     /// Allocation optimum over the valid lower bounds of every cell/count serial subproblem.
     pub lower_bound_makespan_milliseconds: u64,
     /// Actual nested examinations, including reconstruction, plus both allocation DP transitions.
@@ -351,11 +401,14 @@ impl Policy {
             if !qualified_text(&cell.id)
                 || !cells.insert(&cell.id)
                 || cell.available_at_milliseconds > 86_400_000
+                || cell.available_until_milliseconds.is_some_and(|end| {
+                    end < u64::from(cell.available_at_milliseconds) || end > MAX_EXACT_MILLISECONDS
+                })
                 || cell.ordering.objective != ordering::Objective::MinimizeProductionTime
                 || cell.configuration.is_some() != configured
             {
                 return Err(bad(
-                    "parallel cells need unique physical IDs, explicit availability within one day and complete production-time ordering",
+                    "parallel cells need unique physical IDs, a start within one day, an optional exact inclusive finish limit no earlier than the start, and complete production-time ordering",
                 ));
             }
             // Validate the caller's complete policy before assigning a smaller shared-work cap.
@@ -539,7 +592,12 @@ fn trial(
 
 // Dynamic programming over complete count assignments. A cell's zero-count cost is exactly zero:
 // no unused cell's availability, first setup/load or final unload enters the objective.
-fn allocate(trials: &[Vec<Trial>], copies: usize, lower: bool) -> (u64, Vec<usize>, usize) {
+fn allocate(
+    trials: &[Vec<Trial>],
+    cells: &[&Cell],
+    copies: usize,
+    lower: bool,
+) -> (Option<(u64, Vec<usize>)>, usize) {
     let mut costs = vec![u64::MAX; copies + 1];
     costs[0] = 0;
     let mut parents = vec![vec![0; copies + 1]; trials.len()];
@@ -559,6 +617,13 @@ fn allocate(trials: &[Vec<Trial>], copies: usize, lower: bool) -> (u64, Vec<usiz
                 } else {
                     row[count - 1].finish
                 };
+                if count > 0
+                    && cells[cell]
+                        .available_until_milliseconds
+                        .is_some_and(|end| finish > end)
+                {
+                    continue;
+                }
                 let candidate = costs[total - count].max(finish);
                 if candidate < next[total] {
                     next[total] = candidate;
@@ -568,13 +633,16 @@ fn allocate(trials: &[Vec<Trial>], copies: usize, lower: bool) -> (u64, Vec<usiz
         }
         costs = next;
     }
+    if costs[copies] == u64::MAX {
+        return (None, work);
+    }
     let mut allocation = vec![0; trials.len()];
     let mut total = copies;
     for cell in (0..trials.len()).rev() {
         allocation[cell] = parents[cell][total];
         total -= allocation[cell];
     }
-    (costs[copies], allocation, work)
+    (Some((costs[copies], allocation)), work)
 }
 
 fn assignment(
@@ -627,6 +695,7 @@ fn assignment(
             cell: cell.id.clone(),
             copies,
             available_at_milliseconds: cell.available_at_milliseconds,
+            available_until_milliseconds: cell.available_until_milliseconds,
             schedule_node_limit: active.map_or(0, |trial| trial.node_limit),
             scheduled_feed_milliseconds: active.map_or(0, |trial| trial.feed_milliseconds),
             feed_padding_seconds: active.map_or(0.0, |trial| trial.padding_seconds),
@@ -725,8 +794,33 @@ pub(super) fn evaluate(
         }
         trials.push(row);
     }
+    let (incumbent, incumbent_work) = allocate(&trials, &cells, copies, false);
+    let (bound, bound_work) = allocate(&trials, &cells, copies, true);
+    search_nodes += incumbent_work + bound_work;
+    let Some((cost, counts)) = incumbent else {
+        return Err(if bound.is_some() {
+            Refusal::new(
+                RefusalCode::NotConverged,
+                "no complete parallel assignment was found inside the qualified cell availability windows; unfinished serial searches still permit a feasible assignment, so infeasibility is not proved",
+            )
+            .repair("increase the bounded serial and shared parallel search allowances")
+            .repair("supply independently qualified longer availability windows or additional cells")
+        } else {
+            bad("qualified cell availability windows cannot accommodate all garment copies: even the complete allocation over valid serial finish lower bounds is infeasible")
+                .repair("supply independently qualified longer availability windows or additional cells, or reduce the production quantity")
+        });
+    };
+    let lower_bound_makespan_milliseconds =
+        bound.expect("a feasible incumbent has a valid bound").0;
+    let baseline_replaced = cells[0]
+        .available_until_milliseconds
+        .is_some_and(|end| trials[0][copies - 1].finish > end);
     let mut baseline_counts = vec![0; cells.len()];
-    baseline_counts[0] = copies;
+    if baseline_replaced {
+        baseline_counts.clone_from(&counts);
+    } else {
+        baseline_counts[0] = copies;
+    }
     let baseline = assignment(
         plan,
         &cell_plans,
@@ -736,7 +830,6 @@ pub(super) fn evaluate(
         &mut search_nodes,
         pattern,
     )?;
-    let (cost, counts, incumbent_work) = allocate(&trials, copies, false);
     let selected = if cost < baseline.makespan_milliseconds {
         assignment(
             plan,
@@ -750,13 +843,42 @@ pub(super) fn evaluate(
     } else {
         baseline.clone()
     };
-    let (lower_bound_makespan_milliseconds, _, bound_work) = allocate(&trials, copies, true);
-    search_nodes += incumbent_work + bound_work;
+    let availability = cells
+        .iter()
+        .any(|cell| cell.available_until_milliseconds.is_some())
+        .then(|| AvailabilityReport {
+            cells: cells
+                .iter()
+                .zip(&trials)
+                .map(|(cell, row)| CellAvailability {
+                    cell: cell.id.clone(),
+                    available_until_milliseconds: cell.available_until_milliseconds,
+                    counts: row
+                        .iter()
+                        .enumerate()
+                        .map(|(index, trial)| CountAvailability {
+                            copies: index + 1,
+                            incumbent_finish_milliseconds: trial.finish,
+                            lower_bound_finish_milliseconds: trial.lower,
+                            feasible: cell
+                                .available_until_milliseconds
+                                .is_none_or(|end| trial.finish <= end),
+                            infeasibility_proven: cell
+                                .available_until_milliseconds
+                                .is_some_and(|end| trial.lower > end),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            baseline_replaced,
+        });
     debug_assert_eq!(incumbent_work + bound_work, reservation.allocation);
     debug_assert!(search_nodes <= policy.max_search_nodes);
     let optimality_proven = selected.makespan_milliseconds == lower_bound_makespan_milliseconds;
     Ok(Report {
-        schema: if cell_plans.is_empty() {
+        schema: if availability.is_some() {
+            "ftx-sewing-parallel/3"
+        } else if cell_plans.is_empty() {
             "ftx-sewing-parallel/1"
         } else {
             "ftx-sewing-parallel/2"
@@ -767,6 +889,7 @@ pub(super) fn evaluate(
         cell_plans,
         baseline,
         selected,
+        availability,
         lower_bound_makespan_milliseconds,
         search_nodes,
         search_complete,

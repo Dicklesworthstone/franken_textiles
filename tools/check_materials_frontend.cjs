@@ -1239,6 +1239,30 @@ test('parallel cells display elapsed completion, local-to-global copies and exac
       assert.match(visibleText(s),/inner schedule reached its work limit/);
       parallel.optimality_proven=true; parallel.budget_exhausted=false;
     }
+    const originalBaseline=parallel.baseline;
+    parallel.schema='ftx-sewing-parallel/3'; parallel.baseline=selected;
+    selected.cells[0].available_until_milliseconds=10000;
+    selected.cells[1].available_until_milliseconds=26000;
+    parallel.availability={baseline_replaced:true,cells:[
+      {cell:'cell-a',available_until_milliseconds:10000,counts:[
+        {copies:1,incumbent_finish_milliseconds:9900,lower_bound_finish_milliseconds:9900,feasible:true,infeasibility_proven:false},
+        {copies:2,incumbent_finish_milliseconds:25500,lower_bound_finish_milliseconds:25500,feasible:false,infeasibility_proven:true}]},
+      {cell:'cell-b',available_until_milliseconds:26000,counts:[
+        {copies:2,incumbent_finish_milliseconds:25500,lower_bound_finish_milliseconds:25500,feasible:true,infeasibility_proven:false},
+        {copies:3,incumbent_finish_milliseconds:41100,lower_bound_finish_milliseconds:25500,feasible:false,infeasibility_proven:false}]}]};
+    await p.e[op].onclick(); p.emit(report);
+    assert.match(visibleText(s),/Feasible replacement baseline/);
+    assert.doesNotMatch(visibleText(s),/Single-cell baseline/);
+    assert.match(visibleText(s),/including final unloading/);
+    assert.deepEqual(plain(table('selected physical cells').children[2].children.map(n=>n.textContent)),
+      ['cell-a','0','0','10','9.9','8','0','true']);
+    assert.deepEqual(plain(table('qualified cell availability').children[3].children.map(n=>n.textContent)),
+      ['cell-a','2','10','25.5','25.5','Cannot fit: proved']);
+    assert.deepEqual(plain(table('qualified cell availability').children.at(-1).children.map(n=>n.textContent)),
+      ['cell-b','3','26','41.1','25.5','Unresolved search']);
+    parallel.schema='ftx-sewing-parallel/1'; parallel.baseline=originalBaseline;
+    delete parallel.availability;
+    for(const cell of selected.cells) delete cell.available_until_milliseconds;
   }
   p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
   assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);

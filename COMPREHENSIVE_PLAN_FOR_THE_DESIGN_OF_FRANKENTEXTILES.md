@@ -3856,6 +3856,29 @@ temperature/moisture feedback into mechanical laws and physical specimen/garment
 open. The recorded-node plastic update and backward-Euler recovery do not establish continuous-time
 exactness, coefficient uncertainty, global uniqueness or measured textile agreement.
 
+### 25.100 Finite operating windows constrain actual sewing production
+
+The independent-cell production model now admits a source-qualified inclusive end to each
+cell's availability. A complete garment assignment must finish within that window after
+initial setup, all actual recipe feed, handling, fixture transitions and final unloading.
+The same bounded allocation updates emitted stitches, used machines and combined yarn orders;
+a shorter shift cannot retain an earlier infeasible allocation or its cheaper consumption.
+
+Optional windows retain the established millisecond time basis and exact integer bounds.
+The unbounded input keeps its previous report representation. Windowed plans report the
+declared intervals and whether the old first-cell reference assignment had to be replaced
+with a complete feasible baseline. Lower-bound feasibility is separate from incumbent
+feasibility: exhausted inner search must not call a possibly feasible job impossible, and
+an incomplete allocation never masquerades as an executable schedule. Existing whole-job
+work caps still cover count solves, both allocations and exact schedule reconstruction.
+
+This is the bounded software feature `ftx-pb2.2.7`, reaching both native commands and the
+portable material-study path through the existing sewing authority. Synthetic exhaustive
+small assignments, inclusive boundaries and final-unloading cases are the acceptance
+checks. Shared operators, inter-cell transfers and measured factory execution remain open
+under `ftx-pb2.2`; a window is an explicitly qualified input, not inferred live availability.
+See [sewing-production.md](docs/sewing-production.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -61,6 +61,96 @@ fn portable(text: String) -> Value {
 }
 
 #[test]
+fn finite_cell_windows_replay_actual_assignment_and_inventory_in_both_commands() {
+    let directory = workspace();
+    let mut options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
+    options["production"]["parallel"]["cells"][0]["available_until_milliseconds"] = json!(9899);
+    options["production"]["parallel"]["cells"][1]["available_until_milliseconds"] = json!(11100);
+    let text = options.to_string();
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &text).unwrap());
+    let plan = &program["plan"];
+    let parallel = &plan["production"]["parallel"];
+    assert_eq!(parallel["schema"], "ftx-sewing-parallel/3");
+    assert_eq!(parallel["selected"]["makespan_milliseconds"], 11100);
+    assert_eq!(parallel["availability"]["baseline_replaced"], true);
+    assert_eq!(parallel["selected"]["cells"][0]["copies"], json!([]));
+    assert_eq!(parallel["selected"]["cells"][1]["copies"], json!([0, 1, 2]));
+    assert_eq!(program["stitches"].as_array().unwrap().len(), 120);
+    assert!(
+        (plan["consumables"]["total_required_length_m"]
+            .as_f64()
+            .unwrap()
+            - 2.4)
+            .abs()
+            < 1e-12
+    );
+    assert_eq!(
+        portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &plan["options"].to_string()).unwrap()),
+        *plan
+    );
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"window-qualified","changes":{"schema":"ftx-material-bindings/1",
+            "default":pattern["fabric"]["material"]}}],"sewing":options,
+        "comparison":{"basis":"nominal","required_consumers":["sewing","sewing_consumables","sewing_purchasing"],
+            "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"}]}});
+    let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    let row = &report["alternatives"][0];
+    // Binding freezes the selected material into a new pattern identity. Replay that exact
+    // document so configured cell plans retain the correct source hash.
+    let bound_plan = portable(
+        ftx_wasm::manufacturing::sew_plan(
+            row["binding"]["result"]["pattern_json"].as_str().unwrap(),
+            &options.to_string(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        row["sewing"]["result"]["production"],
+        bound_plan["production"]
+    );
+    assert_eq!(
+        report["alternatives"][0]["sewing"]["result"]["consumables"],
+        plan["consumables"]
+    );
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    fs::write(directory.join("options.json"), text).unwrap();
+    fs::write(directory.join("study.json"), study.to_string()).unwrap();
+    for main in [false, true] {
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "options.json"
+            ),
+            program
+        );
+        assert_eq!(
+            run(main, &directory, "study", "pattern.json", "study.json"),
+            report
+        );
+    }
+    // A limit 1 ms before the only remaining cell's completion invalidates the entire sewing
+    // consumer; neither the native portable plan nor the study may reuse the earlier assignment.
+    let mut too_short = options;
+    too_short["production"]["parallel"]["cells"][1]["available_until_milliseconds"] = json!(11099);
+    assert!(ftx_wasm::manufacturing::sew_plan(PATTERN, &too_short.to_string()).is_err());
+    let mut refused_study = study;
+    refused_study["sewing"] = too_short;
+    let refused =
+        portable(ftx_wasm::materials::study(PATTERN, &refused_study.to_string()).unwrap());
+    assert_eq!(refused["alternatives"][0]["sewing"]["status"], "refused");
+    assert!(
+        refused["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn heterogeneous_cells_replay_actual_stitches_and_combined_thread_orders_through_studies() {
     let directory = workspace();
     let options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
@@ -154,7 +244,17 @@ fn heterogeneous_cells_replay_actual_stitches_and_combined_thread_orders_through
                 {"metric":"thread_observed_order_cost","direction":"minimize"}]}});
     let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
     let row = &report["alternatives"][0];
-    assert_eq!(row["sewing"]["result"]["production"], plan["production"]);
+    let bound_plan = portable(
+        ftx_wasm::manufacturing::sew_plan(
+            row["binding"]["result"]["pattern_json"].as_str().unwrap(),
+            &options.to_string(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        row["sewing"]["result"]["production"],
+        bound_plan["production"]
+    );
     assert_eq!(row["sewing"]["result"]["consumables"], *consumption);
     assert_eq!(
         row["metrics"]["feed_seconds"],

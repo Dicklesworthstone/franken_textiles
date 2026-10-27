@@ -1553,16 +1553,19 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
   const report = plan?.production?.parallel;
   if (!report) return;
   const heterogeneous = Boolean(report.cell_plans?.length);
+  const windowed = Boolean(report.availability);
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: parallel completion and aggregate work`,
     ["Allocation", "Completion (s)", "Total feed work (s)", "Scheduled feed work (s)", "Total setup work (s)", "Total handling work (s)"]);
-  for (const [name, allocation] of [["Single-cell baseline", report.baseline], ["Selected cells", report.selected]]) {
+  const baselineLabel = report.availability?.baseline_replaced ? "Feasible replacement baseline" : "Single-cell baseline";
+  for (const [name, allocation] of [[baselineLabel, report.baseline], ["Selected cells", report.selected]]) {
     cells(totals, [name, metric(seconds(allocation?.makespan_milliseconds)), metric(allocation?.feed_seconds),
       metric(seconds(allocation?.scheduled_feed_milliseconds)), metric(seconds(allocation?.setup_milliseconds)),
       metric(seconds(allocation?.handling_milliseconds))]);
   }
   const machines = table(parent, `${label}: selected physical cells`,
-    ["Cell", ...(heterogeneous ? ["Qualified machine"] : []), "Global garment copies (zero-based)", "Available (s)", "Complete (s)", "Raw feed (s)", "Feed rounding (ms)", "Cell order minimum proved"]);
+    ["Cell", ...(heterogeneous ? ["Qualified machine"] : []), "Global garment copies (zero-based)", "Available (s)",
+      ...(windowed ? ["Finish limit (s)"] : []), "Complete (s)", "Raw feed (s)", "Feed rounding (ms)", "Cell order minimum proved"]);
   const operations = table(parent, `${label}: cell-local sewing order`,
     ["Cell", "Position in cell", "Global garment copy", "Operation", "Needle", "Thread",
       ...(heterogeneous ? ["Maximum stitch (mm)", "Stitches/min"] : []), "Required local predecessors"]);
@@ -1572,6 +1575,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     const sourcePlan = source?.plan || plan;
     cells(machines, [cell.cell, ...(heterogeneous ? [sourcePlan.options?.machine?.id || "Unavailable"] : []),
       cell.copies.join(", ") || "Idle", metric(seconds(cell.available_at_milliseconds)),
+      ...(windowed ? [typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended"] : []),
       schedule ? metric(seconds(cell.finish_milliseconds)) : "Idle", metric(schedule?.feed_seconds),
       metric(typeof cell.feed_padding_seconds === "number" ? cell.feed_padding_seconds * 1000 : null),
       schedule ? String(schedule.ordering.optimality_proven) : "No work"]);
@@ -1593,12 +1597,25 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       detail(parent, `${label}: cell ${cell.cell} qualified machine, recipes and exact station geometry`, source);
     }
   }
+  if (windowed) {
+    const windows = table(parent, `${label}: qualified cell availability`,
+      ["Cell", "Garment count", "Finish limit (s)", "Complete incumbent finish (s)", "Finish lower bound (s)", "Window admission"]);
+    for (const cell of report.availability.cells || []) {
+      for (const count of cell.counts || []) cells(windows, [cell.cell, metric(count.copies),
+        typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended",
+        metric(seconds(count.incumbent_finish_milliseconds)), metric(seconds(count.lower_bound_finish_milliseconds)),
+        count.feasible ? "Fits" : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
+    }
+  }
   const note = document.createElement("p");
   note.textContent = (report.optimality_proven ?
     "Minimum parallel completion time proved under the declared millisecond planning model. " :
     "Complete feasible cell allocation retained; the minimum parallel completion time is not proved. ") +
     `Lower bound: ${metric(seconds(report.lower_bound_makespan_milliseconds))} s; search work: ${metric(report.search_nodes)}. ` +
     (report.budget_exhausted ? "At least one inner schedule reached its work limit. " : "") +
+    (windowed ? "Every used cell finishes inside its inclusive qualified availability window, including final unloading. " +
+      "A lower bound that still fits leaves an over-limit incumbent unresolved. " : "") +
+    (report.availability?.baseline_replaced ? "The first-cell baseline exceeded its window; the displayed replacement is the complete selected feasible assignment. " : "") +
     "Every garment stays in one physical cell. Concurrent operation requires independently qualified machines, fixtures and handling labor. " +
     "Each used cell includes its own availability, initial setup and final unloading. Feed is rounded upward once per used cell; raw feed and padding remain separate. " +
     "Elapsed completion is distinct from summed machine work. The retained single-machine reference is not the selected concurrent order. " +
