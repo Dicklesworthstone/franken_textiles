@@ -260,8 +260,8 @@ pub struct Metrics {
     /// Excludes handling, acceleration, final reset and other unmodeled production work.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sewing_feed_and_setup_seconds: Option<f64>,
-    /// Complete source-qualified thread demand for the selected sewing plan, across every channel.
-    /// Cutting copies do not multiply this one declared sewing job.
+    /// Complete source-qualified thread demand across every channel and production copy.
+    /// Requested cutting quantity is inherited unless an explicit matching thread count is supplied.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_required_length_m: Option<f64>,
     /// Complete independent thread orders in the sewing consumer's own declared currency.
@@ -396,6 +396,44 @@ impl Request {
                 .as_ref()
                 .map(|selection| &selection.options)
         })
+    }
+
+    fn sewing_copies(&self) -> Result<Option<usize>, Refusal> {
+        if self
+            .sewing_options()
+            .and_then(|s| s.consumables.as_ref())
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let mut copies = None;
+        for count in self
+            .cutting
+            .as_ref()
+            .map(|c| c.copies)
+            .into_iter()
+            .chain(self.finite_stock.as_ref().map(|s| s.options.copies))
+            .chain(
+                self.cutting_job
+                    .as_ref()
+                    .and_then(|j| j.roll.as_ref())
+                    .map(|c| c.copies),
+            )
+            .chain(
+                self.cutting_job
+                    .as_ref()
+                    .and_then(|j| j.finite_stock.as_ref())
+                    .map(|s| s.options.copies),
+            )
+        {
+            if !(1..=4096).contains(&count) || copies.is_some_and(|previous| previous != count) {
+                return Err(invalid(
+                    "thread production needs the same valid 1..4096 garment quantity on every requested cutting route",
+                ));
+            }
+            copies = Some(count);
+        }
+        Ok(copies)
     }
 
     fn manufacturing_identity(
@@ -860,7 +898,7 @@ impl Request {
             .sewing_options()
             .is_some_and(|s| s.consumables.is_some())
         {
-            notes.push("Thread demand uses the selected plan's actual traversals, independently qualified channel coefficients and once-per-operation allowances. Each exact yarn is aggregated before canonical whole-order pricing. Missing consumption or offers keep the complete metric unknown. Thread purchasing uses its own declared market and describes one sewing job, independently of cutting copies; it is not retained assembly mass or a combined cut-and-sew cost. Recipe selection follows its explicit declared objective; only thread-cost selection searches these order totals, and its separate proof and unresolved-trial status remain authoritative.");
+            notes.push("Thread demand uses the selected plan's actual traversals, independently qualified channel coefficients and once-per-operation/channel allowances on every production copy. Requested cutting quantities must agree and supply the thread count when omitted; an explicit conflicting count refuses sewing. Each exact yarn is aggregated across all copies before canonical whole-order pricing, while continuous-length requirements remain per operation/channel. Sewing geometry, feed and setup time remain per garment; thread purchasing does not establish a batch schedule, retained assembly mass or a combined cut-and-sew cost. Missing consumption or offers keep the complete metric unknown. Recipe selection follows its explicit objective; only thread-cost selection searches these order totals, and its separate proof and unresolved-trial status remain authoritative.");
         }
         if self.vapor.is_some() {
             notes.push("Potential vapor transport uses explicit common-area layer occurrences resolved from each final material assignment. It infers no overlap, body coverage, air-gap resistance, sweat supply, evaporation or coupled heat; canonical source qualifications and boundary assumptions remain in every available result.");
@@ -1029,10 +1067,14 @@ impl Request {
             row.cutting_job = Outcome::from_result(request.build(&pattern));
         }
         if let Some(options) = &self.sewing {
-            row.sewing = Outcome::from_result(SewPlan::build(&pattern, options));
+            row.sewing = Outcome::from_result(self.sewing_copies().and_then(|copies| {
+                let options = recipes::production_options(options, copies)?;
+                SewPlan::build(&pattern, &options)
+            }));
         }
         if let Some(request) = &self.sewing_selection {
-            (row.sewing, row.sewing_selection) = recipes::evaluate(&pattern, request);
+            (row.sewing, row.sewing_selection) =
+                recipes::evaluate(&pattern, request, self.sewing_copies());
         }
         if let Some(request) = &self.assembly_mass {
             let mass = (|| {

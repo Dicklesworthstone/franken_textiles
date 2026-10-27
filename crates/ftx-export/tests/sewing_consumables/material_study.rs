@@ -71,6 +71,161 @@ fn row<'a>(report: &'a Value, key: &str) -> &'a Value {
         .unwrap()
 }
 
+fn finite_inventory(material: &Value, copies: usize) -> Value {
+    json!({"schema":"ftx-finite-stock-request/1","stocks":[{
+        "id":"synthetic-remnant","material":material,
+        "outline_mm":[[0,0],[200,0],[200,300],[0,300]],"grain_mm":[[0,0],[0,10]],
+        "geometry_source":{"reference":"test:production-remnant","accessed_on":"2026-10-26",
+            "note":"Synthetic stock geometry; no measured inventory"}}],
+        "options":{"copies":copies,"gap_mm":2.0,"boundary_margin_mm":2.0,
+            "step_mm":2.0,"work_limit":2000000}})
+}
+
+#[test]
+fn every_cutting_route_drives_complete_thread_orders_before_fixed_or_searched_recipe_evaluation() {
+    for route in ["roll", "finite", "mixed"] {
+        for search in [false, true] {
+            let (pattern, mut request) = study();
+            if search {
+                use_recipe_search(&mut request);
+                request["sewing_selection"]["schema"] = json!("ftx-sewing-selection/3");
+                request["sewing_selection"]["objective"] =
+                    json!("minimize_thread_observed_order_cost");
+            }
+            let options = if search {
+                &mut request["sewing_selection"]["options"]
+            } else {
+                &mut request["sewing"]
+            };
+            let offer = &mut options["consumables"]["purchasing"]["quote_book"]["quotes"][0];
+            offer["available_quantity"] = json!(16.0);
+            offer["price_breaks"] = json!([
+                {"minimum_quantity":4.0,"price":7.0},
+                {"minimum_quantity":8.0,"price":4.0}
+            ]);
+            request["cutting"]["copies"] = json!(2);
+            let finite = finite_inventory(&request["variants"][0]["changes"]["default"], 2);
+            let consumer = match route {
+                "roll" => "cutting",
+                "finite" => {
+                    request.as_object_mut().unwrap().remove("cutting");
+                    request.as_object_mut().unwrap().remove("purchasing");
+                    request["finite_stock"] = finite;
+                    "finite_stock"
+                }
+                _ => {
+                    let roll = request.as_object_mut().unwrap().remove("cutting").unwrap();
+                    request.as_object_mut().unwrap().remove("purchasing");
+                    request["cutting_job"] = json!({"schema":"ftx-cutting-job/1",
+                        "routes":[{"piece":"front","stock":"roll"},{"piece":"back","stock":"finite_stock"}],
+                        "roll":roll,"finite_stock":finite});
+                    "cutting_job"
+                }
+            };
+            let result = run(&pattern, &request);
+            let actual = row(&result, "base");
+            assert_eq!(
+                actual[consumer]["status"], "available",
+                "{route}/{search}: {}",
+                actual[consumer]
+            );
+            assert_eq!(
+                actual["sewing"]["status"], "available",
+                "{route}/{search}: {}",
+                actual["sewing"]
+            );
+            let plan = &actual["sewing"]["result"];
+            assert_eq!(plan["consumables"]["production_copies"], 2);
+            assert_eq!(plan["options"]["consumables"]["production_copies"], 2);
+            assert_eq!(plan["stitch_intervals"], 90);
+            close(plan["feed_seconds"].as_f64().unwrap(), 9.0);
+            close(
+                actual["metrics"]["thread_required_length_m"]
+                    .as_f64()
+                    .unwrap(),
+                7.4,
+            );
+            close(
+                actual["metrics"]["thread_observed_order_cost"]
+                    .as_f64()
+                    .unwrap(),
+                16.0,
+            );
+            assert_eq!(result["comparison"]["frontier"], json!(["base"]));
+            let replay = super::build(
+                actual["binding"]["result"]["pattern"].clone(),
+                plan["options"].clone(),
+            )
+            .unwrap();
+            assert_eq!(plan, &serde_json::to_value(replay).unwrap());
+            if search {
+                assert_eq!(
+                    actual["sewing_selection"]["result"]["request"]["options"]["consumables"]["production_copies"],
+                    2
+                );
+                assert_eq!(
+                    actual["sewing_selection"]["result"]["optimality_proven"],
+                    true
+                );
+            }
+
+            // An explicitly contradictory count refuses the sewing consumer, preserving real stock planning.
+            let options = if search {
+                &mut request["sewing_selection"]["options"]
+            } else {
+                &mut request["sewing"]
+            };
+            options["consumables"]["production_copies"] = json!(1);
+            let mismatch = run(&pattern, &request);
+            let refused = row(&mismatch, "base");
+            assert_eq!(refused[consumer], actual[consumer]);
+            assert_eq!(refused["sewing"]["status"], "refused");
+            assert!(
+                refused["sewing"]["refusal"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("production_copies")
+            );
+            assert!(refused["metrics"]["thread_required_length_m"].is_null());
+            assert_eq!(mismatch["comparison"]["frontier"], json!([]));
+            if search {
+                assert_eq!(refused["sewing_selection"]["status"], "refused");
+            }
+        }
+    }
+}
+
+#[test]
+fn conflicting_cut_route_counts_cannot_choose_an_arbitrary_thread_batch_size() {
+    let (pattern, mut request) = study();
+    request["finite_stock"] = finite_inventory(&request["variants"][0]["changes"]["default"], 2);
+    let result = run(&pattern, &request);
+    let actual = row(&result, "base");
+    assert_eq!(actual["cutting"]["status"], "available");
+    assert_eq!(actual["finite_stock"]["status"], "available");
+    assert_eq!(actual["sewing"]["status"], "refused");
+    assert!(
+        actual["sewing"]["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("same valid")
+    );
+
+    let roll = request.as_object_mut().unwrap().remove("cutting").unwrap();
+    let finite = request
+        .as_object_mut()
+        .unwrap()
+        .remove("finite_stock")
+        .unwrap();
+    request.as_object_mut().unwrap().remove("purchasing");
+    request["cutting_job"] = json!({"schema":"ftx-cutting-job/1",
+        "routes":[{"piece":"front","stock":"roll"},{"piece":"back","stock":"finite_stock"}],
+        "roll":roll,"finite_stock":finite});
+    let result = run(&pattern, &request);
+    assert_eq!(row(&result, "base")["cutting_job"]["status"], "refused");
+    assert_eq!(row(&result, "base")["sewing"]["status"], "refused");
+}
+
 #[test]
 fn quantities_and_purchase_metrics_retain_complete_plans_and_their_own_currency() {
     let (pattern, mut request) = study();

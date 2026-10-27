@@ -3319,6 +3319,22 @@ garment, a temperature rating, a wet-state law or complete transient/mechanical 
 Matched lot-specific measurements and the unchanged-pattern linen/leather/performance-knit acceptance
 in `ftx-tm2` and `ftx-tm8` remain the principal physical-data gaps. The source-import slice is `ftx-ti1`.
 
+### 25.79 One production quantity for cutting and sewing-thread orders
+
+The sewing consumables request accepts an explicit `production_copies` count. Material and design
+studies inherit the actual roll, finite-stock or mixed cutting-job count when it is omitted; all
+requested routes must agree and explicit conflicts refuse sewing. Qualified operation/channel
+traversals and start/end allowances repeat per garment, then exact yarn requirements aggregate before
+the existing price engine evaluates minimums, increments, tiers and observed inventory. Continuity
+remains one complete operation/channel rather than one unbroken thread across all garments.
+
+Both fixed sewing and qualified recipe search use this quantity. Version-2 consumables reports retain
+per-copy contributions and complete production totals; selected options replay independently. Omitted
+standalone counts preserve the original one-garment output. Sewing geometry, feed/setup durations and
+assembly mass keep their per-garment scope. Cross-garment scheduling and combined fabric/thread supplier
+orders remain separate capabilities. Track this functional integration in `ftx-pb1`; see
+[material-sewing-plans.md](docs/material-sewing-plans.md#production-quantities-share-cutting-and-thread-purchasing).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

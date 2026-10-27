@@ -241,9 +241,14 @@ Unused candidate models do not change the selected plan's protocol. Reported bou
 for these computed quantities or costs.
 
 Thread and cutting costs remain separate, with their own currencies and complete-coverage checks.
-The thread consumer describes one declared sewing job; cutting copies do not multiply it. Neither
-thread demand nor purchased cone length establishes retained garment mass or a complete combined
-assembly purchase total. Recipe selection continues to optimize its explicit time objective.
+The thread inventory uses the same production quantity as every requested cutting route. Omitted
+`consumables.production_copies` inherits roll, finite-stock or mixed-job copies; an explicit mismatch
+refuses sewing while leaving independent cutting results visible. Requirements aggregate across
+garments before whole-order purchasing, while continuous length remains per operation/channel.
+The report retains both per-garment contributions and production totals. Neither thread demand nor
+purchased cone length establishes retained garment mass or a combined assembly purchase total.
+Sewing geometry, feed duration and setup schedules remain per garment. Recipe selection optimizes
+its explicitly declared objective, including complete batch thread order cost when requested.
 At most 200,000 configured thread-purchasing work units are admitted across all expanded material
 and design alternatives and recipe trials. Named scenario cases reuse the manufacturing result.
 

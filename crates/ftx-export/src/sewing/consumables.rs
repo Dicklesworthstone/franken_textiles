@@ -71,6 +71,10 @@ pub struct Purchasing {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
+    /// Complete repeated garments for thread inventory only, 1..4096. Omission means one garment
+    /// outside a study; a study inherits its cutting quantity. Geometry and timing stay per garment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production_copies: Option<usize>,
     /// Absence leaves prices unrequested rather than supplying a zero merchandise cost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purchasing: Option<Purchasing>,
@@ -87,17 +91,35 @@ pub struct Contribution {
     pub channel_id: String,
     /// Resolved yarn snapshot, indexed by the report's material map.
     pub material_sha256: String,
-    /// Actual intervals, counting reverse, backtack and reinforcement travel every time.
+    /// Actual intervals across the production copies, counting each repeated traversal.
     pub stitch_intervals: usize,
     /// Qualified coefficient in metres per traversed interval.
     pub metres_per_traversal: f64,
     /// Interval count multiplied by the qualified coefficient, in metres.
     pub traversal_length_m: f64,
-    /// Start allowance applied once to this complete operation/channel.
+    /// Start allowance applied once per garment to this complete operation/channel.
     pub start_allowance_m: f64,
-    /// End allowance applied once to this complete operation/channel.
+    /// End allowance applied once per garment to this complete operation/channel.
     pub end_allowance_m: f64,
     /// Traversal length plus both declared allowances, in metres.
+    pub required_length_m: f64,
+    /// One garment's source-qualified contribution, retained explicitly for production batches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_copy: Option<PerCopyContribution>,
+}
+
+/// Unscaled source-qualified demand for one operation/channel on one garment.
+#[derive(Clone, Debug, Serialize)]
+pub struct PerCopyContribution {
+    /// Actual intervals for one garment, including every reverse and reinforcement traversal.
+    pub stitch_intervals: usize,
+    /// One garment's traversals multiplied by the qualified coefficient, in metres.
+    pub traversal_length_m: f64,
+    /// Qualified allowance at the start of this operation/channel on each garment.
+    pub start_allowance_m: f64,
+    /// Qualified allowance at the end of this operation/channel on each garment.
+    pub end_allowance_m: f64,
+    /// Complete one-garment operation/channel demand; governs continuous-length requirements.
     pub required_length_m: f64,
 }
 
@@ -162,8 +184,11 @@ pub struct PurchasingReport {
 /// Source-qualified inventory derived from the actual selected production sewing plan.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `ftx-sewing-consumables/1`.
+    /// `/1` for an omitted single-garment policy; `/2` for explicit production quantities.
     pub schema: &'static str,
+    /// Repeated garment count for thread quantities and prices. Sewing geometry/time stay per copy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub production_copies: Option<usize>,
     /// Every operation has an admitted source model declaring all required channels.
     pub complete_consumption_coverage: bool,
     /// Missing quantities are not zero and cannot be repaired by a later price lookup.
@@ -199,6 +224,26 @@ fn add(sum: f64, value: f64) -> Result<f64, Refusal> {
         ));
     }
     Ok(next)
+}
+
+impl Request {
+    fn copies(&self) -> Result<usize, Refusal> {
+        let copies = self.production_copies.unwrap_or(1);
+        if !(1..=4096).contains(&copies) {
+            return Err(bad("thread production_copies must be in 1..4096"));
+        }
+        Ok(copies)
+    }
+}
+
+fn repeat(value: f64, copies: usize) -> Result<f64, Refusal> {
+    let repeated = value * copies as f64;
+    if !nonnegative(repeated) || (value > 0.0 && repeated <= 0.0) {
+        return Err(bad(
+            "repeated thread quantity must remain finite and representable",
+        ));
+    }
+    Ok(repeated)
 }
 
 fn resolve_thread(selection: &Selection) -> Result<ResolvedMaterial, Refusal> {
@@ -274,6 +319,7 @@ pub fn purchasing_work_bound(options: &SewOptions) -> Result<usize, Refusal> {
     let Some(request) = &options.consumables else {
         return Ok(0);
     };
+    request.copies()?;
     let mut hashes = BTreeSet::new();
     for model in options
         .qualifications
@@ -328,8 +374,14 @@ pub fn purchasing_work_bound(options: &SewOptions) -> Result<usize, Refusal> {
 }
 
 pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refusal> {
+    let copies = request.copies()?;
     let mut report = Report {
-        schema: "ftx-sewing-consumables/1",
+        schema: if request.production_copies.is_some() {
+            "ftx-sewing-consumables/2"
+        } else {
+            "ftx-sewing-consumables/1"
+        },
+        production_copies: request.production_copies,
         complete_consumption_coverage: true,
         missing_operations: Vec::new(),
         operation_channels: Vec::new(),
@@ -401,6 +453,7 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
                 add(traversal, channel.start_allowance_m)?,
                 channel.end_allowance_m,
             )?;
+            let batch_length = repeat(length, copies)?;
             let requirement = requirements
                 .entry(hash.clone())
                 .or_insert_with(|| Requirement {
@@ -408,7 +461,7 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
                     required_length_m: 0.0,
                     required_continuous_length_m: 0.0,
                 });
-            requirement.required_length_m = add(requirement.required_length_m, length)?;
+            requirement.required_length_m = add(requirement.required_length_m, batch_length)?;
             requirement.required_continuous_length_m =
                 requirement.required_continuous_length_m.max(length);
             report.operation_channels.push(Contribution {
@@ -416,12 +469,22 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
                 qualification_id: q.id.clone(),
                 channel_id: channel.id.clone(),
                 material_sha256: hash.clone(),
-                stitch_intervals: seam.stitch_intervals,
+                stitch_intervals: seam
+                    .stitch_intervals
+                    .checked_mul(copies)
+                    .ok_or_else(|| bad("production thread traversal count overflows"))?,
                 metres_per_traversal: channel.metres_per_traversal,
-                traversal_length_m: traversal,
-                start_allowance_m: channel.start_allowance_m,
-                end_allowance_m: channel.end_allowance_m,
-                required_length_m: length,
+                traversal_length_m: repeat(traversal, copies)?,
+                start_allowance_m: repeat(channel.start_allowance_m, copies)?,
+                end_allowance_m: repeat(channel.end_allowance_m, copies)?,
+                required_length_m: batch_length,
+                per_copy: request.production_copies.map(|_| PerCopyContribution {
+                    stitch_intervals: seam.stitch_intervals,
+                    traversal_length_m: traversal,
+                    start_allowance_m: channel.start_allowance_m,
+                    end_allowance_m: channel.end_allowance_m,
+                    required_length_m: length,
+                }),
             });
         }
     }

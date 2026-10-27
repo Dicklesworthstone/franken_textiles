@@ -105,6 +105,148 @@ fn close(actual: f64, expected: f64) {
 }
 
 #[test]
+fn production_copies_aggregate_before_order_rounding_and_preserve_per_garment_continuity() {
+    let (pattern, mut options, selected) = fixture();
+    let mut offer = quote(&selected, "cone-a", "thread-a");
+    offer["available_quantity"] = json!(8.0);
+    offer["price_breaks"] = json!([
+        {"minimum_quantity":4.0,"price":7.0},
+        {"minimum_quantity":8.0,"price":4.0}
+    ]);
+    purchasing(&mut options, vec![offer]);
+    let single = build(pattern.clone(), options.clone()).unwrap();
+    let single_report = single.consumables.as_ref().unwrap();
+    let single_value = serde_json::to_value(single_report).unwrap();
+    assert_eq!(single_report.schema, "ftx-sewing-consumables/1");
+    assert!(single_value.get("production_copies").is_none());
+    assert!(
+        single_value["operation_channels"][0]
+            .get("per_copy")
+            .is_none()
+    );
+
+    options["consumables"]["production_copies"] = json!(2);
+    let batch = build(pattern.clone(), options.clone()).unwrap();
+    let report = batch.consumables.as_ref().unwrap();
+    assert_eq!(report.schema, "ftx-sewing-consumables/2");
+    assert_eq!(report.production_copies, Some(2));
+    close(report.total_required_length_m.unwrap(), 7.4);
+    close(
+        report.material_requirements[0].required_continuous_length_m,
+        1.2,
+    );
+    for (actual, original) in report
+        .operation_channels
+        .iter()
+        .zip(&single_report.operation_channels)
+    {
+        let per_copy = actual.per_copy.as_ref().unwrap();
+        assert_eq!(actual.stitch_intervals, 2 * original.stitch_intervals);
+        assert_eq!(per_copy.stitch_intervals, original.stitch_intervals);
+        close(actual.required_length_m, 2.0 * original.required_length_m);
+        close(actual.start_allowance_m, 2.0 * original.start_allowance_m);
+        close(actual.end_allowance_m, 2.0 * original.end_allowance_m);
+        close(per_copy.required_length_m, original.required_length_m);
+        close(per_copy.traversal_length_m, original.traversal_length_m);
+        close(per_copy.start_allowance_m, original.start_allowance_m);
+        close(per_copy.end_allowance_m, original.end_allowance_m);
+    }
+    let price = report.purchasing.as_ref().unwrap();
+    assert!(price.complete_observed_quantity_coverage);
+    assert!(price.complete_continuous_length_limit_coverage);
+    close(price.least_observed_independent_order_total.unwrap(), 16.0);
+    close(
+        single_report
+            .purchasing
+            .as_ref()
+            .unwrap()
+            .least_observed_independent_order_total
+            .unwrap(),
+        14.0,
+    );
+    // One aggregated eight-metre order reaches its own tier; two separately rounded orders cost 28.
+    assert_ne!(price.least_observed_independent_order_total.unwrap(), 28.0);
+    assert_eq!(batch.stitch_intervals, single.stitch_intervals);
+    assert_eq!(batch.feed_seconds, single.feed_seconds);
+    assert_eq!(
+        serde_json::to_value(&batch.seams).unwrap(),
+        serde_json::to_value(&single.seams).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&batch).unwrap(),
+        serde_json::to_value(
+            SewPlan::build(&Pattern::new(pattern.clone()), &batch.options).unwrap()
+        )
+        .unwrap()
+    );
+
+    options["consumables"]["purchasing"]["quote_book"]["quotes"][0]["available_quantity"] =
+        json!(6.0);
+    let short = build(pattern.clone(), options.clone()).unwrap();
+    let short = short.consumables.unwrap();
+    close(short.total_required_length_m.unwrap(), 7.4);
+    assert!(!short.purchasing.as_ref().unwrap().complete_offer_coverage);
+    assert!(
+        short
+            .purchasing
+            .as_ref()
+            .unwrap()
+            .least_observed_independent_order_total
+            .is_none()
+    );
+
+    options["qualifications"][0]["thread_consumption"]["channels_complete"] = json!(false);
+    let partial = build(pattern, options).unwrap().consumables.unwrap();
+    assert!(!partial.complete_consumption_coverage);
+    assert!(partial.total_required_length_m.is_none());
+    assert!(partial.material_requirements.is_empty());
+    assert!(partial.purchasing.unwrap().material_orders.is_empty());
+}
+
+#[test]
+fn production_quantity_refuses_invalid_counts_and_overflow_without_changing_single_copy_arithmetic()
+{
+    let (pattern, options, _) = fixture();
+    let single = build(pattern.clone(), options.clone()).unwrap();
+    let mut explicit = options.clone();
+    explicit["consumables"]["production_copies"] = json!(1);
+    let one = build(pattern.clone(), explicit).unwrap();
+    close(
+        one.consumables
+            .as_ref()
+            .unwrap()
+            .total_required_length_m
+            .unwrap(),
+        single
+            .consumables
+            .as_ref()
+            .unwrap()
+            .total_required_length_m
+            .unwrap(),
+    );
+    for copies in [0, 4097] {
+        let mut invalid = options.clone();
+        invalid["consumables"]["production_copies"] = json!(copies);
+        let error = build(pattern.clone(), invalid).unwrap_err();
+        assert!(error.message.contains("production_copies"));
+    }
+    let mut overflow = options;
+    overflow["consumables"]["production_copies"] = json!(4096);
+    overflow["qualifications"][0]["thread_consumption"]["channels"][0]["metres_per_traversal"] =
+        json!(1e304);
+    overflow["qualifications"][0]["thread_consumption"]["channels"][0]["start_allowance_m"] =
+        json!(0.0);
+    overflow["qualifications"][0]["thread_consumption"]["channels"][0]["end_allowance_m"] =
+        json!(0.0);
+    assert!(
+        build(pattern, overflow)
+            .unwrap_err()
+            .message
+            .contains("repeated thread quantity")
+    );
+}
+
+#[test]
 fn actual_repeated_traversals_and_per_operation_allowances_aggregate_before_canonical_pricing() {
     let (pattern, mut options, selected) = fixture();
     purchasing(&mut options, vec![quote(&selected, "cone-a", "thread-a")]);

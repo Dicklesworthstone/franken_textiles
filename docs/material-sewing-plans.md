@@ -165,6 +165,34 @@ across two passes and two declared channels require 3.7 metres after the explici
 allowances; one four-metre rounded order reaches its declared price threshold. Those invented
 coefficients exercise arithmetic and source propagation, not real thread consumption.
 
+### Production quantities share cutting and thread purchasing
+
+Standalone sewing accepts `"consumables": {"production_copies": 3}` to request a three-garment
+thread inventory. Counts are integers in `1..4096`. Omitting the field preserves the original
+single-garment `ftx-sewing-consumables/1` output. An explicit count selects
+`ftx-sewing-consumables/2`, retaining `production_copies` and each operation/channel's `per_copy`
+interval count, traversal length, start/end allowances and complete required length alongside its
+batch contribution.
+
+The consumer repeats every actual traversal and every start/end allowance once per garment, then
+aggregates by exact yarn snapshot **before** applying supplier minimums, increments, price tiers
+and available stock. It prices a complete production order, not a sum of independently rounded
+one-garment orders. The largest complete operation/channel on a single garment still determines
+the continuous-length requirement; separate garments do not require a single unspliced thread
+segment spanning the whole batch. Incomplete consumption remains unknown for every quantity.
+
+Material/design studies inherit the cutting quantity from roll, finite-stock or mixed cutting-job
+requests when the sewing count is omitted. Every requested cutting route must agree. An explicitly
+different thread count refuses the sewing consumer while preserving independent cutting results.
+Both fixed plans and cost-directed recipe selection receive the quantity before evaluation, and
+the selected options retain it for standalone replay.
+
+The regression's two-garment 7.4 m demand becomes one 8 m order costing 16 in its synthetic market;
+pricing two separate one-garment orders would cost 28. It also checks finite-stock refusal, repeated
+allowances, unchanged 1.2 m continuity, actual cutting routes and native/portable replay. These are
+arithmetic examples, not live quotes. Sewing paths, feed durations and setup schedules still describe
+one garment: a batch execution schedule and cross-garment setup optimization are separate work.
+
 ## Geometry, feed and sequencing
 
 ### Optional setup-change optimization

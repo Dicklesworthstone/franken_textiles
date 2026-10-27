@@ -196,9 +196,13 @@ the ordinary sewing commands. Feed/setup objectives keep their existing schemas 
 fields. The cost objective does not require an optimal operation ordering because ordering cannot
 change the declared operation set, traversed intervals or per-operation thread allowances.
 
-This objective covers the independently priced thread orders for the one complete sewing job. It
-does not combine them with fabric cutting costs, infer batch-copy quantities, value worker time, or
-optimize a coupled supplier shipping bundle. Production quality and hardware permission retain their
+This objective covers the independently priced thread orders for the complete declared production
+quantity. Set `options.consumables.production_copies` for standalone selection; material/design studies
+inherit their cutting quantity when it is omitted and refuse mismatches. The same per-garment recipe
+is repeated, then all yarn demand is aggregated before source price tiers, minimums and stock apply.
+The selected options retain that count for exact replay. Geometry and feed/setup time remain per garment.
+It does not combine thread with fabric cutting costs, value worker time, or optimize a coupled supplier
+shipping bundle or cross-garment execution schedule. Production quality and hardware permission retain their
 independent gates. Material-study comparisons continue applying their explicit source-protocol
 policy to each actual selected plan.
 
