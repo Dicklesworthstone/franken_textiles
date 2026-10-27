@@ -111,3 +111,44 @@ only normalized factual snapshots and source hashes, not supplier page copies.
 exact performance-mesh style identity, original yarn/fill levels, missing-range midpoints and
 manifest-to-material identity. They verify the software/data boundary; they do not establish
 garment fit, warmth, measured cloth behavior or machine safety.
+
+## Coats Epic sewing-thread observations (August 2026)
+
+Four additional `Form::Yarn` records in
+`crates/ftx-pattern/src/material_catalog/catalog.json` preserve exact articles from the
+manufacturer's [Coats Epic Product Information Sheet](https://www.coats.com/wp-content/uploads/2025/04/Coats-Epic-Product-Information-Sheet-2026.pdf).
+The Product Range table is on page 2; the August 2026 edition date is on page 3.
+The PDF was retrieved on **2026-10-26** and its table checked visually.
+
+| Catalog ID | Ticket | Tex | Put-up length, m | Supplier average strength, cN |
+| --- | ---: | ---: | ---: | ---: |
+| `coats/epic-2994120-2026` | 120 | 24 | 5000 | 1190 |
+| `coats/epic-2994100-2026` | 100 | 30 | 5000 | 1490 |
+| `coats/epic-2994080-2026` | 80 | 40 | 5000 | 1960 |
+| `coats/epic-2994050-2026` | 50 | 60 | 5000 | 3040 |
+
+Source PDF SHA-256:
+`b08de6e730a7f3993f21219ce189b2da0038091b9976f53fe0a154687bed0ca6`.
+
+All numeric observations carry `published` evidence, original units, source table and
+edition, and exact article identity. The publisher describes indicative current averages,
+without lot bounds or independent calibration. The source names polyester corespun
+construction with polyester wrap and a lubricant finish, but no constituent mass fractions;
+composition remains incomplete. Reported elongation and recommended needle-size ranges
+remain descriptive observations. No midpoint, constitutive law or machine qualification
+is inferred.
+
+The existing resolver normalizes `yarn_linear_density` from tex to kg/m while preserving
+authored observations and frozen selection identity. These yarn selections can be embedded
+in qualified sewing `thread_consumption` channels. With separately sourced metres-per-traversal
+coefficients and start/end allowances, the sewing consumables consumer computes operation,
+per-copy and production-batch length requirements. Its purchasing consumer can evaluate
+separately observed length offers for those exact yarn snapshots. The Coats sheet supplies
+neither consumption coefficients nor price/stock evidence.
+
+`put_up_length` remains a package-length observation: it does not automatically establish
+order increments, uninterrupted available stock or cone rounding. Current pricing does not
+convert yarn length requirements into mass. `supplier_average_thread_strength` remains an
+unknown extension in cN, with no automatic unit conversion or interpretation as seam strength,
+a shell force limit or an allowable load. Mechanical and thermal capability gates continue
+to refuse missing physical properties.

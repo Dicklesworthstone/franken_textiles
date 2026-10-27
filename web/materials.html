@@ -337,8 +337,11 @@ undeclared handling or establish total production time.</p>
 use nominal <code>thread_required_length_m</code> and <code>thread_observed_order_cost</code> as objectives or constraints.
 Require <code>sewing_consumables</code> for complete channel quantities or <code>sewing_purchasing</code> for complete exact-yarn orders.
 The workbench shows the actual selected operation/channel requirements and retains qualified sources and canonical order details.
-Thread purchasing has its own currency and market, which may differ from cutting. It describes one sewing job;
-cutting copies do not multiply thread demand. Prices are not combined with cutting costs, purchased length is not retained garment mass,
+Thread purchasing has its own currency and market, which may differ from cutting. In a study, thread demand uses the cutting production count;
+an explicit <code>consumables.production_copies</code> must agree. Standalone sewing accepts the same field and otherwise describes one garment.
+Per-garment traversal and start/end allowances aggregate across copies before supplier minimums, increments, tiers and stock are evaluated.
+Continuity remains a single operation/channel requirement, and sewing geometry, feed duration and setup schedules remain per garment.
+Prices are not combined with cutting costs, purchased length is not retained garment mass,
 and time-based recipe selection does not prove a thread-cost optimum.</p>
 <p class="note">To choose the recipe by thread purchasing cost, set <code>sewing_selection.schema</code> to
 <code>ftx-sewing-selection/3</code> and <code>objective</code> to <code>minimize_thread_observed_order_cost</code>.
@@ -468,6 +471,15 @@ Consumers <code>material_strain</code> and <code>motion_material_strain</code> c
 These values are raw material Green strains, not percent extension or a softened solver surrogate.
 Inclusive limits are declared design requirements; characterized material domains are not rupture or comfort limits.
 An exhausted strain budget refuses that consumer while preserving independent mechanical and manufacturing results.</p>
+<p class="note">For body-contact load comparisons, add scenario <code>contact_loads</code> with
+<code>{"schema":"ftx-contact-loads/1","max_vertex_samples":100000,"max_pair_evaluations":1000000}</code>.
+Optional <code>instances</code> selects exact retained garment instances; their shared sewn vertices count once.
+Use nominal <code>body_contact_resultant_n</code> or <code>max_body_contact_vertex_force_n</code> for the initial state,
+and <code>motion_peak_body_contact_resultant_n</code> or <code>motion_max_body_contact_vertex_force_n</code> for the complete accepted history.
+Consumers <code>contact_loads</code> and <code>motion_contact_loads</code> may also be required independently.
+The workbench retains signed resultant vectors, nodal maxima, source vertices, sample times and exact material identities.
+Opposing forces can cancel in the resultant; nodal maxima depend on the mesh. These normal forces in newtons exclude tangential friction;
+they are not pressure or comfort limits. Missing source data or exhausted work allowances keep this consumer unavailable without hiding independent results.</p>
 <p>Changing either request, measurements, body or original pattern withdraws affected results. Cancel terminates the worker,
 including synchronous simulation. Raw reports and exact input JSON are downloadable; keep the source-identified body model locally for replay.</p>
 </div></div>

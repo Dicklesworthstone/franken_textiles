@@ -191,6 +191,7 @@ pub(super) fn evaluate(
     run: &mut DrapeRun,
     heat_budget: &mut heat::Budget,
     material_strain: Option<Result<super::strain::History, Refusal>>,
+    contact_loads: Option<Result<super::contact_loads::History, Refusal>>,
     progress: impl FnMut(&str),
 ) -> Result<Value, Refusal> {
     let initial = run.scene.solver.clone();
@@ -202,6 +203,7 @@ pub(super) fn evaluate(
         run,
         heat_budget,
         material_strain,
+        contact_loads,
         progress,
     );
     if result.is_err() {
@@ -219,6 +221,7 @@ fn evaluate_path(
     run: &mut DrapeRun,
     heat_budget: &mut heat::Budget,
     mut material_strain: Option<Result<super::strain::History, Refusal>>,
+    mut contact_loads: Option<Result<super::contact_loads::History, Refusal>>,
     mut progress: impl FnMut(&str),
 ) -> Result<Value, Refusal> {
     path.validate_for(request, body)?;
@@ -389,6 +392,11 @@ fn evaluate_path(
             {
                 material_strain = Some(Err(refusal));
             }
+            if let Some(Ok(history)) = &mut contact_loads
+                && let Err(refusal) = history.advance(&sample.cloth, &sample.body, time)
+            {
+                contact_loads = Some(Err(refusal));
+            }
             if let Some(Ok(history)) = &mut vapor_history
                 && let Err(refusal) = history.advance(crate::vapor::coverage::history::Sample {
                     time_s: time,
@@ -500,6 +508,9 @@ fn evaluate_path(
         "scope":"Prescribed piecewise-linear body-vertex motion from the computed initial drape. All accepted substeps are retained; no independent restarts or empirical ride-up/fit claim. Body self-intersection is not certified."});
     if let Some(history) = material_strain {
         result["material_strain"] = outcome(history.map(|history| history.report(true)));
+    }
+    if let Some(history) = contact_loads {
+        result["contact_loads"] = outcome(history.map(|history| history.report(true)));
     }
     if let Some(history) = initial_permanent_history {
         result["initial_membrane_plasticity_history"] = history;

@@ -1,7 +1,7 @@
 //! Source-preserving catalog selection extends the existing material model, not a second physics API.
 use ftx_pattern::{
     material_catalog::{Selection, normalize},
-    materials::Catalog,
+    materials::{Catalog, Evidence, Form},
 };
 use serde_json::{Value, json};
 
@@ -33,7 +33,7 @@ fn selection() -> Selection {
 #[test]
 fn factual_seed_does_not_invent_physics_or_midpoints() {
     let db = Catalog::builtin().unwrap();
-    assert_eq!(db.materials.len(), 261);
+    assert_eq!(db.materials.len(), 265);
     for id in [
         "fsri/hfm/cotton-sheet/dry/220330-r1",
         "fsri/hfm/cotton-sheet/wet/220318-r1",
@@ -409,5 +409,80 @@ fn observed_supplier_offers_reach_shared_price_capacity_and_revision_consumers()
             assert!(expired.offers.is_empty());
             assert_eq!(expired.excluded_offers[0].reason, ExclusionReason::Expired);
         }
+    }
+}
+
+#[test]
+fn supplier_sewing_threads_normalize_tex_without_reinterpreting_strength_or_ranges() {
+    let catalog = Catalog::builtin().unwrap();
+    for (article, tex, strength_cn) in [
+        ("2994120", 24., 1190.),
+        ("2994100", 30., 1490.),
+        ("2994080", 40., 1960.),
+        ("2994050", 60., 3040.),
+    ] {
+        let resolved = catalog
+            .resolve(&Selection {
+                id: format!("coats/epic-{article}-2026"),
+                ..Selection::default()
+            })
+            .unwrap();
+        let authored = resolved.authored();
+        let material = resolved.material();
+        assert_eq!(material.form, Form::Yarn);
+        assert_eq!(authored.properties["yarn_linear_density"].unit, "tex");
+        assert_eq!(authored.properties["yarn_linear_density"].value, tex);
+        assert!(
+            (material
+                .require("yarn_linear_density", "kg/m", false)
+                .unwrap()
+                - tex * 1e-6)
+                .abs()
+                < 1e-18
+        );
+        assert_eq!(
+            material.require("put_up_length", "m", false).unwrap(),
+            5000.
+        );
+        assert_eq!(
+            material
+                .require("supplier_average_thread_strength", "cN", false)
+                .unwrap(),
+            strength_cn
+        );
+        // A source-defined average has no shell-force meaning or automatic unit conversion.
+        assert!(
+            material
+                .require("supplier_average_thread_strength", "N", false)
+                .is_err()
+        );
+        assert!(!material.properties.contains_key("breaking_force_warp"));
+        assert!(!material.properties.contains_key("breaking_force_weft"));
+        assert!(!material.properties.contains_key("yarn_elongation_break"));
+        assert!(material.structure.contains_key("elongation_reported_range"));
+        assert!(material.composition.is_empty());
+        assert!(!material.composition_complete);
+        assert!(resolved.mechanics().is_err());
+        assert!(resolved.thermal_resistance().is_err());
+        for observation in material.properties.values() {
+            assert_eq!(observation.evidence, Evidence::Published);
+            assert!(observation.bounds.is_none());
+            assert_eq!(observation.source, "coats-epic-2026");
+            assert!(observation.conditions["source_table"].contains("page 2; August 2026"));
+        }
+        let source = &authored.sources["coats-epic-2026"];
+        assert_eq!(source.accessed_on, "2026-10-26");
+        assert!(
+            source
+                .note
+                .contains("b08de6e730a7f3993f21219ce189b2da0038091b9976f53fe0a154687bed0ca6")
+        );
+        assert_eq!(
+            catalog
+                .resolve(&resolved.frozen_selection())
+                .unwrap()
+                .sha256(),
+            resolved.sha256()
+        );
     }
 }

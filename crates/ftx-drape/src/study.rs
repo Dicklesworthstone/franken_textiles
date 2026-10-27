@@ -23,6 +23,7 @@ use crate::{
     },
 };
 
+pub mod contact_loads;
 pub mod fitted;
 pub mod heat;
 pub mod matrix;
@@ -100,6 +101,9 @@ pub struct Scenario {
     /// Raw material-frame strain on selected retained instances; independent of other consumers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_strain: Option<strain::Request>,
+    /// Source-bound body barrier forces on a selected union of retained welded vertices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_loads: Option<contact_loads::Request>,
 }
 
 fn default_motion_trials() -> usize {
@@ -174,6 +178,7 @@ pub struct Session<'a, 'body> {
     motion_path: Option<Result<motion::Path, Refusal>>,
     heat_budget: heat::Budget,
     strain_budget: strain::Budget,
+    contact_load_budget: contact_loads::Budget,
 }
 
 impl<'a, 'body> Session<'a, 'body> {
@@ -208,6 +213,7 @@ impl<'a, 'body> Session<'a, 'body> {
             motion_path: None,
             heat_budget: heat::Budget::default(),
             strain_budget: strain::Budget::default(),
+            contact_load_budget: contact_loads::Budget::default(),
         })
     }
 
@@ -217,6 +223,12 @@ impl<'a, 'body> Session<'a, 'body> {
         let mut descriptor = json!({"scenario":self.scenario,"body_geometry_sha256":self.body_sha256,
             "scenario_sha256":self.scenario_sha256,
             "body_policy":"one fixed caller-supplied posed body; no material-dependent refitting"});
+        if self.scenario.contact_loads.is_some() {
+            descriptor["contact_body"] = json!({
+                "collision_sha256":hash(&self.body.collision).expect("admitted collision body"),
+                "vertex_count":self.body.collision.0.len(),
+                "triangles_sha256":hash(&self.body.collision.1).expect("admitted body triangles")});
+        }
         if let Some(policy) = &self.scenario.vapor_coverage {
             let faces: Option<Vec<_>> = policy
                 .body_triangle_ids
@@ -369,6 +381,11 @@ impl<'a, 'body> Session<'a, 'body> {
             .material_strain
             .as_ref()
             .map(|request| self.strain_budget.reserve(request));
+        let contact_load_admission = self
+            .scenario
+            .contact_loads
+            .as_ref()
+            .map(|request| self.contact_load_budget.reserve(request));
         let mut run = drape(
             pattern,
             &self.scenario.fit_spec,
@@ -379,6 +396,10 @@ impl<'a, 'body> Session<'a, 'body> {
         let mut material_strain = self.scenario.material_strain.as_ref().map(|request| {
             strain_admission.expect("requested strain consumer has admission")?;
             strain::History::new(request, &run)
+        });
+        let mut contact_loads = self.scenario.contact_loads.as_ref().map(|request| {
+            contact_load_admission.expect("requested contact loads have admission")?;
+            contact_loads::History::new(request, &run)
         });
         let surface = self
             .scenario
@@ -429,6 +450,16 @@ impl<'a, 'body> Session<'a, 'body> {
                     .map_err(Clone::clone),
             );
         }
+        if let Some(history) = &contact_loads {
+            result["contact_load_ownership"] = json!({"instances":run.scene.mesh.instances,
+                "triangle_instance":run.scene.triangle_owner});
+            result["contact_loads"] = outcome(
+                history
+                    .as_ref()
+                    .map(|history| history.report(false))
+                    .map_err(Clone::clone),
+            );
+        }
         if let Some(policy) = &self.scenario.vapor_coverage {
             result["vapor_coverage"] =
                 outcome(vapor_coverage_at(policy, &run, self.body.collision));
@@ -452,6 +483,7 @@ impl<'a, 'body> Session<'a, 'body> {
                         &mut run,
                         &mut self.heat_budget,
                         material_strain.take(),
+                        contact_loads.take(),
                         progress,
                     ),
                     Some(Err(refusal)) => Err(refusal.clone()),

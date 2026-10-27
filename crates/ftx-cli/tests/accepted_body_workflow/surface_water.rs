@@ -212,6 +212,8 @@ fn supplied_textile_water_replays_in_native_commands_and_portable_scenario_matri
     let (pattern, mut study, mut single) = inputs();
     single["material_strain"] = json!({"schema":"ftx-material-strain/1",
         "instances":["band"],"max_triangle_samples":100000});
+    single["contact_loads"] = json!({"schema":"ftx-contact-loads/1",
+        "instances":["band"],"max_vertex_samples":100000,"max_pair_evaluations":1000000});
     let water = &mut single["motion"]["transient_surface"]["surface_water"];
     water["schema"] = json!("ftx-textile-surface-water/2");
     water
@@ -228,7 +230,11 @@ fn supplied_textile_water_replays_in_native_commands_and_portable_scenario_matri
     study["comparison"]["objectives"] = json!([
         {"metric":"textile_water_supplied_mass_kg","direction":"minimize"},
         {"metric":"transient_surface_final_min_temperature_c","direction":"minimize"},
-        {"metric":"motion_max_warp_green_strain","direction":"minimize"}]);
+        {"metric":"motion_max_warp_green_strain","direction":"minimize"},
+        {"metric":"motion_peak_body_contact_resultant_n","direction":"minimize"},
+        {"metric":"motion_max_body_contact_vertex_force_n","direction":"minimize"},
+        {"metric":"body_contact_resultant_n","direction":"minimize"},
+        {"metric":"max_body_contact_vertex_force_n","direction":"minimize"}]);
     study["comparison"]["constraints"][0] =
         json!({"metric":"textile_water_remaining_mass_kg","minimum":0.});
     study["comparison"]["constraints"]
@@ -308,6 +314,30 @@ fn supplied_textile_water_replays_in_native_commands_and_portable_scenario_matri
                 water["supplied_liquid_kg"]
             );
             assert_eq!(result["material_strain"]["status"], "available");
+            assert_eq!(result["contact_loads"]["status"], "available");
+            let contact = &result["motion"]["result"]["contact_loads"];
+            assert_eq!(contact["status"], "available", "{contact}");
+            for (metric, field) in [
+                (
+                    "motion_peak_body_contact_resultant_n",
+                    "peak_body_resultant_n",
+                ),
+                (
+                    "motion_max_body_contact_vertex_force_n",
+                    "max_body_vertex_force_n",
+                ),
+            ] {
+                assert_eq!(readings[metric]["value"], contact["result"][field]);
+                assert_eq!(readings[metric]["unit"], "N");
+            }
+            assert_eq!(
+                readings["body_contact_resultant_n"]["value"],
+                result["contact_loads"]["result"]["peak_body_resultant_n"]
+            );
+            assert_eq!(
+                readings["max_body_contact_vertex_force_n"]["value"],
+                result["contact_loads"]["result"]["max_body_vertex_force_n"]
+            );
             let strain = &result["motion"]["result"]["material_strain"];
             assert_eq!(strain["status"], "available");
             assert_eq!(

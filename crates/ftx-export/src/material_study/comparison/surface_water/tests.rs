@@ -168,10 +168,12 @@ fn textile_water_and_maxwell_heat_share_one_conserved_decision_ledger() {
     let admitted = Numerical {
         drape: &s,
         material_strain: None,
+        contact_loads: None,
         vapor_surface: &Value::Null,
         vapor_coverage: None,
         motion: &m,
         motion_material_strain: None,
+        motion_contact_loads: None,
         motion_vapor_coverage: None,
         motion_wet_film: None,
         transient_surface: Some(heat),

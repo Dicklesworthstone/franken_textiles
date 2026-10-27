@@ -829,3 +829,101 @@ Complete declared pre-finishing assembly accounting is available; it cannot disc
 Synthetic coupons and numerical conservation
 are not measured linen/leather/knit garment validation. No warmth rating, empirical fit,
 whole-wearer accuracy, global optimum or hardware execution authorization is claimed.
+
+## Body contact loads in material studies
+
+Optional `scenario.contact_loads` summarizes body barrier forces from the production
+contact model for the whole retained garment or selected physical instances:
+
+```json
+{
+  "contact_loads": {
+    "schema": "ftx-contact-loads/1",
+    "instances": ["front", "back"],
+    "max_vertex_samples": 100000,
+    "max_pair_evaluations": 1000000
+  }
+}
+```
+
+Use exact instance IDs from the sewn garment, or omit `instances` to select all retained
+instances. An explicit list must be nonempty and unique. Unknown, omitted or collapsed
+instances refuse the optional consumer. Both work allowances are required positive integers
+at most 64000000 and cover the initial state and all accepted motion samples together.
+
+### Force scope and material propagation
+
+The consumer reports body barrier force on cloth in newtons and simulation world coordinates.
+It uses the solver's source-bound contact parameters and surface fields, including material
+thickness and seam envelopes. Accepted body geometry moves the collider without discarding
+those material fields. The physical material-thickness ramp must be complete first.
+
+Selected retained triangles contribute a sorted union of welded cloth vertices, counted once.
+A node shared with an unselected piece retains its whole body force: no unqualified allocation
+between pieces is invented. Reports include the vector sum and its magnitude, plus the maximum
+nodal-force magnitude and global welded vertex that witnesses it. Opposing forces can cancel
+in the resultant while local forces remain large.
+
+These are discrete body barrier forces, excluding self-contact forces and Coulomb tangential
+friction. Nodal maxima depend on mesh and barrier policy. No contact-area or physiological
+model is supplied: `physical_validation_claim`, `pressure_claim`, `comfort_claim` and
+`continuous_time_bound` are all false. Caller-supplied force limits remain numerical design
+requirements, without an inferred comfort, safe-fit or garment-tightness threshold.
+
+### Reports, witnesses and comparison
+
+Within each available simulation's result, `contact_loads` is the initial outcome and
+`motion.result.contact_loads` is the accepted-motion outcome. Each uses the ordinary
+`status: "available"` plus `result`, or `status: "refused"` plus refusal envelope.
+An available report has schema `ftx-contact-loads-report/1` and unit `N`.
+The initial scope `initial_state` means the completed drape state used to start motion.
+The motion scope `accepted_motion_samples` contains that state followed by every accepted
+sample, excluding rejected solver trials and unsampled intermediate states.
+
+The report retains the exact request, instance/material hashes, triangle ownership, selected
+welded vertex indices, body topology, material-report digest and `source_sha256`.
+Each frame retains sample index, time, cloth-position hash, body-state hash,
+active-contact-policy hash, candidate-pair count and
+`body_force_on_selected_vertices_n` aligned with `source.selected_vertices`.
+Its `body` reduction contains `resultant_n`, `resultant_magnitude_n`,
+`max_vertex_force_n` and `max_force_vertex`.
+
+Whole-history `peak_body_resultant_n` and `max_body_vertex_force_n` retain their respective
+`peak_body_resultant_sample` and `max_body_vertex_force_sample` witnesses. Equal maxima use
+the earliest sample; equal nodal maxima use the lowest selected vertex index. Initial/final
+cloth hashes, duration and consumed vertex/pair work remain inspectable.
+
+| Comparison metric | Consumer | Unit | Meaning |
+| --- | --- | --- | --- |
+| `body_contact_resultant_n` | `contact_loads` | N | Initial selected resultant magnitude |
+| `max_body_contact_vertex_force_n` | `contact_loads` | N | Initial maximum selected nodal force |
+| `motion_peak_body_contact_resultant_n` | `motion_contact_loads` | N | Peak selected resultant over the complete accepted history |
+| `motion_max_body_contact_vertex_force_n` | `motion_contact_loads` | N | Peak selected nodal force over the complete accepted history |
+
+Existing settled/gating-clear mechanical admission still applies before ranking; motion metrics
+also need complete admitted motion. Contact admission reconciles frozen materials, selected
+ownership and welded scope, cloth/body geometry, accepted samples, force reductions, extrema
+witnesses and work totals. An independent initial collision-body identity in the session descriptor
+prevents a receipt from another body from becoming eligible. Retained vectors support arithmetic
+reconciliation without an additional solve; that is consistency checking, not physical validation.
+Scope and mesh topology participate in comparison protocols, with incompatible protocols refused
+unless the caller explicitly permits mixed protocols. Only nominal readings are supported.
+
+### Work limits and optional failure
+
+Each frame charges the full cloth plus full body vertex count against `max_vertex_samples`;
+selecting a small garment region does not avoid full-geometry contact work.
+`max_pair_evaluations` charges all production contact candidates considered for derivatives,
+including inactive and self-contact candidates. The complete candidate set must fit before any
+derivatives are evaluated. This allowance does not replace or bound the existing broad phase.
+
+A session reserves the requested maxima for each evaluated alternative, with separate aggregate
+64000000 ceilings for vertices and pairs. Missing source/body data, invalid scope, unfinished
+thickness ramp or exhausted allowances refuse only this optional consumer. The trajectory and
+other available consumers remain intact. If motion exhausts its allowance after a valid initial
+reading, the initial report stays available and the motion-load outcome refuses; no partial
+history can supply a supposedly complete peak.
+
+The materials workbench displays separate initial and motion load tables, signed resultant
+components, maxima, sample/time/vertex witnesses, selected instances and raw receipts. It displays
+the Rust comparison result without deriving a pressure or reranking the alternatives in JavaScript.

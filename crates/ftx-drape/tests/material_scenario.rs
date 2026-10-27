@@ -10,6 +10,8 @@ use ftx_drape::{
 use ftx_pattern::Pattern;
 use serde_json::{Value, json};
 
+#[path = "material_scenario/contact_loads.rs"]
+mod contact_loads;
 #[path = "material_scenario/strain.rs"]
 mod material_strain;
 

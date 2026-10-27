@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use super::{Alternative, Request, ScenarioAlternative, hash, invalid};
 
+mod contact_loads;
 #[cfg(test)]
 mod heating_tests;
 mod material_strain;
@@ -58,6 +59,8 @@ pub enum Consumer {
     Drape,
     /// Raw material-frame Green strain on every selected retained triangle of the admitted drape.
     MaterialStrain,
+    /// Body barrier forces over an explicit union of welded vertices on the admitted initial drape.
+    ContactLoads,
     /// Successful independent sheet-column heat on an admitted drape, not whole-body heat.
     Surface,
     /// Potential vapor transfer over current independent sheets on an admitted initial drape.
@@ -70,6 +73,8 @@ pub enum Consumer {
     Motion,
     /// Raw material-frame strain over the initial state and every accepted motion sample.
     MotionMaterialStrain,
+    /// Body barrier loads across the initial state and every accepted motion sample.
+    MotionContactLoads,
     /// Complete potential vapor transfer on the declared covered body domain at every motion sample.
     MotionVaporCoverage,
     /// Conserved explicitly supplied body liquid over a complete covered-domain motion history.
@@ -134,6 +139,10 @@ pub enum Metric {
     SimulatedClothMassKg,
     /// Maximum absolute reported edge strain (%) across compression and extension, at report precision.
     MaxAbsoluteEdgeStrainPct,
+    /// Magnitude of summed body barrier forces on selected welded vertices, in N.
+    BodyContactResultantN,
+    /// Largest body barrier-force magnitude at one selected welded vertex, in N.
+    MaxBodyContactVertexForceN,
     /// Lowest raw warp Green strain E11 on the selected initial drape, dimensionless.
     MinWarpGreenStrain,
     /// Highest raw warp Green strain E11 on the selected initial drape, dimensionless.
@@ -160,6 +169,10 @@ pub enum Metric {
     CoveredVaporPotentialMassFlowKgS,
     /// Peak absolute original-panel edge strain (%) over the initial state and accepted motion samples.
     MotionMaxAbsoluteEdgeStrainPct,
+    /// Peak selected body-force resultant magnitude over initial and accepted samples, in N.
+    MotionPeakBodyContactResultantN,
+    /// Largest selected nodal body-force magnitude over initial and accepted samples, in N.
+    MotionMaxBodyContactVertexForceN,
     /// Lowest selected raw warp E11 over the initial state and every accepted motion sample.
     MotionMinWarpGreenStrain,
     /// Highest selected raw warp E11 over the initial state and every accepted motion sample.
@@ -244,6 +257,9 @@ impl Metric {
             Self::ThreadObservedOrderCost => Consumer::SewingPurchasing,
             Self::VaporPotentialHeatFlowW | Self::VaporPotentialMassFlowKgS => Consumer::Vapor,
             Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
+            Self::BodyContactResultantN | Self::MaxBodyContactVertexForceN => {
+                Consumer::ContactLoads
+            }
             Self::MinWarpGreenStrain
             | Self::MaxWarpGreenStrain
             | Self::MinWeftGreenStrain
@@ -258,6 +274,9 @@ impl Metric {
                 Consumer::VaporCoverage
             }
             Self::MotionMaxAbsoluteEdgeStrainPct => Consumer::Motion,
+            Self::MotionPeakBodyContactResultantN | Self::MotionMaxBodyContactVertexForceN => {
+                Consumer::MotionContactLoads
+            }
             Self::MotionMinWarpGreenStrain
             | Self::MotionMaxWarpGreenStrain
             | Self::MotionMinWeftGreenStrain
@@ -326,6 +345,10 @@ impl Metric {
             | Self::IndependentVaporPotentialMassFlowKgS => "kg/s",
             Self::SimulatedClothMassKg => "kg",
             Self::MaxAbsoluteEdgeStrainPct | Self::MotionMaxAbsoluteEdgeStrainPct => "%",
+            Self::BodyContactResultantN
+            | Self::MaxBodyContactVertexForceN
+            | Self::MotionPeakBodyContactResultantN
+            | Self::MotionMaxBodyContactVertexForceN => "N",
             Self::MinWarpGreenStrain
             | Self::MaxWarpGreenStrain
             | Self::MinWeftGreenStrain
@@ -385,6 +408,18 @@ impl Metric {
                 row.vapor.value().map(|r| r.potential_mass_flow_kg_s)
             }
             Self::SimulatedClothMassKg => simulation["drape"]["mass_kg"].as_f64(),
+            Self::BodyContactResultantN => {
+                admitted.contact_loads?["peak_body_resultant_n"].as_f64()
+            }
+            Self::MaxBodyContactVertexForceN => {
+                admitted.contact_loads?["max_body_vertex_force_n"].as_f64()
+            }
+            Self::MotionPeakBodyContactResultantN => {
+                admitted.motion_contact_loads?["peak_body_resultant_n"].as_f64()
+            }
+            Self::MotionMaxBodyContactVertexForceN => {
+                admitted.motion_contact_loads?["max_body_vertex_force_n"].as_f64()
+            }
             Self::MaxAbsoluteEdgeStrainPct => {
                 let strain = &simulation["drape"]["global_strain_pct"];
                 let lo = strain["min"].as_f64()?;
@@ -802,12 +837,14 @@ impl Policy {
                 Consumer::Vapor => request.vapor.is_some(),
                 Consumer::Drape
                 | Consumer::MaterialStrain
+                | Consumer::ContactLoads
                 | Consumer::Surface
                 | Consumer::VaporSurface
                 | Consumer::Coverage
                 | Consumer::VaporCoverage
                 | Consumer::Motion
                 | Consumer::MotionMaterialStrain
+                | Consumer::MotionContactLoads
                 | Consumer::MotionVaporCoverage
                 | Consumer::MotionWetFilm
                 | Consumer::TransientSurface
@@ -842,12 +879,14 @@ impl Policy {
                 c,
                 Consumer::Drape
                     | Consumer::MaterialStrain
+                    | Consumer::ContactLoads
                     | Consumer::Surface
                     | Consumer::VaporSurface
                     | Consumer::Coverage
                     | Consumer::VaporCoverage
                     | Consumer::Motion
                     | Consumer::MotionMaterialStrain
+                    | Consumer::MotionContactLoads
                     | Consumer::MotionVaporCoverage
                     | Consumer::MotionWetFilm
                     | Consumer::TransientSurface
@@ -862,6 +901,7 @@ impl Policy {
                 c,
                 Consumer::Motion
                     | Consumer::MotionMaterialStrain
+                    | Consumer::MotionContactLoads
                     | Consumer::MotionVaporCoverage
                     | Consumer::MotionWetFilm
                     | Consumer::TransientSurface
@@ -1001,6 +1041,11 @@ impl Policy {
         if self.consumers().contains(&Consumer::VaporSurface) {
             report.notes.push("Independent draped-sheet vapor objectives use the admitted initial geometry, retained source Ret and declared pressure/film/latent-heat conditions. Overlapping sheets remain independent; these potentials are not covered-body evaporation, water supply, latent cooling, continuous motion totals or comfort. Consumed column protocols require separate cross-alternative admission.");
         }
+        if self.consumers().contains(&Consumer::ContactLoads)
+            || self.consumers().contains(&Consumer::MotionContactLoads)
+        {
+            report.notes.push("Body contact objectives use the negative gradient of production barrier energy on an explicit union of welded vertices. They exclude self-contact and Coulomb tangential forces. Opposing forces can cancel in a resultant; nodal peaks depend on mesh and barrier settings. Material and numerical policies, scope and complete sampled motion are retained. No contact area, pressure, comfort, safe-fit threshold or continuous-time force bound is inferred.");
+        }
         if self.consumers().contains(&Consumer::VaporCoverage) {
             report.notes.push("Covered vapor objectives require the whole declared body domain to be covered on the admitted drape. Partial covered subtotals stay visible but cannot be ranked as complete-domain transfer. Actual layer areas, explicit interlayer resistance, pressure boundaries and films define the potential network; no sweat supply, condensation, thermal feedback or comfort is inferred.");
         }
@@ -1078,10 +1123,12 @@ impl Policy {
         let mut admitted = Numerical {
             drape: simulation,
             material_strain: None,
+            contact_loads: None,
             vapor_surface: &Value::Null,
             vapor_coverage: None,
             motion: &Value::Null,
             motion_material_strain: None,
+            motion_contact_loads: None,
             motion_vapor_coverage: None,
             motion_wet_film: None,
             transient_surface: None,
@@ -1090,6 +1137,12 @@ impl Policy {
         if self.consumers().contains(&Consumer::MaterialStrain) && !simulation.is_null() {
             match material_strain::admit(row, descriptor, simulation, None) {
                 Ok(strain) => admitted.material_strain = Some(strain),
+                Err(e) => result.exclusions.push(e),
+            }
+        }
+        if self.consumers().contains(&Consumer::ContactLoads) && !simulation.is_null() {
+            match contact_loads::admit(row, descriptor, simulation, None) {
+                Ok(loads) => admitted.contact_loads = Some(loads),
                 Err(e) => result.exclusions.push(e),
             }
         }
@@ -1112,6 +1165,12 @@ impl Policy {
             }
         }
         if !admitted.motion.is_null() {
+            if self.consumers().contains(&Consumer::MotionContactLoads) {
+                match contact_loads::admit(row, descriptor, simulation, Some(admitted.motion)) {
+                    Ok(loads) => admitted.motion_contact_loads = Some(loads),
+                    Err(e) => result.exclusions.push(e),
+                }
+            }
             if self.consumers().contains(&Consumer::MotionMaterialStrain) {
                 match material_strain::admit(row, descriptor, simulation, Some(admitted.motion)) {
                     Ok(strain) => admitted.motion_material_strain = Some(strain),
@@ -1509,6 +1568,22 @@ impl Policy {
                 ))?;
             }
         }
+        for (consumer, loads) in [
+            (Consumer::ContactLoads, admitted.contact_loads),
+            (Consumer::MotionContactLoads, admitted.motion_contact_loads),
+        ] {
+            if consumers.contains(&consumer) {
+                let loads =
+                    loads.ok_or_else(|| invalid("admitted contact-load scope unavailable"))?;
+                base = hash(&(
+                    base,
+                    json!({"consumer":consumer,"scope":loads["scope"],
+                    "instances":loads["source"]["instances"].as_object().map(|ids| ids.keys().collect::<Vec<_>>()),
+                    "selected_vertices":loads["source"]["selected_vertices"],
+                    "triangles":admitted.drape["triangles"],"unit":"N"}),
+                ))?;
+            }
+        }
         if textile_water {
             base = hash(&(
                 &base,
@@ -1637,10 +1712,12 @@ impl Policy {
 struct Numerical<'a> {
     drape: &'a Value,
     material_strain: Option<&'a Value>,
+    contact_loads: Option<&'a Value>,
     vapor_surface: &'a Value,
     vapor_coverage: Option<&'a Value>,
     motion: &'a Value,
     motion_material_strain: Option<&'a Value>,
+    motion_contact_loads: Option<&'a Value>,
     motion_vapor_coverage: Option<&'a Value>,
     motion_wet_film: Option<&'a Value>,
     transient_surface: Option<Heat<'a>>,
@@ -1694,12 +1771,14 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
         Consumer::Vapor => row.vapor.value().is_some(),
         Consumer::Drape => !admitted.drape.is_null(),
         Consumer::MaterialStrain => admitted.material_strain.is_some(),
+        Consumer::ContactLoads => admitted.contact_loads.is_some(),
         Consumer::Surface => admitted.drape["surface"]["status"] == "available",
         Consumer::VaporSurface => !admitted.vapor_surface.is_null(),
         Consumer::Coverage => admitted.drape["coverage"]["status"] == "available",
         Consumer::VaporCoverage => admitted.vapor_coverage.is_some(),
         Consumer::Motion => !admitted.motion.is_null(),
         Consumer::MotionMaterialStrain => admitted.motion_material_strain.is_some(),
+        Consumer::MotionContactLoads => admitted.motion_contact_loads.is_some(),
         Consumer::MotionVaporCoverage => admitted.motion_vapor_coverage.is_some(),
         Consumer::MotionWetFilm => admitted.motion_wet_film.is_some(),
         Consumer::TransientSurface => admitted.transient_surface.is_some(),
