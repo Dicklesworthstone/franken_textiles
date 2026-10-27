@@ -2031,10 +2031,11 @@ function calibrationResult(parent, r) {
   }
   const c = r.calibration, nonlinear = c.schema === "ftx-nonlinear-swatch-calibration-report/1";
   const timeSearch = c.orthotropic_fit?.time_search;
-  const method = nonlinear ? c.material?.membrane_response?.area_response ? "Nonlinear stretch, shear and area response" :
+  const method = (c.input.plastic_equilibrium ? "Fixed permanent stretch with " : "") +
+    (nonlinear ? c.material?.membrane_response?.area_response ? "Nonlinear stretch, shear and area response" :
     "Nonlinear stretch and shear" : c.input.orthotropic ?
     timeSearch ? "Directional relaxation with times identified within declared bounds" : "Directional relaxation at the declared times" :
-    "Proportional relaxation ratios and times";
+    "Proportional relaxation ratios and times");
   const t = table(parent, "Observed force errors — independent partitions", ["Partition", "Measured components", "Scaled RMS", "Scaled peak"]);
   for (const [name, quality] of [["Fit", c.fit], ["Held out", c.check]]) {
     cells(t, [quality ? name : `${name}: not supplied`, metric(quality?.components), metric(quality?.rms_scaled), metric(quality?.peak_scaled)]);
@@ -2046,6 +2047,30 @@ function calibrationResult(parent, r) {
     cells(domain, [axis, metric(range?.[i]?.[0]), metric(range?.[i]?.[1])]);
   }
   if (nonlinear) areaCalibrationResult(parent, c);
+  if (c.input.plastic_equilibrium) {
+    const known = table(parent, "Known permanent-stretch branch at every acquisition node",
+      ["Acquisition", "Partition", "Time (s)", "Permanent Green strain [warp, weft, shear]",
+        "Accumulated permanent strain", "Known nominal force (N/m)", "Step loss (J/m²)", "Cumulative loss (J/m²)"]);
+    for (const p of c.predictions || []) {
+      const fixed = p.plastic_equilibrium;
+      if (!fixed) continue;
+      cells(known, [p.experiment, p.partition, metric(p.time_seconds), fixed.plastic_strain.map(metric).join(", "),
+        fixed.accumulated_strain.map(metric).join(", "),
+        fixed.nominal_n_m.map(row => row.map(metric).join(", ")).join(" / "),
+        metric(fixed.step_dissipated_j_m2), metric(fixed.cumulative_dissipated_j_m2)]);
+    }
+    const scope = document.createElement("p");
+    scope.textContent = "The permanent-stretch coefficients and their evidence are independently supplied and remain fixed. " +
+      "Each acquisition starts at its declared pristine reference and advances the plastic state at every recorded node, including nodes without observed force. " +
+      "Only the Maxwell recovery branches are identified. Their convolution integrates the declared piecewise-linear Green strain analytically; " +
+      "the plastic response is a recorded-node return map, without a continuous-path or refinement claim. " +
+      "FIT chooses recovery parameters before CHECK replay. The combined network requires its own source qualification.";
+    parent.append(scope);
+    detail(parent, "Fixed permanent-stretch observations and combined-network qualification", {
+      plastic_equilibrium: c.input.plastic_equilibrium,
+      membrane_plasticity: c.input.material?.membrane_plasticity,
+      time_integration: r.time_integration });
+  }
   if (c.orthotropic_fit) {
     const recovery = table(parent, timeSearch ? "Directional recovery — published stiffness at identified times" :
       "Directional recovery — published stiffness at supplied times", ["Time (s)", "Retained branch",

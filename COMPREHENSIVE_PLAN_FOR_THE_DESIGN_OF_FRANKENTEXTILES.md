@@ -3696,6 +3696,44 @@ See [sewing-production.md](docs/sewing-production.md) and `examples/sewing-paral
 This implements `ftx-pb2.2.4`; heterogeneous machines, shared-resource overlap, inter-cell transfers
 and measured physical execution remain open under the parent production qualification work.
 
+### 25.95 Identify Maxwell recovery alongside a known permanent-set branch
+
+Optional `plastic_equilibrium` extends the existing `ftx-relaxation-calibration/1` acquisition path
+with an independently characterized elastoplastic equilibrium branch. Elastic, yield, hardening and
+domain observations remain fixed. Every complete acquisition starts from an explicitly pristine
+zero-Green-strain reference, and every recorded node advances the canonical return map, including
+nodes with no observed force. The existing proportional, fixed-time directional, bounded directional-time
+and model-comparison engines identify only the Maxwell response remaining after that known branch.
+
+The network interpretation requires its own source, matching specimen and conditioning, and separate
+estimate consent. Original strain and accumulated-history limits remain active. Maxwell arms use total
+physical Green strain; their stress does not enter the equilibrium branch's yield test. FIT alone
+selects coefficients, times and competing models. CHECK can reject the retained choice without
+selecting another candidate. Accepted output is an ordinary frozen `parallel_green_maxwell_plastic/1`
+material, with per-node permanent strain, accumulated strain, known equilibrium force and separate
+step/cumulative plastic-work receipts. Omitted input preserves the previous serialization and
+incompatible-law refusals.
+
+The complete synthetic [relaxation-plastic-equilibrium.json](examples/relaxation-plastic-equilibrium.json)
+example retains nine FIT nodes and seven CHECK nodes, including an unobserved-force yielded peak.
+Its independently constructed recovery ratio 2 and time 0.05 seconds are identification targets,
+not measured fabric properties. Both native commands expose the same calibration and ordinary
+binding/strip-history path. The browser workbench displays the known branch at every acquisition node,
+retains the fixed-property and network-source evidence, and withdraws stale fitted selections after
+input changes; see [relaxation-calibration.md](docs/relaxation-calibration.md).
+
+Verification at this checkpoint comprises 42 passing focused pattern tests and manual execution of
+the complete example through both native commands, source-locked binding and a 27-state actual
+strip history. Corrupted CHECK forces and denied network-estimate consent refuse. Fresh automated
+native/portable integration, compiled-WASM replay and full-workspace gates remain pending CI;
+no complete-suite pass is claimed.
+
+This closes the bounded software feature `ftx-rc3`. The plastic experiment uses recorded-node
+return-map updates; exact Maxwell convolution does not establish continuous-time exactness or
+refinement of the plastic path. Joint identification of plastic and viscous coefficients, missing
+temperature/moisture-dependent constitutive laws, measured specimen agreement and garment acceptance remain open under
+`ftx-rc1`, `ftx-tm4`, `ftx-tm2` and `ftx-tm8`.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

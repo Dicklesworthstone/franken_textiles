@@ -113,6 +113,13 @@ within which times are identified. Supply only one of these; the report distingu
 Proportional recovery uses its separate top-level time bounds.
 Estimated input observations and replacement of an existing law
 require separate consent in the file. The checkbox only admits the fitted output estimates; missing mass, bending or contact data stay missing.</p>
+<p class="note">A timed calibration may supply <code>plastic_equilibrium</code> with
+<code>initialization: "pristine_reference"</code> and an independently qualified
+<code>parallel_green_maxwell_plastic/1</code> network. The existing material must already contain
+the independently characterized elastic, yield and hardening observations. Every acquisition starts
+at zero Green strain and replays all recorded nodes, including those without force observations.
+Only the Maxwell branches are fitted; the permanent-stretch law stays fixed. Estimated network evidence
+needs its separate <code>allow_estimated_network</code> consent. Accepted output uses the ordinary combined material model.</p>
 <p class="note">For permanent stretch, upload <code>ftx-membrane-plasticity-calibration/1</code> with complete
 source-qualified loading/unloading cycles, raw Green strains and second-Piola sheet loads.
 Supply independently characterized elasticity, total/accumulated strain limits and explicit yield/hardening

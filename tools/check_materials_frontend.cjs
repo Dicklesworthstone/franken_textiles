@@ -1631,6 +1631,34 @@ test('adaptive heat histories display native local errors and charged work witho
   assert.equal(s.hidden,true); assert.equal(p.e.assign.disabled,true);
 });
 
+test('recovery identification displays the fixed plastic history at unobserved nodes and withdraws stale selections', async()=>{
+  const p=await pageModule();p.e.calibrationMode.value='relaxation';p.select('calibrationRequest');
+  await p.e.calibrate.onclick();
+  const r=calibrationReport('relaxation',true),c=r.calibration;
+  c.input.plastic_equilibrium={initialization:'pristine_reference',allow_estimated_network:true,
+    network:{model:'parallel_green_maxwell_plastic/1',source:'fixed-network',method:'<separate branch qualification>'}};
+  c.input.material={membrane_plasticity:{model:'separable_green_plasticity/1'}};
+  c.predictions=[{experiment:'load',partition:'fit',time_seconds:0.1,residual_n_m:[[null,null],[null,null]],
+    plastic_equilibrium:{plastic_strain:[0.05,0,0],accumulated_strain:[0.05,0,0],
+      nominal_n_m:[[25,0],[0,0]],step_dissipated_j_m2:1,cumulative_dissipated_j_m2:1}},
+    {experiment:'load',partition:'fit',time_seconds:0.3,
+      plastic_equilibrium:{plastic_strain:[0.05,0,0],accumulated_strain:[0.05,0,0],
+        nominal_n_m:[[-5,0],[0,0]],step_dissipated_j_m2:0,cumulative_dissipated_j_m2:1}}];
+  r.time_integration='Analytic Maxwell convolution; recorded-node plastic return map.';
+  p.emit(r);const s=section(p,'Identified material behavior');
+  const t=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Known permanent-stretch branch at every acquisition node');
+  assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),
+    ['load','fit','0.1','0.05, 0, 0','0.05, 0, 0','25, 0 / 0, 0','1','1']);
+  assert.equal(t.children.length,4);assert.match(visibleText(s),/including nodes without observed force/);
+  assert.match(visibleText(s),/Only the Maxwell recovery branches are identified/);
+  assert.match(visibleText(s),/without a continuous-path or refinement claim/);
+  assert.equal(p.e.selection.value,r.selection_json);
+  const d=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='Fixed permanent-stretch observations and combined-network qualification');
+  d.open=true;d.handlers.toggle();assert.match(visibleText(d),/<separate branch qualification>/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  p.e.calibrationRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.e.assign.disabled,true);
+});
+
 test('calibration consent and response changes withdraw only the prepared result and cannot revive stale work', async () => {
   const p=await pageModule(); await p.load();
   p.e.calibrationMode.value='relaxation'; p.e.calibrationEstimates.checked=true;
