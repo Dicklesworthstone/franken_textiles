@@ -252,7 +252,7 @@ READY_REFERENCE from ordinary readiness and makes no fit claim.
 
 `video-select` accepts already-oriented opaque 8-bit PNG or supported complete JPEG frames; JPEG
 EXIF orientation is absent or identity. It reuses the strict photo decoder, refusing automatic
-rotation/reflection because masks and calibration already share the stored pixel frame. Masks stay
+rotation/reflection because masks and calibration already share the stored pixel frame. File masks stay
 binary grayscale PNGs of the exact frame size. Encoded limits are 128 MiB PNG / 64 MiB JPEG; decoded
 frames stay within 40 million pixels. Tests in `video_selection_workflow` cover JPEG/decoded-PNG
 selection equality, absent/identity orientation, source preservation and create-only outputs, and
