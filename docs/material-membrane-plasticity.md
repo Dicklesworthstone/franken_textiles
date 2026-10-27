@@ -248,6 +248,36 @@ It is entirely artificial, with independently computed directional loading, unlo
 loading and reloading. A deliberately unobserved load at a recorded higher warp strain still changes
 the later permanent state. It does not supply constants for linen, leather or knit fabric.
 
+### Identify the permanent branch of a qualified parallel network
+
+The same request also accepts an independently supplied `material.membrane_relaxation` with the
+explicit `parallel_plasticity` qualification described in [parallel membrane memory](material-parallel-memory.md).
+It identifies the same **six permanent yield/hardening coefficients** from the measured **total**
+second-Piola stress. The equilibrium tensor, proportional and directional Maxwell stiffnesses,
+relaxation times, initialization, source observations and common operating domain remain fixed.
+The four elastic observations belong to the equilibrium plastic branch; instantaneous stiffness
+must not be substituted for them. This is an explicitly qualified parallel network, not a fit of
+same-branch viscoplasticity or simultaneous identification of an unknown relaxation spectrum.
+
+[`material-parallel-calibration.json`](../examples/material-parallel-calibration.json) is a complete,
+entirely synthetic example with one proportional branch and one coupled directional branch. Its
+total stresses were computed independently from the scalar plastic return equations and the matrix
+Maxwell recurrence. It contains signed warp, weft and shear FIT cycles, a separate combined CHECK
+cycle, an unobserved higher-strain node, and an irregularly timed unobserved dwell. All mass, bending
+and contact inputs needed by ordinary selected mechanics are supplied separately. The input has no
+previous yield/hardening observations; calibration does not fabricate temporary source records to
+qualify its trial parameters.
+
+The canonical Maxwell response uses **total imposed strain**, its own viscous history, and every
+recorded time interval. Its fixed contribution is computed once per acquisition and is subtracted
+only when constructing the algebraic plastic starting estimate. Every fitted residual compares the
+original observed total stress against equilibrium-plastic plus Maxwell stress. Missing loads,
+constant-strain dwells and reversals advance the fixed spectrum without resetting either history.
+All shared spectrum/network conditions must match the independent elastic/domain observations and
+the acquisition. The full ordinary compiler checks the completed material again before publication;
+the accepted selection preserves the original fixed spectrum and binds both laws to the same source
+identity. A change in source evidence cannot reuse a half-law from a different material.
+
 Each experiment names a source, evidence class, unique acquisition ID, whole-history `fit` or `check`
 partition and mandatory `initialization: "pristine"`. Every history starts at zero time and zero
 strain in the unworked reference. Each subsequent node contains increasing `time_seconds`, raw
@@ -256,12 +286,15 @@ weighting. Missing load channels are `null`; their strain nodes still advance th
 memory. Do not replace a missing lateral force with zero or confuse nominal/Cauchy loads with these
 work-conjugate second-Piola sheet resultants. The acquisition protocol must explain that reduction.
 The solver replays the retained incremental nodes. It does not infer a continuous load path between
-them or establish increment-size independence. Time labels preserve acquisition order; this law has
-no relaxation-rate parameter.
+them or establish increment-size independence. Without a parallel spectrum, time labels preserve
+acquisition order and the permanent law remains rate independent. With a fixed spectrum, actual
+elapsed seconds determine Maxwell relaxation; compressing a dwell into one longer interval generally
+changes the discrete response.
 
 Set explicit, strictly ordered `yield_bounds_n_m` and `hardening_bounds_n_m`, each three pairs in
 warp/weft/shear order. Yield lower bounds must be positive; hardening can include an explicit zero.
-`allow_estimated_material` admits independently supplied estimated elastic/domain quantities;
+`allow_estimated_material` admits independently supplied estimated elastic/domain quantities and,
+when present, the fixed spectrum and separate network qualification;
 `allow_estimated_observations` separately admits estimated or synthetic acquisitions. Neither changes
 the fitted coefficients' `estimate` classification. `replace_existing` is necessary to replace a prior
 permanent-law selector or yield/hardening observation; the original remains in the report.
@@ -273,6 +306,8 @@ cargo run --locked -p ftx-cli --bin ftx-materials -- calibrate-membrane-plastici
   tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json --allow-estimates
 cargo run --locked -p ftx-cli --bin ftx -- --json materials calibrate-membrane-plasticity \
   tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json --allow-estimates
+cargo run --locked -p ftx-cli --bin ftx-materials -- calibrate-membrane-plasticity \
+  examples/material-parallel-calibration.json --allow-estimates
 ```
 
 The commands' final `--allow-estimates` controls **consumption** of the fitted material, separately
@@ -290,6 +325,14 @@ trials and final probes/replays share `max_evaluations` (1–4096) and a fixed 2
 budget. The input permits up to 32 histories and 2048 recorded nodes. These are work limits, not
 runtime or accuracy guarantees.
 
+For a fixed spectrum, each whole FIT or CHECK precomputation additionally costs one forward
+evaluation and one recorded-work unit per branch per node, including its initial state. The full
+partition is reserved before replay, including refused work. `fixed_maxwell_branch_steps` records
+this portion of `history_steps`; the example has 64 branch-node states across its 32 nodes and two
+branches. FIT caching happens before any starting estimate, while CHECK caching waits until all
+FIT selection and excitation checks are complete. The cache is reused for every plastic coefficient
+probe; it neither spends unbounded hidden work nor consults held-out loads during optimization.
+
 The report retains original evidence, source identity, every entered start, the selected FIT
 coefficients, work counts, observed-component residuals and the accepted permanent strain,
 accumulation, storage and dissipated work at each successfully replayed node. FIT sensitivity and a
@@ -298,6 +341,15 @@ yield/hardening effects or materially different residual-equivalent start soluti
 Iteration limits and incomplete sensitivity calculations cannot produce an assignable material.
 Work exhaustion is `BUDGET_EXHAUSTED`, including exhaustion during final diagnostics or CHECK replay.
 Numerical convergence and local excitation do not prove global uniqueness or coefficient confidence.
+
+Joint predictions retain `second_piola_n_m` as the **total** stress. Existing `stored_j_m2` remains
+equilibrium elastic-plus-hardening storage and `plastic_dissipation_j_m2` remains permanent work.
+An additional `parallel_history` contains `maxwell_second_piola_n_m`, accepted
+`viscous_green_strains` in proportional-then-directional authored order, `maxwell_stored_j_m2`,
+cumulative `maxwell_dissipation_j_m2`, and `total_stored_j_m2`. The total counts the two actual
+storage contributions once each. Maxwell dissipation is the canonical backward-Euler endpoint
+dashpot-work quadrature, separately reported from plastic work; it is neither numerical integration
+loss nor an inferred heat source. Pure permanent-law reports omit these additional spectrum fields.
 
 All parameter selection and excitation analysis finish **before CHECK replay**. A CHECK failure
 rejects the same selected candidate; another start is never promoted because it fits CHECK better.
@@ -314,6 +366,11 @@ with no manufactured uncertainty bounds. Empirical cyclic-coupon and garment acc
 The independent synthetic cycle fixture and focused calibration checks cover all six coefficients,
 coupled yielding, missing load channels that still advance memory, a constrained optimum, explicit
 replacement, insufficient excitation, FIT/CHECK isolation and exhaustion during final replay.
+Joint checks additionally compare total stress, both accepted histories and separate energy/work
+ledgers with independent scalar/matrix recurrences; verify exact dwell-factor products at irregular
+times; preserve the fixed spectrum and ordinary source lock; and retain FIT diagnostics when a
+held-out time history or common-domain replay fails. Fixed-spectrum work participates in the same
+bounded budget, including final CHECK refusal, and the legacy pure-law wire fields remain unchanged.
 The command and shared WASM checks additionally exercise ordinary frozen selection, unchanged
 pattern binding, material-hash tampering and separate acquisition/consumption admission. Browser
 state checks cover all unresolved outcomes and withdrawal of a previously assignable selection.
@@ -357,5 +414,7 @@ loading, unloading and reloading checks, plus stiffness degradation, damage and 
 viscoplasticity, nonlinear plastic response, gathered compression, conditioning effects, serialized restart,
 remeshing transfer and temperature feedback to mechanics remain separate missing capabilities. Existing
 elastic or relaxation calibration commands retain their own models; permanent yield/hardening uses
-the separate existing-law identification request above. The linen/leather/knit substitution and
+the separate existing-law identification request above, optionally with an already qualified fixed
+parallel spectrum. Joint identification of unknown spectrum parameters and permanent coefficients
+remains a separate task. The linen/leather/knit substitution and
 independent garment gates need measured specimens, not the synthetic fixture's values.
