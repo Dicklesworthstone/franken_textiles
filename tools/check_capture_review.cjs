@@ -101,6 +101,8 @@ async function sheetReview(page, records = report) {
     const page = await context.newPage();
     await page.goto(pathToFileURL(path.join(reviewDir, "index.html")).href);
     await page.waitForFunction(() => !document.getElementById("captureEditor").hidden);
+    assert.equal(await page.locator("#removePoint").count(), 1, "selected observations can be removed without resetting all work");
+    assert(await page.locator("#removePoint").isDisabled());
     assert.match(await page.locator("#editStatus").innerText(), /^Select a point/);
     assert.equal(await page.evaluate(() => globalThis.captureInjection), undefined);
     assert.deepEqual(await page.locator("#captureInput").evaluate(n => JSON.parse(n.textContent)), replay);
@@ -176,6 +178,107 @@ async function sheetReview(page, records = report) {
     const final = await download(page, "capture-edited.json", corrected);
     assert.equal(corrected.reviewed_sources_sha256, report.capture_input.sources_sha256);
     await page.screenshot({path: path.join(out, "corrected.png"), fullPage: true});
+    // Removing an observation must preserve every remaining correspondence, including the
+    // row/marker indices used by later corrections. Reset restores names and roles as well.
+    async function pointDisplays(expected) {
+      for (let i = 0; i < expected.fit.frames.length; ++i) {
+        const section = page.locator("section").nth(i), points = expected.fit.frames[i].keypoints;
+        assert.equal(await section.locator("tbody tr").count(), points.length);
+        assert.equal(await section.locator("g[data-point]").count(), points.length);
+        for (const [j, p] of points.entries()) {
+          const cells = section.locator("tbody tr").nth(j).locator("td");
+          const role = p.partition === "fit" ? "FIT" : "CHECK";
+          assert.equal((await cells.nth(0).innerText()).trim(), "Select " + p.name);
+          assert.equal(await cells.nth(1).innerText(), role);
+          assert.equal(Number(await cells.nth(3).innerText()), p.sigma_px);
+          assert.deepEqual(JSON.parse(await cells.nth(4).innerText()), expected.model.keypoints[p.name]);
+          assert.equal(await cells.nth(0).locator("button").getAttribute("data-point"), String(j));
+          assert.equal(await section.locator('g[data-point="' + j + '"]').getAttribute("data-partition"), role);
+          assert.equal(await section.locator('g[data-point="' + j + '"] text').textContent(), p.name + " (" + role + ")");
+          assert.deepEqual(await displayed(page, i, j), p.pixel_px);
+        }
+      }
+    }
+    const removed = structuredClone(corrected), removedPoint = removed.fit.frames[0].keypoints.splice(4, 1)[0];
+    await page.locator('.edit-point[data-frame="0"][data-point="4"]').click();
+    const beforeRemovalUrl = await page.locator("#correctedInput").getAttribute("href");
+    await page.locator("#removePoint").click();
+    assert(await page.evaluate(url => globalThis.__revoked.includes(url), beforeRemovalUrl));
+    assert(await page.locator("#removePoint").isDisabled());
+    assert(await page.locator("#applyPoint").isDisabled());
+    await pointDisplays(removed);
+    const removedFile = await download(page, "capture-point-removed.json", removed);
+    // This selection now refers to the NEXT observation, with its original role and sigma.
+    await page.locator('.edit-point[data-frame="0"][data-point="4"]').click();
+    const shiftedPixel = [removed.fit.frames[0].keypoints[4].pixel_px[0] + .125, removed.fit.frames[0].keypoints[4].pixel_px[1]];
+    await page.locator("#editX").fill(String(shiftedPixel[0]));
+    await page.locator("#removePoint").click(); await hidden(page);
+    await pointDisplays(removed);
+    await page.locator("#applyPoint").click();
+    const shifted = structuredClone(removed); shifted.fit.frames[0].keypoints[4].pixel_px = shiftedPixel;
+    await pointDisplays(shifted);
+    await download(page, "capture-shifted-point.json", shifted);
+    // Removed targets become placeable again, with an explicit role and uncertainty.
+    await page.locator("#newFrame").selectOption("0");
+    await page.locator("#newTarget").selectOption(removedPoint.name);
+    await page.locator("#newPartition").selectOption(removedPoint.partition);
+    await page.locator("#newSigma").fill(String(removedPoint.sigma_px));
+    await page.locator("#preparePoint").click();
+    assert(await page.locator("#removePoint").isDisabled());
+    await page.locator("#editX").fill(String(removedPoint.pixel_px[0]));
+    await page.locator("#editY").fill(String(removedPoint.pixel_px[1]));
+    await page.locator("#applyPoint").click();
+    shifted.fit.frames[0].keypoints.push(removedPoint);
+    await pointDisplays(shifted);
+    await download(page, "capture-point-readded.json", shifted);
+    await page.locator("#resetPoints").click(); await hidden(page);
+    await pointDisplays(replay);
+    // A same-pixel replacement may change only the explicit role/sigma. It must still
+    // count as an edit and download, even when it occupies the same original list slot.
+    const replaced = structuredClone(replay), last = replaced.fit.frames[1].keypoints.at(-1);
+    await page.locator('.edit-point[data-frame="1"][data-point="9"]').click();
+    await page.locator("#removePoint").click();
+    await page.locator("#newFrame").selectOption("1");
+    await page.locator("#newTarget").selectOption(last.name);
+    last.partition = last.partition === "fit" ? "held_out" : "fit";
+    last.sigma_px += 1;
+    await page.locator("#newPartition").selectOption(last.partition);
+    await page.locator("#newSigma").fill(String(last.sigma_px));
+    await page.locator("#preparePoint").click();
+    await page.locator("#editX").fill(String(last.pixel_px[0]));
+    await page.locator("#editY").fill(String(last.pixel_px[1]));
+    await page.locator("#applyPoint").click();
+    await pointDisplays(replaced);
+    await download(page, "capture-replaced-metadata.json", replaced);
+    await page.locator("#resetPoints").click(); await hidden(page);
+    await pointDisplays(replay);
+    // Removing CHECKs remains an explicit edit: the ordinary fitter reports a no-held-out
+    // advisory. Removing all observations below supplies the separate native refusal control.
+    const noCheck = structuredClone(replay);
+    for (let i = 0; i < noCheck.fit.frames.length; ++i) {
+      const points = noCheck.fit.frames[i].keypoints;
+      for (let j = points.length - 1; j >= 0; --j) if (points[j].partition === "held_out") {
+        await page.locator('.edit-point[data-frame="' + i + '"][data-point="' + j + '"]').click();
+        await page.locator("#removePoint").click(); points.splice(j, 1);
+      }
+    }
+    await pointDisplays(noCheck);
+    const noCheckFile = await download(page, "capture-no-check.json", noCheck);
+    for (let i = 0; i < noCheck.fit.frames.length; ++i) {
+      const points = noCheck.fit.frames[i].keypoints;
+      while (points.length) {
+        await page.locator('.edit-point[data-frame="' + i + '"][data-point="' + (points.length - 1) + '"]').click();
+        await page.locator("#removePoint").click(); points.pop();
+      }
+    }
+    await pointDisplays(noCheck);
+    await download(page, "capture-empty-points.json", noCheck);
+    await page.locator("#resetPoints").click(); await hidden(page);
+    await pointDisplays(replay);
+    await page.locator('.edit-point[data-frame="0"][data-point="3"]').click();
+    await page.locator("#editX").fill(String(target[0]));
+    await page.locator("#editY").fill(String(target[1]));
+    await page.locator("#applyPoint").click();
     const finalUrl = await page.locator("#correctedInput").getAttribute("href");
     await page.locator("#resetPoints").click(); await hidden(page);
     assert(await page.evaluate(url => globalThis.__revoked.includes(url), finalUrl));
@@ -490,11 +593,18 @@ async function sheetReview(page, records = report) {
       const pixel = newPoint ? p0.pixel_px : [original.fit.frames[0].keypoints[0].pixel_px[0] + .125,
         original.fit.frames[0].keypoints[0].pixel_px[1]];
       if (newPoint) await declare(0, p0);
-      else await page.locator('.edit-point[data-frame="0"][data-point="0"]').click();
+      else {
+        await page.locator('.edit-point[data-frame="0"][data-point="0"]').click();
+        // Coordinates are not pending yet: the silhouette edit alone must prevent removal.
+        await page.locator("#removePoint").click(); await hidden(page);
+        assert.equal(await page.locator("section").nth(0).locator("tbody tr").count(), original.fit.frames[0].keypoints.length);
+        assert.deepEqual(await displayed(page, 0, 0), original.fit.frames[0].keypoints[0].pixel_px);
+      }
       await page.locator("#editX").fill(String(pixel[0]));
       await page.locator("#editY").fill(String(pixel[1]));
       const observedBefore = await page.locator("g[data-silhouette]").evaluateAll(nodes => nodes.map(n => n.outerHTML));
       const button = page.locator(action === "apply" ? "#applySilhouette" : "#removeSilhouette");
+      if (!newPoint) { await page.locator("#removePoint").click(); await hidden(page); }
       await button.click(); await hidden(page);
       assert.deepEqual(await page.locator("g[data-silhouette]").evaluateAll(nodes => nodes.map(n => n.outerHTML)), observedBefore);
       assert.equal(await page.locator("#editX").inputValue(), String(pixel[0]));
@@ -555,6 +665,7 @@ async function sheetReview(page, records = report) {
       observedSlices: 10, sheetPoints, maskedFile, maskedSha256: hash(fs.readFileSync(maskedFile)),
       authoredSlices: 10, inlineFile, inlineSha256: hash(fs.readFileSync(inlineFile)),
       crossEditorPendingCases: 4,
+      removedFile, noCheckFile,
       boundary: "Synthetic actual page and data only; fit acceptance is a separate ordinary CLI run"}, null, 2));
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

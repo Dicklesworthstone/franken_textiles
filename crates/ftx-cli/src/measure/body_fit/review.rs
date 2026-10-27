@@ -354,7 +354,11 @@ pub(super) fn prepare_capture(
         <p id=\"editStatus\" role=\"status\"></p><form id=\"coordinateForm\" novalidate>\
         <label>X (px) <input id=\"editX\" type=\"number\" step=\"any\" disabled></label>\
         <label>Y (px) <input id=\"editY\" type=\"number\" step=\"any\" disabled></label>\
-        <button id=\"applyPoint\" type=\"submit\" disabled>Apply coordinates</button></form>\
+        <button id=\"applyPoint\" type=\"submit\" disabled>Apply coordinates</button> \
+        <button id=\"removePoint\" type=\"button\" disabled>Remove selected observation</button></form>\
+        <p>Remove a mistaken correspondence before fitting, preserving all other observations. \
+        Missing FIT/CHECK evidence can make the native fitter refuse. Do not remove CHECKs to tune a fit result. \
+        Reset restores the original complete point lists.</p>\
         <fieldset id=\"silhouetteFields\" disabled><legend>Author sampled body silhouettes</legend>\
         <p>Use already rectified images and cameras. Declare FIT/CHECK slices before fitting and describe clothing and occluders. \
         These are manually observed foreground intervals, not automatic segmentation or evidence of real-body accuracy. \

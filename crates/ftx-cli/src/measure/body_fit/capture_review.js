@@ -35,6 +35,7 @@
       sections.forEach((s, i) => s.querySelector("svg").dataset.editing = String(
         selected !== null && selected[0] === i || silhouetteDrawing !== null && silhouetteDrawing.frame === i));
       byId("cancelPoint").disabled = draft === null;
+      byId("removePoint").disabled = selected === null || draft !== null;
     }
     function targetOptions() {
       const chooser = byId("newTarget"), old = chooser.value, frame = edited.fit.frames[Number(byId("newFrame").value)];
@@ -82,8 +83,10 @@
         [...sections[i].querySelectorAll("g[data-point]")].slice(frame.keypoints.length).forEach(n => n.remove());
         frame.keypoints.forEach((point, j) => {
           if (j >= body.children.length) appendDisplay(i, j, point);
-          const row = body.children[j], [x, y] = point.pixel_px, before = original.fit.frames[i].keypoints[j]?.pixel_px;
-          const different = before === undefined || x !== before[0] || y !== before[1];
+          const row = body.children[j], [x, y] = point.pixel_px, before = original.fit.frames[i].keypoints[j];
+          const different = before === undefined || point.name !== before.name ||
+            point.partition !== before.partition || point.sigma_px !== before.sigma_px ||
+            x !== before.pixel_px[0] || y !== before.pixel_px[1];
           if (different) ++changed;
           row.dataset.changed = String(different);
           row.querySelector(".point-coordinates").textContent = x + ", " + y;
@@ -93,6 +96,7 @@
           mark.querySelector("text").setAttribute("x", x + 7);
           mark.querySelector("text").setAttribute("y", y - 7);
         });
+        changed += Math.max(0, original.fit.frames[i].keypoints.length - frame.keypoints.length);
         if (JSON.stringify(frame.silhouette) !== JSON.stringify(original.fit.frames[i].silhouette)) ++changed;
         if (silhouetteEditable[i]) renderSilhouette(i);
       });
@@ -102,6 +106,10 @@
       }
       selectionDisplay();
       return changed;
+    }
+    function clearPointDisplay(i) {
+      sections[i].querySelector("tbody").replaceChildren();
+      sections[i].querySelectorAll("g[data-point]").forEach(node => node.remove());
     }
     function select(i, j) {
       clearSilhouetteDrawing();
@@ -391,6 +399,21 @@
       stopPlacement(); pending = false;
       status.textContent = "Placement cancelled. No new point or download published. Select a point or apply a slice to continue.";
     });
+    byId("removePoint").addEventListener("click", () => {
+      withdraw();
+      if (selected === null || draft !== null) return;
+      if (pending || silhouettePending) {
+        status.textContent = "Apply or cancel the pending point or silhouette edit before removing an observation. No change or download published.";
+        return;
+      }
+      const [i, j] = selected, [point] = edited.fit.frames[i].keypoints.splice(j, 1);
+      // Row buttons and marker indices must follow the remaining observations, including
+      // their names, roles, uncertainties and targets. No other observation is reassigned.
+      clearPointDisplay(i); stopPlacement(); pending = false; targetOptions();
+      const count = render();
+      status.textContent = "Removed " + point.name + ". " + count +
+        " changed point(s) or silhouette frame(s). Create a new native review before fitting; missing evidence can refuse. Do not remove CHECKs to tune a fit result.";
+    });
     sections.forEach((section, i) => {
       const svg = section.querySelector("svg");
       svg.addEventListener("click", event => {
@@ -414,6 +437,7 @@
     });
     byId("resetPoints").addEventListener("click", () => {
       edited = structuredClone(original); selected = null; pending = false; draft = null;
+      sections.forEach((_, i) => clearPointDisplay(i));
       silhouettePending = false; clearSilhouetteDrawing(); render();
       byId("newFrame").value = ""; byId("newTarget").value = "";
       byId("newPartition").value = ""; byId("newSigma").value = ""; targetOptions();

@@ -362,6 +362,7 @@ mod tests {
                 strain,
                 f: [[1.1, 0.1], [-0.1, 1.]],
                 equilibrium: [0.; 4],
+                plastic_equilibrium: None,
                 observed: [Some(0.); 4],
                 scale: 1.,
             })

@@ -69,6 +69,10 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   128-observation frame budget refuse. Partial drafts do not bypass fitter admission/acceptance.
   A current edit downloads as `capture-edited.json`; pending/invalid/cancel/reset revoke old URLs,
   and reset restores the complete original point lists.
+  Explicit selected-observation removal preserves every remaining correspondence and makes the
+  removed target placeable again. Pending point/silhouette edits must be resolved first; reset
+  restores the original names/roles/sigmas too. Insufficient FIT evidence retains native refusals;
+  missing CHECK evidence retains the explicit no-held-out advisory rather than a new refusal.
   Original files remain unchanged and script-disabled original review remains available.
   Each frame's read-only stationary-sheet review shows the exact admitted correspondences,
   FIT/CHECK roles, metric positions, camera projections and residuals on the same stored pixels.

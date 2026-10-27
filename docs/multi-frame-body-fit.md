@@ -54,6 +54,12 @@ or CHECK and a sigma in `1e-6..1e6` pixels, then **Prepare new point**. Click th
 numeric coordinates. The target definition is shown for review; no anatomical mapping is inferred.
 Duplicate names and more than 128 observations per frame refuse. Target definitions and all source
 identities stay fixed. Correct annotations before fitting; do not tune held-out checks to a result.
+To discard a mistaken correspondence, select it and choose **Remove selected observation**.
+Resolve pending point/silhouette edits first. Other observations keep their names, targets, roles,
+uncertainties and coordinates; the removed target becomes available for explicit placement again.
+Reset restores the original complete point lists. Insufficient FIT evidence or failed CHECKs still
+refuse. With no CHECK observations, the fitter instead reports an explicit no-held-out advisory;
+acceptance then includes no independent image check. Do not remove CHECKs to improve a fit result.
 Partial annotation drafts can be saved; the ordinary fitter still enforces observability, sufficient
 FIT/CHECK evidence and acceptance. A saved draft does not establish a usable body fit.
 
