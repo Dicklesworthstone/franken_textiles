@@ -2049,6 +2049,16 @@ function stripHistoryResult(parent, r) {
     "persists throughout the program. Stored energy, free-vertex motion and dissipated work remain separate; " +
     "these values do not establish total actuator work, out-of-plane buckling or measured garment behavior.";
   parent.append(note);
+  const parallel = r.input?.material?.record?.membrane_relaxation?.parallel_plasticity;
+  if (parallel?.model === "parallel_green_maxwell_plastic/1") {
+    const network = document.createElement("p");
+    network.textContent = "Declared parallel network: the equilibrium branch retains permanent strain, while Maxwell branches retain their own viscous strains. " +
+      "Plastic flow uses equilibrium-branch stress; Maxwell arms share the total material strain. " +
+      "The report keeps plastic and Maxwell dissipation separate. Matched specimen and garment validation remain independent requirements.";
+    parent.append(network);
+    detail(parent, "Declared permanent-set and recovery network", {
+      declaration: parallel, material_sha256: r.input.material.expected_sha256, model_scope: r.model_scope });
+  }
   const states = table(parent, "Loading and recovery history", ["Time (s)", "Grip extension fraction",
     "Moving-grip force (N)", "Mid-gauge width (m)", "Dynamic residual (N)", "Stored energy (J)",
     "Free kinetic energy (J)", "Maxwell dissipation (J)", "Plastic dissipation (J)"]);

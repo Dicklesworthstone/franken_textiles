@@ -6002,6 +6002,73 @@ test('compiled WASM fit screening reaches the same late design and named-case fr
     } finally {globalThis.ftxProgress=previousProgress;}
   });
 
+test('joint strip histories retain the declared network and separate loss ledgers until source changes', async () => {
+  const p=await pageModule(); await p.inspect('prior-material');
+  const prior=p.e.selection.value;
+  const request=' {"schema":"ftx-strip-history/1","value":-0.0}\n';
+  p.select('stripHistoryRequest',request); p.e.stripHistoryRequest.handlers.change();
+  await p.e.stripHistory.onclick();
+  const report={schema:'ftx-strip-history-report/1',input_sha256:'request-lock',
+    model_scope:'Qualified parallel elastoplastic equilibrium and Maxwell branches',
+    input:{material:{id:'joint-source',expected_sha256:'whole-material-lock',record:{
+      membrane_relaxation:{parallel_plasticity:{model:'parallel_green_maxwell_plastic/1',
+        evidence:'estimate',source:'paired-source',method:'<declared joint acquisition>',
+        conditions:{specimen_id:'<same specimen>',conditioning:'declared dry state'}}}}}},
+    states:[{time_s:0.2,extension_fraction:0,force_n:-0.3,mid_width_m:0.06,
+      free_dynamic_residual_n:1e-8,stored_membrane_energy_j:0.004,free_kinetic_energy_j:0,
+      maxwell_dissipation_j:0.003,plastic_dissipation_j:0.002}]};
+  const raw=` ${JSON.stringify(report)}\n`;
+  p.emit(report,[{name:'joint-history.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'Strip loading and recovery');
+  assert.match(visibleText(s),/equilibrium branch retains permanent strain/);
+  assert.match(visibleText(s),/Plastic flow uses equilibrium-branch stress/);
+  const states=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Loading and recovery history');
+  assert.deepEqual(plain(states.children[2].children.slice(-2).map(n=>n.textContent)),['0.003','0.002']);
+  const detail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='Declared permanent-set and recovery network');
+  detail.open=true; detail.handlers.toggle();
+  assert.match(visibleText(detail),/<same specimen>/); assert.match(visibleText(detail),/whole-material-lock/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  const file=descendants(s).find(n=>n.download==='joint-history.json');
+  assert.equal(await p.blobs.get(file.href).text(),raw);
+  assert.equal(p.e.selection.value,prior);
+  p.e.stripHistoryRequest.handlers.change();
+  assert.equal(s.hidden,true); assert.equal(p.live.size,0); assert.equal(p.e.selection.value,prior);
+  await p.e.stripHistory.onclick();
+  const ordinary=plain(report); delete ordinary.input.material.record.membrane_relaxation.parallel_plasticity;
+  p.emit(ordinary);
+  assert.equal(visibleText(s).includes('Declared parallel network:'),false);
+});
+
+test('compiled WASM joint material memory preserves both histories and exact frozen replay through the worker',
+  {skip:process.env.FTX_REAL_WASM!=='1'}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const material=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-parallel-membrane.json'),'utf8'));
+    const input={schema:'ftx-strip-history/1',material,
+      fixture:{gauge_length_m:0.1,width_m:0.06,warp_axis:[0,1],cells:[2,2]},
+      loading:[[0,0],[0.05,0.02],[0.15,0.02],[0.2,0],[0.25,0]]
+        .map(([time_s,extension_fraction])=>({time_s,extension_fraction})),
+      controls:{max_step_s:0.01,max_steps:32,max_newton:100,
+        velocity_tolerance_m_s:1e-9,force_tolerance_n:1e-6}};
+    const raw=` ${JSON.stringify(input)}\n`, w=await workerModule({bindings:ftx});
+    const result=await w.send({type:'stripHistory',stripRequest:raw,request:200});
+    assert.equal(result.type,'result',result.message);
+    assert.deepEqual(result.result,JSON.parse(ftx.material_strip_history(raw)));
+    assert.match(result.result.model_scope,/parallel/);
+    const last=result.result.states.at(-1);
+    assert.ok(last.maxwell_dissipation_j>0); assert.ok(last.plastic_dissipation_j>0);
+    assert.ok(last.relaxation&&last.plasticity);
+    assert.equal(result.files[1].text,raw);
+    const replay=result.files.find(file=>file.name==='strip-history-replay.json').text;
+    assert.equal(replay,result.result.replay_request_json);
+    assert.deepEqual(JSON.parse(ftx.material_strip_history(replay)),result.result);
+    delete input.material.record.membrane_relaxation.parallel_plasticity;
+    const refused=await w.send({type:'stripHistory',stripRequest:JSON.stringify(input),request:201});
+    assert.equal(refused.type,'error');
+    assert.equal(w.sent.some(message=>message.type==='result'&&message.request===201),false);
+  });
+
 test('compiled WASM adaptive synthesis replays both native selected-body scenarios and exact intermediate patterns',
   {skip:process.env.FTX_REAL_WASM!=='1' || !process.env.FTX_DESIGN_ADAPTIVE_REPLAY}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');

@@ -171,3 +171,68 @@ fn both_native_history_entry_points_replay_the_complete_source_locked_loading_pr
         assert!(call(&dir, &denied, main).is_err());
     }
 }
+
+#[test]
+fn joint_memory_replays_through_both_native_commands_and_the_portable_boundary() {
+    let material: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-parallel-membrane.json"
+    ))
+    .unwrap();
+    let input = json!({
+        "schema": "ftx-strip-history/1",
+        "material": material,
+        "fixture": {
+            "gauge_length_m": 0.1, "width_m": 0.06,
+            "warp_axis": [0.0, 1.0], "cells": [2, 2]
+        },
+        "loading": [
+            {"time_s": 0.0, "extension_fraction": 0.0},
+            {"time_s": 0.05, "extension_fraction": 0.02},
+            {"time_s": 0.15, "extension_fraction": 0.02},
+            {"time_s": 0.2, "extension_fraction": 0.0},
+            {"time_s": 0.25, "extension_fraction": 0.0}
+        ],
+        "controls": {
+            "max_step_s": 0.01, "max_steps": 32, "max_newton": 100,
+            "velocity_tolerance_m_s": 1e-9, "force_tolerance_n": 1e-6
+        }
+    });
+    let request = serde_json::from_value(input.clone()).unwrap();
+    let direct = ftx_drape::strip::history::evaluate(&request).unwrap();
+    assert!(direct.model_scope.contains("parallel"));
+    let last = direct.states.last().unwrap();
+    assert!(last.maxwell_dissipation_j > 0.0);
+    assert!(last.plastic_dissipation_j > 0.0);
+    assert!(last.relaxation.is_some() && last.plasticity.is_some());
+    let replay: Value = serde_json::from_str(&direct.replay_request_json).unwrap();
+    let expected = serde_json::to_value(&direct).unwrap();
+    for source in [&input, &replay] {
+        let portable: Value =
+            serde_json::from_str(&ftx_wasm::materials::strip_history(&source.to_string()).unwrap())
+                .unwrap();
+        assert_eq!(portable, expected);
+    }
+    let mut unqualified = input.clone();
+    unqualified["material"]["record"]["membrane_relaxation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("parallel_plasticity");
+    let denied = serde_json::from_value(unqualified.clone()).unwrap();
+    let refusal = ftx_drape::strip::history::evaluate(&denied).unwrap_err();
+    assert_eq!(
+        serde_json::to_value(
+            ftx_wasm::materials::strip_history(&unqualified.to_string()).unwrap_err()
+        )
+        .unwrap(),
+        serde_json::to_value(&refusal).unwrap()
+    );
+    let dir = directory();
+    for main in [false, true] {
+        assert_eq!(call(&dir, &input, main).unwrap(), expected);
+        assert_eq!(call(&dir, &replay, main).unwrap(), expected);
+        assert_eq!(
+            call(&dir, &unqualified, main).unwrap_err(),
+            serde_json::to_value(&refusal).unwrap()
+        );
+    }
+}
