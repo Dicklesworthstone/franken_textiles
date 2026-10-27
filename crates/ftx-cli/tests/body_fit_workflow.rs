@@ -459,7 +459,8 @@ fn capture_acquires_actual_charuco_pixels_and_replays_the_checked_cameras() {
     // no production input is rescaled or granted a different image budget.
     let (model, original) = fixture_scaled(0.25);
     std::fs::write(dir.join("model.ftxbody"), model).unwrap();
-    let input = capture::charuco(&dir, original);
+    let mut input = original;
+    capture::wrap_images(&dir, &mut input, true);
     save(&dir, &input);
     let review = capture_review(&dir, "charuco-review", 0)["result"].clone();
     assert_eq!(review["body_model_loaded"], false);
