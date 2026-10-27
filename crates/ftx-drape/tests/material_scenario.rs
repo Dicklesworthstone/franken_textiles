@@ -747,6 +747,7 @@ fn composed_evaluation_equals_real_drape_surface_and_projected_coverage() {
             settings: c.settings.clone(),
         },
         conditions: c.conditions.clone(),
+        thermal_bridges: c.thermal_bridges.clone(),
     }
     .evaluate()
     .unwrap();

@@ -4003,6 +4003,28 @@ them after source changes. Existing independent-labor inputs retain their old re
 Measured labor/autonomy applicability, heterogeneous shared fixtures, garment transfers and hardware
 execution remain separate work. See [sewing-production.md](docs/sewing-production.md).
 
+### 25.106 Qualified seam and closure heat paths reach garment coverage decisions
+
+The existing steady coverage authority now accepts explicit retained mesh-edge centerlines with
+source-qualified excess linear thermal conductance. Their contribution is additional to the exact
+unbridged reference stack under the same reservoir films, rather than a second full seam footprint.
+Actual current centerline length and projected coverage ownership are recomputed; shared mesh/body
+boundaries count each physical portion once, and inconsistent neighboring stacks refuse.
+
+Every consumed qualification binds the existing source/topology identity, ordered materials,
+interfaces, films, area-ratio ranges and temperature/length domains. Material alternatives select
+their own matching observations. Baseline, signed excess and total power remain explicit, and the
+ordinary body-coverage objective consumes the total. Comparison admission binds the requested and
+frozen policy and the observations actually consumed; unqualified or stale coverage cannot supply
+a favorable objective while independent supported manufacturing remains available.
+
+This delivers the bounded steady capability `ftx-tm5.1` through native commands, portable/browser
+APIs, frozen replay and material studies. No-bridge behavior is retained. The first model excludes
+transient bridge storage, exterior radiation coupling, inferred seam microgeometry, generic
+heterogeneous seam laws and empirical warmth claims. Matched physical seam/closure measurements
+and garment validation remain under `ftx-tm5` and `ftx-tmf`. See
+[steady-thermal-coverage.md](docs/steady-thermal-coverage.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

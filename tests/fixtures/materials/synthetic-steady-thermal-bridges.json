@@ -1,0 +1,41 @@
+{
+  "schema": "ftx-steady-thermal-bridges/1",
+  "model": "qualified_excess_centerline_conductance/1",
+  "paths": [{
+    "id": "synthetic-front-seam",
+    "instance": "front",
+    "vertices": [0, 1],
+    "qualifications": [{
+      "id": "synthetic-front-reference",
+      "surface_model_sha256": "1a19f20671481ba816dcbfda35fa2dd7523f55d1fb31dc7873a5d9b2c0fa7d4e",
+      "material_sha256": ["29daad30ed08044a5af8eeb7dc7635b49fbcd64e6e48f834002b600e4bb4560d"],
+      "interface_resistance_m2_k_w": [],
+      "layer_area_ratio_ranges": [[0.5, 2.0]],
+      "inside_resistance_m2_k_w": 0.1,
+      "outside_resistance_m2_k_w": 0.2,
+      "temperature_range_c": [-10.0, 50.0],
+      "length_range_m": [0.1, 4.0],
+      "excess_linear_conductance": {
+        "value": 0.2,
+        "unit": "W/(m*K)",
+        "evidence": "estimate",
+        "source": "test",
+        "method": "Synthetic bridged-minus-unbridged reference for software verification",
+        "conditions": {
+          "specimen_id": "synthetic-front-seam-coupon",
+          "conditioning": "synthetic dry test"
+        }
+      },
+      "sources": {
+        "test": {
+          "reference": "test:steady-thermal-bridges",
+          "accessed_on": "2026-10-27",
+          "note": "All values and qualification domains are synthetic; no measured textile or seam performance."
+        }
+      },
+      "allow_estimates": true,
+      "reference_basis": "excess_over_locked_unbridged_stack_same_reservoir_films",
+      "qualification": "Synthetic additive centerline excess over the exact front reference sheet under identical reservoir films, within the declared temperature, current-length and area-ratio domains."
+    }]
+  }]
+}

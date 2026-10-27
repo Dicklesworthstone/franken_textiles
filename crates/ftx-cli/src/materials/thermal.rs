@@ -86,6 +86,7 @@ pub(crate) fn coverage(report: &str, map: &str, conditions: &str) -> Result<Valu
         report: serde_json::from_str(&report).map_err(invalid)?,
         map: serde_json::from_str(&map).map_err(invalid)?,
         conditions: serde_json::from_str(&conditions).map_err(invalid)?,
+        thermal_bridges: None,
     }
     .evaluate()
 }

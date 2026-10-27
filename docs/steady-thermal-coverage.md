@@ -82,6 +82,83 @@ layer order or reuse of the same spatial cloth portion. Uncovered body fractions
 This local-normal closure assumes an appropriate outward, non-self-intersecting body boundary;
 edge consistency checks are not a global body-topology certificate.
 
+## Qualified seam and closure thermal bridges
+
+The single-file `ftx-steady-coverage-request/1` request accepts optional `thermal_bridges`.
+The same policy is available under `scenario.coverage.thermal_bridges`, so ordinary material
+studies and steady motion endpoints evaluate it on their newly draped geometry. Both native
+commands and the browser `thermal_steady_coverage` export use the same coverage authority.
+`tests/fixtures/materials/synthetic-steady-thermal-bridges.json` is an explicitly synthetic policy
+for the retained front-sheet edge in the executable example above. Add its contents as the
+request's `thermal_bridges` value, then run:
+
+```sh
+ftx-materials thermal-steady-coverage bridge-request.json
+ftx materials thermal-steady-coverage bridge-request.json --json
+```
+
+This first model represents qualified **centerline excess over an identified unbridged stack**.
+For an admitted current centerline interval of length `L`, the additional signed power is:
+
+```text
+P_bridge = psi * L * (T_inside - T_outside)
+P_total = P_unbridged_canonical_coverage + sum(P_bridge)
+```
+
+`psi` has units `W/(m*K)`. It must describe the additional power after subtracting the same
+unbridged reference under the same reservoir films; a full seam heat-flow coefficient cannot be
+used as this excess. No second seam area is added and no original sheet footprint is removed.
+The dimensional and excess convention follows the public definition of linear thermal
+transmittance in [ISO 7345:2018, §3.1.13](https://www.iso.org/obp/ui?_escaped_fragment_=iso%3Astd%3Aiso%3A7345%3Aed-3%3Av1%3Aen).
+That reference supplies a definition, not textile coefficients or a claim of standards compliance.
+
+Each `paths[]` entry names a physical seam/closure, an existing drape `instance`, and a connected
+`vertices` sequence of actual retained mesh edges. It does not infer a seam from its name.
+Every source qualification specifies:
+
+- The existing `steady_thermal_surface.model.sha256`, binding the exact source selections,
+  reference areas and mesh topology; the ordered local material hashes and interface resistances.
+- The source-admitted current cloth/body area-ratio range for every layer, total current path-length
+  range, and reservoir/face temperature range. Changed domains are not extrapolated.
+- The exact inner and outer reservoir films used for the reference subtraction.
+- A sourced `excess_linear_conductance` observation, including method, specimen, conditioning,
+  evidence and independently admitted estimates; its unit must be `W/(m*K)` and its value nonnegative.
+- `reference_basis: "excess_over_locked_unbridged_stack_same_reservoir_films"` and the source's
+  explicit qualification of the additive centerline model and its applicability domains.
+
+Alternative qualifications can cover different exact material models. A material change selects
+its own unique matching observation or makes this coverage consumer unavailable. It never inherits
+a seam coefficient from a similarly named fabric. A pose change preserves the source model lock
+and recomputes current edge lengths and their body-region ownership, within the qualified domains.
+
+The evaluator clips each edge against the existing barycentric coverage footprints. It partitions
+length once across body regions, including lines on shared cloth/body boundaries. Deterministic
+ownership is allowed only when all incident covered paths have the same exact physical
+qualification and reservoir conditions. Different seam-side stacks, uncovered intervals, repeated
+edges, coincident overlapping centerlines and ambiguous source alternatives refuse. The numerical
+ownership roundoff length scale is retained separately; it is not empirical seam uncertainty.
+
+`steady.baseline_power_w`, `steady.bridge_power_w` and `steady.power_w` expose the unbridged,
+additional and total signed powers. The body fields carry the same split. Existing region
+conduction fields remain the unbridged reference, while `thermal_bridges.paths[].contributions`
+retains current lengths, body/region/triangle ownership, conductance, signed power and the exact
+consumed qualification digest. Inside and outside bridge powers agree at steady state; no
+unmodeled storage is inserted. Reversed reservoir temperatures reverse the power, and equal
+temperatures give zero bridge exchange.
+
+The existing `body_coverage_power_w` study objective reads the total. Its protocol includes only
+qualifications actually consumed, resolved against the exact requested frozen source policy.
+Different consumed qualifications require the existing explicit mixed-protocol consent; unused
+material alternatives do not change a row's protocol. Missing or altered requested bridge
+outcomes cannot silently enter the frontier as an unbridged result.
+
+This version requires uniform prescribed reservoir temperatures and films. It rejects exterior
+convection/radiation replacement and accepts no transient bridge request. Independent transient
+sheet models retain their own scope and acquire no seam storage or dynamics from this steady policy.
+The model supplies no generic heterogeneous seam microgeometry, finite replacement-area closure,
+bridge interaction law, fitted fabric property, physical seam validation or wearer comfort rating.
+Omitting the policy preserves the ordinary coverage result and its serialization.
+
 For a covered region of area `A_body`, layer `i` uses its allocated current cloth area `A_i`.
 For constant resistance, the region's resistance per body area is:
 
@@ -134,7 +211,7 @@ requests. This export is a usable browser API, not a newly implemented graphical
 ## Remaining physical boundaries
 
 The calculation does not model transient storage, compression-dependent loft, liquid/vapor
-transport, evaporation, wind-dependent films, radiation, seam thermal bridges or human
+transport, evaporation, wind-dependent films, radiation, unqualified seam thermal bridges or human
 thermoregulation. A modeled warm jacket is not evidence of safe exposure temperature, PPE
 performance or real-person fit. It does not authorize any machine or robot operation.
 

@@ -54,6 +54,9 @@ pub struct Request {
     pub map: Map,
     /// Explicit inside/outside reservoirs and films on the prescribed body boundary.
     pub conditions: Conditions,
+    /// Optional observed centerline excess over this exact source-qualified unbridged network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_bridges: Option<super::bridges::Request>,
 }
 
 impl Request {
@@ -84,6 +87,14 @@ impl Request {
                 "separate bare boundaries require explicit exterior exchange mode",
             ));
         }
+        if let Some(bridges) = &self.thermal_bridges {
+            bridges.validate()?;
+            if self.conditions.exterior_exchange.is_some() {
+                return Err(invalid(
+                    "qualified centerline excess requires the characterized reservoir films; exterior convection/radiation is not supported by this bridge model",
+                ));
+            }
+        }
         let frame = &self.report["steady_thermal_surface"];
         let report = json!({"material":self.report["material"],"steady_thermal_surface":frame});
         let mut frozen = Self {
@@ -91,6 +102,7 @@ impl Request {
             schema: self.schema.clone(),
             map: self.map.clone(),
             conditions: self.conditions.clone(),
+            thermal_bridges: self.thermal_bridges.clone(),
         };
         bounded(&frozen)?;
         let (source, cloth) = SteadySurface::from_drape_report(&frozen.report)?;
@@ -173,7 +185,7 @@ impl Request {
             },
         )?;
         let assembly = SteadyCoverage::new(source, projection.layout.clone())?;
-        let (solution, exterior) = if let Some(e) = &self.conditions.exterior_exchange {
+        let (mut solution, exterior) = if let Some(e) = &self.conditions.exterior_exchange {
             let e = broadcast(e, boundaries.len())?;
             let bare = self
                 .conditions
@@ -202,6 +214,42 @@ impl Request {
                 None,
             )
         };
+        let bridges = self
+            .thermal_bridges
+            .as_ref()
+            .map(|policy| {
+                policy.evaluate(super::bridges::Context {
+                    source: &assembly.source,
+                    cloth: &cloth,
+                    projection: &projection,
+                    baseline: &solution,
+                    boundaries: &boundaries,
+                    instances: &instances,
+                    owners: &owners,
+                    model_sha256: frame["model"]["sha256"].as_str().ok_or_else(|| {
+                        invalid("thermal bridge needs the retained source model identity")
+                    })?,
+                })
+            })
+            .transpose()?;
+        if let Some(bridges) = &bridges {
+            solution.baseline_power_w = Some(solution.power_w);
+            solution.bridge_power_w = bridges["bridge_power_w"].as_f64();
+            solution.power_w = bridges["total_power_w"]
+                .as_f64()
+                .expect("computed finite power");
+            for (field, extra) in solution
+                .body
+                .iter_mut()
+                .zip(bridges["body"].as_array().expect("computed fields"))
+            {
+                field.baseline_power_w = Some(field.power_w);
+                field.bridge_power_w = extra["bridge_power_w"].as_f64();
+                field.power_w = extra["total_power_w"]
+                    .as_f64()
+                    .expect("computed finite field");
+            }
+        }
         frozen.conditions.body_mesh_sha256 = Some(body_sha.clone());
         let request = serde_json::to_value(frozen).map_err(|e| invalid(e.to_string()))?;
         let mut result = json!({"schema":"ftx-steady-coverage-result/1",
@@ -213,6 +261,20 @@ impl Request {
             "scope":"local-normal projected coverage with prescribed reservoirs; not whole-wearer heat loss",
             "not_simulated":["transient heat storage","compression-dependent loft","moisture transport",
                 "evaporation","wind-dependent films","radiative exchange","thermal bridges","human thermoregulation"]});
+        if let Some(bridges) = bridges {
+            result["thermal_bridges"] = bridges;
+            result["not_simulated"]
+                .as_array_mut()
+                .expect("authored exclusions")
+                .retain(|value| value != "thermal bridges");
+            result["not_simulated"]
+                .as_array_mut()
+                .expect("authored exclusions")
+                .extend([
+                    json!("unqualified seam/closure microgeometry or replacement-area paths"),
+                    json!("thermal bridge storage, transient response or exterior radiation"),
+                ]);
+        }
         if let Some(details) = exterior {
             let enabled = self
                 .conditions

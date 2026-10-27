@@ -6,6 +6,75 @@ fn fixture(name: &str) -> PathBuf {
         .join("../../tests/fixtures/materials")
         .join(name)
 }
+
+#[test]
+fn both_native_commands_preserve_source_qualified_bridge_power_and_refusals() {
+    let read = |name| serde_json::from_slice::<Value>(&fs::read(fixture(name)).unwrap()).unwrap();
+    let input = json!({"schema":"ftx-steady-coverage-request/1",
+        "report":read("synthetic-steady-surface-report.json"),"map":read("steady-coverage-map.json"),
+        "conditions":read("steady-coverage-conditions.json"),"thermal_bridges":read("synthetic-steady-thermal-bridges.json")});
+    let expected: Value =
+        serde_json::from_str(&ftx_wasm::thermal::steady_coverage(&input.to_string()).unwrap())
+            .unwrap();
+    assert_eq!(expected["steady"]["bridge_power_w"], 6.);
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-thermal-bridges-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    let call = |main: bool, name: &str, value: &Value| {
+        let path = dir.join(format!("{main}-{name}.json"));
+        let bytes = serde_json::to_vec(value).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let mut command = Command::new(if main {
+            env!("CARGO_BIN_EXE_ftx")
+        } else {
+            env!("CARGO_BIN_EXE_ftx-materials")
+        });
+        if main {
+            command.args(["--json", "materials"]);
+        }
+        let result = command
+            .arg("thermal-steady-coverage")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(fs::read(path).unwrap(), bytes);
+        let value: Value = serde_json::from_slice(if result.status.success() || main {
+            &result.stdout
+        } else {
+            &result.stderr
+        })
+        .unwrap();
+        if result.status.success() {
+            Ok(if main { value["result"].clone() } else { value })
+        } else {
+            Err(value["refusal"].clone())
+        }
+    };
+    for main in [false, true] {
+        assert_eq!(call(main, "input", &input).unwrap(), expected);
+        assert_eq!(
+            call(main, "frozen", &expected["request"]).unwrap(),
+            expected
+        );
+        let mut stale = input.clone();
+        stale["thermal_bridges"]["paths"][0]["qualifications"][0]["surface_model_sha256"] =
+            json!("0".repeat(64));
+        let refused = call(main, "stale", &stale).unwrap_err();
+        assert_eq!(refused["code"], "invalid_document");
+        assert!(
+            refused["message"]
+                .as_str()
+                .unwrap()
+                .contains("qualification")
+        );
+    }
+}
 #[test]
 fn command_projects_frozen_drape_inputs_and_replays_the_same_request() {
     let paths = [

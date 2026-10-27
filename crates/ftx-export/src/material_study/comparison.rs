@@ -1644,6 +1644,24 @@ impl Policy {
                 &descriptor["scenario"]["motion"]["transient_surface"]["surface_water"],
             ))?;
         }
+        if consumers.contains(&Consumer::Coverage) {
+            let expected = &descriptor["scenario"]["coverage"]["thermal_bridges"];
+            let result = &admitted.drape["coverage"]["result"];
+            if !expected.is_null()
+                || !result["thermal_bridges"].is_null()
+                || !result["request"]["thermal_bridges"].is_null()
+            {
+                if expected.is_null()
+                    || result["thermal_bridges"].is_null()
+                    || result["request"]["thermal_bridges"] != *expected
+                {
+                    return Err(invalid(
+                        "coverage comparison requires the requested thermal bridges and their exact frozen source policy; missing, injected or changed bridge outcomes refuse",
+                    ));
+                }
+                base = hash(&(base, thermal_bridge_protocol(result)?))?;
+            }
+        }
         if thread {
             let plan = row
                 .sewing
@@ -1955,6 +1973,71 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
         Consumer::TransientSurface => admitted.transient_surface.is_some(),
         Consumer::TransientCoverage => admitted.transient_coverage.is_some(),
     }
+}
+
+// Consume only the observations actually selected by the production bridge solver. Unused source
+// alternatives do not change a comparison protocol. Whole-observation equality is conservative:
+// different source/material/domain qualifications need the existing explicit mixed-protocol consent.
+fn thermal_bridge_protocol(result: &Value) -> Result<Value, Refusal> {
+    let bridges = &result["thermal_bridges"];
+    let input = &result["request"]["thermal_bridges"];
+    let bad = || {
+        invalid(
+            "thermal bridge comparison needs the complete frozen request and exact consumed source qualifications",
+        )
+    };
+    if bridges["schema"] != "ftx-steady-thermal-bridge-result/1"
+        || input["schema"] != "ftx-steady-thermal-bridges/1"
+        || bridges["model"] != input["model"]
+        || bridges["model"] != "qualified_excess_centerline_conductance/1"
+    {
+        return Err(bad());
+    }
+    let paths = input["paths"].as_array().ok_or_else(bad)?;
+    let reported = bridges["paths"].as_array().ok_or_else(bad)?;
+    if paths.len() != reported.len() || reported.is_empty() {
+        return Err(bad());
+    }
+    let mut protocols = BTreeMap::new();
+    for path in reported {
+        let id = path["id"].as_str().ok_or_else(bad)?;
+        let sources: Vec<_> = paths.iter().filter(|p| p["id"] == id).collect();
+        if sources.len() != 1 || sources[0]["instance"] != path["instance"] {
+            return Err(bad());
+        }
+        let qualified = sources[0]["qualifications"].as_array().ok_or_else(bad)?;
+        let pieces = path["contributions"].as_array().ok_or_else(bad)?;
+        if pieces.is_empty() {
+            return Err(bad());
+        }
+        let mut consumed = BTreeSet::new();
+        for piece in pieces {
+            let matching: Vec<_> = qualified
+                .iter()
+                .filter(|q| q["id"] == piece["qualification_id"])
+                .collect();
+            if matching.len() != 1 {
+                return Err(bad());
+            }
+            let identity = hash(matching[0])?;
+            if piece["qualification_sha256"] != identity {
+                return Err(bad());
+            }
+            consumed.insert(identity);
+        }
+        if protocols
+            .insert(
+                id,
+                json!({"instance":path["instance"],"consumed_qualifications":consumed}),
+            )
+            .is_some()
+        {
+            return Err(bad());
+        }
+    }
+    Ok(
+        json!({"model":bridges["model"],"reference_basis":bridges["reference_basis"],"paths":protocols}),
+    )
 }
 
 fn admit_simulation(

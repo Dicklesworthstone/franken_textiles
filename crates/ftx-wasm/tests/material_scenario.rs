@@ -84,6 +84,168 @@ fn matrix_heat_policy(direction: &str) -> Value {
 }
 
 #[test]
+fn qualified_centerline_bridges_change_the_real_coverage_frontier_without_changing_cloth() {
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    let mut request = request();
+    request.variants.truncate(2);
+    request.comparison = Some(
+        serde_json::from_value(json!({"basis":"nominal",
+        "objectives":[{"metric":"body_coverage_power_w","direction":"minimize"}],
+        "required_consumers":["coverage"],"allow_mixed_protocols":true}))
+        .unwrap(),
+    );
+    let mut scenario: Value = serde_json::from_str(SCENARIO).unwrap();
+    scenario["options"]["sew_steps"] = json!(120);
+    scenario["options"]["drape_steps"] = json!(0);
+    scenario["coverage"]["body_triangle_ids"] =
+        json!((0..form.triangles.len()).collect::<Vec<_>>());
+    let evaluate = |request: &Request, scenario: &Value| -> Value {
+        serde_json::from_str(
+            &on_body(
+                &body,
+                PATTERN,
+                &serde_json::to_string(request).unwrap(),
+                &scenario.to_string(),
+                |_| {},
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let baseline = evaluate(&request, &scenario);
+    assert_eq!(baseline["comparison"]["frontier"], json!(["a"]));
+    let frame =
+        &baseline["simulations"][0]["evaluation"]["result"]["drape"]["steady_thermal_surface"];
+    let positions: Vec<Vec3> = serde_json::from_value(frame["positions_m"].clone()).unwrap();
+    // An axial band seam lies fully over the cylinder. A circumferential outer edge may include
+    // gaps between the canonical local-normal body projections and must continue to refuse.
+    let axial_error = |edge: &[usize; 2]| {
+        let d = positions[edge[1]] - positions[edge[0]];
+        (d.x * d.x + d.y * d.y) / (d.z * d.z)
+    };
+    let edge = frame["model"]["patches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|patch| {
+            let v: [usize; 3] = serde_json::from_value(patch["vertices"].clone()).unwrap();
+            [[v[0], v[1]], [v[1], v[2]], [v[2], v[0]]]
+        })
+        .filter(|edge| (positions[edge[1]].z - positions[edge[0]].z).abs() > 1e-6)
+        .min_by(|a, b| axial_error(a).total_cmp(&axial_error(b)))
+        .unwrap();
+    let length = (positions[edge[1]] - positions[edge[0]]).norm();
+    let mut bridges: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-steady-thermal-bridges.json"
+    ))
+    .unwrap();
+    bridges["paths"][0]["instance"] = json!("band");
+    bridges["paths"][0]["vertices"] = json!(edge);
+    let template = bridges["paths"][0]["qualifications"][0].clone();
+    let mut alternatives = Vec::new();
+    for (i, row) in baseline["simulations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let frame = &row["evaluation"]["result"]["drape"]["steady_thermal_surface"];
+        let mut q = template.clone();
+        q["id"] = json!(format!("synthetic-band-state-{i}"));
+        q["surface_model_sha256"] = frame["model"]["sha256"].clone();
+        q["material_sha256"][0] =
+            frame["model"]["columns"][0]["layers"][0]["expected_sha256"].clone();
+        q["layer_area_ratio_ranges"] = json!([[0.01, 100.]]);
+        q["length_range_m"] = json!([0.000001, 1.]);
+        q["excess_linear_conductance"]["value"] = json!(if i == 0 { 1. } else { 0. });
+        q["excess_linear_conductance"]["conditions"]["specimen_id"] =
+            json!("synthetic-band-bridge");
+        alternatives.push(q);
+    }
+    bridges["paths"][0]["qualifications"] = json!(alternatives);
+    scenario["coverage"]["thermal_bridges"] = bridges;
+    let result = evaluate(&request, &scenario);
+    for row in result["simulations"].as_array().unwrap() {
+        let coverage = &row["evaluation"]["result"]["coverage"];
+        assert_eq!(coverage["status"], "available", "{coverage}");
+    }
+    assert_eq!(
+        result["comparison"]["frontier"],
+        json!(["b"]),
+        "{}",
+        result["comparison"]
+    );
+    let delta = scenario["coverage"]["conditions"]["boundaries"][0]["inside_c"]
+        .as_f64()
+        .unwrap()
+        - scenario["coverage"]["conditions"]["boundaries"][0]["outside_c"]
+            .as_f64()
+            .unwrap();
+    for (i, row) in result["simulations"].as_array().unwrap().iter().enumerate() {
+        let outcome = &row["evaluation"]["result"];
+        let heat = &outcome["coverage"]["result"];
+        assert_eq!(
+            outcome["coverage"]["status"], "available",
+            "{}",
+            outcome["coverage"]
+        );
+        assert_eq!(
+            outcome["drape"],
+            baseline["simulations"][i]["evaluation"]["result"]["drape"]
+        );
+        let extra = heat["steady"]["bridge_power_w"].as_f64().unwrap();
+        assert!((extra - if i == 0 { length * delta } else { 0. }).abs() < 1e-10);
+        assert_eq!(
+            heat["steady"]["baseline_power_w"],
+            baseline["simulations"][i]["evaluation"]["result"]["coverage"]["result"]["steady"]["power_w"]
+        );
+        assert_eq!(
+            outcome["metrics"]["body_coverage_power_w"],
+            heat["steady"]["power_w"]
+        );
+        let replay: Value = serde_json::from_str(
+            &ftx_wasm::thermal::steady_coverage(&heat["request"].to_string()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(&replay, heat);
+    }
+    for (variant, row) in request
+        .variants
+        .iter_mut()
+        .zip(result["manufacturing"]["alternatives"].as_array().unwrap())
+    {
+        variant.changes = serde_json::from_value(row["frozen_changes"].clone()).unwrap();
+    }
+    let replay = evaluate(&request, &scenario);
+    assert_eq!(replay["simulations"], result["simulations"]);
+    assert_eq!(
+        replay["comparison"]["frontier"],
+        result["comparison"]["frontier"]
+    );
+    scenario["coverage"]["thermal_bridges"]["paths"][0]["qualifications"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    let stale = evaluate(&request, &scenario);
+    assert_eq!(
+        stale["simulations"][1]["evaluation"]["result"]["coverage"]["status"],
+        "refused"
+    );
+    assert_eq!(stale["simulations"][1]["evaluation"]["status"], "available");
+    assert_eq!(
+        stale["manufacturing"]["alternatives"][1]["cutting"]["status"],
+        "available"
+    );
+    assert_eq!(stale["comparison"]["frontier"], json!(["a"]));
+}
+
+#[test]
 fn named_matrix_cases_match_standalone_consumers_and_replay_frozen_sources() {
     let form = form();
     let body = DrapeBody {

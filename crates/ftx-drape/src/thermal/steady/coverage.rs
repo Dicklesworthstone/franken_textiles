@@ -16,6 +16,7 @@ use ftx_pattern::material_optics::Side;
 use serde::Serialize;
 use serde_json::{Value, json};
 
+pub mod bridges;
 pub mod request;
 
 /// Frozen single-layer source triangles and their explicit inside-to-outside coverage topology.
@@ -54,6 +55,12 @@ pub struct BodySolution {
     pub covered_area_m2: f64,
     /// Heat through the uncovered fraction's declared films, in W.
     pub bare_power_w: f64,
+    /// Unbridged reference power when an explicit qualified centerline extension is active, W.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_power_w: Option<f64>,
+    /// Source-qualified centerline excess, already included in `power_w`, W.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_power_w: Option<f64>,
     /// Sum of covered and bare power, positive inside-to-outside, in W.
     pub power_w: f64,
 }
@@ -71,6 +78,12 @@ pub struct CoverageSolution {
     pub covered_area_m2: f64,
     /// Bare-path power already included in `power_w`, in W.
     pub bare_power_w: f64,
+    /// Original unbridged canonical network power when a centerline extension is active, W.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_power_w: Option<f64>,
+    /// Qualified centerline excess, already included in `power_w`, W.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_power_w: Option<f64>,
     /// Signed heat crossing both boundaries at steady state, in W.
     pub power_w: f64,
     /// Unallocated reference cloth area, explicitly excluded from this calculation, in m².
@@ -308,6 +321,8 @@ impl SteadyCoverage {
                 area_m2: area,
                 covered_area_m2: product(area, self.covered[i])?,
                 bare_power_w: bare,
+                baseline_power_w: None,
+                bridge_power_w: None,
                 power_w: bare,
             });
         }
@@ -370,6 +385,8 @@ impl SteadyCoverage {
             body_area_m2: fields.iter().map(|f| f.area_m2).sum(),
             covered_area_m2: fields.iter().map(|f| f.covered_area_m2).sum(),
             bare_power_w: fields.iter().map(|f| f.bare_power_w).sum(),
+            baseline_power_w: None,
+            bridge_power_w: None,
             power_w: fields.iter().map(|f| f.power_w).sum(),
             unassigned_cloth_reference_area_m2: unassigned,
             body: fields,

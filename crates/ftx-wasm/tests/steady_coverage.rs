@@ -34,6 +34,46 @@ fn browser_native_exact_equality_frozen_replay_and_independent_parallel_answer()
             >= 2
     );
 }
+
+#[test]
+fn qualified_bridge_power_reaches_the_portable_coverage_result_and_frozen_replay() {
+    let mut input = request();
+    let baseline = evaluate(&input).unwrap();
+    input["thermal_bridges"] = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-steady-thermal-bridges.json"
+    ))
+    .unwrap();
+    let result = evaluate(&input).unwrap();
+    assert_eq!(
+        result,
+        serde_json::from_value::<Request>(input.clone())
+            .unwrap()
+            .evaluate()
+            .unwrap()
+    );
+    assert_eq!(
+        result["steady"]["baseline_power_w"],
+        baseline["steady"]["power_w"]
+    );
+    assert_eq!(result["steady"]["bridge_power_w"], 6.);
+    assert!(
+        (result["steady"]["power_w"].as_f64().unwrap()
+            - baseline["steady"]["power_w"].as_f64().unwrap()
+            - 6.)
+            .abs()
+            < 1e-12
+    );
+    assert_eq!(result, evaluate(&result["request"]).unwrap());
+    let mut stale = result["request"].clone();
+    stale["thermal_bridges"]["paths"][0]["qualifications"][0]["material_sha256"][0] =
+        json!("0".repeat(64));
+    assert!(evaluate(&stale).is_err());
+    stale = input.clone();
+    stale["thermal_bridges"]["paths"][0]["qualifications"][0]["allow_estimates"] = json!(false);
+    assert!(evaluate(&stale).is_err());
+    input.as_object_mut().unwrap().remove("thermal_bridges");
+    assert_eq!(baseline, evaluate(&input).unwrap());
+}
 #[test]
 fn stale_spatial_boundaries_unknown_layers_tampered_receipts_and_budget_refuse() {
     let input = request();

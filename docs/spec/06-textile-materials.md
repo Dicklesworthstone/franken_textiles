@@ -72,7 +72,17 @@ explicit area, inner/outer temperatures and a combined boundary-film resistance.
 `W/(m*K)`. It never derives warmth from fiber name, fill power or a marketing label. The output is signed
 heat flow in W, not a comfort index, clo certification, temperature rating or survival guarantee.
 Wind, sweating, evaporative transport, air-gap geometry, layer compression, transient storage, seams,
-thermal bridges, metabolism and thermoregulation remain separate, unimplemented coupling work.
+thermal bridges, metabolism and thermoregulation are outside this scalar stack consumer.
+
+The separate steady body-coverage consumer accepts source-qualified centerline bridge excess over
+its exact unbridged stack. It preserves original area conduction and adds only the observed linear
+excess times current covered length and signed reservoir temperature difference. Exact source model,
+ordered material/interface/film identities and geometry/temperature domains are required. Shared
+boundaries partition each line once; unqualified heterogeneous seam sides, uncovered intervals,
+duplicate physical paths and unsupported exterior/transient bridge modes refuse. The ordinary
+scenario total-coverage heat objective consumes baseline plus bridge power, with source-qualified
+comparison protocols and frozen replay. This is not a generic seam microgeometry or comfort model.
+See [steady-thermal-coverage.md](../steady-thermal-coverage.md#qualified-seam-and-closure-thermal-bridges).
 
 ## Dated purchasing and finite observed stock
 

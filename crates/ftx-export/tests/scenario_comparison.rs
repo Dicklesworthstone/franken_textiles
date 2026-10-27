@@ -94,6 +94,72 @@ fn signed_heat_and_mass_tradeoffs_are_not_absolute_values_or_a_weighted_score() 
 }
 
 #[test]
+fn coverage_frontier_uses_total_bridge_power_and_only_consumed_source_protocols() {
+    let mut request = request();
+    request.comparison.as_mut().unwrap().objectives = serde_json::from_value(json!([
+        {"metric":"body_coverage_power_w","direction":"minimize"}]))
+    .unwrap();
+    let evaluate = |request: &Request, change_used: bool, fault: usize| {
+        let mut policy: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-steady-thermal-bridges.json"
+        ))
+        .unwrap();
+        let mut alternative = policy["paths"][0]["qualifications"][0].clone();
+        alternative["id"] = json!("other-material-alternative");
+        alternative["surface_model_sha256"] = json!("f".repeat(64));
+        alternative["excess_linear_conductance"]["method"] =
+            json!("Different source acquisition protocol");
+        policy["paths"][0]["qualifications"]
+            .as_array_mut()
+            .unwrap()
+            .push(alternative);
+        let mut descriptor = descriptor();
+        descriptor["scenario"]["coverage"]["thermal_bridges"] = policy.clone();
+        serde_json::to_value(request.evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &descriptor, |key, pattern| {
+            let mut result = synthetic(pattern, 20., 0.2);
+            let used = policy["paths"][0]["qualifications"][usize::from(key == "b" && change_used)].clone();
+            let digest = sha256_hex(&serde_json::to_vec(&used).unwrap());
+            let bridge_power = if key == "a" { 6. } else { 3. };
+            result["coverage"]["result"] = json!({
+                "request":{"thermal_bridges":policy},
+                "steady":{"baseline_power_w":10.,"bridge_power_w":bridge_power,"power_w":10.+bridge_power},
+                "thermal_bridges":{"schema":"ftx-steady-thermal-bridge-result/1",
+                    "model":"qualified_excess_centerline_conductance/1",
+                    "reference_basis":"excess_over_locked_unbridged_stack_same_reservoir_films",
+                    "paths":[{"id":"synthetic-front-seam","instance":"front","contributions":[{
+                        "qualification_id":used["id"],"qualification_sha256":if fault==1 && key=="b" {"0".repeat(64)} else {digest}}]}]}});
+            if key == "b" {
+                if fault == 2 { result["coverage"]["result"]["thermal_bridges"] = Value::Null; }
+                if fault == 3 { result["coverage"]["result"]["request"]["thermal_bridges"]["paths"][0]["qualifications"][0]["qualification"] = json!("Changed request source"); }
+            }
+            Ok(result)
+        }).unwrap()).unwrap()
+    };
+    let same = evaluate(&request, false, 0);
+    assert_eq!(same["comparison"]["frontier"], json!(["b"]));
+    assert_eq!(
+        same["comparison"]["alternatives"][0]["readings"]["body_coverage_power_w"]["value"],
+        16.
+    );
+    assert_eq!(
+        same["comparison"]["alternatives"][1]["readings"]["body_coverage_power_w"]["value"],
+        13.
+    );
+    let changed = evaluate(&request, true, 0);
+    assert_eq!(changed["comparison"]["frontier"], json!(["a", "b"]));
+    request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    assert_eq!(
+        evaluate(&request, true, 0)["comparison"]["frontier"],
+        json!(["b"])
+    );
+    for fault in 1..=3 {
+        let corrupt = evaluate(&request, false, fault);
+        assert_eq!(corrupt["comparison"]["frontier"], json!(["a"]));
+        assert_eq!(corrupt["comparison"]["alternatives"][1]["eligible"], false);
+    }
+}
+
+#[test]
 fn stale_missing_and_unsettled_outputs_never_enter_the_frontier_even_with_protocol_override() {
     let mut r = request();
     r.comparison.as_mut().unwrap().allow_mixed_protocols = true;

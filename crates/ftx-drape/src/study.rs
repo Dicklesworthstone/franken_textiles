@@ -43,6 +43,9 @@ pub struct Coverage {
     pub settings: Settings,
     /// Existing prescribed reservoirs or qualified exterior exchange; never inferred weather.
     pub conditions: coverage::Conditions,
+    /// Source-qualified steady seam/closure excess, recomputed on each actual covered pose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_bridges: Option<crate::thermal::steady::coverage::bridges::Request>,
 }
 
 /// Independent potential vapor transfer through layers on the newly draped body domain and
@@ -575,6 +578,7 @@ fn coverage_at(
             settings: policy.settings.clone(),
         },
         conditions: policy.conditions.clone(),
+        thermal_bridges: policy.thermal_bridges.clone(),
     }
     .evaluate()
 }

@@ -91,6 +91,238 @@ fn near(a: f64, b: f64) {
     assert!((a - b).abs() < 1e-7, "{a} != {b}");
 }
 
+fn bridge_digest(value: &Value) -> String {
+    ftx_core::receipt::sha256_hex(&serde_json::to_vec(value).unwrap())
+}
+
+fn bridge_input(resistance: f64) -> Value {
+    let material = Catalog::builtin()
+        .unwrap()
+        .resolve(&selection(resistance))
+        .unwrap();
+    let hash = material.sha256().to_owned();
+    let report = json!({"basis":"per_piece_characterization", "instances":[
+        {"instance":"front","record_sha256":hash},{"instance":"back","record_sha256":hash}],
+        "records":{hash:{"record":material}}});
+    let source = SteadySurface::new(
+        vec![SteadyConductionModel::new(vec![material.clone()], vec![]).unwrap()],
+        4,
+        vec![
+            Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+            Patch {
+                vertices: [1, 3, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+        ],
+    )
+    .unwrap();
+    let mut frame = json!({"schema":"ftx-drape-steady-thermal-surface/1","available":true,
+        "model":source.snapshot().unwrap(), "positions_m":[[0.,0.,0.],[1.,0.,0.],[0.,1.,0.],[1.,1.,0.]],
+        "material_report_sha256":bridge_digest(&report),"triangle_instance":[0,1],"instances":["front","back"]});
+    frame["sha256"] = json!(bridge_digest(&frame));
+    json!({"schema":"ftx-steady-coverage-request/1","report":{"material":report,"steady_thermal_surface":frame},
+        "map":serde_json::from_str::<Value>(include_str!("../../../tests/fixtures/materials/steady-coverage-map.json")).unwrap(),
+        "conditions":serde_json::from_str::<Value>(include_str!("../../../tests/fixtures/materials/steady-coverage-conditions.json")).unwrap()})
+}
+
+fn with_bridge(mut input: Value, vertices: &[usize], psi: f64) -> Value {
+    let hash = &input["report"]["material"]["instances"][0]["record_sha256"];
+    input["thermal_bridges"] = json!({"schema":"ftx-steady-thermal-bridges/1",
+        "model":"qualified_excess_centerline_conductance/1", "paths":[{
+        "id":"synthetic-seam","instance":"front","vertices":vertices,"qualifications":[{
+            "id":"qualified-test-reference","surface_model_sha256":input["report"]["steady_thermal_surface"]["model"]["sha256"],
+            "material_sha256":[hash],"interface_resistance_m2_k_w":[],"layer_area_ratio_ranges":[[0.5,2.]],
+            "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2,
+            "temperature_range_c":[-10.,50.],"length_range_m":[0.1,4.],
+            "excess_linear_conductance":{"value":psi,"unit":"W/(m*K)","evidence":"estimate",
+                "source":"test","method":"Synthetic paired bridged-minus-unbridged reference",
+                "conditions":{"specimen_id":"synthetic-seam-coupon","conditioning":"synthetic dry test"}},
+            "sources":{"test":{"reference":"test:thermal-bridge","accessed_on":"2026-10-27",
+                "note":"Synthetic software verification; no measured seam performance"}},
+            "allow_estimates":true,"reference_basis":"excess_over_locked_unbridged_stack_same_reservoir_films",
+            "qualification":"Synthetic linear centerline excess with independently declared geometry and reference domains"}]}]});
+    input
+}
+
+fn bridge_evaluate(value: &Value) -> Result<Value, ftx_core::Refusal> {
+    serde_json::from_value::<ftx_drape::thermal::steady::coverage::request::Request>(value.clone())
+        .map_err(|e| ftx_core::Refusal::new(ftx_core::RefusalCode::InvalidDocument, e.to_string()))?
+        .evaluate()
+}
+
+#[test]
+fn qualified_centerline_adds_only_signed_excess_and_preserves_frozen_reference() {
+    let plain_input = bridge_input(0.4);
+    let plain = bridge_evaluate(&plain_input).unwrap();
+    assert!(plain["steady"]["baseline_power_w"].is_null());
+    assert!(plain["thermal_bridges"].is_null());
+    let input = with_bridge(plain_input, &[0, 1], 0.2);
+    let original = input.clone();
+    let result = bridge_evaluate(&input).unwrap();
+    assert_eq!(input, original);
+    near(
+        result["steady"]["baseline_power_w"].as_f64().unwrap(),
+        plain["steady"]["power_w"].as_f64().unwrap(),
+    );
+    near(result["steady"]["bridge_power_w"].as_f64().unwrap(), 6.);
+    near(
+        result["steady"]["power_w"].as_f64().unwrap(),
+        30. / 0.7 + 6.,
+    );
+    assert_eq!(result["steady"]["regions"], plain["steady"]["regions"]);
+    assert_eq!(
+        result["thermal_bridges"]["inside_excess_power_w"],
+        result["thermal_bridges"]["outside_excess_power_w"]
+    );
+    assert_eq!(result, bridge_evaluate(&result["request"]).unwrap());
+    for (inside, outside, expected) in [(0., 30., -6.), (15., 15., 0.)] {
+        let mut reversed = input.clone();
+        reversed["conditions"]["boundaries"][0]["inside_c"] = json!(inside);
+        reversed["conditions"]["boundaries"][0]["outside_c"] = json!(outside);
+        let result = bridge_evaluate(&reversed).unwrap();
+        near(
+            result["steady"]["bridge_power_w"].as_f64().unwrap(),
+            expected,
+        );
+        let sum: f64 = result["steady"]["body"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["power_w"].as_f64().unwrap())
+            .sum();
+        near(sum, result["steady"]["power_w"].as_f64().unwrap());
+    }
+}
+
+#[test]
+fn shared_seam_and_body_boundaries_own_each_current_length_once() {
+    let input = with_bridge(bridge_input(0.4), &[1, 2], 0.2);
+    let result = bridge_evaluate(&input).unwrap();
+    near(
+        result["steady"]["bridge_power_w"].as_f64().unwrap(),
+        6. * 2_f64.sqrt(),
+    );
+    let pieces = result["thermal_bridges"]["paths"][0]["contributions"]
+        .as_array()
+        .unwrap();
+    near(
+        pieces.iter().map(|p| p["length_m"].as_f64().unwrap()).sum(),
+        2_f64.sqrt(),
+    );
+    assert_eq!(pieces.len(), 1); // Both source triangles/body faces share the same physical line.
+
+    let mut crossed = input.clone();
+    crossed["map"]["body_triangles"] = json!([[0, 1, 3], [0, 3, 2]]);
+    let split = bridge_evaluate(&crossed).unwrap();
+    near(
+        split["steady"]["bridge_power_w"].as_f64().unwrap(),
+        6. * 2_f64.sqrt(),
+    );
+    let parts = split["thermal_bridges"]["paths"][0]["contributions"]
+        .as_array()
+        .unwrap();
+    assert_eq!(parts.len(), 2);
+    near(
+        parts.iter().map(|p| p["length_m"].as_f64().unwrap()).sum(),
+        2_f64.sqrt(),
+    );
+
+    let mut moved = input.clone();
+    for vertex in moved["report"]["steady_thermal_surface"]["positions_m"]
+        .as_array_mut()
+        .unwrap()
+    {
+        vertex[0] = json!(2. * vertex[0].as_f64().unwrap());
+    }
+    for vertex in moved["map"]["body_positions_m"].as_array_mut().unwrap() {
+        vertex[0] = json!(2. * vertex[0].as_f64().unwrap());
+    }
+    let frame = &mut moved["report"]["steady_thermal_surface"];
+    frame.as_object_mut().unwrap().remove("sha256");
+    frame["sha256"] = json!(bridge_digest(frame));
+    let result = bridge_evaluate(&moved).unwrap();
+    near(
+        result["steady"]["bridge_power_w"].as_f64().unwrap(),
+        6. * 5_f64.sqrt(),
+    );
+    assert_eq!(
+        result["thermal_bridges"]["surface_model_sha256"],
+        input["report"]["steady_thermal_surface"]["model"]["sha256"]
+    );
+
+    let mut heterogeneous = input;
+    heterogeneous["report"] = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-steady-surface-report.json"
+    ))
+    .unwrap();
+    let model_hash = heterogeneous["report"]["steady_thermal_surface"]["model"]["sha256"].clone();
+    let material_hash =
+        heterogeneous["report"]["material"]["instances"][0]["record_sha256"].clone();
+    let q = &mut heterogeneous["thermal_bridges"]["paths"][0]["qualifications"][0];
+    q["surface_model_sha256"] = model_hash;
+    q["material_sha256"][0] = material_hash;
+    assert!(bridge_evaluate(&heterogeneous).is_err());
+}
+
+#[test]
+fn bridge_sources_domains_geometry_and_double_counting_refuse_without_partial_power() {
+    let input = with_bridge(bridge_input(0.4), &[0, 1], 0.2);
+    let path = "/thermal_bridges/paths/0/qualifications/0/";
+    for (field, value) in [
+        ("allow_estimates", json!(false)),
+        ("surface_model_sha256", json!("0".repeat(64))),
+        ("material_sha256", json!(["0".repeat(64)])),
+        ("reference_basis", json!("whole_seam_including_area")),
+        ("length_range_m", json!([0.1, 0.9])),
+        ("temperature_range_c", json!([0., 20.])),
+        ("layer_area_ratio_ranges", json!([[1.1, 2.]])),
+        ("inside_resistance_m2_k_w", json!(0.2)),
+    ] {
+        let mut bad = input.clone();
+        *bad.pointer_mut(&format!("{path}{field}")).unwrap() = value;
+        assert!(bridge_evaluate(&bad).is_err(), "{field}");
+    }
+    let mut duplicate = input.clone();
+    let mut extra = duplicate["thermal_bridges"]["paths"][0].clone();
+    extra["id"] = json!("duplicate-physical-seam");
+    duplicate["thermal_bridges"]["paths"]
+        .as_array_mut()
+        .unwrap()
+        .push(extra);
+    assert!(bridge_evaluate(&duplicate).is_err());
+    let mut unmapped = input.clone();
+    for vertex in unmapped["map"]["body_positions_m"].as_array_mut().unwrap() {
+        vertex[0] = json!(0.5 * vertex[0].as_f64().unwrap());
+    }
+    assert!(bridge_evaluate(&unmapped).is_err());
+    let mut unknown = input.clone();
+    unknown["thermal_bridges"]["paths"][0]["vertices"] = json!([0, 3]);
+    assert!(bridge_evaluate(&unknown).is_err());
+    let mut exterior = input.clone();
+    exterior["conditions"]["exterior_exchange"] = json!([{"air_c":0.,"convection_w_m2_k":5.}]);
+    assert!(bridge_evaluate(&exterior).is_err());
+    let mut replaced = with_bridge(bridge_input(0.8), &[0, 1], 0.4);
+    let mut obsolete = input["thermal_bridges"]["paths"][0]["qualifications"][0].clone();
+    obsolete["id"] = json!("obsolete-qualified-reference");
+    replaced["thermal_bridges"]["paths"][0]["qualifications"]
+        .as_array_mut()
+        .unwrap()
+        .push(obsolete);
+    near(
+        bridge_evaluate(&replaced).unwrap()["steady"]["bridge_power_w"]
+            .as_f64()
+            .unwrap(),
+        12.,
+    );
+    replaced["thermal_bridges"] = input["thermal_bridges"].clone();
+    assert!(bridge_evaluate(&replaced).is_err());
+}
+
 #[test]
 fn unequal_area_layers_match_series_resistances_without_storage() {
     let a = SteadyCoverage::new(source(), layout()).unwrap();

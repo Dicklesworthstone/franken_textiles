@@ -556,6 +556,20 @@ enthalpy from each interval's condensed mass and declared vapor temperature. Exi
 positive-only semantics remain unchanged. Analytic warming, dry/wet reversals, reference-area
 accounting, time refinement, rollback and native/portable scenario replay qualify software only.
 
+**Qualified centerline thermal bridges** (`thermal::steady::coverage::bridges`).
+
+The existing steady coverage request additionally accepts `thermal_bridges`, a qualified centerline
+excess over the unchanged unbridged network. Exact source-surface models, local ordered material
+hashes, interfaces/films and authored temperature/length/area-ratio domains admit each observation.
+Current mesh-edge lengths are partitioned through the same projection footprints; shared boundaries
+choose a deterministic owner only when their exact physical qualification agrees. Repeated or
+coincident paths, uncovered intervals, stale sources and incompatible domains refuse without partial
+power. Baseline, signed excess and total remain distinct globally and per body patch. Ordinary
+scenario/motion-endpoint coverage uses the same authority; omitted policies preserve legacy output.
+Uniform prescribed films are required; no transient bridge storage, generic heterogeneous seam
+microgeometry or exterior-radiation closure is inferred. Synthetic core, native/portable and actual
+material-frontier regressions are described in `docs/steady-thermal-coverage.md`.
+
 **Geometry-derived thermal correspondence** (`thermal::surface::projection`, `ftx-tmb`).
 `project` partitions body triangles by local-normal cloth projection using bounded convex clipping,
 retains inverse-mapped cloth subpolygons and mid-surface distance ranges, and emits the existing
