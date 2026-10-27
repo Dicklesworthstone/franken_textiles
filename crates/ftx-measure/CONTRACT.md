@@ -177,6 +177,10 @@ or claiming observability, convergence or acceptance.
 begin with an empty or one-start draft. The four-start cap, validation of every supplied start,
 identity association, bounds and distinctness remain unchanged. It supplies no initialization
 values and cannot make a draft admissible to `fit_body`.
+`prepare_capture_authoring` also permits an empty model-target map for a first capture draft.
+It retains the ordinary frame/camera, evidence, parameter-domain, measurement and aggregate-variable
+checks. Unknown observations still refuse, and neither this draft helper nor empty starts changes
+ordinary fitting admission. The native first-capture constructor uses it before publication.
 
 **Sampled body silhouettes (FTX-21).** Optional frame silhouettes participate in the shared
 shape/per-frame pose fitter through `BodyModel::surface`. Rectified mesh triangle unions are

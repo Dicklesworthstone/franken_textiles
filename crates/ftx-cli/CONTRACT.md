@@ -28,6 +28,17 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   FIT/CHECK roles, model targets and parameter bounds remain intact. `input.json` is an ordinary
   capture/prepared-fit input; `starts.json` records private create-only publication. Regenerate a
   start review to see the changed geometry. No pose estimate, optimization or fit acceptance.
+- `ftx measure capture-init-review MANIFEST --model MODEL --calibration CAL --reference CHARUCO_DECL
+  --reference-id ID --out NEW_DIR [--json]` and `ftx measure capture-init CHOICES --model MODEL
+  --out NEW_DIR [--json]`: construct the first ordinary capture input from actual selected frames,
+  one checked calibration and an existing stationary ChArUco reference declaration. Native setup
+  records the exact source/model identities and available model controls. Explicit fixed/free
+  shape, root and joint choices determine the configuration; no anatomical targets or starts are
+  invented. Materialization resolves native frame ordinals, rechecks selection and source identities,
+  and runs the existing camera acquisition and draft validator before private create-only publication.
+  Empty targets/observations/starts keep the result a preparation draft. Independent optional metric
+  observations retain their exact uncertainty, evidence and FIT/CHECK roles. Subsequent target, photo
+  and initialization editors complete that ordinary input; ordinary fitting retains its original gates.
 - `ftx measure body-target-review INPUT --model MODEL --out NEW_DIR [--json]` and
   `ftx measure body-targets ANNOTATIONS --model MODEL --out NEW_DIR [--json]`: author named
   correspondences on the exact array-verified converted model in a private offline mesh picker,

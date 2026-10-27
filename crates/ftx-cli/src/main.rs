@@ -108,6 +108,9 @@ const USAGE: &str = "usage:
   ftx measure fit-body FILE --model PATH [--out REPORT | --mesh-out NEW_DIR]
       [--iterations N] [--max-evaluations N] [--silhouettes MANIFEST] [--json]
   ftx measure capture-review FILE --out NEW_DIR [--silhouettes MANIFEST] [--json]
+  ftx measure capture-init-review MANIFEST --model MODEL --calibration CAL --reference CHARUCO_DECL
+      --reference-id ID --out NEW_DIR [--json]
+  ftx measure capture-init CHOICES --model MODEL --out NEW_DIR [--json]
   ftx measure body-target-review FILE --model MODEL --out NEW_DIR [--json]
   ftx measure body-targets TARGETS --model MODEL --out NEW_DIR [--json]
   ftx measure fit-start-review FILE --model MODEL --out NEW_DIR [--silhouettes MANIFEST] [--json]

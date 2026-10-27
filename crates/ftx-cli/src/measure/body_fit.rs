@@ -26,6 +26,7 @@ use crate::{Args, bad_input, known_options, read_json, required};
 
 mod capture;
 mod review;
+mod setup;
 mod start_edit;
 mod start_review;
 mod targets;
@@ -48,6 +49,14 @@ pub(super) fn fit_start_review(args: &Args) -> Result<(Value, i32, String), Refu
 
 pub(super) fn apply_starts(args: &Args) -> Result<(Value, i32, String), Refusal> {
     start_edit::apply(args)
+}
+
+pub(super) fn capture_init_review(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    setup::review(args)
+}
+
+pub(super) fn capture_init(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    setup::apply(args)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

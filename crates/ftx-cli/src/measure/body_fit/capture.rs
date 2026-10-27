@@ -158,9 +158,9 @@ enum Reference {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct CharucoReference {
-    schema: String,
-    sheet: String,
+pub(super) struct CharucoReference {
+    pub(super) schema: String,
+    pub(super) sheet: String,
     held_out_corner_ids: Vec<usize>,
     board_bottom_left_xz_m: Vec2,
     stationary_upright_evidence: String,
@@ -304,6 +304,27 @@ pub(super) fn prepare(path: &Path, original: Value) -> Result<(Request, Value), 
 }
 
 fn prepare_input(path: &Path, original: Value, review: bool) -> Result<(Request, Value), Refusal> {
+    let source = std::fs::canonicalize(path)
+        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display())))?;
+    let base = source
+        .parent()
+        .ok_or_else(|| bad_input("capture needs a parent directory"))?;
+    let (request, mut receipt) = prepare_from_base(base, original, review)?;
+    receipt["source"] = json!(source);
+    check_receipt_budget(&receipt)?;
+    Ok((request, receipt))
+}
+
+/// Validate a fully source-bound draft before its create-only output file exists.
+pub(super) fn prepare_generated(base: &Path, original: Value) -> Result<(Request, Value), Refusal> {
+    prepare_from_base(base, original, false)
+}
+
+fn prepare_from_base(
+    base: &Path,
+    original: Value,
+    review: bool,
+) -> Result<(Request, Value), Refusal> {
     let input: Capture = serde_json::from_value(original.clone())
         .map_err(|e| bad_input(format!("invalid reviewed capture: {e}")))?;
     if input.schema != "ftx-anny-capture-input/1"
@@ -316,11 +337,6 @@ fn prepare_input(path: &Path, original: Value, review: bool) -> Result<(Request,
             "capture needs /1 schemas, a stationary reference_id and 2..8 reviewed frames",
         ));
     }
-    let source = std::fs::canonicalize(path)
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display())))?;
-    let base = source
-        .parent()
-        .ok_or_else(|| bad_input("capture needs a parent directory"))?;
     let (selection, _, _) = super::super::video::analyze(&local(base, &input.video_manifest)?)?;
     let selected = selection["selected_sources"]
         .as_array()
@@ -508,14 +524,26 @@ fn prepare_input(path: &Path, original: Value, review: bool) -> Result<(Request,
             "reviewed capture sources changed; prepare and review a new capture",
         ));
     }
-    let mut receipt = json!({"schema":"ftx-anny-capture/1","source":source,"input":original,
+    let mut receipt = json!({"schema":"ftx-anny-capture/1","input":original,
         "sources_sha256":sources_sha256,
         "selection":selection,"frames":receipts,
         "no_claim":"Source consistency and conditional camera reconstruction only. Caller-reviewed anatomy, stationary reference, decoding/orientation and physical accuracy are not authenticated; sharpness is not stillness and acceptance does not make measurements READY."});
     if let Some(masks) = masks {
         receipt["silhouette_input"] = masks;
     }
-    if serde_json::to_vec(&receipt)
+    check_receipt_budget(&receipt)?;
+    Ok((
+        Request {
+            schema: "ftx-anny-body-fit-input/1".into(),
+            model: input.model,
+            fit,
+        },
+        receipt,
+    ))
+}
+
+fn check_receipt_budget(receipt: &Value) -> Result<(), Refusal> {
+    if serde_json::to_vec(receipt)
         .map_err(|e| bad_input(e.to_string()))?
         .len()
         > 4 * 1024 * 1024
@@ -525,12 +553,5 @@ fn prepare_input(path: &Path, original: Value, review: bool) -> Result<(Request,
             "capture evidence exceeds 4 MiB; use a shorter reviewed decoded-frame manifest",
         ));
     }
-    Ok((
-        Request {
-            schema: "ftx-anny-body-fit-input/1".into(),
-            model: input.model,
-            fit,
-        },
-        receipt,
-    ))
+    Ok(())
 }

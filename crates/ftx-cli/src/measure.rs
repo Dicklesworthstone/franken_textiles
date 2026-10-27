@@ -205,6 +205,12 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if command == "capture-review" {
         return body_fit::capture_review(args);
     }
+    if command == "capture-init-review" {
+        return body_fit::capture_init_review(args);
+    }
+    if command == "capture-init" {
+        return body_fit::capture_init(args);
+    }
     if command == "body-target-review" {
         return body_fit::target_review(args);
     }
@@ -425,7 +431,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         _ => {
             return Err(bad_input(format!(
-                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, calib-sheet, calibrate-camera, photo-scale, measure-photo, sheet-pose, girth-from-section, triangulate, bundle-adjust, fit-body, capture-review, body-target-review, body-targets, fit-start-review, fit-starts, still-window, video-decode, video-mask-review, video-masks or video-select"
+                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, calib-sheet, calibrate-camera, photo-scale, measure-photo, sheet-pose, girth-from-section, triangulate, bundle-adjust, fit-body, capture-init-review, capture-init, capture-review, body-target-review, body-targets, fit-start-review, fit-starts, still-window, video-decode, video-mask-review, video-masks or video-select"
             )));
         }
     };

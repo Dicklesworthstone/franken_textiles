@@ -145,6 +145,50 @@ fn scene() -> (HingedBody, BodyFitInput, Vec<Vec<f64>>) {
 }
 
 #[test]
+fn first_capture_drafts_retain_validation_without_becoming_fittable() {
+    let (mut model, mut input, _) = scene();
+    let point = input.frames[0].keypoints[0].clone();
+    model.layout.keypoints.clear();
+    input.starts.clear();
+    for frame in &mut input.frames {
+        frame.keypoints.clear();
+    }
+    let prepared = prepare_capture_authoring(&input, &model.layout).unwrap();
+    assert_eq!(
+        serde_json::to_value(&prepared).unwrap(),
+        serde_json::to_value(&input).unwrap()
+    );
+    assert!(prepare_start_authoring(&input, &model.layout).is_err());
+    assert!(prepare_input(&input, &model.layout).is_err());
+    assert!(fit_body(&input, &model, &FitOptions::default()).is_err());
+
+    let mut invalid = input.clone();
+    invalid.frames[0].keypoints.push(point);
+    assert!(prepare_capture_authoring(&invalid, &model.layout).is_err());
+    invalid = input.clone();
+    invalid.measurements[0].sigma_m = 0.0;
+    assert!(prepare_capture_authoring(&invalid, &model.layout).is_err());
+    invalid = input.clone();
+    invalid.metric_scale_source.clear();
+    assert!(prepare_capture_authoring(&invalid, &model.layout).is_err());
+    invalid = input.clone();
+    invalid.frames[0].camera.intrinsics.focal_px.x = 0.0;
+    assert!(prepare_capture_authoring(&invalid, &model.layout).is_err());
+
+    model.layout.pose = (0..18)
+        .map(|i| parameter(&format!("p{i}"), -1.0, 1.0))
+        .collect();
+    input.frames = (0..8)
+        .map(|i| {
+            let mut frame = prepared.frames[0].clone();
+            frame.frame.timestamp_us = i * 200_000;
+            frame
+        })
+        .collect();
+    assert!(prepare_capture_authoring(&input, &model.layout).is_err());
+}
+
+#[test]
 fn shared_shape_and_distinct_articulated_poses_are_recovered() {
     let (model, input, poses) = scene();
     let r = fit_body(&input, &model, &FitOptions::default()).unwrap();

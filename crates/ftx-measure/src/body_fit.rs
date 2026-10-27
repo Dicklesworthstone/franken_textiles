@@ -299,7 +299,7 @@ fn unique<'a>(names: impl Iterator<Item = &'a str>) -> bool {
 /// This performs the same identity, parameter-bound and distinct-start checks as [`fit_body`].
 /// It evaluates no body model and establishes neither observability nor acceptance.
 pub fn prepare_input(input: &BodyFitInput, layout: &ModelLayout) -> Result<BodyFitInput, Refusal> {
-    canonical(input, layout, 2)
+    canonical(input, layout, 2, 1)
 }
 
 /// Prepare an initialization editor, allowing zero or one declared start while it is incomplete.
@@ -309,13 +309,24 @@ pub fn prepare_start_authoring(
     input: &BodyFitInput,
     layout: &ModelLayout,
 ) -> Result<BodyFitInput, Refusal> {
-    canonical(input, layout, 0)
+    canonical(input, layout, 0, 1)
+}
+
+/// Validate a first capture draft before model targets and initializations have been authored.
+/// This retains the ordinary frame, evidence, parameter, measurement and aggregate-budget checks.
+/// Empty targets and starts supply no anatomical correspondence or admissible fitted body.
+pub fn prepare_capture_authoring(
+    input: &BodyFitInput,
+    layout: &ModelLayout,
+) -> Result<BodyFitInput, Refusal> {
+    canonical(input, layout, 0, 0)
 }
 
 fn canonical(
     input: &BodyFitInput,
     layout: &ModelLayout,
     minimum_starts: usize,
+    minimum_keypoints: usize,
 ) -> Result<BodyFitInput, Refusal> {
     let ns = layout.shape.len();
     let np = layout.pose.len();
@@ -329,8 +340,7 @@ fn canonical(
         || !(1..=18).contains(&np)
         || ns + np * input.frames.len() > 128
         || input.measurements.len() > 32
-        || layout.keypoints.is_empty()
-        || layout.keypoints.len() > 128
+        || !(minimum_keypoints..=128).contains(&layout.keypoints.len())
         || layout.measurements.len() > 32
     {
         return Err(invalid(

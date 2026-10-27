@@ -1,6 +1,8 @@
 //! Real-binary workflow using a tiny synthetic two-bone .ftxbody, never production model assets.
 #[path = "support/capture.rs"]
 mod capture;
+#[path = "body_fit_workflow/setup.rs"]
+mod setup;
 #[path = "body_fit_workflow/start_edits.rs"]
 mod start_edits;
 #[path = "body_fit_workflow/starts.rs"]

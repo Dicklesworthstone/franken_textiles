@@ -16,6 +16,68 @@ photo URL, runs an external detector or uploads data. `model.model_sha256` must 
 SHA-256 of the exact converted file. The reader also verifies the file's individual array
 hashes. Keep private photos, measurements and fitted bodies outside the repository.
 
+## Construct the first capture input
+
+The first-capture constructor starts from an ordinary decoded-frame manifest, a saved accepted
+lens calibration, the converted model, and an existing `ftx-charuco-sheet-reference/1`
+declaration. It creates the capture and model configuration without copying selected-source
+records, computing their hashes, or assembling separate pose-vector and joint maps by hand.
+This bounded route uses one stream/lens epoch and one stationary upright ChArUco board. The
+board declaration has the same sidecar, predeclared held-out corner IDs, world origin and
+physical-placement evidence described under **Join reviewed capture sources locally** below.
+
+```sh
+ftx measure capture-init-review decoded/manifest.json --model /path/to/anny.ftxbody \
+    --calibration accepted-calibration.json --reference stationary-board.json \
+    --reference-id capture-board --out capture-setup-001 --json
+# Inspect setup.json and complete capture-setup-001/capture-choices.json.
+ftx measure capture-init capture-setup-001/capture-choices.json \
+    --model /path/to/anny.ftxbody --out capture-input-001 --json
+ftx measure body-target-review capture-input-001/input.json \
+    --model /path/to/anny.ftxbody --out target-review-001 --json
+```
+
+The generated choices start incomplete. Supply age in years, the model's gender coefficient,
+explicit scale/observation evidence, and two to eight eligible frame indices from the native
+catalogue. Those indices identify the canonical manifest entries; timestamps stay native and
+are shown as exact text labels. All chosen frames must belong to one stream and camera epoch
+and match the checked calibration's oriented dimensions, rotation and supplied focal metadata.
+Displaying a candidate does not establish that its sheet camera will pass acquisition.
+
+Choose shared shape controls by their exact catalogue names. Each choice either fixes a value
+or fits a declared interval, for example the row structures
+`{"name":"height","choice":{"mode":"fixed","value":0.5}}` and
+`{"name":"height","choice":{"mode":"fit","lower":0.1,"upper":0.9}}`.
+These illustrate the format, not recommended body values or bounds. Unselected shape controls
+retain the converted model's defaults. Select at least one fitted shape control and one fitted
+pose control; the ordinary aggregate parameter budget still applies.
+
+Declare each of the six root components as fixed or fitted. Translations use metres and the
+rotation-vector components use radians. Add an articulated joint only by its exact non-root
+bone name, with an explicit unit axis in that bone's local frame and a fixed angle or fitted
+interval. Unselected joints remain at rest. A fitted parameter does not supply an initial value:
+the separate initialization editor remains responsible for every start and every frame's pose.
+
+Optional independent metric observations use the existing `name`, `value_m`, `sigma_m`,
+`evidence` and `partition` fields. Their functional names, values, uncertainties and FIT/CHECK
+roles are preserved in the constructed input. No demographic choice or model default becomes
+a measured value, and no model targets or photo observations are invented.
+
+`capture-init` verifies the setup bytes, original manifest, current image/mask selection,
+calibration, board declaration/sidecar and exact model again. It then runs the ordinary sheet
+acquisition and native draft validation before publishing a new private directory. The generated
+`input.json` is an ordinary source-bound `ftx-anny-capture-input/1`; `construction.json` records
+its preparation. Original choices and setup remain available in the output. Source paths still
+refer to the original local files, so this is not a portable capture archive.
+
+The new input intentionally has empty anatomical targets, photo observations and starts. Define
+targets with `body-target-review`/`body-targets`, review and annotate the resulting capture with
+`capture-review`, then author starts with `fit-start-review`/`fit-starts`. Only ordinary `fit-body`
+can evaluate observability, convergence, ambiguity and held-out acceptance. A constructed draft
+does not qualify physical print scale, anatomy, a fitted body or READY measurements.
+
+## Review capture observations
+
 Before running the model fit on a reviewed capture input, inspect its actual images and named
 points locally:
 
