@@ -1,8 +1,10 @@
 # Published textile thermal fits: NISTIR 7282
 
-The built-in material catalog now includes ten historical material groups from NISTIR 7282
-(June 2005). Seven provide a complete **effective thermal estimate** with explicit estimate
-consent; three retain conflicting source observations but refuse complete thermal evaluation.
+The built-in material catalog includes ten historical material groups from NISTIR 7282
+(June 2005), represented by eleven records. Eight records provide a complete **effective thermal
+estimate** with explicit estimate consent; three retain conflicting source observations but refuse
+complete thermal evaluation. The additional record selects the report's independently published
+linear specific-heat fit for Cotton Duck, preserving the original conflicting-cubic record.
 These are not current supplier specifications, raw-fiber properties or qualified garment designs.
 No measured warp/weft stiffness, bending or friction is invented to make them drape-ready.
 
@@ -12,6 +14,8 @@ No measured warp/weft stiffness, bending or friction is invented to make them dr
 cargo run -p ftx-cli --bin ftx-materials -- catalog nist/7282/
 cargo run -p ftx-cli --bin ftx-materials -- \
   thermal-at nist/7282/aralite 50 --allow-estimates
+cargo run -p ftx-cli --bin ftx-materials -- \
+  thermal-at nist/7282/cotton-duck-linear-cp 50 --allow-estimates
 cargo run -p ftx-cli --bin ftx-materials -- \
   thermal-transient tests/fixtures/materials/nist-7282-transient.json
 ```
@@ -39,6 +43,7 @@ a thermal barrier name does not establish weave, knit, laminate architecture or 
 | breathe-tex | Moisture barrier | Yes, with estimate consent |
 | breathe-tex-plus | Moisture barrier | Yes, with estimate consent |
 | cotton-duck | Outer shell | No: conflicting specific-heat equations |
+| cotton-duck-linear-cp | Same Cotton Duck group, explicit published linear Cp alternative | Yes, with estimate consent |
 | nomex-e89-crosstech | Moisture barrier | No: conflicting specific-heat coefficient |
 | neo-guard | Moisture barrier | Yes, with estimate consent |
 | nomex-iii-defender | Outer shell | Yes, with estimate consent |
@@ -46,14 +51,14 @@ a thermal barrier name does not establish weave, knit, laminate architecture or 
 | pbi-kevlar-kombat | Outer shell | Yes, with estimate consent |
 | scotchlite | Trim | No: inconsistent density/mass observations |
 
-The tranche adds ten canonical records, bringing that seed to 51. Compatibility-imported
-legacy entries remain additional discovery records. The seven complete thermal models are
-**not seven fully measured mechanical/thermal garment materials**. They are empirical-source
+The eleven records represent ten material groups, not eleven independent material measurements.
+Compatibility-imported legacy entries remain additional discovery records. The eight complete
+thermal models are **not eight fully measured mechanical/thermal garment materials**. They are empirical-source
 fits plus explicitly derived effective mass, with unmodeled uncertainties and construction limits.
 
 ## Sources and normalization
 
-Primary source, accessed 2026-10-14:
+Primary source, initially accessed 2026-10-14; Cotton Duck linear fit checked 2026-10-27:
 
 Lawson, J. R., Walton, W. D., Bryner, N. P., and Amon, F. K., *Estimates of Thermal Properties
 for Fire Fighters' Protective Clothing Materials*, NISTIR 7282, June 2005.
@@ -62,9 +67,11 @@ https://nvlpubs.nist.gov/nistpubs/Legacy/IR/nistir7282.pdf
 Main Tables 1 and 2 (printed page 4; PDF page 9) supply material identity, historic manufacturer,
 reported role, mean thickness and bulk density. Tables 3 and 4 (printed page 14; PDF page 19)
 supply conductivity and specific-heat equations, their R-squared values and separately printed
-20 C values. These main tables were visually checked. Appendix A tables/equation labels were
-available as extracted text but page rendering failed in this environment; conflicts found there
-are retained as unresolved leads, **not silently corrected or claimed facsimile-verified**.
+20 C values. These main tables were visually checked. The original tranche retained Appendix A
+conflict leads from extracted text. The subsequent Cotton Duck linear-model addition visually
+checked Appendix A Tables 1, 2 and 3 (printed A-3 through A-5; PDF pages 29 through 31) and
+Figure 7A (printed A-12; PDF page 38). That figure also displays a competing cubic in Figure 8A;
+visual access does not resolve its disagreement with the main and appendix cubic tables.
 
 The private table adapter emits ordinary `Material` records through the existing catalog; there
 is no alternative public material schema. It preserves original specific-heat coefficients in
@@ -91,6 +98,48 @@ remain separate from equation evaluations; the latter are not adjusted to hit th
 
 Only attributed numerical facts and equations are retained, not source pages or images.
 
+## Cotton Duck: an explicit published linear-model alternative
+
+Select `nist/7282/cotton-duck-linear-cp` to use Appendix A Table 1 and Figure 7A's
+linear least-squares fit:
+
+```text
+Cp(T) = 1.4229 + 0.0039*T  J/(g K), T in degrees Celsius
+      = 1422.9 + 3.9*T    J/(kg K)
+```
+
+Appendix A's methods/results text (A-1/A-2; PDF pages 27/28) establishes a valid range
+of 0..100 C. Figure 7A labels the same coefficients, the Celsius temperature axis, and
+R-squared 0.9824. This is a separate source-authored fit, not a correction, average or
+inferred replacement for the contradictory cubic coefficients. It has its own material ID
+and source-locked selection. The original ten record identities are unchanged.
+
+The source labels Cotton Duck as fabric D. Both fits summarize the three DSC specimens from
+that material group. Its material-group thickness of 1.32 mm and bulk density of 518.9 kg/m3
+are the same main-Table-2 observations as the parent record; their product gives an explicitly
+estimated areal mass of 0.684948 kg/m2. Conductivity is the same Table-3 effective single-layer
+fit, `k(T) = 0.0740 + 0.0005*T` W/(m K), inferred from stack measurements. The combined
+transient model therefore remains bounded to **20..70 C**. No exact-batch match, shared physical
+coupon, known ply recipe, pressure law or dry-state mass is inferred. Source conditioning,
+nominal geometry and effective-mass caveats above all still apply. Cotton Duck specifically
+used non-rolled DSC pans because encapsulation was difficult; Appendix A reports a scan rate
+of 5 C/min. Those limitations remain in the record.
+
+At 50 C, the linear equation gives 1617.9 J/(kg K). Appendix A Table 2 rounds the experimental
+and calculated values to 1.62 J/(g K) and separately reports a 0.3% difference. Table 3 reports
+experimental and calculated averages of 1.62 J/(g K) over 0..100 C and a percent-difference
+range of -0.9% to +2.6%, using `(experiment-calculated)/experiment*100`. These are retained
+as the report's rounded fit diagnostics; they are not reconstructed raw measurements,
+coefficient uncertainty, or independent validation. The source PDF checked on 2026-10-27
+has SHA-256 `97f68ce919dee22e00cbb7e11e0d277153208e0d14d1522baa3281816d5d140b`.
+
+The alternative reaches the ordinary `thermal-at` and `thermal-transient` consumers without
+changing physics code. In the existing transient example, changing only one layer ID to
+`nist/7282/cotton-duck-linear-cp` updates both heat transport and integrated sensible heat.
+The same selection can be frozen and replayed, including source identity. It still requires
+estimate consent, refuses temperatures beyond the common range, and lacks the mechanical
+coefficients needed for draping. No other record's conductivity, thickness or mass is borrowed.
+
 ## Conflicting values are not simulation inputs
 
 Cotton Duck's cubic term differs in sign between the main specific-heat table and Appendix A's
@@ -105,9 +154,10 @@ Table 2 (visually inspected): 55.0 g, 305 by 305 mm, 0.7493 mm thickness. That t
 prints 0.0816 g/cm3. The reported density is preserved, but derived areal mass is withheld.
 https://nvlpubs.nist.gov/nistpubs/Legacy/IR/nistir6512.pdf#page=10
 
-`--allow-estimates` does **not** restore these missing inputs. Resolving them requires checking
-facsimiles/errata and/or acquiring consistent measurements, not choosing the value that makes a
-simulation run. The broader `ftx-tma`, `ftx-tme`, `ftx-tmf` and `ftx-tm2` empirical gates remain open.
+`--allow-estimates` does **not** restore these missing inputs in the original records. Resolving
+their conflicts requires source clarification or consistent measurements. The additive Cotton
+Duck linear model uses its own independently published equation and leaves the conflicting
+cubic unavailable. The broader `ftx-tma`, `ftx-tme`, `ftx-tmf` and `ftx-tm2` empirical gates remain open.
 
 ## Numerical and validation boundary
 

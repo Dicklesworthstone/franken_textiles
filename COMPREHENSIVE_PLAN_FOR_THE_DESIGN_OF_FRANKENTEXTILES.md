@@ -3963,6 +3963,26 @@ exact dry profiles over the declared liquid-loading domain. It does not infer so
 changes, liquid transport between layers, added water mass in mechanical dynamics, thermoregulation
 or empirical garment warmth. Those coupled models and matched measurements remain open.
 
+### 25.104 A separately published Cotton Duck heat-capacity model enables transient use
+
+The NISTIR 7282 catalog now offers an explicit linear-specific-heat alternative for the same
+historical conditioned Cotton Duck material group. Appendix A Table 1 and Figure 7A independently
+state this source-authored model; it does not repair or choose between the conflicting cubic
+representations. The original ten NIST records and their identities remain unchanged.
+
+The ordinary material authority combines the published Celsius heat-capacity fit with the group's
+existing conductivity and explicit estimated areal mass. The common admitted range is 20..70 C.
+Point evaluation, integrated sensible storage, transient layer histories and frozen source replay
+use that selection without solver changes. Estimate consent, source identity and temperature-domain
+refusals remain mandatory. Original coefficients, fit diagnostics, conditioning and source PDF hash
+are retained; reported residuals are not converted into prediction uncertainty.
+
+This delivers the bounded source-model capability `ftx-tma.1`. The record represents a conditioned
+material group rather than an identical shared coupon or exact lot, and its mass remains derived
+from reported group means. Missing mechanics, cubic discrepancies, independent coupon/garment
+validation and cold-weather extrapolation remain unresolved. See
+[nist-thermal-materials.md](docs/nist-thermal-materials.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

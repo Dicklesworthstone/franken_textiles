@@ -91,8 +91,16 @@ fn sourced_estimates_and_unknown_construction_do_not_claim_measured_coefficients
         .iter()
         .filter(|m| m.id.starts_with("nist/7282/"))
     {
-        assert_eq!(m.sources["nist7282"].accessed_on, "2026-10-14");
-        if m.id.ends_with("cotton-duck") {
+        let is_linear_cp = m.id.ends_with("cotton-duck-linear-cp");
+        assert_eq!(
+            m.sources["nist7282"].accessed_on,
+            if is_linear_cp {
+                "2026-10-27"
+            } else {
+                "2026-10-14"
+            }
+        );
+        if m.id.ends_with("cotton-duck") || is_linear_cp {
             assert_eq!(m.form, Form::Woven);
         } else {
             assert_eq!(m.form, Form::Sheet);
@@ -112,6 +120,84 @@ fn sourced_estimates_and_unknown_construction_do_not_claim_measured_coefficients
         }
         assert!(ThermalLaw::from_material(m, false).is_err());
     }
+}
+
+#[test]
+fn cotton_duck_linear_alternative_preserves_group_geometry_and_conflicting_parent() {
+    let db = Catalog::builtin().unwrap();
+    let parent = db
+        .resolve(&Selection {
+            id: "nist/7282/cotton-duck".into(),
+            allow_estimates: true,
+            ..Selection::default()
+        })
+        .unwrap();
+    let alternate = db
+        .resolve(&Selection {
+            id: "nist/7282/cotton-duck-linear-cp".into(),
+            allow_estimates: true,
+            ..Selection::default()
+        })
+        .unwrap();
+    let original = parent.material();
+    let material = alternate.material();
+    assert_ne!(parent.sha256(), alternate.sha256());
+    assert_eq!(
+        serde_json::to_value(&material.properties).unwrap(),
+        serde_json::to_value(&original.properties).unwrap()
+    );
+    assert_eq!(material.form, Form::Woven);
+    assert!(alternate.mechanics().is_err());
+    assert_eq!(
+        material.structure["source_conflict_specific_heat"],
+        original.structure["source_conflict_specific_heat"]
+    );
+    assert!(ThermalLaw::from_material(original, true).is_err());
+    let parent_response = original.thermal_response.as_ref().unwrap();
+    let response = material.thermal_response.as_ref().unwrap();
+    assert_eq!(response.specimen, parent_response.specimen);
+    assert_eq!(response.conditioning, parent_response.conditioning);
+    assert_eq!(
+        serde_json::to_value(&response.conductivity).unwrap(),
+        serde_json::to_value(&parent_response.conductivity).unwrap()
+    );
+    assert!(parent_response.specific_heat.is_none());
+    let cp = response.specific_heat.as_ref().unwrap();
+    assert_eq!(cp.evidence, Evidence::Published);
+    assert_eq!(cp.conditions["r_squared"], "0.9824");
+    let curve = cp.compile("J/(kg*K)", &material.sources, true).unwrap();
+    assert_eq!(curve.domain(), [0.0, 100.0]);
+    // Independent Appendix A Table 1 equation; Table 2 rounds Cp(50 C) to 1.62 J/g K.
+    near(curve.at(0.0).unwrap(), 1422.9);
+    near(curve.at(50.0).unwrap(), 1617.9);
+    near(curve.at(100.0).unwrap(), 1812.9);
+    let law = ThermalLaw::from_material(material, true).unwrap();
+    assert_eq!(law.domain(), Some([20.0, 70.0]));
+    near(material.properties["areal_density"].value, 0.684948);
+    near(law.resistance_at(50.0).unwrap(), 0.00132 / 0.099);
+    near(law.capacity_at(50.0).unwrap(), 0.684948 * 1617.9);
+    near(law.sensible_change(20.0, 70.0).unwrap(), 0.684948 * 79920.0);
+    for temperature in [19.0, 71.0] {
+        assert!(law.capacity_at(temperature).is_err());
+        assert!(law.resistance_at(temperature).is_err());
+        assert!(law.sensible_change(50.0, temperature).is_err());
+    }
+    assert!(ThermalLaw::from_material(material, false).is_err());
+    assert!(cp.compile("J/(kg*K)", &material.sources, false).is_err());
+    let selection: Selection =
+        serde_json::from_str(&serde_json::to_string(&alternate.frozen_selection()).unwrap())
+            .unwrap();
+    assert_eq!(db.resolve(&selection).unwrap().sha256(), alternate.sha256());
+    let mut changed = selection;
+    changed
+        .record
+        .as_mut()
+        .unwrap()
+        .sources
+        .get_mut("nist7282")
+        .unwrap()
+        .reference = "https://example.invalid/unrelated-report".into();
+    assert!(db.resolve(&changed).is_err());
 }
 
 #[test]

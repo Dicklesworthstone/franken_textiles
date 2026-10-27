@@ -1,4 +1,4 @@
-//! Factual transcription of NISTIR 7282, June 2005, Tables 1–4 and §6.4.
+//! Factual transcription of NISTIR 7282, June 2005, Tables 1–4, Appendix A and §6.4.
 //! Source coefficients below are in their ORIGINAL units; the adapter emits the existing Material.
 //! Material-group fits are not measured knots or present-day branded-product specifications.
 
@@ -219,7 +219,7 @@ fn series(
 }
 
 pub(super) fn records() -> Vec<Material> {
-    ROWS.iter().map(|row| {
+    ROWS.iter().flat_map(|row| {
         let specimen = format!("NISTIR7282:{}:conditioned-material-group", row.slug);
         let mut properties = BTreeMap::from([
             ("thickness".into(), quantity(row.thickness_mm, "mm", Evidence::Published,
@@ -256,7 +256,7 @@ pub(super) fn records() -> Vec<Material> {
         if !row.mass_conflict.is_empty() {
             structure.insert("density_crosscheck_source".into(), "https://nvlpubs.nist.gov/nistpubs/Legacy/IR/nistir6512.pdf#page=10".into());
         }
-        Material {
+        let material = Material {
             id: format!("nist/7282/{}", row.slug), name: format!("NISTIR 7282 {} (conditioned historical specimens)", row.name),
             form: if row.slug == "cotton-duck" { Form::Woven } else { Form::Sheet },
             composition: Vec::new(), composition_complete: false, structure, properties,
@@ -270,6 +270,44 @@ pub(super) fn records() -> Vec<Material> {
             }),
             sources: BTreeMap::from([("nist7282".into(), Source { reference: REPORT.into(), accessed_on: "2026-10-14".into(),
                 note: "Lawson, Walton, Bryner and Amon. Estimates of Thermal Properties for Fire Fighters' Protective Clothing Materials. NISTIR 7282, June 2005. Tables 1–4 and sections 3, 4, 6.4. Main tables visually checked; Appendix A conflict leads from extracted text, so disputed curves are withheld pending facsimile/erratum verification.".into() })]),
-        }
+        };
+        let alternative = (row.slug == "cotton-duck")
+            .then(|| cotton_duck_linear_cp(material.clone()));
+        std::iter::once(material).chain(alternative)
     }).collect()
+}
+
+/// A separately published model, not a repair of the conflicting cubic or another specimen group.
+fn cotton_duck_linear_cp(mut material: Material) -> Material {
+    material.id = "nist/7282/cotton-duck-linear-cp".into();
+    material.name =
+        "NISTIR 7282 Cotton Duck (conditioned historical specimens; published linear Cp fit)"
+            .into();
+    material.structure.extend(BTreeMap::<String, String>::from([
+        ("thermal_model_parent_id".into(), "nist/7282/cotton-duck".into()),
+        ("thermal_model_basis".into(), "Explicit alternative: source-authored Appendix A Table 1 and Figure 7A linear Cp fit. The conflicting cubic is still withheld; no coefficient correction or averaging inferred".into()),
+        ("source_tables".into(), "NISTIR 7282 June 2005: main Tables 1 and 2 p.4; Table 3 p.14; sections 3, 4 and 6.4; Appendix A methods pp.A-1/A-2, linear-fit Tables 1/2/3 pp.A-3/A-4/A-5, Figure 7A p.A-12".into()),
+        ("specific_heat_scope".into(), "Appendix A fabric D: three DSC specimens from the same conditioned Cotton Duck material group, not the identical conductivity coupons; group conditioned more than six months at 23+/-3 C and 50+/-10% RH. PerkinElmer DSC7, ASTM E1269, non-rolled pans because encapsulation was difficult, scan rate 5 C/min; source-authored linear fit valid 0..100 C. Exact batch and ply recipe unreported".into()),
+        ("specific_heat_linear_coefficients_j_g_k".into(), "[1.4229, 0.0039]".into()),
+        ("specific_heat_linear_source_diagnostics".into(), "Appendix A Table 2 reports experimental/calculated Cp(50 C) 1.62/1.62 J/(g K), 0.3% difference; Table 3 reports 0..100 C experimental/calculated averages 1.62/1.62 and percent-difference range -0.9..+2.6 using (experiment-calculated)/experiment*100. Rounded source summaries, not raw observations, held-out validation or propagated uncertainty".into()),
+        ("source_pdf_sha256".into(), "97f68ce919dee22e00cbb7e11e0d277153208e0d14d1522baa3281816d5d140b".into()),
+        ("source_facsimile_verification".into(), "2026-10-27: Appendix A Table 1, Table 2, Table 3 and Figure 7A visually checked against primary PDF pages 29, 30, 31 and 38 (one-based). Celsius axis, J/(g K) units, coefficients and R-squared agree; published valid domain is 0..100 C in Appendix A p.A-2".into()),
+    ]));
+    // Keep the original specimen/conditioning, geometry, conductivity and unresolved cubic facts.
+    // Only the explicit Cp model choice and its source receipt differ from the parent material.
+    if let Some(response) = material.thermal_response.as_mut() {
+        response.specific_heat = Some(series(
+            [1.4229, 0.0039, 0.0, 0.0].map(|c| c * 1000.0),
+            [0.0, 100.0],
+            "J/(kg*K)",
+            "Appendix A Table 1 and Figure 7A Celsius linear least-squares fit; original Cp=(0.0039*T+1.4229) J/(g K), each coefficient multiplied by 1000 g/kg. Separate published alternative, not a corrected cubic; reported fit diagnostics do not establish independent validation",
+            0.9824,
+        ));
+    }
+    material.sources.insert("nist7282".into(), Source {
+        reference: REPORT.into(),
+        accessed_on: "2026-10-27".into(),
+        note: "Lawson, Walton, Bryner and Amon. Estimates of Thermal Properties for Fire Fighters' Protective Clothing Materials. NISTIR 7282, June 2005. Same historical conditioned Cotton Duck group as main Tables 1-3, with the separate Appendix A Table 1/Figure 7A linear Cp fit and its Table 2/3 summaries. Appendix A tables and Figure 7A facsimile-verified 2026-10-27; conflicting cubic remains withheld. Source PDF SHA256 in structure.".into(),
+    });
+    material
 }
