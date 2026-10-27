@@ -362,7 +362,7 @@ pub fn head_girth(torso: &Slicer, frames: &BodyFrames) -> Option<f64> {
 /// (acromion) taken as the top of the shoulder straight above the shoulder joint. Shoulder length: along the
 /// top of the shoulder in the coronal section through the joint, from the side neck point `snp` to the
 /// shoulder point. Across back: the back of the horizontal section 15 mm below the shoulder point, between
-/// the two shoulder points' x, as a tape bridging hollows (its convex hull).
+/// the two shoulder points' x, as a tape bridging hollows (the convex hull of the torso loop).
 #[must_use]
 pub fn shoulder_and_back(
     mm: &[Vec3],
@@ -400,12 +400,9 @@ pub fn shoulder_and_back(
     line.push([j.x, acromion_z]);
     let shoulder = path_length(&line);
     // across the back
-    let pts: Vec<[f64; 2]> = torso
-        .loops(acromion_z - 15.0)
-        .into_iter()
-        .flatten()
-        .collect();
-    let hull = convex_hull(&pts);
+    let sections = torso.loops(acromion_z - 15.0);
+    let axis = [frames.torso.origin.x, frames.torso.origin.y];
+    let hull = convex_hull(outermost_around(&sections, axis)?);
     if hull.len() < 3 {
         return None;
     }
@@ -684,6 +681,87 @@ mod tests {
         assert!((girth_near(&v, &t, 0.5, [1.4, 0.5]).unwrap() - 4.0).abs() < 1e-12);
         assert!((girth_near(&v, &t, 0.5, [2.8, 1.0]).unwrap() - 8.0).abs() < 1e-12);
         assert!((girth_near(&v, &t, 0.5, [4.0, 1.0]).unwrap() - 8.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn qualification_across_back_excludes_disconnected_arm_sections() {
+        use crate::landmarks::Frame;
+
+        let frame = Frame {
+            origin: Vec3::ZERO,
+            up: Vec3::new(0.0, 0.0, 1.0),
+            front: Vec3::new(0.0, -1.0, 0.0),
+            lat: Vec3::new(1.0, 0.0, 0.0),
+        };
+        let mut frames = BodyFrames {
+            torso: frame,
+            arm_r: frame,
+            leg_r: frame,
+            floor_z: 0.0,
+            tip_h: 0.0,
+            upper_arm_radius: 0.0,
+            arm_length: 0.0,
+            landmarks: std::collections::BTreeMap::new(),
+            neck: frame,
+            head_bone: Vec3::ZERO,
+            shoulder_joint_r: Vec3::new(-50.0, 0.0, 90.0),
+            torso_points: Vec::new(),
+            leg_points: Vec::new(),
+        };
+        for shift in [Vec3::ZERO, Vec3::new(0.0, 200.0, -125.0)] {
+            frames.torso.origin = shift;
+            frames.shoulder_joint_r = Vec3::new(-50.0, 0.0, 90.0) + shift;
+            let snp = Vec3::new(-20.0, 0.0, 100.0) + shift;
+            for (back_y, arm_back) in [40.0, 70.0].into_iter().flat_map(|y| {
+                [None, Some(60.0), Some(160.0)]
+                    .into_iter()
+                    .map(move |arm| (y, arm))
+            }) {
+                let (mut v, mut t) = prism(&[
+                    [-80.0, -40.0],
+                    [80.0, -40.0],
+                    [80.0, 40.0],
+                    [0.0, back_y],
+                    [-80.0, 40.0],
+                ]);
+                if let Some(y) = arm_back {
+                    let (arm, faces) = prism(&[
+                        [-130.0, y],
+                        [-100.0, y],
+                        [-100.0, y + 20.0],
+                        [-130.0, y + 20.0],
+                    ]);
+                    let offset = v.len();
+                    v.extend(arm);
+                    t.extend(faces.iter().map(|f| f.map(|i| i + offset)));
+                }
+                for p in &mut v {
+                    p.z *= 100.0;
+                    *p += shift;
+                }
+                for _ in 0..2 {
+                    let s = Slicer::new(&v, &t, 5.0);
+                    // Flat shoulder: |-50 - -20| = 30 mm. The back is two straight
+                    // segments meeting at (0, back_y), so use the Pythagorean length,
+                    // not just the 100 mm chord between shoulder x coordinates.
+                    let expected_back = 2.0 * 50.0_f64.hypot((back_y - 40.0) * 50.0 / 80.0);
+                    let (shoulder, back) = shoulder_and_back(&v, &t, &s, &frames, snp)
+                        .expect("closed torso with shoulder and back sections");
+                    assert!((shoulder - 30.0).abs() < 1e-10);
+                    assert!(
+                        (back - expected_back).abs() < 1e-10,
+                        "back={back}, expected={expected_back}, arm={arm_back:?}, shift={shift:?}"
+                    );
+                    // An unrelated closed section must not stand in for an absent torso.
+                    if arm_back.is_some() {
+                        let mut missing_torso = frames.clone();
+                        missing_torso.torso.origin.x = 500.0;
+                        assert_eq!(shoulder_and_back(&v, &t, &s, &missing_torso, snp), None);
+                    }
+                    t.reverse();
+                }
+            }
+        }
     }
 
     #[test]

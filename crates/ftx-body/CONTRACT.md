@@ -26,7 +26,9 @@ neck base (the section across the neck axis at the `neck01` head: below it the s
 trunk), head (the fullest horizontal section round the head bone's axis, 15–50 % of the way from crown to
 C7), shoulder length (along the top of the shoulder in the coronal section through the shoulder joint,
 from the side neck point to the shoulder point, taken as the top of the shoulder above the joint), across
-back (the back of the horizontal section 15 mm below the shoulder points, between them, as a hull), total
+back (the back of the outermost horizontal section containing the torso axis 15 mm below the shoulder
+points, between them, as a hull; disconnected arm sections are excluded and a missing torso section
+yields no reading), total
 crotch length (the lower hull of the median sagittal sections within ±15 mm, waist to waist: a snug tape
 bridges the gluteal cleft) and outseam (from the waist's side point over the hip, as a hull of the
 right-side torso and leg seen from the front, to the hip's widest point, then straight down to the
