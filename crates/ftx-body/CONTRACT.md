@@ -12,7 +12,12 @@ placing pattern pieces (`landmarks.rs`); tape girths (`tape.rs`) and fitting the
 bridges hollows); a vertex exactly at the cutting height counts as above it, so sections of a closed
 mesh are closed loops. Torso girths are horizontal, around the torso axis; limb girths are perpendicular
 to the right leg's or arm's part-frame axis (the vertices taken into that frame), around the axis or,
-where the axis passes beside a narrow limb, the nearest loop (`girth_near`). `Slicer` buckets triangles
+where the axis passes beside a narrow limb, the loop with the nearest section edge (`girth_near`).
+Containing loops retain priority, with the outermost chosen if several contain the axis; external
+distance ties retain section order. The fallback uses segment distance, not the mean of cut vertices:
+subdividing a straight edge must not change which limb is measured. Nonfinite axis coordinates and
+nonfinite or out-of-range slicing heights yield no reading. This is a native geometric rule, not an
+independent qualification of the chosen anatomical axis. `Slicer` buckets triangles
 by height (5 mm slabs) so a search over levels visits only nearby triangles (same loops, same order).
 `tape_readings` reads 21 measurements on the posed body (`TAPE_FIELDS`, definitions in the `fit.rs`
 table and the `tape.rs` functions): stature, chest, waist, hip, waist and crotch heights, thigh, knee,

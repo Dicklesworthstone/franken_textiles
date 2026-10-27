@@ -89,7 +89,7 @@ impl<'a> Slicer<'a> {
     #[must_use]
     pub fn loops(&self, z: f64) -> Vec<Vec<[f64; 2]>> {
         let b = (z - self.z0) / self.width;
-        if !(b >= 0.0 && (b as usize) + 1 < self.start.len()) {
+        if !(b >= 0.0 && (b as usize) < self.start.len().saturating_sub(1)) {
             return Vec::new();
         }
         let b = b as usize;
@@ -564,7 +564,7 @@ fn girth_of(loops: &[Vec<[f64; 2]>], around: [f64; 2]) -> Option<f64> {
 }
 
 /// As [`girth`], but when no loop contains `around` (an axis that passes beside a narrow limb), the loop
-/// whose vertex mean is nearest to it.
+/// with the nearest closed section edge. Collinear subdivision does not change this distance.
 #[must_use]
 pub fn girth_near(
     vertices: &[Vec3],
@@ -576,13 +576,26 @@ pub fn girth_near(
 }
 
 fn near_of(loops: &[Vec<[f64; 2]>], around: [f64; 2]) -> Option<f64> {
+    if !around.iter().all(|x| x.is_finite()) {
+        return None;
+    }
     let chosen = outermost_around(loops, around).or_else(|| {
         let dist = |l: &Vec<[f64; 2]>| {
-            let n = l.len() as f64;
-            let (x, y) = l
-                .iter()
-                .fold((0.0, 0.0), |(x, y), p| (x + p[0] / n, y + p[1] / n));
-            det::hypot(x - around[0], y - around[1])
+            (0..l.len())
+                .map(|i| {
+                    let (a, b) = (l[i], l[(i + 1) % l.len()]);
+                    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                    let length2 = dx * dx + dy * dy;
+                    // Closest point on the closed segment; cuts through vertices can repeat a point.
+                    let t = if length2 > 0.0 {
+                        (((around[0] - a[0]) * dx + (around[1] - a[1]) * dy) / length2)
+                            .clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    det::hypot(a[0] + t * dx - around[0], a[1] + t * dy - around[1])
+                })
+                .fold(f64::INFINITY, f64::min)
         };
         loops.iter().min_by(|a, b| dist(a).total_cmp(&dist(b)))
     })?;
@@ -671,6 +684,118 @@ mod tests {
         assert!((girth_near(&v, &t, 0.5, [1.4, 0.5]).unwrap() - 4.0).abs() < 1e-12);
         assert!((girth_near(&v, &t, 0.5, [2.8, 1.0]).unwrap() - 8.0).abs() < 1e-12);
         assert!((girth_near(&v, &t, 0.5, [4.0, 1.0]).unwrap() - 8.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn qualification_nearest_girth_is_independent_of_collinear_subdivision() {
+        // The axis is 0.25 from the 4 x 4 square, 0.75 from the 1 x 1 square.
+        // Refining only the large square's right edge changes no surface or tape length.
+        let coarse = [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]];
+        let refined = [
+            [0.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 0.5],
+            [4.0, 1.0],
+            [4.0, 1.5],
+            [4.0, 2.0],
+            [4.0, 2.5],
+            [4.0, 3.0],
+            [4.0, 3.5],
+            [4.0, 4.0],
+            [0.0, 4.0],
+        ];
+        for base in [&coarse[..], &refined[..]] {
+            let (mut v, mut t) = prism(base);
+            let (other, faces) = prism(&[[5.0, 1.0], [6.0, 1.0], [6.0, 2.0], [5.0, 2.0]]);
+            let offset = v.len();
+            v.extend(other);
+            t.extend(faces.iter().map(|f| f.map(|i| i + offset)));
+            for _ in 0..2 {
+                let s = Slicer::new(&v, &t, 0.125);
+                for z in [0.25, 0.5, 0.75] {
+                    let axis = [4.25, 1.5];
+                    assert_eq!(girth(&v, &t, z, axis), None);
+                    assert_eq!(
+                        girth_near(&v, &t, z, axis),
+                        Some(16.0),
+                        "{} vertices, z={z}",
+                        base.len()
+                    );
+                    assert_eq!(s.girth_near(z, axis), Some(16.0));
+                    // Containing loops retain priority.
+                    assert_eq!(s.girth_near(z, [3.9, 1.5]), Some(16.0));
+                }
+                t.reverse();
+            }
+        }
+        let (mut v, mut t) = prism(&coarse);
+        let (other, faces) = prism(&[[2.1, 1.9], [2.3, 1.9], [2.3, 2.1], [2.1, 2.1]]);
+        let offset = v.len();
+        v.extend(other);
+        t.extend(faces.iter().map(|f| f.map(|i| i + offset)));
+        // The inner loop is closer but does not contain the axis; the outer loop does.
+        assert_eq!(girth_near(&v, &t, 0.5, [2.0, 2.0]), Some(16.0));
+        assert_eq!(
+            Slicer::new(&v, &t, 0.125).girth_near(0.5, [2.0, 2.0]),
+            Some(16.0)
+        );
+    }
+
+    #[test]
+    fn qualification_sections_match_a_tapered_rectangular_prism() {
+        for scale in [1.0, 100.0] {
+            let (mut v, mut t) = prism(&[[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]);
+            for p in &mut v {
+                if p.z == 1.0 {
+                    p.x *= 2.0;
+                    p.y *= 3.0;
+                }
+                *p = *p * scale + Vec3::new(15.0, -80.0, 8.0);
+            }
+            for _ in 0..2 {
+                let s = Slicer::new(&v, &t, 0.125 * scale);
+                for h in [0.125, 0.5, 0.875, 1.0] {
+                    // At fraction h: width=2+2h, depth=1+2h, independently of triangulation.
+                    let z = 8.0 + h * scale;
+                    let axis = [15.0 + scale, -80.0 + 0.5 * scale];
+                    let perimeter = (6.0 + 8.0 * h) * scale;
+                    let loops = section_loops(&v, &t, z);
+                    assert_eq!(loops.len(), 1);
+                    let area = (2.0 + 2.0 * h) * (1.0 + 2.0 * h) * scale * scale;
+                    assert!((polygon_area(&loops[0]).abs() - area).abs() < 1e-9);
+                    assert_eq!(girth(&v, &t, z, axis), Some(perimeter));
+                    assert_eq!(s.girth_near(z, axis), Some(perimeter));
+                }
+                t.reverse();
+            }
+        }
+    }
+
+    #[test]
+    fn qualification_out_of_domain_slices_have_no_reading() {
+        let (v, t) = prism(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+        let s = Slicer::new(&v, &t, 0.125);
+        for z in [1.5, f64::MAX, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert!(section_loops(&v, &t, z).is_empty());
+            assert!(s.loops(z).is_empty(), "z={z}");
+            assert_eq!(s.girth(z, [0.5, 0.5]), None);
+            assert_eq!(s.girth_near(z, [0.5, 0.5]), None);
+            assert_eq!(s.back_point(z, 0.5), None);
+        }
+    }
+
+    #[test]
+    fn qualification_nearest_girth_requires_a_finite_axis() {
+        let (v, t) = prism(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+        let s = Slicer::new(&v, &t, 0.125);
+        for axis in [
+            [f64::NAN, 0.5],
+            [0.5, f64::INFINITY],
+            [f64::NEG_INFINITY, 0.5],
+        ] {
+            assert_eq!(girth_near(&v, &t, 0.5, axis), None);
+            assert_eq!(s.girth_near(0.5, axis), None);
+        }
     }
 
     #[test]
