@@ -142,6 +142,46 @@ require hashes. Frame declarations cannot be fitted directly or used in an input
 `reviewed_sources_sha256` binding; use the complete replay for that route. Unselected/missing or
 duplicate identities refuse instead of substituting another view.
 
+### Acquire the stationary sheet directly from selected images
+
+For a printed ChArUco sheet, each frame's `reference` may instead be an explicit acquisition
+declaration. This removes the need to transcribe sheet corner pixels into a separate JSON file:
+
+```json
+{
+  "schema": "ftx-charuco-sheet-reference/1",
+  "sheet": "calib-sheet-a4.json",
+  "held_out_corner_ids": [0, 6, 35, 41],
+  "board_bottom_left_xz_m": [-0.1, 0.4],
+  "stationary_upright_evidence": "The original board is fixed upright; its print scale and unchanged placement were checked before capture."
+}
+```
+
+Use the original sidecar from `ftx measure calib-sheet`. Declare at least four distinct held-out
+corner IDs before acquisition; every declared CHECK corner must be detected, together with at
+least four FIT corners. The example IDs belong to the default A4 board. The native ChArUco
+detector runs on the exact selected image with its already-checked lens. Every detected corner
+is retained; camera fitting never trims CHECK points or changes their role to rescue a result.
+The ordinary sheet-pose residual and geometry gates still decide whether the camera is usable.
+Acquisition uses the shared photo boundary's limits of 64 MiB encoded and 16 million decoded
+pixels per selected image; it never resizes a frame or rescales its calibration to fit that budget.
+
+`board_bottom_left_xz_m` is the world `(x, z)` location, in metres, of the **outer bottom-left
+corner of the printed chessboard**, not the paper corner or an inner chessboard intersection.
+The board must be upright and fixed in the plane `y = 0`, with printed right aligned to world
+`+x` and printed up aligned to world `+z`. All acquired frames must use the same sidecar bytes
+and bottom-left location. Detection does not verify these physical assumptions. The evidence
+field records the operator's declaration; no gravity direction, print scale or stationarity is
+inferred from the image.
+
+`capture-review` displays the acquired FIT/CHECK points through the existing stationary-sheet
+overlay. Its evidence retains the original sidecar, all detections, detector identity, exact
+image/sidecar hashes and generated metric correspondences. `capture.json` rebases the sidecar
+path; the reviewed source binding covers the complete acquisition. Subsequent review or fitting
+reruns detection and refuses changed images, sidecars, declared partitions, board placement or
+calibration instead of refreshing an old approval. Original file-based references retain their
+existing behavior. No external detector, network request or body model is needed for this step.
+
 The command reruns selection on current pixels, requires every requested source
 to match exactly and still be selected, recomputes the retained calibration and
 sheet pose, and then calls the unchanged articulated fitter. Original capture,
@@ -156,7 +196,7 @@ manifest when that budget is exceeded; no frames or evidence are silently droppe
 Capture two or more sharp views with the same fixed, flat metric reference and
 stable lens settings. Decode locally with original presentation timestamps and
 apply orientation consistently to images, masks, keypoints and calibration;
-external FFmpeg and manual mask/correspondence review remain explicit steps.
+the local FFmpeg boundary and manual mask/correspondence review remain explicit steps.
 Choose fit/held-out observations and supported model targets before fitting.
 Independent poses may differ between images. Sharpness selection never asserts
 stillness; use the separate still-window/triangulation tools only for a reviewed
@@ -170,41 +210,27 @@ private workspace files (0700 directory, 0600 files); no images are embedded int
 Git or uploaded. If an image changes during fitting, review publication refuses.
 The existing 256 MiB complete review budget applies, including source images.
 
-For a clip that requires a **90-degree clockwise** display turn, an external
-decode recipe is:
+Use [`ftx measure video-decode`](video-frame-selection.md#import-a-local-phone-clip) to
+prepare a clip for selection. Its strict request declares the chosen video
+stream, camera epoch and clockwise turn; it snapshots the original clip locally,
+checks every original PTS against the actual decoder log, and writes `frames.json`
+with the oriented images. Supply the explicitly named masks before running
+`video-select`, then use that selection in the capture declaration above.
 
-```sh
-(
-set -eu
-set -C
-mkdir capture-decode
-mkdir capture-decode/frames
-ffprobe -v error -select_streams v:0 -show_streams -show_frames -of json \
-  clip.mp4 > capture-decode/probe.json
-ffmpeg -hide_banner -nostdin -n -noautorotate -copyts -i clip.mp4 \
-  -map 0:v:0 -an -sn -vf 'transpose=clock,settb=1/1000000,showinfo' \
-  -fps_mode passthrough -enc_time_base 1:1000000 -f image2 -frame_pts 1 \
-  capture-decode/frames/%d.png 2> capture-decode/decode.log
-)
-```
+Choose the actual display transform from the acquisition and verify it against
+the source. Apply that same orientation to reviewed masks and coordinates;
+calibrate the exact orientation, resolution and lens setting. The importer does
+not infer masks, body correspondences, calibration or camera stationarity.
+FFmpeg and ffprobe must be installed locally for this command; they are external
+executables, not linked libraries or requirements for prepared-image workflows.
 
-Use a new directory. Choose the actual display transform from the acquisition,
-verify it against the source, and record the clockwise turn actually applied.
-For already-oriented pixels use `settb=1/1000000,showinfo` without `transpose`.
-Names are packet presentation timestamps in the declared microsecond timebase,
-not frame ordinals. Check them against the probe and `showinfo` records; refuse
-missing, duplicate or negative timestamps instead of estimating from a nominal
-frame rate. Retain the original clip, probe, decode command and log locally.
-If an explicit stream-clock offset is needed, preserve its mapping to original
-timestamps in the decode receipt. Apply the same orientation to reviewed masks
-and coordinates; calibrate that exact orientation/resolution/lens setting.
-
-This recipe was exercised with FFmpeg 8.1.2 on a synthetic variable-rate clip:
-0, 17 and 70 ms produced `0.png`, `17000.png`, `70000.png`; the explicit turn
-changed 64×48 images to 48×64. It is decoder interoperability evidence, not a
-phone/camera or anatomy qualification. FFmpeg's [image2 documentation](https://ffmpeg.org/ffmpeg-formats.html#image2)
-defines the PTS filename option. FFmpeg is external software, not a library or
-runtime dependency of `ftx`.
+For an independently prepared decoded manifest, retain the original source,
+probe, command and decoder log. Check the complete decoded PTS sequence against
+the probe; refuse missing, duplicate or negative timestamps instead of deriving
+them from frame rate. Keep the exact source ticks and timebase when converting
+to microseconds, without shifting the stream origin. File names are transport
+labels only: FFmpeg's `image2 -frame_pts 1` can wrap large timestamps in some
+versions, so a timestamp-looking filename is not evidence of frame identity.
 
 For the original prepared-coordinate input, the top-level document has exactly
 `schema: "ftx-anny-body-fit-input/1"`, `model`, and `fit`.

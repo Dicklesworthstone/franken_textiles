@@ -23,7 +23,8 @@ fn xyz(points: &[Vec3]) -> Vec<u8> {
     f64_bytes(points.iter().flat_map(|v| <[f64; 3]>::from(*v)))
 }
 
-fn synthetic_model() -> Vec<u8> {
+fn synthetic_model_scaled(scale: f64) -> Vec<u8> {
+    let xyz = |points: &[Vec3]| xyz(&points.iter().map(|p| *p * scale).collect::<Vec<_>>());
     let mut template = Vec::new();
     let mut height_delta = Vec::new();
     let mut width_delta = Vec::new();
@@ -153,7 +154,10 @@ fn param(name: &str, lo: f64, hi: f64) -> Value {
     json!({"name":name,"lower":lo,"upper":hi})
 }
 fn fixture() -> (Vec<u8>, Value) {
-    let bytes = synthetic_model();
+    fixture_scaled(1.0)
+}
+fn fixture_scaled(scale: f64) -> (Vec<u8>, Value) {
+    let bytes = synthetic_model_scaled(scale);
     let model = AnnyModel::from_data(AnnyData::from_bytes(&bytes, true).unwrap()).unwrap();
     let body = model.params(Phenotype {
         height: 0.6,
@@ -161,10 +165,15 @@ fn fixture() -> (Vec<u8>, Value) {
         ..Phenotype::default()
     });
     let rest = model.rest(&body).unwrap();
-    let poses = [
+    let mut poses = [
         [0.0, 0.1, 0.05, 0.04, -0.05, 0.02, -0.4],
         [0.2, -0.1, 0.08, -0.03, 0.06, -0.02, 0.5],
     ];
+    for pose in &mut poses {
+        for value in &mut pose[..3] {
+            *value *= scale;
+        }
+    }
     let mut frames = Vec::new();
     for (i, p) in poses.iter().enumerate() {
         let rv = Vec3::new(p[3], p[4], p[5]);
@@ -186,7 +195,7 @@ fn fixture() -> (Vec<u8>, Value) {
                 distortion: Distortion::default(),
             },
             world_to_camera: Mat3::from_rows([[1., 0., 0.], [0., 0., -1.], [0., 1., 0.]]),
-            center_m: Vec3::new(0., -4., 0.75),
+            center_m: Vec3::new(0., -4., 0.75) * scale,
         };
         let keypoints: Vec<_> = posed
             .vertices
@@ -211,7 +220,7 @@ fn fixture() -> (Vec<u8>, Value) {
             param("root_rx_rad",-1.,1.),param("root_ry_rad",-1.,1.),param("root_rz_rad",-1.,1.),param("joint:arm",-1.5,1.5)],
         "keypoints":targets,"measurements":["stature"]},
         "fit":{"schema":"ftx-body-fit-input/1","metric_scale_source":"synthetic metric camera frame","observation_evidence":"synthetic exact Anny-format vertices",
-            "frames":frames,"starts":starts,"measurements":[{"name":"stature","value_m":1.3,"sigma_m":0.002,"evidence":"synthetic independent height","partition":"fit"}]}});
+            "frames":frames,"starts":starts,"measurements":[{"name":"stature","value_m":1.3*scale,"sigma_m":0.002*scale,"evidence":"synthetic independent height","partition":"fit"}]}});
     (bytes, input)
 }
 
@@ -441,6 +450,180 @@ fn capture_review_args(dir: &Path, args: &[&str], code: i32) -> Value {
         String::from_utf8_lossy(&out.stderr)
     );
     serde_json::from_slice(&out.stdout).unwrap()
+}
+
+#[test]
+fn capture_acquires_actual_charuco_pixels_and_replays_the_checked_cameras() {
+    let dir = setup();
+    // A small synthetic model lets the camera resolve a physical-sized board at 1280×960;
+    // no production input is rescaled or granted a different image budget.
+    let (model, original) = fixture_scaled(0.25);
+    std::fs::write(dir.join("model.ftxbody"), model).unwrap();
+    let input = capture::charuco(&dir, original);
+    save(&dir, &input);
+    let review = capture_review(&dir, "charuco-review", 0)["result"].clone();
+    assert_eq!(review["body_model_loaded"], false);
+    let frames = review["capture_input"]["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 2);
+    for (i, frame) in frames.iter().enumerate() {
+        let acquisition = &frame["sheet_acquisition"];
+        assert_eq!(
+            acquisition["detection"]["detector"]["backend"],
+            "rust_charuco"
+        );
+        assert_eq!(
+            acquisition["image_sha256"],
+            input["fit"]["frames"][i]["source"]["image_sha256"]
+        );
+        assert_eq!(
+            acquisition["sheet_sha256"],
+            sha256_hex(&std::fs::read(dir.join("capture-board.json")).unwrap())
+        );
+        assert_eq!(frame["sheet_pose"]["ok"], true);
+        assert_eq!(frame["sheet_pose"]["held_out_points"], 4);
+        let corners = acquisition["detection"]["reference"]["corners"]
+            .as_array()
+            .unwrap();
+        let points = frame["sheet_pose"]["input"]["points"].as_array().unwrap();
+        assert_eq!(corners.len(), points.len());
+        assert_eq!(corners.len(), 42);
+        for (corner, point) in corners.iter().zip(points) {
+            let id = corner["id"].as_u64().unwrap() as usize;
+            assert_eq!(point["pixel_px"], corner["point_px"]);
+            assert_eq!(point["held_out"], [0, 6, 35, 41].contains(&id));
+            assert_eq!(
+                point["sheet_xz_m"],
+                json!([
+                    0.15 + (id % 7 + 1) as f64 * 0.022,
+                    0.10 + (6 - id / 7) as f64 * 0.022
+                ])
+            );
+        }
+        // The original camera is known independently of the rendered detections.
+        let camera: Camera = serde_json::from_value(frame["sheet_pose"]["camera"].clone()).unwrap();
+        assert!((camera.center_m - Vec3::new(0.0, -1.0, 0.1875)).norm() < 0.04);
+        let overlay =
+            std::fs::read_to_string(dir.join(format!("charuco-review/sheet-{i:04}.svg"))).unwrap();
+        assert!(overlay.contains("CHECK") && overlay.contains("FIT"));
+    }
+    let replay: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("charuco-review/capture.json")).unwrap())
+            .unwrap();
+    assert!(
+        Path::new(
+            replay["fit"]["frames"][0]["reference"]["sheet"]
+                .as_str()
+                .unwrap()
+        )
+        .is_absolute()
+    );
+    save(&dir, &replay);
+    let again = capture_review(&dir, "charuco-replay", 0)["result"].clone();
+    assert_eq!(
+        again["capture_input"]["sources_sha256"],
+        review["capture_input"]["sources_sha256"]
+    );
+    assert_eq!(
+        again["capture_input"]["frames"],
+        review["capture_input"]["frames"]
+    );
+
+    // Reference-path input consumes these exact acquired correspondences through the same camera
+    // authority. Only source metadata differs; the body fit must be numerically identical.
+    let acquired = run(&dir, &[], 0)["result"].clone();
+    let mut manual = input.clone();
+    for (i, frame) in frames.iter().enumerate() {
+        let mut reference = frame["sheet_pose"]["input"].clone();
+        reference.as_object_mut().unwrap().remove("intrinsics");
+        let path = format!("acquired-points-{i}.json");
+        std::fs::write(
+            dir.join(&path),
+            serde_json::to_vec_pretty(&reference).unwrap(),
+        )
+        .unwrap();
+        manual["fit"]["frames"][i]["reference"] = json!(path);
+    }
+    save(&dir, &manual);
+    let authored = run(&dir, &[], 0)["result"].clone();
+    for key in [
+        "input",
+        "solution",
+        "attempts",
+        "flags",
+        "model_evaluations",
+    ] {
+        assert_eq!(acquired[key], authored[key], "{key}");
+    }
+
+    let mut changed = replay.clone();
+    changed["fit"]["frames"][0]["reference"]["held_out_corner_ids"] = json!([1, 6, 35, 41]);
+    save(&dir, &changed);
+    let refused = capture_review(&dir, "changed-partitions", 3);
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("sources changed")
+    );
+    assert!(!dir.join("changed-partitions").exists());
+    let mut shifted = input.clone();
+    shifted["fit"]["frames"][1]["reference"]["board_bottom_left_xz_m"] = json!([0.151, 0.10]);
+    save(&dir, &shifted);
+    assert!(
+        capture_review(&dir, "changed-origin", 3)["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot change sidecar or board bottom-left")
+    );
+    assert!(!dir.join("changed-origin").exists());
+    save(&dir, &replay);
+    let mut sheet: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("capture-board.json")).unwrap()).unwrap();
+    sheet["print_instructions"] =
+        json!("Changed source sidecar must not silently refresh a reviewed capture");
+    std::fs::write(
+        dir.join("capture-board.json"),
+        serde_json::to_vec(&sheet).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        capture_review(&dir, "changed-sheet", 3)["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("sources changed")
+    );
+    assert!(!dir.join("changed-sheet").exists());
+
+    // Remove both marker supports around predeclared CHECK corner 0 in the actual pixels.
+    // Resolve a fresh unbound capture so this exercises missing observation admission, rather
+    // than merely the already-tested stale-image hash check. Other corners remain available.
+    let path = dir.join("capture-frame-0.png");
+    let mut image = ftx_trace::raster::image::load_png(&std::fs::read(&path).unwrap()).unwrap();
+    for y in 412..459 {
+        for x in 782..829 {
+            let offset = (y * image.w + x) * 3;
+            image.data[offset..offset + 3].fill(255);
+        }
+    }
+    std::fs::write(
+        path,
+        ftx_trace::raster::image::encode_png_bgr(&image).unwrap(),
+    )
+    .unwrap();
+    let mut occluded = input;
+    for frame in occluded["fit"]["frames"].as_array_mut().unwrap() {
+        let id = frame["source"]["metadata"]["frame"].clone();
+        frame.as_object_mut().unwrap().remove("source");
+        frame["frame"] = id;
+    }
+    save(&dir, &occluded);
+    assert!(
+        capture_review(&dir, "occluded-check", 3)["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("every predeclared CHECK")
+    );
+    assert!(!dir.join("occluded-check").exists());
 }
 
 #[test]

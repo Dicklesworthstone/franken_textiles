@@ -27,6 +27,17 @@ fn command(dir: &Path, args: &[&str]) -> Value {
 }
 
 pub(super) fn wrap(dir: &Path, mut request: Value) -> Value {
+    wrap_images(dir, &mut request, false);
+    request
+}
+
+/// Actual rendered marker pixels enter the native detector. Body correspondences remain synthetic.
+pub(super) fn charuco(dir: &Path, mut request: Value) -> Value {
+    wrap_images(dir, &mut request, true);
+    request
+}
+
+fn wrap_images(dir: &Path, request: &mut Value, charuco: bool) {
     // Reuse the independent analytical calibration input, with its original fit/held-out partitions.
     let calibration_input: Value = serde_json::from_slice(include_bytes!(
         "../../../../docs/examples/camera-calibration.json"
@@ -48,6 +59,20 @@ pub(super) fn wrap(dir: &Path, mut request: Value) -> Value {
     );
     let k = &calibration["solution"]["intrinsics"];
     let calibration_sha = sha256_hex(&std::fs::read(dir.join("capture-calibration.json")).unwrap());
+    let board = charuco.then(|| {
+        let sheet = ftx_trace::calibration_sheet::render(
+            "a4",
+            22.0,
+            16.0,
+            ftx_trace::calibration_sheet::DEFAULT_DICTIONARY,
+        )
+        .unwrap();
+        std::fs::write(dir.join("capture-board.json"), sheet.sidecar_json()).unwrap();
+        (
+            ftx_trace::raster::image::load_png(&sheet.png).unwrap(),
+            sheet.sidecar,
+        )
+    });
     let mut video_frames = Vec::new();
     let mut fit_frames = Vec::new();
     for (i, frame) in request["fit"]["frames"]
@@ -87,6 +112,38 @@ pub(super) fn wrap(dir: &Path, mut request: Value) -> Value {
                 })
                 .collect(),
         };
+        if let Some((page, sidecar)) = &board {
+            // The independently authored pinhole camera sees an upright board at y=0. Map each
+            // output pixel centre into its known print raster; no detector output drives rendering.
+            let origin = Vec2::new(0.15, 0.10);
+            let b = &sidecar["board"];
+            let width_m = b["size_mm"][0].as_f64().unwrap() / 1000.0;
+            let height_m = b["size_mm"][1].as_f64().unwrap() / 1000.0;
+            for y in 0..h {
+                for x in w / 2..w {
+                    let z = camera.center_m.z
+                        - (y as f64 - camera.intrinsics.principal_px.y) * -camera.center_m.y
+                            / camera.intrinsics.focal_px.y;
+                    let world_x = camera.center_m.x
+                        + (x as f64 - camera.intrinsics.principal_px.x) * -camera.center_m.y
+                            / camera.intrinsics.focal_px.x;
+                    let lx = world_x - origin.x;
+                    let ly = origin.y + height_m - z;
+                    image.data[y * w + x] =
+                        if lx >= 0.0 && lx < width_m && ly >= 0.0 && ly < height_m {
+                            let px = (b["origin_px"][0].as_f64().unwrap()
+                                + lx / width_m * b["size_px"][0].as_f64().unwrap())
+                            .floor() as usize;
+                            let py = (b["origin_px"][1].as_f64().unwrap()
+                                + ly / height_m * b["size_px"][1].as_f64().unwrap())
+                            .floor() as usize;
+                            page.data[(py * page.w + px) * 3]
+                        } else {
+                            255
+                        };
+                }
+            }
+        }
         image.data[0] = i as u8;
         let image_name = format!("capture-frame-{i}.png");
         std::fs::write(dir.join(&image_name), encode_png_gray(&image)).unwrap();
@@ -119,6 +176,13 @@ pub(super) fn wrap(dir: &Path, mut request: Value) -> Value {
             &json!({"schema":"ftx-sheet-pose-input/1","reference_id":"synthetic-fixed-sheet",
             "image_size_px":[w,h],"rotation_applied_degrees":0,"image":image_name,"points":points}),
         );
+        let reference = if charuco {
+            json!({"schema":"ftx-charuco-sheet-reference/1","sheet":"capture-board.json",
+                "held_out_corner_ids":[0,6,35,41],"board_bottom_left_xz_m":[0.15,0.10],
+                "stationary_upright_evidence":"Synthetic upright stationary board rasterized using independently authored print geometry and pinhole camera."})
+        } else {
+            json!(reference)
+        };
         fit_frames.push(json!({"source":null,"lens_id":"synthetic-pinhole","calibration":"capture-calibration.json",
             "calibration_sha256":calibration_sha,"reference":reference,"keypoints":keypoints}));
     }
@@ -150,5 +214,4 @@ pub(super) fn wrap(dir: &Path, mut request: Value) -> Value {
     request["video_manifest"] = json!("capture-frames.json");
     request["reference_id"] = json!("synthetic-fixed-sheet");
     request["fit"]["frames"] = json!(fit_frames);
-    request
 }

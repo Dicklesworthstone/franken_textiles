@@ -11,7 +11,7 @@ permissions:
 jobs:
   native:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Record source under test
@@ -27,6 +27,17 @@ jobs:
       - name: Check lints
         if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Check external video decoding
+        if: ${{ !cancelled() }}
+        run: |
+          sudo apt-get -o Acquire::http::User-Agent="OpenAI File Downloader, XaiImageApiFetch/1.0" -o Acquire::https::User-Agent="OpenAI File Downloader, XaiImageApiFetch/1.0" update
+          sudo apt-get -o Acquire::http::User-Agent="OpenAI File Downloader, XaiImageApiFetch/1.0" -o Acquire::https::User-Agent="OpenAI File Downloader, XaiImageApiFetch/1.0" install -y --no-install-recommends ffmpeg
+          ffmpeg -version
+          ffprobe -version
+          cargo test -p ftx-cli --bin ftx --locked video_decode::tests
+          cargo test -p ftx-cli --test video_decode_workflow --locked -- --include-ignored
+          cargo test -p ftx-cli --test body_fit_workflow --locked
+          cargo test -p ftx-export --test cutting --test cutting_job --test sewing_consumables --locked
       - name: Test
         if: ${{ !cancelled() }}
         env:

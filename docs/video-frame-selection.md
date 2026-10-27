@@ -1,5 +1,69 @@
 # Decoded video frame selection
 
+## Import a local phone clip
+
+`ftx measure video-decode` runs separately installed FFmpeg and ffprobe locally, retaining a
+private source snapshot, decoded pixels, original presentation timestamps and the commands/logs
+used to create them. It produces the existing `ftx-video-frames/1` manifest for `video-select`.
+The caller declares the lens epoch and the clockwise rotation to apply; the importer never
+guesses them from a phone model or nominal frame rate.
+
+```json
+{
+  "schema": "ftx-video-decode/1",
+  "video": "clip.mov",
+  "stream": "phone-1",
+  "camera_epoch": "fixed-lens-calibration-a",
+  "rotation_cw_deg": 90,
+  "max_frames": 600
+}
+```
+
+```sh
+ftx measure video-decode decode-input.json --out capture-decode
+# Supply reviewed masks at the paths named in capture-decode/frames.json.
+ftx measure video-select capture-decode/frames.json --out selection.json
+```
+
+The video path resolves relative to the request file. `video_stream_index` optionally chooses
+the zero-based video stream (default 0); it does not name a frame. Optional `focal_px` supplies
+already-calibrated focal lengths in the **oriented** image coordinates. Optional `options` is
+the ordinary selection policy shown below. Input supports local MOV/MP4, Matroska/WebM and AVI;
+network protocols and playlist formats are excluded. FFmpeg remains external software and is
+not downloaded, installed or linked into the numerical crates by this command.
+
+The new output directory contains `source.media`, the exact `request.json`, `ffprobe.stdout`,
+`ffmpeg.stderr`, decoded `frames/`, an empty `masks/` directory, `frames.json`, and the final
+`decode.json`. Existing output paths and links refuse. Directories are private (0700 on Unix),
+with source, reports and completed frame files at 0600. A failed decode can leave its diagnostic
+directory, but publishes no completed manifest/report pair; use a new destination for a retry.
+
+Every frame retains the source's integer PTS and rational time base in the report. Microseconds
+use FFmpeg's nearest rescaling (positive ties round upward). The second decoding pass's complete
+`showinfo` sequence must match the independent probe before publication. Missing, negative,
+duplicate or decreasing timestamps, including collisions after microsecond rescaling, refuse.
+Nonzero source epochs stay intact. PNG filenames are transport ordinals only: some FFmpeg
+versions wrap `image2 -frame_pts` names at signed 32-bit values, so filenames never supply the
+frame identity. There is no inferred nominal FPS, automatic zero-origin shift, frame dropping,
+resizing or silent truncation. A resolution change requires a separately declared capture.
+
+Work is bounded to a 256 MiB source, 40 million pixels per frame, one billion total decoded
+pixels, 1 GiB of PNG output, and 120 seconds per external pass. `max_frames` defaults to 600 and
+must be between 1 and 20,000; the aggregate pixel/byte limits still apply. Frame-count/pixel
+admission happens before PNG decoding. Long clips must be trimmed explicitly with their clock
+mapping retained. Container rotation metadata is retained, while `rotation_cw_deg` alone
+controls the applied transform. Review the images against the source before masking/calibration.
+
+Success is `DECODED_REQUIRES_MASKS`. The command creates **no person or sheet masks** and selects
+no frames. Provide the manifest's matching oriented binary PNG masks, or explicitly edit their
+paths, before running `video-select`. Decoding alone cannot establish segmentation, a fixed
+lens, stillness, anatomical correspondence, calibrated physical accuracy or body-fit readiness.
+The opt-in `video_decode_workflow` integration test exercises real external variable-rate clips,
+large source-clock epochs, explicit rotation, private output, budget refusal and the ordinary
+selector; it uses synthetic media and makes no real-camera accuracy claim.
+
+## Select prepared frames
+
 `ftx measure video-select` implements the decoded-frame selection stage of FTX-20 / plan
 §10.2. It scores **actual pixels** separately inside the supplied person and reference-sheet
 masks, then chooses one eligible frame per populated decoded-time window. It does not use
@@ -48,7 +112,7 @@ directory. Absolute paths also work. A report retains the source manifest path, 
 input ordering, complete acquisition metadata, decode receipt and exact policy defaults.
 The receipt is supplied evidence, **not a verification that decoding or orientation was correct**.
 
-Decode video externally, preserving decoded presentation timestamps rather than estimating
+Use `video-decode` above or decode video externally, preserving presentation timestamps rather than estimating
 times from frame ordinals or a nominal frame rate. Apply display rotation to images and masks
 before calling this command. `rotation_cw_deg` records the already-applied clockwise rotation
 (0, 90, 180 or 270); it does not request another rotation. Each `(stream, timestamp_us)` must
@@ -115,8 +179,9 @@ not correct segmentation, verified decoding or a physical calibration.
 or synchronized-capture evidence required by `ftx measure triangulate`. A moving person can
 be perfectly sharp in every image. Frame selection does not estimate motion, metric scale,
 camera calibration, pose, silhouette correctness or body-fit uncertainty. The mask and epoch
-labels remain caller-supplied. Automatic decoding, masks and motion classification remain
-separate work; no real-wearer fit claim follows from a selected frame.
+labels remain caller-supplied. The explicit native decoder above supplies only the pixel/time
+handoff; masks and motion classification remain reviewed inputs or separate work. No real-wearer
+fit claim follows from a selected frame.
 
 Rust callers can use `ftx_measure::video::{score_frame, select_frames}` directly with
 already-oriented grayscale/mask buffers. These APIs have no I/O or image-decoder dependency.
