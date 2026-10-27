@@ -74,6 +74,53 @@ fn both_native_commands_preserve_source_qualified_bridge_power_and_refusals() {
                 .contains("qualification")
         );
     }
+    // The same canonical sources also support independently prescribed body-region films and
+    // temperatures. One seam loses 6 W while the other gains 2 W; the signed total is 4 W.
+    let mut spatial = expected["request"].clone();
+    let front_film = spatial["conditions"]["boundaries"][0].clone();
+    let mut back_film = front_film.clone();
+    back_film["inside_c"] = json!(20.);
+    back_film["outside_c"] = json!(30.);
+    back_film["inside_resistance_m2_k_w"] = json!(0.2);
+    back_film["outside_resistance_m2_k_w"] = json!(0.3);
+    spatial["conditions"]["boundaries"] = json!([front_film, back_film]);
+    let mut back_path = spatial["thermal_bridges"]["paths"][0].clone();
+    back_path["id"] = json!("synthetic-back-seam");
+    back_path["instance"] = json!("back");
+    back_path["vertices"] = json!([1, 3]);
+    let q = &mut back_path["qualifications"][0];
+    q["id"] = json!("synthetic-back-reference");
+    q["material_sha256"] = json!([spatial["report"]["material"]["instances"][1]["record_sha256"]]);
+    q["inside_resistance_m2_k_w"] = json!(0.2);
+    q["outside_resistance_m2_k_w"] = json!(0.3);
+    q["excess_linear_conductance"]["conditions"]["specimen_id"] =
+        json!("synthetic-back-seam-coupon");
+    spatial["thermal_bridges"]["paths"]
+        .as_array_mut()
+        .unwrap()
+        .push(back_path);
+    let regional: Value =
+        serde_json::from_str(&ftx_wasm::thermal::steady_coverage(&spatial.to_string()).unwrap())
+            .unwrap();
+    assert_eq!(regional["steady"]["bridge_power_w"], 4.);
+    assert_eq!(regional["steady"]["body"][0]["bridge_power_w"], 6.);
+    assert_eq!(regional["steady"]["body"][1]["bridge_power_w"], -2.);
+    let baseline = 15. / 0.7 - 5. / 1.3;
+    assert!((regional["steady"]["baseline_power_w"].as_f64().unwrap() - baseline).abs() < 1e-10);
+    assert!((regional["steady"]["power_w"].as_f64().unwrap() - baseline - 4.).abs() < 1e-10);
+    for main in [false, true] {
+        assert_eq!(call(main, "regional-input", &spatial).unwrap(), regional);
+        assert_eq!(
+            call(main, "regional-frozen", &regional["request"]).unwrap(),
+            regional
+        );
+        let mut stale = regional["request"].clone();
+        stale["map"]["body_positions_m"][0][2] = json!(-0.06);
+        assert!(call(main, "regional-stale-body", &stale).is_err());
+        let mut unqualified = spatial.clone();
+        unqualified["conditions"]["boundaries"][1]["outside_resistance_m2_k_w"] = json!(0.4);
+        assert!(call(main, "regional-unqualified-film", &unqualified).is_err());
+    }
 }
 #[test]
 fn command_projects_frozen_drape_inputs_and_replays_the_same_request() {

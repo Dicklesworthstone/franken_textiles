@@ -4039,6 +4039,26 @@ usable in browser transient calculations without adding another solver or duplic
 The implementation is tracked by `ftx-tma.2`; measured garment validation, absent material
 observations, comfort physiology and graphical history-authoring controls remain separate work.
 
+### 25.108 Regional seam heat and closed garment paths reach the workbench
+
+Qualified seam/closure paths now support distinct prescribed body-region temperatures and films.
+Each projected centerline interval selects its own exact source qualification and uses its local
+reservoir difference, so one path can contain both heat loss and heat gain. Signed interval powers
+remain visible and add to the original coverage baseline once. Shared-boundary ambiguity still
+refuses when neighboring qualifications or physical boundary conditions disagree.
+
+Simple closed paths represent cuffs, necklines and hems by repeating the first retained vertex at
+the end. The actual closing mesh edge contributes once, while backtracks, internal revisits,
+overlapping centerlines and repeated edges remain invalid. Open paths retain their authored length.
+
+The materials workbench accepts an optional path file alongside ordinary coverage inputs and can
+clear it to restore baseline-only coverage. Standalone reports, initial material alternatives and
+steady motion endpoints display baseline, seam excess and combined signed power, current lengths
+and consumed qualifications. Source edits withdraw stale results and downloads; native and portable
+replay retain the same source locks. These extensions remain conditional software capabilities under
+`ftx-tm5`; physical seam measurements, transient bridge dynamics and empirical garment acceptance
+remain open. See [steady-thermal-coverage.md](docs/steady-thermal-coverage.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

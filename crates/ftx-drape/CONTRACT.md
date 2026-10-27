@@ -562,11 +562,15 @@ The existing steady coverage request additionally accepts `thermal_bridges`, a q
 excess over the unchanged unbridged network. Exact source-surface models, local ordered material
 hashes, interfaces/films and authored temperature/length/area-ratio domains admit each observation.
 Current mesh-edge lengths are partitioned through the same projection footprints; shared boundaries
-choose a deterministic owner only when their exact physical qualification agrees. Repeated or
+choose a deterministic owner only when their exact physical qualification and reservoir conditions
+agree. Prescribed temperatures and films may differ per body triangle; each projected interval uses
+its local boundary and uniquely matched qualification before signed contributions are summed.
+Simple closed paths repeat the first vertex only at the end, with at least three distinct vertices;
+their closing edge contributes once. Open paths have no implicit closure. Repeated or
 coincident paths, uncovered intervals, stale sources and incompatible domains refuse without partial
 power. Baseline, signed excess and total remain distinct globally and per body patch. Ordinary
 scenario/motion-endpoint coverage uses the same authority; omitted policies preserve legacy output.
-Uniform prescribed films are required; no transient bridge storage, generic heterogeneous seam
+No transient bridge storage, generic heterogeneous seam
 microgeometry or exterior-radiation closure is inferred. Synthetic core, native/portable and actual
 material-frontier regressions are described in `docs/steady-thermal-coverage.md`.
 

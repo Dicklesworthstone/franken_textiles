@@ -323,6 +323,160 @@ fn bridge_sources_domains_geometry_and_double_counting_refuse_without_partial_po
     assert!(bridge_evaluate(&replaced).is_err());
 }
 
+fn spatial_bridge_input() -> Value {
+    let mut input = with_bridge(bridge_input(0.4), &[0, 1], 0.2);
+    let frame = &mut input["report"]["steady_thermal_surface"];
+    frame["positions_m"] = json!([[0., 0., 0.], [2., 0., 0.], [0., 1., 0.], [2., 1., 0.]]);
+    frame.as_object_mut().unwrap().remove("sha256");
+    frame["sha256"] = json!(bridge_digest(frame));
+    input["map"]["body_positions_m"] = json!([
+        [0., 0., -0.05],
+        [1., 0., -0.05],
+        [2., 0., -0.05],
+        [0., 1., -0.05],
+        [1., 1., -0.05],
+        [2., 1., -0.05]
+    ]);
+    input["map"]["body_triangles"] = json!([[0, 1, 3], [1, 4, 3], [1, 2, 4], [2, 5, 4]]);
+    let mut right = input["conditions"]["boundaries"][0].clone();
+    right["inside_c"] = json!(20.);
+    right["outside_c"] = json!(10.);
+    let left = input["conditions"]["boundaries"][0].clone();
+    input["conditions"]["boundaries"] = json!([left, left, right, right]);
+    input["conditions"]["body_mesh_sha256"] = json!(bridge_digest(&json!({
+        "positions_m":input["map"]["body_positions_m"],
+        "triangles":input["map"]["body_triangles"]
+    })));
+    input
+}
+
+#[test]
+fn bridge_crossing_spatial_reservoirs_uses_each_intervals_qualified_temperature() {
+    let input = spatial_bridge_input();
+    let result = bridge_evaluate(&input).unwrap();
+    // One 2-m edge crosses two bodies: (0.2 W/m/K)*(1 m)*(30 K + 10 K) = 8 W.
+    near(result["steady"]["bridge_power_w"].as_f64().unwrap(), 8.);
+    near(
+        result["thermal_bridges"]["body"][0]["bridge_power_w"]
+            .as_f64()
+            .unwrap(),
+        6.,
+    );
+    near(
+        result["thermal_bridges"]["body"][2]["bridge_power_w"]
+            .as_f64()
+            .unwrap(),
+        2.,
+    );
+    let parts = result["thermal_bridges"]["paths"][0]["contributions"]
+        .as_array()
+        .unwrap();
+    assert_eq!(parts.len(), 2);
+    near(
+        parts.iter().map(|p| p["length_m"].as_f64().unwrap()).sum(),
+        2.,
+    );
+    for part in parts {
+        let bi = part["body_triangle"].as_u64().unwrap() as usize;
+        let film = &input["conditions"]["boundaries"][bi];
+        assert_eq!(part["inside_c"], film["inside_c"]);
+        assert_eq!(part["outside_c"], film["outside_c"]);
+        near(
+            part["power_w"].as_f64().unwrap(),
+            0.2 * part["length_m"].as_f64().unwrap()
+                * (film["inside_c"].as_f64().unwrap() - film["outside_c"].as_f64().unwrap()),
+        );
+    }
+    assert_eq!(result, bridge_evaluate(&result["request"]).unwrap());
+
+    let mut plain = input;
+    plain.as_object_mut().unwrap().remove("thermal_bridges");
+    let baseline = bridge_evaluate(&plain).unwrap();
+    assert_eq!(result["steady"]["regions"], baseline["steady"]["regions"]);
+    near(
+        result["steady"]["power_w"].as_f64().unwrap(),
+        baseline["steady"]["power_w"].as_f64().unwrap() + 8.,
+    );
+}
+
+#[test]
+fn spatial_bridge_films_choose_the_exact_local_observation_and_preserve_signed_power() {
+    let mut input = spatial_bridge_input();
+    for bi in [2, 3] {
+        input["conditions"]["boundaries"][bi]["inside_resistance_m2_k_w"] = json!(0.2);
+        input["conditions"]["boundaries"][bi]["outside_resistance_m2_k_w"] = json!(0.3);
+    }
+    assert!(bridge_evaluate(&input).is_err());
+    let mut q = input["thermal_bridges"]["paths"][0]["qualifications"][0].clone();
+    q["id"] = json!("qualified-right-film-reference");
+    q["inside_resistance_m2_k_w"] = json!(0.2);
+    q["outside_resistance_m2_k_w"] = json!(0.3);
+    q["excess_linear_conductance"]["value"] = json!(0.5);
+    input["thermal_bridges"]["paths"][0]["qualifications"]
+        .as_array_mut()
+        .unwrap()
+        .push(q);
+    let result = bridge_evaluate(&input).unwrap();
+    near(result["steady"]["bridge_power_w"].as_f64().unwrap(), 11.);
+    let parts = result["thermal_bridges"]["paths"][0]["contributions"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        parts[0]["qualification_id"],
+        json!("qualified-test-reference")
+    );
+    assert_eq!(
+        parts[1]["qualification_id"],
+        json!("qualified-right-film-reference")
+    );
+    assert_eq!(result, bridge_evaluate(&result["request"]).unwrap());
+
+    for (inside, outside, expected) in [(0., 30., 0.), (0., 10., 4.)] {
+        let mut signed = spatial_bridge_input();
+        for bi in [2, 3] {
+            signed["conditions"]["boundaries"][bi]["inside_c"] = json!(inside);
+            signed["conditions"]["boundaries"][bi]["outside_c"] = json!(outside);
+        }
+        let solved = bridge_evaluate(&signed).unwrap();
+        near(
+            solved["steady"]["bridge_power_w"].as_f64().unwrap(),
+            expected,
+        );
+        let sum: f64 = solved["thermal_bridges"]["body"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["bridge_power_w"].as_f64().unwrap())
+            .sum();
+        near(sum, expected);
+        assert_eq!(solved, bridge_evaluate(&solved["request"]).unwrap());
+    }
+    let mut outside_domain = spatial_bridge_input();
+    outside_domain["conditions"]["boundaries"][2]["inside_c"] = json!(60.);
+    assert!(bridge_evaluate(&outside_domain).is_err());
+}
+
+#[test]
+fn shared_bridge_boundary_refuses_different_reservoirs_even_when_delta_t_matches() {
+    for (inside, outside) in [(20., 10.), (40., 10.)] {
+        let mut input = with_bridge(bridge_input(0.4), &[1, 2], 0.2);
+        let left = input["conditions"]["boundaries"][0].clone();
+        let mut right = left.clone();
+        right["inside_c"] = json!(inside);
+        right["outside_c"] = json!(outside);
+        input["conditions"]["boundaries"] = json!([left, right]);
+        input["conditions"]["body_mesh_sha256"] = json!(bridge_digest(&json!({
+            "positions_m":input["map"]["body_positions_m"],
+            "triangles":input["map"]["body_triangles"]
+        })));
+        let refusal = bridge_evaluate(&input).unwrap_err();
+        assert!(
+            refusal.message.contains("reservoir conditions"),
+            "{refusal:?}"
+        );
+    }
+}
+
 #[test]
 fn unequal_area_layers_match_series_resistances_without_storage() {
     let a = SteadyCoverage::new(source(), layout()).unwrap();

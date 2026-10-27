@@ -162,3 +162,91 @@ fn exterior_coverage_preserves_spatial_binding_and_distinguishes_bare_body_excha
         .remove("exterior_exchange");
     assert!(evaluate(&input).is_err());
 }
+
+#[test]
+fn closed_seam_loop_includes_the_closing_edge_and_replays_without_backtracking() {
+    let mut input = request();
+    // One covered body face avoids treating the adjacent, differently characterized back sheet
+    // as a second physical qualification for the front triangle's shared diagonal edge.
+    input["map"]["body_triangles"] = json!([[0, 1, 2]]);
+    let baseline = evaluate(&input).unwrap();
+    input["thermal_bridges"] = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-steady-thermal-bridges.json"
+    ))
+    .unwrap();
+    input["thermal_bridges"]["paths"][0]["vertices"] = json!([0, 1, 2]);
+    let open = evaluate(&input).unwrap();
+    input["thermal_bridges"]["paths"][0]["vertices"] = json!([0, 1, 2, 0]);
+    let closed = evaluate(&input).unwrap();
+    let perimeter = 2. + 2_f64.sqrt();
+    let expected_excess = 0.2 * perimeter * 30.;
+    assert!(
+        (closed["thermal_bridges"]["paths"][0]["length_m"]
+            .as_f64()
+            .unwrap()
+            - perimeter)
+            .abs()
+            < 1e-12
+    );
+    assert!((closed["steady"]["bridge_power_w"].as_f64().unwrap() - expected_excess).abs() < 1e-10);
+    assert_eq!(
+        closed["steady"]["baseline_power_w"],
+        baseline["steady"]["power_w"]
+    );
+    assert!(
+        (closed["steady"]["power_w"].as_f64().unwrap()
+            - baseline["steady"]["power_w"].as_f64().unwrap()
+            - expected_excess)
+            .abs()
+            < 1e-10
+    );
+    assert!(
+        (closed["steady"]["bridge_power_w"].as_f64().unwrap()
+            - open["steady"]["bridge_power_w"].as_f64().unwrap()
+            - 6.)
+            .abs()
+            < 1e-10
+    );
+    let mut edges: Vec<[usize; 2]> = closed["thermal_bridges"]["paths"][0]["contributions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| serde_json::from_value(row["edge"].clone()).unwrap())
+        .collect();
+    edges.sort_unstable();
+    edges.dedup();
+    assert_eq!(edges, vec![[0, 1], [0, 2], [1, 2]]);
+    assert_eq!(
+        closed,
+        serde_json::from_value::<Request>(input.clone())
+            .unwrap()
+            .evaluate()
+            .unwrap()
+    );
+    assert_eq!(closed, evaluate(&closed["request"]).unwrap());
+    let mut reversed = input.clone();
+    reversed["thermal_bridges"]["paths"][0]["vertices"] = json!([0, 2, 1, 0]);
+    assert!(
+        (evaluate(&reversed).unwrap()["steady"]["bridge_power_w"]
+            .as_f64()
+            .unwrap()
+            - expected_excess)
+            .abs()
+            < 1e-10
+    );
+    for invalid in [
+        json!([0, 0]),
+        json!([0, 1, 0]),
+        json!([0, 1, 2, 1]),
+        json!([0, 1, 2, 0, 1]),
+        json!([0, 1, 2, 0, 1, 2, 0]),
+    ] {
+        let mut bad = input.clone();
+        bad["thermal_bridges"]["paths"][0]["vertices"] = invalid.clone();
+        assert!(evaluate(&bad).is_err(), "accepted repeated path {invalid}");
+    }
+    let mut too_long = input;
+    too_long["thermal_bridges"]["paths"][0]["qualifications"][0]["length_range_m"] =
+        json!([0.1, 3.0]);
+    assert!(evaluate(&too_long).is_err());
+}

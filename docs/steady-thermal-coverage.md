@@ -88,6 +88,11 @@ The single-file `ftx-steady-coverage-request/1` request accepts optional `therma
 The same policy is available under `scenario.coverage.thermal_bridges`, so ordinary material
 studies and steady motion endpoints evaluate it on their newly draped geometry. Both native
 commands and the browser `thermal_steady_coverage` export use the same coverage authority.
+In the materials workbench, load the optional qualified seam/closure paths JSON beside the
+coverage map and conditions. Clearing it returns to ordinary coverage. The standalone result,
+initial material-study coverage and each steady motion endpoint show baseline, signed seam
+excess and combined power, with current path lengths and the retained source qualifications.
+Changing these inputs withdraws the previous coverage result and its downloads.
 `tests/fixtures/materials/synthetic-steady-thermal-bridges.json` is an explicitly synthetic policy
 for the retained front-sheet edge in the executable example above. Add its contents as the
 request's `thermal_bridges` value, then run:
@@ -114,6 +119,10 @@ That reference supplies a definition, not textile coefficients or a claim of sta
 
 Each `paths[]` entry names a physical seam/closure, an existing drape `instance`, and a connected
 `vertices` sequence of actual retained mesh edges. It does not infer a seam from its name.
+An open path has no repeated vertices. A closed neckline, cuff or hem repeats its first vertex
+only as the final entry, for example `[0, 1, 2, 0]`, with at least three distinct vertices.
+The closing edge contributes its actual length once. Backtracks, internal revisits and repeated
+edges refuse; an open path never acquires an implicit closing edge.
 Every source qualification specifies:
 
 - The existing `steady_thermal_surface.model.sha256`, binding the exact source selections,
@@ -152,8 +161,16 @@ Different consumed qualifications require the existing explicit mixed-protocol c
 material alternatives do not change a row's protocol. Missing or altered requested bridge
 outcomes cannot silently enter the frontier as an unbridged result.
 
-This version requires uniform prescribed reservoir temperatures and films. It rejects exterior
-convection/radiation replacement and accepts no transient bridge request. Independent transient
+Prescribed reservoir temperatures and films may be uniform or distinct for every body triangle.
+Each centerline interval uses the conditions of its own projected body region and must match a
+qualification for that local material stack and those exact films. A path crossing regions can
+therefore lose heat on one interval and gain it on another; the report retains the signed local
+contributions before summing them. A centerline lying exactly on a shared boundary still requires
+identical incident qualifications and reservoir conditions, because the geometry alone cannot
+choose between conflicting physical environments.
+
+This version rejects exterior convection/radiation replacement and accepts no transient bridge
+request. Independent transient
 sheet models retain their own scope and acquire no seam storage or dynamics from this steady policy.
 The model supplies no generic heterogeneous seam microgeometry, finite replacement-area closure,
 bridge interaction law, fitted fabric property, physical seam validation or wearer comfort rating.

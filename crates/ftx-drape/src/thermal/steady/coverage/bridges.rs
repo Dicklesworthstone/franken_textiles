@@ -60,7 +60,8 @@ pub struct Path {
     pub id: String,
     /// Exact retained drape instance carrying this centerline.
     pub instance: String,
-    /// Connected, nonrepeating mesh-edge path in the retained solver vertex order.
+    /// Connected simple mesh-edge path in retained solver order. A closed loop repeats only its
+    /// first vertex at the end and must contain at least three distinct vertices.
     pub vertices: Vec<usize>,
     /// Alternative exact source/stack qualifications. Every contributing interval needs one match.
     pub qualifications: Vec<Qualification>,
@@ -344,16 +345,23 @@ impl Request {
         }
         let mut paths = BTreeSet::new();
         for path in &self.paths {
+            let closed = path.vertices.len() > 1 && path.vertices.first() == path.vertices.last();
+            let distinct_length = path.vertices.len() - usize::from(closed);
             if !text(&path.id)
                 || !paths.insert(&path.id)
                 || !text(&path.instance)
                 || path.vertices.len() < 2
                 || path.qualifications.is_empty()
                 || path.qualifications.len() > 64
-                || path.vertices.iter().collect::<BTreeSet<_>>().len() != path.vertices.len()
+                || (closed && distinct_length < 3)
+                || path.vertices[..distinct_length]
+                    .iter()
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    != distinct_length
             {
                 return Err(invalid(
-                    "thermal bridge needs unique physical paths, nonrepeating vertices and bounded qualification alternatives",
+                    "thermal bridge needs unique physical paths, simple open paths or closed loops with at least three distinct vertices, and bounded qualification alternatives",
                 ));
             }
             let mut ids = BTreeSet::new();
@@ -369,17 +377,6 @@ impl Request {
 
     pub(super) fn evaluate(&self, context: Context<'_>) -> Result<Value, Refusal> {
         self.validate()?;
-        let b = context.boundaries[0];
-        if context.boundaries.iter().any(|v| {
-            v.inside_c != b.inside_c
-                || v.outside_c != b.outside_c
-                || v.inside_resistance != b.inside_resistance
-                || v.outside_resistance != b.outside_resistance
-        }) {
-            return Err(invalid(
-                "this thermal bridge model requires uniform prescribed reservoir temperatures and films",
-            ));
-        }
         let mut work = Work::default();
         work.add(context.source.patches.len() * 3)?;
         let mut hits: Vec<Vec<(usize, &Hit)>> = vec![Vec::new(); context.source.patches.len()];
@@ -496,12 +493,11 @@ impl Request {
                 // All cuts are dimensionless; report the conservative ownership roundoff scale.
                 roundoff_length_bound += length * ROUND * cuts.len() as f64;
                 for cut in cuts.windows(2) {
-                    let midpoint = cut[0] + (cut[1] - cut[0]) * 0.5;
                     let mut candidates = Vec::new();
                     for portion in &portions {
                         work.add(1)?;
-                        if midpoint >= portion.interval[0] - ROUND
-                            && midpoint <= portion.interval[1] + ROUND
+                        if cut[0] >= portion.interval[0] - ROUND
+                            && cut[1] <= portion.interval[1] + ROUND
                         {
                             let q = if let Some(&q) = qualified.get(&portion.region) {
                                 q
@@ -526,10 +522,20 @@ impl Request {
                         ));
                     }
                     let identity = &identities[candidates[0].1.id.as_str()];
-                    for (_, q) in &candidates[1..] {
-                        if &identities[q.id.as_str()] != identity {
+                    let first_body =
+                        context.projection.layout.regions[candidates[0].0.region].body_triangle;
+                    let first_boundary = context.boundaries[first_body];
+                    for (portion, q) in &candidates[1..] {
+                        let body = context.projection.layout.regions[portion.region].body_triangle;
+                        let boundary = context.boundaries[body];
+                        if &identities[q.id.as_str()] != identity
+                            || boundary.inside_c != first_boundary.inside_c
+                            || boundary.outside_c != first_boundary.outside_c
+                            || boundary.inside_resistance != first_boundary.inside_resistance
+                            || boundary.outside_resistance != first_boundary.outside_resistance
+                        {
                             return Err(invalid(
-                                "shared thermal bridge boundary has incompatible physical stack or source qualifications",
+                                "shared thermal bridge boundary has incompatible physical stack, source qualifications or reservoir conditions",
                             ));
                         }
                     }
@@ -542,6 +548,7 @@ impl Request {
                     });
                     let (portion, q) = candidates[0];
                     let region = &context.projection.layout.regions[portion.region];
+                    let b = context.boundaries[region.body_triangle];
                     let part_length = product(length, cut[1] - cut[0])?;
                     let conductance = product(q.excess_linear_conductance.value, part_length)?;
                     let part_power = product(conductance, b.inside_c - b.outside_c)?;
@@ -552,7 +559,8 @@ impl Request {
                         json!({"edge":edge,"edge_fraction":cut,"source_triangle":portion.triangle,
                         "body_triangle":region.body_triangle,"region":region.id,
                         "qualification_id":q.id,"qualification_sha256":identity,
-                        "length_m":part_length,"conductance_w_k":conductance,"power_w":part_power}),
+                        "length_m":part_length,"conductance_w_k":conductance,
+                        "inside_c":b.inside_c,"outside_c":b.outside_c,"power_w":part_power}),
                     );
                 }
             }
@@ -582,7 +590,7 @@ impl Request {
             "summation_residual_w":total-context.baseline.power_w-bridge_power,
             "body":body,"paths":path_reports,"geometry_operations":work.0,
             "ownership_roundoff_length_bound_m":roundoff_length_bound,
-            "ownership_policy":"partition each current mesh-edge length once; shared boundaries choose lowest body/region/source-triangle only when exact physical qualification agrees",
+            "ownership_policy":"partition each current mesh-edge length once using its local prescribed reservoirs; shared boundaries choose lowest body/region/source-triangle only when exact physical qualification and reservoir conditions agree",
             "reference_basis":BASIS,"storage_modeled":false,"uncertainty_propagated":false,
             "empirical_validation_claim":false,
             "scope":"source-qualified centerline excess over the identified covered stack; not generic seam microgeometry, a replacement footprint or a full additional seam area"}),
