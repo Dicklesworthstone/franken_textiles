@@ -3827,6 +3827,82 @@ The bounded data integration is `ftx-tm2.2`; resolving source geometry and match
 mechanical/transport characterization remain under `ftx-tm2` and the unchanged-garment `ftx-tm8`
 acceptance gate.
 
+### 25.99 Identify permanent stretch and delayed recovery together
+
+Optional `joint_relaxation` extends the existing complete-history permanent-membrane calibration
+to identify six directional yield/hardening coefficients and one proportional Maxwell stiffness
+ratio and recovery time in one bounded FIT problem. Fresh inputs require no provisional unknown
+coefficients. Elasticity, strain and accumulated-history limits, network topology, initialization
+and exact specimen/conditioning remain independently qualified inputs.
+
+Every trial replays both canonical histories at every recorded node, including unobserved loads,
+irregular dwells and reversals. The eight-column FIT excitation gate detects local confounding;
+CHECK can reject the retained FIT choice but cannot select another. Both histories participate in
+the existing shared work limits. Joint optimization solves the bounded local least-squares problem
+with active-set free-coordinate updates and endpoint release; clipping an unconstrained coupled
+step no longer stalls an otherwise identifiable example. Existing six-parameter arithmetic stays
+unchanged.
+
+Accepted output is one ordinary frozen material, with all eight fitted quantities retained as
+estimates under the same receipt. The workbench distinguishes unknown recovery identified jointly
+from an independently supplied fixed spectrum, displays both coefficients and their diagnostics,
+and withdraws unresolved selections. The complete artificial
+`examples/material-joint-calibration.json` supplies 27 FIT and five CHECK nodes with independently
+constructed targets, and reaches normal pattern binding and timed cloth histories.
+See [material-membrane-plasticity.md](docs/material-membrane-plasticity.md).
+
+This bounded software feature is `ftx-tm4.5`. Multiple/directional unknown recovery arms,
+temperature/moisture feedback into mechanical laws and physical specimen/garment acceptance remain
+open. The recorded-node plastic update and backward-Euler recovery do not establish continuous-time
+exactness, coefficient uncertainty, global uniqueness or measured textile agreement.
+
+### 25.100 Finite operating windows constrain actual sewing production
+
+The independent-cell production model now admits a source-qualified inclusive end to each
+cell's availability. A complete garment assignment must finish within that window after
+initial setup, all actual recipe feed, handling, fixture transitions and final unloading.
+The same bounded allocation updates emitted stitches, used machines and combined yarn orders;
+a shorter shift cannot retain an earlier infeasible allocation or its cheaper consumption.
+
+Optional windows retain the established millisecond time basis and exact integer bounds.
+The unbounded input keeps its previous report representation. Windowed plans report the
+declared intervals and whether the old first-cell reference assignment had to be replaced
+with a complete feasible baseline. Lower-bound feasibility is separate from incumbent
+feasibility: exhausted inner search must not call a possibly feasible job impossible, and
+an incomplete allocation never masquerades as an executable schedule. Existing whole-job
+work caps still cover count solves, both allocations and exact schedule reconstruction.
+
+This is the bounded software feature `ftx-pb2.2.7`, reaching both native commands and the
+portable material-study path through the existing sewing authority. Synthetic exhaustive
+small assignments, inclusive boundaries and final-unloading cases are the acceptance
+checks. Shared operators, inter-cell transfers and measured factory execution remain open
+under `ftx-pb2.2`; a window is an explicitly qualified input, not inferred live availability.
+See [sewing-production.md](docs/sewing-production.md).
+
+### 25.101 Exact supplier sale units reach live finite-stock purchasing
+
+The source refresh path now admits a reviewed Fabric Mart decimal-yard storefront without
+changing the canonical quote or purchasing schemas. Exact product, variant and SKU identities,
+published textile specification rows, currency and quantity controls must agree across a
+product-HTML/public-JSON/product-HTML observation bracket. A quarter-yard billing price is
+cross-checked against the displayed yard price; Shopify's billing-unit minimum cannot replace
+the storefront's explicit one-yard fabric minimum and quarter-yard increment.
+
+One real nylon/Lycra activewear-knit purchasing identity enters the shared catalog with its
+source-reported nominal width and missing composition fractions/physics retained as unknown.
+The explicit displayed-yard inventory policy preserves both its selected capacity and the
+separate underlying quarter-unit inventory, including any declared display difference. It
+does not infer uninterrupted roll length, usable width, checkout reservation or fulfillment.
+Changed identities, units, material specifications or inconsistent stock refuse publication.
+
+The adapter participates in existing immutable evidence and supplier-revision replay. The
+checked-in dated quote comes from an actual live refresh, and ordinary native purchasing
+has exercised the one-yard order, excess-capacity and missing-continuity outcomes. This
+implements `ftx-pq1.1`; current availability always requires another source observation.
+Broader supplier coverage, representative market percentiles and empirical specimen data
+remain under `ftx-tm6`, `ftx-pq1` and `ftx-tm2`.
+See [fabricmart-stock-refresh.md](docs/fabricmart-stock-refresh.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

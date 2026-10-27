@@ -9,6 +9,7 @@ const INPUT: &str = include_str!(
     "../../../tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json"
 );
 const PARALLEL_INPUT: &str = include_str!("../../../examples/material-parallel-calibration.json");
+const JOINT_INPUT: &str = include_str!("../../../examples/material-joint-calibration.json");
 
 struct Workspace(PathBuf);
 impl Workspace {
@@ -64,6 +65,124 @@ impl Workspace {
 }
 
 #[test]
+fn jointly_unknown_branches_reach_both_commands_binding_and_actual_strip_replay() {
+    let workspace = Workspace::new();
+    fs::write(workspace.0.join("histories.json"), JOINT_INPUT).unwrap();
+    let input: Value = serde_json::from_str(JOINT_INPUT).unwrap();
+    assert!(input["material"]["membrane_relaxation"].is_null());
+    assert!(input["material"]["properties"]["membrane_yield_warp"].is_null());
+    let identified = workspace.identify(false, true);
+    assert_eq!(identified, workspace.identify(true, true));
+    let calibration = &identified["calibration"];
+    assert_eq!(calibration["status"], "ACCEPTED", "{calibration}");
+    assert_eq!(calibration["check_status"], "ACCEPTED");
+    let parameters = &calibration["parameters"];
+    for (key, expected) in [
+        ("yield_n_m", [10.0, 8.0, 5.0]),
+        ("hardening_n_m", [100.0, 50.0, 25.0]),
+    ] {
+        for (axis, target) in expected.into_iter().enumerate() {
+            assert!((parameters[key][axis].as_f64().unwrap() - target).abs() < 1e-6);
+        }
+    }
+    for (key, target) in [("stiffness_ratio", 1.4), ("relaxation_time_seconds", 0.18)] {
+        assert!((parameters["relaxation"][key].as_f64().unwrap() - target).abs() < 1e-6);
+    }
+    assert_eq!(calibration["predictions"].as_array().unwrap().len(), 32);
+    assert!(
+        calibration["diagnostics"]["joint_relaxation"]["branch_steps"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(identified["simulation_ready"], true);
+    let portable_text =
+        ftx_wasm::materials::calibrate_membrane_plasticity(JOINT_INPUT, true).unwrap();
+    let portable: Value = serde_json::from_str(&portable_text).unwrap();
+    for key in ["calibration", "selection", "selection_json"] {
+        assert_eq!(portable[key], identified[key]);
+    }
+    assert_eq!(workspace.identify(false, false)["simulation_ready"], false);
+
+    let pattern = json!({"schema":"fabric-pattern/1","units":"mm","seams":[],
+        "pieces":[{"id":"swatch","cut":{"qty":1},
+            "vertices":{"a":[0,0],"b":[100,0],"c":[0,100]},
+            "edges":[{"id":"ab","from":"a","to":"b"},
+                {"id":"bc","from":"b","to":"c"},{"id":"ca","from":"c","to":"a"}],
+            "grain":[[0,0],[0,100]]}]});
+    workspace.write("pattern.json", &pattern);
+    fs::write(
+        workspace.0.join("selection.json"),
+        identified["selection_json"].as_str().unwrap(),
+    )
+    .unwrap();
+    let bound = workspace.workbench(&["bind", "pattern.json", "selection.json", "bound.json"]);
+    assert!(
+        bound.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bound.stderr)
+    );
+    let saved: Value =
+        serde_json::from_slice(&fs::read(workspace.0.join("bound.json")).unwrap()).unwrap();
+    assert_eq!(saved["pieces"], pattern["pieces"]);
+    assert_eq!(saved["seams"], pattern["seams"]);
+    assert_eq!(saved["fabric"]["material"], identified["selection"]);
+
+    let history = json!({"schema":"ftx-strip-history/1","material":identified["selection"],
+        "fixture":{"gauge_length_m":0.1,"width_m":0.06,"warp_axis":[0.0,1.0],"cells":[2,2]},
+        "loading":[{"time_s":0.0,"extension_fraction":0.0},
+            {"time_s":0.05,"extension_fraction":0.08},{"time_s":0.15,"extension_fraction":0.08},
+            {"time_s":0.2,"extension_fraction":0.0},{"time_s":0.25,"extension_fraction":0.0}],
+        "controls":{"max_step_s":0.01,"max_steps":32,"max_newton":100,
+            "velocity_tolerance_m_s":1e-9,"force_tolerance_n":1e-6}});
+    let direct =
+        ftx_drape::strip::history::evaluate(&serde_json::from_value(history.clone()).unwrap())
+            .unwrap();
+    let last = direct.states.last().unwrap();
+    assert!(last.plastic_dissipation_j > 0.0 && last.maxwell_dissipation_j > 0.0);
+    assert!(
+        direct.states[1..]
+            .iter()
+            .all(|state| state.solve.unwrap().converged)
+    );
+    let report = serde_json::to_value(&direct).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &ftx_wasm::materials::strip_history(&history.to_string()).unwrap()
+        )
+        .unwrap(),
+        report
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &ftx_wasm::materials::strip_history(&direct.replay_request_json).unwrap()
+        )
+        .unwrap(),
+        report
+    );
+    fs::write(workspace.0.join("portable.json"), portable_text).unwrap();
+    workspace.write("forward-request.json", &history);
+    workspace.write("forward-report.json", &report);
+    eprintln!("simultaneous calibration replay: {}", workspace.0.display());
+
+    let mut failed = input;
+    let check = failed["experiments"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|experiment| experiment["partition"] == "check")
+        .unwrap();
+    check["samples"].as_array_mut().unwrap().last_mut().unwrap()["second_piola_n_m"][0] =
+        json!(1e6);
+    workspace.write("histories.json", &failed);
+    let rejected = workspace.identify(true, true);
+    assert_eq!(rejected["calibration"]["status"], "REJECTED");
+    assert_eq!(rejected["calibration"]["parameters"], *parameters);
+    assert_eq!(rejected["calibration"]["fit"], calibration["fit"]);
+    assert!(rejected["selection_json"].is_null());
+}
+
+#[test]
 fn joint_calibration_publishes_one_frozen_material_for_actual_timed_cloth_history() {
     let workspace = Workspace::new();
     fs::write(workspace.0.join("histories.json"), PARALLEL_INPUT).unwrap();
@@ -74,7 +193,13 @@ fn joint_calibration_publishes_one_frozen_material_for_actual_timed_cloth_histor
     assert_eq!(identified["simulation_ready"], true);
     assert_eq!(
         identified["selection"]["record"]["membrane_relaxation"],
-        input["material"]["membrane_relaxation"]
+        serde_json::to_value(
+            serde_json::from_str::<calibration::Input>(PARALLEL_INPUT)
+                .unwrap()
+                .material
+                .membrane_relaxation
+        )
+        .unwrap()
     );
     let portable_text =
         ftx_wasm::materials::calibrate_membrane_plasticity(PARALLEL_INPUT, true).unwrap();
@@ -90,10 +215,12 @@ fn joint_calibration_publishes_one_frozen_material_for_actual_timed_cloth_histor
     assert_eq!(denied["calibration"], identified["calibration"]);
     assert_eq!(denied["simulation_ready"], false);
 
+    // The independently supplied fixed spectrum has a narrower characterized strain domain.
+    // Use an admitted clamped path; global extension alone does not bound every local triangle.
     let history = json!({"schema":"ftx-strip-history/1","material":identified["selection"],
         "fixture":{"gauge_length_m":0.1,"width_m":0.06,"warp_axis":[0.0,1.0],"cells":[2,2]},
         "loading":[{"time_s":0.0,"extension_fraction":0.0},
-            {"time_s":0.05,"extension_fraction":0.08},{"time_s":0.15,"extension_fraction":0.08},
+            {"time_s":0.05,"extension_fraction":0.04},{"time_s":0.15,"extension_fraction":0.04},
             {"time_s":0.2,"extension_fraction":0.0},{"time_s":0.25,"extension_fraction":0.0}],
         "controls":{"max_step_s":0.01,"max_steps":32,"max_newton":100,
             "velocity_tolerance_m_s":1e-9,"force_tolerance_n":1e-6}});

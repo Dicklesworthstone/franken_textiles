@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import refresh_textile_prices as r
 import textile_specifications as s
+import test_refresh_textile_prices as fixtures
 from test_refresh_textile_prices import CART, NOW, csv_entry, csv_raw, entry, product, raw, public_entry, public_product
 
 
@@ -44,6 +45,36 @@ def jsonld_fixture():
 
 
 class SpecificationTests(unittest.TestCase):
+    def test_fabricmart_source_replay_keeps_prices_stock_and_specification_revisions_separate(self):
+        fixture = fixtures.FabricMartTests()
+        e, product, public, html = fixture.inputs()
+        def capture():
+            def get(url, *, accept):
+                return raw(public) if url.endswith(".json") else html
+            book, evidence = r.refresh({"schema": "ftx-textile-refresh/1", "offers": [e]}, get,
+                                       lambda: NOW, intraday=True)
+            return s.capture(book, evidence), evidence
+        old, evidence = capture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, data in evidence.items():
+                (root / name).write_bytes(data)
+            self.assertEqual(s.replay(old, root), old)
+            before_hash = next(r.load(value)["html_before_sha256"] for name, value in evidence.items()
+                               if name.endswith(".receipt.json"))
+            (root / (before_hash + ".html")).write_bytes(b"changed")
+            with self.assertRaises(ValueError):
+                s.replay(old, root)
+        e, product, public, html = fixture.inputs(0, False)
+        depleted, _ = capture()
+        self.assertTrue(s.compare(old, depleted)["quote_publication_allowed"])
+        e["specifications"]["Width"] = '60"'
+        html = fixture.page(e, product, 0, False)
+        changed, _ = capture()
+        review = s.compare(old, changed)
+        self.assertFalse(review["quote_publication_allowed"])
+        self.assertIn("/selected/specifications/Width", [v["path"] for v in review["offers"][0]["changes"]])
+
     def test_reviewed_continuous_limit_changes_require_new_source_review(self):
         e, p = locked(), product()
         fragment = "Maximum continuous cut: 5 yards."

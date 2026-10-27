@@ -1,0 +1,752 @@
+{
+  "schema": "ftx-membrane-plasticity-calibration/1",
+  "material": {
+    "id": "synthetic-joint-calibration-sheet",
+    "name": "Synthetic simultaneous permanent-stretch and delayed-recovery identification; NOT measured textile data",
+    "form": "woven",
+    "structure": {
+      "scope": "Artificial independent scalar permanent return-map observations plus one independently computed backward-Euler Maxwell arm. Neither branch coefficient set is supplied to the fitter. No empirical textile, physical garment or confidence claim."
+    },
+    "properties": {
+      "areal_density": {
+        "value": 0.2,
+        "unit": "kg/m2",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic reference mass per flat area"
+      },
+      "width": {
+        "value": 1.5,
+        "unit": "m",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic pristine stock width"
+      },
+      "thickness": {
+        "value": 0.0006,
+        "unit": "m",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic constant contact thickness"
+      },
+      "warp_stiffness": {
+        "value": 1000,
+        "unit": "N/m",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Independently supplied synthetic elastic warp coefficient",
+        "conditions": {
+          "specimen_id": "artificial-cycle-A",
+          "conditioning": "synthetic constant dry state"
+        }
+      },
+      "weft_stiffness": {
+        "value": 500,
+        "unit": "N/m",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Independently supplied synthetic elastic weft coefficient",
+        "conditions": {
+          "specimen_id": "artificial-cycle-A",
+          "conditioning": "synthetic constant dry state"
+        }
+      },
+      "poisson_warp_weft": {
+        "value": 0,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Explicitly uncoupled synthetic elastic normal directions",
+        "conditions": {
+          "specimen_id": "artificial-cycle-A",
+          "conditioning": "synthetic constant dry state"
+        }
+      },
+      "shear_stiffness": {
+        "value": 250,
+        "unit": "N/m",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Independently supplied synthetic elastic engineering-Green-shear coefficient",
+        "conditions": {
+          "specimen_id": "artificial-cycle-A",
+          "conditioning": "synthetic constant dry state"
+        }
+      },
+      "bending_rigidity": {
+        "value": 3e-05,
+        "unit": "N*m",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic independent recoverable bending"
+      },
+      "friction_skin": {
+        "value": 0.2,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic constant kinetic coefficient"
+      },
+      "friction_self": {
+        "value": 0.3,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic constant kinetic coefficient"
+      },
+      "specific_heat": {
+        "value": 1200,
+        "unit": "J/(kg*K)",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic constant storage; no plastic-work thermal feedback"
+      },
+      "thermal_conductivity": {
+        "value": 0.04,
+        "unit": "W/(m*K)",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic constant through-thickness conductivity"
+      },
+      "membrane_strain_limit_warp": {
+        "value": 0.25,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Independently authored synthetic raw-Green domain; not fitted from the observed maximum",
+        "conditions": {
+          "specimen_id": "artificial-cycle-A",
+          "conditioning": "synthetic constant dry state"
+        }
+      },
+      "membrane_strain_limit_weft": {
+        "value": 0.25,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Independently authored synthetic raw-Green domain",
+        "conditions": {
+          "specimen_id": "artificial-cycle-A",
+          "conditioning": "synthetic constant dry state"
+        }
+      },
+      "membrane_strain_limit_shear": {
+        "value": 0.25,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Independently authored synthetic engineering-Green-shear domain",
+        "conditions": {
+          "specimen_id": "artificial-cycle-A",
+          "conditioning": "synthetic constant dry state"
+        }
+      },
+      "membrane_accumulation_limit_warp": {
+        "value": 1,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Independently authored synthetic history bound; not a fatigue life",
+        "conditions": {
+          "specimen_id": "artificial-cycle-A",
+          "conditioning": "synthetic constant dry state"
+        }
+      },
+      "membrane_accumulation_limit_weft": {
+        "value": 1,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Independently authored synthetic history bound; not a fatigue life",
+        "conditions": {
+          "specimen_id": "artificial-cycle-A",
+          "conditioning": "synthetic constant dry state"
+        }
+      },
+      "membrane_accumulation_limit_shear": {
+        "value": 1,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Independently authored synthetic history bound; not a fatigue life",
+        "conditions": {
+          "specimen_id": "artificial-cycle-A",
+          "conditioning": "synthetic constant dry state"
+        }
+      }
+    },
+    "sources": {
+      "test": {
+        "reference": "test:ftx-permanent-membrane-calibration-independent-scalar-answers",
+        "accessed_on": "2026-10-27",
+        "note": "Every datum is artificial. Independent per-axis recurrence: trial=Q*(e-z); dz=sign(trial)*max(abs(trial)-Y-H*a,0)/(Q+H); z+=dz; a+=abs(dz); S=Q*(e-z). Q=[1000,500,250], Y=[10,8,5], H=[100,50,25]. Raw-Green endpoint increments are prescribed; no candidate-generated oracle, measured garment, damage, recovery-rate, temperature, or confidence claim. Joint example: retained time labels multiplied by0.2; independent Maxwell recurrence v_next=(tau*v_old+h*E_next)/(tau+h), S_maxwell=ratio*Q*(E-v), with ratio1.4, tau0.18 seconds. Two explicitly recorded warp dwells at0.65 and0.75 seconds exercise recovery. These independent synthetic target constants are not input material coefficients."
+      },
+      "network": {
+        "reference": "test:declared-parallel-plastic-maxwell-network",
+        "accessed_on": "2026-10-27",
+        "note": "Synthetic independently declared parallel_green_maxwell_plastic/1 topology, pristine reference, physical Green-strain domain and constant dry conditioning. The declaration supplies no yield, hardening, Maxwell ratio or recovery-time coefficient."
+      }
+    }
+  },
+  "allow_estimated_material": true,
+  "allow_estimated_observations": true,
+  "method": "Synthetic recorded-node scalar return mapping plus independently calculated backward-Euler Maxwell load at each physical Green-strain/time sample. FIT histories identify all eight unknowns jointly; CHECK history is held out. Unobserved-force peaks still advance both memories. No exact continuous-time or empirical textile claim.",
+  "conditions": {
+    "specimen_id": "artificial-cycle-A",
+    "conditioning": "synthetic constant dry state"
+  },
+  "fitted_on": "2026-10-27",
+  "yield_bounds_n_m": [
+    [
+      2,
+      25
+    ],
+    [
+      1,
+      20
+    ],
+    [
+      1,
+      12
+    ]
+  ],
+  "hardening_bounds_n_m": [
+    [
+      0,
+      200
+    ],
+    [
+      0,
+      120
+    ],
+    [
+      0,
+      70
+    ]
+  ],
+  "experiments": [
+    {
+      "id": "warp-cycle",
+      "source": "test",
+      "evidence": "estimate",
+      "partition": "fit",
+      "initialization": "pristine",
+      "samples": [
+        {
+          "time_seconds": 0.0,
+          "green_strain": [
+            0,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.2,
+          "green_strain": [
+            0.005,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            8.31578947368421,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.4,
+          "green_strain": [
+            0.03,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            29.967766305716445,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.6,
+          "green_strain": [
+            0.06,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            43.03736298691831,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.65,
+          "green_strain": [
+            0.06,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            36.843469847469656,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.75,
+          "green_strain": [
+            0.06,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            28.87989295389284,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.8,
+          "green_strain": [
+            0.09,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            null,
+            null,
+            null
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 1.0,
+          "green_strain": [
+            0.035,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            -34.72221075926759,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 1.2,
+          "green_strain": [
+            0,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            -52.90930296513372,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 1.4,
+          "green_strain": [
+            -0.03,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            -59.428547598534415,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 1.6,
+          "green_strain": [
+            0.04,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            56.98435795472956,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 1.8,
+          "green_strain": [
+            0.02,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            7.862059549199472,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        }
+      ]
+    },
+    {
+      "id": "weft-cycle",
+      "source": "test",
+      "evidence": "estimate",
+      "partition": "fit",
+      "initialization": "pristine",
+      "samples": [
+        {
+          "time_seconds": 0.0,
+          "green_strain": [
+            0,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.2,
+          "green_strain": [
+            0,
+            0.01,
+            0
+          ],
+          "second_piola_n_m": [
+            0.0,
+            8.31578947368421,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.4,
+          "green_strain": [
+            0,
+            0.05,
+            0
+          ],
+          "second_piola_n_m": [
+            0.0,
+            24.37924955930496,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.6,
+          "green_strain": [
+            0,
+            0.08,
+            0
+          ],
+          "second_piola_n_m": [
+            0.0,
+            27.88299381038848,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.8,
+          "green_strain": [
+            0,
+            0.04,
+            0
+          ],
+          "second_piola_n_m": [
+            0.0,
+            -14.313797190294451,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 1.0,
+          "green_strain": [
+            0,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            0.0,
+            -28.299140991835873,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 1.2,
+          "green_strain": [
+            0,
+            -0.04,
+            0
+          ],
+          "second_piola_n_m": [
+            0.0,
+            -35.09776622014322,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 1.4,
+          "green_strain": [
+            0,
+            0.06,
+            0
+          ],
+          "second_piola_n_m": [
+            0.0,
+            39.65533862346888,
+            0.0
+          ],
+          "scale_n_m": 1
+        }
+      ]
+    },
+    {
+      "id": "shear-cycle",
+      "source": "test",
+      "evidence": "estimate",
+      "partition": "fit",
+      "initialization": "pristine",
+      "samples": [
+        {
+          "time_seconds": 0.0,
+          "green_strain": [
+            0,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.2,
+          "green_strain": [
+            0,
+            0,
+            0.01
+          ],
+          "second_piola_n_m": [
+            0.0,
+            0.0,
+            4.157894736842105
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.4,
+          "green_strain": [
+            0,
+            0,
+            0.04
+          ],
+          "second_piola_n_m": [
+            0.0,
+            0.0,
+            11.213548224628559
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.6,
+          "green_strain": [
+            0,
+            0,
+            0.08
+          ],
+          "second_piola_n_m": [
+            0.0,
+            0.0,
+            15.723163991570466
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.8,
+          "green_strain": [
+            0,
+            0,
+            0.02
+          ],
+          "second_piola_n_m": [
+            0.0,
+            0.0,
+            -12.084155899599722
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 1.0,
+          "green_strain": [
+            0,
+            0,
+            -0.06
+          ],
+          "second_piola_n_m": [
+            0.0,
+            0.0,
+            -24.263438788457634
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 1.2,
+          "green_strain": [
+            0,
+            0,
+            0.03
+          ],
+          "second_piola_n_m": [
+            0.0,
+            0.0,
+            16.310026760768164
+          ],
+          "scale_n_m": 1
+        }
+      ]
+    },
+    {
+      "id": "held-out-combined",
+      "source": "test",
+      "evidence": "estimate",
+      "partition": "check",
+      "initialization": "pristine",
+      "samples": [
+        {
+          "time_seconds": 0.0,
+          "green_strain": [
+            0,
+            0,
+            0
+          ],
+          "second_piola_n_m": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.2,
+          "green_strain": [
+            0.045,
+            0.065,
+            0.055
+          ],
+          "second_piola_n_m": [
+            43.02392344497608,
+            31.779904306220097,
+            14.913875598086126
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.4,
+          "green_strain": [
+            0.02,
+            0.025,
+            0.015
+          ],
+          "second_piola_n_m": [
+            -14.2613951145807,
+            -12.82674389322589,
+            -6.5168723243515485
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.6,
+          "green_strain": [
+            -0.035,
+            -0.025,
+            -0.04
+          ],
+          "second_piola_n_m": [
+            -55.68884701164785,
+            -30.4842645061866,
+            -17.114560226715458
+          ],
+          "scale_n_m": 1
+        },
+        {
+          "time_seconds": 0.8,
+          "green_strain": [
+            0.03,
+            0.04,
+            0.025
+          ],
+          "second_piola_n_m": [
+            45.963751103146436,
+            26.162204732507835,
+            13.061634823210703
+          ],
+          "scale_n_m": 1
+        }
+      ]
+    }
+  ],
+  "max_evaluations": 4096,
+  "max_rms_scaled": 1e-06,
+  "max_peak_scaled": 1e-05,
+  "joint_relaxation": {
+    "branch_id": "identified-recovery",
+    "stiffness_ratio_bounds": [
+      0.2,
+      3.0
+    ],
+    "relaxation_time_bounds_seconds": [
+      0.03,
+      1.5
+    ],
+    "strain_range": [
+      [
+        -0.2,
+        0.2
+      ],
+      [
+        -0.2,
+        0.2
+      ],
+      [
+        -0.2,
+        0.2
+      ]
+    ],
+    "initialization": "stress_free_reference",
+    "network": {
+      "model": "parallel_green_maxwell_plastic/1",
+      "source": "network",
+      "evidence": "estimate",
+      "method": "Synthetic independent topology, pristine reference and strain domain; no supplied branch coefficients",
+      "conditions": {
+        "specimen_id": "artificial-cycle-A",
+        "conditioning": "synthetic constant dry state"
+      }
+    }
+  }
+}

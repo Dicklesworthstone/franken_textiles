@@ -1,0 +1,44 @@
+{
+  "schema": "ftx-textile-refresh/1",
+  "offers": [
+    {
+      "adapter": "fabricmart_decimal_html_v1",
+      "offer_id": "fabricmart/DCC-3844/US-retail",
+      "material_id": "fabricmart/DCC-3844",
+      "material_sha256": "e10dd31351adc464af6421ad6cd18e4ac615e55fcbc1831bebcd80352f20cffa",
+      "supplier": "Fabric Mart",
+      "sku": "DCC 3844",
+      "quantity": 0.25,
+      "unit": "linear_yard",
+      "minimum_quantity": 1,
+      "order_increment": 0.25,
+      "currency": "USD",
+      "region": "US",
+      "quality": "supplier-retail-grade-unspecified",
+      "terms": "listed-merchandise-tax-shipping-unqualified",
+      "source_url": "https://fabricmartfabrics.com/products/bravo-brown-nylon-lycra-activewear-knit-58w",
+      "public_url": "https://fabricmartfabrics.com/products/bravo-brown-nylon-lycra-activewear-knit-58w.json",
+      "product_id": 10487001547044,
+      "variant_id": 54020910219556,
+      "variant_title": "Default Title",
+      "basis_source": "https://fabricmartfabrics.com/products/bravo-brown-nylon-lycra-activewear-knit-58w",
+      "basis_note": "Reviewed actual supplier HTML and public product JSON 2026-10-27. The single exact variant price bills a quarter-yard; the displayed per-yard price cross-checks four units. UI minimum is one yard and increment one quarter yard, independently of the API's unit minimum. Explicit displayed_yards policy selects the integer yard capacity shown in stock-info; the receipt separately retains raw quarter-unit inventory and any fractional remainder. Initial source advertised 22 yards while exact tracked-deny inventory was 90 quarter-units (22.5 yards); this discrepancy is retained, not silently rounded or treated as continuous roll length. Nominal width is 58 inches, not qualified usable width. Source taxes, shipping, fulfillment and physical material properties remain unqualified.",
+      "basis_reviewed_on": "2026-10-27",
+      "inventory_basis": "displayed_yards",
+      "specifications": {
+        "SKU": "DCC 3844",
+        "Additional": "Activewear Knit. Soft, Smooth, Slick Hand. Fluid Drape. Good Stretch And Recovery. Translucent.",
+        "Content": "Nylon/Lycra",
+        "Color Family": "Brown",
+        "Color Details": "Bravo Brown",
+        "Pattern/Design": "Solid",
+        "Stretch": "4 Way Stretch - 50% Selvage to Selvage - 50% Along Selvage",
+        "Weight": "Light; Falls Moderately Close To The Body",
+        "Width": "58\"",
+        "Use": "Activewear, Swimwear, Leggings",
+        "Care": "Gentle Wash/Hang To Dry",
+        "Type": "Knits - Activewear"
+      }
+    }
+  ]
+}

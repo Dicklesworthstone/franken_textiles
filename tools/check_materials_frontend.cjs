@@ -1239,6 +1239,30 @@ test('parallel cells display elapsed completion, local-to-global copies and exac
       assert.match(visibleText(s),/inner schedule reached its work limit/);
       parallel.optimality_proven=true; parallel.budget_exhausted=false;
     }
+    const originalBaseline=parallel.baseline;
+    parallel.schema='ftx-sewing-parallel/3'; parallel.baseline=selected;
+    selected.cells[0].available_until_milliseconds=10000;
+    selected.cells[1].available_until_milliseconds=26000;
+    parallel.availability={baseline_replaced:true,cells:[
+      {cell:'cell-a',available_until_milliseconds:10000,counts:[
+        {copies:1,incumbent_finish_milliseconds:9900,lower_bound_finish_milliseconds:9900,feasible:true,infeasibility_proven:false},
+        {copies:2,incumbent_finish_milliseconds:25500,lower_bound_finish_milliseconds:25500,feasible:false,infeasibility_proven:true}]},
+      {cell:'cell-b',available_until_milliseconds:26000,counts:[
+        {copies:2,incumbent_finish_milliseconds:25500,lower_bound_finish_milliseconds:25500,feasible:true,infeasibility_proven:false},
+        {copies:3,incumbent_finish_milliseconds:41100,lower_bound_finish_milliseconds:25500,feasible:false,infeasibility_proven:false}]}]};
+    await p.e[op].onclick(); p.emit(report);
+    assert.match(visibleText(s),/Feasible replacement baseline/);
+    assert.doesNotMatch(visibleText(s),/Single-cell baseline/);
+    assert.match(visibleText(s),/including final unloading/);
+    assert.deepEqual(plain(table('selected physical cells').children[2].children.map(n=>n.textContent)),
+      ['cell-a','0','0','10','9.9','8','0','true']);
+    assert.deepEqual(plain(table('qualified cell availability').children[3].children.map(n=>n.textContent)),
+      ['cell-a','2','10','25.5','25.5','Cannot fit: proved']);
+    assert.deepEqual(plain(table('qualified cell availability').children.at(-1).children.map(n=>n.textContent)),
+      ['cell-b','3','26','41.1','25.5','Unresolved search']);
+    parallel.schema='ftx-sewing-parallel/1'; parallel.baseline=originalBaseline;
+    delete parallel.availability;
+    for(const cell of selected.cells) delete cell.available_until_milliseconds;
   }
   p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
   assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
@@ -1790,6 +1814,50 @@ test('joint permanent-stretch identification distinguishes the fixed recovery sp
   const download=descendants(s).find(n=>n.download==='material-calibration.json');
   assert.equal(await p.blobs.get(download.href).text(),raw);
   p.e.calibrationRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.e.assign.disabled,true);
+});
+
+test('jointly identified recovery exposes both unknowns and never labels them as a fixed spectrum', async () => {
+  const p=await pageModule(); await p.load();
+  p.e.calibrationMode.value='membrane_plasticity'; p.e.calibrationEstimates.checked=true;
+  const input='{"schema":"ftx-membrane-plasticity-calibration/1","joint_relaxation":{"source":-0.0}}';
+  p.select('calibrationRequest',input); p.e.calibrationRequest.handlers.change(); p.ready();
+  await p.e.calibrate.onclick();
+  const report=permanentCalibration('ACCEPTED',true,true), c=report.calibration;
+  c.input.joint_relaxation={branch_id:'recovery',stiffness_ratio_bounds:[0.1,3],
+    relaxation_time_bounds_seconds:[0.01,2],strain_range:[[-0.2,0.2],[-0.2,0.2],[-0.2,0.2]],
+    initialization:'stress_free_reference',network:{model:'parallel_green_maxwell_plastic/1',source:'network'}};
+  c.input.material.sources={network:{reference:'test:declared-network',note:'<independent topology; unknown coefficients>'}};
+  c.parameters.relaxation={stiffness_ratio:1.5,relaxation_time_seconds:0.25};
+  c.diagnostics.joint_relaxation={parameter_sensitivity:[4,7],at_bounds:[false,false],branch_steps:3600};
+  c.predictions=[{experiment:'check-cycle',partition:'check',stored_j_m2:2,plastic_dissipation_j_m2:1,
+    parallel_history:{maxwell_stored_j_m2:3,total_stored_j_m2:5,maxwell_dissipation_j_m2:4}}];
+  const raw=JSON.stringify(report);
+  p.emit(report,[{name:'material-calibration.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'Identified material behavior'), rendered=visibleText(s);
+  assert.match(rendered,/all eight unknowns/);
+  assert.match(rendered,/Joint Maxwell branch-node advances \(included above\)/);
+  assert.doesNotMatch(rendered,/held fixed during identification|Only the six permanent-stretch/);
+  const spectrum=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes('Jointly identified recovery'));
+  assert.deepEqual(plain(spectrum.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+    ['recovery: Equilibrium-tensor stiffness ratio','1.5','[0.1, 3]','4','No'],
+    ['recovery: Relaxation time (s)','0.25','[0.01, 2]','7','No']]);
+  const evidence=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('Joint model'));
+  evidence.open=true; evidence.handlers.toggle();
+  assert.match(visibleText(evidence),/<independent topology; unknown coefficients>/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  assert.equal(p.e.selection.value,report.selection_json); assert.equal(p.e.assign.disabled,false);
+  const download=descendants(s).find(n=>n.download==='material-calibration.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
+  await p.e.calibrate.onclick();
+  const unresolved=plain(report);
+  Object.assign(unresolved,{selection:null,selection_json:null,material:null});
+  unresolved.calibration.status='AMBIGUOUS'; unresolved.calibration.parameters=null;
+  unresolved.calibration.diagnostics.sensitivity_evaluated=false;
+  unresolved.calibration.decision_reasons=['The eight FIT sensitivities do not resolve all unknowns.'];
+  p.emit(unresolved);
+  assert.match(visibleText(s),/Not evaluated/); assert.equal(p.e.assign.disabled,true);
+  assert.equal(p.e.selection.value,'');
+  p.e.calibrationRequest.handlers.change(); assert.equal(s.hidden,true);
 });
 
 test('permanent-stretch results show bounded coefficients and withdraw selections for every unresolved outcome', async () => {
@@ -6313,19 +6381,35 @@ test('compiled WASM joint cyclic calibration replays native identification and a
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
-    const calibrationRequest=fs.readFileSync(path.join(__dirname,'../examples/material-parallel-calibration.json'),'utf8');
+    for (const [file, simultaneous, native] of [
+      ['material-parallel-calibration.json',false,process.env.FTX_JOINT_CALIBRATION_REPLAY],
+      ['material-joint-calibration.json',true,process.env.FTX_SIMULTANEOUS_CALIBRATION_REPLAY]
+    ]) {
+    const calibrationRequest=fs.readFileSync(path.join(__dirname,'../examples',file),'utf8');
     const w=await workerModule({bindings:ftx});
     const identified=await w.send({type:'calibrate',request:231,calibrationMode:'membrane_plasticity',calibrationRequest,allowEstimates:true});
     assert.equal(identified.type,'result',identified.message);
     assert.equal(identified.result.calibration.status,'ACCEPTED');
     assert.deepEqual(identified.result,JSON.parse(ftx.material_calibrate_membrane_plasticity(calibrationRequest,true)));
-    assert.equal(identified.result.calibration.diagnostics.fixed_maxwell_branch_steps,64);
-    assert.deepEqual(identified.result.selection.record.membrane_relaxation,JSON.parse(calibrationRequest).material.membrane_relaxation);
+    if (simultaneous) {
+      assert.equal(JSON.parse(calibrationRequest).material.membrane_relaxation,undefined);
+      const c=identified.result.calibration, p=c.parameters.relaxation;
+      assert.ok(Math.abs(p.stiffness_ratio-1.4)<1e-6);
+      assert.ok(Math.abs(p.relaxation_time_seconds-.18)<1e-6);
+      assert.equal(c.diagnostics.fixed_maxwell_branch_steps,undefined);
+      assert.equal(c.diagnostics.history_steps,2*c.diagnostics.joint_relaxation.branch_steps);
+      assert.ok(c.diagnostics.excitation_pivot>1e-6);
+      assert.equal(c.predictions.length,32);
+      assert.equal(c.check_status,'ACCEPTED');
+    } else {
+      assert.equal(identified.result.calibration.diagnostics.fixed_maxwell_branch_steps,64);
+      assert.deepEqual(identified.result.selection.record.membrane_relaxation,identified.result.calibration.input.material.membrane_relaxation);
+    }
     assert.ok(identified.result.calibration.predictions.every(row=>row.parallel_history));
-    const native=process.env.FTX_JOINT_CALIBRATION_REPLAY;
     if(native) assert.deepEqual(identified.result,JSON.parse(fs.readFileSync(path.join(native,'portable.json'),'utf8')));
     const fixture={gauge_length_m:0.1,width_m:0.06,warp_axis:[0,1],cells:[2,2]};
-    const loading=[[0,0],[0.05,0.08],[0.15,0.08],[0.2,0],[0.25,0]]
+    const extension=simultaneous?0.08:0.04;
+    const loading=[[0,0],[0.05,extension],[0.15,extension],[0.2,0],[0.25,0]]
       .map(([time_s,extension_fraction])=>({time_s,extension_fraction}));
     const controls={max_step_s:0.01,max_steps:32,max_newton:100,velocity_tolerance_m_s:1e-9,force_tolerance_n:1e-6};
     const stripRequest=native?fs.readFileSync(path.join(native,'forward-request.json'),'utf8'):
@@ -6336,6 +6420,24 @@ test('compiled WASM joint cyclic calibration replays native identification and a
     assert.ok(last.maxwell_dissipation_j>0&&last.plastic_dissipation_j>0);
     assert.deepEqual(history.result,JSON.parse(ftx.material_strip_history(history.result.replay_request_json)));
     if(native) assert.deepEqual(history.result,JSON.parse(fs.readFileSync(path.join(native,'forward-report.json'),'utf8')));
+    if (simultaneous) {
+      const failed=JSON.parse(calibrationRequest);
+      failed.experiments.find(e=>e.partition==='check').samples.at(-1).second_piola_n_m[0]=1e6;
+      const rejected=await w.send({type:'calibrate',request:233,calibrationMode:'membrane_plasticity',
+        calibrationRequest:JSON.stringify(failed),allowEstimates:true});
+      assert.equal(rejected.type,'result',rejected.message);
+      assert.equal(rejected.result.calibration.status,'REJECTED');
+      assert.deepEqual(rejected.result.calibration.parameters,identified.result.calibration.parameters);
+      assert.deepEqual(rejected.result.calibration.fit,identified.result.calibration.fit);
+      assert.equal(rejected.result.selection_json,null);
+      const limited=JSON.parse(calibrationRequest); limited.max_evaluations=1;
+      const partial=await w.send({type:'calibrate',request:234,calibrationMode:'membrane_plasticity',
+        calibrationRequest:JSON.stringify(limited),allowEstimates:true});
+      assert.equal(partial.type,'result',partial.message);
+      assert.equal(partial.result.calibration.status,'BUDGET_EXHAUSTED');
+      assert.equal(partial.result.selection_json,null);
+    }
+    }
   });
 
 test('compiled WASM identifies a known plastic equilibrium and runs its frozen parallel material through the worker',
@@ -6510,7 +6612,7 @@ test('compiled WASM adaptive synthesis replays both native selected-body scenari
   });
 
 test('compiled WASM evaporating, supplied and condensing textile-water objectives replay native commands and named scenarios',
-  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY)}, async()=>{
+  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY)}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
@@ -6518,7 +6620,7 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
     const previousProgress=globalThis.ftxProgress;globalThis.ftxProgress=()=>{};
     try {
       for(const [dir,kind] of [[process.env.FTX_COUPLED_WATER_REPLAY,'initial'],[process.env.FTX_SUPPLIED_WATER_REPLAY,'supplied'],
-        [process.env.FTX_CONDENSED_WATER_REPLAY,'condensed']].filter(([dir])=>dir)) {
+        [process.env.FTX_CONDENSED_WATER_REPLAY,'condensed'],[process.env.FTX_VARIABLE_WATER_REPLAY,'variable']].filter(([dir])=>dir)) {
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8');
         const bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
         for(const name of ['single','matrix']) {
@@ -6540,6 +6642,15 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
             assert.equal(readings.textile_water_remaining_mass_kg.value,0);
           }
           assert.ok(readings.textile_water_evaporated_mass_kg.value>0);
+          if(kind==='variable') {
+            const heat=result.result.simulations.find(row=>row.key==='qualified').evaluation.result.motion.result.transient_surface.result;
+            assert.ok(heat.model.columns.length>0);
+            for(const column of heat.model.columns) {
+              assert.equal(column.schema,'ftx-dry-thermal-model/2');
+              assert.deepEqual(column.temperature_domain_c,[0,60]);
+              assert.equal(column.cell_capacity_j_m2_k,undefined);
+            }
+          }
         }
         assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
         assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);

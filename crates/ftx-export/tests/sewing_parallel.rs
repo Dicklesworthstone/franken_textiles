@@ -356,6 +356,126 @@ fn selected_cells_combine_actual_yarn_demands_before_one_complete_priced_order()
 }
 
 #[test]
+fn finite_cell_windows_reassign_actual_recipes_stitches_and_thread_inventory() {
+    let (pattern, mut options) = heterogeneous();
+    thread_inventory(&mut options);
+    // A slow-cell garment needs 9900 ms including unloading. Its qualified window now ends
+    // one millisecond too soon, so every complete garment must move to the faster configuration.
+    options["production"]["parallel"]["cells"][0]["available_until_milliseconds"] = json!(9899);
+    options["production"]["parallel"]["cells"][1]["available_until_milliseconds"] = json!(11100);
+    let typed: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let parallel = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    assert_eq!(parallel.schema, "ftx-sewing-parallel/3");
+    assert_eq!(parallel.selected.makespan_milliseconds, 11100);
+    assert_eq!(parallel.lower_bound_makespan_milliseconds, 11100);
+    assert!(parallel.optimality_proven);
+    assert!(parallel.selected.cells[0].copies.is_empty());
+    assert_eq!(parallel.selected.cells[1].copies, vec![0, 1, 2]);
+    assert_eq!(
+        parallel.selected.cells[1].available_until_milliseconds,
+        Some(11100)
+    );
+    let admission = parallel.availability.as_ref().unwrap();
+    assert!(admission.baseline_replaced);
+    assert!(
+        admission.cells[0]
+            .counts
+            .iter()
+            .all(|count| !count.feasible && count.infeasibility_proven)
+    );
+    assert!(admission.cells[1].counts[2].feasible);
+    assert_eq!(
+        serde_json::to_value(&parallel.baseline).unwrap(),
+        serde_json::to_value(&parallel.selected).unwrap()
+    );
+    assert_eq!(program.stitches.len(), 120);
+    assert!(
+        program
+            .stitches
+            .iter()
+            .all(|stitch| stitch.cell.as_deref() == Some("cell-b"))
+    );
+    let inventory = program.plan.consumables.as_ref().unwrap();
+    assert!((inventory.total_required_length_m.unwrap() - 2.4).abs() < 1e-12);
+    assert!((inventory.total_required_mass_kg.unwrap() - 57.6e-6).abs() < 1e-15);
+    assert_eq!(
+        inventory
+            .purchasing
+            .as_ref()
+            .unwrap()
+            .least_observed_independent_order_total,
+        Some(14.0)
+    );
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+    );
+    assert!(
+        parallel.search_nodes
+            <= typed
+                .production
+                .as_ref()
+                .unwrap()
+                .parallel
+                .as_ref()
+                .unwrap()
+                .max_search_nodes
+    );
+}
+
+#[test]
+fn cell_window_finish_is_inclusive_and_counts_availability_and_final_unloading() {
+    let (pattern, mut options) = fixture(1);
+    options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    options["production"]["parallel"]["cells"][0]["available_at_milliseconds"] = json!(1000);
+    options["production"]["parallel"]["cells"][0]["available_until_milliseconds"] = json!(10900);
+    let plan = build(&pattern, options.clone()).unwrap();
+    let parallel = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    assert_eq!(parallel.selected.cells[0].finish_milliseconds, Some(10900));
+    assert!(!parallel.availability.as_ref().unwrap().baseline_replaced);
+    for end in [10899, 10700] {
+        // The second limit accommodates all sewing and setup but not the final 200 ms unload.
+        options["production"]["parallel"]["cells"][0]["available_until_milliseconds"] = json!(end);
+        let refusal = build(&pattern, options.clone()).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+        assert!(refusal.message.contains(
+            "even the complete allocation over valid serial finish lower bounds is infeasible"
+        ));
+    }
+}
+
+#[test]
+fn empty_cell_window_is_idle_but_malformed_or_inexact_windows_refuse() {
+    let (pattern, mut options) = fixture(1);
+    options["production"]["parallel"]["cells"][0]["available_until_milliseconds"] = json!(0);
+    let plan = build(&pattern, options.clone()).unwrap();
+    let parallel = plan.production.unwrap().parallel.unwrap();
+    assert!(parallel.selected.cells[0].copies.is_empty());
+    assert_eq!(parallel.selected.cells[0].finish_milliseconds, None);
+    assert_eq!(parallel.selected.cells[1].copies, vec![0]);
+    assert!(parallel.availability.unwrap().baseline_replaced);
+    for (start, end) in [(1u32, 0u64), (0, 9_007_199_254_740_992)] {
+        options["production"]["parallel"]["cells"][0]["available_at_milliseconds"] = json!(start);
+        options["production"]["parallel"]["cells"][0]["available_until_milliseconds"] = json!(end);
+        assert_eq!(
+            build(&pattern, options.clone()).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+    }
+}
+
+#[test]
 fn unused_cell_thread_evidence_cannot_enter_the_selected_order_and_missing_used_coverage_stays_partial()
  {
     let (pattern, mut options) = heterogeneous();
@@ -510,6 +630,22 @@ fn independent_cells_reduce_elapsed_span_without_losing_aggregate_work() {
     assert!(!parallel.budget_exhausted);
     assert!(!parallel.hardware_execution_authorized);
     assert_eq!(parallel.intercell_transfers, 0);
+    let legacy_parallel = serde_json::to_value(parallel).unwrap();
+    assert!(legacy_parallel.get("availability").is_none());
+    assert!(
+        legacy_parallel["selected"]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|cell| cell.get("available_until_milliseconds").is_none())
+    );
+    assert!(
+        serde_json::to_value(&plan.options).unwrap()["production"]["parallel"]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|cell| cell.get("available_until_milliseconds").is_none())
+    );
     assert_eq!(production.stitch_intervals, 240);
     assert_eq!(
         serde_json::to_value(SewPlan::build(&pattern, &plan.options).unwrap()).unwrap(),
@@ -626,6 +762,91 @@ fn allocation_matches_independent_enumeration_with_availability_and_separate_fix
             }
         }
     }
+}
+
+#[test]
+fn finite_windows_match_independent_exhaustive_feasible_and_infeasible_assignments() {
+    for (end_a, end_b, available_b) in [
+        (30_000, 30_000, 0),
+        (9_899, 50_000, 1_000),
+        (50_000, 0, 0),
+        (25_500, 9_900, 0),
+        (9_899, 25_499, 0),
+        (40_000, 30_000, 10_000),
+    ] {
+        let (pattern, mut options) = fixture(3);
+        for (cell, end) in [(0, end_a), (1, end_b)] {
+            options["production"]["parallel"]["cells"][cell]["available_until_milliseconds"] =
+                json!(end);
+        }
+        options["production"]["parallel"]["cells"][1]["available_at_milliseconds"] =
+            json!(available_b);
+        let exact = (0..=3)
+            .filter_map(|a| {
+                let b = 3 - a;
+                let finish_a = serial_cost(a, 2, 5000);
+                let finish_b = if b == 0 {
+                    0
+                } else {
+                    serial_cost(b, 2, 5000) + available_b
+                };
+                ((a == 0 || finish_a <= end_a) && (b == 0 || finish_b <= end_b))
+                    .then_some(finish_a.max(finish_b))
+            })
+            .min();
+        match (exact, build(&pattern, options)) {
+            (Some(exact), Ok(plan)) => {
+                let parallel = plan.production.unwrap().parallel.unwrap();
+                assert_eq!(parallel.selected.makespan_milliseconds, exact);
+                assert_eq!(parallel.lower_bound_makespan_milliseconds, exact);
+                assert!(parallel.optimality_proven);
+                for assignment in [&parallel.baseline, &parallel.selected] {
+                    for cell in &assignment.cells {
+                        assert!(cell.finish_milliseconds.is_none_or(
+                            |finish| finish <= cell.available_until_milliseconds.unwrap()
+                        ));
+                    }
+                }
+            }
+            (None, Err(refusal)) => assert_eq!(refusal.code, RefusalCode::InvalidDocument),
+            (expected, actual) => panic!("expected {expected:?}, got {actual:?}"),
+        }
+    }
+}
+
+#[test]
+fn bounded_search_does_not_claim_cell_window_infeasibility_from_a_slow_incumbent() {
+    let (pattern, mut options) = fixture(4);
+    // Two trials with two garments would fit a 17800 ms window after complete optimization.
+    // One node per inner search retains the slower serial-copy seed; lower bounds still permit it.
+    options["production"]["parallel"]["max_search_nodes"] = json!(71);
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["available_until_milliseconds"] = json!(17800);
+        for transition in cell["handling"]["transitions"].as_array_mut().unwrap() {
+            if transition["relation"] == "different_copy" {
+                transition["milliseconds"] = json!(0);
+            }
+        }
+    }
+    let refusal = build(&pattern, options.clone()).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::NotConverged);
+    assert!(refusal.message.contains("infeasibility is not proved"));
+    options["production"]["parallel"]["max_search_nodes"] = json!(10000);
+    let parallel = build(&pattern, options)
+        .unwrap()
+        .production
+        .unwrap()
+        .parallel
+        .unwrap();
+    assert_eq!(parallel.selected.makespan_milliseconds, 17800);
+    assert_eq!(
+        parallel.selected.makespan_milliseconds,
+        serial_cost(2, 2, 0)
+    );
+    assert!(parallel.optimality_proven);
 }
 
 #[test]

@@ -228,7 +228,8 @@ bounded enthalpy inversion and transport, including steps with zero newly dissip
 ## Identify yield and hardening from acquired histories
 
 `ftx-membrane-plasticity-calibration/1` identifies the **six yield and hardening coefficients** of
-the law above. It keeps the four elastic observations and all six strain/accumulation limits fixed.
+the law above. An optional single-arm joint mode also identifies a proportional Maxwell ratio and
+time. Both modes keep the four elastic observations and all six strain/accumulation limits fixed.
 Those ten source-bearing quantities must already be present in `material.properties`, with matching
 `specimen_id`, `conditioning` and any additional acquisition conditions. A range explored by the
 optimizer is not a material validity interval or a confidence bound. Total strain and accumulation
@@ -278,6 +279,86 @@ the acquisition. The full ordinary compiler checks the completed material again 
 the accepted selection preserves the original fixed spectrum and binds both laws to the same source
 identity. A change in source evidence cannot reuse a half-law from a different material.
 
+### Jointly identify permanent stretch and one recovery arm
+
+Add `joint_relaxation` to the same calibration request when neither the six permanent coefficients
+nor one proportional Maxwell arm is known. The material needs **no provisional Maxwell coefficients**.
+The network interpretation, source, specimen/conditioning, physical strain domain and new-simulation
+initialization must still be independently declared. This synthetic declaration shows the interface;
+its numbers are search choices, not measured textile properties:
+
+```json
+{
+  "joint_relaxation": {
+    "branch_id": "identified-arm",
+    "stiffness_ratio_bounds": [0.1, 0.9],
+    "relaxation_time_bounds_seconds": [0.1, 1.2],
+    "strain_range": [[-0.2, 0.2], [-0.2, 0.2], [-0.2, 0.2]],
+    "initialization": "stress_free_reference",
+    "network": {
+      "model": "parallel_green_maxwell_plastic/1",
+      "source": "your-network-source",
+      "evidence": "estimate",
+      "method": "Qualified parallel interpretation, physical domain and initial state",
+      "conditions": {
+        "specimen_id": "your-exact-specimen",
+        "conditioning": "your-characterized-state"
+      }
+    }
+  }
+}
+```
+
+The named source must already exist in `material.sources`; every network condition must match the
+acquisition and independent elastic/domain observations. The two new bounds must be strictly ordered
+and positive. They are optimizer bounds, never a time-validity interval or uncertainty estimate.
+The domain is intersected with the original plastic and any fitted elastic domains. Initialization
+can alternatively be the source-declared `relaxed_start`; because acquisitions start at zero strain,
+these experiments do not identify which initialization a later garment should use.
+
+All **eight** parameters vary in one bounded optimization. Each objective and sensitivity probe
+replays the plastic return map and the canonical backward-Euler Maxwell recurrence over every
+recorded node, including unobserved peaks and dwells. Maxwell uses total physical Green strain;
+its stress never enters the plastic branch's yield check. There is no alternating fit that treats
+an estimated branch as independently known. The full eight-column FIT sensitivity gate detects
+local confounding, including ratio/time combinations that a single dwell interval cannot separate.
+Four deterministic interior starts replace the plastic-only algebraic starting estimate.
+Joint steps solve the damped local least-squares problem inside the parameter box, reoptimizing
+free coordinates after an endpoint is reached and releasing endpoints with an inward gradient.
+This bounded active-set solve uses the existing deterministic linear algebra and a fixed work limit;
+simple clipping of an unconstrained coupled step cannot establish its completion.
+
+The selected `parameters.relaxation` reports `stiffness_ratio` and `relaxation_time_seconds`.
+`diagnostics.joint_relaxation` retains the two sensitivities, endpoint flags and `branch_steps`;
+the ordinary excitation pivot covers all eight coefficients. Every objective, failed probe and
+final replay reserves both the plastic nodes and Maxwell branch nodes under the same existing
+work caps. No variable recovery history is reused from another trial. CHECK is evaluated only
+after both branches and the FIT diagnostics are fixed.
+
+Accepted output contains one ordinary source-locked proportional branch and the six permanent
+coefficients, all classified as estimates under the same calibration receipt. Their source records,
+uncertainty fields and independently supplied physics are not fabricated from optimizer bounds.
+If the input already contains a Maxwell spectrum, replacement requires `replace_existing: true`
+and exactly one proportional arm with the same `branch_id`; additional or directional arms refuse
+instead of being dropped. The original supplied coefficients remain in the input receipt and do
+not constrain or seed the joint fit. Omitting `joint_relaxation` preserves the previous fixed-spectrum
+and pure-plastic arithmetic and wire fields.
+
+This bounded mode does not identify multiple or directional Maxwell arms, equilibrium stiffness,
+strain domains, network topology, damage, or temperature/moisture dependence. Recorded-node replay
+does not establish continuous-path exactness or discretization convergence, and an identifiable
+synthetic example does not establish that a real experiment separates all eight parameters.
+
+The complete runnable [material-joint-calibration.json](../examples/material-joint-calibration.json)
+example contains 27 FIT and five CHECK nodes, two irregular dwells, reversals and an unobserved
+yielded peak. Independently tabulated scalar plastic observations are combined with an independent
+backward-Euler Maxwell recurrence. Its synthetic targets are yields `[10,8,5]` N/m, hardening
+`[100,50,25]` N/m, stiffness ratio `1.4` and recovery time `0.18` s. None of those eight coefficients
+is supplied as an input material property. The ordinary native commands, frozen-pattern binding
+and timed-strip consumers use the resulting complete material.
+
+### Shared acquisition, admission and publication
+
 Each experiment names a source, evidence class, unique acquisition ID, whole-history `fit` or `check`
 partition and mandatory `initialization: "pristine"`. Every history starts at zero time and zero
 strain in the unworked reference. Each subsequent node contains increasing `time_seconds`, raw
@@ -287,14 +368,14 @@ memory. Do not replace a missing lateral force with zero or confuse nominal/Cauc
 work-conjugate second-Piola sheet resultants. The acquisition protocol must explain that reduction.
 The solver replays the retained incremental nodes. It does not infer a continuous load path between
 them or establish increment-size independence. Without a parallel spectrum, time labels preserve
-acquisition order and the permanent law remains rate independent. With a fixed spectrum, actual
+acquisition order and the permanent law remains rate independent. With a parallel spectrum, actual
 elapsed seconds determine Maxwell relaxation; compressing a dwell into one longer interval generally
 changes the discrete response.
 
 Set explicit, strictly ordered `yield_bounds_n_m` and `hardening_bounds_n_m`, each three pairs in
 warp/weft/shear order. Yield lower bounds must be positive; hardening can include an explicit zero.
 `allow_estimated_material` admits independently supplied estimated elastic/domain quantities and,
-when present, the fixed spectrum and separate network qualification;
+when present, the fixed spectrum and the separate fixed/joint network qualification;
 `allow_estimated_observations` separately admits estimated or synthetic acquisitions. Neither changes
 the fitted coefficients' `estimate` classification. `replace_existing` is necessary to replace a prior
 permanent-law selector or yield/hardening observation; the original remains in the report.
@@ -308,6 +389,8 @@ cargo run --locked -p ftx-cli --bin ftx -- --json materials calibrate-membrane-p
   tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json --allow-estimates
 cargo run --locked -p ftx-cli --bin ftx-materials -- calibrate-membrane-plasticity \
   examples/material-parallel-calibration.json --allow-estimates
+cargo run --locked -p ftx-cli --bin ftx -- --json materials calibrate-membrane-plasticity \
+  examples/material-joint-calibration.json --allow-estimates
 ```
 
 The commands' final `--allow-estimates` controls **consumption** of the fitted material, separately
@@ -337,7 +420,8 @@ The report retains original evidence, source identity, every entered start, the 
 coefficients, work counts, observed-component residuals and the accepted permanent strain,
 accumulation, storage and dissipated work at each successfully replayed node. FIT sensitivity and a
 column-normalized Gram pivot describe local numerical excitation. Missing directions, indistinguishable
-yield/hardening effects or materially different residual-equivalent start solutions are `AMBIGUOUS`.
+yield/hardening or joint recovery effects, and materially different residual-equivalent start solutions,
+are `AMBIGUOUS`.
 Iteration limits and incomplete sensitivity calculations cannot produce an assignable material.
 Work exhaustion is `BUDGET_EXHAUSTED`, including exhaustion during final diagnostics or CHECK replay.
 Numerical convergence and local excitation do not prove global uniqueness or coefficient confidence.
@@ -371,6 +455,11 @@ ledgers with independent scalar/matrix recurrences; verify exact dwell-factor pr
 times; preserve the fixed spectrum and ordinary source lock; and retain FIT diagnostics when a
 held-out time history or common-domain replay fails. Fixed-spectrum work participates in the same
 bounded budget, including final CHECK refusal, and the legacy pure-law wire fields remain unchanged.
+Fresh joint-identification checks start without either branch's coefficients, compare all eight
+recovered targets and every Maxwell node against independently constructed scalar recurrences,
+retain both histories through an unobserved yielded peak, reject insufficient time excitation,
+and preserve FIT decisions under rejected or refused CHECK data. Source/domain/replacement refusal
+and charging both constitutive histories against one shared budget have focused regressions.
 The command and shared WASM checks additionally exercise ordinary frozen selection, unchanged
 pattern binding, material-hash tampering and separate acquisition/consumption admission. Browser
 state checks cover all unresolved outcomes and withdrawal of a previously assignable selection.
@@ -415,6 +504,6 @@ viscoplasticity, nonlinear plastic response, gathered compression, conditioning 
 remeshing transfer and temperature feedback to mechanics remain separate missing capabilities. Existing
 elastic or relaxation calibration commands retain their own models; permanent yield/hardening uses
 the separate existing-law identification request above, optionally with an already qualified fixed
-parallel spectrum. Joint identification of unknown spectrum parameters and permanent coefficients
-remains a separate task. The linen/leather/knit substitution and
+parallel spectrum or jointly identified single proportional arm. Joint identification of multiple
+or directional unknown Maxwell arms remains open. The linen/leather/knit substitution and
 independent garment gates need measured specimens, not the synthetic fixture's values.

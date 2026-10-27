@@ -186,6 +186,130 @@ class PublicProductTests(unittest.TestCase):
         self.assertEqual(evidence[book["quotes"][0]["source_sha256"] + ".json"], raw(p))
 
 
+class FabricMartTests(unittest.TestCase):
+    """Synthetic response fragments reproduce a reviewed public template, never live offers."""
+    def inputs(self, inventory=90, available=True):
+        url = "https://fabricmartfabrics.com/products/synthetic-quarter-yard-knit"
+        e = dict(offer_id="synthetic/fabricmart", material_id="synthetic/knit", material_sha256="a" * 64,
+                 supplier="Synthetic Fabric Mart fixture", sku="SYNTHETIC", quantity=0.25,
+                 unit="linear_yard", minimum_quantity=1, order_increment=0.25, currency="USD",
+                 region="US", quality="synthetic", terms="synthetic-no-purchase",
+                 adapter="fabricmart_decimal_html_v1", source_url=url, public_url=url + ".json",
+                 product_id=7, variant_id=42, variant_title="Default Title", basis_source=url,
+                 basis_note="Synthetic fixture; not observed inventory", basis_reviewed_on="2026-10-13",
+                 inventory_basis="displayed_yards", specifications={"SKU": "SYNTHETIC",
+                     "Content": "Nylon/elastane", "Width": '58"', "Type": "Knits - Activewear"})
+        variant = dict(id=42, sku=e["sku"], title="Default Title", price=625, available=available,
+                       inventory_management="shopify", inventory_policy="deny", inventory_quantity=inventory)
+        product = dict(id=7, variants=[variant], tags=["decimal"])
+        public = dict(product=dict(id=7, variants=[dict(variant, product_id=7, price="6.25",
+            price_currency="USD", quantity_rule={"min": 1, "max": None, "increment": 1},
+            quantity_price_breaks=[])]))
+        html = self.page(e, product, inventory, available)
+        return e, product, public, html
+
+    @staticmethod
+    def page(e, product, inventory=90, available=True):
+        stock = f"In stock ({inventory // 4} yards available)" if available else "Out of stock"
+        specs = "".join(f"<li><strong>{k}:</strong>{v}</li>" for k, v in e["specifications"].items())
+        return (f'<section id="product-7" data-product-id="7" data-variant-inventory="{inventory}">'
+                f'<script class="product-json" type="application/json">{json.dumps(product)}</script>'
+                '<span class="price-item--regular-yards">$25.00 per yard</span>'
+                f'<p class="stock-info"><span class="stock-dot"></span>{stock}</p>'
+                '<label for="qty-7">Quantity</label>'
+                '<label for="qty-7">Quantity : 1 yard, can only be changed in increments of 0.25.</label>'
+                '<input name="properties[_decimal]" value="true">'
+                '<input name="properties[_step]" value="0.25">'
+                '<input name="properties[_minimum_qty]" value="1">'
+                f'<ul class="product-specification">{specs}</ul></section>').encode()
+
+    def test_quarter_yard_price_and_explicit_display_inventory_policy(self):
+        e, _, public, html = self.inputs()
+        q, receipt = r.extract_fabricmart(e, html, raw(public), html, NOW, intraday=True)
+        self.assertEqual((q["price"], q["quantity"], q["minimum_quantity"], q["order_increment"]),
+                         (6.25, 0.25, 1, 0.25))
+        self.assertEqual(q["price"] / q["quantity"], 25)
+        self.assertEqual(q["available_quantity"], 22)
+        self.assertEqual(receipt["observed"]["inventory_yards"], 22.5)
+        self.assertEqual(receipt["inventory_display_difference_yards"], 0.5)
+        self.assertEqual(receipt["manifest_entry"]["inventory_basis"], "displayed_yards")
+        self.assertNotIn("maximum_continuous_quantity", q)
+        self.assertEqual(q["source_sha256"], hashlib.sha256(html).hexdigest())
+        self.assertEqual(q["material_sha256"], e["material_sha256"])
+        self.assertEqual(q["observed_at"], "2026-10-13T12:00:00.000000Z")
+
+    def test_explicit_zero_stock_survives_and_never_becomes_unknown(self):
+        e, _, public, html = self.inputs(inventory=0, available=False)
+        q, _ = r.extract_fabricmart(e, html, raw(public), html, NOW)
+        self.assertEqual(q["available_quantity"], 0)
+        self.assertFalse(q["available"])
+        for inventory, available in ((0, True), (90, False)):
+            e, _, public, html = self.inputs(inventory, available)
+            with self.assertRaises(ValueError):
+                r.extract_fabricmart(e, html, raw(public), html, NOW)
+
+    def test_quantity_price_identity_and_inventory_disagreements_refuse(self):
+        e, product, public, html = self.inputs()
+        changes = [(b"22 yards", b"90 yards"), (b"$25.00", b"$6.25"),
+                   (b'value="0.25"', b'value="1"'), (b'"deny"', b'"continue"'),
+                   (b'data-variant-inventory="90"', b'data-variant-inventory="92"'),
+                   (b'"id": 42', b'"id": 43'), (b'58"', b'60"'),
+                   (b'"inventory_quantity": 90', b'"inventory_quantity": -1')]
+        for old, new in changes:
+            changed = html.replace(old, new)
+            self.assertNotEqual(changed, html)
+            with self.subTest(old=old), self.assertRaises(ValueError):
+                r.extract_fabricmart(e, changed, raw(public), changed, NOW)
+        for key, value in (("price_currency", "CAD"), ("price", "7.00"),
+                           ("sku", "OTHER"), ("title", "Sample"), ("product_id", 8),
+                           ("quantity_price_breaks", [{"price": "5"}])):
+            changed = copy.deepcopy(public); changed["product"]["variants"][0][key] = value
+            with self.subTest(field=key), self.assertRaises(ValueError):
+                r.extract_fabricmart(e, html, raw(changed), html, NOW)
+        product["variants"].append(dict(product["variants"][0], id=43))
+        ambiguous = self.page(e, product)
+        with self.assertRaises(ValueError):
+            r.extract_fabricmart(e, ambiguous, raw(public), ambiguous, NOW)
+
+    def test_entire_bracket_refuses_later_valid_but_changed_stock(self):
+        e, _, public, before = self.inputs()
+        _, _, _, after = self.inputs(inventory=88)
+        with self.assertRaisesRegex(ValueError, "changed during observation"):
+            r.extract_fabricmart(e, before, raw(public), after, NOW)
+
+    def test_missing_or_unscoped_html_cannot_supply_stock_or_specifications(self):
+        e, _, public, html = self.inputs()
+        for changed in (html + html, html.replace(b'stock-info', b'other-info'),
+                        html.replace(b'</section>', b''),
+                        html.replace(b'<section id="product-7"', b'<section id="product-8"')):
+            with self.subTest(html=changed[:40]), self.assertRaises(ValueError):
+                r.extract_fabricmart(e, changed, raw(public), changed, NOW)
+
+    def test_manifest_requires_exact_source_material_and_inventory_policy(self):
+        e, _, _, _ = self.inputs()
+        for key, value in (("source_url", "https://example.invalid/products/sheet"),
+                           ("material_sha256", ""), ("quantity", 1), ("minimum_quantity", 0.25),
+                           ("inventory_basis", "automatically_choose_max"), ("variant_id", True)):
+            changed = dict(e); changed[key] = value
+            with self.subTest(field=key), self.assertRaises(ValueError):
+                r.validate_fabricmart(changed)
+
+    def test_refresh_is_read_only_bracketed_and_archives_all_source_bytes(self):
+        e, _, public, html = self.inputs()
+        calls = []
+        def get(url, *, accept):
+            calls.append((url, accept))
+            self.assertNotIn("cart", url)
+            return raw(public) if url.endswith(".json") else html
+        book, evidence = r.refresh({"schema": "ftx-textile-refresh/1", "offers": [e]},
+                                   get, lambda: NOW, intraday=True)
+        self.assertEqual(calls, [(e["source_url"], "text/html"),
+            (e["public_url"], "application/json"), (e["source_url"], "text/html")])
+        self.assertEqual(book["quotes"][0]["available_quantity"], 22)
+        self.assertEqual(evidence[hashlib.sha256(html).hexdigest() + ".html"], html)
+        self.assertEqual(evidence[hashlib.sha256(raw(public)).hexdigest() + ".json"], raw(public))
+
+
 class RefreshTests(unittest.TestCase):
     def extract(self, e=None, p=None, before=CART, after=CART, now=NOW):
         return r.extract(e or entry(), raw(p or product()), before, after, now)

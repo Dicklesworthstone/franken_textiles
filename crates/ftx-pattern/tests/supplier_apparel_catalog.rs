@@ -13,10 +13,10 @@ fn supplier_catalog() -> Catalog {
 }
 
 #[test]
-fn twelve_supplier_records_enter_the_shared_catalog_and_freeze_without_invented_physics() {
+fn supplier_records_enter_the_shared_catalog_and_freeze_without_invented_physics() {
     let source = supplier_catalog();
     let builtin = Catalog::builtin().unwrap();
-    assert_eq!(source.materials.len(), 12);
+    assert_eq!(source.materials.len(), 13);
     for record in &source.materials {
         let selected = builtin
             .resolve(&Selection {
@@ -39,10 +39,47 @@ fn twelve_supplier_records_enter_the_shared_catalog_and_freeze_without_invented_
             assert!(!observation.conditions.is_empty());
             assert_eq!(
                 record.sources[&observation.source].accessed_on,
-                "2026-10-18"
+                if record.id == "fabricmart/DCC-3844" {
+                    "2026-10-27"
+                } else {
+                    "2026-10-18"
+                }
             );
         }
     }
+}
+
+#[test]
+fn fabricmart_quarter_yard_manifest_locks_exact_knit_without_inventing_composition_or_usable_width() {
+    let catalog = supplier_catalog();
+    let material = catalog
+        .resolve(&Selection {
+            id: "fabricmart/DCC-3844".into(),
+            ..Selection::default()
+        })
+        .unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../docs/examples/fabricmart-stock-refresh.json"
+    ))
+    .unwrap();
+    let offer = &manifest["offers"][0];
+    assert_eq!(offer["material_sha256"], material.sha256());
+    assert_eq!(offer["sku"], material.authored().structure["supplier_sku"]);
+    assert_eq!(offer["quantity"], 0.25);
+    assert_eq!(offer["minimum_quantity"], 1);
+    assert_eq!(offer["order_increment"], 0.25);
+    assert_eq!(offer["inventory_basis"], "displayed_yards");
+    assert_eq!(material.material().form, Form::Knit);
+    assert!(material.material().composition.is_empty());
+    assert!(!material.material().composition_complete);
+    assert_eq!(material.authored().properties["width"].value, 58.0);
+    assert_eq!(material.material().properties["width"].value, 58.0 * 0.0254);
+    assert_eq!(material.material().properties.len(), 1);
+    let empty = Catalog::from_json(r#"{"schema":"ftx-textile-catalog/1","materials":[]}"#).unwrap();
+    assert_eq!(
+        empty.resolve(&material.frozen_selection()).unwrap().sha256(),
+        material.sha256()
+    );
 }
 
 #[test]

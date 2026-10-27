@@ -179,6 +179,19 @@ jobs without a named cell; legacy previews retain their bytes. Portable native/b
 CLI adapters use the same renderer; CLI files are create-new. The focused regression checks actual
 2.5-versus-5 mm needle spacing, feed, full-job revalidation and escaped labels.
 
+**Finite cell availability** (`ftx-pb2.2.7`). Optional source-qualified
+`available_until_milliseconds` limits complete cell finish, including initial setup/loading,
+once-ceiled feed and final unloading. Incumbent allocation admits only whole cell/count schedules
+inside their inclusive windows; the independent lower-bound allocation still considers unfinished
+searches whose lower bounds fit. A missing feasible incumbent is unresolved when the relaxed
+allocation remains possible, and definitively refused only when valid lower bounds exclude every
+complete allocation. An unavailable first-cell seed is explicitly replaced by the selected feasible
+assignment. Parallel `/3` retains bounded count/admission receipts and supplied ends; no-window
+schemas and serialization stay unchanged. Actual cell recipes, stitches, yarn inventory and material
+studies follow the constrained assignment. Reconstruction shares the existing work reservation.
+Tests: exhaustive and bounded `sewing_parallel`, native/portable `sewing_production_workflow`.
+Declared windows do not imply calendar reservations, shared labor, preemption or physical execution.
+
 **Planar sewing access** (`passes[].access`). Optional `planar_disk_sweep/1` requires an explicit
 flat assembly and an admitted source process qualification. Full machine and qualification hashes
 bind the independent tool/fixture acquisition to the current configuration and material stack.
