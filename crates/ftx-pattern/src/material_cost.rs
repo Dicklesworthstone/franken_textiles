@@ -23,7 +23,8 @@ pub enum SaleUnit {
     Kilogram,
 }
 
-/// Dimension of the purchase requirement; no mass/area/length conversion is inferred.
+/// Dimension of the purchase requirement. Source-qualified yarn linear density can supply a
+/// length requirement from a kilogram offer; no sheet/fill mass-to-area conversion is inferred.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Basis {
@@ -180,6 +181,10 @@ pub struct Offer {
     pub order_quantity: f64,
     /// Acquired area/mass/length after rounding, in the scope's canonical unit.
     pub acquired: f64,
+    /// Admitted exact-yarn density used only when a kilogram offer supplies requested metres.
+    /// The enclosing sample's material hash binds the original observation, units and evidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yarn_linear_density_kg_m: Option<f64>,
     /// Merchandise cost on the quote's stated terms, not a checkout or landed-cost guarantee.
     pub order_cost: f64,
     /// Source-observed threshold reached by the complete rounded order. None retains the base
@@ -217,6 +222,9 @@ pub enum ExclusionReason {
     InsufficientContinuousLength,
     /// The sale unit cannot supply the requested area/mass/length dimension.
     IncompatibleBasis,
+    /// A kilogram yarn offer cannot supply metres without an admitted, representable positive
+    /// linear-density conversion from the exact selected material. Length offers remain usable.
+    YarnLengthMassConversionUnavailable,
 }
 
 /// Retained source observation for an excluded order, without reviving an older price.
@@ -501,8 +509,22 @@ impl Quote {
     }
 
     fn offer(&self, material: &ResolvedMaterial, scope: &Scope) -> Result<Option<Offer>, Refusal> {
+        let yarn_linear_density_kg_m = if self.unit == SaleUnit::Kilogram
+            && scope.basis == Basis::Length
+            && material.material().form == crate::materials::Form::Yarn
+        {
+            Some(material.yarn_linear_density_kg_m()?)
+        } else {
+            None
+        };
         let factor = match (self.unit, scope.basis) {
             (SaleUnit::SquareMeter, Basis::Area) | (SaleUnit::Kilogram, Basis::Mass) => 1.0,
+            (SaleUnit::Kilogram, Basis::Length) => {
+                let Some(density) = yarn_linear_density_kg_m else {
+                    return Ok(None);
+                };
+                positive("yarn mass-to-length conversion", 1.0 / density)?
+            }
             (SaleUnit::LinearYard | SaleUnit::LinearMeter, Basis::Length) => self.linear_unit_m(),
             (SaleUnit::LinearYard | SaleUnit::LinearMeter, Basis::Area) => {
                 let width =
@@ -552,6 +574,7 @@ impl Quote {
             rate,
             order_quantity,
             acquired,
+            yarn_linear_density_kg_m,
             order_cost,
             applied_price_break,
             quantity_sufficiency_observed: self.available_quantity.is_some(),
@@ -686,8 +709,9 @@ impl QuoteBook {
             .collect())
     }
 
-    /// Filter to a reproducible, like-for-like sample. Only area pricing uses material width;
-    /// length pricing uses exact linear sale-unit conversion without inventing a width or density.
+    /// Filter to a reproducible, like-for-like sample. Area pricing uses material width; length
+    /// pricing uses exact linear units or admitted yarn density for kilogram offers. Unavailable
+    /// yarn conversions exclude only those mass offers; they do not invalidate length offers.
     /// Missing/stale/out-of-stock observations produce an explicitly empty sample, never zero cost.
     ///
     /// # Errors
@@ -735,6 +759,9 @@ impl QuoteBook {
             if q.material_id != material.authored().id {
                 continue;
             }
+            let yarn_conversion = q.unit == SaleUnit::Kilogram
+                && scope.basis == Basis::Length
+                && material.material().form == crate::materials::Form::Yarn;
             // Apply expiry AFTER selecting the latest observation: expired prices must not revive
             // an older unbounded quote. Do this before width/order arithmetic for ineligible data.
             let reason = if q
@@ -775,6 +802,16 @@ impl QuoteBook {
             } else {
                 None
             };
+            let reason = reason.or_else(|| {
+                (yarn_conversion
+                    && material
+                        .yarn_linear_density_kg_m()
+                        .and_then(|density| {
+                            positive("yarn mass-to-length conversion", 1.0 / density)
+                        })
+                        .is_err())
+                .then_some(ExclusionReason::YarnLengthMassConversionUnavailable)
+            });
             if let Some(reason) = reason {
                 excluded_offers.push(ExcludedOffer {
                     quote: q.clone(),
@@ -790,7 +827,20 @@ impl QuoteBook {
                 });
                 continue;
             }
-            match q.offer(material, scope)? {
+            let offer = match q.offer(material, scope) {
+                Ok(offer) => offer,
+                Err(_) if yarn_conversion => {
+                    excluded_offers.push(ExcludedOffer {
+                        quote: q.clone(),
+                        reason: ExclusionReason::YarnLengthMassConversionUnavailable,
+                        required_order_quantity: None,
+                        required_continuous_length_m: None,
+                    });
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            match offer {
                 Some(offer)
                     if q.available_quantity
                         .is_none_or(|limit| within_capacity(offer.order_quantity, limit)) =>
@@ -1830,5 +1880,193 @@ mod tests {
             .remove("width");
         let narrow = catalog().unwrap().resolve(&selection).unwrap();
         assert!(book(vec![quote()]).evaluate(&narrow, &scope()).is_err());
+    }
+
+    fn yarn(value: f64, unit: &str, evidence: &str, consent: bool) -> ResolvedMaterial {
+        let selection: Selection = serde_json::from_value(serde_json::json!({
+            "id":"synthetic-yarn", "allow_estimates":consent,
+            "record":{"id":"synthetic-yarn","name":"Synthetic yarn","form":"yarn",
+                "sources":{"test":{"reference":"test:yarn-density","accessed_on":"2026-10-13",
+                    "note":"Invented numerical fixture; no empirical textile claim"}},
+                "properties":{"yarn_linear_density":{"value":value,"unit":unit,
+                    "evidence":evidence,"source":"test","method":"Synthetic nominal density"}}}
+        }))
+        .unwrap();
+        crate::materials::Catalog::builtin()
+            .unwrap()
+            .resolve(&selection)
+            .unwrap()
+    }
+
+    fn yarn_offers(material: &ResolvedMaterial) -> (Quote, Quote, Scope) {
+        let mut kilograms = quote();
+        kilograms.material_id = material.authored().id.clone();
+        kilograms.material_sha256 = Some(material.sha256().into());
+        kilograms.offer_id = "kilograms".into();
+        kilograms.sku = "mass-thread".into();
+        kilograms.unit = SaleUnit::Kilogram;
+        kilograms.price = 1.0;
+        kilograms.quantity = 0.01;
+        kilograms.minimum_quantity = 0.006;
+        kilograms.order_increment = 0.002;
+        kilograms.available_quantity = Some(0.008);
+        kilograms.price_breaks = vec![PriceBreak {
+            minimum_quantity: 0.008,
+            price: 0.8,
+            sku: None,
+        }];
+        let mut metres = kilograms.clone();
+        metres.offer_id = "metres".into();
+        metres.sku = "length-thread".into();
+        metres.unit = SaleUnit::LinearMeter;
+        metres.price = 2.0;
+        metres.quantity = 1000.0;
+        metres.minimum_quantity = 100.0;
+        metres.order_increment = 100.0;
+        metres.available_quantity = Some(400.0);
+        metres.maximum_continuous_quantity = Some(400.0);
+        metres.price_breaks.clear();
+        let mut request = scope();
+        request.basis = Basis::Length;
+        request.requirement = 350.0;
+        request.continuous_length_m = Some(50.0);
+        request.require_observed_quantity = true;
+        (kilograms, metres, request)
+    }
+
+    #[test]
+    fn yarn_kilogram_offers_round_and_select_tiers_in_original_mass_units() {
+        let material = yarn(20.0, "tex", "published", false);
+        let (kilograms, metres, request) = yarn_offers(&material);
+        let result = book(vec![kilograms.clone(), metres.clone()])
+            .evaluate(&material, &request)
+            .unwrap();
+        assert_eq!(result.offers.len(), 2);
+        let mass = &result.offers[0];
+        assert_eq!(mass.quote.unit, SaleUnit::Kilogram);
+        assert!((mass.yarn_linear_density_kg_m.unwrap() - 0.00002).abs() < 1e-18);
+        assert!((mass.order_quantity - 0.008).abs() < 1e-15);
+        assert!((mass.acquired - 400.0).abs() < 1e-10);
+        assert!((mass.order_cost - 0.64).abs() < 1e-12);
+        assert!((mass.rate - 0.0016).abs() < 1e-12);
+        assert_eq!(
+            mass.applied_price_break.as_ref().unwrap().minimum_quantity,
+            0.008
+        );
+        assert!(mass.quantity_sufficiency_observed);
+        assert_eq!(mass.within_observed_continuous_limit, None);
+        assert_eq!(result.offers[1].yarn_linear_density_kg_m, None);
+        assert!(mass.order_cost < result.offers[1].order_cost);
+        // The nominal 350 m weighs 0.007 kg, but a complete rounded order needs 0.008 kg.
+        let mut short = kilograms.clone();
+        short.available_quantity = Some(0.007);
+        let result = book(vec![short, metres.clone()])
+            .evaluate(&material, &request)
+            .unwrap();
+        assert_eq!(result.offers.len(), 1);
+        assert_eq!(
+            result.excluded_offers[0].reason,
+            ExclusionReason::InsufficientQuantity
+        );
+        assert_eq!(
+            result.excluded_offers[0].required_order_quantity,
+            Some(0.008)
+        );
+        // A mass-derived total length does not establish any uninterrupted source segment.
+        let mut strict = request;
+        strict.require_observed_continuous_length = true;
+        let result = book(vec![kilograms, metres])
+            .evaluate(&material, &strict)
+            .unwrap();
+        assert_eq!(result.offers.len(), 1);
+        assert_eq!(
+            result.excluded_offers[0].reason,
+            ExclusionReason::UnknownContinuousLength
+        );
+    }
+
+    #[test]
+    fn missing_unapproved_or_unrepresentable_yarn_density_withholds_only_mass_offers() {
+        for material in [
+            yarn(20.0, "tex", "estimate", false),
+            yarn(0.0, "kg/m", "published", false),
+            yarn(1e-320, "kg/m", "published", false),
+            yarn(1e308, "kg/m", "published", false),
+        ] {
+            let (kilograms, metres, request) = yarn_offers(&material);
+            let result = book(vec![kilograms, metres])
+                .evaluate(&material, &request)
+                .unwrap();
+            assert_eq!(result.offers.len(), 1);
+            assert_eq!(result.offers[0].quote.offer_id, "metres");
+            assert_eq!(
+                result.excluded_offers[0].reason,
+                ExclusionReason::YarnLengthMassConversionUnavailable
+            );
+        }
+        let original = yarn(180.0, "denier", "published", false);
+        let mut selection = original.frozen_selection();
+        selection.expected_sha256 = None;
+        selection.record.as_mut().unwrap().properties.clear();
+        let missing = crate::materials::Catalog::builtin()
+            .unwrap()
+            .resolve(&selection)
+            .unwrap();
+        let (kilograms, metres, request) = yarn_offers(&missing);
+        let result = book(vec![kilograms, metres])
+            .evaluate(&missing, &request)
+            .unwrap();
+        assert_eq!(result.offers.len(), 1);
+        assert_eq!(
+            result.excluded_offers[0].reason,
+            ExclusionReason::YarnLengthMassConversionUnavailable
+        );
+        assert!((original.yarn_linear_density_kg_m().unwrap() - 0.00002).abs() < 1e-18);
+        // Consent follows this exact material selection, independently of process evidence.
+        let admitted = yarn(20.0, "tex", "estimate", true);
+        let (kilograms, _, request) = yarn_offers(&admitted);
+        assert_eq!(
+            book(vec![kilograms])
+                .evaluate(&admitted, &request)
+                .unwrap()
+                .offers
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn yarn_conversion_is_snapshot_bound_and_never_applies_to_sheet_or_fill_density() {
+        let original = yarn(20.0, "tex", "published", false);
+        let changed = yarn(30.0, "tex", "published", false);
+        let (kilograms, _, request) = yarn_offers(&original);
+        let stale = book(vec![kilograms]).evaluate(&changed, &request).unwrap();
+        assert!(stale.offers.is_empty());
+        assert_eq!(
+            stale.excluded_offers[0].reason,
+            ExclusionReason::MaterialSnapshotMismatch
+        );
+        for form in [
+            crate::materials::Form::Woven,
+            crate::materials::Form::Fill,
+            crate::materials::Form::Fiber,
+        ] {
+            let mut selection = original.frozen_selection();
+            selection.expected_sha256 = None;
+            selection.record.as_mut().unwrap().form = form;
+            let other = crate::materials::Catalog::builtin()
+                .unwrap()
+                .resolve(&selection)
+                .unwrap();
+            let (kilograms, metres, request) = yarn_offers(&other);
+            let result = book(vec![kilograms, metres])
+                .evaluate(&other, &request)
+                .unwrap();
+            assert_eq!(result.offers.len(), 1);
+            assert_eq!(
+                result.excluded_offers[0].reason,
+                ExclusionReason::IncompatibleBasis
+            );
+        }
     }
 }

@@ -192,13 +192,40 @@ pub struct Report {
 /// Nominal flux at explicitly supplied pressures through an already qualified fixed network.
 #[derive(Clone, Copy, Debug)]
 pub struct PotentialFlux {
-    /// Potential latent heat in W/m²; actual evaporation still needs a liquid/energy owner.
+    /// Potential latent heat in W/m²; actual phase change still needs a liquid/energy owner.
+    /// The explicit signed API uses positive outward and negative inward transfer.
     pub heat_w_m2: f64,
     /// Potential water transport in kg/(m²·s), using the network's declared latent heat.
     pub mass_kg_m2_s: f64,
 }
 
 impl Report {
+    /// Reuse the fixed network with a signed pressure difference. Positive flux leaves the
+    /// inside boundary; negative flux enters it. The caller must independently qualify reverse
+    /// transport and own phase mass and enthalpy; a measured forward Ret alone does not do so.
+    /// Existing positive-only stack requests and `flux_at_pressures` retain their refusal rules.
+    ///
+    /// # Errors
+    /// Negative/nonfinite pressures, invalid coefficients, or unrepresentable nonzero flux.
+    pub fn signed_flux_at_pressures(
+        &self,
+        inside_pa: f64,
+        outside_pa: f64,
+    ) -> Result<PotentialFlux, Refusal> {
+        if inside_pa < 0. || outside_pa < 0. {
+            return Err(invalid("signed vapor flux needs nonnegative pressures"));
+        }
+        if inside_pa < outside_pa {
+            let flux = self.flux_at_pressures(outside_pa, inside_pa)?;
+            Ok(PotentialFlux {
+                heat_w_m2: -flux.heat_w_m2,
+                mass_kg_m2_s: -flux.mass_kg_m2_s,
+            })
+        } else {
+            self.flux_at_pressures(inside_pa, outside_pa)
+        }
+    }
+
     /// Reuse this canonical network at new prescribed pressures. This does not qualify any
     /// temperature dependence or liquid boundary; the calling model must supply that evidence.
     ///

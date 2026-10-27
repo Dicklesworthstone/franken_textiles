@@ -1141,6 +1141,50 @@ test('batch sewing displays production ordering, scoped copy dependencies and ac
   }
 });
 
+test('qualified handling displays joint timing, physical copies and source evidence without a setup-only optimum claim', async () => {
+  const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
+  const order={baseline_order:['0/join','0/finish'],selected_order:['0/join','0/finish'],
+    baseline_changes:{needle_changes:0,thread_changes:2,total_changes:2},
+    selected_changes:{needle_changes:0,thread_changes:2,total_changes:2},optimality_proven:true,
+    budget_exhausted:false,search_nodes:4,timing:{baseline_setup_milliseconds:6500,
+      selected_setup_milliseconds:6500,feed_and_setup_seconds:30.5},
+    handling_timing:{baseline_handling_milliseconds:10600,selected_handling_milliseconds:10600,
+      baseline_modeled_production_seconds:41.1,selected_modeled_production_seconds:41.1}};
+  const plan={options:{production:{ordering:{initial_setup:{}},handling:{source:{note:'<timed garment handling>'}}}},
+    seams:[{pass:{id:'join',seam:'side',needle:'N',thread:'A',after:[]}},
+      {pass:{id:'finish',seam:'side',needle:'N',thread:'B',after:['join']}}],
+    production:{production_copies:1,feed_seconds:24,ordering:order,
+      operations:[{id:'0/join',seam_index:0,after:[]},{id:'0/finish',seam_index:1,after:['0/join']}],
+      handling:{selected:{steps:[{from:null,to:'0/join',milliseconds:100},
+        {from:'0/join',to:'0/finish',milliseconds:10300},{from:'0/finish',to:null,milliseconds:200}]}}}};
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('handled'); row.sewing=outcome(plan);
+    const study=studyReport([row]);
+    const report=op==='sew'?{stitches:[],plan}:op==='study'?study:{...scenarioReport(),manufacturing:study};
+    await p.e[op].onclick(); p.emit(report);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    assert.deepEqual(plain(table('serial production durations').children[3].children.map(n=>n.textContent)),
+      ['Selected order','24','6.5','10.6','41.1']);
+    assert.deepEqual(plain(table('selected garment handling').children[2].children.map(n=>n.textContent)),
+      ['Initial loading','0/join','100']);
+    assert.deepEqual(plain(table('selected garment handling').children[4].children.map(n=>n.textContent)),
+      ['0/finish','Final unloading','200']);
+    assert.match(visibleText(s),/joint optimum does not prove the setup-only minimum/);
+    const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('handling evidence, exact qualifications and complete timelines'));
+    source.open=true; source.handlers.toggle(); assert.match(visibleText(source),/<timed garment handling>/);
+    if(op==='sew') {
+      const summary=JSON.parse(s.children[1].textContent);
+      assert.equal(summary.ordering_objective,'minimize_production_time');
+      assert.equal(summary.handling_seconds,10.6); assert.equal(summary.modeled_production_seconds,41.1);
+      assert.match(visibleText(s),/Minimum declared setup plus handling duration proven/);
+      assert.doesNotMatch(visibleText(s),/Minimum declared setup duration proven/);
+    }
+  }
+  p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
 test('partial sewing spans display both source sides without an ordering policy or new geometry', async () => {
   const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions');
   await p.e.sew.onclick();
@@ -3173,6 +3217,28 @@ function selectedThreadPlan() {
         least_observed_independent_order_total:6,unavailable_reason:null}}};
 }
 
+test('consumed thread mass preserves missing density while length inventory stays available', async()=>{
+  const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions');
+  const plan=selectedThreadPlan(), r=plan.consumables;
+  r.complete_mass_coverage=true; r.total_required_mass_kg=0.0000816;
+  for(const yarn of r.material_requirements) yarn.mass={linear_density_kg_m:0.000024,
+    required_mass_kg:yarn.material_sha256==='exact-needle'?0.0000528:0.0000288};
+  await p.e.sew.onclick(); p.emit({stitches:[],plan});
+  const s=section(p,'sew');
+  const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+  assert.deepEqual(plain(table('consumed thread mass').children[2].children.map(n=>n.textContent)),
+    ['Complete qualified yarn density','0.0000816']);
+  assert.match(visibleText(s),/Consumed thread includes the declared allowances and is not retained assembly mass/);
+  r.complete_mass_coverage=false; r.total_required_mass_kg=null;
+  r.material_requirements[1].mass=null; r.material_requirements[1].mass_unavailable_reason='Exact yarn density not qualified';
+  await p.e.sew.onclick(); p.emit({stitches:[],plan});
+  assert.deepEqual(plain(table('consumed thread mass').children[2].children.map(n=>n.textContent)),
+    ['Incomplete or unavailable density','Unknown']);
+  assert.match(visibleText(table('exact yarn length and mass requirements')),/Exact yarn density not qualified/);
+  assert.match(visibleText(s),/Complete channel coverage/); assert.match(visibleText(s),/3.4/);
+  p.e.sewOptions.handlers.change(); assert.equal(s.hidden,true);
+});
+
 test('production thread inventory displays batch and per-garment quantities without repricing', async()=>{
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const row=studyRow('three garments'), plan=selectedThreadPlan(), report=plan.consumables;
@@ -3194,7 +3260,7 @@ test('production thread inventory displays batch and per-garment quantities with
   assert.deepEqual(plain(table('three garments: thread consumption per garment before production aggregation').children[2].children.map(n=>n.textContent)),
     ['hem <selected>','needle','10','2','0.1','0.1','2.2']);
   assert.equal(table('three garments: selected operation and thread channel requirements').children[2].children[5].textContent,'6.6');
-  assert.match(visibleText(s),/feed duration and setup schedules still describe one garment/);
+  assert.match(visibleText(s),/Explicit production schedules report their complete batch timing/);
   assert.match(visibleText(s),/without multiplying its splice-free length/);
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
@@ -3780,6 +3846,79 @@ test('compiled WASM measured treatment and batch sewing replay through the actua
       assert.equal(report.selected.operations.at(-1).occupied_after[id],0);
       assert.equal(report.fixture_geometry_and_access_validated,false);
     }
+  });
+
+test('compiled WASM executes handling-aware batch timing through the actual sewing and study workers',
+  {skip:process.env.FTX_REAL_WASM!=='1'}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const pattern=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-sewing-pattern.json'),'utf8');
+    const options=fs.readFileSync(path.join(__dirname,'../examples/sewing-handling-options.json'),'utf8');
+    const w=await workerModule({bindings:ftx});
+    const result=await w.send({type:'sew',request:201,pattern,options});
+    assert.equal(result.type,'result',result.message);
+    assert.deepEqual(result.result,JSON.parse(ftx.sew_stitches(pattern,options)));
+    const plan=result.result.plan, batch=plan.production;
+    assert.equal(plan.schema,'ftx-sewing-plan/15'); assert.equal(result.result.stitches.length,240);
+    assert.deepEqual(batch.ordering.selected_order,['0/join','0/reinforce','1/join','1/reinforce','2/join','2/reinforce']);
+    assert.equal(batch.ordering.timing.selected_setup_milliseconds,6500);
+    assert.equal(batch.ordering.handling_timing.selected_handling_milliseconds,10600);
+    assert.ok(Math.abs(batch.ordering.handling_timing.selected_modeled_production_seconds-41.1)<1e-12);
+    assert.equal(batch.workholding.selected.peak_occupancy['holding-jig'],1);
+    assert.equal(batch.handling.selected.steps.length,7);
+    const studyRequest=JSON.stringify({schema:'ftx-material-study/1',
+      variants:[{key:'retained',changes:{schema:'ftx-material-bindings/1',default:JSON.parse(pattern).fabric.material}}],
+      sewing:JSON.parse(options),comparison:{basis:'nominal',required_consumers:['sewing'],
+        objectives:[{metric:'sewing_modeled_production_seconds',direction:'minimize'}]}});
+    const study=await w.send({type:'study',request:202,pattern,studyRequest});
+    assert.equal(study.type,'result',study.message);
+    assert.deepEqual(study.result,JSON.parse(ftx.material_study(pattern,studyRequest)));
+    assert.deepEqual(study.result.comparison.frontier,['retained']);
+    assert.equal(study.result.alternatives[0].metrics.sewing_handling_seconds,10.6);
+    const row=study.result.alternatives[0];
+    assert.deepEqual(row.sewing.result.production,batch);
+    assert.deepEqual(row.sewing.result,JSON.parse(ftx.sew_stitches(row.binding.result.pattern_json,
+      JSON.stringify(row.sewing.result.options))).plan);
+  });
+
+test('compiled WASM purchases exact catalog yarn by mass and exposes complete consumed-mass objectives',
+  {skip:process.env.FTX_REAL_WASM!=='1'}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const pattern=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-sewing-pattern.json'),'utf8');
+    const selection=JSON.parse(fs.readFileSync(path.join(__dirname,'../examples/sewing-thread-cost-selection.json'),'utf8'));
+    const yarn=JSON.parse(ftx.material_inspect(JSON.stringify({id:'coats/epic-2994120-2026'}))).selection;
+    for(const qualification of selection.options.qualifications)
+      for(const channel of qualification.thread_consumption.channels) channel.material=yarn;
+    const consumables=selection.options.consumables;
+    consumables.production_copies=3;
+    consumables.purchasing.market.require_observed_continuous_length=false;
+    Object.assign(consumables.purchasing.quote_book.quotes[0],{material_id:yarn.id,
+      material_sha256:yarn.expected_sha256,unit:'kilogram',price:100,quantity:1,
+      minimum_quantity:0.0001,order_increment:0.0001,available_quantity:0.0003,
+      maximum_continuous_quantity:null,price_breaks:[{minimum_quantity:0.0002,price:80}],
+      source:'test:synthetic-kilogram-yarn-order'});
+    const studyRequest=JSON.stringify({schema:'ftx-material-study/1',
+      variants:[{key:'original',changes:{schema:'ftx-material-bindings/1',default:JSON.parse(pattern).fabric.material}}],
+      sewing_selection:selection,comparison:{basis:'nominal',required_consumers:['sewing_purchasing'],
+        objectives:[{metric:'thread_required_mass_kg',direction:'minimize'},
+          {metric:'thread_observed_order_cost',direction:'minimize'}]}});
+    const w=await workerModule({bindings:ftx});
+    const result=await w.send({type:'study',request:203,pattern,studyRequest});
+    assert.equal(result.type,'result',result.message);
+    assert.deepEqual(result.result,JSON.parse(ftx.material_study(pattern,studyRequest)));
+    const row=result.result.alternatives[0], inventory=row.sewing.result.consumables;
+    assert.equal(inventory.complete_mass_coverage,true);
+    assert.ok(Math.abs(row.metrics.thread_required_length_m-5.1)<1e-12);
+    assert.ok(Math.abs(row.metrics.thread_required_mass_kg-0.0001224)<1e-15);
+    assert.ok(Math.abs(row.metrics.thread_observed_order_cost-0.016)<1e-15);
+    const order=inventory.purchasing.material_orders[0].least_observed_order;
+    assert.equal(order.quote.unit,'kilogram'); assert.equal(order.order_quantity,0.0002);
+    assert.ok(Math.abs(order.yarn_linear_density_kg_m-0.000024)<1e-18);
+    assert.equal(order.within_observed_continuous_limit,null);
+    assert.deepEqual(result.result.comparison.frontier,['original']);
   });
 
 test('compiled WASM checks the full tool sweep through the actual sewing worker',
@@ -4848,6 +4987,35 @@ test('supplied textile water displays delivery and incoming enthalpy separately 
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
+test('condensation retains incoming mass and warming separately from later evaporation and withdraws refused histories', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const report=scenarioReport(); report.scenario.scenario={motion:{transient_surface:{surface_water:{schema:'ftx-textile-surface-water/3'}}}};
+  const water={schema:'ftx-textile-surface-water-result/3',initial_liquid_kg:0,supplied_liquid_kg:0.001,
+    condensed_liquid_kg:0.004,evaporated_liquid_kg:0.003,remaining_liquid_kg:0.002,
+    mass_balance_error_kg:0,dryout_events:0,latent_energy_j:7500,condensation_latent_energy_j:10000,
+    exported_vapor_sensible_energy_j:252,liquid_stored_change_j:168,supplied_liquid_sensible_energy_j:84,
+    incoming_vapor_sensible_energy_j:336,balance_error_j:0,
+    request:{condensation:{source:{reference:'<independent reverse-transfer evidence>'}}}};
+  const motion={samples:[{}],keyframes:[],transient_surface:outcome({duration_s:1,thermal_steps:12,
+    trace:[{temperature_range_c:[15,20]}],surface_water:water})};
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome(motion);
+  await p.e.scenario.onclick(); p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+  assert.deepEqual(plain(table('A: textile surface liquid — conserved initial, supplied and condensed inventory').children[2].children.map(n=>n.textContent)),
+    ['0','0.001','0.004','0.003','0.002','0','0']);
+  assert.deepEqual(plain(table('A: textile evaporation and sensible energy').children[2].children.map(n=>n.textContent)),
+    ['7500','252','168','84','10000','336','0']);
+  assert.match(visibleText(s),/condense on dry or wet cloth and later re-evaporate/);
+  const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='A: textile liquid source, exact patches and canonical vapor paths (display only)');
+  source.open=true; source.handlers.toggle(); assert.match(visibleText(source),/<independent reverse-transfer evidence>/);
+  motion.transient_surface=refused('condensation exceeds qualified loading');
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.equal(table('A: textile evaporation and sensible energy'),undefined);
+  assert.match(visibleText(s),/condensation exceeds qualified loading/);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
 test('plastic and relaxation heat display each domain source separately and preserve independent refusals', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   const report = scenarioReport(); report.scenario.scenario = { motion: { transient_surface: {}, transient_coverage: {} } };
@@ -5861,15 +6029,16 @@ test('compiled WASM adaptive synthesis replays both native selected-body scenari
     } finally {globalThis.ftxProgress=previousProgress;}
   });
 
-test('compiled WASM coupled and supplied textile-water objectives replay both native commands and named scenarios',
-  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY)}, async()=>{
+test('compiled WASM evaporating, supplied and condensing textile-water objectives replay native commands and named scenarios',
+  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY)}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
     const w=await workerModule({bindings:ftx});
     const previousProgress=globalThis.ftxProgress;globalThis.ftxProgress=()=>{};
     try {
-      for(const [dir,supplied] of [[process.env.FTX_COUPLED_WATER_REPLAY,false],[process.env.FTX_SUPPLIED_WATER_REPLAY,true]].filter(([dir])=>dir)) {
+      for(const [dir,kind] of [[process.env.FTX_COUPLED_WATER_REPLAY,'initial'],[process.env.FTX_SUPPLIED_WATER_REPLAY,'supplied'],
+        [process.env.FTX_CONDENSED_WATER_REPLAY,'condensed']].filter(([dir])=>dir)) {
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8');
         const bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
         for(const name of ['single','matrix']) {
@@ -5881,7 +6050,11 @@ test('compiled WASM coupled and supplied textile-water objectives replay both na
         assert.deepEqual(result.result.comparison.frontier,['qualified']);
         if(name==='single') {
           const readings=result.result.comparison.alternatives.find(row=>row.key==='qualified').readings;
-          if(supplied) assert.ok(readings.textile_water_supplied_mass_kg.value>0);
+          if(kind==='supplied') assert.ok(readings.textile_water_supplied_mass_kg.value>0);
+          else if(kind==='condensed') {
+            assert.ok(readings.textile_water_condensed_mass_kg.value>0);
+            assert.ok(readings.textile_water_condensation_latent_energy_j.value>0);
+          }
           else {
             assert.ok(readings.transient_surface_final_min_temperature_c.value<20);
             assert.equal(readings.textile_water_remaining_mass_kg.value,0);

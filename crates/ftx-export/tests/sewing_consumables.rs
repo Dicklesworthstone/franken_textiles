@@ -105,6 +105,194 @@ fn close(actual: f64, expected: f64) {
 }
 
 #[test]
+fn catalog_yarn_mass_and_kilogram_orders_follow_complete_batch_consumption() {
+    let (pattern, mut options, _) = fixture();
+    let selected = Catalog::builtin()
+        .unwrap()
+        .resolve(&Selection {
+            id: "coats/epic-2994120-2026".into(),
+            ..Selection::default()
+        })
+        .unwrap()
+        .frozen_selection();
+    for channel in options["qualifications"][0]["thread_consumption"]["channels"]
+        .as_array_mut()
+        .unwrap()
+    {
+        channel["material"] = json!(selected);
+    }
+    options["consumables"]["production_copies"] = json!(3);
+    let mut mass_offer = quote(&selected, "mass-offer", "mass-thread");
+    mass_offer["unit"] = json!("kilogram");
+    mass_offer["price"] = json!(100.0);
+    mass_offer["quantity"] = json!(1.0);
+    mass_offer["minimum_quantity"] = json!(0.0001);
+    mass_offer["order_increment"] = json!(0.0001);
+    mass_offer["available_quantity"] = json!(0.0003);
+    mass_offer["price_breaks"] = json!([{"minimum_quantity":0.0002,"price":80.0}]);
+    mass_offer
+        .as_object_mut()
+        .unwrap()
+        .remove("maximum_continuous_quantity");
+    let mut length_offer = quote(&selected, "length-offer", "length-thread");
+    length_offer["available_quantity"] = json!(12.0);
+    purchasing(&mut options, vec![mass_offer, length_offer]);
+    options["consumables"]["purchasing"]["market"]["require_observed_continuous_length"] =
+        json!(false);
+    let plan = build(pattern.clone(), options.clone()).unwrap();
+    let report = plan.consumables.as_ref().unwrap();
+    assert!(report.complete_consumption_coverage && report.complete_mass_coverage);
+    close(report.total_required_length_m.unwrap(), 11.1);
+    close(report.total_required_mass_kg.unwrap(), 0.0002664);
+    let requirement = &report.material_requirements[0];
+    close(
+        requirement.mass.as_ref().unwrap().linear_density_kg_m,
+        24e-6,
+    );
+    close(
+        requirement.mass.as_ref().unwrap().required_mass_kg,
+        0.0002664,
+    );
+    assert!(requirement.mass_unavailable_reason.is_none());
+    let original = report.materials[&requirement.material_sha256]
+        .record
+        .as_ref()
+        .unwrap();
+    assert_eq!(original.properties["yarn_linear_density"].unit, "tex");
+    assert_eq!(original.properties["yarn_linear_density"].value, 24.0);
+    let purchasing = report.purchasing.as_ref().unwrap();
+    assert!(purchasing.complete_offer_coverage);
+    assert!(purchasing.complete_observed_quantity_coverage);
+    assert!(!purchasing.complete_continuous_length_limit_coverage);
+    let order = purchasing.material_orders[0]
+        .least_observed_order
+        .as_ref()
+        .unwrap();
+    assert_eq!(order.quote.offer_id, "mass-offer");
+    close(order.order_quantity, 0.0003);
+    close(order.acquired, 12.5);
+    close(order.order_cost, 0.024);
+    close(
+        purchasing.least_observed_independent_order_total.unwrap(),
+        0.024,
+    );
+    assert_eq!(plan.stitch_intervals, 90);
+    close(plan.feed_seconds, 9.0);
+    assert_eq!(
+        serde_json::to_value(&plan).unwrap(),
+        serde_json::to_value(
+            SewPlan::build(&Pattern::new(pattern.clone()), &plan.options).unwrap()
+        )
+        .unwrap()
+    );
+    // Strict continuity falls back to the source-observed length offer, not to inferred cone length.
+    options["consumables"]["purchasing"]["market"]["require_observed_continuous_length"] =
+        json!(true);
+    let strict = build(pattern.clone(), options.clone())
+        .unwrap()
+        .consumables
+        .unwrap();
+    assert!(strict.complete_mass_coverage);
+    let purchasing = strict.purchasing.unwrap();
+    assert!(purchasing.complete_continuous_length_limit_coverage);
+    assert_eq!(
+        purchasing.material_orders[0]
+            .least_observed_order
+            .as_ref()
+            .unwrap()
+            .quote
+            .offer_id,
+        "length-offer"
+    );
+    // Missing consumption prevents both totals; available density cannot complete a partial channel list.
+    options["qualifications"][0]["thread_consumption"]["channels_complete"] = json!(false);
+    let partial = build(pattern, options).unwrap().consumables.unwrap();
+    assert!(!partial.complete_mass_coverage);
+    assert!(partial.total_required_mass_kg.is_none());
+    assert!(partial.material_requirements.is_empty());
+}
+
+#[test]
+fn unavailable_yarn_mass_preserves_length_requirements_and_length_purchasing() {
+    let (pattern, mut options, original) = fixture();
+    let mut selected = original.clone();
+    selected.expected_sha256 = None;
+    selected.record.as_mut().unwrap().properties.insert(
+        "yarn_linear_density".into(),
+        serde_json::from_value(json!({"value":25.0,"unit":"tex","evidence":"estimate",
+            "source":"fixture","method":"Synthetic density, not a measured yarn"}))
+        .unwrap(),
+    );
+    let freeze = |selection: &Selection| {
+        Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: Vec::new(),
+        }
+        .resolve(selection)
+        .unwrap()
+        .frozen_selection()
+    };
+    let unapproved = freeze(&selected);
+    selected.allow_estimates = true;
+    let approved = freeze(&selected);
+    for selection in [&original, &unapproved] {
+        for channel in options["qualifications"][0]["thread_consumption"]["channels"]
+            .as_array_mut()
+            .unwrap()
+        {
+            channel["material"] = json!(selection);
+        }
+        purchasing(&mut options, vec![quote(selection, "length", "length")]);
+        let report = build(pattern.clone(), options.clone())
+            .unwrap()
+            .consumables
+            .unwrap();
+        assert!(report.complete_consumption_coverage);
+        assert!(!report.complete_mass_coverage);
+        assert!(report.total_required_mass_kg.is_none());
+        assert!(report.material_requirements[0].mass.is_none());
+        assert!(
+            report.material_requirements[0]
+                .mass_unavailable_reason
+                .as_ref()
+                .unwrap()
+                .contains("yarn_linear_density")
+        );
+        close(report.total_required_length_m.unwrap(), 3.7);
+        assert!(report.purchasing.unwrap().complete_offer_coverage);
+    }
+    // Two exact snapshots stay separate even when their material ID and source values agree.
+    options["qualifications"][0]["thread_consumption"]["channels"][0]["material"] = json!(approved);
+    purchasing(
+        &mut options,
+        vec![
+            quote(&approved, "approved", "approved"),
+            quote(&unapproved, "unapproved", "unapproved"),
+        ],
+    );
+    let partial = build(pattern.clone(), options.clone())
+        .unwrap()
+        .consumables
+        .unwrap();
+    assert!(partial.complete_consumption_coverage);
+    assert_eq!(partial.material_requirements.len(), 2);
+    assert_eq!(
+        partial
+            .material_requirements
+            .iter()
+            .filter(|r| r.mass.is_some())
+            .count(),
+        1
+    );
+    assert!(!partial.complete_mass_coverage && partial.total_required_mass_kg.is_none());
+    assert!(partial.purchasing.unwrap().complete_offer_coverage);
+    options["qualifications"][0]["thread_consumption"]["channels"][1]["material"] = json!(approved);
+    let complete = build(pattern, options).unwrap().consumables.unwrap();
+    assert!(complete.complete_mass_coverage);
+    close(complete.total_required_mass_kg.unwrap(), 3.7 * 25e-6);
+}
+
+#[test]
 fn production_copies_aggregate_before_order_rounding_and_preserve_per_garment_continuity() {
     let (pattern, mut options, selected) = fixture();
     let mut offer = quote(&selected, "cone-a", "thread-a");

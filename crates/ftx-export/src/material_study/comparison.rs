@@ -127,8 +127,14 @@ pub enum Metric {
     SewingSetupSeconds,
     /// Generated feed plus source-qualified setup time, excluding undeclared handling, in seconds.
     SewingFeedAndSetupSeconds,
+    /// Qualified serial handling on the selected complete batch schedule, in seconds.
+    SewingHandlingSeconds,
+    /// Declared serial feed, setup and handling on the selected complete schedule, in seconds.
+    SewingModeledProductionSeconds,
     /// Complete thread length across the selected job's channels, including operation allowances.
     ThreadRequiredLengthM,
+    /// Complete consumed inventory from the exact yarns' qualified linear densities, in kilograms.
+    ThreadRequiredMassKg,
     /// Complete independent thread orders in their own currency; never a cut-and-sew subtotal.
     ThreadObservedOrderCost,
     /// Potential latent power (W) through the declared stack; water supply is not modeled.
@@ -205,8 +211,12 @@ pub enum Metric {
     TextileWaterRemainingMassKg,
     /// Independently sourced liquid delivered to qualified textile reference areas, in kilograms.
     TextileWaterSuppliedMassKg,
+    /// Qualified reverse vapor transfer accumulated as textile free liquid, in kilograms.
+    TextileWaterCondensedMassKg,
     /// Latent energy removed from the textile/liquid system over the complete motion, in joules.
     TextileWaterLatentEnergyJ,
+    /// Latent energy released by qualified condensation into the textile/liquid system, in joules.
+    TextileWaterCondensationLatentEnergyJ,
     /// Signed incoming-side energy (J) for all independent sheets over the whole requested motion.
     TransientSurfaceInsideEnergyJ,
     /// Signed incoming-side energy (J) of declared body paths AND exposed-cloth films, not wearer loss.
@@ -252,8 +262,10 @@ impl Metric {
             Self::StitchIntervals
             | Self::FeedSeconds
             | Self::SewingSetupSeconds
-            | Self::SewingFeedAndSetupSeconds => Consumer::Sewing,
-            Self::ThreadRequiredLengthM => Consumer::SewingConsumables,
+            | Self::SewingFeedAndSetupSeconds
+            | Self::SewingHandlingSeconds
+            | Self::SewingModeledProductionSeconds => Consumer::Sewing,
+            Self::ThreadRequiredLengthM | Self::ThreadRequiredMassKg => Consumer::SewingConsumables,
             Self::ThreadObservedOrderCost => Consumer::SewingPurchasing,
             Self::VaporPotentialHeatFlowW | Self::VaporPotentialMassFlowKgS => Consumer::Vapor,
             Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
@@ -295,7 +307,9 @@ impl Metric {
             | Self::TextileWaterEvaporatedMassKg
             | Self::TextileWaterRemainingMassKg
             | Self::TextileWaterSuppliedMassKg
+            | Self::TextileWaterCondensedMassKg
             | Self::TextileWaterLatentEnergyJ
+            | Self::TextileWaterCondensationLatentEnergyJ
             | Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
             | Self::TransientSurfaceNetBoundaryEnergyJ
@@ -328,7 +342,9 @@ impl Metric {
             | Self::MotionWetFilmSuppliedMassKg => "kg",
             Self::TextileWaterEvaporatedMassKg
             | Self::TextileWaterRemainingMassKg
-            | Self::TextileWaterSuppliedMassKg => "kg",
+            | Self::TextileWaterSuppliedMassKg
+            | Self::TextileWaterCondensedMassKg
+            | Self::ThreadRequiredMassKg => "kg",
             Self::ObservedOrderCost
             | Self::SelectedObservedOrderCost
             | Self::CuttingJobObservedOrderCost
@@ -336,7 +352,11 @@ impl Metric {
             | Self::ThreadObservedOrderCost => currency.unwrap_or("unavailable currency"),
             Self::ThreadRequiredLengthM => "m",
             Self::StitchIntervals | Self::UsedStockCount => "count",
-            Self::FeedSeconds | Self::SewingSetupSeconds | Self::SewingFeedAndSetupSeconds => "s",
+            Self::FeedSeconds
+            | Self::SewingSetupSeconds
+            | Self::SewingFeedAndSetupSeconds
+            | Self::SewingHandlingSeconds
+            | Self::SewingModeledProductionSeconds => "s",
             Self::VaporPotentialHeatFlowW
             | Self::CoveredVaporPotentialHeatFlowW
             | Self::IndependentVaporPotentialHeatFlowW => "W",
@@ -368,7 +388,7 @@ impl Metric {
             | Self::TransientCoverageNetBoundaryEnergyJ
             | Self::MotionCoveredVaporPotentialEnergyJ
             | Self::MotionWetFilmBodyReservoirLatentEnergyJ => "J",
-            Self::TextileWaterLatentEnergyJ => "J",
+            Self::TextileWaterLatentEnergyJ | Self::TextileWaterCondensationLatentEnergyJ => "J",
             Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
             | Self::TransientCoverageMinSampleTemperatureC
@@ -401,7 +421,10 @@ impl Metric {
             Self::FeedSeconds => row.metrics.feed_seconds,
             Self::SewingSetupSeconds => row.metrics.sewing_setup_seconds,
             Self::SewingFeedAndSetupSeconds => row.metrics.sewing_feed_and_setup_seconds,
+            Self::SewingHandlingSeconds => row.metrics.sewing_handling_seconds,
+            Self::SewingModeledProductionSeconds => row.metrics.sewing_modeled_production_seconds,
             Self::ThreadRequiredLengthM => row.metrics.thread_required_length_m,
+            Self::ThreadRequiredMassKg => row.metrics.thread_required_mass_kg,
             Self::ThreadObservedOrderCost => row.metrics.thread_observed_order_cost,
             Self::VaporPotentialHeatFlowW => row.vapor.value().map(|r| r.potential_heat_flow_w),
             Self::VaporPotentialMassFlowKgS => {
@@ -516,10 +539,19 @@ impl Metric {
                 admitted.transient_surface.as_ref()?.result["surface_water"]["supplied_liquid_kg"]
                     .as_f64()
             }
+            Self::TextileWaterCondensedMassKg => {
+                admitted.transient_surface.as_ref()?.result["surface_water"]["condensed_liquid_kg"]
+                    .as_f64()
+            }
             Self::TextileWaterLatentEnergyJ => {
                 admitted.transient_surface.as_ref()?.result["surface_water"]["latent_energy_j"]
                     .as_f64()
             }
+            Self::TextileWaterCondensationLatentEnergyJ => admitted
+                .transient_surface
+                .as_ref()?
+                .result["surface_water"]["condensation_latent_energy_j"]
+                .as_f64(),
             Self::TransientSurfaceInsideEnergyJ => {
                 admitted.transient_surface.as_ref()?.result["inside_energy_j"].as_f64()
             }
@@ -1033,10 +1065,12 @@ impl Policy {
                 Metric::TextileWaterEvaporatedMassKg
                     | Metric::TextileWaterRemainingMassKg
                     | Metric::TextileWaterSuppliedMassKg
+                    | Metric::TextileWaterCondensedMassKg
                     | Metric::TextileWaterLatentEnergyJ
+                    | Metric::TextileWaterCondensationLatentEnergyJ
             )
         }) {
-            report.notes.push("Textile-water objectives require the source-qualified free-film history, canonical Ret networks and the complete liquid/vapor energy ledger on the admitted motion. Reference material area owns initial and supplied water; current area conducts vapor. Version 2 independently qualifies and integrates each incoming-liquid schedule and its sensible enthalpy. Latent energy is removed from the textile/liquid system, separately from any prescribed body-water reservoir. These are nominal conditional computations, not wet-property characterization, continuous-time temperature bounds, comfort or measured garment validation.");
+            report.notes.push("Textile-water objectives require the source-qualified free-film history, canonical Ret networks and the complete liquid/vapor energy ledger on the admitted motion. Reference material area owns liquid; current area conducts vapor. Version 2 qualifies incoming-liquid delivery and sensible enthalpy. Version 3 additionally qualifies reverse transfer, dry/wet nucleation and the declared incoming-vapor enthalpy model. Evaporative latent removal and condensation latent release stay separate, including when the same water later re-evaporates. These are nominal conditional computations, not sorption, inferred wet properties, continuous-time temperature bounds, comfort or measured garment validation.");
         }
         if self.consumers().contains(&Consumer::VaporSurface) {
             report.notes.push("Independent draped-sheet vapor objectives use the admitted initial geometry, retained source Ret and declared pressure/film/latent-heat conditions. Overlapping sheets remain independent; these potentials are not covered-body evaporation, water supply, latent cooling, continuous motion totals or comfort. Consumed column protocols require separate cross-alternative admission.");
@@ -1066,10 +1100,13 @@ impl Policy {
         if self.metrics().iter().any(|metric| {
             matches!(
                 metric,
-                Metric::SewingSetupSeconds | Metric::SewingFeedAndSetupSeconds
+                Metric::SewingSetupSeconds
+                    | Metric::SewingFeedAndSetupSeconds
+                    | Metric::SewingHandlingSeconds
+                    | Metric::SewingModeledProductionSeconds
             )
         }) {
-            report.notes.push("Sewing time objectives use the selected complete schedule and its explicitly qualified directed setup durations, including the declared initial setup. Feed plus setup excludes undeclared handling and is not a complete machine cycle time. A budget-limited feasible incumbent remains comparable, without an optimality claim; absent timing evidence stays unavailable.");
+            report.notes.push("Sewing time objectives use the selected complete schedule and independently qualified setup and handling evidence. Feed plus setup retains its original scope. Modeled production time additionally requires explicit serial initial, between-operation and final handling, including same-copy versus different-copy transitions. A joint setup-and-handling optimum does not prove either component minimal. A budget-limited complete incumbent remains comparable without an optimality claim; absent timing stays unavailable, and undeclared work or hardware execution is not inferred.");
         }
         if self.consumers().contains(&Consumer::CuttingJob)
             || self.consumers().contains(&Consumer::CuttingJobPurchasing)
@@ -1084,7 +1121,7 @@ impl Policy {
         if self.consumers().contains(&Consumer::SewingConsumables)
             || self.consumers().contains(&Consumer::SewingPurchasing)
         {
-            report.notes.push("Thread objectives use the selected production plan's complete, independently qualified channel consumption. Exact yarn demands aggregate before supplier rounding and stock admission. Costs retain the thread market's own currency and date; they are independent of cut-stock copies, retained garment mass and a combined assembly purchase total. Missing consumption or any eligible whole order remains unavailable, and time-based recipe selection does not prove a thread-cost optimum.");
+            report.notes.push("Thread objectives use the selected production plan's complete, independently qualified channel consumption. Exact yarn demands aggregate before supplier rounding and stock admission. Consumed mass requires each exact yarn's qualified linear density and includes the declared allowances; it is not retained garment mass. Kilogram offers retain their original mass minimums, increments, tiers and stock limits, without inventing an uninterrupted length from mass. Missing density preserves length-only capabilities. Costs retain the thread market's own currency and date; missing consumption or any eligible whole order remains unavailable, and time-based recipe selection does not prove a thread-cost optimum.");
         }
         report
     }
@@ -1596,6 +1633,21 @@ impl Policy {
                 .value()
                 .ok_or_else(|| invalid("selected sewing plan for thread protocols unavailable"))?;
             let mut consumption_protocols = BTreeMap::new();
+            let mass_protocol = self.metrics().contains(&Metric::ThreadRequiredMassKg)
+                || (consumers.contains(&Consumer::SewingPurchasing)
+                    && plan
+                        .consumables
+                        .as_ref()
+                        .and_then(|c| c.purchasing.as_ref())
+                        .is_some_and(|p| {
+                            p.material_orders.iter().any(|order| {
+                                order.least_observed_order.as_ref().is_some_and(|offer| {
+                                    offer.quote.unit
+                                        == ftx_pattern::material_cost::SaleUnit::Kilogram
+                                })
+                            })
+                        }));
+            let mut mass_protocols = BTreeMap::new();
             for seam in &plan.seams {
                 let q = plan
                     .options
@@ -1614,13 +1666,54 @@ impl Policy {
                     "consumption":{"method":model.method,"conditions":model.conditions,"evidence":model.evidence},
                     "channels":channels,
                 }));
+                if mass_protocol {
+                    let materials = &plan
+                        .consumables
+                        .as_ref()
+                        .ok_or_else(|| invalid("resolved thread materials unavailable"))?
+                        .materials;
+                    let channels: BTreeMap<_, _> =
+                        model
+                            .channels
+                            .iter()
+                            .map(|channel| {
+                                // Selection overrides participate in the consumed snapshot. Inspect its
+                                // resolved frozen record, never the original pre-override embedded record.
+                                let material = channel
+                                    .material
+                                    .expected_sha256
+                                    .as_deref()
+                                    .and_then(|sha| {
+                                        materials
+                                            .iter()
+                                            .find(|(hash, _)| hash.eq_ignore_ascii_case(sha))
+                                            .and_then(|(_, selection)| selection.record.as_ref())
+                                    })
+                                    .ok_or_else(|| {
+                                        invalid("exact resolved thread material unavailable")
+                                    })?;
+                                let quantity = material.properties.get("yarn_linear_density");
+                                Ok((channel.id.as_str(), quantity.map_or(Value::Null, |q| json!({
+                            "unit":"kg/m", "method":q.method, "conditions":q.conditions,
+                            "evidence":q.evidence
+                        }))))
+                            })
+                            .collect::<Result<_, Refusal>>()?;
+                    mass_protocols.insert(seam.pass.operation_id(), channels);
+                }
             }
             base = hash(&(base, consumption_protocols))?;
+            if mass_protocol {
+                base = hash(&(base, mass_protocols))?;
+            }
         }
         if self.metrics().iter().any(|metric| {
             matches!(
                 metric,
-                Metric::SewingSetupSeconds | Metric::SewingFeedAndSetupSeconds
+                Metric::SewingSetupSeconds
+                    | Metric::SewingFeedAndSetupSeconds
+                    | Metric::SewingHandlingSeconds
+                    | Metric::SewingModeledProductionSeconds
             )
         }) {
             let times = row
@@ -1634,6 +1727,22 @@ impl Policy {
                 json!({"machine":times.machine,"method":times.method,
                 "conditions":times.conditions,"evidence":times.evidence}),
             ))?;
+        }
+        if self.metrics().iter().any(|metric| {
+            matches!(
+                metric,
+                Metric::SewingHandlingSeconds | Metric::SewingModeledProductionSeconds
+            )
+        }) {
+            let handling = row
+                .sewing
+                .value()
+                .and_then(|plan| plan.options.production.as_ref())
+                .and_then(|production| production.handling.as_ref())
+                .ok_or_else(|| invalid("source-qualified sewing handling unavailable"))?;
+            // The declared operation/copy timing domain is part of this model's protocol;
+            // do not silently compare different transition tables or source qualifications.
+            base = hash(&(base, handling))?;
         }
         if consumers.contains(&Consumer::VaporCoverage) {
             let vapor = admitted

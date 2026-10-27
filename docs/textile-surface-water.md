@@ -1,8 +1,10 @@
-# Textile-owned free liquid and evaporative cooling
+# Textile-owned free liquid, evaporation and condensation
 
 `motion.transient_surface.surface_water` evolves explicitly declared **free liquid on the textile**
 together with the existing independent-sheet temperature history. Version 1 starts from an initial
 inventory. Version 2 also admits independently sourced delivery rates and incoming liquid temperatures.
+Version 3 adds independently qualified condensation and re-evaporation, including incoming vapor
+sensible energy and latent release.
 Evaporation removes latent energy from that textile/liquid system, so cooling changes subsequent
 vapor demand. Water remains attached to its source material triangles as the cloth moves.
 
@@ -21,7 +23,7 @@ defaulted from fiber names, a saturation formula or a different measured conditi
 
 | Field | Contract |
 | --- | --- |
-| `schema` | `ftx-textile-surface-water/1` for initial-only liquid; `/2` for prescribed supply |
+| `schema` | `ftx-textile-surface-water/1` for initial-only liquid; `/2` for prescribed supply; `/3` for supplied liquid and qualified reverse phase transfer |
 | `model` | `inner_cell_equilibrium_free_film_frozen_properties/1` |
 | `bindings` | Map containing every retained instance name, including mirrored instances separately |
 | `bindings.<instance>.material_sha256` | Exact normalized source material hash already used by mechanics and dry heat |
@@ -34,7 +36,8 @@ defaulted from fiber names, a saturation formula or a different measured conditi
 | `outside_vapor_pressure_pa` | Nonnegative ambient pressure for each mechanical keyframe interval |
 | `inside_film_resistance_m2_pa_w` | Positive declared vapor film before the material Ret |
 | `outside_film_resistance_m2_pa_w` | Positive declared vapor film after the material Ret |
-| `replenishment_kg_m2_s` | Version 1 requires exactly zero; version 2 omits this field and requires `supply` |
+| `replenishment_kg_m2_s` | Version 1 requires exactly zero; versions 2/3 omit this field and require `supply` |
+| `condensation` | Version 3 requires the independently qualified reverse-transfer object described below; versions 1/2 forbid it |
 | `source` | Existing `{reference, accessed_on, note}` provenance object |
 | `evidence` | `measured`, `published` or `estimate` for the explicit coupling inputs |
 | `allow_estimates` | Independent opt-in required for `estimate`; never relaxes a material selection's evidence policy |
@@ -48,7 +51,7 @@ new coupling qualification; the old binding cannot silently authorize a new spec
 
 ### Prescribed liquid supply
 
-Version 2 requires a `supply` object with schema `ftx-textile-liquid-supply/1`. Its `bindings` map
+Versions 2 and 3 require a `supply` object with schema `ftx-textile-liquid-supply/1`. Its `bindings` map
 contains exactly the same instance names as the top-level water bindings, including dry/zero-feed
 instances. Each entry has `rate_kg_m2_s` and `temperature_c` arrays, one value per mechanical keyframe
 interval. Rates are nonnegative kilograms per **reference material square metre per second**;
@@ -131,11 +134,80 @@ and the complete energy balance invariant.
 
 This is an explicit mass-transfer / implicit heat discretization. Halving thermal step size is
 needed to assess accuracy; energy conservation is not a convergence certificate. All material-cell
-temperatures must remain inside the raw table's qualified domain. Wet pressure below ambient, a
-post-step crossing into condensation, unrepresentable mass/time/capacity, or a budget failure
-refuses. A smaller `max_step_s` can resolve numerical overshoot; it does not create missing evidence.
+temperatures must remain inside the raw table's qualified domain. Versions 1 and 2 refuse wet pressure
+below ambient or a post-step crossing into condensation. Every version refuses unrepresentable
+mass/time/capacity or a budget failure. A smaller `max_step_s` can resolve numerical overshoot;
+it does not create missing evidence.
 The whole accepted mechanical interval stages its temperature, liquid and source counters together
 and publishes no partial heat state on failure. The mechanical result and other consumers survive.
+
+## Condensation and subsequent re-evaporation
+
+Version 3 explicitly admits reverse exchange in the same retained free-film model. Set
+`schema: "ftx-textile-surface-water/3"`, keep the independently qualified version-2 `supply`
+(including explicit zero rates when no liquid is delivered), and add:
+
+```json
+"condensation": {
+  "schema": "ftx-textile-condensation/1",
+  "vapor_temperature_c": [40.0, 10.0],
+  "source": {
+    "reference": "test:synthetic-reversible-film",
+    "accessed_on": "2026-10-27",
+    "note": "Invented software example; no measured fabric or vapor qualification"
+  },
+  "evidence": "estimate",
+  "allow_estimates": true,
+  "method": "Prescribed incoming vapor temperatures in two mechanical intervals",
+  "qualification": "Synthetic reverse use of the exact locked Ret, phase transfer onto wet and dry patches, and constant latent plus cp_liquid effective sensible enthalpy over the full declared pressure, temperature and liquid-loading domains"
+}
+```
+
+There must be one vapor temperature for every mechanical keyframe interval, inside the same qualified
+temperature domain. Reverse-transport evidence and estimate consent are independent of both the base
+film and liquid supply. A forward Ret observation or a material name does not establish reverse
+permeation, nucleation on a dry textile, or validity of this enthalpy approximation. The source must
+justify those assumptions for the exact frozen material and its declared domain. Versions 1 and 2
+reject this extension; removing or failing its qualification does not silently enable condensation.
+
+The canonical fixed Ret network supplies a signed flux from the initial substep temperature:
+positive pressure difference evaporates available liquid; negative pressure difference condenses
+incoming vapor onto that same triangle. Current area controls transfer, while reference area owns
+the resulting liquid. Water can condense onto an initially dry patch and later evaporate when the
+boundary pressure changes. This is an independent-sheet inner-cell film, not a prediction of dew
+location inside an arbitrary garment layer stack.
+
+Let `a` be condensed mass, `Tv` the explicit incoming vapor temperature and retain the earlier symbols.
+The inventory becomes `m1 = m0 + s + a - e`. The full balance is:
+
+```text
+ΔH_dry + c [m1 (T1 - Tref) - m0 (T0 - Tref)]
+       + e c (T0 - Tref) + e L
+  = E_inside - E_outside + Q + s c (Ts - Tref) + a c (Tv - Tref) + a L
+```
+
+The existing implicit heat equation therefore receives remaining liquid capacity and source
+`Q - e L + s c (Ts - T0) + a c (Tv - T0) + a L`. Both incoming sensible energy and latent release
+change the solved textile temperature. The effective convention uses the already supplied **liquid**
+sensible coefficient for both vapor enthalpy labels and a constant latent heat; it does not derive a
+real gas heat capacity or temperature-dependent latent heat. That approximation requires explicit
+qualification over the requested domain. Changing the common enthalpy reference only relabels the
+storage/flow terms and does not change computed temperatures.
+
+Version 3 uses `ftx-textile-surface-water-result/3`. It retains every version-2 field and adds
+`condensed_liquid_kg`, `condensation_latent_energy_j` and `incoming_vapor_sensible_energy_j` to every
+sample and the final receipt. Final patch rows retain condensed mass and incoming sensible energy.
+Existing `latent_energy_j` remains nonnegative **evaporative removal**; condensation release is kept
+separately. The mass residual is `remaining + evaporated - initial - supplied - condensed`, and the
+full energy residual subtracts incoming vapor sensible energy and condensation latent release.
+
+Nominal comparison metrics `textile_water_condensed_mass_kg` and
+`textile_water_condensation_latent_energy_j` use the same admitted complete history. Admission checks
+exact sources, per-patch inventory, mass/energy totals and interval-temperature-weighted incoming
+enthalpy. No statistical bounds, unsampled-time guarantees or empirical condensation rates are
+inferred. Maximum liquid loading still refuses transactionally; there is no invented runoff,
+drainage, absorbed-water law or mechanical water mass. Refinement remains necessary when pressure
+reverses within a thermal step.
 
 ## Reports and scope
 
@@ -161,7 +233,7 @@ Temperatures and boundary fluxes are actual results of that coupled equation. No
 comparisons admit matching source-qualified histories after canonical material/Ret replay, retained
 patch/reference ownership, cumulative mass/latent/enthalpy consistency and the full source/boundary
 balance. Sampled temperature and boundary metrics plus textile evaporated/remaining mass and latent
-energy are available; supplied-mass admission requires matching version 2 receipts and independent
+energy are available; supplied-mass admission requires matching version 2/3 receipts and independent
 schedule reconstruction. These comparisons do not propagate water or thermal bounds.
 
 The separate `vapor_coverage_history.wet_film` belongs to a prescribed **body** reservoir. Its latent
@@ -172,7 +244,8 @@ wet-dependent material law, mechanical mass change, thermoregulation or comfort/
 
 Analytic tests check sampled-temperature sensible export, reference invariance, rate feedback,
 time refinement, exact dryout, dry remainders, incoming sensible heat, supply-limited evaporation,
-rewetting, reference/current area separation and transactional overflow/source/domain refusals.
+rewetting, condensation onto dry textile, latent warming, subsequent re-evaporation,
+reference/current area separation and transactional overflow/source/domain refusals.
 Moving sewn-garment tests exercise thermal cooling, reference-area delivery, Maxwell heat, frozen replay and
 independent mechanical results. The portable scenario-study regression uses the same actual runtime
 and verifies source/missing-data refusals and manufacturing independence. All these inputs are

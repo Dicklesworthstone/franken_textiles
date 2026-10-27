@@ -142,13 +142,16 @@ The existing resolver normalizes `yarn_linear_density` from tex to kg/m while pr
 authored observations and frozen selection identity. These yarn selections can be embedded
 in qualified sewing `thread_consumption` channels. With separately sourced metres-per-traversal
 coefficients and start/end allowances, the sewing consumables consumer computes operation,
-per-copy and production-batch length requirements. Its purchasing consumer can evaluate
-separately observed length offers for those exact yarn snapshots. The Coats sheet supplies
+per-copy and production-batch length requirements and nominal consumed inventory mass.
+Its purchasing consumer can evaluate separately observed length or kilogram offers for those
+exact yarn snapshots, using the admitted linear density for the latter. The Coats sheet supplies
 neither consumption coefficients nor price/stock evidence.
 
 `put_up_length` remains a package-length observation: it does not automatically establish
-order increments, uninterrupted available stock or cone rounding. Current pricing does not
-convert yarn length requirements into mass. `supplier_average_thread_strength` remains an
+order increments, uninterrupted available stock or cone rounding. Kilogram offers cannot pass
+strict continuity with the current source-quote fields; density does not establish a continuous
+segment. Consumed inventory includes allowances and does not establish retained garment mass.
+`supplier_average_thread_strength` remains an
 unknown extension in cN, with no automatic unit conversion or interpretation as seam strength,
 a shell force limit or an allowable load. Mechanical and thermal capability gates continue
 to refuse missing physical properties.

@@ -454,6 +454,18 @@ and energy objectives after complete source, geometry, water and energy admissio
 <code>textile_water_latent_energy_j</code> as nominal objectives or inclusive constraints to compare the textile's own water.
 These quantities are separate from body-reservoir water. Missing material qualification, inconsistent ledgers and incomplete
 motion exclude the affected alternative; source-reported uncertainty ranges are not inferred.</p>
+<p class="note">For serial production handling, provide <code>production.handling</code> with exact machine and
+process qualification locks, independent timing evidence, initial loading, final unloading and every directed
+operation transition for the same garment or a different garment. Select ordering objective
+<code>minimize_production_time</code> with qualified setup times. Compare <code>sewing_handling_seconds</code>
+and <code>sewing_modeled_production_seconds</code>; the latter includes declared feed, setup and handling.
+Recipe selection uses <code>ftx-sewing-selection/4</code> and <code>minimize_modeled_production_seconds</code>.
+These serial phase totals preserve finite fixture and planar access constraints. A joint optimum is conditional
+on the declared work and does not prove the setup-only minimum or authorize machine execution.</p>
+<p class="note">Qualified <code>yarn_linear_density</code> supplies <code>thread_required_mass_kg</code> and permits
+kilogram-priced thread offers. Supplier minimums, increments, tiers and stock stay in their original sale units.
+Missing density leaves length-only quantities and offers usable. Consumed mass includes thread allowances;
+it is separate from retained garment mass. Mass and nominal package length do not establish splice-free continuity.</p>
 <p class="note">Use <code>ftx-textile-surface-water/2</code> for continuous liquid delivery. Omit
 <code>replenishment_kg_m2_s</code> and add <code>supply</code> with schema <code>ftx-textile-liquid-supply/1</code>,
 its own <code>source</code>, <code>evidence</code>, <code>allow_estimates</code> and <code>method</code>.
@@ -463,6 +475,14 @@ incoming liquid contributes its own sensible heat. A dry patch may evaporate its
 The source-qualified loading cap is enforced without silently discarding excess water.
 Add <code>textile_water_supplied_mass_kg</code> to constrain or optimize delivered liquid alongside cooling;
 the complete incoming-water and energy histories must qualify before comparison.</p>
+<p class="note">Use <code>ftx-textile-surface-water/3</code> to admit condensation as well as evaporation.
+Retain the explicit liquid supply and add <code>condensation</code> with schema <code>ftx-textile-condensation/1</code>,
+one incoming <code>vapor_temperature_c</code> per motion interval and independent source qualification for reverse
+transport, dry/wet nucleation and the effective enthalpy model. Condensed water stays on its reference textile
+triangle and can re-evaporate; exceeding the qualified loading cap refuses the interval. Metrics
+<code>textile_water_condensed_mass_kg</code> and <code>textile_water_condensation_latent_energy_j</code> retain
+condensed mass and released heat separately from evaporative losses. This does not infer absorbed moisture,
+drainage, wet mechanical mass or a measured garment prediction.</p>
 <p class="note">Scenario comparisons require a settled initial drape with clear gating. Static heat, strain and simulated-cloth-mass objectives describe
 that initial frame. Motion objectives additionally require complete, converged continuation; the final moving state need not be at rest.
 Signed surface power and body-coverage power have different bases and are not interchangeable.

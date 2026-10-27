@@ -85,6 +85,31 @@ fn retained_network_pressure_updates_use_the_same_canonical_flux_authority() {
 }
 
 #[test]
+fn signed_retained_flux_reverses_without_changing_positive_only_consumers() {
+    let report = request().evaluate(&empty_catalog()).unwrap();
+    for [inside, outside] in [[2000., 1000.], [900., 900.], [3500., 50.]] {
+        let forward = report.flux_at_pressures(inside, outside).unwrap();
+        let signed = report.signed_flux_at_pressures(inside, outside).unwrap();
+        let reverse = report.signed_flux_at_pressures(outside, inside).unwrap();
+        assert_eq!(signed.heat_w_m2, forward.heat_w_m2);
+        assert_eq!(signed.mass_kg_m2_s, forward.mass_kg_m2_s);
+        assert_eq!(reverse.heat_w_m2, -forward.heat_w_m2);
+        assert_eq!(reverse.mass_kg_m2_s, -forward.mass_kg_m2_s);
+    }
+    assert!(report.flux_at_pressures(1000., 2000.).is_err());
+    for pair in [[-1., 0.], [0., -1.], [f64::NAN, 0.], [1., f64::INFINITY]] {
+        assert!(report.signed_flux_at_pressures(pair[0], pair[1]).is_err());
+    }
+    let mut invalid = report.clone();
+    invalid.total_resistance_m2_pa_w = f64::MAX;
+    assert!(
+        invalid
+            .signed_flux_at_pressures(0., f64::MIN_POSITIVE)
+            .is_err()
+    );
+}
+
+#[test]
 fn complete_source_bounds_reverse_resistance_endpoints_and_replay_exactly() {
     let input = bounded_request();
     let report = input.evaluate(&empty_catalog()).unwrap();

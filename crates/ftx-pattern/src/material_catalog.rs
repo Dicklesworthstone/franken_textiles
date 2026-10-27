@@ -317,6 +317,30 @@ impl ResolvedMaterial {
         &self.sha256
     }
 
+    /// Source-qualified nominal yarn mass per length under this selection's evidence policy.
+    /// This does not infer a continuous package length, retained garment mass or a sheet property.
+    ///
+    /// # Errors
+    /// A non-yarn form, missing/unapproved observation, wrong unit or nonpositive density/bounds.
+    pub fn yarn_linear_density_kg_m(&self) -> Result<f64, Refusal> {
+        if self.normalized.form != crate::materials::Form::Yarn {
+            return Err(invalid("linear yarn mass requires a yarn material"));
+        }
+        let density =
+            self.normalized
+                .require("yarn_linear_density", "kg/m", self.allow_estimates)?;
+        if density <= 0.0
+            || self.normalized.properties["yarn_linear_density"]
+                .bounds
+                .is_some_and(|bounds| bounds[0] <= 0.0)
+        {
+            return Err(invalid(
+                "yarn linear density and its reported bounds must be positive",
+            ));
+        }
+        Ok(density)
+    }
+
     /// Resolve the common orthotropic sheet law under the selected evidence policy.
     ///
     /// # Errors

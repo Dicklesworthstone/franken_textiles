@@ -3549,6 +3549,78 @@ three-dimensional approach/retraction, calibrated machine registration, handling
 assignment remain separate unsatisfied requirements. Static planar clearance and a source-qualified
 schedule do not authorize hardware or establish measured seam quality.
 
+### 25.89 Production timing includes qualified garment handling
+
+The shared batch scheduler accepts an optional `production.handling` policy for explicit
+initial loading, directed operation transitions and final unloading. Same-copy and different-copy
+transitions have separate source-qualified durations; keeping a needle/thread setup never implies
+zero garment handling. Full machine and admitted process/material qualification hashes bind the
+timing domain. Missing observations remain unresolved in recipe selection, while malformed or
+unknown operation identities refuse.
+
+The `minimize_production_time` objective adds serial, nonoverlapping handling to qualified setup
+durations inside the existing bounded scheduler. Final unloading participates in search and its
+lower bound. Generated feed time, dependencies, finite fixture occupancy, planar access and exact
+stitch replay retain their existing authorities. Reports preserve baseline and selected feed,
+setup and handling separately; a combined optimum does not imply a setup-only optimum.
+`minimize_modeled_production_seconds` lets recipe choice follow this complete declared objective.
+
+Both native commands, portable adapters and the browser expose this behavior. Studies compare
+`sewing_handling_seconds` and `sewing_modeled_production_seconds`; missing evidence cannot become
+a winning zero or a proof that all recipes are infeasible. The complete synthetic
+`examples/sewing-handling-options.json` demonstrates a transfer penalty changing batch order.
+See [sewing-production.md](docs/sewing-production.md). This delivers the software slice
+`ftx-pb2.2.3`; concurrent machines, measured phase overlap, physical handling, grip and machine
+execution remain separate qualification requirements.
+
+### 25.90 Exact yarn density connects consumption to mass and purchasing
+
+The existing yarn material authority now supplies admitted positive linear density in kg/m to
+thread consumption and the canonical quote engine. Complete consumed length can therefore produce
+a source-bound mass receipt and satisfy a kilogram-priced offer. Supplier minimums, increments,
+quantity tiers and finite stock are still applied in original kilograms before conversion to
+acquired metres and comparable rates. Missing or unapproved density excludes only the mass route;
+ordinary length requirements and length offers remain available.
+
+Per-yarn and complete consumed-mass totals retain their exact frozen material identities, including
+the observations actually selected through overrides. The nominal `thread_required_mass_kg`
+study objective uses this complete inventory and checks its source protocols. Kilogram inventory
+does not establish uninterrupted length, so strict continuity still needs independent qualifying
+length evidence. Neither nominal cone size nor tex invents stock availability.
+
+Consumed thread includes declared operation allowances and is not automatically retained garment
+mass, an attachment or a new mechanical load. The built-in Coats yarn observations exercise this
+bridge without adding fabricated material values or prices. Synthetic offers verify original-unit
+rounding, finite stock, exact source locks and both native/portable workflows.
+See [material-sewing-plans.md](docs/material-sewing-plans.md). This completes the bounded yarn
+integration `ftx-yb2`, while live supplier coverage and retained-trim measurements remain open.
+
+### 25.91 Source-qualified condensation and re-evaporation share the thermal state
+
+Version 3 of the existing textile free-film request extends independently sourced liquid delivery
+with explicitly qualified reverse Ret transport, deposition on dry or wet textile and incoming
+vapor temperature for every motion interval. The same frozen material network determines transfer
+over current cloth area, while reference material area owns liquid and its qualified loading cap.
+Deposited water remains available for later evaporation when the boundary reverses.
+
+The existing implicit thermal solver receives condensation latent release and incoming sensible
+mixing. Its declared effective enthalpy convention uses the existing liquid heat capacity and
+constant latent heat; this is an explicit qualified model, not an inferred vapor heat capacity.
+Evaporative removal, condensation release, supplied-liquid enthalpy and incoming-vapor enthalpy stay
+separate. Initial plus supplied plus condensed water equals remaining plus evaporated water.
+A late temperature, loading or numerical failure rolls back the complete accepted interval.
+
+Native, portable, single-case and named-case studies admit the complete source/geometry/mass/energy
+history before comparing `textile_water_condensed_mass_kg` or
+`textile_water_condensation_latent_energy_j`. Browser views show the separate ledgers and withdraw
+refused histories; compiled-worker acceptance replays native-generated complete reports. Analytic,
+time-refinement, enthalpy-reference, source-substitution and actual sewn-motion reversal tests
+establish the bounded software behavior.
+
+This implements `ftx-vc2.1`, not the full empirical moisture program. Sorption, capillary transfer,
+drainage, mechanical water mass, general garment dew-location prediction and measured wet-property
+qualification remain open. See [textile-surface-water.md](docs/textile-surface-water.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

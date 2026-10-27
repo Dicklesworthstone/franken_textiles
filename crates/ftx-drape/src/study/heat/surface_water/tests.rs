@@ -99,6 +99,215 @@ fn supplied_fixture(
     history
 }
 
+fn condensing_fixture(
+    loading: f64,
+    step: f64,
+    ambient: Vec<f64>,
+    vapor: Vec<f64>,
+) -> SurfaceHistory {
+    let intervals = ambient.len();
+    let mut history = supplied_fixture(loading, step, vec![0.; intervals], vec![20.; intervals]);
+    let mut request = history.water.as_ref().unwrap().request.clone();
+    request.schema = "ftx-textile-surface-water/3".into();
+    request.outside_vapor_pressure_pa = ambient;
+    request.condensation = Some(serde_json::from_value(json!({
+        "schema":"ftx-textile-condensation/1", "vapor_temperature_c":vapor,
+        "source":{"reference":"test:reversible-free-film","accessed_on":"2026-10-27",
+            "note":"Synthetic reverse Ret, wet/dry nucleation and effective enthalpy closure"},
+        "evidence":"estimate", "allow_estimates":true,
+        "method":"Prescribed vapor reservoir; artificial fixed sensible coefficient and latent heat",
+        "qualification":"Synthetic exact Ret in both directions; wet/dry phase transfer and cp_liquid sensible plus constant latent convention over the full declared domains"
+    })).unwrap());
+    request.validate(intervals).unwrap();
+    history.water.as_mut().unwrap().request = request.clone();
+    history.request.surface_water = Some(request);
+    history
+}
+
+#[test]
+fn condensation_warms_a_dry_textile_and_conserves_incoming_vapor_enthalpy() {
+    let mut history = condensing_fixture(0., 1., vec![6000.], vec![40.]);
+    // T_old=20 gives p_wet=4000 Pa. R=10, area=.5 and L=10000 => .01 kg enters.
+    // The new film adds 10 J/K; latent release is 100 J and vapor mixing is 200 J.
+    let capacity = 100. + 0.01 * 1000.;
+    let conductance = 0.5 / 1.2;
+    let expected = (capacity * 20. + 2. * conductance * 20. + 300.) / (capacity + 2. * conductance);
+    advance(&mut history, 0.5, 1.).unwrap();
+    near(history.state.temperature_c()[0][0], expected);
+    let report = history.finish("path", "initial", 1.).unwrap();
+    let water = &report["surface_water"];
+    assert_eq!(water["schema"], "ftx-textile-surface-water-result/3");
+    near(water["initial_liquid_kg"].as_f64().unwrap(), 0.);
+    near(water["condensed_liquid_kg"].as_f64().unwrap(), 0.01);
+    near(water["remaining_liquid_kg"].as_f64().unwrap(), 0.01);
+    near(water["evaporated_liquid_kg"].as_f64().unwrap(), 0.);
+    near(
+        water["condensation_latent_energy_j"].as_f64().unwrap(),
+        100.,
+    );
+    near(
+        water["incoming_vapor_sensible_energy_j"].as_f64().unwrap(),
+        400.,
+    );
+    near(water["mass_balance_error_kg"].as_f64().unwrap(), 0.);
+    let independent = report["stored_change_j"].as_f64().unwrap()
+        + water["liquid_stored_change_j"].as_f64().unwrap()
+        - 400.
+        - 100.
+        - report["net_boundary_energy_j"].as_f64().unwrap();
+    near(independent, 0.);
+    near(report["balance_error_j"].as_f64().unwrap(), independent);
+    near(
+        water["patches"][0]["condensed_liquid_kg"].as_f64().unwrap(),
+        0.01,
+    );
+    near(
+        water["patches"][0]["incoming_vapor_sensible_energy_j"]
+            .as_f64()
+            .unwrap(),
+        400.,
+    );
+}
+
+#[test]
+fn condensed_water_can_reevaporate_after_a_boundary_reversal() {
+    let mut history = condensing_fixture(0., 0.1, vec![6000., 1000.], vec![30., 10.]);
+    history
+        .advance(&geometry(0.5), 0.5, 0, 0, None, None, None)
+        .unwrap();
+    let condensed = history.water.as_ref().unwrap().condensed[0];
+    let warm = history.state.temperature_c()[0][0];
+    assert!(condensed > 0. && warm > 20.);
+    history
+        .advance(&geometry(0.5), 1., 1, 1, None, None, None)
+        .unwrap();
+    let water = history.water.as_ref().unwrap();
+    assert_eq!(water.condensed[0], condensed);
+    near(water.evaporated[0], condensed);
+    assert_eq!(water.remaining[0], 0.);
+    assert_eq!(water.dryout_events, 1);
+    assert!(history.state.temperature_c()[0][0] < warm);
+    near(history.balance_error_j(), 0.);
+}
+
+#[test]
+fn condensation_uses_current_transfer_area_and_reference_inventory_domain() {
+    let mut small = condensing_fixture(0., 1., vec![6000.], vec![20.]);
+    let mut large = condensing_fixture(0., 1., vec![6000.], vec![20.]);
+    advance(&mut small, 0.5, 1.).unwrap();
+    advance(&mut large, 1., 1.).unwrap();
+    near(small.water.as_ref().unwrap().condensed[0], 0.01);
+    near(large.water.as_ref().unwrap().condensed[0], 0.02);
+    // Domain capacity remains .1 kg/reference m² * .5 reference m², not stretched area.
+    let mut overflow = condensing_fixture(0.08, 1., vec![6000.], vec![20.]);
+    let initial_temperature = overflow.state.temperature_c().to_vec();
+    assert!(advance(&mut overflow, 1., 1.).is_err());
+    assert_eq!(overflow.state.temperature_c(), initial_temperature);
+    assert_eq!(overflow.water.as_ref().unwrap().remaining[0], 0.04);
+    assert_eq!(overflow.water.as_ref().unwrap().condensed[0], 0.);
+    assert_eq!(overflow.water.as_ref().unwrap().condensation_latent_j, 0.);
+    assert_eq!(overflow.thermal_steps, 0);
+
+    // Several accepted thermal subdivisions precede this overflow; the containing mechanical
+    // interval still publishes none of their liquid, heat, temperatures or source counters.
+    let mut late = condensing_fixture(0., 0.1, vec![6000.], vec![20.]);
+    late.water
+        .as_mut()
+        .unwrap()
+        .request
+        .maximum_liquid_loading_kg_m2 = 0.005;
+    let before = late.state.temperature_c().to_vec();
+    assert!(advance(&mut late, 0.5, 1.).is_err());
+    assert_eq!(late.state.temperature_c(), before);
+    assert_eq!(late.water.as_ref().unwrap().remaining, vec![0.]);
+    assert_eq!(late.water.as_ref().unwrap().condensed, vec![0.]);
+    assert_eq!(late.water.as_ref().unwrap().condensation_latent_j, 0.);
+    assert_eq!(late.thermal_steps, 0);
+}
+
+#[test]
+fn condensation_effective_enthalpy_reference_only_relabels_the_complete_energy_ledger() {
+    let mut zero = condensing_fixture(0.01, 0.1, vec![6000.], vec![40.]);
+    let mut shifted = condensing_fixture(0.01, 0.1, vec![6000.], vec![40.]);
+    shifted.water.as_mut().unwrap().request.enthalpy_reference_c = 100.;
+    shifted
+        .request
+        .surface_water
+        .as_mut()
+        .unwrap()
+        .enthalpy_reference_c = 100.;
+    advance(&mut zero, 0.5, 1.).unwrap();
+    advance(&mut shifted, 0.5, 1.).unwrap();
+    assert_eq!(zero.state.temperature_c(), shifted.state.temperature_c());
+    assert_eq!(
+        zero.water.as_ref().unwrap().remaining,
+        shifted.water.as_ref().unwrap().remaining
+    );
+    assert_eq!(
+        zero.water.as_ref().unwrap().condensed,
+        shifted.water.as_ref().unwrap().condensed
+    );
+    near(zero.balance_error_j(), 0.);
+    near(shifted.balance_error_j(), 0.);
+    let a = zero.water.as_ref().unwrap();
+    let b = shifted.water.as_ref().unwrap();
+    near(
+        b.incoming_vapor_sensible_j[0] - a.incoming_vapor_sensible_j[0],
+        -a.condensed[0] * 1000. * 100.,
+    );
+}
+
+#[test]
+fn condensation_requires_its_independent_source_and_cannot_leak_into_older_versions() {
+    let history = condensing_fixture(0., 1., vec![6000.], vec![20.]);
+    let valid = history.request.surface_water.unwrap();
+    for version in ["ftx-textile-surface-water/1", "ftx-textile-surface-water/2"] {
+        let mut wrong = valid.clone();
+        wrong.schema = version.into();
+        assert!(wrong.validate(1).is_err());
+    }
+    for mutation in 0..5 {
+        let mut wrong = valid.clone();
+        let condensation = wrong.condensation.as_mut().unwrap();
+        match mutation {
+            0 => condensation.allow_estimates = false,
+            1 => condensation.qualification.clear(),
+            2 => condensation.source.reference.clear(),
+            3 => condensation.vapor_temperature_c = vec![81.],
+            _ => condensation.vapor_temperature_c.clear(),
+        }
+        assert!(wrong.validate(1).is_err());
+    }
+    let mut old = supplied_fixture(0.01, 1., vec![0.], vec![20.]);
+    old.water
+        .as_mut()
+        .unwrap()
+        .request
+        .outside_vapor_pressure_pa[0] = 6000.;
+    assert!(advance(&mut old, 0.5, 1.).is_err());
+}
+
+#[test]
+fn condensation_refines_toward_the_same_coupled_temperature_and_mass() {
+    let run = |step| {
+        let mut history = condensing_fixture(0., step, vec![6000.], vec![40.]);
+        advance(&mut history, 0.5, 1.).unwrap();
+        near(history.balance_error_j(), 0.);
+        (
+            history.state.temperature_c()[0][0],
+            history.water.as_ref().unwrap().condensed[0],
+        )
+    };
+    let coarse = run(0.1);
+    let medium = run(0.05);
+    let fine = run(0.025);
+    let reference = run(0.001);
+    assert!((fine.0 - reference.0).abs() < (medium.0 - reference.0).abs());
+    assert!((medium.0 - reference.0).abs() < (coarse.0 - reference.0).abs());
+    assert!((fine.1 - reference.1).abs() < (medium.1 - reference.1).abs());
+    assert!((medium.1 - reference.1).abs() < (coarse.1 - reference.1).abs());
+}
+
 #[test]
 fn supplied_liquid_enthalpy_enters_the_actual_heat_solve_and_balances_independently() {
     let mut warm = supplied_fixture(0.05, 1., vec![0.01], vec![40.]);

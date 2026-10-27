@@ -14,6 +14,7 @@ const PATTERN: &str =
 const OPTIONS: &str = include_str!("../../../examples/sewing-production-options.json");
 const WORKHOLDING: &str = include_str!("../../../examples/sewing-workholding-options.json");
 const ACCESS: &str = include_str!("../../../examples/sewing-access-options.json");
+const HANDLING: &str = include_str!("../../../examples/sewing-handling-options.json");
 const TIMED_SELECTION: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-timed-selection.json");
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -234,6 +235,130 @@ fn both_native_commands_and_portable_exports_enforce_the_same_planar_tool_sweep(
     assert_eq!(
         fs::read_to_string(directory.join("collision.json")).unwrap(),
         collision
+    );
+}
+
+#[test]
+fn qualified_handling_changes_the_actual_batch_and_replays_through_study_and_commands() {
+    let directory = workspace();
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    fs::write(directory.join("handling.json"), HANDLING).unwrap();
+    let plan = portable(ftx_wasm::manufacturing::sew_plan(PATTERN, HANDLING).unwrap());
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, HANDLING).unwrap());
+    assert_eq!(plan["schema"], "ftx-sewing-plan/15");
+    assert_eq!(program["plan"], plan);
+    assert_eq!(program["stitches"].as_array().unwrap().len(), 240);
+    let production = &plan["production"];
+    assert_eq!(
+        production["ordering"]["selected_order"],
+        json!([
+            "0/join",
+            "0/reinforce",
+            "1/join",
+            "1/reinforce",
+            "2/join",
+            "2/reinforce"
+        ])
+    );
+    assert_eq!(production["ordering"]["optimality_proven"], true);
+    assert_eq!(
+        production["ordering"]["timing"]["selected_setup_milliseconds"],
+        6500
+    );
+    let timing = &production["ordering"]["handling_timing"];
+    assert_eq!(timing["selected_handling_milliseconds"], 10600);
+    assert!(
+        (timing["selected_modeled_production_seconds"]
+            .as_f64()
+            .unwrap()
+            - 41.1)
+            .abs()
+            < 1e-12
+    );
+    assert_eq!(
+        production["handling"]["selected"]["steps"]
+            .as_array()
+            .unwrap()
+            .len(),
+        7
+    );
+    assert_eq!(
+        production["workholding"]["selected"]["peak_occupancy"]["holding-jig"],
+        1
+    );
+    assert_eq!(plan["hardware_execution_authorized"], false);
+
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let mut request = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"retained","changes":{"schema":"ftx-material-bindings/1",
+            "default":pattern["fabric"]["material"]}}],
+        "sewing":serde_json::from_str::<Value>(HANDLING).unwrap(),
+        "comparison":{"basis":"nominal","required_consumers":["sewing"],
+            "objectives":[{"metric":"sewing_modeled_production_seconds","direction":"minimize"}],
+            "constraints":[{"metric":"sewing_handling_seconds","maximum":11.0}]}});
+    let report = portable(ftx_wasm::materials::study(PATTERN, &request.to_string()).unwrap());
+    let row = &report["alternatives"][0];
+    let bound_pattern = row["binding"]["result"]["pattern_json"].as_str().unwrap();
+    let resolved_options = row["sewing"]["result"]["options"].to_string();
+    assert_eq!(
+        row["sewing"]["result"],
+        portable(ftx_wasm::manufacturing::sew_plan(bound_pattern, &resolved_options).unwrap())
+    );
+    assert_eq!(row["sewing"]["result"]["production"], *production);
+    assert_eq!(row["metrics"]["sewing_handling_seconds"], 10.6);
+    assert_eq!(
+        row["metrics"]["sewing_modeled_production_seconds"],
+        timing["selected_modeled_production_seconds"]
+    );
+    assert_eq!(report["comparison"]["frontier"], json!(["retained"]));
+    fs::write(directory.join("study.json"), request.to_string()).unwrap();
+    fs::write(directory.join("bound.json"), bound_pattern).unwrap();
+    fs::write(directory.join("resolved.json"), &resolved_options).unwrap();
+    for main in [false, true] {
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-plan",
+                "pattern.json",
+                "handling.json"
+            ),
+            plan
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "handling.json"
+            ),
+            program
+        );
+        assert_eq!(
+            run(main, &directory, "study", "pattern.json", "study.json"),
+            report
+        );
+        assert_eq!(
+            run(main, &directory, "sew-plan", "bound.json", "resolved.json"),
+            row["sewing"]["result"]
+        );
+    }
+
+    // Unsupported source qualification withdraws the time objective without erasing binding.
+    request["sewing"]["production"]["handling"]["machine_sha256"] = json!("0".repeat(64));
+    let refused = portable(ftx_wasm::materials::study(PATTERN, &request.to_string()).unwrap());
+    assert_eq!(refused["alternatives"][0]["binding"]["status"], "available");
+    assert_eq!(refused["alternatives"][0]["sewing"]["status"], "refused");
+    assert!(refused["alternatives"][0]["metrics"]["sewing_modeled_production_seconds"].is_null());
+    assert_eq!(refused["comparison"]["frontier"], json!([]));
+    assert_eq!(
+        fs::read_to_string(directory.join("pattern.json")).unwrap(),
+        PATTERN
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join("handling.json")).unwrap(),
+        HANDLING
     );
 }
 

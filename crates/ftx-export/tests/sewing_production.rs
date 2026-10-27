@@ -398,13 +398,29 @@ fn handling_requires_exact_source_applicability_and_never_fills_missing_times() 
         build(pattern.clone(), missing).unwrap_err().code,
         RefusalCode::NotConverged
     );
-    for field in ["initial_milliseconds", "final_milliseconds"] {
+    for field in [
+        "initial_milliseconds",
+        "final_milliseconds",
+        "qualifications",
+    ] {
         let mut missing = options.clone();
         missing["production"]["handling"][field]
             .as_object_mut()
             .unwrap()
             .remove("b");
-        assert!(build(pattern.clone(), missing).is_err());
+        assert_eq!(
+            build(pattern.clone(), missing).unwrap_err().code,
+            RefusalCode::NotConverged,
+            "{field}"
+        );
+        let mut unknown = options.clone();
+        let value = unknown["production"]["handling"][field]["b"].clone();
+        unknown["production"]["handling"][field]["absent-operation"] = value;
+        assert_eq!(
+            build(pattern.clone(), unknown).unwrap_err().code,
+            RefusalCode::InvalidDocument,
+            "{field}"
+        );
     }
     let mut duplicate = options;
     let row = duplicate["production"]["handling"]["transitions"][0].clone();
@@ -450,6 +466,34 @@ fn handling_changes_recipe_selection_and_unknown_handling_never_proves_a_recipe_
     );
     assert!(with.optimality_proven);
     assert_eq!(with.selected_objective_seconds, Some(38.0));
+    for field in [
+        "initial_milliseconds",
+        "final_milliseconds",
+        "qualifications",
+    ] {
+        let mut missing = options.clone();
+        missing["production"]["handling"][field]
+            .as_object_mut()
+            .unwrap()
+            .remove("b");
+        let unresolved = request(missing, true)
+            .select(&Pattern::new(pattern.clone()))
+            .unwrap();
+        assert!(unresolved.search_complete, "{field}");
+        assert_eq!(unresolved.unresolved_trials, 2, "{field}");
+        assert!(
+            !unresolved.optimality_proven && !unresolved.no_feasible_listed_recipe,
+            "{field}"
+        );
+        assert!(unresolved.selected_plan.is_none(), "{field}");
+        assert!(
+            unresolved.trials.iter().all(|trial| trial
+                .refusal
+                .as_ref()
+                .is_some_and(|refusal| refusal.code == RefusalCode::NotConverged)),
+            "{field}"
+        );
+    }
     options["production"]["handling"]["qualifications"]["b"]
         .as_array_mut()
         .unwrap()

@@ -511,6 +511,20 @@ checks actual reference-area delivery, Maxwell coexistence, unchanged mechanics 
 No body transfer, absorption, capillary transport, inferred wet-property law, mechanical liquid mass
 or empirical fabric/comfort claim is supplied by this boundary condition.
 
+**Source-qualified condensation and re-evaporation** (`study::heat::surface_water`, `ftx-vc2`).
+Version 3 independently qualifies reverse use of the locked canonical Ret, wet/dry phase transfer,
+incoming vapor temperature and the existing constant-latent/effective liquid-sensible enthalpy
+convention. Signed current-area flux condenses onto reference-owned liquid when ambient vapor
+pressure exceeds the film pressure. The same implicit solver adds latent release and incoming
+sensible mixing, then can re-evaporate that inventory after a boundary reversal. Condensed mass,
+incoming vapor sensible energy and released latent energy remain separate from liquid supply and
+evaporative removal. Maximum-loading/domain failure rolls back the complete accepted interval;
+there is no drainage, source default, sorption, wet mechanical mass or whole-layer/wearer claim.
+Comparison admission checks the complete source/material/patch inventory and reconstructs incoming
+enthalpy from each interval's condensed mass and declared vapor temperature. Existing v1/v2
+positive-only semantics remain unchanged. Analytic warming, dry/wet reversals, reference-area
+accounting, time refinement, rollback and native/portable scenario replay qualify software only.
+
 **Geometry-derived thermal correspondence** (`thermal::surface::projection`, `ftx-tmb`).
 `project` partitions body triangles by local-normal cloth projection using bounded convex clipping,
 retains inverse-mapped cloth subpolygons and mid-surface distance ranges, and emits the existing

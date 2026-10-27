@@ -260,10 +260,20 @@ pub struct Metrics {
     /// Excludes handling, acceleration, final reset and other unmodeled production work.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sewing_feed_and_setup_seconds: Option<f64>,
+    /// Qualified initial, between-operation and final handling on the selected batch schedule.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sewing_handling_seconds: Option<f64>,
+    /// Complete declared serial feed, setup and handling time; excludes undeclared machine work.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sewing_modeled_production_seconds: Option<f64>,
     /// Complete source-qualified thread demand across every channel and production copy.
     /// Requested cutting quantity is inherited unless an explicit matching thread count is supplied.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_required_length_m: Option<f64>,
+    /// Complete consumed thread inventory from qualified exact-yarn linear density, in kilograms.
+    /// Includes declared cutting/end allowances; it is not retained garment mass.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_required_mass_kg: Option<f64>,
     /// Complete independent thread orders in the sewing consumer's own declared currency.
     /// Separate from cut-stock purchasing; missing channels or offers never produce a subtotal.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1171,6 +1181,7 @@ impl Request {
                 .filter(|r| r.complete_consumption_coverage)
             {
                 row.metrics.thread_required_length_m = consumables.total_required_length_m;
+                row.metrics.thread_required_mass_kg = consumables.total_required_mass_kg;
                 row.metrics.thread_observed_order_cost = consumables
                     .purchasing
                     .as_ref()
@@ -1184,6 +1195,15 @@ impl Request {
                 row.metrics.sewing_setup_seconds =
                     Some(timing.selected_setup_milliseconds as f64 / 1000.0);
                 row.metrics.sewing_feed_and_setup_seconds = Some(timing.feed_and_setup_seconds);
+            }
+            if let Some(timing) = plan
+                .ordering_report()
+                .and_then(|order| order.handling_timing.as_ref())
+            {
+                row.metrics.sewing_handling_seconds =
+                    Some(timing.selected_handling_milliseconds as f64 / 1000.0);
+                row.metrics.sewing_modeled_production_seconds =
+                    Some(timing.selected_modeled_production_seconds);
             }
         }
         if let Some(plan) = row.finite_stock.value() {
