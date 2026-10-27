@@ -3303,6 +3303,22 @@ all accepted samples and consistent extrema. The browser exposes both the spatia
 samples. These are nominal design constraints: characterized strain domains are not failure limits,
 and sampled compliance establishes neither continuous-time safety nor comfort or physical garment fit.
 
+### 25.78 Extend actual insulation choices through the shared material authority
+
+The built-in catalog adds ten source-qualified manufacturer grades: six Type G polyester insulation
+sheets and four pre-compressed Type B footwear sheets. Their original mass, thickness, thermal
+resistance and nominal width observations retain document revision, table page, source digest and
+test method. ASTM D5736 thickness pressure is not assigned to the separate ASTM F1868 thermal result;
+rounded clo columns do not replace the published SI observations. Type B composition stays unknown
+where the source omits it. See [insulation-data.md](docs/insulation-data.md).
+
+Existing resolution, freezing, mass/width screening and steady thermal consumers use these records
+without a second database or solver edits. A material-only G100/B100 substitution changes conditional
+steady heat flow through the existing series model. This is useful commercial coverage, not a measured
+garment, a temperature rating, a wet-state law or complete transient/mechanical characterization.
+Matched lot-specific measurements and the unchanged-pattern linen/leather/performance-knit acceptance
+in `ftx-tm2` and `ftx-tm8` remain the principal physical-data gaps. The source-import slice is `ftx-ti1`.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
