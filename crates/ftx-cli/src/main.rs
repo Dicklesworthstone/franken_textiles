@@ -22,6 +22,7 @@ mod draft;
 mod export;
 mod fabric;
 mod fold;
+mod import;
 mod materials;
 mod measure;
 mod outfit;
@@ -51,6 +52,7 @@ use serde_json::{Value, json};
 const VIEWER_TEMPLATE: &str = include_str!("../../../assets/fold_viewer_template.html");
 
 const USAGE: &str = "usage:
+  ftx import garmentcode INPUT.json --out NEW_DIR [--annotations ANNOTATIONS.json] [--json]
   ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--fabric F.json] [--json]
   ftx draft PROGRAM --measurements M --ws WS [--style S.json] [--fabric F.json] [--update-measurements] [--as-of DATE] [--no-priors] [--json]
   ftx validate PATTERN --measurements M [--fit F] [--json]
@@ -997,6 +999,7 @@ fn main() -> ExitCode {
         }
     };
     match args.positional.first().map(String::as_str) {
+        Some("import") => emit("import", args.json, import::cmd_import(&args)),
         Some("draft") => emit("draft", args.json, draft::cmd_draft(&args)),
         Some("render") => emit("render", args.json, render::cmd_render(&args)),
         Some("viewer") => emit("viewer", args.json, fold::cmd_viewer(&args)),

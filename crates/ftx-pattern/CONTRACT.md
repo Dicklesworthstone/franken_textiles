@@ -66,6 +66,64 @@ Python's `str(KeyError)`; `Value` prints as is).
 
 **Determinism class.** Fixed-order f64 arithmetic over `ftx-core`; bit-identical across targets.
 
+**Evaluated GarmentCode import.**
+
+`garmentcode_import::import_garmentcode` admits an evaluated GarmentCode specification and an optional
+`fabric-garmentcode-annotations/1` sidecar into the existing `fabric-pattern/1` model. The text wrapper
+`import_garmentcode_json` bounds each input to 4 MiB and records its exact-text SHA-256 in the pattern
+and report. This is a conversion boundary, not a GarmentCode parameter-program evaluator or an
+SVG/DXF/PDF parser.
+
+Declared `units_in_meter` supplies the scale `1000 / units_in_meter` to native millimetres. Line,
+quadratic and cubic edges retain their exact supported curve representation; relative controls use
+`start + t * chord + h * perp(chord)`, with no unit-normalization of the perpendicular. A clockwise
+loop is reversed with its controls, notch directions and stitch orientation kept consistent. Original
+panel names and edge indices remain traceable. A two-sided stitch means native `reverse: true`;
+`right_wrong` means `false`, adjusted when a panel's loop is reversed.
+
+Each panel must have one consecutive closed edge loop with no unused vertices or zero-length chords.
+Sampled outlines reject intersections, self-touching and overlaps; this does not prove analytic
+Bézier simplicity. Circular arcs, active parameters, normalized panel translation, unsupported fields
+and invalid or reused stitch references refuse. Input depth, panel/edge counts, sampled points and
+intersection work have deterministic budgets. Supported curves are retained, not replaced by the
+sampled audit outline.
+
+Each panel is already a physical instance, so its native cut quantity is one. Neither names nor the
+sidecar infer mirror pairs or fold geometry. The import cannot restore allowances, grain, construction
+marks or pieces absent from its source. Original translation and rotation remain verbatim source
+metadata; they do not supply native body-placement hints.
+
+The sidecar's optional `panels` map is keyed by the original panel names. Supported fields are `role`,
+`grain`, `placement`, `sa`, `sim`, `note`, `material` and `notches`. Dimensional annotations use native
+millimetres; `notch.edge` is the original integer edge index and `notch.s` is its original-direction
+arclength fraction. Optional `stitches` entries are keyed by original decimal stitch indices and may
+supply `ratio`, `ratio_band`, `tol_mm` and `kind`. The optional `fit` is a separate `fabric-fit/1`
+contract with explicit, nonempty points of measure; it is retained as `report.fit_spec`. Its geometric
+references use the emitted native IDs (`p0000`, `e0000`, etc.), available in the report's panel/edge
+mapping. Import checks those references against the emitted pattern; ordinary validation evaluates
+the points and their measurement targets. Unknown panel or
+stitch annotation fields and source references refuse, as do geometry-changing cut overrides.
+`sim: true` requires explicit native placement.
+
+An optional top-level `provenance` object is retained verbatim in the report and pattern import
+metadata as unverified caller assertions. Source `fabric_pattern_export` metadata is retained as
+`pattern.meta.import.source_export`, preserving supplied warnings and edge maps for review.
+
+For example, annotate a source panel actually named `front` with a 100 mm grain-direction segment,
+10 mm allowance and a notch a quarter of the way along its original edge zero:
+
+```json
+{"schema":"fabric-garmentcode-annotations/1","panels":{"front":{"grain":[[0,0],[0,100]],"sa":10,"notches":[{"edge":0,"s":0.25}]}}}
+```
+
+The result contains the native `pattern` and an import `report`, always `REVIEW_REQUIRED`. Structural
+or budget refusals publish no successful conversion; the report lists missing construction
+information. Run ordinary validation afterward for seam and fit checks. Import does not supply wearer
+measurements, fabricate a fit contract, infer a matching seam ratio from its lengths, or establish
+physical fit. The CLI retains exact source and annotation bytes in a new directory and writes
+`import.json` last. Native and WebAssembly callers use
+the same core; browser authoring controls are separate work.
+
 **MIT source-row material data** (`material_catalog::mit`). Existing summary IDs stay unchanged;
 `mit.raw-2013.NNa` etc. retain 52 lettered workbook rows for the same 30 fabrics. Four published
 quantities per row retain original units and source conditions; `lb/in3` normalizes to `kg/m3`
