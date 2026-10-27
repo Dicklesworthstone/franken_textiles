@@ -1,5 +1,18 @@
 # ftx-pattern contract
 
+**Source-qualified treatment** (`material_treatment`, `ftx-care1`). Frozen before/after selections,
+exact process/cycles/conditioning and sourced directional dimensional changes produce one nominal
+material-axis map. The AFTER record independently qualifies every retained physical observation;
+missing properties and response laws never inherit old coefficients. `geometry::Input::apply`
+derives an ordinary pattern for treatment or inverse cutting compensation, preserves source topology,
+transforms absolute curve geometry and physical notch positions, and recomputes the existing seam
+walk. Mirrored pieces and material-aligned folds work through normal instance generation; unsupported
+fold/scale compositions and repeat compensation refuse. Returned source/request/pattern JSON is
+exact frozen replay text. Standard seam allowances remain authored manufacturing choices. These
+free dimensional changes do not establish constrained sewn-garment wash behavior or measured fit.
+Tests: `material_treatment`, `material_treatment_geometry`, `laundered_denim_catalog`. Source and
+paired observations: [laundered-denim-materials.md](../../docs/laundered-denim-materials.md).
+
 **Purpose.** The `fabric-pattern/1` document and what every later stage reads from it: instances (mirror
 pairs, on-fold unfolding), the structure checks with the reference's messages, seam sides, notch fractions
 and notch-piecewise seam sampling (`docs/spec/01` §2, §6–8). Validation (FTX-04, `validate.rs`) and the
