@@ -362,7 +362,6 @@ pub fn drape(
     );
     add_numerical_report(&mut report, &sew, &drape, opts);
     report["material"] = material.report;
-    add_contact_report(&mut report, &scene, &sew, &drape, initial_contact.as_ref());
     add_casing_windows(&mut report, &scene, &fold, &initial_positions, &drape, opts);
     if let Some(fabrics) = &material.piece_fabrics {
         report["fabric"] = json!({"basis":"per_piece", "see":"material.records"});
@@ -406,6 +405,8 @@ pub fn drape(
             }
         }
     }
+    // Bind reactions to the complete material receipt, including retained per-piece ownership.
+    add_contact_report(&mut report, &scene, &sew, &drape, initial_contact.as_ref());
     if let Some(attached) = scene.solver.model.attached_mass_report()? {
         // Preserve the existing simulated-cloth metric. Actual solver/elastic gravity and inertia
         // use the augmented mass vector; thermal surfaces retain only characterized sheet mass.

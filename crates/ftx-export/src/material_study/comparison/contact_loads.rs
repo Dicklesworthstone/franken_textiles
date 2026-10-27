@@ -224,13 +224,12 @@ pub(super) fn admit<'a>(
     {
         return Err(fail());
     }
-    if let Some(motion) = motion {
-        if samples.is_empty()
+    if let Some(motion) = motion
+        && (samples.is_empty()
             || motion["triangles"] != simulation["triangles"]
-            || motion["body_triangles"] != report["source"]["body_triangles"]
-        {
-            return Err(fail());
-        }
+            || motion["body_triangles"] != report["source"]["body_triangles"])
+    {
+        return Err(fail());
     }
     let all_initial: Vec<Vec3> =
         serde_json::from_value(map["body_force_on_cloth_n"].clone()).map_err(|_| fail())?;
@@ -267,16 +266,15 @@ pub(super) fn admit<'a>(
         {
             return Err(fail());
         }
-        if i == 0 {
-            if frame["body_state_sha256"] != map["body_state_sha256"]
+        if i == 0
+            && (frame["body_state_sha256"] != map["body_state_sha256"]
                 || frame["active_policy_sha256"] != map["active_policy_sha256"]
                 || forces
                     .iter()
                     .zip(&selected)
-                    .any(|(force, &v)| *force != all_initial[v])
-            {
-                return Err(fail());
-            }
+                    .any(|(force, &v)| *force != all_initial[v]))
+        {
+            return Err(fail());
         }
         if let Some(motion) = motion {
             let body = if i == 0 {
