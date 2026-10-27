@@ -490,6 +490,196 @@ def extract_public_product(entry: dict, product_raw: bytes, before_raw: bytes, a
     return quote, receipt
 
 
+def validate_fabricmart(entry: dict) -> None:
+    """Only the reviewed single-variant quarter-yard storefront contract is supported."""
+    required = set(FIELDS) | {"adapter", "source_url", "public_url", "product_id", "variant_id",
+        "variant_title", "basis_source", "basis_note", "basis_reviewed_on", "specifications",
+        "inventory_basis", "material_sha256"}
+    if set(entry) != required or entry["adapter"] != "fabricmart_decimal_html_v1":
+        raise ValueError("Fabric Mart manifest fields differ from fabricmart_decimal_html_v1")
+    validate_basis(entry)
+    url = entry["source_url"]
+    if (origin(url) != "https://fabricmartfabrics.com"
+            or not re.fullmatch(r"/products/[a-z0-9-]+", urllib.parse.urlsplit(url).path)
+            or entry["basis_source"] != url or entry["public_url"] != url + ".json"):
+        raise ValueError("Fabric Mart sources must identify one canonical public product")
+    if (entry["unit"] != "linear_yard" or entry["quantity"] != 0.25
+            or entry["minimum_quantity"] != 1 or entry["order_increment"] != 0.25
+            or entry["currency"] != "USD" or entry["variant_title"] != "Default Title"
+            or entry["inventory_basis"] != "displayed_yards"):
+        raise ValueError("only explicit quarter-yard USD pricing and displayed-yard stock are qualified")
+    for key in ("product_id", "variant_id"):
+        if type(entry[key]) is not int or not 0 < entry[key] <= 2**53 - 1:
+            raise ValueError(f"{key} must be an exact positive integer")
+    specs = entry["specifications"]
+    if (not isinstance(specs, dict) or not specs or specs.get("SKU") != entry["sku"]
+            or not {"Content", "Width", "Type"}.issubset(specs)
+            or any(not isinstance(k, str) or not k.strip() or not isinstance(v, str) or not v.strip()
+                   for k, v in specs.items())):
+        raise ValueError("Fabric Mart needs reviewed exact SKU, content, width and construction fields")
+
+
+class FabricMartPage(HTMLParser):
+    """Read the actual product section; no page-wide substring can supply a variant field."""
+    def __init__(self, product_id: int):
+        super().__init__(convert_charrefs=True)
+        self.product_id = str(product_id)
+        self.sections = 0
+        self.active = False
+        self.capture = None
+        self.capture_tag = None
+        self.capture_parts = []
+        self.values = {}
+        self.inputs = {}
+        self.in_specs = False
+        self.specs = {}
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        classes = attrs.get("class", "").split()
+        if tag == "section" and attrs.get("id") == "product-" + self.product_id:
+            self.sections += 1
+            self.active = True
+            if attrs.get("data-product-id") != self.product_id:
+                raise ValueError("product section identity changed")
+            self.values["inventory_attribute"] = attrs.get("data-variant-inventory")
+        if not self.active:
+            return
+        if tag == "ul" and "product-specification" in classes:
+            if self.in_specs or self.specs:
+                raise ValueError("duplicate product specifications")
+            self.in_specs = True
+        key = None
+        if tag == "script" and "product-json" in classes and attrs.get("type") == "application/json":
+            key = "product"
+        elif tag == "p" and "stock-info" in classes:
+            key = "stock"
+        elif tag == "span" and "price-item--regular-yards" in classes:
+            key = "yard_price"
+        elif tag == "label" and attrs.get("for") == "qty-" + self.product_id:
+            # The hidden generic quantity label also exists; only the full selling-basis label matters.
+            key = "quantity_label"
+        elif tag == "li" and self.in_specs:
+            key = "specification"
+        if key:
+            if self.capture is not None:
+                raise ValueError("nested product data field")
+            self.capture, self.capture_tag, self.capture_parts = key, tag, []
+        if tag == "input" and attrs.get("name") in {
+                "properties[_decimal]", "properties[_step]", "properties[_minimum_qty]"}:
+            name = attrs["name"]
+            if name in self.inputs:
+                raise ValueError("duplicate product quantity field")
+            self.inputs[name] = attrs.get("value")
+
+    def handle_data(self, data):
+        if self.capture is not None:
+            self.capture_parts.append(data)
+
+    def handle_endtag(self, tag):
+        if self.capture is not None and tag == self.capture_tag:
+            key = self.capture
+            value = "".join(self.capture_parts)
+            if key != "product":
+                value = " ".join(value.split())
+            if key == "specification":
+                name, sep, value = value.partition(":")
+                if not sep or name in self.specs:
+                    raise ValueError("ambiguous product specification")
+                self.specs[name] = value.strip()
+            elif key != "quantity_label" or ":" in value:
+                if key in self.values:
+                    raise ValueError("duplicate product data field")
+                self.values[key] = value
+            self.capture = self.capture_tag = None
+        if tag == "ul":
+            self.in_specs = False
+        if tag == "section" and self.active:
+            self.active = False
+
+
+def fabricmart_page(entry: dict, raw: bytes) -> dict:
+    if len(raw) > LIMIT:
+        raise ValueError("source exceeds 4 MiB")
+    page = FabricMartPage(entry["product_id"])
+    page.feed(raw.decode("utf-8-sig")); page.close()
+    if page.sections != 1 or page.active or page.capture is not None:
+        raise ValueError("missing, ambiguous or unclosed Fabric Mart product section")
+    if (page.specs != entry["specifications"] or page.inputs != {
+            "properties[_decimal]": "true", "properties[_step]": "0.25",
+            "properties[_minimum_qty]": "1"}
+            or page.values.get("quantity_label") !=
+                "Quantity : 1 yard, can only be changed in increments of 0.25."):
+        raise ValueError("reviewed textile specification or quarter-yard selling basis changed")
+    product = load(page.values.get("product", "").encode())
+    variant = public_variant(product, entry)
+    if len(product["variants"]) != 1 or "decimal" not in product.get("tags", []):
+        raise ValueError("only a single reviewed decimal variant is qualified")
+    amount, inventory = variant.get("price"), variant.get("inventory_quantity")
+    if (type(amount) is not int or not 0 < amount <= 2**53 - 1
+            or type(inventory) is not int or not 0 <= inventory <= 2**53 - 1
+            or variant.get("inventory_management") != "shopify"
+            or variant.get("inventory_policy") != "deny"
+            or page.values.get("inventory_attribute") != str(inventory)
+            or type(variant.get("available")) is not bool):
+        raise ValueError("exact tracked-deny inventory, availability or price is missing/conflicting")
+    match = re.fullmatch(r"\$([0-9]+\.[0-9]{2}) per yard", page.values.get("yard_price", ""))
+    if not match or Decimal(match[1]) != Decimal(amount) / 25:
+        raise ValueError("displayed yard price does not match four quarter-yard units")
+    stock_text = page.values.get("stock", "")
+    stock = re.fullmatch(r"In stock \(([0-9]+) yards available\)", stock_text)
+    if stock:
+        displayed = int(stock[1])
+        if not variant["available"] or inventory == 0 or displayed != inventory // 4:
+            raise ValueError("displayed yards and exact quarter-yard inventory conflict")
+    elif stock_text == "Out of stock" and inventory == 0 and not variant["available"]:
+        displayed = 0
+    else:
+        raise ValueError("unqualified, missing or contradictory displayed stock")
+    return {"price_hundredths": amount, "available": variant["available"],
+            "displayed_yards": displayed, "inventory_quarter_units": inventory,
+            "inventory_yards": inventory / 4, "specifications": page.specs}
+
+
+def extract_fabricmart(entry: dict, before_raw: bytes, public_raw: bytes, after_raw: bytes,
+                      observed: dt.datetime, *, intraday=False) -> tuple[dict, dict]:
+    """Observe declared stock without converting it into a continuous cutting length."""
+    validate_fabricmart(entry)
+    observed = observation_time(entry, observed)
+    before, after = (fabricmart_page(entry, raw) for raw in (before_raw, after_raw))
+    if before != after:
+        raise ValueError("supplier price, stock or specification changed during observation")
+    product = load(public_raw).get("product")
+    if not isinstance(product, dict):
+        raise ValueError("public currency source needs one product")
+    variant = public_variant(product, entry)
+    if (len(product["variants"]) != 1 or variant.get("product_id") != entry["product_id"]
+            or variant.get("price_currency") != "USD"
+            or decimal_number(variant.get("price")) != Decimal(before["price_hundredths"]) / 100
+            or variant.get("quantity_rule") != {"min": 1, "max": None, "increment": 1}
+            or variant.get("quantity_price_breaks") != []):
+        raise ValueError("public product currency, price or underlying unit rules changed")
+    digest = hashlib.sha256(after_raw).hexdigest()
+    quote = quote_basis(entry)
+    quote.update(price=before["price_hundredths"] / 100, observed_on=observed.date().isoformat(),
+                 available=before["available"], available_quantity=before["displayed_yards"],
+                 source=entry["source_url"], source_sha256=digest)
+    receipt = {"schema": "ftx-source-refresh/1", "adapter": entry["adapter"],
+        "observed_at": observed.isoformat(), "manifest_entry": entry,
+        "source_sha256": digest,
+        "html_before_sha256": hashlib.sha256(before_raw).hexdigest(), "html_after_sha256": digest,
+        "public_sha256": hashlib.sha256(public_raw).hexdigest(), "observed": before,
+        "quantity_basis": "one billing unit is 0.25 yard; displayed price cross-checks four units",
+        "inventory_basis": "explicit displayed_yards policy; retain full-unit inventory separately",
+        "inventory_display_difference_yards": before["inventory_yards"] - before["displayed_yards"],
+        "limits": ["Displayed yards are the explicitly selected conservative capacity, not a silent inventory clamp.",
+                   "Aggregate stock does not establish any maximum continuous roll or defect-free cutting length.",
+                   "Public declarations do not reserve inventory or qualify checkout tax, shipping or fulfillment.",
+                   "Reported stretch and nominal width do not supply mechanical laws or usable cutting width."]}
+    stamp_intraday(quote, receipt, observed, intraday)
+    return quote, receipt
+
+
 def validate_csv(entry: dict) -> None:
     required = set(FIELDS) | {"adapter", "source_url", "basis_source", "basis_note",
                               "basis_reviewed_on", "columns", "match", "availability", "delimiter"}
@@ -903,6 +1093,8 @@ def refresh(manifest: dict, get, now=None, *, intraday=False) -> tuple[dict, dic
             validate_jsonld(entry)
         elif entry.get("adapter") == "shopify_public_product_v1":
             validate_public_product(entry)
+        elif entry.get("adapter") == "fabricmart_decimal_html_v1":
+            validate_fabricmart(entry)
         else:
             raise ValueError("unknown source adapter")
         if entry["offer_id"] in ids:
@@ -926,6 +1118,14 @@ def refresh(manifest: dict, get, now=None, *, intraday=False) -> tuple[dict, dic
             else:
                 quote, receipt = extract_jsonld(entry, product, observed, intraday=intraday)
                 extension = ".html" if entry["source_format"] == "html" else ".json"
+        elif entry.get("adapter") == "fabricmart_decimal_html_v1":
+            before = get(entry["source_url"], accept="text/html")
+            public = get(entry["public_url"], accept="application/json")
+            product = get(entry["source_url"], accept="text/html")
+            quote, receipt = extract_fabricmart(entry, before, public, product, clock(), intraday=intraday)
+            evidence[hashlib.sha256(before).hexdigest() + ".html"] = before
+            evidence[hashlib.sha256(public).hexdigest() + ".json"] = public
+            extension = ".html"
         elif entry.get("adapter") == "shopify_public_product_v1":
             # Bracket the Ajax price/availability with the explicit public currency and stock.
             before = get(entry["public_url"], accept="application/json")

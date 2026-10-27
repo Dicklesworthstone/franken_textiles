@@ -44,6 +44,8 @@ def digest(value: str) -> str:
 def _extension(entry):
     if entry.get("adapter") == "csv_v1":
         return ".csv"
+    if entry.get("adapter") == "fabricmart_decimal_html_v1":
+        return ".html"
     return ".html" if entry.get("source_format") == "html" else ".json"
 
 
@@ -111,6 +113,14 @@ def _facts(entry, source, receipt, public_sources=()):
             offer["priceSpecification"] = {k: v for k, v in offer["priceSpecification"].items()
                                            if k not in {"price", "priceCurrency"}}
         selected = {"product": expand(product), "offer": offer}
+    elif adapter == "fabricmart_decimal_html_v1":
+        _, checked = prices.extract_fabricmart(entry, *public_sources, source, observed,
+            intraday=receipt.get("quote_schema") == prices.INTRADAY_SCHEMA)
+        if checked != receipt:
+            raise ValueError("Fabric Mart receipt does not replay from its source observations")
+        selected = {"specifications": checked["observed"]["specifications"],
+                    "product_id": entry["product_id"], "variant_id": entry["variant_id"],
+                    "variant_title": entry["variant_title"], "inventory_basis": entry["inventory_basis"]}
     elif adapter in {"shopify_ajax_product_v1", "shopify_public_product_v1"}:
         if adapter == "shopify_public_product_v1":
             prices.extract_public_product(entry, source, *public_sources, observed,
@@ -159,10 +169,15 @@ def _record(receipt_raw, source, read_evidence):
         raise ValueError("retained source exceeds 4 MiB")
     entry = receipt["manifest_entry"]
     public_sources = []
-    if receipt["adapter"] == "shopify_public_product_v1":
-        for field in ("public_before_sha256", "public_after_sha256"):
+    corroboration = []
+    if receipt["adapter"] == "fabricmart_decimal_html_v1":
+        corroboration = [("html_before_sha256", ".html"), ("public_sha256", ".json")]
+    elif receipt["adapter"] == "shopify_public_product_v1":
+        corroboration = [("public_before_sha256", ".json"), ("public_after_sha256", ".json")]
+    if corroboration:
+        for field, extension in corroboration:
             key = digest(receipt[field])
-            raw = read_evidence(key + ".json")
+            raw = read_evidence(key + extension)
             if len(raw) > prices.LIMIT or hashlib.sha256(raw).hexdigest() != key:
                 raise ValueError("retained public-product corroboration differs from its source digest")
             public_sources.append(raw)

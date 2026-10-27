@@ -220,6 +220,29 @@
       "sources": {"discovery-94065":{"reference":"https://discoveryfabrics.com/products/polartec-power-stretch-jersey","accessed_on":"2026-10-18","note":"Primary supplier variant, Specs and Features and Content rows reviewed by public HTTP GET. Factual attributes only; trademarks and page rights remain with source. HTML SHA-256 4a9d57a2f74b190b2036f2d1317a14ed11aabfcec8cf9bf29c7d0972e828f7d4. This polyester construction is distinct from the nylon 94010 specimen; neither has complete mechanical or thermal characterization."}}
     },
     {
+      "id": "fabricmart/DCC-3844",
+      "name": "Fabric Mart Bravo Brown Nylon/Lycra Activewear Knit DCC 3844",
+      "form": "knit",
+      "composition": [],
+      "composition_complete": false,
+      "structure": {
+        "supplier_sku": "DCC 3844",
+        "supplier_product_id": "10487001547044",
+        "supplier_variant_id": "54020910219556; Default Title",
+        "composition_label": "Nylon/Lycra; fractions are not reported. [source: fabricmart-dcc3844]",
+        "construction": "Activewear knit; specific knit architecture, yarn count, lot and finish unreported. [source: fabricmart-dcc3844]",
+        "color": "Bravo Brown. [source: fabricmart-dcc3844]",
+        "supplier_stretch": "50% selvage-to-selvage and along selvage; load, gauge, conditioning and recovery protocol are absent. This marketing specification is not breaking strain or a mechanical response. [source: fabricmart-dcc3844]",
+        "width_scope": "Nominal overall width only; usable width and continuous roll capacity are not established.",
+        "selling_basis": "UI one-yard minimum and quarter-yard increments; JSON price bills each quarter-yard. Exact quoted prices and observed stock are separate dated quote snapshots.",
+        "record_revision": "2026-10-27"
+      },
+      "properties": {
+        "width": {"value":58,"unit":"in","evidence":"published","source":"fabricmart-dcc3844","method":"Exact product Specification Width field, cross-checked against SKU and product/variant IDs","conditions":{"specimen":"As-sold Bravo Brown DCC 3844; lot, conditioning and usable selvage allowances not reported"}}
+      },
+      "sources": {"fabricmart-dcc3844":{"reference":"https://fabricmartfabrics.com/products/bravo-brown-nylon-lycra-activewear-knit-58w","accessed_on":"2026-10-27","note":"Primary supplier public product HTML and product JSON inspected 2026-10-27. Initial HTML SHA-256 6a8912121a6fe37d736577d35cf78ef3a09c44d283d32554668d10da1d42285d; public JSON SHA-256 4d5b89483c92b647efa3802f9c9a357b8b0a1f7fe1f97c652fee0d921d8cca90. Factual attribute transcription only; page and image rights remain with supplier. Product is a purchasing identity, not a calibrated textile specimen. No mass, mechanical, thermal or fire-performance properties are inferred."}}
+    },
+    {
       "id": "rbtr/hyperdry-850-goose-down",
       "name": "Ripstop by the Roll HyperDRY 850 FP Goose Down",
       "form": "fill",

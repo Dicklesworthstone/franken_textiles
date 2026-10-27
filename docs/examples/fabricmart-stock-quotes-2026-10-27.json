@@ -1,0 +1,27 @@
+{
+  "schema": "ftx-textile-quotes/2",
+  "quotes": [
+    {
+      "offer_id": "fabricmart/DCC-3844/US-retail",
+      "material_id": "fabricmart/DCC-3844",
+      "supplier": "Fabric Mart",
+      "sku": "DCC 3844",
+      "quantity": 0.25,
+      "unit": "linear_yard",
+      "minimum_quantity": 1,
+      "order_increment": 0.25,
+      "currency": "USD",
+      "region": "US",
+      "quality": "supplier-retail-grade-unspecified",
+      "terms": "listed-merchandise-tax-shipping-unqualified",
+      "material_sha256": "e10dd31351adc464af6421ad6cd18e4ac615e55fcbc1831bebcd80352f20cffa",
+      "price": 6.25,
+      "observed_on": "2026-10-27",
+      "available": true,
+      "available_quantity": 22,
+      "source": "https://fabricmartfabrics.com/products/bravo-brown-nylon-lycra-activewear-knit-58w",
+      "source_sha256": "27679bfcf2b93952f3b3e3d71a2c15d5d73d70e0ff495067fb70d3eba0bf5a82",
+      "observed_at": "2026-10-27T20:33:12.801363Z"
+    }
+  ]
+}

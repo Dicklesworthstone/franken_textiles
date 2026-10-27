@@ -3879,6 +3879,30 @@ checks. Shared operators, inter-cell transfers and measured factory execution re
 under `ftx-pb2.2`; a window is an explicitly qualified input, not inferred live availability.
 See [sewing-production.md](docs/sewing-production.md).
 
+### 25.101 Exact supplier sale units reach live finite-stock purchasing
+
+The source refresh path now admits a reviewed Fabric Mart decimal-yard storefront without
+changing the canonical quote or purchasing schemas. Exact product, variant and SKU identities,
+published textile specification rows, currency and quantity controls must agree across a
+product-HTML/public-JSON/product-HTML observation bracket. A quarter-yard billing price is
+cross-checked against the displayed yard price; Shopify's billing-unit minimum cannot replace
+the storefront's explicit one-yard fabric minimum and quarter-yard increment.
+
+One real nylon/Lycra activewear-knit purchasing identity enters the shared catalog with its
+source-reported nominal width and missing composition fractions/physics retained as unknown.
+The explicit displayed-yard inventory policy preserves both its selected capacity and the
+separate underlying quarter-unit inventory, including any declared display difference. It
+does not infer uninterrupted roll length, usable width, checkout reservation or fulfillment.
+Changed identities, units, material specifications or inconsistent stock refuse publication.
+
+The adapter participates in existing immutable evidence and supplier-revision replay. The
+checked-in dated quote comes from an actual live refresh, and ordinary native purchasing
+has exercised the one-yard order, excess-capacity and missing-continuity outcomes. This
+implements `ftx-pq1.1`; current availability always requires another source observation.
+Broader supplier coverage, representative market percentiles and empirical specimen data
+remain under `ftx-tm6`, `ftx-pq1` and `ftx-tm2`.
+See [fabricmart-stock-refresh.md](docs/fabricmart-stock-refresh.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
