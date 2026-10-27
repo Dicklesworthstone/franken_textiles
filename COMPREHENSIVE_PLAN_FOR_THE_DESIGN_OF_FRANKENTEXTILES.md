@@ -3344,6 +3344,10 @@ active contact policy and selected source instances. Moving bodies keep those sa
 Explicit vertex and candidate-pair allowances bound the additional evaluation; optional refusal
 preserves independently available motion, thermal and manufacturing outputs.
 
+Initial reaction receipts bind the completed material report, including retained per-piece instance
+and triangle ownership. Heterogeneous-garment regressions compare the complete receipt against the
+ordinary production contact calculation; native and portable comparisons exercise this per-piece path.
+
 Four nominal comparison metrics cover the initial resultant, initial maximum nodal force and their
 peaks across accepted motion. Admission reconciles complete sample histories, source ownership,
 independent initial collider identity, force-vector reductions, extrema witnesses and work totals.
