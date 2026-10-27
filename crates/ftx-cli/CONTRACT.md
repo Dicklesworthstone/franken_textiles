@@ -16,6 +16,18 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   malformed input still refuses. Distorted cameras show projected vertices without invented
   straight lens-warped edges. `INITIALIZATION_REVIEW` and exact original/source/model bindings
   establish no optimized body, observability, fit acceptance, collision skin or READY status.
+  The local editor authors shared-shape and per-frame pose starts with explicit named bounds and
+  units. Empty/one-start inputs are draft-only; all existing starts retain strict validation, and
+  the ordinary fitter still requires two to four distinct starts. Edits do not recompute the
+  displayed original geometry. Pending/invalid edits, cancellation and reset withdraw old links.
+- `ftx measure fit-starts ANNOTATIONS --model MODEL --out NEW_DIR [--json]`: apply a complete
+  `ftx-body-starts/1` annotation through the same native fitter admission. Exact source bytes,
+  model and capture/mask evidence bind the values; original-order frame ordinals preserve full
+  native timestamps without a browser round trip. Only starts and rebased capture paths change,
+  plus explicit inline materialization of separately imported review-mask slices. All observations,
+  FIT/CHECK roles, model targets and parameter bounds remain intact. `input.json` is an ordinary
+  capture/prepared-fit input; `starts.json` records private create-only publication. Regenerate a
+  start review to see the changed geometry. No pose estimate, optimization or fit acceptance.
 - `ftx measure body-target-review INPUT --model MODEL --out NEW_DIR [--json]` and
   `ftx measure body-targets ANNOTATIONS --model MODEL --out NEW_DIR [--json]`: author named
   correspondences on the exact array-verified converted model in a private offline mesh picker,

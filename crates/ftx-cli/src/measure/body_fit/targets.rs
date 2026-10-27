@@ -170,7 +170,7 @@ pub(super) fn review(args: &Args) -> Result<(Value, i32, String), Refusal> {
     ))
 }
 
-fn rebase_capture(input: &mut Value, source: &Path) -> Result<(), Refusal> {
+pub(super) fn rebase_capture(input: &mut Value, source: &Path) -> Result<(), Refusal> {
     if input["schema"] != "ftx-anny-capture-input/1" {
         return Ok(());
     }

@@ -5,12 +5,12 @@ use std::{fmt::Write as _, path::Path};
 use ftx_body::{AnnyData, AnnyModel};
 use ftx_core::{Refusal, RefusalCode, Vec2, receipt::sha256_hex};
 use ftx_measure::{
-    body_fit::{BodyModel, FitFrame, prepare_input},
+    body_fit::{BodyModel, FitFrame, prepare_start_authoring},
     silhouette::{self, Axis, SurfaceMesh},
 };
 use serde_json::{Value, json};
 
-use super::{Adapter, Request, capture, import_masks, review};
+use super::{Adapter, Request, capture, import_masks, review, start_edit};
 use crate::{Args, bad_input, known_options, required, workspace};
 
 fn mesh_bytes(mesh: &SurfaceMesh) -> Result<Vec<u8>, Refusal> {
@@ -250,11 +250,22 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let masks = super::option(args, "silhouettes")
         .map(|path| import_masks(path, &mut request.fit))
         .transpose()?;
-    let input = prepare_input(&request.fit, adapter.layout())?;
+    let input = prepare_start_authoring(&request.fit, adapter.layout())?;
     let source =
         std::fs::canonicalize(file).map_err(|e| workspace::io_error(Path::new(file), e))?;
     let mut bundle = review::Bundle::new();
     let original = bundle.push("original-input.json".into(), bytes.clone())?;
+    let (editor_page, editor) = start_edit::attach(
+        &mut bundle,
+        &request.fit,
+        &adapter,
+        &source,
+        &bytes,
+        capture_input.as_ref(),
+        super::option(args, "silhouettes")
+            .zip(masks.as_ref())
+            .map(|(path, receipt)| (Path::new(path), receipt)),
+    )?;
     let images: Vec<_> = input
         .frames
         .iter()
@@ -269,14 +280,38 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let mut page = String::from(
         "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">\
-         <title>Body fit initializations</title><style>body{font:16px system-ui;max-width:1100px;margin:2rem auto;padding:1rem}svg{max-width:100%;border:1px solid #999}pre{white-space:pre-wrap;overflow-wrap:anywhere}section{border-top:2px solid #999;margin:2rem 0}a{color:#0369a1}</style>\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src 'self'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">\
+         <title>Body fit initializations</title><style>body{font:16px system-ui;max-width:1100px;margin:2rem auto;padding:1rem}svg,img{max-width:100%;border:1px solid #999}pre{white-space:pre-wrap;overflow-wrap:anywhere}section{border-top:2px solid #999;margin:2rem 0}a{color:#0369a1}button,input,select{font:inherit;padding:.3em}label{display:block;margin:.5em 0}fieldset{margin:1em 0}input{max-width:14em}[hidden]{display:none!important}#startStatus{min-height:3em}</style>\
          <h1>Inspect declared body fit initializations</h1>\
          <p>No fitting or acceptance was performed. Orange marks are observations; blue marks are initial projections. Gray wireframe links are shown only for rectified cameras; distorted cameras show projected vertices. Hidden surfaces remain visible. Failed projections and missing contour coverage remain explicit diagnostics.</p>\
-         <p>Keep held-out evidence fixed. Inspect starts before fitting; do not tune observations or initializations to held-out residuals. Change starts in the original input and generate a new directory. No anatomy, observability, collision skin, READY measurements or physical fit is established.</p>\
+         <p>Keep held-out evidence fixed. Inspect starts before fitting; do not tune observations or initializations to held-out residuals. Author explicit values below and generate a new review directory. No anatomy, observability, collision skin, READY measurements or physical fit is established.</p>\
          <p><a href=\"original-input.json\">Exact original input</a> · <a href=\"review.json\">Complete initialization report</a></p>\
          <p>The original input retains its original relative paths; run it from its original location. This review is not a portable capture archive.</p>",
     );
+    page.push_str(&editor_page);
+    if input.starts.is_empty() {
+        page.push_str("<h2>Original source frames</h2><p>No original starts were declared, so no mesh or projection has been evaluated.</p>");
+        for (frame, image) in input.frames.iter().zip(&images) {
+            write!(
+                page,
+                "<section><h3>{} @ {} us</h3>",
+                review::label(&frame.frame.stream),
+                frame.frame.timestamp_us
+            )
+            .unwrap();
+            if let Some(image) = image {
+                write!(
+                    page,
+                    "<img src=\"{}\" alt=\"Original oriented source frame\">",
+                    image["file"].as_str().unwrap()
+                )
+                .unwrap();
+            } else {
+                page.push_str("<p>This direct input has no bound source photograph.</p>");
+            }
+            page.push_str("</section>");
+        }
+    }
     let mut starts = Vec::new();
     for (s, start) in input.starts.iter().enumerate() {
         write!(page, "<h2>Start {}</h2><pre>{}</pre>", s + 1, review::label(&serde_json::to_string_pretty(&json!({"shape_parameters":adapter.layout.shape,"shape_values":start.shape,"pose_parameters":adapter.layout.pose})).unwrap())).unwrap();
@@ -344,7 +379,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let report = json!({"schema":"ftx-body-start-review/1","status":"INITIALIZATION_REVIEW",
         "body_fitted":false,"input_sha256":sha256_hex(&bytes),"input_source":source,
         "model_sha256":hash,"model":adapter.layout,"anny_configuration":adapter.config,
-        "canonical_input":input,"original_input":original,"viewer":viewer,"starts":starts,
+        "canonical_input":input,"original_input":original,"viewer":viewer,"starts":starts,"start_editor":editor,
         "capture_input":capture_input,"silhouette_input":masks,
         "no_claim":"Declared initializations evaluated without optimization. No accepted body, observability, uniqueness, anatomical correctness, collision-skin admission, READY measurement or real-wearer fit claim."});
     bundle.publish_report(output, &report, "review.json")?;

@@ -173,6 +173,10 @@ corresponding poses together, checks observations and parameter bounds, and requ
 2–4 distinct strictly interior starts. The ordinary fitter uses this same function. Native
 pre-fit visualization can therefore inspect exact declared starts without duplicating validation
 or claiming observability, convergence or acceptance.
+`prepare_start_authoring` uses that same admission with a zero-start minimum so an operator can
+begin with an empty or one-start draft. The four-start cap, validation of every supplied start,
+identity association, bounds and distinctness remain unchanged. It supplies no initialization
+values and cannot make a draft admissible to `fit_body`.
 
 **Sampled body silhouettes (FTX-21).** Optional frame silhouettes participate in the shared
 shape/per-frame pose fitter through `BodyModel::surface`. Rectified mesh triangle unions are
