@@ -295,6 +295,13 @@ fn unique<'a>(names: impl Iterator<Item = &'a str>) -> bool {
     names.into_iter().all(|s| text(s) && set.insert(s))
 }
 
+/// Validate and canonically order observations and declared initializations without fitting.
+/// This performs the same identity, parameter-bound and distinct-start checks as [`fit_body`].
+/// It evaluates no body model and establishes neither observability nor acceptance.
+pub fn prepare_input(input: &BodyFitInput, layout: &ModelLayout) -> Result<BodyFitInput, Refusal> {
+    canonical(input, layout)
+}
+
 fn canonical(input: &BodyFitInput, layout: &ModelLayout) -> Result<BodyFitInput, Refusal> {
     let ns = layout.shape.len();
     let np = layout.pose.len();
@@ -800,7 +807,7 @@ pub fn fit_body(
             "invalid body-fit iteration, model-evaluation or multistart-spread budget",
         ));
     }
-    let input = canonical(input, model.layout())?;
+    let input = prepare_input(input, model.layout())?;
     let mut report = BodyFitReport {
         schema: "ftx-body-fit/1",
         status: "REJECTED",

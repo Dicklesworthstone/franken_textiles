@@ -1,6 +1,8 @@
 //! Real-binary workflow using a tiny synthetic two-bone .ftxbody, never production model assets.
 #[path = "support/capture.rs"]
 mod capture;
+#[path = "body_fit_workflow/starts.rs"]
+mod starts;
 use ftx_body::{Affine, AnnyData, AnnyModel, Phenotype};
 use ftx_core::{Mat3, Vec2, Vec3, receipt::sha256_hex};
 use ftx_measure::camera::{Camera, Distortion, Intrinsics};

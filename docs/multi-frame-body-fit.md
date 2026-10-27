@@ -81,6 +81,42 @@ is written last. The original static review needs no scripts; editing uses its s
 local images/scripts and no network connections. Visual agreement does not establish correct anatomy,
 lens accuracy, observability or physical fit.
 
+## Inspect starting poses before fitting
+
+Once the photo observations and targets are reviewed, inspect every declared initialization in
+the calibrated image frame:
+
+```sh
+ftx measure fit-start-review capture-review-002/capture.json --model /path/to/anny.ftxbody \
+    --out start-review-001 --json
+# Open start-review-001/index.html and inspect every start and frame.
+ftx measure fit-body capture-review-002/capture.json --model /path/to/anny.ftxbody \
+    --mesh-out fitted-review-001 --json
+```
+
+This evaluates the actual declared shape and pose vectors through the ordinary native body model,
+without optimization. The page shows each initial posed mesh over its checked source image,
+observed keypoints, projected targets, and supplied silhouette slices. Parameter names and values,
+residuals, contour comparisons and projection refusals are retained for every start/frame. Rectified
+cameras show a wireframe; distorted cameras show individually projected vertices so straight screen
+edges do not falsely represent lens distortion. Hidden surfaces remain visible in this diagnostic
+view. The corresponding full initial meshes can be downloaded as OBJ files.
+
+A misplaced start remains visible as a diagnostic: points behind the camera, missing foreground
+coverage and residuals beyond the fitter's acceptance threshold are not omitted or renamed a pass.
+Malformed observations, duplicate starts, missing frame identities and values outside the strictly
+interior parameter bounds still refuse through the same preparation function used by the fitter.
+The review checks source and model identity again, preserves exact original input bytes, and writes
+`review.json` with `INITIALIZATION_REVIEW`, never an accepted body. Prepared-coordinate input works
+without source photos; `--silhouettes MANIFEST` accepts the same explicit mask import as fitting.
+
+Correct initialization values in the original input and regenerate into a new directory. Keep
+predeclared CHECK observations fixed; this preview does not authorize fitting to their residuals.
+The original input download retains its original relative paths and belongs at its original
+location. Source images are copied privately for review, but the directory is not a portable
+capture archive. Inspecting a start establishes neither observability nor anatomical accuracy;
+ordinary `fit-body` remains responsible for convergence, ambiguity and held-out acceptance.
+
 ## Input structure
 
 ### Join reviewed capture sources locally

@@ -107,6 +107,7 @@ const USAGE: &str = "usage:
   ftx measure fit-body FILE --model PATH [--out REPORT | --mesh-out NEW_DIR]
       [--iterations N] [--max-evaluations N] [--silhouettes MANIFEST] [--json]
   ftx measure capture-review FILE --out NEW_DIR [--silhouettes MANIFEST] [--json]
+  ftx measure fit-start-review FILE --model MODEL --out NEW_DIR [--silhouettes MANIFEST] [--json]
   ftx measure still-window FILE [--out FILE] [--json]
   ftx measure video-select FILE [--out FILE] [--json]
   ftx measure video-decode REQUEST.json --out NEW_DIR [--json]

@@ -44,7 +44,14 @@ pub(super) struct Bundle {
 }
 
 impl Bundle {
-    fn push(&mut self, name: String, bytes: Vec<u8>) -> Result<Value, Refusal> {
+    pub(super) fn new() -> Self {
+        Self {
+            manifest: Value::Null,
+            files: Vec::new(),
+        }
+    }
+
+    pub(super) fn push(&mut self, name: String, bytes: Vec<u8>) -> Result<Value, Refusal> {
         let total = self
             .files
             .iter()
@@ -100,7 +107,7 @@ impl Bundle {
     }
 }
 
-fn source_image(
+pub(super) fn source_image(
     bundle: &mut Bundle,
     capture: &Value,
     frame: &FitFrame,
@@ -504,7 +511,7 @@ fn obj(vertices: &[Vec3], faces: &[[u32; 3]]) -> Result<Vec<u8>, Refusal> {
 }
 
 // Display-only XML sanitation; the complete original label is retained in JSON.
-fn label(s: &str) -> String {
+pub(super) fn label(s: &str) -> String {
     xml_escape(
         &s.chars()
             .map(|c| {

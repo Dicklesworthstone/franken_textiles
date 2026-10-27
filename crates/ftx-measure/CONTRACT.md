@@ -167,6 +167,13 @@ collinear controls, missing fit information, strict schemas and budget-stop atom
 No external numerical dependency. No estimated reference-scale parameter, joint intrinsic
 calibration, covariance, global-minimum guarantee, body fit or real-wearer accuracy claim.
 
+**Body-fit initialization preparation.** `body_fit::prepare_input` exposes the fitter's existing
+canonical input admission without running a model or optimization. It orders frames and their
+corresponding poses together, checks observations and parameter bounds, and requires the same
+2–4 distinct strictly interior starts. The ordinary fitter uses this same function. Native
+pre-fit visualization can therefore inspect exact declared starts without duplicating validation
+or claiming observability, convergence or acceptance.
+
 **Sampled body silhouettes (FTX-21).** Optional frame silhouettes participate in the shared
 shape/per-frame pose fitter through `BodyModel::surface`. Rectified mesh triangle unions are
 compared on fixed horizontal/vertical image lines; limb gaps and overlapping surfaces retain

@@ -7,6 +7,15 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
 `ftx outfit`, `ftx materials` and immutable `ftx round` workspaces with their local review.
 
 **Commands.**
+- `ftx measure fit-start-review INPUT --model MODEL --out NEW_DIR [--silhouettes MANIFEST] [--json]`:
+  inspect every declared shared shape and frame pose through the ordinary native model before
+  fitting. The shared canonical preparation checks the same observations, identities, strict bounds
+  and distinct starts as the fitter. Private source-image overlays, actual target projections,
+  sampled contour comparisons and full initial OBJ meshes retain each declared start and frame.
+  Behind-camera points, missing contours and large residuals remain explicit diagnostics;
+  malformed input still refuses. Distorted cameras show projected vertices without invented
+  straight lens-warped edges. `INITIALIZATION_REVIEW` and exact original/source/model bindings
+  establish no optimized body, observability, fit acceptance, collision skin or READY status.
 - `ftx measure video-mask-review MANIFEST.json --out NEW_DIR [--json]` and
   `ftx measure video-masks POLYGONS.json --out NEW_DIR [--json]`: author person/sheet sharpness
   regions in a private offline editor, then materialize opaque binary PNGs using the existing native
