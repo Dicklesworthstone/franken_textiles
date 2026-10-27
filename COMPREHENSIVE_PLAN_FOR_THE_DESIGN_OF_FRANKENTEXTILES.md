@@ -3683,8 +3683,13 @@ valid inner lower bounds. Incomplete inner searches retain complete feasible sch
 proof status. The explicit millisecond convention ceilings total feed once per used cell, preserving
 raw feed and padding. Availability, initial setup/loading and final unloading are charged to every
 used cell. Aggregate machine work remains distinct from elapsed completion. One shared parallel
-work cap covers all nested cell/count schedules and allocation work; recipe and study cross products
-reserve the full amount before evaluation.
+work cap covers all nested cell/count schedules, returned-schedule reconstruction and allocation
+work; recipe and study cross products reserve the full amount before evaluation. The count cache
+retains fixed-size timing/search receipts and streamed full-schedule digests. Only the returned
+baseline and selected schedules retain full operation, handling and fixture histories; their exact
+reconstruction is checked and charged to the same cap. Parallel plans also admit the ordinary
+250000 expanded stitch-interval bound before count searches. These bounded retention and output
+repairs are tracked in `ftx-pb2.2.5`.
 
 Every output stitch identifies its cell and global garment copy; nested fixture and handling histories
 retain local IDs with exact global mappings. The old outer serial report remains a reference and
@@ -3722,17 +3727,22 @@ binding/strip-history path. The browser workbench displays the known branch at e
 retains the fixed-property and network-source evidence, and withdraws stale fitted selections after
 input changes; see [relaxation-calibration.md](docs/relaxation-calibration.md).
 
-Verification at this checkpoint comprises 42 passing focused pattern tests and manual execution of
-the complete example through both native commands, source-locked binding and a 27-state actual
-strip history. Corrupted CHECK forces and denied network-estimate consent refuse. Fresh automated
-native/portable integration, compiled-WASM replay and full-workspace gates remain pending CI;
-no complete-suite pass is claimed.
+Verification comprises 42 passing focused pattern tests, both fitting-derivative unit regressions,
+all six native/portable calibration workflow tests and 155 browser lifecycle tests. The actual compiled-WASM worker identifies the
+complete example, binds its frozen material, runs a 27-state strip history and reproduces its frozen
+replay exactly. Corrupted CHECK forces and denied network-estimate consent refuse in both native
+commands and the real browser worker. The parallel-cell worker also matches complete native
+program, recipe-selection and material-study reports. Workspace formatting and strict Clippy for
+all production libraries/binaries and changed integration tests pass. The full all-target Clippy
+process was killed by the execution environment while checking the export library test target;
+that gate and full-workspace test completion remain for CI. These focused results do not claim a
+complete-suite pass.
 
 This closes the bounded software feature `ftx-rc3`. The plastic experiment uses recorded-node
 return-map updates; exact Maxwell convolution does not establish continuous-time exactness or
 refinement of the plastic path. Joint identification of plastic and viscous coefficients, missing
-temperature/moisture-dependent constitutive laws, measured specimen agreement and garment acceptance remain open under
-`ftx-rc1`, `ftx-tm4`, `ftx-tm2` and `ftx-tm8`.
+temperature/moisture-dependent constitutive laws, measured specimen agreement and garment acceptance
+remain open under `ftx-rc1`, `ftx-tm4`, `ftx-tm2` and `ftx-tm8`.
 
 ## Appendix A. Sources
 

@@ -332,15 +332,21 @@ fn cell_stitch_streams_replay_every_physical_copy_with_local_history_mapping() {
 #[test]
 fn one_global_work_budget_preserves_complete_incumbents_and_a_sound_lower_bound() {
     let (pattern, mut options) = fixture(4);
-    options["production"]["parallel"]["max_search_nodes"] = json!(68);
+    // Two complete DPs need 60 transitions; eight trials and three reserved replays need one node each.
+    options["production"]["parallel"]["max_search_nodes"] = json!(70);
+    assert_eq!(
+        build(&pattern, options.clone()).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+    options["production"]["parallel"]["max_search_nodes"] = json!(71);
     let typed: SewOptions = serde_json::from_value(options.clone()).unwrap();
-    assert_eq!(typed.scheduling_work_bound().unwrap(), 2068);
+    assert_eq!(typed.scheduling_work_bound().unwrap(), 2071);
     let plan = build(&pattern, options).unwrap();
     let parallel = plan.production.unwrap().parallel.unwrap();
     assert!(parallel.budget_exhausted);
     assert!(!parallel.optimality_proven);
     assert!(!parallel.search_complete);
-    assert!(parallel.search_nodes <= 68);
+    assert!(parallel.search_nodes <= 71);
     let exact = (0..=4)
         .map(|a| serial_cost(a, 2, 5000).max(serial_cost(4 - a, 2, 5000)))
         .min()
@@ -364,6 +370,114 @@ fn one_global_work_budget_preserves_complete_incumbents_and_a_sound_lower_bound(
             .filter_map(|cell| cell.schedule.as_ref())
             .all(|schedule| schedule.ordering.selected_order.len() == schedule.operations.len())
     );
+}
+
+#[test]
+fn compact_count_receipts_replay_exact_schedules_and_charge_every_reconstruction() {
+    let (pattern, options) = fixture(3);
+    let plan = build(&pattern, options.clone()).unwrap();
+    let parallel = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    let cells = options["production"]["parallel"]["cells"]
+        .as_array()
+        .unwrap();
+    let copies = 3;
+    let cap = options["production"]["parallel"]["max_search_nodes"]
+        .as_u64()
+        .unwrap() as usize;
+    let allocation_work = cells.len() * (copies + 1) * (copies + 2);
+    let replay_slots = 1 + cells.len().min(copies);
+    let per_trial = (cap - allocation_work) / (cells.len() * copies + replay_slots);
+    let serial = |cell: &Value, count: usize, node_limit: usize| {
+        let mut input = options.clone();
+        input["production"] = json!({
+            "production_copies": count,
+            "ordering": cell["ordering"],
+            "handling": cell["handling"],
+            "workholding": cell["workholding"]
+        });
+        input["production"]["ordering"]["max_search_nodes"] = json!(node_limit);
+        build(&pattern, input).unwrap().production.unwrap()
+    };
+    let mut actual_work = allocation_work;
+    for cell in cells {
+        let declared = cell["ordering"]["max_search_nodes"].as_u64().unwrap() as usize;
+        let node_limit = per_trial.min(declared);
+        for count in 1..=copies {
+            actual_work += serial(cell, count, node_limit).ordering.search_nodes;
+        }
+    }
+    assert!(parallel.selected.makespan_milliseconds < parallel.baseline.makespan_milliseconds);
+    for assignment in [&parallel.baseline, &parallel.selected] {
+        for cell in &assignment.cells {
+            if let Some(schedule) = &cell.schedule {
+                let input = cells
+                    .iter()
+                    .find(|input| input["id"].as_str() == Some(cell.cell.as_str()))
+                    .unwrap();
+                let replay = serial(input, cell.copies.len(), cell.schedule_node_limit);
+                actual_work += replay.ordering.search_nodes;
+                assert_eq!(
+                    serde_json::to_value(schedule).unwrap(),
+                    serde_json::to_value(replay).unwrap()
+                );
+                assert!(cell.schedule_node_limit <= per_trial);
+            }
+        }
+    }
+    assert_eq!(parallel.search_nodes, actual_work);
+    assert!(parallel.search_nodes <= cap);
+    assert_eq!(parallel.selected.makespan_milliseconds, 25500);
+    assert_eq!(parallel.lower_bound_makespan_milliseconds, 25500);
+    assert!(parallel.optimality_proven);
+    for cell in &plan
+        .options
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap()
+        .cells
+    {
+        let original = cells
+            .iter()
+            .find(|input| input["id"].as_str() == Some(cell.id.as_str()))
+            .unwrap();
+        assert_eq!(
+            cell.ordering.max_search_nodes,
+            original["ordering"]["max_search_nodes"].as_u64().unwrap() as usize
+        );
+    }
+}
+
+#[test]
+fn parallel_plan_refuses_a_batch_that_the_ordinary_stitch_program_cannot_emit() {
+    let (_, mut options) = fixture(31);
+    let mut source: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+    ))
+    .unwrap();
+    for piece in source["pieces"].as_array_mut().unwrap() {
+        piece["vertices"]["c"][1] = json!(10100.0);
+        piece["vertices"]["d"][1] = json!(10100.0);
+    }
+    let pattern = Pattern::new(source);
+    options["production"]["ordering"]["max_search_nodes"] = json!(1);
+    let mut serial = options.clone();
+    serial["production"]
+        .as_object_mut()
+        .unwrap()
+        .remove("parallel");
+    let serial: SewOptions = serde_json::from_value(serial).unwrap();
+    let ordinary = SewPlan::build(&pattern, &serial).unwrap();
+    assert_eq!(ordinary.total_stitch_intervals(), 250480);
+    assert_eq!(
+        SewProgram::build(&pattern, &serial).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+    let refusal = build(&pattern, options).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::BudgetExceeded);
+    assert!(refusal.message.contains("stitch-program"));
 }
 
 #[test]

@@ -209,7 +209,8 @@ fn parallel_recipe_selection_uses_elapsed_completion_and_preserves_independent_c
             program
         );
     }
-    request["options"]["production"]["parallel"]["max_search_nodes"] = json!(46);
+    // Forty allocation transitions, six count trials and three reserved schedule replays.
+    request["options"]["production"]["parallel"]["max_search_nodes"] = json!(49);
     let bounded = portable(ftx_wasm::sew_select(PATTERN, &request.to_string()).unwrap());
     assert_eq!(bounded["report"]["search_complete"], true);
     assert_eq!(bounded["report"]["optimality_proven"], false);

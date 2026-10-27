@@ -2068,7 +2068,9 @@ function calibrationResult(parent, r) {
     parent.append(scope);
     detail(parent, "Fixed permanent-stretch observations and combined-network qualification", {
       plastic_equilibrium: c.input.plastic_equilibrium,
-      membrane_plasticity: c.input.material?.membrane_plasticity,
+      material_id: c.input.material?.id,
+      fixed_properties: c.input.material?.properties,
+      sources: c.input.material?.sources,
       time_integration: r.time_integration });
   }
   if (c.orthotropic_fit) {

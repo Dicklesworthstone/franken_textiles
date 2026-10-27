@@ -356,15 +356,25 @@ two-cell job at **25.5 modeled seconds**. Aggregate feed remains 24 seconds, sel
 distinct from the 25.5-second elapsed span. These are synthetic arithmetic checks, not measured
 factory throughput or a claim that an actual operator or fixture can perform concurrent work.
 
-There are at most eight cells and 63 total copy/operation pairs. `parallel.max_search_nodes` is one
-global cap covering every nested serial search and both complete allocation dynamic programs.
-Allocation work is reserved first and the remaining cap is divided across all cell/count trials,
-also respecting each cell's own ordering cap. The outer serial-reference cap plus the parallel cap
-must total at most 200000. `SewOptions::scheduling_work_bound()` reserves that complete configured
-amount for recipe and material cross products; increasing inherited production quantity cannot
-silently evade the reservation. Too-small budgets refuse before inner work rather than omit counts.
-Every inner trial must establish a complete supported baseline; an unsupported baseline refuses
-the requested parallel result without proving all allocations infeasible.
+There are at most eight cells and 63 total copy/operation pairs. The complete batch must also fit
+the ordinary 250000 expanded stitch-interval limit before any cell/count search begins, so an
+accepted parallel plan cannot exceed the ordinary stitch program's output bound.
+`parallel.max_search_nodes` is one global cap covering every nested serial search, reconstruction
+of the returned schedules and both complete allocation dynamic programs. Allocation work is
+reserved first; the remaining cap covers all cell/count trials, one baseline replay and up to
+`min(cells, copies)` selected-cell replays, also respecting each cell's own ordering cap. The outer
+serial-reference cap plus the parallel cap must total at most 200000.
+`SewOptions::scheduling_work_bound()` reserves that complete configured amount for recipe and
+material cross products; increasing inherited production quantity cannot silently evade the
+reservation. Too-small budgets refuse before inner work rather than omit counts.
+
+The count cache holds fixed-size timing, bound and search receipts plus a streamed digest of each
+ordinary schedule. Full operation and fixture histories are retained only for the returned baseline
+and selected allocation. Reconstruction repeats the ordinary solver at the exact recorded node cap
+and verifies the complete receipt and schedule digest; a mismatch returns `NotConverged`. Reported
+actual search work includes these reconstructions. Every inner trial must establish a complete
+supported baseline; an unsupported baseline refuses the requested parallel result without proving
+all allocations infeasible.
 
 Parallel output uses plan `/16`, production `/4` and nested `ftx-sewing-parallel/1`. The outer
 production `ordering`, `handling` and `workholding` remain **single-machine reference reports**.
