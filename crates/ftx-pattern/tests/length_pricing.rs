@@ -108,7 +108,7 @@ fn stock_and_continuity_apply_to_different_quantities_in_the_offer_unit() {
 }
 
 #[test]
-fn incompatible_mass_and_area_quotes_never_create_a_length_conversion() {
+fn unqualified_mass_and_area_quotes_never_create_a_length_conversion() {
     let mut request = scope();
     request.continuous_length_m = None;
     request.require_observed_continuous_length = false;
@@ -121,7 +121,11 @@ fn incompatible_mass_and_area_quotes_never_create_a_length_conversion() {
         assert!(out.rate_p10_p50_p90.is_none());
         assert_eq!(
             out.excluded_offers[0].reason,
-            ExclusionReason::IncompatibleBasis
+            if unit == SaleUnit::Kilogram {
+                ExclusionReason::YarnLengthMassConversionUnavailable
+            } else {
+                ExclusionReason::IncompatibleBasis
+            }
         );
     }
     request.basis = Basis::Area;

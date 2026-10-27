@@ -44,6 +44,13 @@ twist, thread counts, stitch geometry, fill power and loft. These are observatio
 certifications. A cut-resistance force needs its test standard; a burn-test class needs its jurisdiction,
 method and conditioning. Unknown coatings/finishes never imply laser-safe or child-sleepwear-safe.
 
+Direct tensile-test observations use `tensile_maximum_force` and `tensile_force_at_break` in N,
+with original kgf normalized by exactly 9.80665 N/kgf. `tensile_displacement_at_break` is the
+reported instrument displacement in m, not local strain. Source-axis labels and specimen geometry
+stay in conditions; neither force becomes a warp/weft stiffness or strength per unit width.
+`reported_thickness` is inspectable gauge thickness in m and does not supply the separately
+qualified `thickness` required for contact or sewing clearance.
+
 ## Thermal consumer
 
 `ThermalStack::evaluate` computes dry one-dimensional steady conduction through series layers, with

@@ -12,6 +12,7 @@ mod fabric101;
 pub mod knit_strips;
 pub mod laundered_denim;
 mod leather;
+mod leather_tensile;
 mod loaded_insulation;
 mod mit;
 mod neoprene;
@@ -63,7 +64,12 @@ fn invalid(message: impl Into<String>) -> Refusal {
 pub fn property_unit(key: &str) -> Option<&'static str> {
     Some(match key {
         "areal_density" => "kg/m2",
-        "thickness" | "reported_thickness" | "width" | "fiber_diameter" | "staple_length" => "m",
+        "thickness"
+        | "reported_thickness"
+        | "width"
+        | "fiber_diameter"
+        | "staple_length"
+        | "tensile_displacement_at_break" => "m",
         "bulk_density" => "kg/m3",
         "warp_stiffness"
         | "weft_stiffness"
@@ -121,6 +127,8 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         "air_permeability" => "m/s",
         "air_volume_flow" => "m3/s",
         "axial_stiffness"
+        | "tensile_maximum_force"
+        | "tensile_force_at_break"
         | "breaking_force_warp"
         | "breaking_force_weft"
         | "tear_force"
@@ -155,6 +163,7 @@ fn factor(unit: &str, expected: &str) -> Option<f64> {
         ("g/cm3", "kg/m3") => 1000.0,
         ("lb/in3", "kg/m3") => 0.453_592_37 / (0.0254 * 0.0254 * 0.0254),
         ("kN/m", "N/m") | ("kN", "N") => 1000.0,
+        ("kgf", "N") => 9.80665,
         ("mN*m", "N*m") => 0.001,
         ("lbf*in2", "N*m2") => 4.448_221_615_260_5 * 0.0254 * 0.0254,
         ("%", "1") => 0.01,
@@ -224,6 +233,7 @@ impl Catalog {
         catalog.materials.extend(mit::records());
         catalog.materials.extend(mit::raw_records());
         catalog.materials.extend(leather::records());
+        catalog.materials.extend(leather_tensile::records());
         catalog.materials.extend(loaded_insulation::records());
         catalog.materials.extend(neoprene::records());
         catalog.materials.extend(wet_denim::records());
