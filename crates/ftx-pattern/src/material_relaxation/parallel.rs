@@ -38,7 +38,7 @@ pub struct ParallelPlasticity {
 }
 
 impl ParallelPlasticity {
-    pub(super) fn validate(
+    pub(crate) fn validate(
         &self,
         sources: &BTreeMap<String, Source>,
         allow: bool,
@@ -98,7 +98,7 @@ pub(crate) fn compile(
 
 // Identification already validates the independent elastic/domain observations. Its six unknown
 // yield/hardening coefficients are trial parameters, not fabricated source observations. This
-// compiler only supplies a fixed transient response to that private calibration path; it cannot
+// compiler supplies transient response to private fixed-spectrum or joint calibration trials; it cannot
 // create a paired plastic law or publish a material. Publication uses the full compiler above.
 pub(crate) fn compile_for_calibration(
     material: &Material,

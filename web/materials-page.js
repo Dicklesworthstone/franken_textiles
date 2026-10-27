@@ -1719,7 +1719,8 @@ function sewingResult(parent, r) {
 function permanentStretchResult(parent, r) {
   const c = r.calibration, d = c.diagnostics;
   const recovery = c.input.material.membrane_relaxation;
-  const joint = Boolean(recovery?.parallel_plasticity);
+  const identifiedRecovery = c.input.joint_relaxation;
+  const joint = Boolean(identifiedRecovery || recovery?.parallel_plasticity);
   const decision = document.createElement("p");
   decision.textContent = `Permanent-stretch identification: ${c.status}. Held-out replay: ${c.check_status}. ` +
     c.decision_reasons.join(" ") + (c.check_refusal ? ` ${c.check_refusal.message}` : "");
@@ -1744,17 +1745,33 @@ function permanentStretchResult(parent, r) {
       sourceQuantity(properties[`membrane_accumulation_limit_${axis}`])]);
   }
   if (joint) {
-    const spectrum = table(parent, "Delayed recovery — independently supplied, held fixed during identification",
+    if (identifiedRecovery) {
+      const spectrum = table(parent, "Jointly identified recovery — selected FIT coefficients",
+        ["Branch / coefficient", "Selected value", "Search range", "FIT sensitivity per unit", "At search bound"]);
+      const selected = c.parameters?.relaxation, diagnostics = d.joint_relaxation;
+      for (const [i, label, value, bounds] of [
+        [0, "Equilibrium-tensor stiffness ratio", selected?.stiffness_ratio, identifiedRecovery.stiffness_ratio_bounds],
+        [1, "Relaxation time (s)", selected?.relaxation_time_seconds, identifiedRecovery.relaxation_time_bounds_seconds]
+      ]) cells(spectrum, [`${identifiedRecovery.branch_id}: ${label}`, metric(value),
+        `[${bounds.map(metric).join(", ")}]`,
+        d.sensitivity_evaluated ? metric(diagnostics?.parameter_sensitivity[i]) : "Not evaluated",
+        d.sensitivity_evaluated ? (diagnostics?.at_bounds[i] ? "Yes" : "No") : "Not evaluated"]);
+      detail(parent, "Joint model, fixed material properties and original sources",
+        { joint_relaxation: identifiedRecovery, fixed_properties: c.input.material.properties,
+          replaced_recovery: recovery, sources: c.input.material.sources });
+    } else {
+      const spectrum = table(parent, "Delayed recovery — independently supplied, held fixed during identification",
       ["Branch", "Stiffness definition", "Relaxation time", "Time evidence", "Time source"]);
-    for (const branch of recovery.branches || []) cells(spectrum,
-      [branch.id, `Equilibrium-tensor ratio: ${sourceQuantity(branch.stiffness_ratio)}`,
-        sourceQuantity(branch.relaxation_time), branch.relaxation_time.evidence, branch.relaxation_time.source]);
-    for (const branch of recovery.orthotropic_branches || []) cells(spectrum,
-      [branch.id, ["warp", "weft", "coupling", "shear"].map(axis =>
-        `${axis}: ${sourceQuantity(branch.stiffness[axis])}`).join("; "),
-        sourceQuantity(branch.relaxation_time), branch.relaxation_time.evidence, branch.relaxation_time.source]);
-    detail(parent, "Fixed recovery spectrum, joint-network qualification and original sources",
-      { recovery, sources: c.input.material.sources });
+      for (const branch of recovery.branches || []) cells(spectrum,
+        [branch.id, `Equilibrium-tensor ratio: ${sourceQuantity(branch.stiffness_ratio)}`,
+          sourceQuantity(branch.relaxation_time), branch.relaxation_time.evidence, branch.relaxation_time.source]);
+      for (const branch of recovery.orthotropic_branches || []) cells(spectrum,
+        [branch.id, ["warp", "weft", "coupling", "shear"].map(axis =>
+          `${axis}: ${sourceQuantity(branch.stiffness[axis])}`).join("; "),
+          sourceQuantity(branch.relaxation_time), branch.relaxation_time.evidence, branch.relaxation_time.source]);
+      detail(parent, "Fixed recovery spectrum, joint-network qualification and original sources",
+        { recovery, sources: c.input.material.sources });
+    }
     const endings = new Map();
     for (const prediction of c.predictions || []) if (prediction.parallel_history) endings.set(prediction.experiment, prediction);
     if (endings.size) {
@@ -1777,9 +1794,14 @@ function permanentStretchResult(parent, r) {
     ["Refused forward trials", metric(d.trials_refused)],
     ["FIT excitation pivot", d.sensitivity_evaluated ? metric(d.excitation_pivot) : "Not evaluated"]
   ]) cells(work, row);
-  if (joint) cells(work, ["Fixed Maxwell branch-node advances (included above)", metric(d.fixed_maxwell_branch_steps)]);
+  if (identifiedRecovery) cells(work, ["Joint Maxwell branch-node advances (included above)", metric(d.joint_relaxation?.branch_steps)]);
+  else if (joint) cells(work, ["Fixed Maxwell branch-node advances (included above)", metric(d.fixed_maxwell_branch_steps)]);
   const note = document.createElement("p");
-  note.textContent = (joint ?
+  note.textContent = (identifiedRecovery ?
+    "Six permanent-stretch and hardening coefficients and one Maxwell stiffness ratio and recovery time are identified together. " +
+    "The FIT excitation check includes all eight unknowns; a locally unresolved combination cannot publish a material. " +
+    "Every trial advances both histories at every recorded node, including nodes with unobserved forces. " +
+    "The supplied equilibrium elasticity, domains and network interpretation remain fixed. " : joint ?
     "Only the six permanent-stretch and hardening coefficients are identified. The independently qualified Maxwell spectrum stays fixed. " +
     "Recorded elapsed times advance its delayed-recovery state, including nodes with unobserved forces; residuals compare the total parallel-network load. " :
     "The shared rate-independent law follows every recorded loading, unloading and reversal node, including nodes with unobserved forces. ") +
@@ -1789,7 +1811,8 @@ function permanentStretchResult(parent, r) {
     (joint ? " Equilibrium and Maxwell storage remain separate from plastic loss and physical dashpot work; none is automatically injected as heat." : "");
   parent.append(note);
   detail(parent, "Complete source histories, permanent strain, stored energy, dissipation and residuals", c);
-  return { response: joint ? "Permanent stretch with independently characterized delayed recovery" :
+  return { response: identifiedRecovery ? "Joint permanent stretch and delayed-recovery identification" :
+    joint ? "Permanent stretch with independently characterized delayed recovery" :
     "Permanent stretch and directional hardening", status: c.status,
     held_out: c.check_status, input_sha256: c.input_sha256, material_id: r.selection?.id,
     allow_estimates: r.selection?.allow_estimates,

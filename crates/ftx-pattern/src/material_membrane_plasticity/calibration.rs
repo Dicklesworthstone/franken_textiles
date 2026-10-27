@@ -1,5 +1,5 @@
-//! Identify only yield and hardening of the existing permanent membrane law. Elasticity, domains
-//! and any qualified parallel Maxwell spectrum are independently supplied and remain fixed. Every
+//! Identify yield/hardening, optionally together with one proportional Maxwell ratio and time.
+//! Elasticity, domains and the parallel-network interpretation are independently supplied. Every
 //! trial replays complete FIT paths; CHECK paths cannot choose or alter parameters.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use super::{AXES, ELASTIC, MODEL, PlasticMembrane};
 use crate::material_calibration::{Partition, Quality, fitted_domain};
 use crate::material_catalog::normalize;
-use crate::material_relaxation::{CompiledRelaxation, parallel};
+use crate::material_relaxation::{
+    CompiledRelaxation, Initialization as RelaxationInitialization, MaxwellBranch, Relaxation,
+    parallel,
+};
 use crate::material_response::StrainDomain;
 use crate::materials::{Evidence, Form, Material, Quantity, Source};
 
@@ -69,6 +72,38 @@ pub struct Parameters {
     pub yield_n_m: [f64; 3],
     /// Nonnegative directional isotropic hardening coefficients in N/m.
     pub hardening_n_m: [f64; 3],
+    /// Present only when the single proportional Maxwell arm was jointly identified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relaxation: Option<RelaxationParameters>,
+}
+
+/// Jointly identified proportional branch; these are estimates, not fixed source observations.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelaxationParameters {
+    /// Positive multiplier of the independently characterized equilibrium tensor.
+    pub stiffness_ratio: f64,
+    /// Positive canonical backward-Euler recovery time, seconds.
+    pub relaxation_time_seconds: f64,
+}
+
+/// An explicit single-arm model to identify together with the six permanent coefficients.
+/// No provisional Maxwell coefficient is needed in the input material.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JointRelaxation {
+    /// Identity of the one proportional arm retained in the fitted ordinary material.
+    pub branch_id: String,
+    /// Finite strictly ordered positive search bounds, never confidence intervals.
+    pub stiffness_ratio_bounds: [f64; 2],
+    /// Finite strictly ordered positive time search bounds, seconds.
+    pub relaxation_time_bounds_seconds: [f64; 2],
+    /// Independently qualified physical Green-strain domain; not enlarged by fitting.
+    pub strain_range: [[f64; 2]; 3],
+    /// Source-declared new-simulation initialization; acquisitions always start at zero strain.
+    pub initialization: RelaxationInitialization,
+    /// Source/method/specimen/conditioning for this exact network, domain and initialization.
+    pub network: parallel::ParallelPlasticity,
 }
 
 /// Original source-bearing problem. The six domain quantities remain properties of `material`.
@@ -90,6 +125,11 @@ pub struct Input {
     /// Required if a permanent-law selector or any previous yield/hardening quantity exists.
     #[serde(default)]
     pub replace_existing: bool,
+    /// Identify one proportional Maxwell arm at the same time as yield/hardening. Otherwise any
+    /// existing spectrum stays fixed. Replacing a supplied arm requires replace_existing; other
+    /// arms are never silently discarded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joint_relaxation: Option<JointRelaxation>,
     /// Acquisition/reduction protocol, including reference frame, loading and initialization.
     pub method: String,
     /// Must include specimen_id and conditioning, matching all elastic/domain observations.
@@ -135,7 +175,7 @@ pub struct Prediction {
     pub time_seconds: f64,
     /// Recorded material-frame strain.
     pub green_strain: [f64; 3],
-    /// Predicted accepted TOTAL second-Piola resultants, including any fixed Maxwell branches.
+    /// Predicted accepted TOTAL second-Piola resultants, including any Maxwell branches.
     pub second_piola_n_m: [f64; 3],
     /// Predicted minus observed; unobserved channels remain null.
     pub residual_n_m: [Option<f64>; 3],
@@ -147,7 +187,7 @@ pub struct Prediction {
     pub stored_j_m2: f64,
     /// Cumulative irreversible work per reference area, not an automatic thermal source.
     pub plastic_dissipation_j_m2: f64,
-    /// Present only for an explicitly qualified fixed parallel Maxwell spectrum. The existing
+    /// Present only for an explicitly qualified parallel Maxwell spectrum. The existing
     /// stored_j_m2 remains equilibrium elastic/hardening storage; measured stress is the TOTAL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel_history: Option<ParallelHistory>,
@@ -197,6 +237,9 @@ pub struct Diagnostics {
     /// partition is precomputed once; absent for ordinary rate-independent identification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixed_maxwell_branch_steps: Option<usize>,
+    /// Joint full-parameter excitation and per-trial Maxwell work; absent for the legacy fits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joint_relaxation: Option<JointRelaxationDiagnostics>,
     /// Caller-supplied whole-operation forward-call limit.
     pub evaluation_limit: usize,
     /// Fixed whole-operation recorded-node limit.
@@ -217,6 +260,17 @@ pub struct Diagnostics {
     pub at_bounds: [bool; 6],
     /// All entered starts, including failed attempts; choice uses FIT only.
     pub starts: Vec<StartReport>,
+}
+
+/// Additional diagnostics for the two recovery parameters in the full eight-column FIT problem.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JointRelaxationDiagnostics {
+    /// RMS scaled-force sensitivity per ratio and per second; not parameter uncertainty.
+    pub parameter_sensitivity: [f64; 2],
+    /// Proximity to authored normalized ratio/time endpoints using the same 1e-7 rule.
+    pub at_bounds: [bool; 2],
+    /// Reserved Maxwell branch-node states, including refused trials and final replays.
+    pub branch_steps: usize,
 }
 
 /// Reviewable original evidence, selected FIT candidate, diagnostics and held-out replay.
@@ -258,15 +312,17 @@ fn text_ok(s: &str) -> bool {
     !s.trim().is_empty() && s.len() <= 4096
 }
 
-struct Prepared {
+struct Prepared<const N: usize> {
     tensor: [[f64; 3]; 3],
     equilibrium_domain: Option<StrainDomain>,
     strain_limit: [f64; 3],
     accumulation_limit: [f64; 3],
-    bounds: [[f64; 2]; 6],
+    bounds: [[f64; 2]; N],
     relaxation: Option<CompiledRelaxation>,
     branch_count: usize,
     fixed_histories: Vec<Option<Vec<FixedState>>>,
+    /// A qualified model template with explicitly synthetic, unpublished trial coefficients.
+    joint_template: Option<Material>,
 }
 
 struct FixedState {
@@ -311,17 +367,21 @@ fn fixed_history(
     Ok(result)
 }
 
-impl Prepared {
-    fn parameters(&self, x: [f64; 6]) -> Parameters {
-        let p: [f64; 6] =
+impl<const N: usize> Prepared<N> {
+    fn parameters(&self, x: [f64; N]) -> Parameters {
+        let p: [f64; N] =
             std::array::from_fn(|i| (1.0 - x[i]) * self.bounds[i][0] + x[i] * self.bounds[i][1]);
         Parameters {
             yield_n_m: [p[0], p[1], p[2]],
             hardening_n_m: [p[3], p[4], p[5]],
+            relaxation: self.joint_template.as_ref().map(|_| RelaxationParameters {
+                stiffness_ratio: p[6],
+                relaxation_time_seconds: p[7],
+            }),
         }
     }
 
-    fn law(&self, x: [f64; 6]) -> Result<PlasticMembrane, Refusal> {
+    fn law(&self, x: [f64; N]) -> Result<PlasticMembrane, Refusal> {
         let p = self.parameters(x);
         PlasticMembrane::new(
             self.tensor,
@@ -331,9 +391,88 @@ impl Prepared {
             self.accumulation_limit,
         )
     }
+
+    fn joint_law(
+        &self,
+        x: [f64; N],
+        plastic: &PlasticMembrane,
+    ) -> Result<Option<CompiledRelaxation>, Refusal> {
+        let Some(template) = &self.joint_template else {
+            return Ok(None);
+        };
+        let mut trial = template.clone();
+        let parameters = self.parameters(x).relaxation.expect("joint parameters");
+        let branch = &mut trial
+            .membrane_relaxation
+            .as_mut()
+            .expect("joint template")
+            .branches[0];
+        branch.stiffness_ratio.value = parameters.stiffness_ratio;
+        branch.relaxation_time.value = parameters.relaxation_time_seconds;
+        // All independent evidence was admitted before the template was created. Only these
+        // unpublished trial estimates use estimate admission; publication recompiles everything.
+        parallel::compile_for_calibration(&trial, true, plastic).map(Some)
+    }
 }
 
-fn prepare(input: &Input) -> Result<Prepared, Refusal> {
+fn joint_template(input: &Input, material: &Material) -> Result<Option<Material>, Refusal> {
+    let Some(joint) = &input.joint_relaxation else {
+        return Ok(None);
+    };
+    joint
+        .network
+        .validate(&material.sources, input.allow_estimated_material)?;
+    if !text_ok(&joint.branch_id)
+        || joint
+            .network
+            .conditions
+            .iter()
+            .any(|(key, value)| input.conditions.get(key) != Some(value))
+    {
+        return Err(bad(
+            "joint recovery identification requires a branch ID and independently qualified matching network/domain/initialization conditions",
+        ));
+    }
+    if let Some(previous) = &material.membrane_relaxation
+        && (!input.replace_existing
+            || previous.branches.len() != 1
+            || !previous.orthotropic_branches.is_empty()
+            || previous.branches[0].id != joint.branch_id)
+    {
+        return Err(bad(
+            "joint recovery can replace only one matching proportional arm with replace_existing; additional or directional arms cannot be discarded",
+        ));
+    }
+    let quantity = |value, unit: &str| Quantity {
+        value,
+        unit: unit.into(),
+        source: joint.network.source.clone(),
+        evidence: Evidence::Estimate,
+        method: "Unpublished bounded joint-identification trial, not a measured coefficient".into(),
+        conditions: joint.network.conditions.clone(),
+        bounds: None,
+    };
+    let midpoint = |bounds: [f64; 2]| 0.5 * bounds[0] + 0.5 * bounds[1];
+    let mut template = material.clone();
+    template.membrane_relaxation = Some(Relaxation {
+        model: "green_maxwell/1".into(),
+        branches: vec![MaxwellBranch {
+            id: joint.branch_id.clone(),
+            stiffness_ratio: quantity(midpoint(joint.stiffness_ratio_bounds), "1"),
+            relaxation_time: quantity(midpoint(joint.relaxation_time_bounds_seconds), "s"),
+        }],
+        orthotropic_branches: Vec::new(),
+        initialization: joint.initialization,
+        strain_range: joint.strain_range,
+        source: joint.network.source.clone(),
+        method: joint.network.method.clone(),
+        conditions: joint.network.conditions.clone(),
+        parallel_plasticity: Some(joint.network.clone()),
+    });
+    Ok(Some(template))
+}
+
+fn prepare<const N: usize>(input: &Input) -> Result<Prepared<N>, Refusal> {
     input.material.validate()?;
     if input.schema != SCHEMA
         || !text_ok(&input.method)
@@ -405,26 +544,40 @@ fn prepare(input: &Input) -> Result<Prepared, Refusal> {
     }
     let [warp, weft, poisson, shear] = elasticity;
     let d = 1.0 - poisson * (poisson * weft / warp);
-    let bounds = std::array::from_fn(|i| {
+    let bounds: [[f64; 2]; N] = std::array::from_fn(|i| {
         if i < 3 {
             input.yield_bounds_n_m[i]
-        } else {
+        } else if i < 6 {
             input.hardening_bounds_n_m[i - 3]
+        } else if i == 6 {
+            input
+                .joint_relaxation
+                .as_ref()
+                .expect("joint dimension")
+                .stiffness_ratio_bounds
+        } else {
+            input
+                .joint_relaxation
+                .as_ref()
+                .expect("joint dimension")
+                .relaxation_time_bounds_seconds
         }
     });
     for (i, &[lo, hi]) in bounds.iter().enumerate() {
         if !lo.is_finite()
             || !hi.is_finite()
             || lo < 0.0
-            || (i < 3 && lo == 0.0)
+            || (!(3..6).contains(&i) && lo == 0.0)
             || hi <= lo
             || !(hi - lo).is_finite()
             || lo + (hi - lo) * 1e-6 == lo
             || hi - (hi - lo) * 1e-6 == hi
         {
-            return Err(bad(
-                "yield/hardening search bounds must be finite, ordered, representable and physically positive/nonnegative; they are not uncertainty intervals",
-            ));
+            return Err(bad(if input.joint_relaxation.is_some() {
+                "coefficient search bounds must be finite, ordered, representable and physically positive (hardening may be zero); they are not uncertainty intervals"
+            } else {
+                "yield/hardening search bounds must be finite, ordered, representable and physically positive/nonnegative; they are not uncertainty intervals"
+            }));
         }
     }
     let mut prepared = Prepared {
@@ -440,9 +593,13 @@ fn prepare(input: &Input) -> Result<Prepared, Refusal> {
         relaxation: None,
         branch_count: 0,
         fixed_histories: Vec::new(),
+        joint_template: joint_template(input, &material)?,
     };
-    let law = prepared.law([0.5; 6])?;
-    if let Some(relaxation) = &material.membrane_relaxation {
+    let law = prepared.law([0.5; N])?;
+    if prepared.joint_template.is_some() {
+        prepared.relaxation = prepared.joint_law([0.5; N], &law)?;
+        prepared.branch_count = 1;
+    } else if let Some(relaxation) = &material.membrane_relaxation {
         if relaxation
             .conditions
             .iter()
@@ -544,17 +701,20 @@ enum Failure {
     Physical(Refusal),
 }
 
-struct Work<'a> {
+struct Work<'a, const N: usize> {
     input: &'a Input,
-    prepared: Prepared,
+    prepared: Prepared<N>,
     diagnostics: Diagnostics,
 }
 
-impl Work<'_> {
+impl<const N: usize> Work<'_, N> {
     // The fixed spectrum depends only on the original total strain/time history. Reserve its
     // entire partition before evaluation, reuse FIT for all coefficient probes, and leave CHECK
     // untouched until after parameter selection and excitation. No failed work is refunded.
     fn prepare_fixed_partition(&mut self, partition: Partition) -> Result<(), Failure> {
+        if self.prepared.joint_template.is_some() {
+            return Ok(());
+        }
         let Some(law) = &self.prepared.relaxation else {
             return Ok(());
         };
@@ -599,7 +759,7 @@ impl Work<'_> {
 
     fn evaluate(
         &mut self,
-        x: [f64; 6],
+        x: [f64; N],
         partition: Partition,
         retain: bool,
     ) -> Result<Evaluation, Failure> {
@@ -611,13 +771,21 @@ impl Work<'_> {
             .filter(|e| e.partition == partition)
             .map(|e| e.samples.len())
             .sum::<usize>();
+        let branch_nodes = if self.prepared.joint_template.is_some() {
+            nodes * self.prepared.branch_count
+        } else {
+            0
+        };
         if self.diagnostics.evaluations == self.input.max_evaluations
-            || self.diagnostics.history_steps + nodes > MAX_HISTORY_STEPS
+            || self.diagnostics.history_steps + nodes + branch_nodes > MAX_HISTORY_STEPS
         {
             return Err(Failure::Budget);
         }
         self.diagnostics.evaluations += 1;
-        self.diagnostics.history_steps += nodes;
+        self.diagnostics.history_steps += nodes + branch_nodes;
+        if let Some(joint) = &mut self.diagnostics.joint_relaxation {
+            joint.branch_steps += branch_nodes;
+        }
         let result = self.replay(x, partition, retain);
         if result.is_err() {
             self.diagnostics.trials_refused += 1;
@@ -627,11 +795,12 @@ impl Work<'_> {
 
     fn replay(
         &self,
-        x: [f64; 6],
+        x: [f64; N],
         partition: Partition,
         retain: bool,
     ) -> Result<Evaluation, Refusal> {
         let law = self.prepared.law(x)?;
+        let joint_law = self.prepared.joint_law(x, &law)?;
         let mut residual = Vec::new();
         let mut predictions = Vec::new();
         for (experiment_index, experiment) in self
@@ -641,6 +810,10 @@ impl Work<'_> {
             .enumerate()
             .filter(|(_, e)| e.partition == partition)
         {
+            let joint_history = joint_law
+                .as_ref()
+                .map(|recovery| fixed_history(recovery, experiment))
+                .transpose()?;
             let mut memory = law.pristine();
             let mut dissipated = 0.0;
             for (i, sample) in experiment.samples.iter().enumerate() {
@@ -667,8 +840,9 @@ impl Work<'_> {
                 if !dissipated.is_finite() {
                     return Err(bad("history dissipation overflows"));
                 }
-                let fixed = self.prepared.fixed_histories[experiment_index]
+                let fixed = joint_history
                     .as_ref()
+                    .or(self.prepared.fixed_histories[experiment_index].as_ref())
                     .map(|states| &states[i]);
                 let stress = fixed.map_or(response.stress, |state| {
                     std::array::from_fn(|j| response.stress[j] + state.stress[j])
@@ -721,9 +895,9 @@ impl Work<'_> {
         })
     }
 
-    fn jacobian(&mut self, x: [f64; 6], base: &Evaluation) -> Result<Vec<[f64; 6]>, Failure> {
-        let mut rows = vec![[0.0; 6]; base.residual.len()];
-        for j in 0..6 {
+    fn jacobian(&mut self, x: [f64; N], base: &Evaluation) -> Result<Vec<[f64; N]>, Failure> {
+        let mut rows = vec![[0.0; N]; base.residual.len()];
+        for j in 0..N {
             let lo = (x[j] - 1e-4).max(0.0);
             let hi = (x[j] + 1e-4).min(1.0);
             let mut sides = Vec::new();
@@ -764,7 +938,12 @@ impl Work<'_> {
 
 // With a complete observed prefix, z = e-Q^-1*S and a = sum(abs(delta z)). Active samples obey
 // abs(S_i) = Y_i + H_i*a_i. This is only a projected FIT optimizer seed, never an extra force datum.
-fn algebraic_seed(input: &Input, prepared: &Prepared) -> [f64; 6] {
+fn algebraic_seed<const N: usize>(input: &Input, prepared: &Prepared<N>) -> [f64; N] {
+    // The algebraic plastic seed assumes independently known transient stress. With an unknown
+    // arm use a declared deterministic interior start, never interpret total load as plastic load.
+    if prepared.joint_template.is_some() {
+        return [0.35; N];
+    }
     let mut rows: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
     let mut forces: [Vec<f64>; 3] = std::array::from_fn(|_| Vec::new());
     let q = prepared.tensor;
@@ -809,7 +988,7 @@ fn algebraic_seed(input: &Input, prepared: &Prepared) -> [f64; 6] {
             old = plastic;
         }
     }
-    let mut seed = [0.5; 6];
+    let mut seed = [0.5; N];
     for i in 0..3 {
         if rows[i].len() < 2 || rows[i].iter().all(|r| (r[1] - rows[i][0][1]).abs() < 1e-8) {
             continue;
@@ -825,10 +1004,131 @@ fn algebraic_seed(input: &Input, prepared: &Prepared) -> [f64; 6] {
     seed
 }
 
-fn optimize(
-    work: &mut Work<'_>,
-    mut x: [f64; 6],
-) -> (Option<([f64; 6], Evaluation)>, &'static str) {
+// Solve the damped local least-squares problem inside the actual parameter box. Merely clipping
+// its unconstrained solution leaves the free coordinates compensating for a step that never
+// occurred. The active set fixes reached endpoints, then releases any endpoint whose quadratic
+// gradient points into the feasible box. Every face solve uses the existing deterministic SVD.
+fn bounded_step<const N: usize>(
+    rows: &[[f64; N]],
+    rhs: &[f64],
+    x: [f64; N],
+    scales: [f64; N],
+) -> Option<[f64; N]> {
+    let scales = scales.map(|s| s.max(1e-12));
+    let lower: [f64; N] = std::array::from_fn(|j| -x[j] * scales[j]);
+    let upper: [f64; N] = std::array::from_fn(|j| (1.0 - x[j]) * scales[j]);
+    let mut current = [0.0; N];
+    // -1 is a lower endpoint, +1 an upper endpoint, 0 a free coordinate.
+    let mut active = [0_i8; N];
+    for _ in 0..4 * N * N {
+        let mut reduced: Vec<[f64; N]> = rows
+            .iter()
+            .map(|row| std::array::from_fn(|j| if active[j] == 0 { row[j] } else { 0.0 }))
+            .collect();
+        let mut target_rhs: Vec<f64> = rows
+            .iter()
+            .zip(rhs)
+            .map(|(row, target)| {
+                target
+                    - (0..N)
+                        .filter(|&j| active[j] != 0)
+                        .map(|j| row[j] * current[j])
+                        .sum::<f64>()
+            })
+            .collect();
+        for j in 0..N {
+            if active[j] != 0 {
+                let mut row = [0.0; N];
+                row[j] = 1.0;
+                reduced.push(row);
+                target_rhs.push(current[j]);
+            }
+        }
+        let mut target = lstsq(&reduced, &target_rhs);
+        if target.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        let mut fraction = 1.0;
+        let mut blocker = None;
+        for j in 0..N {
+            if active[j] != 0 {
+                target[j] = current[j];
+                continue;
+            }
+            let endpoint = if target[j] < lower[j] {
+                Some((lower[j], -1))
+            } else if target[j] > upper[j] {
+                Some((upper[j], 1))
+            } else {
+                None
+            };
+            if let Some((bound, side)) = endpoint {
+                let reachable = (bound - current[j]) / (target[j] - current[j]);
+                if reachable < fraction || (reachable == fraction && blocker.is_none()) {
+                    fraction = reachable;
+                    blocker = Some((j, bound, side));
+                }
+            }
+        }
+        if !fraction.is_finite() || fraction < 0.0 {
+            return None;
+        }
+        if let Some((j, bound, side)) = blocker {
+            current = std::array::from_fn(|k| {
+                (current[k] + fraction * (target[k] - current[k])).clamp(lower[k], upper[k])
+            });
+            current[j] = bound;
+            active[j] = side;
+            continue;
+        }
+        current = target;
+        let residual: Vec<f64> = rows
+            .iter()
+            .zip(rhs)
+            .map(|(row, target)| (0..N).map(|j| row[j] * current[j]).sum::<f64>() - target)
+            .collect();
+        let tolerance = 128.0
+            * f64::EPSILON
+            * (1.0
+                + rhs.iter().map(|v| v.abs()).sum::<f64>()
+                + residual.iter().map(|v| v.abs()).sum::<f64>());
+        if !tolerance.is_finite() {
+            return None;
+        }
+        let mut release = None;
+        let mut violation = tolerance;
+        for j in 0..N {
+            if active[j] != 0 {
+                let gradient = rows
+                    .iter()
+                    .zip(&residual)
+                    .map(|(row, residual)| row[j] * residual)
+                    .sum::<f64>();
+                let outward = f64::from(active[j]) * gradient;
+                if !outward.is_finite() {
+                    return None;
+                }
+                if outward > violation {
+                    violation = outward;
+                    release = Some(j);
+                }
+            }
+        }
+        if let Some(j) = release {
+            active[j] = 0;
+        } else {
+            return Some(std::array::from_fn(|j| {
+                (x[j] + current[j] / scales[j]).clamp(0.0, 1.0)
+            }));
+        }
+    }
+    None
+}
+
+fn optimize<const N: usize>(
+    work: &mut Work<'_, N>,
+    mut x: [f64; N],
+) -> (Option<([f64; N], Evaluation)>, &'static str) {
     let mut current = match work.evaluate(x, Partition::Fit, false) {
         Ok(e) => e,
         Err(Failure::Budget) => return (None, "BUDGET_EXHAUSTED"),
@@ -844,7 +1144,7 @@ fn optimize(
             Err(Failure::Budget) => return (Some((x, current)), "BUDGET_EXHAUSTED"),
             Err(Failure::Physical(_)) => return (Some((x, current)), "REFUSED"),
         };
-        let scales: [f64; 6] =
+        let scales: [f64; N] =
             std::array::from_fn(|j| jacobian.iter().map(|r| r[j] * r[j]).sum::<f64>().sqrt());
         if scales.iter().any(|s| !s.is_finite()) {
             return (Some((x, current)), "REFUSED");
@@ -854,7 +1154,7 @@ fn optimize(
         }
         // A clipped Newton step can vanish at a corner with a feasible descent direction.
         // Only the scaled bound-constrained gradient can establish local stationarity here.
-        let stationary = (0..6).all(|j| {
+        let stationary = (0..N).all(|j| {
             let gradient = jacobian
                 .iter()
                 .zip(&current.residual)
@@ -869,21 +1169,29 @@ fn optimize(
         }
         let mut accepted = None;
         for _ in 0..12 {
-            let mut rows: Vec<[f64; 6]> = jacobian
+            let mut rows: Vec<[f64; N]> = jacobian
                 .iter()
                 .map(|r| std::array::from_fn(|j| r[j] / scales[j].max(1e-12)))
                 .collect();
             let mut rhs: Vec<_> = current.residual.iter().map(|r| -r).collect();
-            for j in 0..6 {
-                let mut row = [0.0; 6];
+            for j in 0..N {
+                let mut row = [0.0; N];
                 row[j] = lambda.sqrt();
                 rows.push(row);
                 rhs.push(0.0);
             }
-            let delta = lstsq(&rows, &rhs);
-            let trial: [f64; 6] =
-                std::array::from_fn(|j| (x[j] + delta[j] / scales[j].max(1e-12)).clamp(0.0, 1.0));
-            let step = (0..6).map(|j| (trial[j] - x[j]).abs()).fold(0.0, f64::max);
+            let trial: [f64; N] = if N == 8 {
+                let Some(trial) = bounded_step(&rows, &rhs, x, scales) else {
+                    lambda *= 10.0;
+                    continue;
+                };
+                trial
+            } else {
+                // Preserve the existing six-parameter arithmetic when joint mode is absent.
+                let delta = lstsq(&rows, &rhs);
+                std::array::from_fn(|j| (x[j] + delta[j] / scales[j].max(1e-12)).clamp(0.0, 1.0))
+            };
+            let step = (0..N).map(|j| (trial[j] - x[j]).abs()).fold(0.0, f64::max);
             if step <= 1e-12 {
                 lambda *= 10.0;
                 continue;
@@ -908,15 +1216,15 @@ fn optimize(
     (Some((x, current)), "ITERATION_LIMIT")
 }
 
-fn excitation(rows: &[[f64; 6]]) -> ([f64; 6], f64) {
-    let scales: [f64; 6] =
+fn excitation<const N: usize>(rows: &[[f64; N]]) -> ([f64; N], f64) {
+    let scales: [f64; N] =
         std::array::from_fn(|j| rows.iter().map(|r| r[j] * r[j]).sum::<f64>().sqrt());
     if scales.iter().any(|s| !s.is_finite() || *s <= 1e-10) {
         return (scales.map(|s| if s.is_finite() { s } else { 0.0 }), 0.0);
     }
-    let mut l = [[0.0; 6]; 6];
+    let mut l = [[0.0; N]; N];
     let mut pivot = 1.0_f64;
-    for i in 0..6 {
+    for i in 0..N {
         for j in 0..=i {
             let value = rows
                 .iter()
@@ -970,19 +1278,55 @@ fn fitted_material(
     material
         .structure
         .insert("membrane_plasticity_model".into(), MODEL.into());
+    if let Some(recovery) = &parameters.relaxation {
+        material = joint_template(input, &material)?.expect("joint publication template");
+        let branch = &mut material
+            .membrane_relaxation
+            .as_mut()
+            .expect("joint publication")
+            .branches[0];
+        for (quantity, value) in [
+            (&mut branch.stiffness_ratio, recovery.stiffness_ratio),
+            (
+                &mut branch.relaxation_time,
+                recovery.relaxation_time_seconds,
+            ),
+        ] {
+            quantity.value = value;
+            quantity.source = source.clone();
+            quantity.method = "Bounded joint FIT-only identification with the six permanent coefficients through recorded-node return mapping and canonical backward-Euler recovery; not a measured coefficient or confidence bound".into();
+            quantity.conditions = input.conditions.clone();
+        }
+        material.sources.get_mut(&source).expect("fit source").note = format!(
+            "{}; bounded joint FIT-only identification of six directional yield/hardening coefficients and one proportional Maxwell ratio/time. All eight coefficients share complete-history residuals and the full local excitation gate. Original evidence, declared bounds and independent CHECK replay are retained; no global uniqueness, empirical garment or parameter-confidence claim.",
+            input.method
+        );
+    }
     normalize(&material)?.compiled_membrane_plasticity(true)?;
     Ok(material)
 }
 
-/// Identify six bounded coefficients and replay the chosen model without consulting CHECK during
-/// optimization or excitation analysis. No optional material is returned after an unresolved result.
+/// Identify six permanent coefficients, optionally together with a proportional recovery ratio/time,
+/// without consulting CHECK during optimization or excitation analysis. Unresolved results cannot bind.
 ///
 /// # Errors
 /// Malformed/unqualified acquisition, independently supplied elasticity/domains, incompatible law,
 /// denied evidence/replacement, or nonrepresentable input/output. Numerical fit failures are reports.
 pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
-    let prepared = prepare(input)?;
-    let fixed_steps = prepared.relaxation.as_ref().map(|_| 0);
+    if input.joint_relaxation.is_some() {
+        calibrate_inner::<8>(input)
+    } else {
+        calibrate_inner::<6>(input)
+    }
+}
+
+fn calibrate_inner<const N: usize>(input: &Input) -> Result<Report, Refusal> {
+    let prepared = prepare::<N>(input)?;
+    let fixed_steps = prepared
+        .relaxation
+        .as_ref()
+        .filter(|_| prepared.joint_template.is_none())
+        .map(|_| 0);
     let input_sha256 = sha256_hex(&serde_json::to_vec(input).map_err(|e| bad(e.to_string()))?);
     let has_check = input.experiments.iter().any(|e| {
         e.partition == Partition::Check
@@ -997,6 +1341,14 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             evaluations: 0,
             history_steps: 0,
             fixed_maxwell_branch_steps: fixed_steps,
+            joint_relaxation: input
+                .joint_relaxation
+                .as_ref()
+                .map(|_| JointRelaxationDiagnostics {
+                    parameter_sensitivity: [0.0; 2],
+                    at_bounds: [false; 2],
+                    branch_steps: 0,
+                }),
             evaluation_limit: input.max_evaluations,
             history_step_limit: MAX_HISTORY_STEPS,
             starts_attempted: 0,
@@ -1046,11 +1398,11 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         return Ok(report);
     }
     let seed = algebraic_seed(input, &work.prepared);
-    let mut best: Option<([f64; 6], Evaluation)> = None;
+    let mut best: Option<([f64; N], Evaluation)> = None;
     let mut candidates = Vec::new();
     let mut exhausted = false;
     let mut incomplete = false;
-    for (index, start) in [seed, [0.15; 6], [0.5; 6], [0.85; 6]]
+    for (index, start) in [seed, [0.15; N], [0.5; N], [0.85; N]]
         .into_iter()
         .enumerate()
     {
@@ -1083,29 +1435,32 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     if let Some((x, e)) = best {
         report.parameters = Some(work.prepared.parameters(x));
         report.fit = e.quality.clone();
-        work.diagnostics.at_bounds = x.map(|v| v <= 1e-7 || v >= 1.0 - 1e-7);
+        work.diagnostics.at_bounds = std::array::from_fn(|j| x[j] <= 1e-7 || x[j] >= 1.0 - 1e-7);
+        if let Some(joint) = &mut work.diagnostics.joint_relaxation {
+            joint.at_bounds = std::array::from_fn(|j| x[j + 6] <= 1e-7 || x[j + 6] >= 1.0 - 1e-7);
+        }
         let equivalent = candidates.iter().any(|(other, cost)| {
             (*cost - e.cost).abs() <= 1e-12 * (1.0 + e.cost)
-                && (0..6).any(|j| (other[j] - x[j]).abs() > 1e-3)
+                && (0..N).any(|j| (other[j] - x[j]).abs() > 1e-3)
         });
         if !exhausted {
             match work.jacobian(x, &e) {
                 Ok(rows) => {
                     let (scales, pivot) = excitation(&rows);
-                    work.diagnostics.parameter_sensitivity = std::array::from_fn(|j| {
+                    let sensitivity: [f64; N] = std::array::from_fn(|j| {
                         scales[j]
                             / (work.prepared.bounds[j][1] - work.prepared.bounds[j][0])
                             / (e.residual.len() as f64).sqrt()
                     });
-                    if work
-                        .diagnostics
-                        .parameter_sensitivity
-                        .iter()
-                        .any(|v| !v.is_finite())
-                    {
+                    if sensitivity.iter().any(|v| !v.is_finite()) {
                         work.diagnostics.parameter_sensitivity = [0.0; 6];
                         incomplete = true;
                     } else {
+                        work.diagnostics.parameter_sensitivity =
+                            std::array::from_fn(|j| sensitivity[j]);
+                        if let Some(joint) = &mut work.diagnostics.joint_relaxation {
+                            joint.parameter_sensitivity = [sensitivity[6], sensitivity[7]];
+                        }
                         work.diagnostics.excitation_pivot = pivot;
                         work.diagnostics.sensitivity_evaluated = true;
                     }
@@ -1168,7 +1523,11 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             report.decision_reasons.push("materially different bounded coefficients give equivalent FIT residuals across starts".into());
         }
         if !work.diagnostics.sensitivity_evaluated || work.diagnostics.excitation_pivot <= 1e-6 {
-            report.decision_reasons.push("FIT histories do not independently identify all six yield/hardening coefficients within the numerical excitation gate".into());
+            report.decision_reasons.push(if input.joint_relaxation.is_some() {
+                "FIT histories do not independently identify all eight permanent/recovery coefficients within the joint numerical excitation gate".into()
+            } else {
+                "FIT histories do not independently identify all six yield/hardening coefficients within the numerical excitation gate".into()
+            });
         }
         if incomplete {
             report.decision_reasons.push("at least one bounded optimization or selected sensitivity calculation did not complete".into());
@@ -1209,4 +1568,37 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     }
     report.diagnostics = work.diagnostics;
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bounded_step;
+
+    #[test]
+    fn bounded_quadratic_reoptimizes_the_free_coordinate_after_reaching_a_bound() {
+        // min (u+v-2)^2 + (u-1)^2, 0<=u<=0.2, 0<=v<=2.
+        // Unconstrained (1,1) clipped to (0.2,1) is not stationary; the exact constrained
+        // solution is (0.2,1.8). Returned coordinates divide by the supplied physical spans.
+        let point =
+            bounded_step(&[[1.0, 1.0], [1.0, 0.0]], &[2.0, 1.0], [0.0; 2], [0.2, 2.0]).unwrap();
+        assert!((point[0] - 1.0).abs() < 1e-12, "{point:?}");
+        assert!((point[1] - 0.9).abs() < 1e-12, "{point:?}");
+    }
+
+    #[test]
+    fn bounded_quadratic_releases_an_endpoint_with_an_inward_gradient() {
+        // H=[[1,.9],[.9,1]], b=[1,1.5], 0<=u,v<=1. The unconstrained direction first
+        // reaches u=0; after v reaches 1, that lower bound must release. Independent KKT
+        // equations give u=.1, v=1, gradient=[0,-.41]. Keeping u=0 is nonstationary.
+        let root = 0.19_f64.sqrt();
+        let point = bounded_step(
+            &[[1.0, 0.9], [0.0, root]],
+            &[1.0, 0.6 / root],
+            [0.0; 2],
+            [1.0; 2],
+        )
+        .unwrap();
+        assert!((point[0] - 0.1).abs() < 1e-12, "{point:?}");
+        assert!((point[1] - 1.0).abs() < 1e-12, "{point:?}");
+    }
 }

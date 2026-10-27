@@ -494,6 +494,278 @@ fn joint_input() -> Input {
     .unwrap()
 }
 
+fn identify_both_input() -> Input {
+    let mut source = input();
+    let known = joint_input();
+    source
+        .material
+        .sources
+        .insert("network".into(), known.material.sources["network"].clone());
+    source.joint_relaxation = Some(serde_json::from_value(json!({
+        "branch_id": "identified-arm",
+        "stiffness_ratio_bounds": [0.1, 0.9],
+        "relaxation_time_bounds_seconds": [0.1, 1.2],
+        "strain_range": [[-0.2, 0.2], [-0.2, 0.2], [-0.2, 0.2]],
+        "initialization": "stress_free_reference",
+        "network": {
+            "model": "parallel_green_maxwell_plastic/1",
+            "source": "network", "evidence": "estimate",
+            "method": "Synthetic single proportional recovery arm plus plastic equilibrium; independently declared domain and pristine reference, neither arm's coefficients supplied",
+            "conditions": source.conditions
+        }
+    })).unwrap());
+    let mut dwell = source.experiments[0].samples[3].clone();
+    dwell.time_seconds = 3.25;
+    source.experiments[0].samples.insert(4, dwell.clone());
+    dwell.time_seconds = 3.75;
+    source.experiments[0].samples.insert(5, dwell);
+    // Independent scalar Maxwell recurrence adds known synthetic transient load to the existing
+    // independently tabulated plastic fixture. No production fitter or forward law creates data.
+    for experiment in &mut source.experiments {
+        let mut viscous = [0.0; 3];
+        let mut previous = 0.0;
+        for sample in &mut experiment.samples {
+            let h = sample.time_seconds - previous;
+            for axis in 0..3 {
+                viscous[axis] = (0.5 * viscous[axis] + h * sample.green_strain[axis]) / (0.5 + h);
+                if let Some(force) = &mut sample.second_piola_n_m[axis] {
+                    *force += 0.5
+                        * [1000.0, 500.0, 250.0][axis]
+                        * (sample.green_strain[axis] - viscous[axis]);
+                }
+            }
+            previous = sample.time_seconds;
+        }
+    }
+    source
+}
+
+#[test]
+fn jointly_identifies_permanent_stretch_and_recovery_without_prior_coefficients() {
+    let source = identify_both_input();
+    let original = serde_json::to_value(&source).unwrap();
+    assert!(source.material.membrane_relaxation.is_none());
+    let report = calibrate(&source).unwrap();
+    assert_eq!(report.status, Status::Accepted, "{report:#?}");
+    let parameters = report.parameters.as_ref().unwrap();
+    for i in 0..3 {
+        near(parameters.yield_n_m[i], [10.0, 8.0, 5.0][i], 1e-6);
+        near(parameters.hardening_n_m[i], [100.0, 50.0, 25.0][i], 1e-6);
+    }
+    let recovery = parameters.relaxation.as_ref().unwrap();
+    near(recovery.stiffness_ratio, 0.5, 1e-6);
+    near(recovery.relaxation_time_seconds, 0.5, 1e-6);
+    assert!(report.diagnostics.excitation_pivot > 1e-6);
+    assert_eq!(report.check_status, "ACCEPTED");
+    assert_eq!(report.predictions.len(), 32);
+    assert_eq!(report.diagnostics.fixed_maxwell_branch_steps, None);
+    let diagnostics = report.diagnostics.joint_relaxation.as_ref().unwrap();
+    assert!(diagnostics.parameter_sensitivity.iter().all(|s| *s > 0.0));
+    assert_eq!(
+        report.diagnostics.history_steps,
+        2 * diagnostics.branch_steps
+    );
+    assert_eq!(
+        diagnostics.branch_steps,
+        (report.diagnostics.evaluations - 1) * 27 + 5
+    );
+    let material = report.material.as_ref().unwrap();
+    let arm = &material.membrane_relaxation.as_ref().unwrap().branches[0];
+    assert_eq!(arm.id, "identified-arm");
+    assert_eq!(arm.stiffness_ratio.evidence, Evidence::Estimate);
+    assert_eq!(arm.relaxation_time.evidence, Evidence::Estimate);
+    assert_eq!(
+        arm.stiffness_ratio.source,
+        material.properties["membrane_yield_warp"].source
+    );
+    assert_eq!(arm.relaxation_time.source, arm.stiffness_ratio.source);
+    assert!(arm.stiffness_ratio.bounds.is_none());
+    for (key, observation) in &source.material.properties {
+        assert_eq!(
+            serde_json::to_value(&material.properties[key]).unwrap(),
+            serde_json::to_value(observation).unwrap()
+        );
+    }
+    assert_eq!(original, serde_json::to_value(&source).unwrap());
+    let plastic = material
+        .compiled_membrane_plasticity(true)
+        .unwrap()
+        .unwrap();
+    let mut all = Vec::new();
+    for experiment in &source.experiments {
+        let mut memory = plastic.pristine();
+        let mut viscous = [0.0; 3];
+        let mut previous = 0.0;
+        for sample in &experiment.samples {
+            memory = memory.advance(sample.green_strain).unwrap().memory;
+            let response = memory.response(sample.green_strain, false).unwrap();
+            let h = sample.time_seconds - previous;
+            for axis in 0..3 {
+                viscous[axis] = (recovery.relaxation_time_seconds * viscous[axis]
+                    + h * sample.green_strain[axis])
+                    / (recovery.relaxation_time_seconds + h);
+            }
+            all.push((response.stress, viscous));
+            previous = sample.time_seconds;
+        }
+    }
+    for (prediction, (equilibrium, viscous)) in report.predictions.iter().zip(all) {
+        let history = prediction.parallel_history.as_ref().unwrap();
+        for axis in 0..3 {
+            near(history.viscous_green_strains[0][axis], viscous[axis], 1e-12);
+            let stress = recovery.stiffness_ratio
+                * [1000.0, 500.0, 250.0][axis]
+                * (prediction.green_strain[axis] - viscous[axis]);
+            near(history.maxwell_second_piola_n_m[axis], stress, 1e-12);
+            near(
+                prediction.second_piola_n_m[axis],
+                equilibrium[axis] + stress,
+                1e-12,
+            );
+        }
+        near(
+            history.total_stored_j_m2,
+            prediction.stored_j_m2 + history.maxwell_stored_j_m2,
+            1e-12,
+        );
+    }
+    let null_peak = &report.predictions[6];
+    assert_eq!(null_peak.residual_n_m, [None; 3]);
+    assert!(null_peak.plastic_strain[0] > report.predictions[5].plastic_strain[0]);
+    assert!(
+        null_peak
+            .parallel_history
+            .as_ref()
+            .unwrap()
+            .viscous_green_strains[0][0]
+            > report.predictions[5]
+                .parallel_history
+                .as_ref()
+                .unwrap()
+                .viscous_green_strains[0][0]
+    );
+}
+
+#[test]
+fn joint_check_rejects_the_same_fit_without_refitting_either_branch() {
+    let mut source = identify_both_input();
+    let original = calibrate(&source).unwrap();
+    source.experiments.last_mut().unwrap().samples[2].second_piola_n_m[0] = Some(1e6);
+    let rejected = calibrate(&source).unwrap();
+    assert_eq!(rejected.status, Status::Rejected);
+    assert_eq!(rejected.check_status, "REJECTED");
+    assert!(rejected.material.is_none());
+    assert_eq!(original.parameters, rejected.parameters);
+    assert_eq!(
+        serde_json::to_value(&original.fit).unwrap(),
+        serde_json::to_value(&rejected.fit).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&original.diagnostics).unwrap(),
+        serde_json::to_value(&rejected.diagnostics).unwrap()
+    );
+    let sample = &mut source.experiments.last_mut().unwrap().samples[2];
+    sample.green_strain[0] = 0.25;
+    sample.second_piola_n_m = [None; 3];
+    let refused = calibrate(&source).unwrap();
+    assert_eq!(refused.status, Status::Rejected);
+    assert_eq!(refused.check_status, "REFUSED");
+    assert_eq!(refused.parameters, original.parameters);
+    assert!(refused.material.is_none());
+}
+
+#[test]
+fn joint_recovery_work_and_all_final_replays_share_the_existing_budget() {
+    let mut source = identify_both_input();
+    source.max_evaluations = 1;
+    let report = calibrate(&source).unwrap();
+    assert_eq!(report.status, Status::BudgetExhausted);
+    assert!(report.material.is_none());
+    assert_eq!(report.diagnostics.evaluations, 1);
+    assert_eq!(report.diagnostics.history_steps, 54);
+    assert_eq!(
+        report.diagnostics.joint_relaxation.unwrap().branch_steps,
+        27
+    );
+    assert_eq!(report.check_status, "NOT_EVALUATED");
+}
+
+#[test]
+fn joint_recovery_requires_a_qualified_domain_and_explicit_single_arm_replacement() {
+    let source = identify_both_input();
+    let original = serde_json::to_value(&source).unwrap();
+    for (path, value) in [
+        ("/joint_relaxation/branch_id", json!("")),
+        (
+            "/joint_relaxation/stiffness_ratio_bounds",
+            json!([0.0, 0.9]),
+        ),
+        (
+            "/joint_relaxation/relaxation_time_bounds_seconds",
+            json!([1.0, 1.0]),
+        ),
+        ("/joint_relaxation/strain_range/0", json!([-0.1, 0.04])),
+        ("/joint_relaxation/network/source", json!("missing")),
+        (
+            "/joint_relaxation/network/conditions/specimen_id",
+            json!("other-specimen"),
+        ),
+    ] {
+        let mut changed = original.clone();
+        *changed.pointer_mut(path).unwrap() = value;
+        let input: Input = serde_json::from_value(changed).unwrap();
+        assert!(calibrate(&input).is_err(), "accepted {path}");
+    }
+    let mut denied = source.clone();
+    for quantity in denied.material.properties.values_mut() {
+        quantity.evidence = Evidence::Measured;
+    }
+    denied.allow_estimated_material = false;
+    assert!(calibrate(&denied).is_err());
+    let mut existing = source.clone();
+    existing.material.membrane_relaxation = joint_input().material.membrane_relaxation;
+    assert!(calibrate(&existing).is_err());
+    existing.replace_existing = true;
+    assert!(calibrate(&existing).is_err());
+}
+
+#[test]
+fn one_interval_histories_cannot_identify_ratio_and_time_separately() {
+    let mut source = identify_both_input();
+    let mut histories = Vec::new();
+    for axis in 0..3 {
+        for (index, strain) in [0.04, 0.06, 0.09].into_iter().enumerate() {
+            let mut experiment = source.experiments[axis].clone();
+            experiment.id = format!("one-step-{axis}-{index}");
+            experiment.samples.truncate(1);
+            let stiffness = [1000.0, 500.0, 250.0][axis];
+            let yield_value = [10.0, 8.0, 5.0][axis];
+            let hardening = [100.0, 50.0, 25.0][axis];
+            let mut e = [0.0; 3];
+            e[axis] = strain;
+            let mut s = [Some(0.0); 3];
+            s[axis] = Some(
+                stiffness * (yield_value + hardening * strain) / (stiffness + hardening)
+                    + 0.5 * stiffness * strain * 0.5 / 1.5,
+            );
+            experiment.samples.push(Sample {
+                time_seconds: 1.0,
+                green_strain: e,
+                second_piola_n_m: s,
+                scale_n_m: 1.0,
+            });
+            histories.push(experiment);
+        }
+    }
+    source.experiments = histories;
+    let report = calibrate(&source).unwrap();
+    assert_ne!(report.status, Status::Accepted);
+    assert!(report.material.is_none());
+    if report.diagnostics.sensitivity_evaluated {
+        assert!(report.diagnostics.excitation_pivot <= 1e-6);
+    }
+}
+
 #[test]
 fn fixed_parallel_spectrum_identifies_total_cycles_and_publishes_the_same_qualified_material() {
     use ftx_pattern::{material_catalog::Selection, materials::Catalog};

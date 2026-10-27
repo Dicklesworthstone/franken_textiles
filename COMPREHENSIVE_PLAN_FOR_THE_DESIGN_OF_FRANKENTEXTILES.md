@@ -3827,6 +3827,35 @@ The bounded data integration is `ftx-tm2.2`; resolving source geometry and match
 mechanical/transport characterization remain under `ftx-tm2` and the unchanged-garment `ftx-tm8`
 acceptance gate.
 
+### 25.99 Identify permanent stretch and delayed recovery together
+
+Optional `joint_relaxation` extends the existing complete-history permanent-membrane calibration
+to identify six directional yield/hardening coefficients and one proportional Maxwell stiffness
+ratio and recovery time in one bounded FIT problem. Fresh inputs require no provisional unknown
+coefficients. Elasticity, strain and accumulated-history limits, network topology, initialization
+and exact specimen/conditioning remain independently qualified inputs.
+
+Every trial replays both canonical histories at every recorded node, including unobserved loads,
+irregular dwells and reversals. The eight-column FIT excitation gate detects local confounding;
+CHECK can reject the retained FIT choice but cannot select another. Both histories participate in
+the existing shared work limits. Joint optimization solves the bounded local least-squares problem
+with active-set free-coordinate updates and endpoint release; clipping an unconstrained coupled
+step no longer stalls an otherwise identifiable example. Existing six-parameter arithmetic stays
+unchanged.
+
+Accepted output is one ordinary frozen material, with all eight fitted quantities retained as
+estimates under the same receipt. The workbench distinguishes unknown recovery identified jointly
+from an independently supplied fixed spectrum, displays both coefficients and their diagnostics,
+and withdraws unresolved selections. The complete artificial
+`examples/material-joint-calibration.json` supplies 27 FIT and five CHECK nodes with independently
+constructed targets, and reaches normal pattern binding and timed cloth histories.
+See [material-membrane-plasticity.md](docs/material-membrane-plasticity.md).
+
+This bounded software feature is `ftx-tm4.5`. Multiple/directional unknown recovery arms,
+temperature/moisture feedback into mechanical laws and physical specimen/garment acceptance remain
+open. The recorded-node plastic update and backward-Euler recovery do not establish continuous-time
+exactness, coefficient uncertainty, global uniqueness or measured textile agreement.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

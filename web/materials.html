@@ -125,6 +125,12 @@ source-qualified loading/unloading cycles, raw Green strains and second-Piola sh
 Supply independently characterized elasticity, total/accumulated strain limits and explicit yield/hardening
 search ranges. FIT chooses the coefficients before held-out CHECK replay. Unexcited directions, incomplete
 searches and failed checks retain a report without an assignable selection.</p>
+<p class="note">To identify both permanent stretch and delayed recovery from the same histories, include
+<code>joint_relaxation</code> with one proportional Maxwell branch, positive stiffness-ratio and recovery-time
+search bounds, a source-qualified network declaration and its strain domain. No provisional recovery
+coefficients are required. The shared fitter checks excitation of all eight unknowns and replays every
+recorded strain/time node. The result distinguishes jointly identified recovery from an independently
+supplied spectrum that stays fixed. Fitted coefficients remain estimates.</p>
 <p class="note">Review fit and held-out errors below, then assign the exact identified selection in section 2.
 Download the complete report, original input and frozen selection for reuse. No specimen data leaves this tab.</p>
 <details><summary>Clamped-strip acquisitions and inverse identification</summary>
