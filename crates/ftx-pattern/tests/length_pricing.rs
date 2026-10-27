@@ -108,21 +108,26 @@ fn stock_and_continuity_apply_to_different_quantities_in_the_offer_unit() {
 }
 
 #[test]
-fn incompatible_mass_and_area_quotes_never_create_a_length_conversion() {
+fn missing_yarn_density_and_area_quotes_never_create_a_length_conversion() {
     let mut request = scope();
     request.continuous_length_m = None;
     request.require_observed_continuous_length = false;
-    for unit in [SaleUnit::Kilogram, SaleUnit::SquareMeter] {
+    for (unit, reason) in [
+        (
+            SaleUnit::Kilogram,
+            ExclusionReason::YarnLengthMassConversionUnavailable,
+        ),
+        (SaleUnit::SquareMeter, ExclusionReason::IncompatibleBasis),
+    ] {
         let mut q = quote();
         q.unit = unit;
         q.maximum_continuous_quantity = None;
         let out = book(vec![q]).evaluate(&material(), &request).unwrap();
         assert!(out.offers.is_empty());
         assert!(out.rate_p10_p50_p90.is_none());
-        assert_eq!(
-            out.excluded_offers[0].reason,
-            ExclusionReason::IncompatibleBasis
-        );
+        assert_eq!(out.excluded_offers.len(), 1);
+        assert_eq!(out.excluded_offers[0].reason, reason);
+        assert_eq!(out.excluded_offers[0].required_order_quantity, None);
     }
     request.basis = Basis::Area;
     assert!(book(vec![quote()]).evaluate(&material(), &request).is_err());
