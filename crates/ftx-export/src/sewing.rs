@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Ctx, ExportOptions, edge_sa};
 
+pub mod access;
 pub mod assembly;
 pub mod consumables;
 pub mod ordering;
@@ -92,6 +93,9 @@ pub struct SewingPass {
     /// Optional measured compression evaluation of every ply at the same prescribed foot pressure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presser_foot: Option<pressure::Request>,
+    /// Optional source-qualified planar tool/fixture clearance in the explicit assembly frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<access::Policy>,
     /// Operation IDs which must finish first. Omission adds no physical-accessibility claim.
     #[serde(default)]
     pub after: Vec<String>,
@@ -226,6 +230,9 @@ pub struct PlannedSeam {
     /// Loaded ply stack and source receipts, separate from the original stack/assembly geometry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presser_foot: Option<pressure::Receipt>,
+    /// Full circular tool sweep against declared static fixtures; no machine-frame inference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<access::Receipt>,
     /// Ordered directed runs indexing `stations`; present for version-2 jobs, including lock travel.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<StitchRun>,
@@ -244,7 +251,8 @@ pub struct SewPlan {
     /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` qualifications, `/6` ordering,
     /// `/7` pressure, `/8` clearance, `/9` timed ordering, `/10` partial source spans,
     /// `/11` source-qualified thread consumption and purchasing, `/12` cross-copy production schedule,
-    /// `/13` source-qualified finite workholding across production copies.
+    /// `/13` source-qualified finite workholding across production copies,
+    /// `/14` source-qualified planar tool/fixture clearance in explicit assemblies.
     /// Capabilities compose rather than replace.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
@@ -498,6 +506,7 @@ impl SewPlan {
             return Err(bad("invalid export seam allowance"));
         }
         let mut remaining = BTreeMap::new();
+        let mut access_work = access::Budget::default();
         for pass in &options.passes {
             if pass.seam.trim().is_empty()
                 || pass.operation_id().trim().is_empty()
@@ -532,6 +541,12 @@ impl SewPlan {
             }
             if let Some(foot) = &pass.presser_foot {
                 foot.validate(machine.presser_foot.as_ref())?;
+            }
+            if let Some(access) = &pass.access {
+                if pass.assembly.is_none() {
+                    return Err(bad("planar access requires an explicit flat assembly"));
+                }
+                access.validate(machine, &mut access_work)?;
             }
         }
         let mut source_seams = BTreeMap::new();
@@ -578,7 +593,9 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if options
+            schema: if options.passes.iter().any(|pass| pass.access.is_some()) {
+                "ftx-sewing-plan/14"
+            } else if options
                 .production
                 .as_ref()
                 .is_some_and(|production| production.workholding.is_some())
@@ -863,6 +880,22 @@ impl SewPlan {
                     )));
                 }
             };
+            let access = pass
+                .access
+                .as_ref()
+                .map(|policy| {
+                    let qualification = qualified.first().copied().ok_or_else(|| {
+                        bad(format!(
+                            "{id}: planar access needs an admitted source process qualification"
+                        ))
+                    })?;
+                    policy.evaluate(
+                        assembly.as_ref().expect("validated access assembly"),
+                        qualification,
+                        &mut access_work,
+                    )
+                })
+                .transpose()?;
             let stitch_intervals = runs.iter().map(|r| r.stitch_intervals).sum();
             let feed_seconds = stitch_intervals as f64 * 60.0 / pass.stitches_per_minute;
             out.feed_seconds += feed_seconds;
@@ -880,6 +913,7 @@ impl SewPlan {
                 feed_b_over_a: feeds,
                 stack_mm: stack,
                 presser_foot,
+                access,
                 runs: if out.schema != "ftx-sewing-plan/1" {
                     runs
                 } else {

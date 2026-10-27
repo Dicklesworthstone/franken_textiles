@@ -120,6 +120,19 @@ access and hardware authorization remain unvalidated. Tests include exhaustive s
 optima, lifecycle boundaries, multiple resources, source invalidation, unresolved selector claims,
 bounded incumbents, stitch replay and native/portable capacity-dependent schedules.
 
+**Planar sewing access** (`passes[].access`). Optional `planar_disk_sweep/1` requires an explicit
+flat assembly and an admitted source process qualification. Full machine and qualification hashes
+bind the independent tool/fixture acquisition to the current configuration and material stack.
+Every complete canonical needle chord is checked against all filled simple fixture polygons using
+a circular tool sweep in the existing operation-local millimetre frame; reverse and backtack runs
+revisit the same checked chords. Tool contact refuses, while a positive declared margin is inclusive.
+Plan `/14` and per-seam `ftx-sewing-access/1` receipts retain exact minimum distances and deterministic
+closest-point witnesses; the full source policy stays in the ordinary replay options. Limits are
+64 fixtures, 1024 total polygon vertices and 256 qualification references per operation, with 50000000
+aggregate geometry work units per plan. Omission preserves existing wire output. This establishes
+declared static planar separation, not grip, cloth support, three-dimensional access, approach motion,
+machine registration or hardware authorization. Tests: `sewing_access`; see `docs/sewing-access.md`.
+
 **Material-following recipe selection** (`material_study::recipes`, plan §25.10 / `ftx-ms2`).
 Optional `Request.sewing_selection` is exclusive with fixed `sewing` and reruns the existing
 qualified recipe selector on every freshly bound material alternative. Its unmodified selected

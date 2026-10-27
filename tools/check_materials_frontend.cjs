@@ -3063,6 +3063,64 @@ test('finite sewing fixtures retain capacities, operation lifecycles and source 
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
+test('planar sewing access retains complete-path clearances, witnesses and source locks in every result view', async () => {
+  const access={schema:'ftx-sewing-access/1',model:'planar_disk_sweep/1',frame:'operation_local_mm',
+    machine_sha256:'complete-machine-lock',qualification:{id:'qualified-process',sha256:'complete-process-lock'},
+    tool_radius_mm:2,required_clearance_mm:1,minimum_clearance_mm:3,minimum_centerline_distance_mm:5,
+    checked_segments:4,fixture_count:1,physical_access_validated:false,
+    witness:{fixture:'<clamp>',needle_segment:[0,1],fixture_edge:[3,0],needle_mm:[20,0],fixture_mm:[25,0]}};
+  const policy={model:'planar_disk_sweep/1',machine_sha256:'complete-machine-lock',
+    qualifications:[access.qualification],source:{note:'<declared tool and clamp geometry>'}};
+  const plan={schema:'ftx-sewing-plan/14',options:{},hardware_execution_authorized:false,seams:[
+    {pass:{id:'joined panel',seam:'side',access:policy},access,
+      assembly:{frame:'operation_local_mm',needle_mm:[[20,0],[20,2.5],[20,5],[20,7.5],[20,10]]}},
+    {pass:{id:'legacy operation',seam:'hem'}}]};
+  const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
+  const boundUrls=[...p.live];
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('qualified access'); row.sewing=outcome(plan);
+    const study=studyReport([row]);
+    const report=op==='sew'?{schema:'ftx-sewing-program/2',stitches:[],plan}:
+      op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=` ${JSON.stringify(report)}\n`, file=`${op}-access.json`;
+    await p.e[op].onclick(); p.emit(report,[{name:file,text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    const clearances=table('planar tool and fixture clearance');
+    assert.equal(clearances.children.length,3);
+    assert.deepEqual(plain(clearances.children[2].children.map(n=>n.textContent)),
+      ['joined panel','Declared planar model checked','2','1','3','1','4']);
+    assert.deepEqual(plain(table('limiting planar clearance witnesses').children[2].children.map(n=>n.textContent)),
+      ['joined panel','<clamp>','[0, 1]','[3, 0]','[20, 0]','[25, 0]']);
+    assert.match(visibleText(s),/every complete needle-path segment/);
+    assert.match(visibleText(s),/do not establish fixture grip, three-dimensional approach clearance/);
+    const detail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('tool geometry, assembly and qualification sources'));
+    detail.open=true; detail.handlers.toggle();
+    assert.match(visibleText(detail),/<declared tool and clamp geometry>/);
+    assert.match(visibleText(detail),/complete-machine-lock/); assert.match(visibleText(detail),/complete-process-lock/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    const link=descendants(s).find(n=>n.download===file); assert.equal(await p.blobs.get(link.href).text(),raw);
+    if(op==='sew') assert.equal(JSON.parse(s.children[1].textContent).planar_access_checked_operations,1);
+  }
+  p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+  assert.deepEqual([...p.live],boundUrls);
+});
+
+test('missing planar receipts remain unknown and ordinary plans have no access claim', async () => {
+  const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions');
+  const plan={schema:'ftx-sewing-plan/14',options:{},seams:[{pass:{seam:'side',access:{model:'planar_disk_sweep/1'}}}]};
+  await p.e.sew.onclick(); p.emit({stitches:[],plan});
+  const s=section(p,'sew'), text=visibleText(s);
+  assert.match(text,/No retained clearance result/); assert.match(text,/remain unchecked/);
+  assert.equal(JSON.parse(s.children[1].textContent).planar_access_checked_operations,undefined);
+  const result=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith('planar tool and fixture clearance'));
+  assert.deepEqual(plain(result.children[2].children.slice(2).map(n=>n.textContent)),Array(5).fill('Unknown'));
+  await p.e.sew.onclick(); p.emit({stitches:[],plan:{options:{},seams:[{pass:{seam:'side'}}]}});
+  assert.equal(descendants(s).some(n=>n.tag==='table'&&n.children[0].textContent.endsWith('planar tool and fixture clearance')),false);
+});
+
 test('study timing separates sourced setup duration from feed time and preserves missing evidence', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   for (const op of ['study', 'scenario']) {
@@ -3722,6 +3780,30 @@ test('compiled WASM measured treatment and batch sewing replay through the actua
       assert.equal(report.selected.operations.at(-1).occupied_after[id],0);
       assert.equal(report.fixture_geometry_and_access_validated,false);
     }
+  });
+
+test('compiled WASM checks the full tool sweep through the actual sewing worker',
+  {skip:process.env.FTX_REAL_WASM!=='1'}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const pattern=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-sewing-pattern.json'),'utf8');
+    const options=fs.readFileSync(path.join(__dirname,'../examples/sewing-access-options.json'),'utf8');
+    const w=await workerModule({bindings:ftx});
+    const result=await w.send({type:'sew',request:198,pattern,options});
+    assert.equal(result.type,'result',result.message);
+    assert.deepEqual(result.result,JSON.parse(ftx.sew_stitches(pattern,options)));
+    assert.equal(result.result.plan.schema,'ftx-sewing-plan/14');
+    assert.equal(result.result.stitches.length,240);
+    for(const seam of result.result.plan.seams) {
+      assert.equal(seam.access.minimum_clearance_mm,3);
+      assert.equal(seam.access.checked_segments,40);
+      assert.equal(seam.access.physical_access_validated,false);
+    }
+    const collision=JSON.parse(options); collision.passes[0].access.tool_radius_mm=6;
+    const refused=await w.send({type:'sew',request:199,pattern,options:JSON.stringify(collision)});
+    assert.equal(refused.type,'error'); assert.match(refused.message,/planar access/);
+    assert.equal(w.sent.filter(message=>message.type==='result'&&message.request===199).length,0);
   });
 
 test('compiled WASM authored designs replay real stock and sewing while excluding invalid geometry',

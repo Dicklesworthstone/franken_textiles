@@ -28,6 +28,14 @@ occupancy from the source-qualified production report. They do not recompute sch
 fixture geometry/hardware approval. Native command parity cases and the opt-in compiled-WASM
 worker case cover measured treatment studies and capacity-dependent constrained schedules.
 
+The same sewing exports enforce optional source-qualified `passes[].access` policies over every
+complete needle chord in the explicit operation-local assembly. `ftx-sewing-plan/14` retains tool
+clearances, limiting witnesses and exact machine/process locks; an edited receipt is never an input
+shortcut. Direct sewing and study pages display those retained results and withdraw stale views.
+Missing receipts stay unknown. This static planar model grants no grip, machine-registration,
+three-dimensional approach or hardware-execution claim. The complete synthetic access example is
+covered by core, native/portable and opt-in compiled-WASM worker regressions.
+
 **Clock.** An input, never read: `today` (`YYYY-MM-DD`) dates tape files and judges staleness, `created`
 (`YYYY-MM-DDTHH:MM`) stamps the exports and the zip entries. The worker passes the wearer's local date and
 minute, as `webapp.py` reads them.

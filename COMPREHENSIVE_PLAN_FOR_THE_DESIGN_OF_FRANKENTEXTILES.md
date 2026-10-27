@@ -3528,6 +3528,27 @@ This implements finite reusable inventory under `ftx-pb2.2.1`. Multi-machine ass
 fixture geometry and grip mechanics, seam access, measured handling and real execution qualification
 remain open. Counting available jigs does not establish those physical capabilities.
 
+### 25.88 Sewing checks the complete tool sweep against declared fixtures
+
+The shared sewing planner now admits optional source-qualified static planar access policies for
+explicit registered/folded assemblies. A circular tool envelope sweeps every complete canonical
+needle chord against filled simple fixture polygons. Checking complete segments catches collisions
+between otherwise-clear stitch stations; reverse feed and backtacks revisit the same checked sweep.
+Tool contact refuses, and requested positive separation is inclusive. Full machine and admitted
+material/process qualification hashes bind the policy's applicability. Missing geometry evidence or
+an unqualified operation cannot become an access pass.
+
+Ordinary stitch programs, production, recipe search and material studies use this same admission.
+Reports retain minimum clearance, exact limiting points, source policy and frame; browser views show
+them without recalculating geometry. Omission preserves earlier behavior. A complete synthetic example
+combines three copies, finite fixture inventory and per-operation clearance. See
+[sewing-access.md](docs/sewing-access.md) and `examples/sewing-access-options.json`.
+
+This advances `ftx-pb2.2` and `ftx-sp2` with a bounded geometric constraint. Grip force, cloth support,
+three-dimensional approach/retraction, calibrated machine registration, handling and multi-machine
+assignment remain separate unsatisfied requirements. Static planar clearance and a source-qualified
+schedule do not authorize hardware or establish measured seam quality.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
