@@ -215,6 +215,7 @@ fn law(input: &Input, ratios: &[f64], times: &[f64], source: &str) -> Relaxation
         ),
         conditions: input.conditions.clone(),
         orthotropic_branches: Vec::new(),
+        parallel_plasticity: None,
         branches: ratios
             .iter()
             .zip(times)

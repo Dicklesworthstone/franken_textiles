@@ -238,6 +238,133 @@ fn production_thread_orders_follow_cutting_copies_in_native_and_portable_consume
 }
 
 #[test]
+fn sourced_yarn_mass_and_kilogram_purchasing_replay_in_native_and_portable_studies() {
+    let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+    let source: Value = serde_json::from_str(pattern).unwrap();
+    let yarn = ftx_pattern::materials::Catalog::builtin()
+        .unwrap()
+        .resolve(&ftx_pattern::material_catalog::Selection {
+            id: "coats/epic-2994120-2026".into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .frozen_selection();
+    let yarn_hash = yarn.expected_sha256.as_ref().unwrap();
+    let mut selection: Value = serde_json::from_str(include_str!(
+        "../../../examples/sewing-thread-cost-selection.json"
+    ))
+    .unwrap();
+    for qualification in selection["options"]["qualifications"]
+        .as_array_mut()
+        .unwrap()
+    {
+        for channel in qualification["thread_consumption"]["channels"]
+            .as_array_mut()
+            .unwrap()
+        {
+            channel["material"] = json!(yarn);
+        }
+    }
+    selection["options"]["consumables"]["production_copies"] = json!(3);
+    let purchasing = &mut selection["options"]["consumables"]["purchasing"];
+    purchasing["market"]["require_observed_continuous_length"] = json!(false);
+    let offer = &mut purchasing["quote_book"]["quotes"][0];
+    offer["offer_id"] = json!("synthetic-kg-epic24");
+    offer["material_id"] = json!(yarn.id);
+    offer["material_sha256"] = json!(yarn_hash);
+    offer["sku"] = json!("synthetic-kg-epic24");
+    offer["unit"] = json!("kilogram");
+    offer["quantity"] = json!(1.);
+    offer["price"] = json!(100.);
+    offer["minimum_quantity"] = json!(0.0001);
+    offer["order_increment"] = json!(0.0001);
+    offer["available_quantity"] = json!(0.0003);
+    offer["price_breaks"] = json!([{"minimum_quantity":0.0002,"price":80.}]);
+    offer
+        .as_object_mut()
+        .unwrap()
+        .remove("maximum_continuous_quantity");
+    offer["source"] = json!("test:synthetic-kg-yarn-quote-not-a-Coats-price");
+    let study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"three-copy-yarn","changes":{"schema":"ftx-material-bindings/1",
+            "default":source["fabric"]["material"]}}],
+        "sewing_selection":selection,
+        "comparison":{"basis":"nominal","required_consumers":["sewing_consumables","sewing_purchasing"],
+            "objectives":[{"metric":"thread_required_mass_kg","direction":"minimize"},
+                {"metric":"thread_observed_order_cost","direction":"minimize"}]}});
+    let text = study.to_string();
+    let portable: Value =
+        serde_json::from_str(&ftx_wasm::materials::study(pattern, &text).unwrap()).unwrap();
+    let row = &portable["alternatives"][0];
+    assert_eq!(row["sewing"]["status"], "available");
+    let consumables = &row["sewing"]["result"]["consumables"];
+    assert_eq!(consumables["production_copies"], 3);
+    assert_eq!(consumables["complete_consumption_coverage"], true);
+    assert_eq!(consumables["complete_mass_coverage"], true);
+    // Baseline: 40 traversals * (.01 + .02) m plus .5m allowances = 1.7m/copy.
+    // Three copies need 5.1 m; published 24 tex is 24e-6 kg/m, not package/cone rounding.
+    let expected_mass = 5.1 * 24e-6;
+    assert!((consumables["total_required_length_m"].as_f64().unwrap() - 5.1).abs() < 1e-12);
+    assert!(
+        (consumables["total_required_mass_kg"].as_f64().unwrap() - expected_mass).abs() < 1e-18
+    );
+    assert!(
+        (row["metrics"]["thread_required_mass_kg"].as_f64().unwrap() - expected_mass).abs() < 1e-18
+    );
+    let original =
+        &consumables["materials"][yarn_hash]["record"]["properties"]["yarn_linear_density"];
+    assert_eq!(original["unit"], "tex");
+    assert_eq!(original["value"], 24.);
+    let purchasing = &consumables["purchasing"];
+    assert_eq!(purchasing["complete_offer_coverage"], true);
+    assert_eq!(purchasing["complete_observed_quantity_coverage"], true);
+    assert_eq!(
+        purchasing["complete_continuous_length_limit_coverage"],
+        false
+    );
+    let order = &purchasing["material_orders"][0]["least_observed_order"];
+    assert_eq!(order["quote"]["unit"], "kilogram");
+    assert_eq!(order["quote"]["available_quantity"], 0.0003);
+    assert_eq!(order["order_quantity"], 0.0002);
+    assert!((order["acquired"].as_f64().unwrap() - 0.0002 / 24e-6).abs() < 1e-12);
+    assert!((order["order_cost"].as_f64().unwrap() - 0.016).abs() < 1e-14);
+    assert!(
+        (row["metrics"]["thread_observed_order_cost"]
+            .as_f64()
+            .unwrap()
+            - 0.016)
+            .abs()
+            < 1e-14
+    );
+    assert_eq!(row["sewing_selection"]["result"]["optimality_proven"], true);
+    assert_eq!(
+        portable["comparison"]["frontier"],
+        json!(["three-copy-yarn"])
+    );
+    let readings = &portable["comparison"]["alternatives"][0]["readings"];
+    assert_eq!(readings["thread_required_mass_kg"]["unit"], "kg");
+    assert_eq!(
+        readings["thread_required_mass_kg"]["value"],
+        row["metrics"]["thread_required_mass_kg"]
+    );
+    assert_eq!(readings["thread_observed_order_cost"]["unit"], "USD");
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-yarn-mass-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("pattern.json"), pattern).unwrap();
+    fs::write(dir.join("study.json"), text).unwrap();
+    for main in [false, true] {
+        assert_eq!(run(main, &dir), portable);
+    }
+}
+
+#[test]
 fn both_native_commands_expand_design_material_pairs_and_preserve_exact_replay() {
     let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
     let input = include_str!("../../../examples/design-study.json");

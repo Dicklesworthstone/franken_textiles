@@ -397,6 +397,18 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
         inputs.report["membrane_stiffness_basis"] = json!(
             "elastic source tensor with permanent Green-strain set and directional hardening"
         );
+        if let Some(identity) = law.parallel_material_sha256() {
+            inputs.report["parallel_membrane_network"] = json!({
+                "model":ftx_pattern::material_relaxation::parallel::MODEL,
+                "material_sha256":identity,
+                "strain_basis":"total_physical_green_strain",
+                "plastic_flow_stress":"elastoplastic_equilibrium_branch_only",
+                "maxwell_stress":"sum_of_branch_stiffness_times_total_minus_own_viscous_strain",
+                "same_branch_viscoplasticity":false});
+            inputs.report["membrane_stiffness_basis"] = json!(
+                "elastic tangent of elastoplastic equilibrium branch; qualified parallel Maxwell branches add transient stress"
+            );
+        }
     }
     Ok(inputs)
 }

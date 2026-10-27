@@ -457,7 +457,12 @@ impl Material {
         };
         if let Some(relaxation) = &self.membrane_relaxation {
             relaxation.validate_equilibrium(self)?;
-            relaxation.compile(&self.sources, allow_estimates, mechanics.origin_tangent())?;
+            // Joint declarations were admitted against this complete material by
+            // compiled_membrane_plasticity above. The standalone compiler deliberately refuses
+            // a joint half-law; only independent spectra use that entry point here.
+            if relaxation.parallel_plasticity.is_none() {
+                relaxation.compile(&self.sources, allow_estimates, mechanics.origin_tangent())?;
+            }
         }
         Ok(mechanics)
     }

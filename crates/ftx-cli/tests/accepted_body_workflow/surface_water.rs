@@ -208,6 +208,109 @@ fn coupled_textile_water_objectives_replay_in_both_native_commands_and_portable_
 }
 
 #[test]
+fn condensation_and_reevaporation_replay_through_actual_selected_body_decisions() {
+    let (pattern, mut study, mut single) = inputs();
+    let heat = &mut single["motion"]["transient_surface"];
+    heat["boundaries"] = json!([heat["boundaries"][0], heat["boundaries"][0]]);
+    let water = &mut heat["surface_water"];
+    water["schema"] = json!("ftx-textile-surface-water/3");
+    water
+        .as_object_mut()
+        .unwrap()
+        .remove("replenishment_kg_m2_s");
+    water["bindings"]["band"]["initial_liquid_kg_m2"] = json!(0.);
+    water["outside_vapor_pressure_pa"] = json!([6000., 1000.]);
+    water["supply"] = json!({"schema":"ftx-textile-liquid-supply/1",
+        "bindings":{"band":{"rate_kg_m2_s":[0.,0.],"temperature_c":[20.,20.]}},
+        "source":{"reference":"test:no-delivered-liquid","accessed_on":"2026-10-27",
+            "note":"Synthetic zero liquid delivery; ambient vapor is the only mass source"},
+        "evidence":"estimate","allow_estimates":true,"method":"Declared zero liquid feed"});
+    let condensation = json!({"schema":"ftx-textile-condensation/1", "vapor_temperature_c":[40.,10.],
+        "source":{"reference":"test:selected-body-condensation","accessed_on":"2026-10-27",
+            "note":"Synthetic reversible Ret and wet/dry nucleation; no empirical garment claim"},
+        "evidence":"estimate","allow_estimates":true,"method":"Prescribed two-interval vapor reservoir",
+        "qualification":"Synthetic source closure for reverse locked Ret, wet/dry phase transfer and constant latent plus cp_liquid effective sensible enthalpy over the declared domains"});
+    water["condensation"] = condensation.clone();
+    single["motion"]["keyframes"] = json!([
+        {"time_s":0.0005,"arm_abduction_deg":35.},
+        {"time_s":0.001,"arm_abduction_deg":35.}]);
+    study["comparison"]["objectives"] = json!([
+        {"metric":"textile_water_condensed_mass_kg","direction":"minimize"},
+        {"metric":"textile_water_condensation_latent_energy_j","direction":"minimize"},
+        {"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}]);
+    replay(
+        &pattern,
+        &study,
+        single,
+        "FTX_CONDENSED_WATER_REPLAY",
+        |report| {
+            let result = &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
+            let outcome = &result["motion"]["result"]["transient_surface"];
+            assert_eq!(outcome["status"], "available", "{outcome}");
+            let heat = &outcome["result"];
+            let water = &heat["surface_water"];
+            assert_eq!(water["schema"], "ftx-textile-surface-water-result/3");
+            assert_eq!(water["request"]["condensation"], condensation);
+            assert_eq!(water["initial_liquid_kg"], 0.);
+            assert_eq!(water["supplied_liquid_kg"], 0.);
+            assert_eq!(water["remaining_liquid_kg"], 0.);
+            let condensed = water["condensed_liquid_kg"].as_f64().unwrap();
+            assert!(condensed > 0.);
+            assert!(
+                (water["evaporated_liquid_kg"].as_f64().unwrap() - condensed).abs()
+                    < 1e-12 * condensed
+            );
+            let first = &heat["trace"][0]["surface_water"];
+            assert!(first["remaining_liquid_kg"].as_f64().unwrap() > 0.);
+            assert_eq!(first["evaporated_liquid_kg"], 0.);
+            for sample in heat["trace"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .chain(std::iter::once(heat))
+            {
+                let w = &sample["surface_water"];
+                let mass = w["remaining_liquid_kg"].as_f64().unwrap()
+                    + w["evaporated_liquid_kg"].as_f64().unwrap()
+                    - w["condensed_liquid_kg"].as_f64().unwrap();
+                assert!(mass.abs() <= 1e-12 * condensed);
+                let energy = sample["stored_change_j"].as_f64().unwrap()
+                    + w["liquid_stored_change_j"].as_f64().unwrap()
+                    + w["exported_vapor_sensible_energy_j"].as_f64().unwrap()
+                    + w["latent_energy_j"].as_f64().unwrap()
+                    - w["incoming_vapor_sensible_energy_j"].as_f64().unwrap()
+                    - w["condensation_latent_energy_j"].as_f64().unwrap()
+                    - sample["net_boundary_energy_j"].as_f64().unwrap();
+                assert!(
+                    energy.abs() < 1e-10,
+                    "phase-change energy residual {energy}"
+                );
+                assert!(
+                    (w["incoming_vapor_sensible_energy_j"].as_f64().unwrap()
+                        - w["condensed_liquid_kg"].as_f64().unwrap() * 4200. * 40.)
+                        .abs()
+                        < 1e-12
+                );
+            }
+            let readings = &keyed(&report["comparison"]["alternatives"], "qualified")["readings"];
+            assert_eq!(
+                readings["textile_water_condensed_mass_kg"]["value"],
+                water["condensed_liquid_kg"]
+            );
+            assert_eq!(
+                readings["textile_water_condensation_latent_energy_j"]["value"],
+                water["condensation_latent_energy_j"]
+            );
+            assert_eq!(
+                keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"]["result"]
+                    ["transient_surface"]["status"],
+                "refused"
+            );
+        },
+    );
+}
+
+#[test]
 fn supplied_textile_water_replays_in_native_commands_and_portable_scenario_matrices() {
     let (pattern, mut study, mut single) = inputs();
     single["material_strain"] = json!({"schema":"ftx-material-strain/1",

@@ -305,6 +305,7 @@ function objectiveComparison(parent, r) {
   };
   const threadLabels = {
     thread_required_length_m: "Required thread length",
+    thread_required_mass_kg: "Consumed thread mass",
     thread_observed_order_cost: "Complete thread order cost"
   };
   const contactLabels = {
@@ -317,7 +318,9 @@ function objectiveComparison(parent, r) {
     textile_water_evaporated_mass_kg: "Evaporated textile water",
     textile_water_remaining_mass_kg: "Remaining textile liquid",
     textile_water_supplied_mass_kg: "Supplied textile liquid",
-    textile_water_latent_energy_j: "Textile evaporation latent energy"
+    textile_water_condensed_mass_kg: "Condensed textile water",
+    textile_water_latent_energy_j: "Textile evaporation latent energy",
+    textile_water_condensation_latent_energy_j: "Textile condensation latent release"
   };
   const strainLabels = {};
   for (const [prefix, scope] of [["", "Initial"], ["motion_", "Motion"]]) {
@@ -505,16 +508,21 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
     detail(parent, `${key}: ${label} temperature history, source and energy accounting (display only)`, h || { refusal: output?.refusal || dependency?.refusal });
     if (h?.surface_water) {
       const water = h.surface_water;
-      const supplied = water.schema === "ftx-textile-surface-water-result/2";
-      const mass = table(parent, `${key}: textile surface liquid — conserved ${supplied ? "initial and supplied" : "initial"} inventory`,
-        ["Initial liquid (kg)", ...(supplied ? ["Supplied liquid (kg)"] : []), "Evaporated liquid (kg)", "Remaining liquid (kg)", "Mass residual (kg)", "Dryout events"]);
-      cells(mass, [metric(water.initial_liquid_kg), ...(supplied ? [metric(water.supplied_liquid_kg)] : []), metric(water.evaporated_liquid_kg), metric(water.remaining_liquid_kg),
+      const condensing = water.schema === "ftx-textile-surface-water-result/3";
+      const supplied = condensing || water.schema === "ftx-textile-surface-water-result/2";
+      const mass = table(parent, `${key}: textile surface liquid — conserved ${condensing ? "initial, supplied and condensed" : supplied ? "initial and supplied" : "initial"} inventory`,
+        ["Initial liquid (kg)", ...(supplied ? ["Supplied liquid (kg)"] : []),
+          ...(condensing ? ["Condensed liquid (kg)"] : []), "Evaporated liquid (kg)", "Remaining liquid (kg)", "Mass residual (kg)", "Dryout events"]);
+      cells(mass, [metric(water.initial_liquid_kg), ...(supplied ? [metric(water.supplied_liquid_kg)] : []),
+        ...(condensing ? [metric(water.condensed_liquid_kg)] : []), metric(water.evaporated_liquid_kg), metric(water.remaining_liquid_kg),
         metric(water.mass_balance_error_kg), metric(water.dryout_events)]);
       const energy = table(parent, `${key}: textile evaporation and sensible energy`,
         ["Latent energy (J)", "Exported vapor sensible energy (J)", "Liquid sensible change (J)",
-          ...(supplied ? ["Incoming liquid sensible energy (J)"] : []), "Combined energy residual (J)"]);
+          ...(supplied ? ["Incoming liquid sensible energy (J)"] : []),
+          ...(condensing ? ["Condensation latent release (J)", "Incoming vapor sensible energy (J)"] : []), "Combined energy residual (J)"]);
       cells(energy, [metric(water.latent_energy_j), metric(water.exported_vapor_sensible_energy_j),
-        metric(water.liquid_stored_change_j), ...(supplied ? [metric(water.supplied_liquid_sensible_energy_j)] : []), metric(water.balance_error_j)]);
+        metric(water.liquid_stored_change_j), ...(supplied ? [metric(water.supplied_liquid_sensible_energy_j)] : []),
+        ...(condensing ? [metric(water.condensation_latent_energy_j), metric(water.incoming_vapor_sensible_energy_j)] : []), metric(water.balance_error_j)]);
       const scope = document.createElement("p");
       scope.textContent = "This explicitly sourced free liquid shares the inner textile cell temperature. Evaporation cools that cell, " +
         "and the temperature feeds the declared vapor-pressure table. " +
@@ -522,6 +530,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
           "Dryout ends evaporation; the remaining interval uses the dry heat model. ") +
         "The combined balance includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, " +
         "against boundary energy plus qualified material heat" + (supplied ? " and incoming liquid sensible energy. Loading beyond the qualified cap refuses the interval. " : ". The initial-only model has zero replenishment. ") +
+        (condensing ? "Independently qualified reverse vapor transfer can condense on dry or wet cloth and later re-evaporate. Condensation latent release and incoming vapor sensible enthalpy are separate energy inputs; the effective enthalpy convention remains explicit in the source policy. " : "") +
         "The liquid adds no mechanical water mass. " +
         "It does not infer absorbed moisture, wicking, body sweat or wet material properties. Comparison admission checks the complete liquid and vapor ledger, " +
         "including exact material bindings and canonical vapor paths, before temperature, energy or textile-water objectives can qualify.";
@@ -548,7 +557,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       }
       const scope = document.createElement("p");
       scope.textContent = (h.surface_water ?
-        "The energy residual includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, minus net boundary energy, qualified source heat and any declared incoming liquid sensible energy. " :
+        "The energy residual includes dry-textile and liquid sensible storage, exported vapor sensible energy and evaporative latent energy, minus net boundary energy, qualified source heat and declared incoming liquid/vapor sensible energy and condensation latent release. " :
         "The energy residual is physical stored change minus net boundary energy minus the sum of qualified source heat. ") +
         "Each source needs its own material conversion evidence. Work already accumulated in the initial drape, reversible storage and numerical loss are excluded. " +
         (channels.every(([field]) => h[field].distribution === "uniform_reference_thickness" && h[field].temporal_distribution === "uniform_over_accepted_interval") ?
@@ -1098,6 +1107,7 @@ function manufacturingComparison(op, parent, study, computed) {
       splitProcurementResult(parent, purchase, `${row.key}: whole-marker supplier allocation`);
     }
     sewingWorkholding(parent, available(row.sewing), row.key);
+    sewingHandling(parent, available(row.sewing), row.key);
     sewingAccess(parent, available(row.sewing), row.key);
   }
   if (study.alternatives.some(row => row.finite_stock && row.finite_stock.status !== "not_requested")) {
@@ -1173,7 +1183,7 @@ function manufacturingComparison(op, parent, study, computed) {
   if (study.screening) screening(parent, study.screening);
 }
 function sewingConsumablesComparison(parent, alternatives, computed) {
-  const metrics = ["thread_required_length_m", "thread_observed_order_cost"];
+  const metrics = ["thread_required_length_m", "thread_required_mass_kg", "thread_observed_order_cost"];
   const requested = [...(computed?.policy?.objectives || []), ...(computed?.policy?.constraints || [])]
     .some(item => metrics.includes(item.metric)) ||
     computed?.policy?.required_consumers?.some(name => ["sewing_consumables", "sewing_purchasing"].includes(name));
@@ -1193,6 +1203,19 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
     const copies = report?.schema === "ftx-sewing-consumables/1" ? 1 : report?.production_copies;
     cells(totals, [row.key, metric(copies), quantity, metric(complete ? report.total_required_length_m : null), pricing,
       purchase?.currency || "Unknown", cost === "Unknown" ? cost : `${cost} ${purchase?.currency || "(currency unavailable)"}`]);
+    if (report?.complete_mass_coverage != null || row.metrics?.thread_required_mass_kg != null ||
+        [...(computed?.policy?.objectives || []), ...(computed?.policy?.constraints || [])]
+          .some(item => item.metric === "thread_required_mass_kg")) {
+      const mass = table(parent, `${row.key}: consumed thread mass`,
+        ["Mass coverage", "Complete consumed mass (kg)"]);
+      cells(mass, [report?.complete_mass_coverage === true ? "Complete qualified yarn density" : "Incomplete or unavailable density",
+        metric(complete && report?.complete_mass_coverage === true ? report.total_required_mass_kg : null)]);
+      const yarns = table(parent, `${row.key}: exact yarn length and mass requirements`,
+        ["Exact yarn snapshot", "Required length (m)", "Qualified linear density (kg/m)", "Consumed mass (kg)", "Missing mass evidence"]);
+      for (const yarn of report?.material_requirements || []) cells(yarns, [yarn.material_sha256,
+        metric(yarn.required_length_m), metric(yarn.mass?.linear_density_kg_m),
+        metric(yarn.mass?.required_mass_kg), yarn.mass_unavailable_reason || (yarn.mass ? "None" : "Not supplied")]);
+    }
     if (report?.operation_channels?.length) {
       const channels = table(parent, `${row.key}: selected operation and thread channel requirements`,
         ["Operation", "Qualification", "Channel", "Exact yarn snapshot", "Traversed intervals", "Required length (m)"]);
@@ -1227,7 +1250,9 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
     "Exact yarn requirements aggregate before supplier minimums, increments and observed stock are applied. " +
     "Study thread inventories use the same production copies as cutting; standalone sewing uses its explicitly declared production copies or one garment. " +
     "One continuous operation/channel requirement is retained without multiplying its splice-free length by the production count. " +
-    "Sewing geometry, feed duration and setup schedules still describe one garment; purchased thread is not retained assembly mass. " +
+    "Qualified yarn linear density can supply consumed mass and convert kilogram offers while keeping supplier rounding in the original sale units. " +
+    "Missing density leaves length-only results usable; mass never establishes an uninterrupted thread length. " +
+    "Consumed thread includes the declared allowances and is not retained assembly mass. Explicit production schedules report their complete batch timing. " +
     "Thread prices retain their own currency and market; they are not combined with cutting costs. " +
     "Time-based recipe selection does not prove the least thread cost.";
   parent.append(note);
@@ -1490,6 +1515,33 @@ function sewingWorkholding(parent, plan, label = "Selected sewing plan") {
   detail(parent, `${label}: fixture source, qualification locks and both complete timelines`, {
     policy: plan.options?.production?.workholding, report });
 }
+function sewingHandling(parent, plan, label = "Selected sewing plan") {
+  const report = plan?.production?.handling;
+  if (!report) return;
+  const timing = plan.production.ordering?.handling_timing;
+  const totals = table(parent, `${label}: serial production durations`,
+    ["Schedule", "Feed (s)", "Setup (s)", "Handling (s)", "Modeled production (s)"]);
+  for (const [name, prefix] of [["Original dependency order", "baseline"], ["Selected order", "selected"]]) {
+    const setup = plan.production.ordering?.timing?.[`${prefix}_setup_milliseconds`];
+    const handling = timing?.[`${prefix}_handling_milliseconds`];
+    cells(totals, [name, metric(plan.production.feed_seconds),
+      metric(typeof setup === "number" ? setup / 1000 : null),
+      metric(typeof handling === "number" ? handling / 1000 : null),
+      metric(timing?.[`${prefix}_modeled_production_seconds`])]);
+  }
+  const transitions = table(parent, `${label}: selected garment handling`,
+    ["Previous operation", "Next operation", "Handling (ms)"]);
+  for (const step of report.selected?.steps || []) cells(transitions,
+    [step.from ?? "Initial loading", step.to ?? "Final unloading", metric(step.milliseconds)]);
+  const note = document.createElement("p");
+  note.textContent = "The selected order includes independently qualified initial loading, operation transitions and final unloading. " +
+    "Same-garment and different-garment transitions have explicit durations; retaining a needle/thread setup does not imply zero handling. " +
+    "Feed, setup and handling are serial, nonoverlapping phases in this declared model. A joint optimum does not prove the setup-only minimum. " +
+    "The result remains conditional on the supplied timings and constraints; it does not qualify undeclared work, concurrent machines or hardware execution.";
+  parent.append(note);
+  detail(parent, `${label}: handling evidence, exact qualifications and complete timelines`,
+    { policy: plan.options?.production?.handling, report, timing });
+}
 function sewingAccess(parent, plan, label = "Selected sewing plan") {
   const seams = plan?.seams?.filter(row => row.access || row.pass?.access) || [];
   if (!seams.length) return;
@@ -1539,18 +1591,21 @@ function sewingResult(parent, r) {
         pass.seam, pass.needle, pass.thread, (row.productionOperation?.after || pass.after).join(", ") || "None declared"]);
     }
     const note = document.createElement("p");
-    const objective = order.timing ? "declared setup duration" : "setup-change count";
+    const objective = order.handling_timing ? "declared setup plus handling duration" :
+      order.timing ? "declared setup duration" : "setup-change count";
     note.textContent = (order.optimality_proven ?
       `Minimum ${objective} proven for the declared operations, dependencies, initial setup${production?.workholding ? " and finite fixtures" : ""}. ` :
       `Best complete feasible schedule found; minimum ${objective} has not been proven. `) +
       (order.budget_exhausted ? "The search reached its declared work limit. " : "") +
-      "Needle and thread changes each count once. Handling, rethreading duration, assembly access and total manufacturing time are not inferred. " +
+      (order.handling_timing ? "Needle and thread changes remain separate counts; declared handling is included in the joint duration objective. " :
+        "Needle and thread changes each count once. Handling, rethreading duration, assembly access and total manufacturing time are not inferred. ") +
       ((plan.options.production?.ordering || plan.options.ordering).initial_setup ? "The supplied initial setup is included in the counts." :
         "No initial setup was supplied, so installing the first setup is not counted.");
     parent.append(note);
     detail(parent, "Baseline order, selected order and bounded search result", order);
   }
   sewingWorkholding(parent, plan);
+  sewingHandling(parent, plan);
   sewingAccess(parent, plan);
   if (plan?.seams.some(row => row.source_span)) {
     const spans = table(parent, "Partial-seam operations — original source correspondence",
@@ -1574,8 +1629,11 @@ function sewingResult(parent, r) {
     feed_seconds: production?.feed_seconds ?? plan?.feed_seconds,
     setup_seconds: order?.timing ? order.timing.selected_setup_milliseconds / 1000 : undefined,
     feed_and_setup_seconds: order?.timing?.feed_and_setup_seconds,
+    handling_seconds: order?.handling_timing ? order.handling_timing.selected_handling_milliseconds / 1000 : undefined,
+    modeled_production_seconds: order?.handling_timing?.selected_modeled_production_seconds,
     setup_changes: order?.selected_changes,
-    ordering_objective: order ? (order.timing ? "minimize_setup_time" : "minimize_setup_changes") : undefined,
+    ordering_objective: order ? (order.handling_timing ? "minimize_production_time" :
+      order.timing ? "minimize_setup_time" : "minimize_setup_changes") : undefined,
     ordering_optimality_proven: order?.optimality_proven,
     finite_workholding_enforced: production?.workholding ? true : undefined,
     planar_access_checked_operations: plan?.seams?.filter(row => row.access).length || undefined,
@@ -1991,6 +2049,16 @@ function stripHistoryResult(parent, r) {
     "persists throughout the program. Stored energy, free-vertex motion and dissipated work remain separate; " +
     "these values do not establish total actuator work, out-of-plane buckling or measured garment behavior.";
   parent.append(note);
+  const parallel = r.input?.material?.record?.membrane_relaxation?.parallel_plasticity;
+  if (parallel?.model === "parallel_green_maxwell_plastic/1") {
+    const network = document.createElement("p");
+    network.textContent = "Declared parallel network: the equilibrium branch retains permanent strain, while Maxwell branches retain their own viscous strains. " +
+      "Plastic flow uses equilibrium-branch stress; Maxwell arms share the total material strain. " +
+      "The report keeps plastic and Maxwell dissipation separate. Matched specimen and garment validation remain independent requirements.";
+    parent.append(network);
+    detail(parent, "Declared permanent-set and recovery network", {
+      declaration: parallel, material_sha256: r.input.material.expected_sha256, model_scope: r.model_scope });
+  }
   const states = table(parent, "Loading and recovery history", ["Time (s)", "Grip extension fraction",
     "Moving-grip force (N)", "Mid-gauge width (m)", "Dynamic residual (N)", "Stored energy (J)",
     "Free kinetic energy (J)", "Maxwell dissipation (J)", "Plastic dissipation (J)"]);

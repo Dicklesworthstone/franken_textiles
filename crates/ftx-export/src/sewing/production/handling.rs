@@ -152,21 +152,10 @@ impl Policy {
         if self
             .qualifications
             .keys()
+            .chain(self.initial_milliseconds.keys())
+            .chain(self.final_milliseconds.keys())
             .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-            != operations
-            || self
-                .initial_milliseconds
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>()
-                != operations
-            || self
-                .final_milliseconds
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>()
-                != operations
+            .any(|operation| !operations.contains(operation))
             || self
                 .initial_milliseconds
                 .values()
@@ -174,8 +163,33 @@ impl Policy {
                 .any(|&value| value > MAX_MILLISECONDS)
         {
             return Err(bad(
-                "handling needs exact qualification, initial and final coverage of every original operation, with durations at most one day",
+                "handling names an unknown operation or a duration greater than one day",
             ));
+        }
+        for operation in &operations {
+            for (field, present) in [
+                (
+                    "qualification",
+                    self.qualifications.contains_key(*operation),
+                ),
+                (
+                    "initial loading",
+                    self.initial_milliseconds.contains_key(*operation),
+                ),
+                (
+                    "final unloading",
+                    self.final_milliseconds.contains_key(*operation),
+                ),
+            ] {
+                if !present {
+                    // Missing endpoint/applicability observations cannot prove that a listed
+                    // recipe is physically infeasible, just as a missing transition cannot.
+                    return Err(Refusal::new(
+                        RefusalCode::NotConverged,
+                        format!("{operation}: missing source-qualified {field} handling evidence"),
+                    ));
+                }
+            }
         }
         let qualified: BTreeMap<_, _> = plan
             .options

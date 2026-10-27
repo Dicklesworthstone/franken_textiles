@@ -136,13 +136,35 @@ contributions remain inspectable, but no partial aggregate is published as a who
 
 For dated purchasing, set `consumables.purchasing.quote_book` to an existing `ftx-textile-quotes/1`
 or `/2` book, and `consumables.purchasing.market` to the ordinary procurement market. Each complete
-yarn requirement goes through `QuoteBook` with `basis: "length"`; no sheet width or inferred
-mass-to-length conversion is needed. Supplier minimums, increments, all-unit price thresholds,
+yarn requirement goes through `QuoteBook` with `basis: "length"`. Linear offers need no sheet
+width. Kilogram offers additionally require a positive, source-qualified `yarn_linear_density`
+from that exact frozen yarn; the ordinary catalog normalizes tex and denier to kg/m. Supplier
+minimums, increments, all-unit price thresholds,
 available quantities, exact dates and validity limits apply **after** all matching channels and
 operations have been aggregated. Each operation/channel's complete demand, including allowances,
 is one uninterrupted segment; the largest determines the existing continuous-length check.
 The market's quantity and continuity policies retain their meanings. Supplier splitting is not
 supported by this consumer and a supplied `split_orders` policy refuses explicitly.
+
+An admitted linear density also supplies each complete requirement's optional `mass` receipt:
+`linear_density_kg_m` and `required_mass_kg`. `complete_mass_coverage` and
+`total_required_mass_kg` report a complete nominal inventory mass only when all channels and yarn
+densities are available. Missing or unapproved density leaves lengths and length-denominated
+offers usable, while `mass_unavailable_reason` records the missing capability. The calculation
+includes start/end allowances and every repeated traversal. It does **not** establish the mass
+retained after trimming, add mass to the garment's dynamics, or duplicate an assembly extra.
+Reported density bounds remain attached to the frozen source; these nominal calculations do not
+claim uncertainty propagation or a conservative mass requirement.
+
+For a kilogram offer, quantity, minimum, ordering increment, all-unit tiers and observed stock
+remain in original kilograms. Only the canonical acquired quantity and unit rate are converted
+back to metres and currency/metre, allowing comparison with linear offers. The selected offer
+retains `yarn_linear_density_kg_m` as its conversion receipt. Neither tex nor a nominal cone's
+put-up length establishes actual stock, an order increment or an uninterrupted segment. Because
+the current quote schema only records uninterrupted limits on linear sale units, a kilogram
+offer has unknown continuity and cannot pass `require_observed_continuous_length: true`.
+Permissive continuity can admit it while retaining that unknown status. No mass-to-length
+conversion is performed for fiber, sheet or fill records.
 
 Only currently eligible offers locking the exact consumed yarn hash can be selected. An unlocked
 latest observation cannot revive an older locked price. Supplier/base/tier SKU aliases are connected

@@ -65,6 +65,98 @@ fn near(actual: f64, expected: f64, tolerance: f64) {
 }
 
 #[test]
+fn qualified_parallel_history_replays_actual_coupon_reactions_and_both_irreversible_ledgers() {
+    let mut input = request(false);
+    input.material = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-parallel-membrane.json"
+    ))
+    .unwrap();
+    // Independent homogeneous-bar comparison; keep finite numerical mass visible in the report.
+    input
+        .material
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("areal_density")
+        .unwrap()
+        .value = 1e-8;
+    input.loading = [
+        (0.0, 0.0),
+        (0.05, 0.08),
+        (0.15, 0.08),
+        (0.2, 0.0),
+        (0.25, 0.0),
+    ]
+    .into_iter()
+    .map(|(time_s, extension_fraction)| Loading {
+        time_s,
+        extension_fraction,
+    })
+    .collect();
+    let result = evaluate(&input).unwrap();
+    let (width, area, young, branch, tau, yield_stress, hardening) =
+        (0.06, 0.006, 1000.0, 2000.0, 0.05, 20.0, 100.0);
+    let (mut permanent, mut accumulated, mut viscous): (f64, f64, f64) = (0.0, 0.0, 0.0);
+    let (mut plastic_work, mut viscous_work) = (0.0, 0.0);
+    for (i, state) in result.states.iter().enumerate() {
+        let stretch = 1.0 + state.extension_fraction;
+        let strain = 0.5 * (stretch * stretch - 1.0);
+        if i > 0 {
+            let trial = young * (strain - permanent);
+            let delta = trial.signum()
+                * (trial.abs() - yield_stress - hardening * accumulated).max(0.0)
+                / (young + hardening);
+            permanent += delta;
+            accumulated += delta.abs();
+            plastic_work += area * yield_stress * delta.abs();
+            let a = tau / (tau + state.time_step_s);
+            let gap = strain - viscous;
+            viscous_work += area * a * (1.0 - a) * branch * gap * gap;
+            viscous = a * viscous + (1.0 - a) * strain;
+        }
+        let stress = young * (strain - permanent) + branch * (strain - viscous);
+        near(state.force_n, width * stretch * stress, 3e-7);
+        near(state.fixed_grip_force_n, -state.force_n, 3e-7);
+        near(state.plastic_dissipation_j, plastic_work, 3e-9);
+        near(state.maxwell_dissipation_j, viscous_work, 3e-9);
+        near(
+            state.stored_membrane_energy_j,
+            0.5 * area
+                * (young * (strain - permanent).powi(2)
+                    + hardening * accumulated.powi(2)
+                    + branch * (strain - viscous).powi(2)),
+            3e-9,
+        );
+        assert!(state.relaxation.is_some());
+        assert!(state.plasticity.is_some());
+    }
+    let last = result.states.last().unwrap();
+    assert!(last.plastic_dissipation_j > 0.0);
+    assert!(last.maxwell_dissipation_j > 0.0);
+    let replay: Request = serde_json::from_str(&result.replay_request_json).unwrap();
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        serde_json::to_value(evaluate(&replay).unwrap()).unwrap()
+    );
+    input
+        .material
+        .record
+        .as_mut()
+        .unwrap()
+        .membrane_relaxation
+        .as_mut()
+        .unwrap()
+        .branches[0]
+        .relaxation_time
+        .value = 0.1;
+    let changed = evaluate(&input).unwrap();
+    assert_eq!(result.reference_positions_m, changed.reference_positions_m);
+    assert_eq!(result.triangles, changed.triangles);
+    assert!((last.force_n - changed.states.last().unwrap().force_n).abs() > 0.01);
+}
+
+#[test]
 fn maxwell_load_hold_unload_matches_bar_reactions_storage_and_irreversible_work() {
     let input = request(false);
     let result = evaluate(&input).unwrap();

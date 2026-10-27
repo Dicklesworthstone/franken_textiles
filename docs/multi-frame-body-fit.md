@@ -29,8 +29,9 @@ ftx measure fit-body capture-review-001/capture.json --model /path/to/anny.ftxbo
 The first command needs no body model. It reruns selection and camera checks, copies the exact
 selected images, and overlays the supplied points at stored image coordinates without another
 rotation or rectification. The table shows every name, FIT/CHECK assignment, pixel, sigma and
-authored model target. Supplied silhouettes are shown as read-only observed scanlines after the
-existing rectified-camera and interval checks. Dashed lines show sampled slices; thick segments
+authored model target. Supplied silhouettes are shown as observed scanlines after the
+existing rectified-camera and interval checks. Imported mask constraints remain read-only;
+inline constraints can be authored or corrected as described below. Dashed lines show sampled slices; thick segments
 show foreground, and empty slices explicitly assert background. Every slice retains its original
 FIT/CHECK role, axis, position, sigma and evidence. This does not validate the segmentation,
 occluders or clothing against a body.
@@ -63,7 +64,7 @@ ftx measure capture-review /path/to/capture-edited.json --out capture-review-002
 ```
 
 Pending/invalid edits or **Cancel placement** withdraw the old download. **Reset all corrections**
-restores the original point lists, removing in-memory additions, and revokes the corrected input.
+restores the original point lists and inline silhouettes, removing in-memory additions, and revokes the corrected input.
 Original files and preparation evidence stay unchanged;
 SVG/report links explicitly refer to that original review. Nothing is stored in browser storage.
 If any input integer exceeds JavaScript's exact range, the editor refuses and the original native
@@ -311,6 +312,41 @@ functionals are the 21 `ftx-body::TAPE_FIELDS` names, including `stature`, `ches
 and `arm_length`. Stature is the rest mesh's z extent; other functionals reuse the existing
 body tape implementation at its standard 35-degree A-pose. They do not change as image poses
 move. Give actual independent tape evidence, not a size-chart guess masquerading as tape.
+
+## Author sampled silhouettes in capture review
+
+The local capture-review page can author body-contour constraints directly on the selected images,
+without first preparing a separate binary mask. These constraints describe the visible body contour
+at explicit sampled lines. They are separate from the person/sheet regions used for video sharpness.
+
+Choose a frame in the silhouette editor, then declare a horizontal or vertical slice, its fixed
+full-resolution pixel coordinate, FIT or CHECK role, and contour-location sigma. Explain the
+contour definition and the treatment of clothing and occluders in the evidence field. Add each
+foreground interval by its two endpoints, either numerically or by picking endpoints on that
+frame's image. Horizontal slices hold Y fixed and describe X intervals; vertical slices hold X
+fixed and describe Y intervals. Display scaling and zoom do not change stored coordinates.
+
+Keep separate intervals for disconnected foreground, such as gaps between limbs. An explicit
+empty interval list asserts background on that slice. A complete silhouette needs at least one
+foreground slice; background-only or unfinished drafts cannot become valid contour evidence.
+The existing native limits apply: 1–64 unique slices, up to eight ordered, disjoint intervals per
+slice, in-image coordinates, nonempty evidence, and sigma in `1e-6..1e6` pixels. The editor
+refuses crossing, touching or out-of-order intervals instead of merging or clipping them.
+
+Existing slice edits preserve their axis, fixed coordinate, FIT/CHECK role and sigma while
+correcting endpoints. Remove an unwanted inline slice explicitly. Pending or invalid changes
+withdraw the corrected-input download; cancel returns to the saved draft, and reset restores
+the complete original input. Changes remain in memory until you download `capture-edited.json`.
+Run `capture-review` on that downloaded document in a new output directory, then pass the reviewed
+capture to the ordinary fitter. Source identities, calibration and model-target definitions remain
+unchanged, and the native fitter still owns observability, optimization and acceptance.
+
+Authoring is available only for checked cameras with zero radial and tangential distortion.
+Rectify the images, keypoints and calibration together before generating the review; the page
+cannot rectify them. Frames supplied by a silhouette-mask manifest remain read-only so edits
+cannot replace or detach their source-bound evidence. Other frames may use explicit inline slices.
+Choose held-out lines before fitting. A plausible outline, a successful download or agreement on
+the sampled lines does not establish anatomical correctness or physical fit.
 
 ## Silhouettes from rectified masks
 

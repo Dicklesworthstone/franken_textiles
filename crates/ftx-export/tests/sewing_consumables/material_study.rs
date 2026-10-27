@@ -537,6 +537,137 @@ fn no_thread_quantity_or_price_interval_is_invented_from_nominal_consumption() {
 }
 
 #[test]
+fn thread_mass_comparison_uses_resolved_density_overrides_and_preserves_missing_mass() {
+    let database = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: Vec::new(),
+    };
+    let locked = |mut selection: Selection| {
+        selection.expected_sha256 = None;
+        selection.expected_sha256 =
+            Some(database.resolve(&selection).unwrap().sha256().to_string());
+        selection
+    };
+    for embedded_density in [false, true] {
+        let (pattern, mut request) = study();
+        request["comparison"] = json!({"basis":"nominal",
+            "objectives":[{"metric":"thread_required_mass_kg","direction":"minimize"}]});
+        request["sewing"]["consumables"] = json!({});
+        let mut other = pattern["fabric"]["material"].clone();
+        other["id"] = json!("other-qualified-sheet");
+        other["record"]["id"] = json!("other-qualified-sheet");
+        let other = frozen(&other);
+        request["variants"]
+            .as_array_mut()
+            .unwrap()
+            .push(variant("different", &json!(other)));
+        let mut qualification = request["sewing"]["qualifications"][0].clone();
+        qualification["id"] = json!("other-stack-qualification");
+        qualification["materials"] = json!([other.expected_sha256, other.expected_sha256]);
+        request["sewing"]["qualifications"]
+            .as_array_mut()
+            .unwrap()
+            .push(qualification);
+
+        let mut source = super::yarn("same-authored-thread");
+        source.allow_estimates = true;
+        let quantity = |value, state| {
+            serde_json::from_value(json!({
+                "value":value,"unit":"tex","evidence":"estimate","source":"fixture",
+                "method":"Synthetic density protocol; not a textile measurement",
+                "conditions":{"conditioning":state}
+            }))
+            .unwrap()
+        };
+        if embedded_density {
+            source.record.as_mut().unwrap().properties.insert(
+                "yarn_linear_density".into(),
+                quantity(10.0, "original unused state"),
+            );
+        }
+        for (index, value, state) in [
+            (0, 20.0, "dry source state"),
+            (1, 40.0, "other source state"),
+        ] {
+            let mut selection = source.clone();
+            selection
+                .overrides
+                .insert("yarn_linear_density".into(), quantity(value, state));
+            let selection = locked(selection);
+            for channel in
+                request["sewing"]["qualifications"][index]["thread_consumption"]["channels"]
+                    .as_array_mut()
+                    .unwrap()
+            {
+                channel["material"] = json!(selection);
+            }
+        }
+        let result = run(&pattern, &request);
+        for key in ["base", "different"] {
+            assert_eq!(
+                row(&result, key)["sewing"]["status"],
+                "available",
+                "{}",
+                row(&result, key)["sewing"]
+            );
+        }
+        close(
+            row(&result, "base")["metrics"]["thread_required_mass_kg"]
+                .as_f64()
+                .unwrap(),
+            3.7 * 20e-6,
+        );
+        close(
+            row(&result, "different")["metrics"]["thread_required_mass_kg"]
+                .as_f64()
+                .unwrap(),
+            3.7 * 40e-6,
+        );
+        assert_ne!(
+            row(&result["comparison"], "base")["input_protocol_sha256"],
+            row(&result["comparison"], "different")["input_protocol_sha256"]
+        );
+        assert_eq!(
+            result["comparison"]["frontier"],
+            json!(["base", "different"])
+        );
+        assert_eq!(
+            result["comparison"]["incomparable"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        request["comparison"]["allow_mixed_protocols"] = json!(true);
+        assert_eq!(
+            run(&pattern, &request)["comparison"]["frontier"],
+            json!(["base"])
+        );
+
+        source.record.as_mut().unwrap().properties.clear();
+        let missing = locked(source);
+        for channel in request["sewing"]["qualifications"][1]["thread_consumption"]["channels"]
+            .as_array_mut()
+            .unwrap()
+        {
+            channel["material"] = json!(missing);
+        }
+        let result = run(&pattern, &request);
+        let missing = row(&result, "different");
+        assert_eq!(missing["sewing"]["status"], "available");
+        close(
+            missing["metrics"]["thread_required_length_m"]
+                .as_f64()
+                .unwrap(),
+            3.7,
+        );
+        assert!(missing["metrics"]["thread_required_mass_kg"].is_null());
+        assert_eq!(result["comparison"]["frontier"], json!(["base"]));
+        assert_eq!(row(&result["comparison"], "different")["eligible"], false);
+    }
+}
+
+#[test]
 fn all_expanded_material_design_and_recipe_rows_reserve_thread_purchasing_before_callbacks() {
     let (pattern, original) = study();
     for mode in ["materials", "designs", "recipes"] {

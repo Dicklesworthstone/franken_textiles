@@ -38,7 +38,20 @@ impl ResolvedMaterial {
                         "membrane relaxation requires a characterized sheet",
                     ));
                 }
-                material.compiled_membrane_plasticity(self.allows_estimates())?;
+                let plastic = material.compiled_membrane_plasticity(self.allows_estimates())?;
+                if r.parallel_plasticity.is_some() {
+                    return super::parallel::compile(
+                        material,
+                        self.allows_estimates(),
+                        plastic.as_ref().ok_or_else(|| {
+                            Refusal::new(
+                                RefusalCode::InvalidDocument,
+                                "parallel network lacks its plastic branch",
+                            )
+                        })?,
+                        self.sha256().to_owned(),
+                    );
+                }
                 r.validate_equilibrium(material)?;
                 // Match the ordinary mechanics compiler's reference conversion exactly, without
                 // making a membrane-only coupon invent thickness, bending or interface friction.

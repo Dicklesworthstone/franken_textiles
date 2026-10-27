@@ -1384,6 +1384,111 @@ fn capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_referenc
         serde_json::from_slice::<Value>(&result.stdout).unwrap()["result"].clone()
     };
     let reference = fit("masked-good.json", "expected-masked-fit.json", &[], 0);
+    // Author the same positive synthetic constraints inline. The actual browser checker starts
+    // without them and produces this ordinary fitter input through explicit operator controls.
+    let mut inline_good = good.clone();
+    for (i, frame) in inline_good["fit"]["frames"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        frame["silhouette"] = masked["frames"][i]["silhouette"].clone();
+        frame["silhouette"]["evidence"] = json!(
+            "Synthetic posed surface samples; no clothing, external occluders or real photographs. Explicitly reviewed foreground and background."
+        );
+    }
+    std::fs::write(
+        dir.join("inline-good.json"),
+        serde_json::to_vec_pretty(&inline_good).unwrap(),
+    )
+    .unwrap();
+    let inline_start =
+        capture_review_args(&dir, &["good.json", "--out", "inline-review"], 0)["result"].clone();
+    assert_eq!(
+        inline_start["capture_input"]["sources_sha256"],
+        review["capture_input"]["sources_sha256"]
+    );
+    let inline_reference = fit("inline-good.json", "expected-inline-fit.json", &[], 0);
+    assert_eq!(inline_reference["solution"], reference["solution"]);
+    assert_eq!(inline_reference["attempts"], reference["attempts"]);
+    let mut failed_inline_check = inline_good.clone();
+    let check = failed_inline_check["fit"]["frames"][0]["silhouette"]["lines"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|line| line["partition"] == "held_out" && !line["intervals_px"][0].is_null())
+        .unwrap();
+    for endpoint in check["intervals_px"][0].as_array_mut().unwrap() {
+        *endpoint = json!(endpoint.as_f64().unwrap() + 12.0);
+    }
+    std::fs::write(
+        dir.join("inline-failed-check.json"),
+        serde_json::to_vec_pretty(&failed_inline_check).unwrap(),
+    )
+    .unwrap();
+    let failed_inline = fit("inline-failed-check.json", "inline-check-fit.json", &[], 2);
+    assert!(failed_inline["solution"].is_null());
+    for (before, after) in inline_reference["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(failed_inline["attempts"].as_array().unwrap())
+    {
+        assert_eq!(before["cost_history"], after["cost_history"]);
+        assert!(after["checks"].as_array().unwrap().iter().any(|check| {
+            check["partition"] == "held_out"
+                && check["name"].as_str().unwrap().starts_with("silhouette:")
+                && check["passed"] == false
+        }));
+    }
+    // Preparation preserves disjoint foreground and explicit empty background; it does not turn
+    // those authored observations into a fit claim or silently fill the gap between limbs.
+    let mut disjoint = good.clone();
+    disjoint["fit"]["frames"][0]["silhouette"] = json!({
+        "evidence":"Synthetic disjoint contour; clothing absent, occlusion explicitly reviewed.",
+        "lines":[
+            {"axis":"horizontal","at_px":100.25,"intervals_px":[[100.5,120.25],[200.75,225.5]],"sigma_px":2.5,"partition":"held_out"},
+            {"axis":"vertical","at_px":10.5,"intervals_px":[],"sigma_px":1.5,"partition":"fit"}
+        ]
+    });
+    std::fs::write(
+        dir.join("inline-disjoint.json"),
+        serde_json::to_vec_pretty(&disjoint).unwrap(),
+    )
+    .unwrap();
+    let disjoint_review = capture_review_args(
+        &dir,
+        &["inline-disjoint.json", "--out", "inline-disjoint-review"],
+        0,
+    )["result"]
+        .clone();
+    assert_eq!(disjoint_review["body_fitted"], false);
+    assert_eq!(
+        disjoint_review["frames"][0]["silhouette"],
+        disjoint["fit"]["frames"][0]["silhouette"]
+    );
+    for (name, lines) in [
+        ("overlap", json!([[[100, 210], [200, 225]], []])),
+        ("touching", json!([[[100, 200], [200, 225]], []])),
+        ("outside", json!([[[-1, 120], [200, 225]], []])),
+        ("only-background", json!([[], []])),
+    ] {
+        let mut invalid = disjoint.clone();
+        for i in 0..2 {
+            invalid["fit"]["frames"][0]["silhouette"]["lines"][i]["intervals_px"] =
+                lines[i].clone();
+        }
+        let input = format!("inline-{name}.json");
+        let output = format!("inline-{name}-review");
+        std::fs::write(
+            dir.join(&input),
+            serde_json::to_vec_pretty(&invalid).unwrap(),
+        )
+        .unwrap();
+        capture_review_args(&dir, &[&input, "--out", &output], 3);
+        assert!(!dir.join(output).exists());
+    }
     let old_route = fit(
         "good.json",
         "old-mask-fit.json",

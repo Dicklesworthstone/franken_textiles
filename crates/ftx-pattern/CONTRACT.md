@@ -208,4 +208,12 @@ law checks the same source policy, equilibrium specimen/conditions, supported sh
 reference tangent as full garment mechanics, while requiring only the membrane observations it uses.
 It does not require mass, bending, thickness or friction. Dynamic consumers independently require
 source-qualified mass. This allows timed coupon experiments on incompletely characterized sheets
-without declaring them garment-ready; unsupported joint permanent-strain/Maxwell models still refuse.
+without declaring them garment-ready. Same-triangle permanent strain and Maxwell memory require the
+explicit `membrane_relaxation.parallel_plasticity` model `parallel_green_maxwell_plastic/1`.
+The joint qualification has its own source, method, evidence and shared specimen/conditioning;
+every elastic, plastic and Maxwell observation must match. Only complete-material compilation creates
+paired locks with full source identity and the intersection of physical Green-strain domains.
+The elastoplastic branch sees its own stress; each Maxwell branch sees total Green strain minus its
+own viscous strain. Separate numerical laws without that declaration remain incompatible. No joint
+parameter identification, same-branch viscoplasticity or empirical textile qualification is inferred.
+See `docs/material-parallel-memory.md` and `tests/material_parallel.rs`.

@@ -396,6 +396,95 @@ fn supplied_case() -> (Alternative, Value, Value, Value) {
     (a, d, s, m)
 }
 
+fn condensing_case() -> (Alternative, Value, Value, Value) {
+    let (a, mut d, s, mut m) = supplied_case();
+    let h = &mut m["transient_surface"]["result"];
+    let policy = &mut h["request"]["surface_water"];
+    policy["schema"] = json!("ftx-textile-surface-water/3");
+    policy["outside_vapor_pressure_pa"] = json!([6000.]);
+    policy["condensation"] = json!({"schema":"ftx-textile-condensation/1",
+        "vapor_temperature_c":[40.],"source":{"reference":"test:condensation-ledger",
+        "accessed_on":"2026-10-27","note":"Synthetic phase source; not empirical textile evidence"},
+        "evidence":"estimate","allow_estimates":true,"method":"Explicit synthetic vapor reservoir",
+        "qualification":"Exact synthetic reverse Ret and wet/dry phase closure with fixed latent and cp_liquid effective sensible enthalpy"});
+    let condensed = 1e-5 * 0.001;
+    let incoming = condensed * 4200. * 40.;
+    let released = condensed * 2500000.;
+    let storage = condensed * 4200. * 21.;
+    let remaining = h["surface_water"]["remaining_liquid_kg"].as_f64().unwrap() + condensed;
+    let stored = h["surface_water"]["liquid_stored_change_j"]
+        .as_f64()
+        .unwrap()
+        + storage;
+    let net = h["net_boundary_energy_j"].as_f64().unwrap() + storage - incoming - released;
+    {
+        let row = &mut h["surface_water"];
+        row["schema"] = json!("ftx-textile-surface-water-result/3");
+        row["remaining_liquid_kg"] = json!(remaining);
+        row["condensed_liquid_kg"] = json!(condensed);
+        row["incoming_vapor_sensible_energy_j"] = json!(incoming);
+        row["condensation_latent_energy_j"] = json!(released);
+        row["liquid_stored_change_j"] = json!(stored);
+    }
+    for (i, patch) in h["surface_water"]["patches"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        patch["condensed_liquid_kg"] = json!(if i == 0 { condensed } else { 0. });
+        patch["incoming_vapor_sensible_energy_j"] = json!(if i == 0 { incoming } else { 0. });
+        if i == 0 {
+            patch["remaining_liquid_kg"] = json!(remaining);
+        }
+    }
+    h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+    for field in [
+        "schema",
+        "remaining_liquid_kg",
+        "condensed_liquid_kg",
+        "incoming_vapor_sensible_energy_j",
+        "condensation_latent_energy_j",
+        "liquid_stored_change_j",
+    ] {
+        h["trace"][0]["surface_water"][field] = h["surface_water"][field].clone();
+    }
+    h["net_boundary_energy_j"] = json!(net);
+    h["outside_energy_j"] = json!(-net);
+    h["trace"][0]["net_boundary_energy_j"] = json!(net);
+    h["trace"][0]["outside_energy_j"] = json!(-net);
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    (a, d, s, m)
+}
+
+#[test]
+fn condensation_admission_reconciles_each_mass_source_and_incoming_vapor_enthalpy() {
+    let (a, d, s, m) = condensing_case();
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+    for fault in 0..8 {
+        let (a, mut d, s, mut m) = condensing_case();
+        let h = &mut m["transient_surface"]["result"];
+        match fault {
+            0 => h["surface_water"]["patches"][0]["condensed_liquid_kg"] = json!(0.),
+            1 => h["trace"][0]["surface_water"]["condensed_liquid_kg"] = json!(0.),
+            2 => h["surface_water"]["condensation_latent_energy_j"] = json!(0.),
+            3 => h["surface_water"]["patches"][0]["incoming_vapor_sensible_energy_j"] = json!(0.),
+            4 => {
+                h["request"]["surface_water"]["condensation"]["vapor_temperature_c"] = json!([50.])
+            }
+            5 => h["request"]["surface_water"]["condensation"]["allow_estimates"] = json!(false),
+            6 => h["request"]["surface_water"]["schema"] = json!("ftx-textile-surface-water/2"),
+            _ => h["request"]["surface_water"]["condensation"]["qualification"] = json!(""),
+        }
+        h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+        d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
 #[test]
 fn supplied_inventory_and_incoming_enthalpy_join_the_same_conserved_history() {
     let (a, d, s, m) = supplied_case();

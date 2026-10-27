@@ -41,8 +41,10 @@ yield is not automatically a second-Piola/Green-strain calibration. No label suc
 or performance knit supplies the twelve quantities.
 
 Readiness and drape resolution refuse incomplete or invalid opted-in laws, unknown selectors and a
-same-material nonlinear or Maxwell membrane response. The sheet law is unavailable for fiber,
-yarn and fill records. An ordinary material without the selector retains its existing behavior.
+same-material nonlinear membrane response. Maxwell memory on the same triangle requires an explicit
+source-qualified [parallel network](material-parallel-memory.md); independent laws still refuse by
+default. The sheet law is unavailable for fiber, yarn and fill records. An ordinary material without
+the selector retains its existing behavior.
 
 ## Physical coordinates, work and bounds
 
@@ -94,8 +96,9 @@ To represent a particular loading path, integrate that path explicitly.
 `Solver::with_membrane_plasticity(&[Option<PlasticMembrane>])` binds one optional law per retained
 triangle after grain mapping and welding. The elastic tensor must match exactly. Selected triangles
 require `compression = [1, 1]` and no gather-softening zone; the caller's mapping is never changed
-to force compatibility. Maxwell or nonlinear membrane laws may remain on other triangles, while
-their combination on the same triangle requires a future jointly characterized model.
+to force compatibility. Maxwell or nonlinear membrane laws may remain on other triangles. A qualified
+parallel Maxwell network uses the atomic `Solver::with_membrane_histories` binder; the individual
+binders refuse joint half-laws. Same-triangle nonlinear plasticity remains unsupported.
 
 Newton trials and line searches read history without advancing it. A converged, audited physical
 step stages all material updates with positions, velocities and contact state, then commits them
@@ -135,7 +138,8 @@ separate `plastic_dissipation_j`. `empirical_validation_claim` and `restart_impo
 
 For library inspection, `Solver::membrane_plasticity_report()` returns that optional history;
 `Solver::membrane_energy()` returns actual membrane storage, including Maxwell branches on other
-triangles but excluding bending, contact, inertia and dissipated work.
+triangles or in an explicitly qualified parallel network, but excluding bending, contact, inertia
+and dissipated work.
 `Solver::membrane_plastic_dissipation_j()` returns cumulative accepted joules in retained triangle
 order, with zero for unselected triangles and `None` when no permanent membrane law is bound.
 Each selected history element also exposes its own `plastic_dissipation_j`. These cumulative
@@ -349,8 +353,8 @@ it is not browser navigation or an empirical garment experiment. Synthetic value
 a textile's conversion fraction or establish temperature agreement with a real specimen.
 
 `ftx-ps1` and `ftx-tm4` remain open for matched cyclic warp/weft/shear acquisitions and independent
-loading, unloading and reloading checks, plus stiffness degradation, damage and rupture. Joint
-Maxwell/nonlinear plastic response, gathered compression, conditioning effects, serialized restart,
+loading, unloading and reloading checks, plus stiffness degradation, damage and rupture. Same-branch
+viscoplasticity, nonlinear plastic response, gathered compression, conditioning effects, serialized restart,
 remeshing transfer and temperature feedback to mechanics remain separate missing capabilities. Existing
 elastic or relaxation calibration commands retain their own models; permanent yield/hardening uses
 the separate existing-law identification request above. The linen/leather/knit substitution and

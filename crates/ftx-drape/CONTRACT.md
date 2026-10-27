@@ -19,6 +19,18 @@ contribution keeps the aggregate range unavailable while preserving nominal resu
 do not require an independence assumption; no SD/CV conversion, confidence level, unsampled-motion
 error bound, moisture supply or latent cooling follows from these ranges.
 
+**Qualified parallel material memory.** `Solver::with_membrane_histories` atomically binds matching
+per-triangle elastoplastic/Maxwell branches from one qualified complete material. The original
+individual binders refuse a joint half-law; absent joint declarations retain mutual rejection.
+The existing incremental potential, exact derivative chain and reactions add Maxwell response to
+the elastoplastic equilibrium branch once. Both histories and their separate physical dissipation
+ledgers commit with accepted geometry/velocity/contact state; failed steps roll back both. Unit
+compression and original grain/rest ownership are required. Canonical sewn scenes and timed strips
+use the same binder. `tests/parallel_membrane.rs`, `tests/strip_history.rs`, `tests/relaxation.rs` and
+the internal geometric derivative test cover known answers, source/domain refusal, independent
+ledgers, real sewn ownership and rollback. This is a declared parallel network, not same-branch
+viscoplasticity or measured textile acceptance; see `docs/material-parallel-memory.md`.
+
 **Purpose.** The cloth solver that replaces Blender's (plan §11): an orthotropic Green-strain membrane
 rotated to the grain, quadratic hinge bending, lumped inertia, and implicit Euler solved by Newton on a
 sparse LDLᵀ with an Armijo line search; a static solve; and contact with a static body (IPC barrier on the
@@ -511,6 +523,20 @@ checks actual reference-area delivery, Maxwell coexistence, unchanged mechanics 
 No body transfer, absorption, capillary transport, inferred wet-property law, mechanical liquid mass
 or empirical fabric/comfort claim is supplied by this boundary condition.
 
+**Source-qualified condensation and re-evaporation** (`study::heat::surface_water`, `ftx-vc2`).
+Version 3 independently qualifies reverse use of the locked canonical Ret, wet/dry phase transfer,
+incoming vapor temperature and the existing constant-latent/effective liquid-sensible enthalpy
+convention. Signed current-area flux condenses onto reference-owned liquid when ambient vapor
+pressure exceeds the film pressure. The same implicit solver adds latent release and incoming
+sensible mixing, then can re-evaporate that inventory after a boundary reversal. Condensed mass,
+incoming vapor sensible energy and released latent energy remain separate from liquid supply and
+evaporative removal. Maximum-loading/domain failure rolls back the complete accepted interval;
+there is no drainage, source default, sorption, wet mechanical mass or whole-layer/wearer claim.
+Comparison admission checks the complete source/material/patch inventory and reconstructs incoming
+enthalpy from each interval's condensed mass and declared vapor temperature. Existing v1/v2
+positive-only semantics remain unchanged. Analytic warming, dry/wet reversals, reference-area
+accounting, time refinement, rollback and native/portable scenario replay qualify software only.
+
 **Geometry-derived thermal correspondence** (`thermal::surface::projection`, `ftx-tmb`).
 `project` partitions body triangles by local-normal cloth projection using bounded convex clipping,
 retains inverse-mapped cloth subpolygons and mid-surface distance ranges, and emits the existing
@@ -626,8 +652,8 @@ qualify a measured coupon or supply missing material properties.
 unloads a planar, fully gripped sheet through the existing implicit dynamic solver. Canonical membrane
 observations and real reference areal mass are required; unrelated bending/contact/thermal evidence
 is not fabricated. The pristine stationary initialization, explicit increasing clock, piecewise-linear
-grip motion and globally bounded subdivisions preserve one accepted Maxwell or permanent-strain
-history throughout. Every accepted step reports membrane reactions, interior momentum residuals,
+grip motion and globally bounded subdivisions preserve accepted Maxwell, permanent-strain or explicitly
+qualified parallel-network histories throughout. Every accepted step reports membrane reactions, interior momentum residuals,
 stored/kinetic energy and separate existing physical viscous/plastic work. A failed complete request
 publishes no partial success. Frozen inputs replay offline. Synthetic analytical Green-strain bar
 reactions/work, continuous Maxwell ramp/hold refinement, mass-dependent dynamics and refusal tests

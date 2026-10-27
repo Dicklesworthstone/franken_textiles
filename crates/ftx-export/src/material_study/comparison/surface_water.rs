@@ -183,7 +183,8 @@ pub(super) fn admit(
             Err(fail())
         };
     }
-    let supplied = policy["schema"] == "ftx-textile-surface-water/2";
+    let condensing = policy["schema"] == "ftx-textile-surface-water/3";
+    let supplied = condensing || policy["schema"] == "ftx-textile-surface-water/2";
     let version_valid = if supplied {
         policy["replenishment_kg_m2_s"].is_null() && !policy["supply"].is_null()
     } else {
@@ -193,6 +194,7 @@ pub(super) fn admit(
     };
     if coverage
         || !version_valid
+        || condensing == policy["condensation"].is_null()
         || policy["model"] != "inner_cell_equilibrium_free_film_frozen_properties/1"
         || water["request"] != *policy
         || heat["initial_temperature_c"] != heat_request["initial_temperature_c"]
@@ -261,6 +263,31 @@ pub(super) fn admit(
     {
         return Err(fail());
     }
+    let vapor_temperatures = if condensing {
+        let input = &policy["condensation"];
+        source(input)?;
+        if input["schema"] != "ftx-textile-condensation/1"
+            || !input["qualification"]
+                .as_str()
+                .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
+        {
+            return Err(fail());
+        }
+        let values = array(input, "vapor_temperature_c")?
+            .iter()
+            .map(|v| {
+                finite(v)
+                    .filter(|t| *t >= domain[0] && *t <= domain[1])
+                    .ok_or_else(fail)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if values.len() != ambient.len() {
+            return Err(fail());
+        }
+        Some(values)
+    } else {
+        None
+    };
 
     // Reference area and ownership come from the initial drape's canonical retained frame, not
     // current stretched triangle areas or identifiers copied only into the liquid receipt.
@@ -396,7 +423,7 @@ pub(super) fn admit(
         &drape["material"],
     )?;
 
-    let mut totals = [0.; 5];
+    let mut totals = [0.; 7];
     let mut dryouts = 0_u64;
     let mut used = BTreeSet::new();
     let mut areas = BTreeMap::new();
@@ -418,6 +445,33 @@ pub(super) fn admit(
         let initial = nonnegative(row, "initial_liquid_kg")?;
         let remaining = nonnegative(row, "remaining_liquid_kg")?;
         let evaporated = nonnegative(row, "evaporated_liquid_kg")?;
+        let (condensed, incoming_j) = if condensing {
+            let mass = nonnegative(row, "condensed_liquid_kg")?;
+            let energy = number(row, "incoming_vapor_sensible_energy_j")?;
+            let temperatures = vapor_temperatures.as_ref().ok_or_else(fail)?;
+            let low = temperatures.iter().copied().fold(f64::INFINITY, f64::min);
+            let high = temperatures
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max);
+            if !inside(
+                energy,
+                mass * cp * (low - reference),
+                mass * cp * (high - reference),
+                enthalpy_scale(mass),
+                total_steps,
+            ) {
+                return Err(fail());
+            }
+            (mass, energy)
+        } else {
+            if !row["condensed_liquid_kg"].is_null()
+                || !row["incoming_vapor_sensible_energy_j"].is_null()
+            {
+                return Err(fail());
+            }
+            (0., 0.)
+        };
         let delivery = supply.as_ref().and_then(|s| s.deliveries.get(instance));
         let (supplied_mass, supplied_j) = if let Some(delivery) = delivery {
             let mass = nonnegative(row, "supplied_liquid_kg")?;
@@ -455,8 +509,8 @@ pub(super) fn admit(
             || (!supplied && remaining > initial)
             || !near(
                 remaining + evaporated,
-                initial + supplied_mass,
-                initial + supplied_mass,
+                initial + supplied_mass + condensed,
+                initial + supplied_mass + condensed,
             )
         {
             return Err(fail());
@@ -464,11 +518,15 @@ pub(super) fn admit(
         used.insert(instance);
         *areas.entry(instance).or_insert(0.) += area;
         dryouts += u64::from(initial > 0. && remaining == 0.);
-        for (total, value) in
-            totals
-                .iter_mut()
-                .zip([initial, remaining, evaporated, supplied_mass, supplied_j])
-        {
+        for (total, value) in totals.iter_mut().zip([
+            initial,
+            remaining,
+            evaporated,
+            supplied_mass,
+            supplied_j,
+            condensed,
+            incoming_j,
+        ]) {
             *total += value;
         }
         let ts = temperatures[i]
@@ -476,12 +534,14 @@ pub(super) fn admit(
             .filter(|v| v.len() == cells)
             .ok_or_else(fail)?;
         let inner = finite(&ts[0]).ok_or_else(fail)?;
-        if ((initial > 0. || delivery.is_some_and(|d| d.rates[0][0] > 0.))
-            && pressure(initial_temperature)?
-                < finite(ambient.first().ok_or_else(fail)?).ok_or_else(fail)?)
-            || ((remaining > 0.
-                || delivery.is_some_and(|d| d.rates.last().is_some_and(|r| r[0] > 0.)))
-                && pressure(inner)? < finite(ambient.last().ok_or_else(fail)?).ok_or_else(fail)?)
+        if !condensing
+            && (((initial > 0. || delivery.is_some_and(|d| d.rates[0][0] > 0.))
+                && pressure(initial_temperature)?
+                    < finite(ambient.first().ok_or_else(fail)?).ok_or_else(fail)?)
+                || ((remaining > 0.
+                    || delivery.is_some_and(|d| d.rates.last().is_some_and(|r| r[0] > 0.)))
+                    && pressure(inner)?
+                        < finite(ambient.last().ok_or_else(fail)?).ok_or_else(fail)?))
         {
             return Err(fail());
         }
@@ -503,7 +563,7 @@ pub(super) fn admit(
         || !accumulated_near(
             liquid_storage,
             number(water, "liquid_stored_change_j")?,
-            enthalpy_scale(totals[0] + totals[3]),
+            enthalpy_scale(totals[0] + totals[3] + totals[5]),
             total_steps,
         )
         || (!supplied && water["dryout_events"].as_u64() != Some(dryouts))
@@ -519,7 +579,11 @@ pub(super) fn admit(
     .into_iter()
     .zip(totals)
     {
-        if !near(number(water, field)?, expected, totals[0] + totals[3]) {
+        if !near(
+            number(water, field)?,
+            expected,
+            totals[0] + totals[3] + totals[5],
+        ) {
             return Err(fail());
         }
     }
@@ -529,6 +593,16 @@ pub(super) fn admit(
                 number(water, "supplied_liquid_sensible_energy_j")?,
                 totals[4],
                 enthalpy_scale(totals[3]),
+            ))
+    {
+        return Err(fail());
+    }
+    if condensing
+        && (!near(number(water, "condensed_liquid_kg")?, totals[5], totals[5])
+            || !near(
+                number(water, "incoming_vapor_sensible_energy_j")?,
+                totals[6],
+                enthalpy_scale(totals[5]),
             ))
     {
         return Err(fail());
@@ -555,7 +629,8 @@ pub(super) fn admit(
         }
     }
 
-    let mut previous = [totals[0], 0., 0.];
+    let mut previous = [totals[0], 0., 0., 0.];
+    let mut previous_incoming_j = 0.;
     let mut previous_dryouts = 0;
     let mut steps = 0_u64;
     let mut corrections = Vec::with_capacity(trace.len() + 1);
@@ -567,6 +642,21 @@ pub(super) fn admit(
         let latent_j = nonnegative(w, "latent_energy_j")?;
         let stored_j = number(w, "liquid_stored_change_j")?;
         let exported_j = number(w, "exported_vapor_sensible_energy_j")?;
+        let (condensed, condensation_j, incoming_j) = if condensing {
+            (
+                nonnegative(w, "condensed_liquid_kg")?,
+                nonnegative(w, "condensation_latent_energy_j")?,
+                number(w, "incoming_vapor_sensible_energy_j")?,
+            )
+        } else {
+            if !w["condensed_liquid_kg"].is_null()
+                || !w["condensation_latent_energy_j"].is_null()
+                || !w["incoming_vapor_sensible_energy_j"].is_null()
+            {
+                return Err(fail());
+            }
+            (0., 0., 0.)
+        };
         let events = w["dryout_events"].as_u64().ok_or_else(fail)?;
         let (supplied_mass, supplied_j) = if supplied {
             (
@@ -581,7 +671,7 @@ pub(super) fn admit(
             }
             (0., 0.)
         };
-        let available_mass = initial + supplied_mass;
+        let available_mass = initial + supplied_mass + condensed;
         let range = if std::ptr::eq(row, heat) {
             final_range
         } else {
@@ -598,9 +688,10 @@ pub(super) fn admit(
         // temperature excursions that cancel in a cumulative receipt. No substep is solved here.
         let energy_scale = steps as f64
             * (1. + (dry_capacity + cp * available_mass) * (domain[1] - domain[0]))
-            + 2. * enthalpy_scale(evaporated + supplied_mass)
-            + cp * supplied_mass * (domain[1] - domain[0])
+            + 2. * enthalpy_scale(evaporated + supplied_mass + condensed)
+            + cp * (supplied_mass + condensed) * (domain[1] - domain[0])
             + latent_j
+            + condensation_j
             + mechanical_heat.get(index).copied().ok_or_else(fail)?;
         let ambient_index = if std::ptr::eq(row, heat) {
             ambient.len() - 1
@@ -641,8 +732,23 @@ pub(super) fn admit(
         } else {
             false
         };
-        let mass_error = remaining + evaporated - initial - supplied_mass;
-        let expected_schema = if supplied {
+        if let Some(temperatures) = &vapor_temperatures {
+            let temperature = *temperatures.get(ambient_index).ok_or_else(fail)?;
+            // Incoming vapor has an explicit, constant effective enthalpy within this physical
+            // interval. Check its mass-weighted integral without rerunning transport or heat.
+            if !accumulated_near(
+                incoming_j,
+                previous_incoming_j + (condensed - previous[3]) * cp * (temperature - reference),
+                enthalpy_scale(condensed),
+                steps,
+            ) {
+                return Err(fail());
+            }
+        }
+        let mass_error = remaining + evaporated - initial - supplied_mass - condensed;
+        let expected_schema = if condensing {
+            "ftx-textile-surface-water-result/3"
+        } else if supplied {
             "ftx-textile-surface-water-result/2"
         } else {
             "ftx-textile-surface-water-result/1"
@@ -651,14 +757,15 @@ pub(super) fn admit(
             || initial != totals[0]
             || (!supplied && remaining > previous[0])
             || (supplied
-                && remaining > previous[0] + supplied_mass - previous[2]
+                && remaining > previous[0] + supplied_mass - previous[2] + condensed - previous[3]
                 && !near(
                     remaining,
-                    previous[0] + supplied_mass - previous[2],
+                    previous[0] + supplied_mass - previous[2] + condensed - previous[3],
                     available_mass,
                 ))
             || evaporated < previous[1]
             || supplied_mass < previous[2]
+            || condensed < previous[3]
             || events < previous_dryouts
             || events > event_bound
             || (supplied
@@ -673,9 +780,11 @@ pub(super) fn admit(
                 available_mass,
             )
             || !accumulated_near(latent_j, evaporated * latent, latent_j, steps)
+            || !accumulated_near(condensation_j, condensed * latent, condensation_j, steps)
             || range[0] < domain[0]
             || range[1] > domain[1]
-            || ((remaining > 0. || active_supply)
+            || (!condensing
+                && (remaining > 0. || active_supply)
                 && pressure(range[1])?
                     < finite(ambient.get(ambient_index).ok_or_else(fail)?).ok_or_else(fail)?)
             || !inside(
@@ -709,9 +818,11 @@ pub(super) fn admit(
         {
             return Err(fail());
         }
-        previous = [remaining, evaporated, supplied_mass];
+        previous = [remaining, evaporated, supplied_mass, condensed];
+        previous_incoming_j = incoming_j;
         previous_dryouts = events;
-        let correction = stored_j + exported_j + latent_j - supplied_j;
+        let correction =
+            stored_j + exported_j + latent_j - supplied_j - condensation_j - incoming_j;
         if !correction.is_finite() {
             return Err(fail());
         }
@@ -729,6 +840,9 @@ pub(super) fn admit(
         "balance_error_j",
         "supplied_liquid_kg",
         "supplied_liquid_sensible_energy_j",
+        "condensed_liquid_kg",
+        "condensation_latent_energy_j",
+        "incoming_vapor_sensible_energy_j",
     ] {
         if water[field] != trace.last().ok_or_else(fail)?["surface_water"][field] {
             return Err(fail());

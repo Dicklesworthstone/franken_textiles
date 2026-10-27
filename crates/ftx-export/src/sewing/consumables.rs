@@ -132,6 +132,22 @@ pub struct Requirement {
     pub required_length_m: f64,
     /// Largest complete operation/channel demand; no mid-operation thread splice is inferred.
     pub required_continuous_length_m: f64,
+    /// Optional nominal mass of all consumed inventory, including the declared allowances.
+    /// This is not the mass retained in a finished garment after trimming and other losses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mass: Option<MassRequirement>,
+    /// A missing/unapproved density or unrepresentable conversion withholds only mass.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mass_unavailable_reason: Option<String>,
+}
+
+/// One exact yarn's nominal length-to-mass reduction, bound by its requirement's material hash.
+#[derive(Clone, Debug, Serialize)]
+pub struct MassRequirement {
+    /// Admitted nominal yarn linear density; the frozen selection retains its source and bounds.
+    pub linear_density_kg_m: f64,
+    /// Complete required length multiplied by that density, before purchasing-rounding excess.
+    pub required_mass_kg: f64,
 }
 
 /// Why an operation cannot contribute a complete thread inventory.
@@ -201,6 +217,14 @@ pub struct Report {
     pub material_requirements: Vec<Requirement>,
     /// Sum of required metres across all channels/materials, absent on incomplete consumption.
     pub total_required_length_m: Option<f64>,
+    /// Every complete yarn requirement has an admitted, representable nominal mass conversion.
+    pub complete_mass_coverage: bool,
+    /// Complete consumed inventory mass, including allowances, never retained garment mass.
+    /// Absent when consumption, any density or the complete sum is unavailable.
+    pub total_required_mass_kg: Option<f64>,
+    /// Why the complete mass is absent; individual requirements retain their precise failures.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mass_unavailable_reason: Option<String>,
     /// Absent unless requested; no partial purchase total is ever supplied.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purchasing: Option<PurchasingReport>,
@@ -388,6 +412,9 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
         materials: BTreeMap::new(),
         material_requirements: Vec::new(),
         total_required_length_m: None,
+        complete_mass_coverage: false,
+        total_required_mass_kg: None,
+        mass_unavailable_reason: None,
         purchasing: None,
         purchasing_work_bound: purchasing_work_bound(&plan.options)?,
     };
@@ -460,6 +487,8 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
                     material_sha256: hash.clone(),
                     required_length_m: 0.0,
                     required_continuous_length_m: 0.0,
+                    mass: None,
+                    mass_unavailable_reason: None,
                 });
             requirement.required_length_m = add(requirement.required_length_m, batch_length)?;
             requirement.required_continuous_length_m =
@@ -491,11 +520,46 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
     report.complete_consumption_coverage = report.missing_operations.is_empty();
     if report.complete_consumption_coverage {
         let mut total = 0.0;
-        for requirement in requirements.into_values() {
+        let mut mass_total = Ok(0.0);
+        for mut requirement in requirements.into_values() {
             total = add(total, requirement.required_length_m)?;
+            let mass = resolved[&requirement.material_sha256]
+                .yarn_linear_density_kg_m()
+                .and_then(|density| {
+                    let mass = requirement.required_length_m * density;
+                    if !positive(mass) {
+                        return Err(bad(
+                            "required thread mass must be positive and representable",
+                        ));
+                    }
+                    Ok(MassRequirement {
+                        linear_density_kg_m: density,
+                        required_mass_kg: mass,
+                    })
+                });
+            match mass {
+                Ok(mass) => {
+                    mass_total = mass_total.and_then(|total| add(total, mass.required_mass_kg));
+                    requirement.mass = Some(mass);
+                }
+                Err(error) => {
+                    requirement.mass_unavailable_reason = Some(error.message.clone());
+                    mass_total = Err(error);
+                }
+            }
             report.material_requirements.push(requirement);
         }
         report.total_required_length_m = Some(total);
+        match mass_total {
+            Ok(total) => {
+                report.complete_mass_coverage = true;
+                report.total_required_mass_kg = Some(total);
+            }
+            Err(error) => report.mass_unavailable_reason = Some(error.message),
+        }
+    } else {
+        report.mass_unavailable_reason =
+            Some("thread consumption is incomplete; no complete inventory mass is known".into());
     }
     if let Some(purchasing) = &request.purchasing {
         report.purchasing = Some(price(&report, &resolved, purchasing)?);

@@ -210,7 +210,8 @@ geometry/material-history values are admitted; the last budget also counts Maxwe
 Real source-qualified **areal density** is required because interior sheet inertia is active. Missing
 bending, contact, thickness or thermal observations do not prevent this membrane-only experiment.
 The material's evidence policy, strain domain and specimen-qualified history remain authoritative.
-The currently unsupported simultaneous Maxwell/permanent-strain law still refuses.
+Simultaneous Maxwell/permanent-strain memory requires an explicitly qualified
+[parallel network](material-parallel-memory.md); an unqualified combination still refuses.
 
 The returned `ftx-strip-history-report/1` freezes the complete input and records every accepted time
 step, both grip reactions, midpoint width, positions, velocities, local Green-strain bounds, independent

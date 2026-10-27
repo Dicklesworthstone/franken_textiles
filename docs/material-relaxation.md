@@ -5,6 +5,12 @@ The same frozen selection drives uniform or per-piece sewn garments, Newton step
 and prescribed-body continuation. Each retained material triangle owns its accepted internal strain;
 seam welding never merges unlike material histories. No new crate or runtime dependency is added.
 
+An explicitly qualified [parallel network](material-parallel-memory.md) can also retain permanent
+strain in its equilibrium branch. Maxwell branches still see total physical Green strain, while
+plastic flow sees only the elastoplastic equilibrium branch's stress. Full-material compilation and
+atomic binding admit both histories together; unrelated independent laws retain their existing
+mutual refusal. Ordinary Maxwell selections and their wire format remain unchanged.
+
 ## Use it
 
 `tests/fixtures/materials/synthetic-relaxation.json` is a complete **synthetic** selection, not a
