@@ -128,7 +128,7 @@ reconstructed capture. If the original input changes, generate a new target revi
 editing its recorded hash. The page uses local assets only and keeps edits in memory; pending,
 invalid, cancelled or reset edits withdraw the previous edited download.
 
-## Inspect starting poses before fitting
+## Author and inspect starting poses before fitting
 
 Once the photo observations and targets are reviewed, inspect every declared initialization in
 the calibrated image frame:
@@ -157,8 +157,42 @@ The review checks source and model identity again, preserves exact original inpu
 `review.json` with `INITIALIZATION_REVIEW`, never an accepted body. Prepared-coordinate input works
 without source photos; `--silhouettes MANIFEST` accepts the same explicit mask import as fitting.
 
-Correct initialization values in the original input and regenerate into a new directory. Keep
-predeclared CHECK observations fixed; this preview does not authorize fitting to their residuals.
+The page also provides named controls for the shared shape and each frame's pose. Every control
+shows its declared bounds and units: root translations are metres, rotations and joint angles are
+radians, and shape controls are model coefficients. Add a start, enter its values, and apply it;
+copy a start when preparing another initialization, then change it enough to make the starts
+distinct. The optional midpoint action is an explicit initial guess inside the declared bounds,
+not a pose estimated from the photographs. Up to four starts can be retained.
+
+An input with `fit.starts: []` or one valid start can be opened for authoring. The empty case does
+not generate a placeholder body. Downloading and applying a completed initialization set requires
+the ordinary fitter's two to four distinct, strictly interior starts. Incomplete fields, bounds
+violations and duplicate starts withdraw the download; cancel and reset discard pending edits.
+
+The existing mesh and image overlays remain the **original** preview while values are edited. To
+evaluate an edited initialization through the real model, download `body-starts.json`, materialize
+it, and generate a fresh review:
+
+```sh
+ftx measure fit-starts /path/to/body-starts.json --model /path/to/anny.ftxbody \
+    --out starts-applied-001 --json
+ftx measure fit-start-review starts-applied-001/input.json --model /path/to/anny.ftxbody \
+    --out start-review-002 --json
+# Inspect the new projections before fitting starts-applied-001/input.json.
+```
+
+The annotation contains only start values, source/model bindings and native frame ordinals.
+Native code maps those ordinals back to the original exact frame identities, preserving timestamps
+beyond JavaScript's integer range. It verifies the source input bytes, converted model and capture
+sources again before changing `fit.starts`. It preserves observations, model targets, parameter
+bounds, uncertainty and FIT/CHECK assignments; capture file paths are rebased to their original
+locations. A separate `--silhouettes` option is also bound to its exact imported evidence. Applying
+the download materializes those additional slices inline, so the resulting input retains the
+reviewed constraints without requiring the old command-line option. Existing constraints remain
+intact. The new private directory contains `input.json`, the exact annotations and original input,
+and a final `starts.json` receipt.
+
+Keep predeclared CHECK observations fixed; this preview does not authorize fitting to their residuals.
 The original input download retains its original relative paths and belongs at its original
 location. Source images are copied privately for review, but the directory is not a portable
 capture archive. Inspecting a start establishes neither observability nor anatomical accuracy;

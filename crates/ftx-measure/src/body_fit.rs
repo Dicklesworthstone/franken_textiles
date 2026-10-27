@@ -299,10 +299,24 @@ fn unique<'a>(names: impl Iterator<Item = &'a str>) -> bool {
 /// This performs the same identity, parameter-bound and distinct-start checks as [`fit_body`].
 /// It evaluates no body model and establishes neither observability nor acceptance.
 pub fn prepare_input(input: &BodyFitInput, layout: &ModelLayout) -> Result<BodyFitInput, Refusal> {
-    canonical(input, layout)
+    canonical(input, layout, 2)
 }
 
-fn canonical(input: &BodyFitInput, layout: &ModelLayout) -> Result<BodyFitInput, Refusal> {
+/// Prepare an initialization editor, allowing zero or one declared start while it is incomplete.
+/// All existing starts and observations retain the ordinary validation rules. Fitting and
+/// materializing edited starts must still use [`prepare_input`], which requires 2..4 starts.
+pub fn prepare_start_authoring(
+    input: &BodyFitInput,
+    layout: &ModelLayout,
+) -> Result<BodyFitInput, Refusal> {
+    canonical(input, layout, 0)
+}
+
+fn canonical(
+    input: &BodyFitInput,
+    layout: &ModelLayout,
+    minimum_starts: usize,
+) -> Result<BodyFitInput, Refusal> {
     let ns = layout.shape.len();
     let np = layout.pose.len();
     if input.schema != "ftx-body-fit-input/1"
@@ -310,7 +324,7 @@ fn canonical(input: &BodyFitInput, layout: &ModelLayout) -> Result<BodyFitInput,
         || !text(&input.observation_evidence)
         || !text(&layout.model_id)
         || !(2..=8).contains(&input.frames.len())
-        || !(2..=4).contains(&input.starts.len())
+        || !(minimum_starts..=4).contains(&input.starts.len())
         || !(1..=12).contains(&ns)
         || !(1..=18).contains(&np)
         || ns + np * input.frames.len() > 128

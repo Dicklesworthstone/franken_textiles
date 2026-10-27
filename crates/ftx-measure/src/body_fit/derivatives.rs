@@ -284,7 +284,7 @@ mod tests {
                 partition: Partition::Fit,
             }],
         };
-        let input = canonical(&input, &model.layout).unwrap();
+        let input = prepare_input(&input, &model.layout).unwrap();
         let x = encode(&input.starts[0], &model.layout).unwrap();
         (model, input, x)
     }

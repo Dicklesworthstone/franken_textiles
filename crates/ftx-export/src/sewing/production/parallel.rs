@@ -3,13 +3,14 @@
 //! makespan optimization uses the caller's explicit once-per-cell feed-ceiling time convention.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 
-use ftx_core::{Refusal, RefusalCode};
+use ftx_core::{Refusal, RefusalCode, receipt::Sha256};
 use ftx_pattern::materials::{Evidence, Source};
 use serde::{Deserialize, Serialize};
 
 use super::{handling, workholding};
-use crate::sewing::{SewPlan, bad, ordering, qualified_text, sha256_text};
+use crate::sewing::{MAX_STATIONS, SewPlan, bad, ordering, qualified_text, sha256_text};
 
 const MAX_CELLS: usize = 8;
 const MAX_WORK: usize = 200_000;
@@ -28,7 +29,7 @@ pub struct Policy {
     /// `independent_machines_fixtures_and_handling_labor/1`, covered by the retained source.
     /// A shared operator or shared fixture pool cannot satisfy this declaration.
     pub independence: String,
-    /// Shared upper bound for nested serial-search nodes and allocation transitions.
+    /// Shared upper bound for count schedules, baseline/selected replay and allocation transitions.
     pub max_search_nodes: usize,
     /// Complete admitted machine configuration shared by every explicitly identified instance.
     pub machine_sha256: String,
@@ -125,7 +126,7 @@ pub struct Report {
     pub selected: Assignment,
     /// Allocation optimum over the valid lower bounds of every cell/count serial subproblem.
     pub lower_bound_makespan_milliseconds: u64,
-    /// Actual nested feasible-prefix examinations plus both allocation dynamic-program transitions.
+    /// Actual nested examinations, including reconstruction, plus both allocation DP transitions.
     pub search_nodes: usize,
     /// All nested schedules and allocation subproblems completed their declared search.
     pub search_complete: bool,
@@ -162,16 +163,17 @@ impl Policy {
         // Two DPs (incumbent and rigorous subproblem bounds), including idle-cell choices.
         let allocation = self.cells.len() * (copies + 1) * (copies + 2);
         let trials = self.cells.len() * copies;
+        let replays = 1 + self.cells.len().min(copies);
         let remaining = self
             .max_search_nodes
             .checked_sub(allocation)
             .ok_or_else(|| {
                 budget("parallel work limit cannot cover the complete allocation dynamic programs")
             })?;
-        let per_trial = remaining / trials;
+        let per_trial = remaining / (trials + replays);
         if per_trial == 0 {
             return Err(budget(
-                "parallel work limit must reserve at least one search node for every cell/copy-count schedule",
+                "parallel work limit must reserve at least one search node for every cell/copy-count schedule and baseline/selected replay",
             ));
         }
         let bound = serial_nodes
@@ -299,14 +301,41 @@ impl Policy {
     }
 }
 
-#[derive(Clone)]
+// Fixed-size receipts keep source operation and fixture histories out of the count cache.
+#[derive(Clone, Debug, PartialEq)]
 struct Trial {
-    schedule: super::Report,
     node_limit: usize,
+    feed_seconds: f64,
+    setup_milliseconds: u64,
+    handling_milliseconds: u64,
     feed_milliseconds: u64,
     padding_seconds: f64,
     finish: u64,
     lower: u64,
+    search_nodes: usize,
+    search_complete: bool,
+    budget_exhausted: bool,
+    schedule_sha256: [u8; 32],
+}
+
+struct ScheduleDigest(Sha256);
+
+impl Write for ScheduleDigest {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn schedule_sha256(schedule: &super::Report) -> Result<[u8; 32], Refusal> {
+    let mut digest = ScheduleDigest(Sha256::new());
+    serde_json::to_writer(&mut digest, schedule)
+        .map_err(|error| bad(format!("parallel schedule digest: {error}")))?;
+    Ok(digest.0.finalize())
 }
 
 fn sum_time(a: u64, b: u64) -> Result<u64, Refusal> {
@@ -317,7 +346,12 @@ fn sum_time(a: u64, b: u64) -> Result<u64, Refusal> {
         })
 }
 
-fn trial(plan: &SewPlan, cell: &Cell, copies: usize, node_limit: usize) -> Result<Trial, Refusal> {
+fn trial(
+    plan: &SewPlan,
+    cell: &Cell,
+    copies: usize,
+    node_limit: usize,
+) -> Result<(Trial, super::Report), Refusal> {
     let mut ordering = cell.ordering.clone();
     ordering.max_search_nodes = node_limit;
     let policy = super::Policy {
@@ -355,14 +389,21 @@ fn trial(plan: &SewPlan, cell: &Cell, copies: usize, node_limit: usize) -> Resul
         )?,
     )?;
     let lower = sum_time(start, handling.lower_bound_setup_and_handling_milliseconds)?;
-    Ok(Trial {
-        schedule,
+    let receipt = Trial {
         node_limit,
+        feed_seconds: schedule.feed_seconds,
+        setup_milliseconds: setup.selected_setup_milliseconds,
+        handling_milliseconds: handling.selected_handling_milliseconds,
         feed_milliseconds,
         padding_seconds: (rounded - feed) / 1000.0,
         finish,
         lower,
-    })
+        search_nodes: schedule.ordering.search_nodes,
+        search_complete: schedule.ordering.search_complete,
+        budget_exhausted: schedule.ordering.budget_exhausted,
+        schedule_sha256: schedule_sha256(&schedule)?,
+    };
+    Ok((receipt, schedule))
 }
 
 // Dynamic programming over complete count assignments. A cell's zero-count cost is exactly zero:
@@ -406,9 +447,11 @@ fn allocate(trials: &[Vec<Trial>], copies: usize, lower: bool) -> (u64, Vec<usiz
 }
 
 fn assignment(
+    plan: &SewPlan,
     cells: &[&Cell],
     trials: &[Vec<Trial>],
     counts: &[usize],
+    search_nodes: &mut usize,
 ) -> Result<Assignment, Refusal> {
     let mut out = Assignment {
         cells: Vec::with_capacity(cells.len()),
@@ -423,32 +466,26 @@ fn assignment(
         let active = count.checked_sub(1).map(|index| &row[index]);
         let copies = (first_copy..first_copy + count).collect();
         first_copy += count;
-        if let Some(trial) = active {
-            out.makespan_milliseconds = out.makespan_milliseconds.max(trial.finish);
-            out.feed_seconds += trial.schedule.feed_seconds;
+        let schedule = if let Some(expected) = active {
+            let (replayed, schedule) = trial(plan, cell, count, expected.node_limit)?;
+            if &replayed != expected {
+                return Err(Refusal::new(
+                    RefusalCode::NotConverged,
+                    "parallel baseline/selected schedule did not exactly replay its cached receipt",
+                ));
+            }
+            *search_nodes += replayed.search_nodes;
+            out.makespan_milliseconds = out.makespan_milliseconds.max(replayed.finish);
+            out.feed_seconds += replayed.feed_seconds;
             out.scheduled_feed_milliseconds =
-                sum_time(out.scheduled_feed_milliseconds, trial.feed_milliseconds)?;
-            out.setup_milliseconds = sum_time(
-                out.setup_milliseconds,
-                trial
-                    .schedule
-                    .ordering
-                    .timing
-                    .as_ref()
-                    .expect("timed")
-                    .selected_setup_milliseconds,
-            )?;
-            out.handling_milliseconds = sum_time(
-                out.handling_milliseconds,
-                trial
-                    .schedule
-                    .ordering
-                    .handling_timing
-                    .as_ref()
-                    .expect("handling")
-                    .selected_handling_milliseconds,
-            )?;
-        }
+                sum_time(out.scheduled_feed_milliseconds, replayed.feed_milliseconds)?;
+            out.setup_milliseconds = sum_time(out.setup_milliseconds, replayed.setup_milliseconds)?;
+            out.handling_milliseconds =
+                sum_time(out.handling_milliseconds, replayed.handling_milliseconds)?;
+            Some(schedule)
+        } else {
+            None
+        };
         out.cells.push(CellSchedule {
             cell: cell.id.clone(),
             copies,
@@ -457,7 +494,7 @@ fn assignment(
             scheduled_feed_milliseconds: active.map_or(0, |trial| trial.feed_milliseconds),
             feed_padding_seconds: active.map_or(0.0, |trial| trial.padding_seconds),
             finish_milliseconds: active.map(|trial| trial.finish),
-            schedule: active.map(|trial| trial.schedule.clone()),
+            schedule,
         });
     }
     Ok(out)
@@ -473,6 +510,18 @@ pub(super) fn evaluate(plan: &SewPlan, policy: &Policy, copies: usize) -> Result
         .max_search_nodes;
     let budget = policy.budget(copies, serial_nodes)?;
     let qualifications = policy.validate(plan)?;
+    // The outer production report is not attached to plan yet: its source interval count must be
+    // expanded explicitly. Reuse the ordinary stitch-program bound before any count/cell search.
+    if plan
+        .stitch_intervals
+        .checked_mul(copies)
+        .is_none_or(|intervals| intervals > MAX_STATIONS)
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "parallel production exceeds the ordinary expanded stitch-program interval budget",
+        ));
+    }
     let mut cells: Vec<_> = policy.cells.iter().collect();
     cells.sort_by_key(|cell| &cell.id);
     let mut trials = Vec::with_capacity(cells.len());
@@ -483,22 +532,22 @@ pub(super) fn evaluate(plan: &SewPlan, policy: &Policy, copies: usize) -> Result
         let node_limit = cell.ordering.max_search_nodes.min(budget.per_trial);
         let mut row = Vec::with_capacity(copies);
         for count in 1..=copies {
-            let trial = trial(plan, cell, count, node_limit)?;
-            search_nodes += trial.schedule.ordering.search_nodes;
-            search_complete &= trial.schedule.ordering.search_complete;
-            budget_exhausted |= trial.schedule.ordering.budget_exhausted;
-            row.push(trial);
+            let (receipt, _) = trial(plan, cell, count, node_limit)?;
+            search_nodes += receipt.search_nodes;
+            search_complete &= receipt.search_complete;
+            budget_exhausted |= receipt.budget_exhausted;
+            row.push(receipt);
         }
         trials.push(row);
     }
     let mut baseline_counts = vec![0; cells.len()];
     baseline_counts[0] = copies;
-    let baseline = assignment(&cells, &trials, &baseline_counts)?;
+    let baseline = assignment(plan, &cells, &trials, &baseline_counts, &mut search_nodes)?;
     let (cost, counts, incumbent_work) = allocate(&trials, copies, false);
     let selected = if cost < baseline.makespan_milliseconds {
-        assignment(&cells, &trials, &counts)?
+        assignment(plan, &cells, &trials, &counts, &mut search_nodes)?
     } else {
-        assignment(&cells, &trials, &baseline_counts)?
+        baseline.clone()
     };
     let (lower_bound_makespan_milliseconds, _, bound_work) = allocate(&trials, copies, true);
     search_nodes += incumbent_work + bound_work;

@@ -1637,7 +1637,9 @@ test('recovery identification displays the fixed plastic history at unobserved n
   const r=calibrationReport('relaxation',true),c=r.calibration;
   c.input.plastic_equilibrium={initialization:'pristine_reference',allow_estimated_network:true,
     network:{model:'parallel_green_maxwell_plastic/1',source:'fixed-network',method:'<separate branch qualification>'}};
-  c.input.material={membrane_plasticity:{model:'separable_green_plasticity/1'}};
+  c.input.material={id:'known-plastic',properties:{membrane_yield_warp:{
+    value:20,unit:'N/m',source:'fixed-yield',method:'<independently observed yield>'}},
+    sources:{'fixed-yield':{reference:'test:independent-yield',note:'<retained fixed observation>'}}};
   c.predictions=[{experiment:'load',partition:'fit',time_seconds:0.1,residual_n_m:[[null,null],[null,null]],
     plastic_equilibrium:{plastic_strain:[0.05,0,0],accumulated_strain:[0.05,0,0],
       nominal_n_m:[[25,0],[0,0]],step_dissipated_j_m2:1,cumulative_dissipated_j_m2:1}},
@@ -1655,6 +1657,8 @@ test('recovery identification displays the fixed plastic history at unobserved n
   assert.equal(p.e.selection.value,r.selection_json);
   const d=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='Fixed permanent-stretch observations and combined-network qualification');
   d.open=true;d.handlers.toggle();assert.match(visibleText(d),/<separate branch qualification>/);
+  assert.match(visibleText(d),/<independently observed yield>/);
+  assert.match(visibleText(d),/<retained fixed observation>/);
   assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
   p.e.calibrationRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.e.assign.disabled,true);
 });
@@ -6182,6 +6186,111 @@ test('joint strip histories retain the declared network and separate loss ledger
   p.emit(ordinary);
   assert.equal(visibleText(s).includes('Declared parallel network:'),false);
 });
+
+test('compiled WASM identifies a known plastic equilibrium and runs its frozen parallel material through the worker',
+  {skip:process.env.FTX_REAL_WASM!=='1'}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const raw=fs.readFileSync(path.join(__dirname,'../examples/relaxation-plastic-equilibrium.json'),'utf8');
+    const input=JSON.parse(raw), w=await workerModule({bindings:ftx});
+    const fitted=await w.send({type:'calibrate',request:210,calibrationMode:'relaxation',
+      calibrationRequest:raw,allowEstimates:true});
+    assert.equal(fitted.type,'result',fitted.message);
+    const result=fitted.result, calibration=result.calibration;
+    assert.deepEqual(result,JSON.parse(ftx.material_calibrate_relaxation(raw,true)));
+    assert.equal(result.material.capabilities.mechanical_coefficients.ready,true);
+    assert.deepEqual(calibration.material.properties,calibration.input.material.properties);
+    assert.match(result.time_integration,/every recorded node, including unobserved loads/);
+    assert.match(result.time_integration,/not a continuous-path plasticity solution/);
+    const law=result.selection.record.membrane_relaxation, branch=law.branches[0];
+    assert.deepEqual(law.parallel_plasticity,input.plastic_equilibrium.network);
+    assert.ok(Math.abs(branch.stiffness_ratio.value-2)<1e-6);
+    assert.ok(Math.abs(branch.relaxation_time.value-.05)<1e-7);
+    assert.ok(calibration.fit.peak_scaled<1e-4);
+    assert.ok(calibration.check.peak_scaled<1e-4);
+
+    // Synthetic observations come from this independent scalar return map and exponential
+    // convolution. Null forces still advance both histories, and CHECK starts pristine.
+    let index=0;
+    for(const experiment of input.experiments) {
+      let plastic=0, accumulated=0, lag=0, previousTime=0, previousStrain=0;
+      for(const sample of experiment.samples) {
+        const stretch=sample.deformation[0][0], strain=.5*(stretch*stretch-1);
+        const h=sample.time_seconds-previousTime;
+        if(h>0) {
+          const decay=Math.exp(-h/.05);
+          lag=decay*lag+.05*(1-decay)/h*(strain-previousStrain);
+        }
+        const trial=1000*(strain-plastic), excess=Math.abs(trial)-(20+100*accumulated);
+        if(excess>0) {
+          const increment=excess/1100;
+          plastic+=Math.sign(trial)*increment; accumulated+=increment;
+        }
+        const expected=stretch*(1000*(strain-plastic)+2000*lag);
+        if(sample.nominal_n_m[0][0]!==null) {
+          assert.ok(Math.abs(sample.nominal_n_m[0][0]-expected)<1e-10*Math.max(1,Math.abs(expected)));
+        }
+        const prediction=calibration.predictions[index++].plastic_equilibrium;
+        assert.ok(Math.abs(prediction.plastic_strain[0]-plastic)<1e-12);
+        assert.ok(Math.abs(prediction.accumulated_strain[0]-accumulated)<1e-12);
+        previousTime=sample.time_seconds; previousStrain=strain;
+      }
+    }
+    assert.equal(index,16); assert.equal(calibration.predictions.length,index);
+    assert.deepEqual(calibration.predictions[2].residual_n_m,[[null,null],[null,null]]);
+    assert.ok(calibration.predictions[2].plastic_equilibrium.plastic_strain[0]>.05);
+    assert.equal(calibration.predictions[9].plastic_equilibrium.plastic_strain[0],0);
+    assert.equal(fitted.files.find(file=>file.name==='calibration-input.json').text,raw);
+    const selection=fitted.files.find(file=>file.name==='calibrated-selection.json').text;
+    assert.equal(selection,result.selection_json);
+    assert.deepEqual(JSON.parse(selection),result.selection);
+    assert.deepEqual(JSON.parse(ftx.material_inspect(selection)),result.material);
+
+    const pattern={schema:'fabric-pattern/1',units:'mm',seams:[],
+      fabric:{areal_g_m2:200,note:'preserve unrelated metadata'},
+      pieces:[{id:'swatch',material:'shell',cut:{qty:1},
+        vertices:{a:[0,0],b:[100,0],c:[0,100]},
+        edges:[{id:'ab',from:'a',to:'b'},{id:'bc',from:'b',to:'c'},{id:'ca',from:'c',to:'a'}],
+        grain:[[0,0],[0,100]]}]};
+    const bound=await w.send({type:'bind',request:211,pattern:JSON.stringify(pattern),
+      changes:JSON.stringify({schema:'ftx-material-bindings/1',default:JSON.parse(selection)})});
+    assert.equal(bound.type,'result',bound.message); assert.equal(bound.result.geometry_changed,false);
+    const locked=JSON.parse(bound.result.pattern_json);
+    assert.deepEqual(locked.pieces,pattern.pieces); assert.deepEqual(locked.seams,pattern.seams);
+    assert.equal(locked.fabric.note,pattern.fabric.note);
+    assert.equal(bound.files.find(file=>file.name==='pattern.json').text,bound.result.pattern_json);
+    const strip={schema:'ftx-strip-history/1',material:locked.fabric.material,
+      fixture:{gauge_length_m:.1,width_m:.06,warp_axis:[0,1],cells:[2,2]},
+      loading:[[0,0],[.05,.02],[.15,.02],[.2,0],[.25,0]]
+        .map(([time_s,extension_fraction])=>({time_s,extension_fraction})),
+      controls:{max_step_s:.01,max_steps:32,max_newton:100,
+        velocity_tolerance_m_s:1e-9,force_tolerance_n:1e-6}};
+    const history=await w.send({type:'stripHistory',request:212,stripRequest:JSON.stringify(strip)});
+    assert.equal(history.type,'result',history.message);
+    assert.deepEqual(history.result.input.material,result.selection);
+    assert.equal(history.result.states.length,27);
+    const last=history.result.states.at(-1);
+    assert.ok(last.relaxation&&last.plasticity);
+    assert.ok(last.maxwell_dissipation_j>0); assert.ok(last.plastic_dissipation_j>0);
+    const replay=history.files.find(file=>file.name==='strip-history-replay.json').text;
+    assert.equal(replay,history.result.replay_request_json);
+    const replayed=await w.send({type:'stripHistory',request:213,stripRequest:replay});
+    assert.equal(replayed.type,'result',replayed.message);
+    assert.deepEqual(replayed.result,history.result);
+
+    const unqualified=plain(input), denied=plain(input), failedCheck=plain(input);
+    delete unqualified.plastic_equilibrium;
+    denied.plastic_equilibrium.allow_estimated_network=false;
+    failedCheck.experiments[1].samples[2].nominal_n_m[0][0]=50000;
+    for(const [offset,rejected] of [unqualified,denied,failedCheck].entries()) {
+      const request=214+offset;
+      const refused=await w.send({type:'calibrate',request,calibrationMode:'relaxation',
+        calibrationRequest:JSON.stringify(rejected),allowEstimates:true});
+      assert.equal(refused.type,'error'); assert.equal(refused.files,undefined);
+      assert.equal(w.sent.some(message=>message.type==='result'&&message.request===request),false);
+    }
+  });
 
 test('compiled WASM joint material memory preserves both histories and exact frozen replay through the worker',
   {skip:process.env.FTX_REAL_WASM!=='1'}, async()=>{
