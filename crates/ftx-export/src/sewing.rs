@@ -243,7 +243,8 @@ pub struct PlannedSeam {
 pub struct SewPlan {
     /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` qualifications, `/6` ordering,
     /// `/7` pressure, `/8` clearance, `/9` timed ordering, `/10` partial source spans,
-    /// `/11` source-qualified thread consumption and purchasing, `/12` cross-copy production schedule.
+    /// `/11` source-qualified thread consumption and purchasing, `/12` cross-copy production schedule,
+    /// `/13` source-qualified finite workholding across production copies.
     /// Capabilities compose rather than replace.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
@@ -577,7 +578,13 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if options.production.is_some() {
+            schema: if options
+                .production
+                .as_ref()
+                .is_some_and(|production| production.workholding.is_some())
+            {
+                "ftx-sewing-plan/13"
+            } else if options.production.is_some() {
                 "ftx-sewing-plan/12"
             } else if options.consumables.is_some()
                 || options

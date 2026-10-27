@@ -12,6 +12,7 @@ use std::{
 const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
 const OPTIONS: &str = include_str!("../../../examples/sewing-production-options.json");
+const WORKHOLDING: &str = include_str!("../../../examples/sewing-workholding-options.json");
 const TIMED_SELECTION: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-timed-selection.json");
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -96,6 +97,69 @@ fn both_native_plan_and_stitch_commands_execute_the_documented_batch_and_match_p
     assert_eq!(
         fs::read_to_string(directory.join("options.json")).unwrap(),
         OPTIONS
+    );
+}
+
+#[test]
+fn finite_fixture_inventory_changes_both_native_schedules_and_the_real_stitch_program() {
+    let directory = workspace();
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    for (capacity, setup_seconds) in [(1, 6.5), (2, 4.0), (3, 1.5)] {
+        let mut options: Value = serde_json::from_str(WORKHOLDING).unwrap();
+        options["production"]["workholding"]["resources"][0]["capacity"] = json!(capacity);
+        let text = options.to_string();
+        let filename = format!("fixtures-{capacity}.json");
+        fs::write(directory.join(&filename), &text).unwrap();
+        let plan = portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &text).unwrap());
+        let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &text).unwrap());
+        assert_eq!(plan["schema"], "ftx-sewing-plan/13");
+        assert_eq!(plan["production"]["schema"], "ftx-sewing-production/2");
+        assert_eq!(plan["production"]["stitch_intervals"], 240);
+        assert_eq!(plan["production"]["feed_seconds"], 24.0);
+        let ordering = &plan["production"]["ordering"];
+        assert_eq!(ordering["optimality_proven"], true);
+        assert_eq!(
+            ordering["timing"]["feed_and_setup_seconds"],
+            24.0 + setup_seconds
+        );
+        let workholding = &plan["production"]["workholding"];
+        assert_eq!(workholding["schema"], "ftx-sewing-workholding/1");
+        assert_eq!(workholding["fixture_geometry_and_access_validated"], false);
+        assert_eq!(workholding["holds"].as_array().unwrap().len(), 3);
+        let resource = workholding["resources"][0]["id"].as_str().unwrap();
+        assert_eq!(workholding["baseline"]["peak_occupancy"][resource], 1);
+        assert_eq!(
+            workholding["selected"]["peak_occupancy"][resource],
+            capacity
+        );
+        let timeline = workholding["selected"]["operations"].as_array().unwrap();
+        assert_eq!(timeline.len(), 6);
+        assert_eq!(timeline.last().unwrap()["occupied_after"][resource], 0);
+        for (step, operation) in timeline
+            .iter()
+            .zip(ordering["selected_order"].as_array().unwrap())
+        {
+            assert_eq!(step["operation"], *operation);
+            assert!(step["occupied_during"][resource].as_u64().unwrap() <= capacity);
+        }
+        assert_eq!(program["plan"], plan);
+        assert_eq!(program["stitches"].as_array().unwrap().len(), 240);
+        assert_eq!(plan["hardware_execution_authorized"], false);
+        for main in [false, true] {
+            assert_eq!(
+                run(main, &directory, "sew-plan", "pattern.json", &filename),
+                plan
+            );
+            assert_eq!(
+                run(main, &directory, "sew-stitches", "pattern.json", &filename),
+                program
+            );
+        }
+        assert_eq!(fs::read_to_string(directory.join(filename)).unwrap(), text);
+    }
+    assert_eq!(
+        fs::read_to_string(directory.join("pattern.json")).unwrap(),
+        PATTERN
     );
 }
 

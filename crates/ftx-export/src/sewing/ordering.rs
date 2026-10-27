@@ -150,6 +150,42 @@ pub(super) struct Operation<'a> {
     pub thread: &'a str,
 }
 
+/// Shared integer occupancy authority for the resource-qualified production caller and search.
+/// Operation indices use the same sorted IDs as the optimizer; counts are bounded during admission.
+pub(super) struct ResourceLimits {
+    pub(super) ids: Vec<String>,
+    pub(super) capacity: Vec<u32>,
+    pub(super) acquire: Vec<Vec<u32>>,
+    pub(super) holds: Vec<ResourceHold>,
+}
+
+pub(super) struct ResourceHold {
+    pub(super) resource: usize,
+    pub(super) units: u32,
+    pub(super) acquire: u64,
+    pub(super) release: u64,
+}
+
+impl ResourceLimits {
+    pub(super) fn occupied(&self, mask: u64) -> Vec<u32> {
+        let mut occupied = vec![0; self.capacity.len()];
+        for hold in &self.holds {
+            if mask & hold.acquire != 0 && mask & hold.release == 0 {
+                occupied[hold.resource] += hold.units;
+            }
+        }
+        occupied
+    }
+
+    pub(super) fn admits(&self, occupied: &[u32], next: usize) -> bool {
+        occupied
+            .iter()
+            .zip(&self.acquire[next])
+            .zip(&self.capacity)
+            .all(|((&held, &acquire), &capacity)| held + acquire <= capacity)
+    }
+}
+
 struct Task<'a> {
     id: &'a str,
     predecessors: u64,
@@ -162,6 +198,7 @@ struct Search<'a> {
     initial: Option<(u64, u64)>,
     all: u64,
     times: Option<Vec<Vec<u64>>>,
+    resources: Option<&'a ResourceLimits>,
 }
 
 struct Frame {
@@ -261,12 +298,17 @@ impl Search<'_> {
     }
 
     fn frame(&self, mask: u64, last: Option<usize>, cost: u64) -> Frame {
+        let occupied = self.resources.map(|resources| resources.occupied(mask));
         let mut candidates: Vec<_> = self
             .tasks
             .iter()
             .enumerate()
             .filter(|(i, task)| {
-                mask & (1 << i) == 0 && task.predecessors & mask == task.predecessors
+                mask & (1 << i) == 0
+                    && task.predecessors & mask == task.predecessors
+                    && self.resources.is_none_or(|resources| {
+                        resources.admits(occupied.as_ref().expect("resource state"), *i)
+                    })
             })
             .map(|(i, _)| i)
             .collect();
@@ -305,8 +347,30 @@ pub(super) fn optimize_operations(
     baseline_passes: &[Operation<'_>],
     feed_seconds: f64,
 ) -> Result<Report, Refusal> {
+    optimize_operations_with_resources(policy, baseline_passes, feed_seconds, None)
+}
+
+// Resource-qualified callers first admit the complete baseline, including added lifecycle edges.
+// Relaxing resource capacity only weakens existing lower bounds; pruning/proof remain sound.
+pub(super) fn optimize_operations_with_resources(
+    policy: &Policy,
+    baseline_passes: &[Operation<'_>],
+    feed_seconds: f64,
+    resources: Option<&ResourceLimits>,
+) -> Result<Report, Refusal> {
     let mut passes = baseline_passes.to_vec();
     passes.sort_by_key(|p| p.id);
+    if resources.is_some_and(|resources| {
+        resources
+            .ids
+            .iter()
+            .map(String::as_str)
+            .ne(passes.iter().map(|pass| pass.id))
+    }) {
+        return Err(bad(
+            "workholding resource indices do not match admitted operations",
+        ));
+    }
     let times = policy
         .setup_times
         .as_ref()
@@ -354,6 +418,7 @@ pub(super) fn optimize_operations(
         all: (1_u64 << tasks.len()) - 1,
         tasks,
         times,
+        resources,
         // An explicitly installed identity absent from the job is a known different setup (zero),
         // not the omitted/unknown setup represented by None.
         initial: policy.initial_setup.as_ref().map(|s| {

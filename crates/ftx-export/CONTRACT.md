@@ -101,9 +101,24 @@ totals use u64 on native and WASM. Per-garment plan totals remain unchanged; sha
 select the explicit batch scope for consumers. The version-4 stitch program emits every selected
 copy's real runs, charging the complete 250000-interval cap before expansion. Missing timing or stale
 material qualification refuses; a search stop preserves a complete incumbent with no optimality claim.
-Existing absent-policy output is unchanged. This single-configuration slice infers no fixture changes,
-workholding capacity, handling, seam access, machine execution or physical quality. Tests:
+Existing absent-policy output is unchanged. This single-configuration slice infers no undeclared
+fixture changes, handling, seam access, machine execution or physical quality. Tests:
 `sewing_production`, existing `sewing` and `sewing_program`; see `docs/sewing-production.md`.
+
+**Finite workholding** (`production.workholding`). Optional source-qualified resources and per-copy
+holds constrain the same batch optimizer. Full typed machine and admitted qualification hashes
+bind resource applicability to the exact configuration, material stack and process; estimate consent
+is independent. Acquisition precedes operation start, release follows completion, and same-operation
+holds contribute to during/peak occupancy. Distinct anchors add real prerequisites; cycles refuse.
+The serial baseline must be admitted before pruning or objective shortcuts. An unsupported baseline
+is `NotConverged`, preserving unresolved recipe trials rather than claiming global infeasibility.
+The selected stitch program uses the constrained order. Plan `/13`, production `/2` and workholding
+`/1` retain expanded holds, exact source locks, full baseline/selected timelines and finite peaks.
+Bounds are 16 resources, 64 source holds, 1024 expanded holds and 256 qualification references, with
+integer capacities/demands in 1..4096. Omission preserves prior wire output. Fixture geometry, seam
+access and hardware authorization remain unvalidated. Tests include exhaustive small count/time
+optima, lifecycle boundaries, multiple resources, source invalidation, unresolved selector claims,
+bounded incumbents, stitch replay and native/portable capacity-dependent schedules.
 
 **Material-following recipe selection** (`material_study::recipes`, plan §25.10 / `ftx-ms2`).
 Optional `Request.sewing_selection` is exclusive with fixed `sewing` and reruns the existing

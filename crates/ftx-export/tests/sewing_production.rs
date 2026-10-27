@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::Refusal;
-use ftx_export::sewing::{SewOptions, SewPlan, program::SewProgram};
+use ftx_core::{Refusal, RefusalCode};
+use ftx_export::sewing::{SewOptions, SewPlan, production::workholding, program::SewProgram};
 use ftx_pattern::Pattern;
 use serde_json::{Value, json};
 
@@ -72,6 +72,91 @@ fn timed(options: &mut Value) {
     });
 }
 
+fn fixtures(pattern: &Value, options: &mut Value, capacity: u32, holds: Value) {
+    let mut original = options.clone();
+    original["production"]
+        .as_object_mut()
+        .unwrap()
+        .remove("workholding");
+    let plan = build(pattern.clone(), original).unwrap();
+    let qualifications: BTreeMap<_, _> = plan
+        .seams
+        .iter()
+        .map(|seam| {
+            let id = seam.qualification_id.as_ref().unwrap();
+            let qualification = plan
+                .options
+                .qualifications
+                .iter()
+                .find(|q| &q.id == id)
+                .unwrap();
+            (
+                seam.pass.operation_id().to_string(),
+                json!([{
+                    "id":id,"sha256":workholding::qualification_sha256(qualification).unwrap()
+                }]),
+            )
+        })
+        .collect();
+    options["production"]["workholding"] = json!({
+        "machine_sha256":workholding::machine_sha256(&plan.options.machine).unwrap(),
+        "qualifications":qualifications,
+        "resources":[{"id":"jig","capacity":capacity}],"holds":holds,
+        "source":{"reference":"test:finite-workholding","accessed_on":"2026-10-27",
+            "note":"Synthetic reusable fixture observations; no physical fixture-fit evidence"},
+        "method":"Declared finite fixture occupancy through each supported operation envelope",
+        "conditions":{"configuration":"synthetic single-machine fixture bench"},
+        "evidence":"estimate","allow_estimates":true
+    });
+}
+
+fn one_hold() -> Value {
+    json!([{"id":"held-garment","resource":"jig","units":1,"acquire":"a","release":"b"}])
+}
+
+// Independent full enumeration of the small two-operation garment example. This uses explicit
+// garment state and acquired/released inventory, not the optimizer's bit masks or lower bounds.
+fn exhaustive_fixture_cost(copies: usize, capacity: usize, timed: bool) -> u64 {
+    fn visit(
+        states: &mut [u8],
+        capacity: usize,
+        last: Option<u8>,
+        cost: u64,
+        timed: bool,
+        best: &mut u64,
+    ) {
+        if states.iter().all(|&state| state == 2) {
+            *best = (*best).min(cost);
+            return;
+        }
+        for copy in 0..states.len() {
+            let phase = states[copy];
+            if phase == 2
+                || (phase == 0 && states.iter().filter(|&&state| state == 1).count() == capacity)
+            {
+                continue;
+            }
+            let change = if timed {
+                match (last, phase) {
+                    (None, 0) => 1000,
+                    (None, 1) => 3000,
+                    (Some(0), 1) => 500,
+                    (Some(1), 0) => 2000,
+                    _ => 0,
+                }
+            } else {
+                u64::from(last.is_some_and(|previous| previous != phase))
+            };
+            states[copy] += 1;
+            visit(states, capacity, Some(phase), cost + change, timed, best);
+            states[copy] -= 1;
+        }
+    }
+    let mut best = u64::MAX;
+    visit(&mut vec![0; copies], capacity, None, 0, timed, &mut best);
+    best
+}
+
 fn complete(plan: &SewPlan) {
     let production = plan.production.as_ref().unwrap();
     let operations: BTreeMap<_, _> = production
@@ -105,6 +190,409 @@ fn complete(plan: &SewPlan) {
         }
         assert_eq!(done.len(), operations.len(), "complete incumbent required");
     }
+}
+
+#[test]
+fn finite_fixtures_change_actual_batch_order_and_match_independent_exhaustive_optima() {
+    for capacity in 1..=3 {
+        for timed_objective in [false, true] {
+            let (pattern, mut options) = fixture();
+            batch(&mut options, 3);
+            if timed_objective {
+                timed(&mut options);
+            }
+            fixtures(&pattern, &mut options, capacity, one_hold());
+            let plan = build(pattern, options).unwrap();
+            complete(&plan);
+            assert_eq!(plan.schema, "ftx-sewing-plan/13");
+            let production = plan.production.as_ref().unwrap();
+            assert_eq!(production.schema, "ftx-sewing-production/2");
+            let report = production.workholding.as_ref().unwrap();
+            assert_eq!(report.holds.len(), 3);
+            assert_eq!(report.baseline.peak_occupancy["jig"], 1);
+            assert_eq!(report.selected.peak_occupancy["jig"], capacity);
+            assert!(!report.fixture_geometry_and_access_validated);
+            assert!(production.ordering.optimality_proven);
+            let actual = if timed_objective {
+                let timing = production.ordering.timing.as_ref().unwrap();
+                assert_eq!(timing.baseline_setup_milliseconds, 6500);
+                assert_eq!(
+                    timing.selected_setup_milliseconds,
+                    [6500, 4000, 1500][capacity as usize - 1]
+                );
+                timing.selected_setup_milliseconds
+            } else {
+                production.ordering.selected_changes.total_changes as u64
+            };
+            assert_eq!(
+                actual,
+                exhaustive_fixture_cost(3, capacity as usize, timed_objective)
+            );
+            for timeline in [&report.baseline, &report.selected] {
+                let mut previous = 0;
+                for step in &timeline.operations {
+                    assert_eq!(step.occupied_before["jig"], previous);
+                    assert!(step.occupied_during["jig"] <= capacity);
+                    previous = step.occupied_after["jig"];
+                }
+                assert_eq!(previous, 0);
+            }
+            assert!(!plan.hardware_execution_authorized && !plan.physical_seam_quality_validated);
+        }
+    }
+}
+
+#[test]
+fn resource_search_limit_preserves_a_complete_admitted_incumbent() {
+    let (pattern, mut options) = fixture();
+    batch(&mut options, 3);
+    fixtures(&pattern, &mut options, 2, one_hold());
+    options["production"]["ordering"]["max_search_nodes"] = json!(1);
+    let plan = build(pattern, options).unwrap();
+    complete(&plan);
+    let production = plan.production.as_ref().unwrap();
+    assert!(production.ordering.budget_exhausted);
+    assert!(!production.ordering.optimality_proven);
+    assert_eq!(
+        production.ordering.selected_order,
+        production.ordering.baseline_order
+    );
+    let resources = production.workholding.as_ref().unwrap();
+    assert_eq!(resources.selected.peak_occupancy["jig"], 1);
+    assert_eq!(resources.selected.operations.len(), 6);
+}
+
+#[test]
+fn multiple_resources_enforce_integer_demands_instead_of_only_counting_open_copies() {
+    let (pattern, mut options) = fixture();
+    batch(&mut options, 3);
+    timed(&mut options);
+    fixtures(
+        &pattern,
+        &mut options,
+        3,
+        json!([
+            {"id":"two-jaws","resource":"jig","units":2,"acquire":"a","release":"b"},
+            {"id":"support","resource":"support","units":1,"acquire":"a","release":"b"}
+        ]),
+    );
+    options["production"]["workholding"]["resources"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"support","capacity":2}));
+    for (capacity, expected_time, expected_peak) in [(3, 6500, 1), (4, 4000, 2)] {
+        options["production"]["workholding"]["resources"][0]["capacity"] = json!(capacity);
+        let plan = build(pattern.clone(), options.clone()).unwrap();
+        let production = plan.production.as_ref().unwrap();
+        assert_eq!(
+            production
+                .ordering
+                .timing
+                .as_ref()
+                .unwrap()
+                .selected_setup_milliseconds,
+            expected_time
+        );
+        let peak = &production
+            .workholding
+            .as_ref()
+            .unwrap()
+            .selected
+            .peak_occupancy;
+        assert_eq!(peak["jig"], 2 * expected_peak);
+        assert_eq!(peak["support"], expected_peak);
+    }
+}
+
+#[test]
+fn single_operation_holds_are_available_before_start_and_released_after_completion() {
+    let (pattern, mut options) = fixture();
+    batch(&mut options, 3);
+    fixtures(
+        &pattern,
+        &mut options,
+        1,
+        json!([
+            {"id":"join-fixture","resource":"jig","units":1,"acquire":"a","release":"a"},
+            {"id":"finish-fixture","resource":"jig","units":1,"acquire":"b","release":"b"}
+        ]),
+    );
+    let plan = build(pattern.clone(), options.clone()).unwrap();
+    let production = plan.production.as_ref().unwrap();
+    assert_eq!(production.ordering.selected_changes.total_changes, 1);
+    let resources = production.workholding.as_ref().unwrap();
+    for step in &resources.selected.operations {
+        assert_eq!(step.occupied_before["jig"], 0);
+        assert_eq!(step.occupied_during["jig"], 1);
+        assert_eq!(step.occupied_after["jig"], 0);
+        assert_eq!(step.acquired, step.released);
+    }
+
+    // An existing hold cannot be borrowed by another hold merely because this operation releases it.
+    options["production"]["workholding"]["holds"][0]["release"] = json!("b");
+    let refusal = build(pattern, options).unwrap_err();
+    assert!(refusal.message.contains("before start"));
+    assert!(refusal.message.contains("baseline is unsupported"));
+}
+
+#[test]
+fn lifecycles_add_real_precedence_and_refuse_cycles_or_unknown_anchors() {
+    let (pattern, mut options) = fixture();
+    options["passes"][1]["after"] = json!([]);
+    batch(&mut options, 3);
+    fixtures(&pattern, &mut options, 2, one_hold());
+    let plan = build(pattern.clone(), options.clone()).unwrap();
+    complete(&plan);
+    for operation in &plan.production.as_ref().unwrap().operations {
+        if operation.operation_id == "b" {
+            assert_eq!(operation.after, [format!("{}/a", operation.copy)]);
+        }
+    }
+    let mut wrong = options.clone();
+    wrong["production"]["workholding"]["holds"][0]["release"] = json!("missing");
+    assert!(
+        build(pattern.clone(), wrong)
+            .unwrap_err()
+            .message
+            .contains("anchor")
+    );
+    options["passes"][1]["after"] = json!(["a"]);
+    options["production"]["workholding"]["holds"][0]["acquire"] = json!("b");
+    options["production"]["workholding"]["holds"][0]["release"] = json!("a");
+    assert!(
+        build(pattern, options)
+            .unwrap_err()
+            .message
+            .contains("dependency cycle")
+    );
+}
+
+#[test]
+fn infeasible_serial_seed_never_becomes_a_zero_cost_incumbent_or_global_infeasibility_claim() {
+    let (pattern, mut options) = fixture();
+    let pass = options["passes"][0].clone();
+    options["passes"] = json!(["a", "b", "c", "d"].map(|id| {
+        let mut pass = pass.clone();
+        pass["id"] = json!(id);
+        pass
+    }));
+    options["qualifications"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    batch(&mut options, 2);
+    fixtures(
+        &pattern,
+        &mut options,
+        1,
+        json!([
+            {"id":"first","resource":"jig","units":1,"acquire":"a","release":"c"},
+            {"id":"second","resource":"jig","units":1,"acquire":"b","release":"d"}
+        ]),
+    );
+    let refusal = build(pattern.clone(), options.clone()).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::NotConverged);
+    assert!(refusal.message.contains("baseline is unsupported"));
+    assert!(refusal.message.contains("no global infeasibility"));
+    let selection: ftx_export::sewing_selection::Request = serde_json::from_value(json!({
+        "schema":"ftx-sewing-selection/1","options":options,
+        "alternatives":[{"operation":"a","recipes":[{"id":"slower",
+            "needle":options["passes"][0]["needle"],"thread":options["passes"][0]["thread"],
+            "max_stitch_mm":2.5,"stitches_per_minute":300.0}]}],
+        "objective":"minimize_feed_seconds","max_plan_evaluations":2
+    }))
+    .unwrap();
+    let unresolved = selection.select(&Pattern::new(pattern.clone())).unwrap();
+    assert_eq!(unresolved.unresolved_trials, 2);
+    assert!(unresolved.search_complete && unresolved.selected_plan.is_none());
+    assert!(!unresolved.no_feasible_listed_recipe && !unresolved.optimality_proven);
+    // A compatible explicit source order really is feasible; the earlier refusal did not prove otherwise.
+    options["passes"][1]["after"] = json!(["c"]);
+    options["passes"][2]["after"] = json!(["a"]);
+    let plan = build(pattern, options).unwrap();
+    complete(&plan);
+    assert_eq!(
+        plan.ordering_report()
+            .unwrap()
+            .selected_changes
+            .total_changes,
+        0
+    );
+    assert!(plan.ordering_report().unwrap().optimality_proven);
+}
+
+#[test]
+fn workholding_requires_exact_admitted_machine_material_process_and_independent_evidence() {
+    let (pattern, mut options) = fixture();
+    batch(&mut options, 3);
+    fixtures(&pattern, &mut options, 2, one_hold());
+    for defect in [
+        "machine",
+        "qualification",
+        "consent",
+        "source",
+        "coverage",
+        "selected",
+        "material",
+    ] {
+        let mut changed = options.clone();
+        let mut material = pattern.clone();
+        match defect {
+            "machine" => changed["machine"]["max_stitches_per_minute"] = json!(1500.0),
+            "qualification" => {
+                changed["qualifications"][0]["method"] =
+                    json!("Another qualification under the same ID")
+            }
+            "consent" => changed["production"]["workholding"]["allow_estimates"] = json!(false),
+            "source" => changed["production"]["workholding"]["source"]["note"] = json!(""),
+            "coverage" => {
+                changed["production"]["workholding"]["qualifications"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("b");
+            }
+            "selected" => {
+                changed["production"]["workholding"]["qualifications"]["b"] =
+                    changed["production"]["workholding"]["qualifications"]["a"].clone()
+            }
+            "material" => {
+                material["fabric"]["material"]["record"]["properties"]["thickness"]["value"] =
+                    json!(0.7);
+                let mut unqualified = changed.clone();
+                unqualified["production"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("workholding");
+                unqualified["qualifications"] = json!([]);
+                unqualified["require_qualification"] = json!(false);
+                let fresh = build(material.clone(), unqualified).unwrap();
+                for qualification in changed["qualifications"].as_array_mut().unwrap() {
+                    qualification["materials"] = json!(
+                        fresh.seams[0]
+                            .sides
+                            .iter()
+                            .map(|side| &side.material_sha256)
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+            _ => unreachable!(),
+        }
+        assert!(build(material, changed).is_err(), "{defect}");
+    }
+
+    // Even a freshly valid resource reference cannot admit a sewing recipe outside its process envelope.
+    options["require_qualification"] = json!(false);
+    options["qualifications"][1]["stitches_per_minute"] = json!([1.0, 2.0]);
+    let typed: SewOptions = serde_json::from_value(options.clone()).unwrap();
+    options["production"]["workholding"]["qualifications"]["b"][0]["sha256"] =
+        json!(workholding::qualification_sha256(&typed.qualifications[1]).unwrap());
+    assert!(
+        build(pattern, options)
+            .unwrap_err()
+            .message
+            .contains("actual admitted sewing qualification")
+    );
+}
+
+#[test]
+fn resource_counts_and_expansion_are_bounded_before_search() {
+    let (pattern, mut options) = fixture();
+    batch(&mut options, 3);
+    fixtures(&pattern, &mut options, 2, one_hold());
+    for (field, value) in [
+        ("capacity", 0),
+        ("capacity", 4097),
+        ("units", 0),
+        ("units", 4097),
+    ] {
+        let mut wrong = options.clone();
+        let row = if field == "capacity" {
+            "resources"
+        } else {
+            "holds"
+        };
+        wrong["production"]["workholding"][row][0][field] = json!(value);
+        assert!(build(pattern.clone(), wrong).is_err());
+    }
+    let mut too_many = options.clone();
+    too_many["production"]["workholding"]["holds"] = json!(
+        (0..65)
+            .map(|index| {
+                let mut hold = one_hold()[0].clone();
+                hold["id"] = json!(format!("hold-{index}"));
+                hold
+            })
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        build(pattern.clone(), too_many).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+
+    options["passes"].as_array_mut().unwrap().truncate(1);
+    options["qualifications"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    batch(&mut options, 63);
+    fixtures(
+        &pattern,
+        &mut options,
+        64,
+        json!((0..64).map(|index| json!({
+        "id":format!("hold-{index}"),"resource":"jig","units":1,"acquire":"a","release":"a"
+    })).collect::<Vec<_>>()),
+    );
+    assert_eq!(
+        build(pattern, options).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
+fn qualified_resource_order_replays_through_the_real_stitch_program_and_omission_is_unchanged() {
+    let (pattern, mut options) = fixture();
+    batch(&mut options, 3);
+    timed(&mut options);
+    let legacy = build(pattern.clone(), options.clone()).unwrap();
+    let legacy_json = serde_json::to_value(&legacy).unwrap();
+    assert!(legacy_json["production"].get("workholding").is_none());
+    assert!(
+        legacy_json["options"]["production"]
+            .get("workholding")
+            .is_none()
+    );
+    fixtures(&pattern, &mut options, 2, one_hold());
+    let plan = build(pattern.clone(), options.clone()).unwrap();
+    let replay = SewPlan::build(&Pattern::new(pattern.clone()), &plan.options).unwrap();
+    assert_eq!(
+        serde_json::to_value(&plan).unwrap(),
+        serde_json::to_value(replay).unwrap()
+    );
+    let program = SewProgram::build(&Pattern::new(pattern), &plan.options).unwrap();
+    assert_eq!(
+        serde_json::to_value(&program.plan).unwrap(),
+        serde_json::to_value(&plan).unwrap()
+    );
+    let actual: Vec<_> = program
+        .stitches
+        .iter()
+        .filter(|step| step.begins_run)
+        .map(|step| {
+            format!(
+                "{}/{}",
+                step.copy.unwrap(),
+                plan.seams[step.operation].pass.operation_id()
+            )
+        })
+        .collect();
+    assert_eq!(actual, plan.ordering_report().unwrap().selected_order);
+    assert_eq!(program.stitches.len(), legacy.total_stitch_intervals());
+    assert_eq!(
+        serde_json::to_value(&plan.options).unwrap()["production"]["workholding"],
+        options["production"]["workholding"]
+    );
 }
 
 #[test]

@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{SewOptions, SewPlan, bad, ordering};
 
+pub mod workholding;
+
 /// Optional production schedule. The expanded graph has at most 63 operations and one machine.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,6 +20,9 @@ pub struct Policy {
     pub production_copies: Option<usize>,
     /// Count changes or source-qualified directed durations across the complete expanded graph.
     pub ordering: ordering::Policy,
+    /// Optional qualified finite fixture lifecycles, enforced before and during ordering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workholding: Option<workholding::Policy>,
 }
 
 /// One physical garment operation, referencing the single retained geometry and qualified recipe.
@@ -45,7 +50,7 @@ pub struct Operation {
 /// Complete bounded schedule over every repeated operation. No geometry or source evidence is guessed.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `ftx-sewing-production/1`.
+    /// `/1` repeated operations; `/2` additionally enforces source-qualified finite workholding.
     pub schema: &'static str,
     /// Actual garment quantity shared with any requested thread inventory.
     pub production_copies: usize,
@@ -60,6 +65,10 @@ pub struct Report {
     pub stitch_intervals: usize,
     /// Complete batch continuous feed duration. Setup, if qualified, is reported separately.
     pub feed_seconds: f64,
+    /// Expanded fixture holds and complete baseline/selected occupancy histories.
+    /// Its full source policy remains in the owning plan's options.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workholding: Option<workholding::Report>,
 }
 
 fn count(value: usize) -> Result<usize, Refusal> {
@@ -158,6 +167,11 @@ pub(super) fn evaluate(plan: &SewPlan, policy: &Policy) -> Result<Report, Refusa
             });
         }
     }
+    let workholding = policy
+        .workholding
+        .as_ref()
+        .map(|policy| workholding::compile(plan, policy, &mut operations))
+        .transpose()?;
     let views: Vec<_> = operations
         .iter()
         .map(|operation| {
@@ -170,19 +184,32 @@ pub(super) fn evaluate(plan: &SewPlan, policy: &Policy) -> Result<Report, Refusa
             }
         })
         .collect();
-    let mut ordering = ordering::optimize_operations(&policy.ordering, &views, feed_seconds)?;
+    let mut ordering = ordering::optimize_operations_with_resources(
+        &policy.ordering,
+        &views,
+        feed_seconds,
+        workholding.as_ref().map(|compiled| &compiled.limits),
+    )?;
     ordering.tie_break = if ordering.timing.is_some() {
         "Retain the incumbent on equal integer setup milliseconds; start with complete garments in ascending copy order, then explore by immediate duration and scoped operation ID."
     } else {
         "Retain the incumbent on equal total changes; start with complete garments in ascending copy order, then explore by immediate total changes and scoped operation ID."
     };
+    let workholding = workholding
+        .map(|compiled| compiled.report(&ordering.selected_order))
+        .transpose()?;
     Ok(Report {
-        schema: "ftx-sewing-production/1",
+        schema: if workholding.is_some() {
+            "ftx-sewing-production/2"
+        } else {
+            "ftx-sewing-production/1"
+        },
         production_copies: copies,
         machine: plan.options.machine.id.clone(),
         operations,
         ordering,
         stitch_intervals,
         feed_seconds,
+        workholding,
     })
 }

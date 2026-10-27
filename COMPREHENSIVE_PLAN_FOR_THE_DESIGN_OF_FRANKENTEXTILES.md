@@ -3494,6 +3494,33 @@ laundered-denim example can emit a complete comparison of untreated, treated, co
 compensated-then-treated panels. This implements the software scope of `ftx-care1.3`; measured sewn
 restraint, process-dependent contact and held-out garment behavior remain under `ftx-care1`.
 
+### 25.87 Production batching respects finite reusable fixtures
+
+An optional source-qualified workholding policy now declares finite resource capacities and
+per-copy acquisition/release operations inside the shared production optimizer. Full machine and
+admitted qualification hashes bind applicability to the exact configuration, material stack,
+process and source evidence. Distinct acquisition/release anchors add actual dependencies. Units
+are acquired before an operation starts and released only after it completes; single-operation
+holds still occupy resources during execution. The search retains complete feasible incumbents
+and applies the existing count or directed-time objective under these extra constraints.
+
+This changes real batch order. In the synthetic three-copy join/reinforce example, one, two and
+three fixtures yield 6.5, 4.0 and 1.5 seconds of declared setup respectively, with the same 240 stitch
+intervals and 24 seconds of feed. These are software examples, not measured factory throughput.
+The stitch program follows the selected constrained order, and native/portable reports retain all
+resource capacities, expanded holds and complete before/during/after occupancy timelines.
+
+The existing serial-copy baseline is checked before optimization or lower-bound shortcuts. If that
+particular seed is unsupported, `NotConverged` keeps recipe selection unresolved; it does not prove
+that no other feasible schedule exists. Invalid added cycles remain definitive request refusals.
+The resource graph, integer demands, qualification references and expanded holds are bounded.
+Omitted policy preserves prior output. See [sewing-production.md](docs/sewing-production.md) and
+the complete `examples/sewing-workholding-options.json`.
+
+This implements finite reusable inventory within `ftx-pb2.2`. Multi-machine assignment/transfers,
+fixture geometry and grip mechanics, seam access, measured handling and real execution qualification
+remain open. Counting available jigs does not establish those physical capabilities.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
