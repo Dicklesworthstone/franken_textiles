@@ -67,6 +67,7 @@ function controls() {
   $("heat").disabled ||= !drape || !has("heatConditions");
   $("vaporSurface").disabled ||= !drape || !has("vaporSurfaceConditions");
   $("coverage").disabled ||= !drape || !has("map") || !has("coverageConditions");
+  $("clearCoverageBridges").disabled = !has("coverageBridges");
   $("cancel").disabled = !pending;
 }
 function clear(keys) {
@@ -739,6 +740,28 @@ function motionVaporComparison(op, parent, key, index, motion, dependency, reque
       text: history.replay_request_json, mime: "application/json" });
   }
 }
+function thermalBridges(parent, label, result) {
+  const bridges = result?.thermal_bridges;
+  if (!bridges) return;
+  const totals = table(parent, `${label}: qualified seam and closure heat`,
+    ["Baseline power (W)", "Seam/closure excess (W)", "Combined power (W)"]);
+  cells(totals, [metric(bridges.baseline_power_w), metric(bridges.bridge_power_w), metric(bridges.total_power_w)]);
+  const paths = table(parent, `${label}: current qualified paths`, ["Path", "Instance", "Current length (m)", "Excess power (W)"]);
+  for (const path of bridges.paths || []) cells(paths, [path.id, path.instance, metric(path.length_m), metric(path.power_w)]);
+  const note = document.createElement("p");
+  note.textContent = "Combined power includes each source-qualified seam or closure excess once. " +
+    "The unbridged stack remains visible as the baseline. These signed steady rates do not supply transient heat or establish measured garment warmth.";
+  parent.append(note);
+  detail(parent, `${label}: path qualifications, projected ownership and replay inputs (display only)`, {
+    surface_model_sha256: bridges.surface_model_sha256, bridges,
+    qualifications: result.request?.thermal_bridges });
+}
+function coverageResult(parent, result) {
+  thermalBridges(parent, "Coverage", result);
+  return { steady: result.steady,
+    ...(Object.hasOwn(result, "thermal_bridges") ? { thermal_bridges: result.thermal_bridges } : {}),
+    comfort_claim: result.comfort_claim, empirical_validation_claim: result.empirical_validation_claim };
+}
 function motionComparison(op, parent, rows, simulations, requested, filePrefix = "") {
   if (!requested && ![...simulations.values()].some(o => available(o)?.motion)) return;
   const note = document.createElement("p");
@@ -764,6 +787,7 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
     for (const endpoint of result.keyframes) {
       cells(endpoints, [metric(endpoint.time_s), metric(endpoint.arm_abduction_deg), state(endpoint.surface),
         metric(available(endpoint.surface)?.steady?.power_w), state(endpoint.coverage), metric(available(endpoint.coverage)?.steady?.power_w)]);
+      thermalBridges(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s`, available(endpoint.coverage));
     }
     if (result.keyframes.some(e => e.vapor_surface && e.vapor_surface.status !== "not_requested")) {
       const vapor = table(parent, `${row.key}: endpoint vapor potentials — independent sheets`,
@@ -835,6 +859,7 @@ function comparison(op, r, parent = sections.get(op).comparison, { skipManufactu
         scenario_sha256: result?.scenario_sha256, body_geometry_sha256: result?.body_geometry_sha256,
         placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
         surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
+      thermalBridges(parent, `${row.key}: initial coverage`, available(result?.coverage));
       materialStrainComparison(parent, row.key, result?.material_strain, outcome, r.scenario?.scenario?.material_strain);
       contactLoadsComparison(parent, row.key, result?.contact_loads, outcome, r.scenario?.scenario?.contact_loads);
     }
@@ -2376,7 +2401,7 @@ function show(op, msg) {
       op === "treatment" ? treatmentResult(s.comparison, r) :
       op === "vapor" ? vaporResult(s.comparison, r) :
       op === "vaporSurface" ? vaporSurfaceResult(s.comparison, r) :
-      op === "heat" || op === "coverage" ? { steady: r.steady, comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim } :
+      op === "heat" || op === "coverage" ? coverageResult(s.comparison, r) :
       op === "pressure" && ["ftx-compressed-thermal-history-report/1", "ftx-compressed-thermal-history-report/2"].includes(r.schema) ? compressionHistoryResult(s.comparison, r) :
       op === "pressure" && r.schema === "ftx-compression-stack-report/1" ? {
         selected_layer: r.chosen_layer_id, pressure_pa: r.pressure_pa,
@@ -2532,7 +2557,10 @@ async function execute(op) {
       if (op === "heat" || op === "vaporSurface" || op === "coverage") {
         if (!drape) throw Error("Re-drape the current material first."); msg.report = drape;
         msg.conditions = await read(op === "heat" ? "heatConditions" : op === "vaporSurface" ? "vaporSurfaceConditions" : "coverageConditions");
-        if (op === "coverage") msg.map = await read("map");
+        if (op === "coverage") {
+          msg.map = await read("map");
+          if (has("coverageBridges")) msg.thermalBridges = await read("coverageBridges");
+        }
       }
       if (op === "cut" || op === "price") msg.options = await read("cutOptions");
       if (op === "cut") {
@@ -2704,5 +2732,7 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
   });
 }
 $("studyOnBody").addEventListener("change", () => invalidate(["study"]));
+$("clearCoverageBridges").onclick = () => { $("coverageBridges").value = ""; invalidate(["coverage"]); };
+$("coverageBridges").addEventListener("change", () => invalidate(["coverage"]));
 window.addEventListener("pagehide", () => { ++epoch; worker?.terminate(); clear(["bind", ...operations]); });
 start();

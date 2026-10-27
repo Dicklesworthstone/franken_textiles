@@ -246,6 +246,10 @@ pressures and boundary films. Results are independent sheet potentials; they do 
 availability, layered body evaporation or cooling feedback into the dry-heat simulation.</p></div>
 <div><label>Body geometry / instance layer map JSON <input id="map" type="file" accept=".json,application/json"></label>
 <label>Coverage conditions JSON <input id="coverageConditions" type="file" accept=".json,application/json"></label>
+<label>Optional qualified seam/closure paths JSON (<code>ftx-steady-thermal-bridges/1</code>) <input id="coverageBridges" type="file" accept=".json,application/json"></label>
+<button id="clearCoverageBridges" type="button" disabled>Clear seam/closure paths</button>
+<p class="note">Supply explicit paths on the retained drape mesh and source-qualified excess conductance for the exact material stack and reservoir films.
+Coverage reports keep the unbridged baseline, seam/closure excess and combined power separately. An incompatible material, geometry or qualification refuses this heat result; no seam benefit is inferred from a name.</p>
 <button id="coverage" data-command="coverage" disabled>Recompute layered body coverage</button></div></div>
 </section>
 <section><h2>4. Compare material alternatives on the original pattern</h2>

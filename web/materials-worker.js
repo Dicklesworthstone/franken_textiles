@@ -376,12 +376,18 @@ self.onmessage = async ({ data: msg }) => {
       case "heat":
         raw = ftx.thermal_steady_surface(msg.report, msg.conditions); result = json(raw);
         files = [file("thermal-surface.json", raw)]; break;
-      case "coverage":
+      case "coverage": {
         // Validate each complete JSON fragment, but preserve its number representation. A JS
         // parse/stringify round trip would invalidate the Rust material/geometry receipt hashes.
         for (const fragment of [msg.report, msg.map, msg.conditions]) json(fragment);
-        raw = ftx.thermal_steady_coverage(`{"schema":"ftx-steady-coverage-request/1","report":${msg.report},"map":${msg.map},"conditions":${msg.conditions}}`);
+        let bridges = "";
+        if (msg.thermalBridges !== undefined) {
+          json(msg.thermalBridges);
+          bridges = `,"thermal_bridges":${msg.thermalBridges}`;
+        }
+        raw = ftx.thermal_steady_coverage(`{"schema":"ftx-steady-coverage-request/1","report":${msg.report},"map":${msg.map},"conditions":${msg.conditions}${bridges}}`);
         result = json(raw); files = [file("thermal-coverage.json", raw)]; break;
+      }
       case "cut": {
         raw = ftx.cut_plan(msg.pattern, msg.options); result = json(raw);
         files = [file("cut-plan.json", raw)];

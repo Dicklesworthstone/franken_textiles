@@ -455,6 +455,26 @@ test('worker retains numerical JSON identities across binding, drape files and n
   await w.send({type:'coverage',report:fold.reportText,map:'{}',conditions:'{}'});
   assert.ok(w.called.find(c=>c[0]==='coverage')[2].includes(fold.reportText));
 });
+test('coverage worker forwards optional qualified paths losslessly and refuses malformed inputs without a result', async () => {
+  const w=await workerModule(), report=' {"coordinate":-0.0,"coefficient":1.0}\n',
+    map=' {"body":1.0}\n', conditions=' {"temperature":20.0}\n',
+    thermalBridges=' {"schema":"ftx-steady-thermal-bridges/1","model":"qualified_excess_centerline_conductance/1","paths":[],"value":1.0,"x":-0.0}\n';
+  const result=await w.send({type:'coverage',report,map,conditions,thermalBridges});
+  assert.equal(result.type,'result',result.message);
+  const request=w.called.find(c=>c[0]==='coverage');
+  assert.equal(request[2],`{"schema":"ftx-steady-coverage-request/1","report":${report},"map":${map},"conditions":${conditions},"thermal_bridges":${thermalBridges}}`);
+  assert.deepEqual(request[1].thermal_bridges,JSON.parse(thermalBridges));
+  await w.send({type:'coverage',report,map,conditions});
+  assert.equal(Object.hasOwn(w.called.filter(c=>c[0]==='coverage')[1][1],'thermal_bridges'),false);
+  const refused=await w.send({type:'coverage',report,map,conditions,thermalBridges:'invalid'});
+  assert.equal(refused.type,'error'); assert.equal(refused.files,undefined);
+  assert.equal(w.called.filter(c=>c[0]==='coverage').length,2);
+  const native=await workerModule({bindings:{default:()=>Promise.resolve(),
+    thermal_steady_coverage:()=>{throw Error('thermal bridge source qualification mismatch');}}});
+  const mismatch=await native.send({type:'coverage',report,map,conditions,thermalBridges});
+  assert.equal(mismatch.type,'error'); assert.match(mismatch.message,/source qualification mismatch/);
+  assert.equal(native.sent.some(m=>m.type==='result'),false);
+});
 
 test('finite stock uses unmodified source text and previews the first allocated physical item', async () => {
   const w = await workerModule(), pattern = '{"coordinate":-0.0}', stockRequest = '{"mass":1.0}';
@@ -2693,6 +2713,64 @@ const scenarioReport = () => ({ schema: 'ftx-material-scenario-study/1', scenari
     metrics: { simulation_gating_clear: false, cloth_mass_kg: 0, independent_surface_power_w: -4.5, body_coverage_power_w: null },
     surface: outcome(), coverage: refused('missing conductivity'), drape: { settled: false, flags: ['unsettled'] },
     body_geometry_sha256: 'body-lock', positions_sha256: 'positions-lock' }) }] });
+function seamHeatReport(total = 7.5) {
+  const baseline=total<0?-6:6, excess=total-baseline;
+  return { schema:'ftx-steady-coverage-result/1', steady:{power_w:total,baseline_power_w:baseline,bridge_power_w:excess},
+    thermal_bridges:{schema:'ftx-steady-thermal-bridge-result/1',surface_model_sha256:'model-lock',
+      baseline_power_w:baseline,bridge_power_w:excess,total_power_w:total,
+      paths:[{id:'<zipper & seam>',instance:'front',length_m:0.25,power_w:excess,contributions:[]}]},
+    request:{thermal_bridges:{schema:'ftx-steady-thermal-bridges/1',paths:[{id:'<zipper & seam>',
+      qualifications:[{sources:{local:{reference:'local:<qualified assembly>'}}}]}]}},
+    comfort_claim:false,empirical_validation_claim:false };
+}
+test('coverage presents baseline and qualified seam excess separately and invalidates source edits', async () => {
+  const p=await pageModule(); await p.load(); await p.bind();
+  for (const id of ['measurements','fit','body']) p.select(id);
+  p.e.body.files[0].arrayBuffer=async()=>new ArrayBuffer(8);
+  await p.e.fold.onclick(); p.emit({settled:true,flags:[]});
+  p.select('map'); p.select('coverageConditions');
+  const bridgeInput=' {"schema":"ftx-steady-thermal-bridges/1","model":"qualified_excess_centerline_conductance/1","paths":[],"value":1.0,"x":-0.0}\n';
+  p.select('coverageBridges',bridgeInput); p.e.coverageBridges.handlers.change();
+  assert.equal(p.e.clearCoverageBridges.disabled,false);
+  await p.e.coverage.onclick();
+  assert.equal(p.current().messages.at(-1).thermalBridges,bridgeInput);
+  const r=seamHeatReport(), raw=` ${JSON.stringify(r)}\n`;
+  p.emit(r,[{name:'coverage-result.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'coverage'), tables=descendants(s).filter(n=>n.tag==='table');
+  assert.deepEqual(plain(tables[0].children[2].children.map(n=>n.textContent)),['6','1.5','7.5']);
+  assert.deepEqual(plain(tables[1].children[2].children.map(n=>n.textContent)),['<zipper & seam>','front','0.25','1.5']);
+  assert.match(visibleText(s),/do not supply transient heat/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  const link=descendants(s).find(n=>n.download==='coverage-result.json');
+  assert.equal(await p.blobs.get(link.href).text(),raw);
+  const provenance=descendants(s).find(n=>n.tag==='details'&&n.children[0]?.textContent.includes('path qualifications'));
+  provenance.open=true; provenance.handlers.toggle();
+  assert.match(visibleText(provenance),/local:<qualified assembly>/);
+  p.e.coverageBridges.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,1);
+  await p.e.coverage.onclick(); p.emit(r);
+  // A real file input clears its FileList when its value is cleared.
+  Object.defineProperty(p.e.coverageBridges,'value',{set(value){assert.equal(value,'');this.files=[];}});
+  p.e.clearCoverageBridges.onclick(); assert.equal(s.hidden,true); assert.equal(p.e.clearCoverageBridges.disabled,true);
+  await p.e.coverage.onclick(); assert.equal(Object.hasOwn(p.current().messages.at(-1),'thermalBridges'),false);
+  p.emit({steady:{power_w:6},comfort_claim:false,empirical_validation_claim:false});
+  assert.equal(descendants(s).some(n=>n.tag==='table'),false);
+});
+test('scenario endpoints use combined seam power and preserve signed bridge accounting', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const r=scenarioReport(), initial=r.simulations.find(row=>row.key==='A').evaluation.result;
+  initial.coverage=outcome(seamHeatReport()); initial.metrics.body_coverage_power_w=7.5;
+  initial.motion=outcome({duration_s:1,trials:1,samples:[],metrics:{},keyframes:[{
+    time_s:1,arm_abduction_deg:35,surface:omitted(),coverage:outcome(seamHeatReport(-7.5))}]});
+  await p.e.scenario.onclick(); p.emit(r);
+  const s=section(p,'Fresh drape and heat alternatives'), tables=descendants(s).filter(n=>n.tag==='table');
+  const endpoint=tables.find(t=>t.children[0].textContent==='A: endpoint steady snapshots — not transient heat');
+  assert.equal(endpoint.children[2].children.at(-1).textContent,'-7.5');
+  const ledger=tables.find(t=>t.children[0].textContent==='A: endpoint 1 s: qualified seam and closure heat');
+  assert.deepEqual(plain(ledger.children[2].children.map(n=>n.textContent)),['-6','-1.5','-7.5']);
+  const initialLedger=tables.find(t=>t.children[0].textContent==='A: initial coverage: qualified seam and closure heat');
+  assert.deepEqual(plain(initialLedger.children[2].children.map(n=>n.textContent)),['6','1.5','7.5']);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true);
+});
 function scenarioMatrixReport() {
   const cold=scenarioReport(), warm=scenarioReport();
   const candidate=(key,value,unit,eligible=true)=>({key,eligible,dominated_by:[],
