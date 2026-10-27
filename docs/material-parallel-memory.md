@@ -140,7 +140,7 @@ print(json.dumps({
     },
     'loading': [
         {'time_s': t, 'extension_fraction': e}
-        for t, e in [(0, 0), (0.05, 0.02), (0.15, 0.02), (0.2, 0), (0.25, 0)]
+        for t, e in [(0, 0), (0.05, 0.08), (0.15, 0.08), (0.2, 0), (0.25, 0)]
     ],
     'controls': {
         'max_step_s': 0.01, 'max_steps': 512,
@@ -159,6 +159,31 @@ qualification. Ordinary pattern bindings and per-piece overrides consume the sam
 editing sewing geometry. Existing separate elastic, plastic and relaxation calibration commands
 retain their stated model scopes; this declaration does not add a joint inverse-identification
 algorithm.
+
+## Resolving small Newton corrections
+
+The shared cloth solver keeps the requested full Newton-correction tolerance. Near a stationary
+state, subtracting total energies can lose the much smaller energy change associated with the last
+correction. The former energy-only line search stalled on this fixture at its original density,
+even though a full correction still improved the mechanical balance. Reducing the step repeatedly
+could leave the rounded energy and gradient effectively unchanged.
+
+If ordinary Armijo fails, an unshortened, collision-admitted full step can now use the
+[Hager–Zhang approximate Wolfe conditions, §4](https://people.clas.ufl.edu/hager/files/cg_descent.pdf).
+The predicted decrease and absolute energy discrepancy must both fit within
+`16 * f64::EPSILON * max(abs(old_energy), abs(new_energy))`. This is an explicit floating-point
+error estimate, not a certified error bound. The trial's directional derivative must satisfy the
+approximate Wolfe interval and its finite free-gradient infinity norm must strictly decrease.
+Source domains and collision checks still apply. A shortened or collision-limited step cannot
+use this alternative, and passing it never declares convergence: the next Newton iteration must
+still meet the original correction tolerance. Timed strips separately require the original
+force and momentum-balance tolerances.
+
+`SolveReport.roundoff_steps` counts these accepted precision steps, including friction lag rounds.
+Reported energies remain their actual evaluated values, so a roundoff-scale increase is visible.
+The synthetic 4% and 8% load/hold/unload histories now complete at the original mass and strict
+tolerances, including a smaller time step and a refined mesh. Their branch histories, losses and
+frozen replay remain ordinary solver outputs, with no relaxed convergence or material-domain gate.
 
 ## Verification and reference
 

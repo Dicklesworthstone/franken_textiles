@@ -157,6 +157,69 @@ fn qualified_parallel_history_replays_actual_coupon_reactions_and_both_irreversi
 }
 
 #[test]
+fn nominal_mass_parallel_history_meets_requested_correction_and_force_at_large_strain() {
+    let mut input = request(false);
+    input.material = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-parallel-membrane.json"
+    ))
+    .unwrap();
+    for (extension, step, cells) in [
+        (0.04, 0.01, [2, 2]),
+        (0.08, 0.01, [2, 2]),
+        (0.08, 0.005, [2, 2]),
+        (0.08, 0.01, [4, 4]),
+    ] {
+        input.controls.max_step_s = step;
+        input.fixture.cells = cells;
+        for point in &mut input.loading {
+            if point.extension_fraction > 0.0 {
+                point.extension_fraction = extension;
+            }
+        }
+        let result = evaluate(&input).unwrap();
+        near(result.reference_mass_kg, 0.2 * 0.006, 1e-17);
+        for state in &result.states[1..] {
+            let solve = state.solve.unwrap();
+            assert!(solve.converged);
+            assert!(
+                solve.last_step / state.time_step_s < input.controls.velocity_tolerance_m_s,
+                "{solve:?}"
+            );
+            assert!(state.free_dynamic_residual_n <= input.controls.force_tolerance_n);
+            assert!(
+                state.momentum_balance_residual_n
+                    <= state.positions_m.len() as f64 * input.controls.force_tolerance_n
+            );
+        }
+        let last = result.states.last().unwrap();
+        assert!(last.maxwell_dissipation_j > 0.0);
+        assert!(last.plastic_dissipation_j > 0.0);
+        println!(
+            "nominal parallel extension={extension} dt={step} cells={cells:?}: states={}, Newton={}, precision steps={}, plastic={} J, Maxwell={} J",
+            result.states.len(),
+            result.newton_iterations,
+            result.states[1..]
+                .iter()
+                .map(|state| state.solve.unwrap().roundoff_steps)
+                .sum::<usize>(),
+            last.plastic_dissipation_j,
+            last.maxwell_dissipation_j,
+        );
+        assert!(
+            result.states[1..]
+                .iter()
+                .any(|state| state.solve.unwrap().roundoff_steps > 0),
+            "the regression must exercise the precision step"
+        );
+        let replay: Request = serde_json::from_str(&result.replay_request_json).unwrap();
+        assert_eq!(
+            serde_json::to_value(&result).unwrap(),
+            serde_json::to_value(evaluate(&replay).unwrap()).unwrap()
+        );
+    }
+}
+
+#[test]
 fn maxwell_load_hold_unload_matches_bar_reactions_storage_and_irreversible_work() {
     let input = request(false);
     let result = evaluate(&input).unwrap();

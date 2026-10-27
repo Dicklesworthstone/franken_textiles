@@ -51,6 +51,16 @@ legacy window-mean definition; they do not override the numerical gate. Neither 
 static stress equilibrium, material-history relaxation or real-person fit. Historical timings and
 verdicts below predate this stricter acceptance boundary and require fresh production-model checks.
 
+At unresolved floating-point energy differences, a failed Armijo trial may use approximate Wolfe
+slopes only for a full, domain- and CCD-admitted step. Both the predicted decrement and absolute
+energy discrepancy must be at most `16 * EPSILON * max(abs(old_energy), abs(new_energy))`, an explicit
+numerical error estimate. Finite free-gradient infinity norm must strictly decrease. This admits
+another Newton iterate, never early convergence or a looser correction tolerance; timed strips
+retain their separate force gate. `SolveReport.roundoff_steps` counts these steps through lag rounds,
+and actual energy values remain visible. Scalar rejection tests, nominal-density 4%/8% cyclic strip
+regressions and existing contact/history rollback tests cover the correction. See
+`docs/material-parallel-memory.md` for the primary reference and limitations.
+
 **Accepted contact observations** (`ftx-onn.17`). Every accepted phase endpoint retains separate
 body/self primitive-pair counts, the minimum active thickness-offset gap with its pair and effective
 offset (m), and frozen friction-lag counts. Disabled domains and absent active gaps remain unavailable.

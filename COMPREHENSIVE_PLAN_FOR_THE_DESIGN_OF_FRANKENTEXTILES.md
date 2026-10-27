@@ -391,7 +391,7 @@ The design follows research file 07 (a survey of frankensim for this purpose).
 
 | Blender failure (recorded in the reference) | Mechanism in `ftx-drape` |
 |---|---|
-| Start-state sensitivity; a strained start launches the jacket | Each step minimises an incremental potential with a backtracking line search: the potential never rises; a high-strain start relaxes |
+| Start-state sensitivity; a strained start launches the jacket | Each step minimises an incremental potential with backtracking; resolvable increases refuse, while roundoff-limited full trials require derivative progress (§25.93) |
 | Collision jitter 0.2–0.5 mm/frame; "settled" was a drift statistic | Newton converges each step to a tolerance; settled is a residual and velocity criterion |
 | Collider inset (else every girth gains 4.4 cm) | Barrier on the gap minus the real cloth half-thickness; clearance reported exactly |
 | Cloth squeezed into the arm–torso wedge unstable | One smooth barrier potential; an equilibrium exists whenever a feasible gap exists |
@@ -3649,6 +3649,26 @@ This advances the constitutive capability under `ftx-tm4`. It supplies no guesse
 joint inverse calibration or measured linen/leather/performance-knit acceptance. Matched complete
 loading/recovery observations and independent garment validation remain under `ftx-tm2` and
 `ftx-tm8`.
+
+### 25.93 Resolve cloth equilibrium when energy differences reach floating-point resolution
+
+The shared implicit cloth solver now supports a tightly bounded full-step approximate-Wolfe
+acceptance when absolute-energy Armijo loses the tiny predicted decrease to rounding. The trial
+must still pass existing contact and characterized-material domains, satisfy endpoint directional
+derivative bounds and strictly reduce the free-gradient residual. Only roundoff-scale predicted
+decreases and energy discrepancies qualify. This is a line-search decision; the original requested
+Newton-correction convergence test remains separate and unchanged. Reports retain the number of
+such accepted steps, including friction-lag rounds.
+
+This removes a reproduced blocker in ordinary nominal-density textile load/hold/unload histories.
+The synthetic joint permanent-set/Maxwell specimen now completes 4% and 8% cycles, an 8% half-time-step
+case and an 8% refined-mesh case under the original correction and independent force tolerances.
+Both history ledgers and exact frozen replay remain intact. Contact, failed-step rollback and
+material-domain checks retain their original authority. The algorithm uses the approximate-Wolfe
+conditions of Hager and Zhang (2005, section 4), with additional conservative eligibility and
+gradient-progress checks; this is no unconditional convergence or physical textile-validation claim.
+See [material-parallel-memory.md](docs/material-parallel-memory.md). The bounded numerical repair
+is `ftx-tm4.3`; measured characterization and garment acceptance remain open.
 
 ## Appendix A. Sources
 

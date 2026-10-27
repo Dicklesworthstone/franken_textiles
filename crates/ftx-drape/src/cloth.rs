@@ -4,9 +4,10 @@
 //! `E(x) = ½h⁻²(x − x̃)ᵀM(x − x̃) + Ψ_membrane(x) + Ψ_bend(x)` with `x̃ = xₙ + h vₙ + h² g` and lumped mass,
 //! by projected Newton: element Hessians projected to positive semidefinite, a sparse LDLᵀ solve whose
 //! symbolic analysis (ordered on the vertex graph) is reused while contact couplings stay unchanged,
-//! and an Armijo backtracking line
-//! search, so the potential never rises and a strained start relaxes instead of exploding. A static
-//! solve minimises `Ψ − Σ mᵢ g·xᵢ` the same way. Units: metres, kilograms, seconds.
+//! and an Armijo backtracking line search. Near floating-point energy resolution, a full step may
+//! instead pass approximate Wolfe slopes and strict gradient progress within a bounded numerical
+//! energy discrepancy. The requested Newton-correction tolerance is unchanged. A static solve
+//! minimises `Ψ − Σ mᵢ g·xᵢ` the same way. Units: metres, kilograms, seconds.
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use ftx_pattern::material_response::{CompiledMembrane, StrainDomain};
@@ -456,8 +457,43 @@ pub struct SolveReport {
     pub ccd_limited: usize,
     /// Line-search halvings, summed.
     pub halvings: usize,
+    /// Full steps admitted by approximate Wolfe slopes when energy differences are unresolved.
+    pub roundoff_steps: usize,
     /// Preconditioned conjugate-gradient iterations, failed attempts included.
     pub pcg_iterations: usize,
+}
+
+// Hager–Zhang, SIAM J. Optim. 16 (2005), §4, (4.1) and T2. This is an approximate
+// line-search test, not convergence. Limit its use to a full step with an unresolved predicted
+// decrease, finite strictly improving free gradient, and a roundoff-scale energy discrepancy.
+// https://people.clas.ufl.edu/hager/files/cg_descent.pdf
+fn roundoff_step(
+    energy: f64,
+    trial_energy: f64,
+    alpha: f64,
+    slope: f64,
+    trial_slope: f64,
+    residual: f64,
+    trial_residual: f64,
+) -> bool {
+    let uncertainty = 16.0 * f64::EPSILON * energy.abs().max(trial_energy.abs());
+    [
+        energy,
+        trial_energy,
+        slope,
+        trial_slope,
+        residual,
+        trial_residual,
+    ]
+    .iter()
+    .all(|v| v.is_finite())
+        && alpha == 1.0
+        && slope < 0.0
+        && -slope <= uncertainty
+        && (trial_energy - energy).abs() <= uncertainty
+        && trial_slope >= 0.9 * slope
+        && trial_slope <= (2.0 * 1e-4 - 1.0) * slope
+        && trial_residual < residual
 }
 
 /// What [`Solver::settle`] did.
@@ -1120,9 +1156,31 @@ impl Solver {
                     }
                     Err(e) => return Err(e),
                 };
-                if e <= energy + 1e-4 * alpha * slope {
+                let armijo = e <= energy + 1e-4 * alpha * slope;
+                let precision_step = !armijo
+                    && alpha == 1.0
+                    && -slope <= 16.0 * f64::EPSILON * energy.abs().max(e.abs())
+                    && (e - energy).abs() <= 16.0 * f64::EPSILON * energy.abs().max(e.abs())
+                    && {
+                        let (trial_gradient, _) = self.assemble(&trial, inertia, false);
+                        let trial_slope = trial_gradient.iter().zip(&p).map(|(a, b)| a * b).sum();
+                        let trial_residual =
+                            trial_gradient.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+                        trial_gradient.iter().all(|v| v.is_finite())
+                            && roundoff_step(
+                                energy,
+                                e,
+                                alpha,
+                                slope,
+                                trial_slope,
+                                rep.residual,
+                                trial_residual,
+                            )
+                    };
+                if armijo || precision_step {
                     self.x = trial;
                     energy = e;
+                    rep.roundoff_steps += usize::from(precision_step);
                     accepted = true;
                     break;
                 }
@@ -1298,6 +1356,7 @@ impl Solver {
             rep.factorizations += again.factorizations;
             rep.ccd_limited += again.ccd_limited;
             rep.halvings += again.halvings;
+            rep.roundoff_steps += again.roundoff_steps;
             rep.pcg_iterations += again.pcg_iterations;
             rep.converged = again.converged;
             rep.energy_end = again.energy_end;
@@ -1636,6 +1695,37 @@ pub fn grid(w: f64, h: f64, nx: usize, ny: usize, origin: Vec2) -> (Vec<Vec2>, V
         }
     }
     (rest, tris)
+}
+
+#[cfg(test)]
+mod line_search_tests {
+    use super::roundoff_step;
+
+    #[test]
+    fn unresolved_energy_requires_full_step_curvature_and_actual_gradient_progress() {
+        // A quadratic near its minimum: f=1+(x-1)^2, x=1+1e-8, p=-1e-8.
+        // Its decrement is below one energy ULP while its derivative still resolves the root.
+        // One ULP of upward evaluation noise must not prevent that full Newton correction.
+        let energy = 1.0;
+        let perturbed = energy + f64::EPSILON;
+        let (slope, residual) = (-2e-16, 2e-8);
+        assert!(roundoff_step(
+            energy, perturbed, 1.0, slope, 0.0, residual, 0.0
+        ));
+        // Equal energies alone cannot authorize no progress, an overshoot, a CCD-limited step,
+        // a resolvable energy rise/decrement, or non-finite derivatives.
+        for (e, alpha, s0, s1, r1) in [
+            (energy, 1.0, slope, slope, residual),
+            (energy, 1.0, slope, -2.0 * slope, 0.0),
+            (energy, 0.5, slope, 0.0, 0.0),
+            (energy + 1e-10, 1.0, slope, 0.0, 0.0),
+            (energy, 1.0, -1e-6, 0.0, 0.0),
+            (energy, 1.0, slope, 0.0, residual),
+            (energy, 1.0, slope, f64::NAN, 0.0),
+        ] {
+            assert!(!roundoff_step(energy, e, alpha, s0, s1, residual, r1));
+        }
+    }
 }
 
 #[cfg(test)]
