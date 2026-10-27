@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{SewOptions, SewPlan, bad, ordering};
 
+pub mod handling;
 pub mod workholding;
 
 /// Optional production schedule. The expanded graph has at most 63 operations and one machine.
@@ -23,6 +24,9 @@ pub struct Policy {
     /// Optional qualified finite fixture lifecycles, enforced before and during ordering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workholding: Option<workholding::Policy>,
+    /// Optional source-qualified serial loading, copy/operation transitions and final unloading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handling: Option<handling::Policy>,
 }
 
 /// One physical garment operation, referencing the single retained geometry and qualified recipe.
@@ -69,6 +73,9 @@ pub struct Report {
     /// Its full source policy remains in the owning plan's options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workholding: Option<workholding::Report>,
+    /// Complete source-bound handling replay for both baseline and selected schedules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handling: Option<handling::Report>,
 }
 
 fn count(value: usize) -> Result<usize, Refusal> {
@@ -87,6 +94,13 @@ pub(super) fn resolve_options(options: &SewOptions) -> Result<Cow<'_, SewOptions
     if options.ordering.is_some() {
         return Err(bad(
             "choose one-garment ordering or production scheduling, not both",
+        ));
+    }
+    if (production.ordering.objective == ordering::Objective::MinimizeProductionTime)
+        != production.handling.is_some()
+    {
+        return Err(bad(
+            "qualified handling requires minimize_production_time ordering, and that objective requires handling",
         ));
     }
     let thread_copies = options
@@ -172,6 +186,11 @@ pub(super) fn evaluate(plan: &SewPlan, policy: &Policy) -> Result<Report, Refusa
         .as_ref()
         .map(|policy| workholding::compile(plan, policy, &mut operations))
         .transpose()?;
+    let handling = policy
+        .handling
+        .as_ref()
+        .map(|policy| handling::compile(plan, policy, &operations))
+        .transpose()?;
     let views: Vec<_> = operations
         .iter()
         .map(|operation| {
@@ -189,8 +208,11 @@ pub(super) fn evaluate(plan: &SewPlan, policy: &Policy) -> Result<Report, Refusa
         &views,
         feed_seconds,
         workholding.as_ref().map(|compiled| &compiled.limits),
+        handling.as_ref().map(|compiled| &compiled.costs),
     )?;
-    ordering.tie_break = if ordering.timing.is_some() {
+    ordering.tie_break = if handling.is_some() {
+        "Retain the incumbent on equal integer setup-plus-handling milliseconds; start with complete garments in ascending copy order, then explore by immediate duration and scoped operation ID."
+    } else if ordering.timing.is_some() {
         "Retain the incumbent on equal integer setup milliseconds; start with complete garments in ascending copy order, then explore by immediate duration and scoped operation ID."
     } else {
         "Retain the incumbent on equal total changes; start with complete garments in ascending copy order, then explore by immediate total changes and scoped operation ID."
@@ -198,8 +220,13 @@ pub(super) fn evaluate(plan: &SewPlan, policy: &Policy) -> Result<Report, Refusa
     let workholding = workholding
         .map(|compiled| compiled.report(&ordering.selected_order))
         .transpose()?;
+    let handling = handling
+        .map(|compiled| compiled.report(&ordering.baseline_order, &ordering.selected_order))
+        .transpose()?;
     Ok(Report {
-        schema: if workholding.is_some() {
+        schema: if handling.is_some() {
+            "ftx-sewing-production/3"
+        } else if workholding.is_some() {
             "ftx-sewing-production/2"
         } else {
             "ftx-sewing-production/1"
@@ -211,5 +238,6 @@ pub(super) fn evaluate(plan: &SewPlan, policy: &Policy) -> Result<Report, Refusa
         stitch_intervals,
         feed_seconds,
         workholding,
+        handling,
     })
 }

@@ -163,3 +163,18 @@ pub struct TimingReport {
     /// Generated feed duration plus selected setup duration. Not total manufacturing time.
     pub feed_and_setup_seconds: f64,
 }
+
+/// Source-qualified serial handling added to actual feed and setup, not a factory throughput claim.
+#[derive(Clone, Debug, Serialize)]
+pub struct HandlingTimingReport {
+    /// Initial, between-operation and final handling in the complete baseline.
+    pub baseline_handling_milliseconds: u64,
+    /// The same handling scope in the selected complete schedule.
+    pub selected_handling_milliseconds: u64,
+    /// Baseline feed plus setup plus handling, without overlap or undeclared phases.
+    pub baseline_modeled_production_seconds: f64,
+    /// Selected feed plus setup plus handling, without overlap or undeclared phases.
+    pub selected_modeled_production_seconds: f64,
+    /// Valid bound on the combined integer objective; feed is a fixed independent addition.
+    pub lower_bound_setup_and_handling_milliseconds: u64,
+}

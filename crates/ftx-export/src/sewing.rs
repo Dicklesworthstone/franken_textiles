@@ -416,6 +416,16 @@ impl SewPlan {
             .map_or(self.feed_seconds, |production| production.feed_seconds)
     }
 
+    /// Complete serial feed/setup/handling model, available only with admitted handling evidence.
+    /// This is conditional modeled time, not an elapsed factory throughput or hardware claim.
+    #[must_use]
+    pub fn modeled_production_seconds(&self) -> Option<f64> {
+        self.ordering_report()?
+            .handling_timing
+            .as_ref()
+            .map(|timing| timing.selected_modeled_production_seconds)
+    }
+
     /// Actual traversal scope, matching [`Self::total_feed_seconds`].
     #[must_use]
     pub fn total_stitch_intervals(&self) -> usize {
@@ -593,7 +603,13 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if options.passes.iter().any(|pass| pass.access.is_some()) {
+            schema: if options
+                .production
+                .as_ref()
+                .is_some_and(|production| production.handling.is_some())
+            {
+                "ftx-sewing-plan/15"
+            } else if options.passes.iter().any(|pass| pass.access.is_some()) {
                 "ftx-sewing-plan/14"
             } else if options
                 .production

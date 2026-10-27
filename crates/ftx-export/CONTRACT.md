@@ -120,6 +120,20 @@ access and hardware authorization remain unvalidated. Tests include exhaustive s
 optima, lifecycle boundaries, multiple resources, source invalidation, unresolved selector claims,
 bounded incumbents, stitch replay and native/portable capacity-dependent schedules.
 
+**Serial garment handling** (`production.handling`). Independent full machine/qualification locks
+admit explicit first loading, directed same-copy/different-copy operation transitions and final
+unloading. `minimize_production_time` adds these serial nonoverlapping durations to ordinary setup
+and feed, with complete finite workholding/access admission preserved. Integer lower bounds include
+the final unload; a work limit retains a complete source-bound incumbent. Plan `/15`, production
+`/3` and handling `/1` preserve every baseline/selected scoped transition. Setup/feed/handling totals
+stay separate, and joint proof never becomes setup-only optimality. Missing handling evidence is
+`NotConverged`, keeping recipe selection unresolved. Selection `/4` minimizes the actual complete
+modeled total across explicit qualified recipes. Limits remain 63 expanded operations/200000 search
+nodes, with at most 8192 timing rows/256 qualification locks and one-day per-phase durations. Tests
+in `sewing_production` compare independent exhaustive optima under finite fixtures, final unloading,
+source changes, complete bounded replay and a handling-dependent recipe winner. No physical timing,
+parallel resource execution or hardware qualification is inferred.
+
 **Planar sewing access** (`passes[].access`). Optional `planar_disk_sweep/1` requires an explicit
 flat assembly and an admitted source process qualification. Full machine and qualification hashes
 bind the independent tool/fixture acquisition to the current configuration and material stack.
