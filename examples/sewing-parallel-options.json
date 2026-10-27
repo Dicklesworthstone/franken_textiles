@@ -1,0 +1,204 @@
+{
+  "machine": {
+    "id": "example-configuration-not-a-qualified-machine",
+    "stitch_mm": [0.5, 5.0], "feed_b_over_a": [0.5, 2.0],
+    "max_stack_mm": 3.0, "max_stitches_per_minute": 1000.0
+  },
+  "passes": [
+    {
+      "id": "join", "seam": "side", "max_stitch_mm": 2.5,
+      "plies": [1, 1], "minimum_allowance_mm": 6.0,
+      "stitches_per_minute": 600.0, "needle": "example-needle",
+      "thread": "example-thread-a", "after": []
+    },
+    {
+      "id": "reinforce", "seam": "side", "max_stitch_mm": 2.5,
+      "plies": [1, 1], "minimum_allowance_mm": 6.0,
+      "stitches_per_minute": 600.0, "needle": "example-needle",
+      "thread": "example-thread-b", "after": ["join"]
+    }
+  ],
+  "production": {
+    "production_copies": 3,
+    "ordering": {
+      "objective": "minimize_production_time", "max_search_nodes": 2000,
+      "initial_setup": {"needle": "example-needle", "thread": "initial-thread"},
+      "setup_times": {
+        "machine": "example-configuration-not-a-qualified-machine",
+        "source": {"reference": "test:parallel-serial-reference", "accessed_on": "2026-10-27", "note": "Invented software timing, not measured factory throughput"},
+        "method": "Synthetic nonoverlapping complete needle/thread changes; exclude feed and handling",
+        "evidence": "estimate", "allow_estimates": true,
+        "transitions": [
+          {"from": {"needle": "example-needle", "thread": "initial-thread"}, "to": {"needle": "example-needle", "thread": "example-thread-a"}, "milliseconds": 1000},
+          {"from": {"needle": "example-needle", "thread": "initial-thread"}, "to": {"needle": "example-needle", "thread": "example-thread-b"}, "milliseconds": 3000},
+          {"from": {"needle": "example-needle", "thread": "example-thread-a"}, "to": {"needle": "example-needle", "thread": "example-thread-b"}, "milliseconds": 500},
+          {"from": {"needle": "example-needle", "thread": "example-thread-b"}, "to": {"needle": "example-needle", "thread": "example-thread-a"}, "milliseconds": 2000}
+        ]
+      }
+    },
+    "handling": {
+      "model": "serial_operation_transitions/1",
+      "machine_sha256": "560788cff0cfc3e842e0cda1be7db88a7f7b5ad094e560e1821a4ebad60cd1c4",
+      "qualifications": {
+        "join": [{"id": "synthetic-workholding-join", "sha256": "8cdd5a0b2094be2c965379eff69fac69ea32fe95f2a343c8d0c3900f275656e2"}],
+        "reinforce": [{"id": "synthetic-workholding-reinforce", "sha256": "3b21aae3daea3359d86d3d939156b313505579cbb471f5b5b4170ff572dfaacc"}]
+      },
+      "initial_milliseconds": {"join": 100, "reinforce": 100},
+      "final_milliseconds": {"join": 200, "reinforce": 200},
+      "transitions": [
+        {"from": "join", "to": "reinforce", "relation": "same_copy", "milliseconds": 100},
+        {"from": "reinforce", "to": "join", "relation": "same_copy", "milliseconds": 100},
+        {"from": "join", "to": "join", "relation": "different_copy", "milliseconds": 5000},
+        {"from": "join", "to": "reinforce", "relation": "different_copy", "milliseconds": 5000},
+        {"from": "reinforce", "to": "join", "relation": "different_copy", "milliseconds": 5000},
+        {"from": "reinforce", "to": "reinforce", "relation": "different_copy", "milliseconds": 5000}
+      ],
+      "source": {"reference": "test:parallel-reference-handling", "accessed_on": "2026-10-27", "note": "Synthetic serial reference; each selected cell supplies independent timing and labor evidence"},
+      "method": "Separate first load, inter-operation handling and final unload, excluding feed and setup",
+      "evidence": "estimate", "allow_estimates": true
+    },
+    "parallel": {
+      "model": "independent_whole_garment_cells/1", "objective": "minimize_makespan",
+      "time_basis": "ceil_cell_feed_milliseconds/1",
+      "independence": "independent_machines_fixtures_and_handling_labor/1",
+      "max_search_nodes": 10000,
+      "machine_sha256": "560788cff0cfc3e842e0cda1be7db88a7f7b5ad094e560e1821a4ebad60cd1c4",
+      "qualifications": {
+        "join": [{"id": "synthetic-workholding-join", "sha256": "8cdd5a0b2094be2c965379eff69fac69ea32fe95f2a343c8d0c3900f275656e2"}],
+        "reinforce": [{"id": "synthetic-workholding-reinforce", "sha256": "3b21aae3daea3359d86d3d939156b313505579cbb471f5b5b4170ff572dfaacc"}]
+      },
+      "source": {
+        "reference": "test:two-independent-sewing-cells", "accessed_on": "2026-10-27",
+        "note": "Invented software qualification of two machines, four distinct jigs and two distinct workers; no physical process or throughput evidence"
+      },
+      "method": "Synthetic confirmation of exact common configuration and qualification coverage on separate instances with independent fixture units and handling labor",
+      "conditions": {"cell-a": "machine-a, jigs-a1/a2, worker-a", "cell-b": "machine-b, jigs-b1/b2, worker-b", "sharing": "No machine, fixture unit or handling worker is shared"},
+      "evidence": "estimate", "allow_estimates": true,
+      "cells": [
+        {
+          "id": "cell-a", "available_at_milliseconds": 0,
+          "ordering": {
+            "objective": "minimize_production_time", "max_search_nodes": 2000,
+            "initial_setup": {"needle": "example-needle", "thread": "initial-thread"},
+            "setup_times": {
+              "machine": "example-configuration-not-a-qualified-machine",
+              "source": {"reference": "test:cell-a-setup", "accessed_on": "2026-10-27", "note": "Synthetic cell-a times, not physical observations"},
+              "method": "Complete needle/thread changes by worker-a, excluding feed and handling",
+              "evidence": "estimate", "allow_estimates": true,
+              "transitions": [
+                {"from": {"needle": "example-needle", "thread": "initial-thread"}, "to": {"needle": "example-needle", "thread": "example-thread-a"}, "milliseconds": 1000},
+                {"from": {"needle": "example-needle", "thread": "initial-thread"}, "to": {"needle": "example-needle", "thread": "example-thread-b"}, "milliseconds": 3000},
+                {"from": {"needle": "example-needle", "thread": "example-thread-a"}, "to": {"needle": "example-needle", "thread": "example-thread-b"}, "milliseconds": 500},
+                {"from": {"needle": "example-needle", "thread": "example-thread-b"}, "to": {"needle": "example-needle", "thread": "example-thread-a"}, "milliseconds": 2000}
+              ]
+            }
+          },
+          "handling": {
+            "model": "serial_operation_transitions/1",
+            "machine_sha256": "560788cff0cfc3e842e0cda1be7db88a7f7b5ad094e560e1821a4ebad60cd1c4",
+            "qualifications": {
+              "join": [{"id": "synthetic-workholding-join", "sha256": "8cdd5a0b2094be2c965379eff69fac69ea32fe95f2a343c8d0c3900f275656e2"}],
+              "reinforce": [{"id": "synthetic-workholding-reinforce", "sha256": "3b21aae3daea3359d86d3d939156b313505579cbb471f5b5b4170ff572dfaacc"}]
+            },
+            "initial_milliseconds": {"join": 100, "reinforce": 100}, "final_milliseconds": {"join": 200, "reinforce": 200},
+            "transitions": [
+              {"from": "join", "to": "reinforce", "relation": "same_copy", "milliseconds": 100},
+              {"from": "reinforce", "to": "join", "relation": "same_copy", "milliseconds": 100},
+              {"from": "join", "to": "join", "relation": "different_copy", "milliseconds": 5000},
+              {"from": "join", "to": "reinforce", "relation": "different_copy", "milliseconds": 5000},
+              {"from": "reinforce", "to": "join", "relation": "different_copy", "milliseconds": 5000},
+              {"from": "reinforce", "to": "reinforce", "relation": "different_copy", "milliseconds": 5000}
+            ],
+            "source": {"reference": "test:cell-a-handling", "accessed_on": "2026-10-27", "note": "Synthetic durations supplied by worker-a independently of cell-b"},
+            "method": "Separate first load, between-operation handling and final unload; exclude setup/feed",
+            "evidence": "estimate", "allow_estimates": true
+          },
+          "workholding": {
+            "machine_sha256": "560788cff0cfc3e842e0cda1be7db88a7f7b5ad094e560e1821a4ebad60cd1c4",
+            "qualifications": {
+              "join": [{"id": "synthetic-workholding-join", "sha256": "8cdd5a0b2094be2c965379eff69fac69ea32fe95f2a343c8d0c3900f275656e2"}],
+              "reinforce": [{"id": "synthetic-workholding-reinforce", "sha256": "3b21aae3daea3359d86d3d939156b313505579cbb471f5b5b4170ff572dfaacc"}]
+            },
+            "resources": [{"id": "jigs-a", "capacity": 2}],
+            "holds": [{"id": "held-garment", "resource": "jigs-a", "units": 1, "acquire": "join", "release": "reinforce"}],
+            "source": {"reference": "test:cell-a-fixtures", "accessed_on": "2026-10-27", "note": "Invented jigs-a1 and a2, distinct from every fixture in cell-b"},
+            "method": "Synthetic inventory and continuous hold from join through reinforcement",
+            "evidence": "estimate", "allow_estimates": true
+          }
+        },
+        {
+          "id": "cell-b", "available_at_milliseconds": 0,
+          "ordering": {
+            "objective": "minimize_production_time", "max_search_nodes": 2000,
+            "initial_setup": {"needle": "example-needle", "thread": "initial-thread"},
+            "setup_times": {
+              "machine": "example-configuration-not-a-qualified-machine",
+              "source": {"reference": "test:cell-b-setup", "accessed_on": "2026-10-27", "note": "Synthetic cell-b times, not physical observations"},
+              "method": "Complete needle/thread changes by worker-b, excluding feed and handling",
+              "evidence": "estimate", "allow_estimates": true,
+              "transitions": [
+                {"from": {"needle": "example-needle", "thread": "initial-thread"}, "to": {"needle": "example-needle", "thread": "example-thread-a"}, "milliseconds": 1000},
+                {"from": {"needle": "example-needle", "thread": "initial-thread"}, "to": {"needle": "example-needle", "thread": "example-thread-b"}, "milliseconds": 3000},
+                {"from": {"needle": "example-needle", "thread": "example-thread-a"}, "to": {"needle": "example-needle", "thread": "example-thread-b"}, "milliseconds": 500},
+                {"from": {"needle": "example-needle", "thread": "example-thread-b"}, "to": {"needle": "example-needle", "thread": "example-thread-a"}, "milliseconds": 2000}
+              ]
+            }
+          },
+          "handling": {
+            "model": "serial_operation_transitions/1",
+            "machine_sha256": "560788cff0cfc3e842e0cda1be7db88a7f7b5ad094e560e1821a4ebad60cd1c4",
+            "qualifications": {
+              "join": [{"id": "synthetic-workholding-join", "sha256": "8cdd5a0b2094be2c965379eff69fac69ea32fe95f2a343c8d0c3900f275656e2"}],
+              "reinforce": [{"id": "synthetic-workholding-reinforce", "sha256": "3b21aae3daea3359d86d3d939156b313505579cbb471f5b5b4170ff572dfaacc"}]
+            },
+            "initial_milliseconds": {"join": 100, "reinforce": 100}, "final_milliseconds": {"join": 200, "reinforce": 200},
+            "transitions": [
+              {"from": "join", "to": "reinforce", "relation": "same_copy", "milliseconds": 100},
+              {"from": "reinforce", "to": "join", "relation": "same_copy", "milliseconds": 100},
+              {"from": "join", "to": "join", "relation": "different_copy", "milliseconds": 5000},
+              {"from": "join", "to": "reinforce", "relation": "different_copy", "milliseconds": 5000},
+              {"from": "reinforce", "to": "join", "relation": "different_copy", "milliseconds": 5000},
+              {"from": "reinforce", "to": "reinforce", "relation": "different_copy", "milliseconds": 5000}
+            ],
+            "source": {"reference": "test:cell-b-handling", "accessed_on": "2026-10-27", "note": "Synthetic durations supplied by worker-b independently of cell-a"},
+            "method": "Separate first load, between-operation handling and final unload; exclude setup/feed",
+            "evidence": "estimate", "allow_estimates": true
+          },
+          "workholding": {
+            "machine_sha256": "560788cff0cfc3e842e0cda1be7db88a7f7b5ad094e560e1821a4ebad60cd1c4",
+            "qualifications": {
+              "join": [{"id": "synthetic-workholding-join", "sha256": "8cdd5a0b2094be2c965379eff69fac69ea32fe95f2a343c8d0c3900f275656e2"}],
+              "reinforce": [{"id": "synthetic-workholding-reinforce", "sha256": "3b21aae3daea3359d86d3d939156b313505579cbb471f5b5b4170ff572dfaacc"}]
+            },
+            "resources": [{"id": "jigs-b", "capacity": 2}],
+            "holds": [{"id": "held-garment", "resource": "jigs-b", "units": 1, "acquire": "join", "release": "reinforce"}],
+            "source": {"reference": "test:cell-b-fixtures", "accessed_on": "2026-10-27", "note": "Invented jigs-b1 and b2, distinct from every fixture in cell-a"},
+            "method": "Synthetic inventory and continuous hold from join through reinforcement",
+            "evidence": "estimate", "allow_estimates": true
+          }
+        }
+      ]
+    }
+  },
+  "qualifications": [
+    {
+      "id": "synthetic-workholding-join",
+      "materials": ["529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b", "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"],
+      "machine": "example-configuration-not-a-qualified-machine", "needle": "example-needle", "thread": "example-thread-a",
+      "stitch_mm": [0.01, 5.0], "feed_b_over_a": [0.5, 2.0], "stack_mm": [0.01, 3.0], "stitches_per_minute": [1.0, 1000.0], "allow_reverse": false,
+      "source": {"reference": "test:finite-workholding-process", "accessed_on": "2026-10-27", "note": "Synthetic software example, not measured seam or fixture qualification"},
+      "method": "Invented process envelope for the exact synthetic material stack and two-pass example",
+      "conditions": {"configuration": "synthetic sewing production example"}, "evidence": "estimate", "allow_estimates": true
+    },
+    {
+      "id": "synthetic-workholding-reinforce",
+      "materials": ["529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b", "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"],
+      "machine": "example-configuration-not-a-qualified-machine", "needle": "example-needle", "thread": "example-thread-b",
+      "stitch_mm": [0.01, 5.0], "feed_b_over_a": [0.5, 2.0], "stack_mm": [0.01, 3.0], "stitches_per_minute": [1.0, 1000.0], "allow_reverse": false,
+      "source": {"reference": "test:finite-workholding-process", "accessed_on": "2026-10-27", "note": "Synthetic software example, not measured seam or fixture qualification"},
+      "method": "Invented process envelope for the exact synthetic material stack and two-pass example",
+      "conditions": {"configuration": "synthetic sewing production example"}, "evidence": "estimate", "allow_estimates": true
+    }
+  ],
+  "require_qualification": true, "seam_allowance_mm": null, "seam_tolerance_mm": 0.5
+}

@@ -19,6 +19,16 @@ or property fill is introduced. Existing sewing/study APIs accept the shared opt
 policy and retain copy-scoped traversal, actual batch totals and qualified ordering proof. Tests:
 `material_treatment`, `sewing_production`, and the material worker/page regressions.
 
+The same adapters accept `production.parallel` with independently qualified whole-garment cells.
+Plan `/16` and stitch program `/5` retain actual cell/global-copy assignment, per-cell serial histories,
+raw feed, explicit millisecond padding and elapsed makespan with its lower bound. The recipe selector
+accepts `/5` for `minimize_parallel_makespan`; studies use the distinct nominal
+`sewing_parallel_makespan_seconds` metric. Aggregate configured work includes every nested schedule
+and allocation. Browser results display actual selected cells rather than the outer serial reference,
+preserve exact source downloads and withdraw stale views. Complete native/portable and compiled-worker
+replay cases exercise the same shared authorities; no browser scheduler, machine transfer or hardware
+authorization is introduced.
+
 The existing study boundary also accepts canonical treatment design operations, including
 grid/adaptive post-operations, without a separate browser law. Exact intermediate stage strings
 remain in the ordinary report. The page exposes before/after/request downloads for selected,

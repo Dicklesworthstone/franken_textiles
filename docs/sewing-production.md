@@ -280,6 +280,121 @@ loses the feed-plus-setup comparison but wins with handling at 38.0 modeled seco
 alternative process/source qualifications remain mandatory. Source timing and software feasibility
 do not establish empirical seam quality or authorize machine execution.
 
+## Concurrent independent machine cells
+
+Optional `production.parallel` assigns **whole garments** to source-qualified physical cells. Every
+cell is an explicitly qualified instance of the same complete admitted machine configuration. It
+has its own initial setup, setup-time table, handling observations, availability time and optional
+fixture inventory. A garment stays in its selected cell for all operations; this model contains no
+inter-cell transfers. The source must explicitly establish independent machines, fixture units and
+handling labor. One shared operator cannot be counted as simultaneously loading two cells.
+
+Run the complete source-locked synthetic example, with two independent jig inventories and two
+independently declared handling workers:
+
+```sh
+cargo run -p ftx-cli --bin ftx-materials -- sew-plan \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  examples/sewing-parallel-options.json
+
+cargo run -p ftx-cli --bin ftx-materials -- sew-stitches \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  examples/sewing-parallel-options.json
+```
+
+The policy requires these exact declarations:
+
+```json
+{
+  "model": "independent_whole_garment_cells/1",
+  "objective": "minimize_makespan",
+  "time_basis": "ceil_cell_feed_milliseconds/1",
+  "independence": "independent_machines_fixtures_and_handling_labor/1",
+  "max_search_nodes": 10000,
+  "machine_sha256": "FULL_TYPED_CONFIGURATION_HASH",
+  "qualifications": {"join": [{"id": "qualified-join", "sha256": "FULL_QUALIFICATION_HASH"}]},
+  "cells": [{
+    "id": "physical-cell-a",
+    "available_at_milliseconds": 0,
+    "ordering": "COMPLETE_EXISTING_PRODUCTION_TIME_ORDERING_POLICY",
+    "handling": "COMPLETE_EXISTING_SOURCE_QUALIFIED_HANDLING_POLICY",
+    "workholding": "OPTIONAL_INDEPENDENT_FIXTURE_POLICY"
+  }],
+  "source": "COMPLETE_SOURCE_OBJECT",
+  "method": "Observed qualification of these exact configurations and independent resources",
+  "conditions": {"resources": "Identify the distinct machine, fixture units and handling labor"},
+  "evidence": "estimate",
+  "allow_estimates": true
+}
+```
+
+The descriptive placeholders above stand for the ordinary complete typed objects, not literal
+accepted strings. Every original operation needs its actual admitted qualification content lock.
+Each cell's `ordering.objective` is `minimize_production_time`; its `handling` and optional
+`workholding` use the existing schemas above. These inputs are independently admitted on every
+cell/copy-count subproblem, including cells that are idle in the final allocation. Missing evidence
+is an unresolved result, never a zero duration or proof that the cell is infeasible.
+
+The planner solves each cell's serial schedule for every possible positive assigned copy count,
+using the existing scheduler and all its seam, access, setup, handling and fixture authorities.
+An exact dynamic program then selects copy counts summing to the full batch, minimizing the maximum
+used-cell finish. A second dynamic program uses valid inner-schedule lower bounds. It can prove the
+selected makespan only if the feasible assignment attains that global bound. An exhausted inner
+search still supplies a complete feasible schedule and its lower bound; it does not manufacture a
+global optimum. The complete baseline assigns all garments to the first lexicographic cell.
+
+The explicit time convention rounds **total generated feed upward once per used cell** to an
+integer millisecond, then adds that cell's exact integer setup, handling and availability durations.
+Raw continuous feed and the less-than-one-millisecond padding remain in the report. The proved
+optimum is conditional on this declared millisecond planning convention, not a sub-millisecond
+physical timing claim. An idle cell incurs no setup, loading, final unloading or availability delay.
+
+For two independent copies of the synthetic cell in `sewing-handling-options.json`, three garments
+split into two plus one. The single-cell baseline finishes at 41.1 modeled seconds and the selected
+two-cell job at **25.5 modeled seconds**. Aggregate feed remains 24 seconds, selected setup work is
+5.5 seconds and handling work is 5.9 seconds. Their sum, 35.4 seconds of work across two cells, is
+distinct from the 25.5-second elapsed span. These are synthetic arithmetic checks, not measured
+factory throughput or a claim that an actual operator or fixture can perform concurrent work.
+
+There are at most eight cells and 63 total copy/operation pairs. `parallel.max_search_nodes` is one
+global cap covering every nested serial search and both complete allocation dynamic programs.
+Allocation work is reserved first and the remaining cap is divided across all cell/count trials,
+also respecting each cell's own ordering cap. The outer serial-reference cap plus the parallel cap
+must total at most 200000. `SewOptions::scheduling_work_bound()` reserves that complete configured
+amount for recipe and material cross products; increasing inherited production quantity cannot
+silently evade the reservation. Too-small budgets refuse before inner work rather than omit counts.
+Every inner trial must establish a complete supported baseline; an unsupported baseline refuses
+the requested parallel result without proving all allocations infeasible.
+
+Parallel output uses plan `/16`, production `/4` and nested `ftx-sewing-parallel/1`. The outer
+production `ordering`, `handling` and `workholding` remain **single-machine reference reports**.
+`SewPlan::ordering_report()` and `modeled_production_seconds()` therefore return no serial selected
+result for a parallel job. Use `parallel_makespan_seconds()` and `parallel_optimality_proven()` for
+the active parallel objective, and `parallel.selected` for aggregate actual work.
+
+Each baseline/selected cell retains its complete ordinary serial schedule. IDs in those nested
+operation, dependency, fixture and handling records are cell-local; `cell.copies[local_copy]` maps
+every record to its global physical garment. This map is shared by every nested history, not only
+the operation table. Stitch program `/5` emits a physical `cell` and global `copy` on every interval,
+grouped by cell and that cell's selected order. The file is a collection of independent streams,
+not one chronological needle stream across machines. Geometry, feed, source identities and actual
+traversal counts retain their ordinary meanings. Omitted parallel policy preserves earlier output.
+
+The existing recipe selector accepts `ftx-sewing-selection/5` with
+`objective: "minimize_parallel_makespan"`. It evaluates every complete qualified recipe with this
+same cell allocator and compares elapsed completion. If an inner allocation is unproved, its
+complete recipe remains usable but unresolved for a recipe-optimum claim. Old serial time objectives
+refuse parallel options rather than score the retained serial reference. Feed-only and complete
+thread-order objectives retain their batch meanings.
+
+Material and design studies expose `sewing_parallel_makespan_seconds` as a nominal objective or
+inclusive constraint. The same metric is available to model-backed single-case and named-case
+scenario comparisons. The complete cell resource/source policy qualifies comparisons, and absent
+evidence cannot produce a zero score. Browser direct sewing and study views show original versus
+selected completion, aggregate work, physical copy assignments, each cell's local order, fixture
+occupancy and handling. The full source-bearing allocations remain downloadable, and changed
+inputs withdraw obsolete results.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **63 copy/operation pairs** and 1–200000 examined search nodes.
@@ -289,9 +404,10 @@ bound with `budget_exhausted: true` and `optimality_proven: false`; it never ret
 or proves unvisited schedules infeasible. Full search proves only the declared count/time objective
 under the declared predecessor graph and source table.
 
-This slice covers a single declared machine/configuration, needle/thread transitions, optional
-source-qualified finite workholding and explicit serial operation/copy handling. It does not infer
-additional machines, undeclared inventory, grip adequacy, three-dimensional machine approach,
+Serial mode covers a single declared machine/configuration; qualified parallel mode assigns whole
+garments to explicitly independent instances of that same configuration. Both retain needle/thread
+transitions, optional source-qualified finite workholding and explicit serial operation/copy handling
+inside each used cell. Neither infers additional machines, undeclared inventory, grip adequacy, three-dimensional machine approach,
 acceleration or measured seam quality. Planar seam access requires its own independently qualified
 policy. These other physical constraints remain open under `ftx-pb2`/`ftx-sp2`; hardware
 authorization remains false.

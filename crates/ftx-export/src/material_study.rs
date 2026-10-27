@@ -266,6 +266,11 @@ pub struct Metrics {
     /// Complete declared serial feed, setup and handling time; excludes undeclared machine work.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sewing_modeled_production_seconds: Option<f64>,
+    /// Completion of the selected whole-garment parallel-cell allocation, in seconds from the
+    /// declared common origin. Includes cell availability and explicitly rounded cell feed time.
+    /// This is elapsed modeled makespan, not the sum of machine or handling work.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sewing_parallel_makespan_seconds: Option<f64>,
     /// Complete source-qualified thread demand across every channel and production copy.
     /// Requested cutting quantity is inherited unless an explicit matching thread count is supplied.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -795,10 +800,14 @@ impl Request {
             recipes::check_budget(selection, variants.len())?;
         }
         if let Some(options) = self.sewing_options() {
+            let scheduling_work = match options.scheduling_work_bound() {
+                Ok(work) => work,
+                Err(refusal) if refusal.code == RefusalCode::BudgetExceeded => return Err(refusal),
+                // Invalid cell/source policies remain independent sewing refusals, before search.
+                Err(_) => 0,
+            };
             if self.sewing_selection.is_none()
-                && options.ordering_policy().is_some_and(|policy| {
-                    policy.max_search_nodes.saturating_mul(variants.len()) > 200_000
-                })
+                && scheduling_work.saturating_mul(variants.len()) > 200_000
             {
                 return Err(budget(
                     "material study exceeds 200000 aggregate sewing ordering nodes",
@@ -1175,6 +1184,7 @@ impl Request {
         if let Some(plan) = row.sewing.value() {
             row.metrics.stitch_intervals = Some(plan.total_stitch_intervals());
             row.metrics.feed_seconds = Some(plan.total_feed_seconds());
+            row.metrics.sewing_parallel_makespan_seconds = plan.parallel_makespan_seconds();
             if let Some(consumables) = plan
                 .consumables
                 .as_ref()

@@ -1185,6 +1185,66 @@ test('qualified handling displays joint timing, physical copies and source evide
   assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
+test('parallel cells display elapsed completion, local-to-global copies and exact sources without serial proof leakage', async () => {
+  const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
+  const local=copies=>({production_copies:copies,feed_seconds:copies*8,
+    ordering:{selected_order:Array.from({length:copies},(_,copy)=>[`${copy}/join`,`${copy}/reinforce`]).flat(),
+      optimality_proven:true},
+    operations:Array.from({length:copies},(_,copy)=>[
+      {id:`${copy}/join`,copy,operation_id:'join',seam_index:0,after:[]},
+      {id:`${copy}/reinforce`,copy,operation_id:'reinforce',seam_index:1,after:[`${copy}/join`]}]).flat()});
+  const selected={makespan_milliseconds:25500,feed_seconds:24,scheduled_feed_milliseconds:24000,
+    setup_milliseconds:5500,handling_milliseconds:5900,cells:[
+      {cell:'cell-a',copies:[0],available_at_milliseconds:0,finish_milliseconds:9900,
+        scheduled_feed_milliseconds:8000,feed_padding_seconds:0,schedule:local(1)},
+      {cell:'cell-b',copies:[1,2],available_at_milliseconds:0,finish_milliseconds:25500,
+        scheduled_feed_milliseconds:16000,feed_padding_seconds:0,schedule:local(2)}]};
+  const parallel={schema:'ftx-sewing-parallel/1',time_basis:'ceil_cell_feed_milliseconds/1',
+    baseline:{makespan_milliseconds:41100,feed_seconds:24,scheduled_feed_milliseconds:24000,
+      setup_milliseconds:6500,handling_milliseconds:10600},selected,
+    lower_bound_makespan_milliseconds:25500,search_nodes:73,optimality_proven:true,budget_exhausted:false};
+  const plan={schema:'ftx-sewing-plan/16',hardware_execution_authorized:false,
+    options:{production:{parallel:{source:{note:'<qualified independent labor>'},cells:[{id:'cell-a'},{id:'cell-b'}]}}},
+    seams:[{pass:{id:'join',seam:'side',needle:'N',thread:'A',after:[]}},
+      {pass:{id:'reinforce',seam:'side',needle:'N',thread:'B',after:['join']}}],
+    production:{production_copies:3,feed_seconds:24,ordering:{optimality_proven:true},parallel}};
+  for (const op of ['sew','study','scenario']) {
+    const row=studyRow('cells'); row.sewing=outcome(plan); row.metrics.sewing_parallel_makespan_seconds=25.5;
+    const study=studyReport([row]);
+    const report=op==='sew'?{schema:'ftx-sewing-program/5',stitches:[],plan}:
+      op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=JSON.stringify(report);
+    await p.e[op].onclick(); p.emit(report,[{name:'parallel-report.json',text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    assert.deepEqual(plain(table('parallel completion and aggregate work').children[3].children.map(n=>n.textContent)),
+      ['Selected cells','25.5','24','24','5.5','5.9']);
+    assert.deepEqual(plain(table('cell-local sewing order').children.at(-1).children.map(n=>n.textContent)),
+      ['cell-b','4','2','reinforce','N','B','1/join']);
+    assert.match(visibleText(s),/Minimum parallel completion time proved/);
+    assert.match(visibleText(s),/Elapsed completion is distinct from summed machine work/);
+    assert.doesNotMatch(visibleText(s),/Minimum declared setup|Selected cross-garment sewing order/);
+    const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('cell independence, timing sources and complete allocations'));
+    source.open=true; source.handlers.toggle(); assert.match(visibleText(source),/<qualified independent labor>/);
+    const download=descendants(s).find(n=>n.download==='parallel-report.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    if(op==='sew') {
+      const summary=JSON.parse(s.children[1].textContent);
+      assert.equal(summary.parallel_makespan_seconds,25.5); assert.equal(summary.parallel_optimality_proven,true);
+      assert.equal(Object.hasOwn(summary,'modeled_production_seconds'),false);
+      assert.equal(Object.hasOwn(summary,'ordering_optimality_proven'),false);
+      await p.e.sew.onclick(); parallel.optimality_proven=false; parallel.budget_exhausted=true;
+      p.emit({stitches:[],plan}); assert.match(visibleText(s),/minimum parallel completion time is not proved/);
+      assert.match(visibleText(s),/inner schedule reached its work limit/);
+      parallel.optimality_proven=true; parallel.budget_exhausted=false;
+    }
+  }
+  p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
 test('partial sewing spans display both source sides without an ordering policy or new geometry', async () => {
   const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions');
   await p.e.sew.onclick();
@@ -3882,6 +3942,62 @@ test('compiled WASM executes handling-aware batch timing through the actual sewi
       JSON.stringify(row.sewing.result.options))).plan);
   });
 
+test('compiled WASM parallel cells preserve native schedules, recipe choices and actual stitch assignments through workers',
+  {skip:process.env.FTX_REAL_WASM!=='1'}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const pattern=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-sewing-pattern.json'),'utf8');
+    const options=fs.readFileSync(path.join(__dirname,'../examples/sewing-parallel-options.json'),'utf8');
+    const w=await workerModule({bindings:ftx});
+    const result=await w.send({type:'sew',request:211,pattern,options});
+    assert.equal(result.type,'result',result.message);
+    assert.deepEqual(result.result,JSON.parse(ftx.sew_stitches(pattern,options)));
+    const plan=result.result.plan, parallel=plan.production.parallel;
+    assert.equal(plan.schema,'ftx-sewing-plan/16'); assert.equal(result.result.schema,'ftx-sewing-program/5');
+    assert.equal(parallel.baseline.makespan_milliseconds,41100);
+    assert.equal(parallel.selected.makespan_milliseconds,25500); assert.equal(parallel.optimality_proven,true);
+    assert.equal(result.result.stitches.length,240);
+    const copies=new Set();
+    for(const cell of parallel.selected.cells) {
+      for(const copy of cell.copies) {assert.equal(copies.has(copy),false);copies.add(copy);}
+      const stitches=result.result.stitches.filter(step=>step.cell===cell.cell);
+      assert.equal(stitches.length,cell.copies.length*80);
+      assert.ok(stitches.every(step=>cell.copies.includes(step.copy)));
+    }
+    assert.deepEqual([...copies].sort(),[0,1,2]);
+    assert.deepEqual(JSON.parse(result.files.find(file=>file.name==='sewing-program.json').text),result.result);
+    const selection={schema:'ftx-sewing-selection/5',options:JSON.parse(options),
+      objective:'minimize_parallel_makespan',max_plan_evaluations:2,
+      alternatives:[{operation:'join',recipes:[{id:'faster-qualified',needle:'example-needle',
+        thread:'example-thread-a',max_stitch_mm:2.5,stitches_per_minute:1000}]}]};
+    const chosen=JSON.parse(ftx.sew_select(pattern,JSON.stringify(selection)));
+    assert.deepEqual(chosen.report.selected_choices,{join:'faster-qualified'});
+    assert.equal(chosen.report.selected_objective_seconds,22.3); assert.equal(chosen.report.optimality_proven,true);
+    assert.deepEqual(JSON.parse(ftx.sew_stitches(pattern,chosen.selected_options_json)).plan,chosen.report.selected_plan);
+    const studyRequest=JSON.stringify({schema:'ftx-material-study/1',
+      variants:[{key:'parallel',changes:{schema:'ftx-material-bindings/1',default:JSON.parse(pattern).fabric.material}}],
+      sewing_selection:selection,comparison:{basis:'nominal',required_consumers:['sewing'],
+        objectives:[{metric:'sewing_parallel_makespan_seconds',direction:'minimize'}]}});
+    const study=await w.send({type:'study',request:212,pattern,studyRequest});
+    assert.equal(study.type,'result',study.message);
+    assert.deepEqual(study.result,JSON.parse(ftx.material_study(pattern,studyRequest)));
+    assert.equal(study.result.alternatives[0].metrics.sewing_parallel_makespan_seconds,22.3);
+    assert.equal(Object.hasOwn(study.result.alternatives[0].metrics,'sewing_modeled_production_seconds'),false);
+    assert.deepEqual(study.result.comparison.frontier,['parallel']);
+    assert.equal(study.files.find(file=>file.name==='study-request.json').text,studyRequest);
+    if(process.env.FTX_PARALLEL_PRODUCTION_REPLAY) {
+      const expected=name=>JSON.parse(fs.readFileSync(path.join(process.env.FTX_PARALLEL_PRODUCTION_REPLAY,name),'utf8'));
+      assert.deepEqual(result.result,expected('program.json'));
+      assert.deepEqual(chosen,expected('selection-report.json'));
+      assert.deepEqual(study.result,expected('study-report.json'));
+    }
+    const denied=JSON.parse(options); denied.production.parallel.independence='one-shared-worker';
+    const refused=await w.send({type:'sew',request:213,pattern,options:JSON.stringify(denied)});
+    assert.equal(refused.type,'error');
+    assert.equal(w.sent.some(message=>message.type==='result'&&message.request===213),false);
+  });
+
 test('compiled WASM purchases exact catalog yarn by mass and exposes complete consumed-mass objectives',
   {skip:process.env.FTX_REAL_WASM!=='1'}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
@@ -6047,7 +6163,7 @@ test('compiled WASM joint material memory preserves both histories and exact fro
     const material=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-parallel-membrane.json'),'utf8'));
     const input={schema:'ftx-strip-history/1',material,
       fixture:{gauge_length_m:0.1,width_m:0.06,warp_axis:[0,1],cells:[2,2]},
-      loading:[[0,0],[0.05,0.02],[0.15,0.02],[0.2,0],[0.25,0]]
+      loading:[[0,0],[0.05,0.08],[0.15,0.08],[0.2,0],[0.25,0]]
         .map(([time_s,extension_fraction])=>({time_s,extension_fraction})),
       controls:{max_step_s:0.01,max_steps:32,max_newton:100,
         velocity_tolerance_m_s:1e-9,force_tolerance_n:1e-6}};
@@ -6059,10 +6175,19 @@ test('compiled WASM joint material memory preserves both histories and exact fro
     const last=result.result.states.at(-1);
     assert.ok(last.maxwell_dissipation_j>0); assert.ok(last.plastic_dissipation_j>0);
     assert.ok(last.relaxation&&last.plasticity);
+    assert.ok(result.result.states.some(state=>state.solve?.roundoff_steps>0));
+    for (const state of result.result.states.slice(1)) {
+      assert.equal(state.solve.converged,true);
+      assert.ok(state.solve.last_step/state.time_step_s<1e-9);
+      assert.ok(state.free_dynamic_residual_n<=1e-6);
+    }
     assert.equal(result.files[1].text,raw);
     const replay=result.files.find(file=>file.name==='strip-history-replay.json').text;
     assert.equal(replay,result.result.replay_request_json);
     assert.deepEqual(JSON.parse(ftx.material_strip_history(replay)),result.result);
+    if(process.env.FTX_JOINT_HISTORY_REPLAY) {
+      assert.deepEqual(result.result,JSON.parse(fs.readFileSync(process.env.FTX_JOINT_HISTORY_REPLAY,'utf8')));
+    }
     delete input.material.record.membrane_relaxation.parallel_plasticity;
     const refused=await w.send({type:'stripHistory',stripRequest:JSON.stringify(input),request:201});
     assert.equal(refused.type,'error');

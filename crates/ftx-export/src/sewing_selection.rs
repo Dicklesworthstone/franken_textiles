@@ -68,6 +68,9 @@ pub enum Objective {
     MinimizeFeedAndSetupSeconds,
     /// Minimize serial feed, setup and source-qualified copy/operation handling, including endpoints.
     MinimizeModeledProductionSeconds,
+    /// Minimize elapsed whole-garment parallel-cell completion under the explicitly qualified
+    /// availability, independence and conservative millisecond planning policy.
+    MinimizeParallelMakespan,
     /// Minimize complete source-locked thread orders from the shared consumables price result.
     /// Unknown consumption or incomplete eligible offer coverage cannot supply a score.
     MinimizeThreadObservedOrderCost,
@@ -77,7 +80,7 @@ pub enum Objective {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// `/1` feed; `/2` feed plus setup; `/3` thread cost; `/4` modeled production time.
+    /// `/1` feed; `/2` feed plus setup; `/3` thread cost; `/4` serial time; `/5` parallel makespan.
     pub schema: String,
     /// Complete template job. `require_qualification` must be true; it is never silently enabled.
     pub options: SewOptions,
@@ -207,11 +210,12 @@ impl Request {
             Objective::MinimizeFeedSeconds => "ftx-sewing-selection/1",
             Objective::MinimizeFeedAndSetupSeconds => "ftx-sewing-selection/2",
             Objective::MinimizeModeledProductionSeconds => "ftx-sewing-selection/4",
+            Objective::MinimizeParallelMakespan => "ftx-sewing-selection/5",
             Objective::MinimizeThreadObservedOrderCost => "ftx-sewing-selection/3",
         };
         if self.schema != schema || !self.options.require_qualification {
             return Err(invalid(
-                "sewing selection needs schema /1 for feed, /2 for feed plus setup, /3 for thread cost or /4 for modeled production time, and explicit require_qualification=true",
+                "sewing selection needs schema /1 for feed, /2 for feed plus setup, /3 for thread cost, /4 for serial production time or /5 for parallel makespan, and explicit require_qualification=true",
             ));
         }
         if !(1..=MAX_TRIALS).contains(&self.max_plan_evaluations)
@@ -231,11 +235,11 @@ impl Request {
         }
         // Ordering is separate from recipe selection. Bound its aggregate configured work without
         // reducing the caller's per-job budget or confusing ordering exhaustion with recipe proof.
-        if self.options.ordering_policy().is_some_and(|policy| {
-            self.max_plan_evaluations
-                .checked_mul(policy.max_search_nodes)
-                .is_none_or(|n| n > MAX_ORDERING_NODES)
-        }) {
+        if self
+            .max_plan_evaluations
+            .checked_mul(self.options.scheduling_work_bound()?)
+            .is_none_or(|n| n > MAX_ORDERING_NODES)
+        {
             return Err(Refusal::new(
                 RefusalCode::BudgetExceeded,
                 "combined recipe/ordering search exceeds 200000 configured ordering nodes",
@@ -291,6 +295,21 @@ impl Request {
         groups.sort_by(|a, b| a.operation.cmp(b.operation));
         let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds;
         let handled = self.objective == Objective::MinimizeModeledProductionSeconds;
+        let parallel = self
+            .options
+            .production
+            .as_ref()
+            .and_then(|production| production.parallel.as_ref());
+        if (timed || handled) && parallel.is_some() {
+            return Err(invalid(
+                "serial time objectives cannot score a parallel-cell plan; use minimize_parallel_makespan",
+            ));
+        }
+        if self.objective == Objective::MinimizeParallelMakespan && parallel.is_none() {
+            return Err(invalid(
+                "parallel makespan selection requires a qualified production.parallel policy",
+            ));
+        }
         if timed
             && self.options.ordering_policy().is_none_or(|policy| {
                 policy.objective != ordering::Objective::MinimizeSetupTime
@@ -314,35 +333,40 @@ impl Request {
                 "modeled production selection requires qualified handling, minimize_production_time ordering, explicit initial setup and setup times",
             ));
         }
-        if let Some(policy) = self.options.ordering_policy()
-            && let Some(times) = &policy.setup_times
-        {
-            let initial = policy.initial_setup.as_ref().ok_or_else(|| {
-                invalid("timed recipe ordering requires an explicit initial setup")
-            })?;
-            if !matches!(
-                policy.objective,
-                ordering::Objective::MinimizeSetupTime
-                    | ordering::Objective::MinimizeProductionTime
-            ) {
-                return Err(invalid("setup times require the timed ordering objective"));
-            }
-            let choices: BTreeSet<_> = self
-                .options
-                .passes
-                .iter()
-                .map(|p| ordering::Setup {
-                    needle: p.needle.clone(),
-                    thread: p.thread.clone(),
-                })
-                .chain(groups.iter().flat_map(|g| {
-                    g.recipes.iter().map(|r| ordering::Setup {
-                        needle: r.needle.clone(),
-                        thread: r.thread.clone(),
+        let policies = self.options.ordering_policy().into_iter().chain(
+            parallel
+                .into_iter()
+                .flat_map(|policy| policy.cells.iter().map(|cell| &cell.ordering)),
+        );
+        for policy in policies {
+            if let Some(times) = &policy.setup_times {
+                let initial = policy.initial_setup.as_ref().ok_or_else(|| {
+                    invalid("timed recipe ordering requires an explicit initial setup")
+                })?;
+                if !matches!(
+                    policy.objective,
+                    ordering::Objective::MinimizeSetupTime
+                        | ordering::Objective::MinimizeProductionTime
+                ) {
+                    return Err(invalid("setup times require the timed ordering objective"));
+                }
+                let choices: BTreeSet<_> = self
+                    .options
+                    .passes
+                    .iter()
+                    .map(|p| ordering::Setup {
+                        needle: p.needle.clone(),
+                        thread: p.thread.clone(),
                     })
-                }))
-                .collect();
-            times.check_choices(&self.options.machine.id, &choices, initial)?;
+                    .chain(groups.iter().flat_map(|g| {
+                        g.recipes.iter().map(|r| ordering::Setup {
+                            needle: r.needle.clone(),
+                            thread: r.thread.clone(),
+                        })
+                    }))
+                    .collect();
+                times.check_choices(&self.options.machine.id, &choices, initial)?;
+            }
         }
         Ok(groups)
     }
@@ -367,7 +391,8 @@ impl Request {
         let mut selected_plan: Option<SewPlan> = None;
         let mut selected_choices = None;
         let handled = self.objective == Objective::MinimizeModeledProductionSeconds;
-        let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds || handled;
+        let parallel = self.objective == Objective::MinimizeParallelMakespan;
+        let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds || handled || parallel;
         let cost = self.objective == Objective::MinimizeThreadObservedOrderCost;
         let objective_currency = if cost {
             Some(
@@ -419,6 +444,13 @@ impl Request {
                                 None
                             }
                         }
+                    } else if parallel {
+                        let seconds = plan.parallel_makespan_seconds().ok_or_else(|| {
+                            invalid("admitted parallel recipe lost its complete cell allocation")
+                        })?;
+                        trial.objective_seconds = Some(seconds);
+                        trial.ordering_optimality_proven = plan.parallel_optimality_proven();
+                        Some(seconds)
                     } else if timed {
                         let schedule = plan
                             .ordering_report()
@@ -480,6 +512,8 @@ impl Request {
         Ok(Report {
             schema: if cost {
                 "ftx-sewing-selection-report/3"
+            } else if parallel {
+                "ftx-sewing-selection-report/5"
             } else if handled {
                 "ftx-sewing-selection-report/4"
             } else if timed {
@@ -503,6 +537,8 @@ impl Request {
             no_feasible_listed_recipe: search_complete && !has_plan && unresolved_trials == 0,
             tie_break: if cost {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal complete thread order cost"
+            } else if parallel {
+                "template first, then operation ID / recipe ID lexicographic; retain first equal declared parallel-cell makespan"
             } else if handled {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal modeled feed-plus-setup-plus-handling time"
             } else if timed {

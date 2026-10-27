@@ -462,6 +462,15 @@ and <code>sewing_modeled_production_seconds</code>; the latter includes declared
 Recipe selection uses <code>ftx-sewing-selection/4</code> and <code>minimize_modeled_production_seconds</code>.
 These serial phase totals preserve finite fixture and planar access constraints. A joint optimum is conditional
 on the declared work and does not prove the setup-only minimum or authorize machine execution.</p>
+<p class="note">Use <code>production.parallel</code> to allocate complete garments across explicitly independent
+physical cells. Each cell supplies its availability, initial setup, qualified handling and its own fixture inventory;
+one garment stays in one cell. The shared machine configuration, process qualifications and independence of machines,
+fixtures and handling labor need exact source locks. Select the explicit
+<code>ceil_cell_feed_milliseconds/1</code> time basis: continuous feed is rounded upward once per used cell,
+with raw feed and the padding retained. Compare <code>sewing_parallel_makespan_seconds</code>, or select recipes
+with <code>ftx-sewing-selection/5</code> and <code>minimize_parallel_makespan</code>.
+Completion includes each used cell's availability and final unloading; it differs from total machine work.
+The report retains every cell's order, physical copy assignments, fixtures, handling and bounded-search proof.</p>
 <p class="note">Qualified <code>yarn_linear_density</code> supplies <code>thread_required_mass_kg</code> and permits
 kilogram-priced thread offers. Supplier minimums, increments, tiers and stock stay in their original sale units.
 Missing density leaves length-only quantities and offers usable. Consumed mass includes thread allowances;

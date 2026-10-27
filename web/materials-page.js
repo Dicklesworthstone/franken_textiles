@@ -1108,6 +1108,7 @@ function manufacturingComparison(op, parent, study, computed) {
     }
     sewingWorkholding(parent, available(row.sewing), row.key);
     sewingHandling(parent, available(row.sewing), row.key);
+    sewingParallel(parent, available(row.sewing), row.key);
     sewingAccess(parent, available(row.sewing), row.key);
   }
   if (study.alternatives.some(row => row.finite_stock && row.finite_stock.status !== "not_requested")) {
@@ -1167,7 +1168,7 @@ function manufacturingComparison(op, parent, study, computed) {
       cells(timing, [row.key, state(row.sewing), metric(m.feed_seconds),
         metric(m.sewing_setup_seconds), metric(m.sewing_feed_and_setup_seconds)]);
       const sewing = available(row.sewing);
-      const source = (sewing?.production?.ordering || sewing?.ordering)?.timing;
+      const source = sewing?.production?.parallel ? null : (sewing?.production?.ordering || sewing?.ordering)?.timing;
       if (source) detail(parent, `${row.key}: setup timing evidence and selected schedule (display only)`, source);
     }
     const note = document.createElement("p");
@@ -1494,6 +1495,7 @@ function treatmentResult(parent, r) {
       "Download the exact material selections or use this transition in a piece-treatment request." };
 }
 function sewingWorkholding(parent, plan, label = "Selected sewing plan") {
+  if (plan?.production?.parallel) return;
   const report = plan?.production?.workholding;
   if (!report) return;
   const resources = table(parent, `${label}: finite fixture inventory`,
@@ -1516,6 +1518,7 @@ function sewingWorkholding(parent, plan, label = "Selected sewing plan") {
     policy: plan.options?.production?.workholding, report });
 }
 function sewingHandling(parent, plan, label = "Selected sewing plan") {
+  if (plan?.production?.parallel) return;
   const report = plan?.production?.handling;
   if (!report) return;
   const timing = plan.production.ordering?.handling_timing;
@@ -1541,6 +1544,53 @@ function sewingHandling(parent, plan, label = "Selected sewing plan") {
   parent.append(note);
   detail(parent, `${label}: handling evidence, exact qualifications and complete timelines`,
     { policy: plan.options?.production?.handling, report, timing });
+}
+function sewingParallel(parent, plan, label = "Selected sewing plan") {
+  const report = plan?.production?.parallel;
+  if (!report) return;
+  const seconds = value => typeof value === "number" ? value / 1000 : null;
+  const totals = table(parent, `${label}: parallel completion and aggregate work`,
+    ["Allocation", "Completion (s)", "Total feed work (s)", "Scheduled feed work (s)", "Total setup work (s)", "Total handling work (s)"]);
+  for (const [name, allocation] of [["Single-cell baseline", report.baseline], ["Selected cells", report.selected]]) {
+    cells(totals, [name, metric(seconds(allocation?.makespan_milliseconds)), metric(allocation?.feed_seconds),
+      metric(seconds(allocation?.scheduled_feed_milliseconds)), metric(seconds(allocation?.setup_milliseconds)),
+      metric(seconds(allocation?.handling_milliseconds))]);
+  }
+  const machines = table(parent, `${label}: selected physical cells`,
+    ["Cell", "Global garment copies (zero-based)", "Available (s)", "Complete (s)", "Raw feed (s)", "Feed rounding (ms)", "Cell order minimum proved"]);
+  const operations = table(parent, `${label}: cell-local sewing order`,
+    ["Cell", "Position in cell", "Global garment copy", "Operation", "Needle", "Thread", "Required local predecessors"]);
+  for (const cell of report.selected?.cells || []) {
+    const schedule = cell.schedule;
+    cells(machines, [cell.cell, cell.copies.join(", ") || "Idle", metric(seconds(cell.available_at_milliseconds)),
+      schedule ? metric(seconds(cell.finish_milliseconds)) : "Idle", metric(schedule?.feed_seconds),
+      metric(typeof cell.feed_padding_seconds === "number" ? cell.feed_padding_seconds * 1000 : null),
+      schedule ? String(schedule.ordering.optimality_proven) : "No work"]);
+    if (!schedule) continue;
+    for (const [i, id] of schedule.ordering.selected_order.entries()) {
+      const operation = schedule.operations.find(item => item.id === id);
+      const pass = plan.seams[operation.seam_index].pass;
+      cells(operations, [cell.cell, metric(i + 1), metric(cell.copies[operation.copy]),
+        operation.operation_id, pass.needle, pass.thread, operation.after.join(", ") || "None"]);
+    }
+    const policy = plan.options?.production?.parallel?.cells?.find(item => item.id === cell.cell);
+    const local = { production: schedule, options: { production: policy } };
+    sewingWorkholding(parent, local, `${label}: cell ${cell.cell} (local copy IDs)`);
+    sewingHandling(parent, local, `${label}: cell ${cell.cell} (local copy IDs)`);
+  }
+  const note = document.createElement("p");
+  note.textContent = (report.optimality_proven ?
+    "Minimum parallel completion time proved under the declared millisecond planning model. " :
+    "Complete feasible cell allocation retained; the minimum parallel completion time is not proved. ") +
+    `Lower bound: ${metric(seconds(report.lower_bound_makespan_milliseconds))} s; search work: ${metric(report.search_nodes)}. ` +
+    (report.budget_exhausted ? "At least one inner schedule reached its work limit. " : "") +
+    "Every garment stays in one physical cell. Concurrent operation requires independently qualified machines, fixtures and handling labor. " +
+    "Each used cell includes its own availability, initial setup and final unloading. Feed is rounded upward once per used cell; raw feed and padding remain separate. " +
+    "Elapsed completion is distinct from summed machine work. The retained single-machine reference is not the selected concurrent order. " +
+    "This calculation does not qualify garment transfers, shared operators or hardware execution.";
+  parent.append(note);
+  detail(parent, `${label}: cell independence, timing sources and complete allocations`, {
+    policy: plan.options?.production?.parallel, report });
 }
 function sewingAccess(parent, plan, label = "Selected sewing plan") {
   const seams = plan?.seams?.filter(row => row.access || row.pass?.access) || [];
@@ -1571,7 +1621,8 @@ function sewingAccess(parent, plan, label = "Selected sewing plan") {
   parent.append(note);
 }
 function sewingResult(parent, r) {
-  const plan = r.plan, production = plan?.production, order = production?.ordering || plan?.ordering;
+  const plan = r.plan, production = plan?.production, parallel = production?.parallel;
+  const order = parallel ? null : production?.ordering || plan?.ordering;
   if (order) {
     const counts = table(parent, "Sewing setup changes — declared needle and thread identities",
       ["Schedule", "Needle changes", "Thread changes", "Total changes"]);
@@ -1606,6 +1657,7 @@ function sewingResult(parent, r) {
   }
   sewingWorkholding(parent, plan);
   sewingHandling(parent, plan);
+  sewingParallel(parent, plan);
   sewingAccess(parent, plan);
   if (plan?.seams.some(row => row.source_span)) {
     const spans = table(parent, "Partial-seam operations — original source correspondence",
@@ -1631,11 +1683,15 @@ function sewingResult(parent, r) {
     feed_and_setup_seconds: order?.timing?.feed_and_setup_seconds,
     handling_seconds: order?.handling_timing ? order.handling_timing.selected_handling_milliseconds / 1000 : undefined,
     modeled_production_seconds: order?.handling_timing?.selected_modeled_production_seconds,
+    parallel_makespan_seconds: parallel ? parallel.selected.makespan_milliseconds / 1000 : undefined,
+    parallel_lower_bound_seconds: parallel ? parallel.lower_bound_makespan_milliseconds / 1000 : undefined,
+    parallel_optimality_proven: parallel?.optimality_proven,
+    parallel_search_work: parallel?.search_nodes,
     setup_changes: order?.selected_changes,
     ordering_objective: order ? (order.handling_timing ? "minimize_production_time" :
       order.timing ? "minimize_setup_time" : "minimize_setup_changes") : undefined,
     ordering_optimality_proven: order?.optimality_proven,
-    finite_workholding_enforced: production?.workholding ? true : undefined,
+    finite_workholding_enforced: (parallel ? parallel.selected.cells.some(cell => cell.schedule?.workholding) : production?.workholding) ? true : undefined,
     planar_access_checked_operations: plan?.seams?.filter(row => row.access).length || undefined,
     search_nodes: order?.search_nodes, hardware_execution_authorized: plan?.hardware_execution_authorized };
 }

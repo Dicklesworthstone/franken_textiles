@@ -111,11 +111,14 @@ pub(super) fn check_budget(
             "material study exceeds 256 aggregate sewing recipe plan evaluations or 4096 operation evaluations; reduce alternatives or recipe search limits",
         ));
     }
-    if request
-        .options
-        .ordering_policy()
-        .is_some_and(|policy| plans.saturating_mul(policy.max_search_nodes) > 200_000)
-    {
+    let scheduling_work = match request.options.scheduling_work_bound() {
+        Ok(work) => work,
+        Err(refusal) if refusal.code == RefusalCode::BudgetExceeded => return Err(refusal),
+        // Malformed or contradictory sewing inputs remain independent per-row refusals.
+        // They fail before scheduling and must not suppress a valid cutting or mass result.
+        Err(_) => 0,
+    };
+    if plans.saturating_mul(scheduling_work) > 200_000 {
         return Err(budget(
             "material study exceeds 200000 aggregate recipe/ordering search nodes",
         ));

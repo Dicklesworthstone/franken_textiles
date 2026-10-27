@@ -19,6 +19,10 @@ pub struct StitchStep {
     /// Omission retains the existing single-garment program representation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub copy: Option<usize>,
+    /// Physical cell for explicitly independent concurrent production. Stitches are serialized by
+    /// cell then that cell's operation order; this is not one chronological cross-cell needle stream.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell: Option<String>,
     /// Index into that operation's directed `runs` array; its phase identifies lock travel.
     pub run: usize,
     /// Canonical station before this interval, on both material sides.
@@ -86,7 +90,31 @@ impl SewProgram {
                 )?;
             }
         }
-        let sequence: Vec<_> = if let Some(production) = &plan.production {
+        let sequence: Vec<_> = if let Some(parallel) = plan
+            .production
+            .as_ref()
+            .and_then(|production| production.parallel.as_ref())
+        {
+            let mut sequence = Vec::new();
+            for cell in &parallel.selected.cells {
+                if let Some(schedule) = &cell.schedule {
+                    let by_id: BTreeMap<_, _> = schedule
+                        .operations
+                        .iter()
+                        .map(|operation| (operation.id.as_str(), operation))
+                        .collect();
+                    for id in &schedule.ordering.selected_order {
+                        let operation = by_id[id.as_str()];
+                        sequence.push((
+                            Some(cell.cell.clone()),
+                            Some(cell.copies[operation.copy]),
+                            operation.seam_index,
+                        ));
+                    }
+                }
+            }
+            sequence
+        } else if let Some(production) = &plan.production {
             let by_id: BTreeMap<_, _> = production
                 .operations
                 .iter()
@@ -98,14 +126,14 @@ impl SewProgram {
                 .iter()
                 .map(|id| {
                     let operation = by_id[id.as_str()];
-                    (Some(operation.copy), operation.seam_index)
+                    (None, Some(operation.copy), operation.seam_index)
                 })
                 .collect()
         } else {
-            (0..plan.seams.len()).map(|i| (None, i)).collect()
+            (0..plan.seams.len()).map(|i| (None, None, i)).collect()
         };
         let mut stitches = Vec::with_capacity(total_intervals);
-        for (copy, operation) in sequence {
+        for (cell, copy, operation) in sequence {
             let seam = &plan.seams[operation];
             for (run, travel) in seam.runs.iter().enumerate() {
                 let mut from = travel.from_station;
@@ -122,6 +150,7 @@ impl SewProgram {
                     stitches.push(StitchStep {
                         operation,
                         copy,
+                        cell: cell.clone(),
                         run,
                         from_station: from,
                         to_station: to,
@@ -141,7 +170,13 @@ impl SewProgram {
             return Err(bad("inconsistent sewing program interval accounting"));
         }
         Ok(Self {
-            schema: if plan.production.is_some() {
+            schema: if plan
+                .production
+                .as_ref()
+                .is_some_and(|production| production.parallel.is_some())
+            {
+                "ftx-sewing-program/5"
+            } else if plan.production.is_some() {
                 "ftx-sewing-program/4"
             } else if assembly {
                 "ftx-sewing-program/3"

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::{SewOptions, SewPlan, bad, ordering};
 
 pub mod handling;
+pub mod parallel;
 pub mod workholding;
 
 /// Optional production schedule. The expanded graph has at most 63 operations and one machine.
@@ -27,6 +28,9 @@ pub struct Policy {
     /// Optional source-qualified serial loading, copy/operation transitions and final unloading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handling: Option<handling::Policy>,
+    /// Optional assignment of whole garments to explicitly independent qualified machine cells.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel: Option<parallel::Policy>,
 }
 
 /// One physical garment operation, referencing the single retained geometry and qualified recipe.
@@ -76,6 +80,10 @@ pub struct Report {
     /// Complete source-bound handling replay for both baseline and selected schedules.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handling: Option<handling::Report>,
+    /// Actual concurrent-cell assignment. The outer ordering/handling/workholding reports retain
+    /// their single-machine reference meaning; selected physical work lives in these cell reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel: Option<parallel::Report>,
 }
 
 fn count(value: usize) -> Result<usize, Refusal> {
@@ -124,6 +132,14 @@ pub(super) fn resolve_options(options: &SewOptions) -> Result<Cow<'_, SewOptions
     production
         .ordering
         .validate_production(expanded, &options.machine.id)?;
+    if let Some(parallel) = &production.parallel {
+        parallel.work_bound(copies, production.ordering.max_search_nodes)?;
+        if production.handling.is_none() {
+            return Err(bad(
+                "parallel production needs a complete timed serial reference",
+            ));
+        }
+    }
     if production.production_copies == Some(copies)
         && options
             .consumables
@@ -223,8 +239,15 @@ pub(super) fn evaluate(plan: &SewPlan, policy: &Policy) -> Result<Report, Refusa
     let handling = handling
         .map(|compiled| compiled.report(&ordering.baseline_order, &ordering.selected_order))
         .transpose()?;
+    let parallel = policy
+        .parallel
+        .as_ref()
+        .map(|parallel| parallel::evaluate(plan, parallel, copies))
+        .transpose()?;
     Ok(Report {
-        schema: if handling.is_some() {
+        schema: if parallel.is_some() {
+            "ftx-sewing-production/4"
+        } else if handling.is_some() {
             "ftx-sewing-production/3"
         } else if workholding.is_some() {
             "ftx-sewing-production/2"
@@ -239,5 +262,6 @@ pub(super) fn evaluate(plan: &SewPlan, policy: &Policy) -> Result<Report, Refusa
         feed_seconds,
         workholding,
         handling,
+        parallel,
     })
 }

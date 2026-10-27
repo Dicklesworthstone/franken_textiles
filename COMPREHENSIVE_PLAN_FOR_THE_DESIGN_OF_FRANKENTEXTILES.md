@@ -3670,6 +3670,32 @@ gradient-progress checks; this is no unconditional convergence or physical texti
 See [material-parallel-memory.md](docs/material-parallel-memory.md). The bounded numerical repair
 is `ftx-tm4.3`; measured characterization and garment acceptance remain open.
 
+### 25.94 Allocate complete garments across independently qualified sewing cells
+
+Optional `production.parallel` adds a bounded whole-garment assignment over explicitly identified
+physical cells sharing one fully admitted machine configuration. Each cell retains its own setup,
+availability, handling and optional finite fixtures. Source qualification must establish independent
+machines, fixture units and handling labor; a shared operator is not silently multiplied. Garments
+stay in their assigned cell, and each cell reuses the existing serial production authority.
+
+An integer allocation solve minimizes the maximum used-cell completion, with a second solve over
+valid inner lower bounds. Incomplete inner searches retain complete feasible schedules and honest
+proof status. The explicit millisecond convention ceilings total feed once per used cell, preserving
+raw feed and padding. Availability, initial setup/loading and final unloading are charged to every
+used cell. Aggregate machine work remains distinct from elapsed completion. One shared parallel
+work cap covers all nested cell/count schedules and allocation work; recipe and study cross products
+reserve the full amount before evaluation.
+
+Every output stitch identifies its cell and global garment copy; nested fixture and handling histories
+retain local IDs with exact global mappings. The old outer serial report remains a reference and
+cannot supply the selected parallel time. Both native commands, portable/browser consumers, recipe
+selection and material/design/scenario comparisons use this same result through the dedicated
+`sewing_parallel_makespan_seconds` objective. The complete synthetic two-cell example reduces
+three-garment completion from 41.1 to 25.5 declared seconds while preserving all 240 stitch intervals.
+See [sewing-production.md](docs/sewing-production.md) and `examples/sewing-parallel-options.json`.
+This implements `ftx-pb2.2.4`; heterogeneous machines, shared-resource overlap, inter-cell transfers
+and measured physical execution remain open under the parent production qualification work.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

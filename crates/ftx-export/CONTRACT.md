@@ -134,6 +134,25 @@ in `sewing_production` compare independent exhaustive optima under finite fixtur
 source changes, complete bounded replay and a handling-dependent recipe winner. No physical timing,
 parallel resource execution or hardware qualification is inferred.
 
+**Independent parallel cells** (`production.parallel`). An explicit source qualification binds
+distinct physical machine instances, independent fixtures and handling labor to the same complete
+machine/process configuration. Whole garments stay in one cell. Every cell/count trial reuses
+ordinary serial scheduling, handling and fixture admission; every cell policy is checked even if
+the selected allocation leaves it idle. Exact dynamic programming minimizes the maximum finish and
+separately propagates valid inner bounds. Proof requires the complete incumbent to attain that
+global bound; bounded inner searches retain all operations and their exact source identities.
+The required `ceil_cell_feed_milliseconds/1` policy ceiling-schedules generated feed once per used
+cell and retains raw feed and sub-millisecond padding. This is an explicit planning-resolution
+objective. Setup/handling work is summed separately from elapsed makespan. Unused cells incur no
+availability/setup/loading/unloading costs. The outer serial-reference cap plus one global parallel
+cap (all cell/count searches and both DPs) is at most 200000; at most eight cells and 63 expanded
+operations are supported. `SewOptions::scheduling_work_bound` reserves the complete cross-product
+work. Plan `/16`, production `/4`, parallel `/1` and stitch `/5` retain complete per-cell schedules
+with local-to-global physical-copy maps; every output stitch identifies its cell/global copy.
+`ordering_report` withholds the serial reference from actual parallel scoring. Synthetic independent
+exhaustive, budget, fixture, source and stitch cases live in `sewing_parallel`. This does not qualify
+shared workers, cross-cell transfers, arbitrary configurations, grip or hardware execution.
+
 **Planar sewing access** (`passes[].access`). Optional `planar_disk_sweep/1` requires an explicit
 flat assembly and an admitted source process qualification. Full machine and qualification hashes
 bind the independent tool/fixture acquisition to the current configuration and material stack.

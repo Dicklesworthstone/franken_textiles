@@ -134,6 +134,31 @@ pub struct SewOptions {
 }
 
 impl SewOptions {
+    /// Conservative configured scheduling-work reservation for one complete recipe evaluation.
+    /// Includes the serial reference and the parallel policy's entire shared inner/allocation cap.
+    /// It stays conservative when a later manufacturing consumer inherits a larger cutting count.
+    ///
+    /// # Errors
+    /// Conflicting quantities, invalid schedule bounds or more than 200000 total work units.
+    pub fn scheduling_work_bound(&self) -> Result<usize, Refusal> {
+        let resolved = production::resolve_options(self)?;
+        if let Some(production) = &resolved.production {
+            return production.parallel.as_ref().map_or_else(
+                || Ok(production.ordering.max_search_nodes),
+                |parallel| {
+                    parallel.work_bound(
+                        production.production_copies.unwrap_or(1),
+                        production.ordering.max_search_nodes,
+                    )
+                },
+            );
+        }
+        Ok(resolved
+            .ordering
+            .as_ref()
+            .map_or(0, |ordering| ordering.max_search_nodes))
+    }
+
     /// Active scheduling policy. Production and one-garment ordering are exclusive at admission.
     #[must_use]
     pub fn ordering_policy(&self) -> Option<&ordering::Policy> {
@@ -401,6 +426,13 @@ impl SewPlan {
     /// Active admitted order, including the complete batch when production scheduling was requested.
     #[must_use]
     pub fn ordering_report(&self) -> Option<&ordering::Report> {
+        if self
+            .production
+            .as_ref()
+            .is_some_and(|production| production.parallel.is_some())
+        {
+            return None;
+        }
         self.production
             .as_ref()
             .map(|production| &production.ordering)
@@ -424,6 +456,27 @@ impl SewPlan {
             .handling_timing
             .as_ref()
             .map(|timing| timing.selected_modeled_production_seconds)
+    }
+
+    /// Selected whole-job elapsed time under the explicit concurrent-cell millisecond model.
+    /// Aggregate feed/setup/handling work remains separately scoped in the parallel report.
+    #[must_use]
+    pub fn parallel_makespan_seconds(&self) -> Option<f64> {
+        self.production
+            .as_ref()?
+            .parallel
+            .as_ref()
+            .map(|parallel| parallel.selected.makespan_milliseconds as f64 / 1000.0)
+    }
+
+    /// Proof status for the qualified parallel-cell assignment and its declared time resolution.
+    #[must_use]
+    pub fn parallel_optimality_proven(&self) -> Option<bool> {
+        self.production
+            .as_ref()?
+            .parallel
+            .as_ref()
+            .map(|parallel| parallel.optimality_proven)
     }
 
     /// Actual traversal scope, matching [`Self::total_feed_seconds`].
@@ -604,6 +657,12 @@ impl SewPlan {
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
             schema: if options
+                .production
+                .as_ref()
+                .is_some_and(|production| production.parallel.is_some())
+            {
+                "ftx-sewing-plan/16"
+            } else if options
                 .production
                 .as_ref()
                 .is_some_and(|production| production.handling.is_some())

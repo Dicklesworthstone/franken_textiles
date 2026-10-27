@@ -136,6 +136,23 @@ heterogeneous combinations and model-backed scenario studies. The search needs a
 maximum stitch pitch and stitch-rate alternatives. It never invents a recipe from a fiber name.
 Machine limits, assemblies, pressure settings, geometry and source-admission policy remain fixed.
 
+Source-qualified independent production cells use `ftx-sewing-selection/5` with
+`objective: "minimize_parallel_makespan"`. Each complete recipe reruns the ordinary planner,
+every cell's serial scheduling and the whole-garment allocation. The dedicated nominal metric
+`sewing_parallel_makespan_seconds` works as an objective or inclusive constraint in manufacturing,
+design and scenario studies. It includes availability and final unloading under the explicitly
+declared millisecond planning convention; it is distinct from the sum of machine work.
+The complete cell-independence, source, timing and fixture policy belongs to the comparison protocol.
+An unproved complete incumbent can be compared, while recipe optimality requires all examined
+inner allocations to be proved. Missing cell qualification withholds the sewing result and its
+objective without erasing independent mass or cutting. Reported-bound makespan is unsupported.
+
+Parallel plans leave the old serial setup/handling/time metrics unavailable, and serial timed
+recipe objectives refuse a parallel request. Generated feed, stitch counts and thread orders retain
+their complete-batch meanings. Recipe/material work reservations include the entire parallel cap
+in addition to the serial reference. See [sewing-production.md](sewing-production.md#concurrent-independent-machine-cells)
+and the complete `examples/sewing-parallel-options.json` for input and replay.
+
 The timed `ftx-sewing-selection/2` request is also supported: `selected_objective_seconds` preserves
 feed plus qualified setup time, while the study's `feed_seconds` remains the selected plan's feed
 time. An admitted timed plan additionally supplies `sewing_setup_seconds` and

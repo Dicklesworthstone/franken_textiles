@@ -131,6 +131,9 @@ pub enum Metric {
     SewingHandlingSeconds,
     /// Declared serial feed, setup and handling on the selected complete schedule, in seconds.
     SewingModeledProductionSeconds,
+    /// Elapsed completion of a source-qualified independent-cell allocation under its explicit
+    /// millisecond planning convention; distinct from total serial or machine work.
+    SewingParallelMakespanSeconds,
     /// Complete thread length across the selected job's channels, including operation allowances.
     ThreadRequiredLengthM,
     /// Complete consumed inventory from the exact yarns' qualified linear densities, in kilograms.
@@ -264,7 +267,8 @@ impl Metric {
             | Self::SewingSetupSeconds
             | Self::SewingFeedAndSetupSeconds
             | Self::SewingHandlingSeconds
-            | Self::SewingModeledProductionSeconds => Consumer::Sewing,
+            | Self::SewingModeledProductionSeconds
+            | Self::SewingParallelMakespanSeconds => Consumer::Sewing,
             Self::ThreadRequiredLengthM | Self::ThreadRequiredMassKg => Consumer::SewingConsumables,
             Self::ThreadObservedOrderCost => Consumer::SewingPurchasing,
             Self::VaporPotentialHeatFlowW | Self::VaporPotentialMassFlowKgS => Consumer::Vapor,
@@ -356,7 +360,8 @@ impl Metric {
             | Self::SewingSetupSeconds
             | Self::SewingFeedAndSetupSeconds
             | Self::SewingHandlingSeconds
-            | Self::SewingModeledProductionSeconds => "s",
+            | Self::SewingModeledProductionSeconds
+            | Self::SewingParallelMakespanSeconds => "s",
             Self::VaporPotentialHeatFlowW
             | Self::CoveredVaporPotentialHeatFlowW
             | Self::IndependentVaporPotentialHeatFlowW => "W",
@@ -423,6 +428,7 @@ impl Metric {
             Self::SewingFeedAndSetupSeconds => row.metrics.sewing_feed_and_setup_seconds,
             Self::SewingHandlingSeconds => row.metrics.sewing_handling_seconds,
             Self::SewingModeledProductionSeconds => row.metrics.sewing_modeled_production_seconds,
+            Self::SewingParallelMakespanSeconds => row.metrics.sewing_parallel_makespan_seconds,
             Self::ThreadRequiredLengthM => row.metrics.thread_required_length_m,
             Self::ThreadRequiredMassKg => row.metrics.thread_required_mass_kg,
             Self::ThreadObservedOrderCost => row.metrics.thread_observed_order_cost,
@@ -1108,6 +1114,12 @@ impl Policy {
         }) {
             report.notes.push("Sewing time objectives use the selected complete schedule and independently qualified setup and handling evidence. Feed plus setup retains its original scope. Modeled production time additionally requires explicit serial initial, between-operation and final handling, including same-copy versus different-copy transitions. A joint setup-and-handling optimum does not prove either component minimal. A budget-limited complete incumbent remains comparable without an optimality claim; absent timing stays unavailable, and undeclared work or hardware execution is not inferred.");
         }
+        if self
+            .metrics()
+            .contains(&Metric::SewingParallelMakespanSeconds)
+        {
+            report.notes.push("Parallel sewing makespan is the completion time of the selected whole-garment allocation from the declared common origin. Each independently qualified cell retains its own availability, initial setup, serial handling and finite fixtures. Cell feed is scheduled under the explicit conservative millisecond convention, with raw feed and padding retained. This is distinct from summed machine work. A complete incumbent remains comparable without an optimality proof; no unqualified resource independence, inter-cell transfer, measured throughput or hardware execution is inferred.");
+        }
         if self.consumers().contains(&Consumer::CuttingJob)
             || self.consumers().contains(&Consumer::CuttingJobPurchasing)
         {
@@ -1743,6 +1755,20 @@ impl Policy {
             // The declared operation/copy timing domain is part of this model's protocol;
             // do not silently compare different transition tables or source qualifications.
             base = hash(&(base, handling))?;
+        }
+        if self
+            .metrics()
+            .contains(&Metric::SewingParallelMakespanSeconds)
+        {
+            let parallel = row
+                .sewing
+                .value()
+                .and_then(|plan| plan.options.production.as_ref())
+                .and_then(|production| production.parallel.as_ref())
+                .ok_or_else(|| invalid("source-qualified parallel sewing cells unavailable"))?;
+            // Resource independence, availability, time resolution and every cell's source-bound
+            // timing/fixture policy define this experiment, independent of textile protocol consent.
+            base = hash(&(base, parallel))?;
         }
         if consumers.contains(&Consumer::VaporCoverage) {
             let vapor = admitted

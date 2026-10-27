@@ -187,8 +187,8 @@ fn joint_memory_replays_through_both_native_commands_and_the_portable_boundary()
         },
         "loading": [
             {"time_s": 0.0, "extension_fraction": 0.0},
-            {"time_s": 0.05, "extension_fraction": 0.02},
-            {"time_s": 0.15, "extension_fraction": 0.02},
+            {"time_s": 0.05, "extension_fraction": 0.08},
+            {"time_s": 0.15, "extension_fraction": 0.08},
             {"time_s": 0.2, "extension_fraction": 0.0},
             {"time_s": 0.25, "extension_fraction": 0.0}
         ],
@@ -204,6 +204,18 @@ fn joint_memory_replays_through_both_native_commands_and_the_portable_boundary()
     assert!(last.maxwell_dissipation_j > 0.0);
     assert!(last.plastic_dissipation_j > 0.0);
     assert!(last.relaxation.is_some() && last.plasticity.is_some());
+    assert!(
+        direct
+            .states
+            .iter()
+            .any(|state| { state.solve.is_some_and(|solve| solve.roundoff_steps > 0) })
+    );
+    for state in &direct.states[1..] {
+        let solve = state.solve.unwrap();
+        assert!(solve.converged);
+        assert!(solve.last_step / state.time_step_s < 1e-9);
+        assert!(state.free_dynamic_residual_n <= 1e-6);
+    }
     let replay: Value = serde_json::from_str(&direct.replay_request_json).unwrap();
     let expected = serde_json::to_value(&direct).unwrap();
     for source in [&input, &replay] {

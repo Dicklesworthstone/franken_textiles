@@ -15,6 +15,7 @@ const OPTIONS: &str = include_str!("../../../examples/sewing-production-options.
 const WORKHOLDING: &str = include_str!("../../../examples/sewing-workholding-options.json");
 const ACCESS: &str = include_str!("../../../examples/sewing-access-options.json");
 const HANDLING: &str = include_str!("../../../examples/sewing-handling-options.json");
+const PARALLEL: &str = include_str!("../../../examples/sewing-parallel-options.json");
 const TIMED_SELECTION: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-timed-selection.json");
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -56,6 +57,188 @@ fn run(main: bool, directory: &Path, action: &str, pattern: &str, request: &str)
 
 fn portable(text: String) -> Value {
     serde_json::from_str(&text).unwrap()
+}
+
+#[test]
+fn parallel_cells_replay_through_native_commands_studies_and_each_independent_cell() {
+    let directory = workspace();
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    fs::write(directory.join("parallel.json"), PARALLEL).unwrap();
+    let plan = portable(ftx_wasm::manufacturing::sew_plan(PATTERN, PARALLEL).unwrap());
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, PARALLEL).unwrap());
+    let parallel = &plan["production"]["parallel"];
+    assert_eq!(plan["schema"], "ftx-sewing-plan/16");
+    assert_eq!(program["schema"], "ftx-sewing-program/5");
+    assert_eq!(program["plan"], plan);
+    assert_eq!(parallel["selected"]["makespan_milliseconds"], 25500);
+    assert_eq!(parallel["baseline"]["makespan_milliseconds"], 41100);
+    assert_eq!(parallel["optimality_proven"], true);
+    assert_eq!(program["stitches"].as_array().unwrap().len(), 240);
+    for cell in parallel["selected"]["cells"].as_array().unwrap() {
+        let copies = cell["copies"].as_array().unwrap();
+        if copies.is_empty() {
+            continue;
+        }
+        let source = plan["options"]["production"]["parallel"]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["id"] == cell["cell"])
+            .unwrap();
+        let mut options = plan["options"].clone();
+        options["production"]
+            .as_object_mut()
+            .unwrap()
+            .remove("parallel");
+        options["production"]["production_copies"] = json!(copies.len());
+        options["production"]["ordering"] = source["ordering"].clone();
+        options["production"]["ordering"]["max_search_nodes"] = cell["schedule_node_limit"].clone();
+        options["production"]["handling"] = source["handling"].clone();
+        options["production"]["workholding"] = source["workholding"].clone();
+        let replay =
+            portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &options.to_string()).unwrap());
+        assert_eq!(replay["production"], cell["schedule"]);
+        let stream: Vec<_> = program["stitches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|step| step["cell"] == cell["cell"])
+            .collect();
+        assert_eq!(stream.len(), copies.len() * 80);
+        assert!(stream.iter().all(|step| copies.contains(&step["copy"])));
+    }
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let mut study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"cells","changes":{"schema":"ftx-material-bindings/1",
+            "default":pattern["fabric"]["material"]}}],
+        "sewing":serde_json::from_str::<Value>(PARALLEL).unwrap(),
+        "comparison":{"basis":"nominal","required_consumers":["sewing"],
+            "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"}],
+            "constraints":[{"metric":"sewing_parallel_makespan_seconds","maximum":26.0}]}});
+    let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    let row = &report["alternatives"][0];
+    assert_eq!(row["sewing"]["result"]["production"], plan["production"]);
+    assert_eq!(row["metrics"]["sewing_parallel_makespan_seconds"], 25.5);
+    assert_eq!(row["metrics"]["feed_seconds"], 24.0);
+    assert!(row["metrics"]["sewing_modeled_production_seconds"].is_null());
+    assert!(row["metrics"]["sewing_setup_seconds"].is_null());
+    assert_eq!(report["comparison"]["frontier"], json!(["cells"]));
+    fs::write(directory.join("study.json"), study.to_string()).unwrap();
+    for main in [false, true] {
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-plan",
+                "pattern.json",
+                "parallel.json"
+            ),
+            plan
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "parallel.json"
+            ),
+            program
+        );
+        assert_eq!(
+            run(main, &directory, "study", "pattern.json", "study.json"),
+            report
+        );
+    }
+    study["sewing"]["production"]["parallel"]["allow_estimates"] = json!(false);
+    let refused = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    assert_eq!(refused["alternatives"][0]["binding"]["status"], "available");
+    assert_eq!(refused["alternatives"][0]["sewing"]["status"], "refused");
+    assert!(refused["alternatives"][0]["metrics"]["sewing_parallel_makespan_seconds"].is_null());
+    assert_eq!(refused["comparison"]["frontier"], json!([]));
+    assert_eq!(
+        fs::read_to_string(directory.join("parallel.json")).unwrap(),
+        PARALLEL
+    );
+}
+
+#[test]
+fn parallel_recipe_selection_uses_elapsed_completion_and_preserves_independent_consumer_failures() {
+    let directory = workspace();
+    let options: Value = serde_json::from_str(PARALLEL).unwrap();
+    let mut request = json!({"schema":"ftx-sewing-selection/5","options":options,
+        "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+        "alternatives":[{"operation":"join","recipes":[{"id":"faster-qualified",
+            "needle":"example-needle","thread":"example-thread-a",
+            "max_stitch_mm":2.5,"stitches_per_minute":1000.0}]}]});
+    let result = portable(ftx_wasm::sew_select(PATTERN, &request.to_string()).unwrap());
+    let report = &result["report"];
+    assert_eq!(report["schema"], "ftx-sewing-selection-report/5");
+    assert_eq!(
+        report["selected_choices"],
+        json!({"join":"faster-qualified"})
+    );
+    assert_eq!(report["optimality_proven"], true);
+    assert_eq!(report["trials"][0]["objective_seconds"], 25.5);
+    assert_eq!(report["selected_objective_seconds"], 22.3);
+    let selected = result["selected_options_json"].as_str().unwrap();
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, selected).unwrap());
+    assert_eq!(program["plan"], report["selected_plan"]);
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    fs::write(directory.join("selection.json"), request.to_string()).unwrap();
+    fs::write(directory.join("selected.json"), selected).unwrap();
+    for main in [false, true] {
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-select",
+                "pattern.json",
+                "selection.json"
+            ),
+            result
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "selected.json"
+            ),
+            program
+        );
+    }
+    request["options"]["production"]["parallel"]["max_search_nodes"] = json!(46);
+    let bounded = portable(ftx_wasm::sew_select(PATTERN, &request.to_string()).unwrap());
+    assert_eq!(bounded["report"]["search_complete"], true);
+    assert_eq!(bounded["report"]["optimality_proven"], false);
+    assert!(bounded["report"]["unresolved_trials"].as_u64().unwrap() > 0);
+    assert!(bounded["report"]["selected_plan"].is_object());
+    request["options"] = options.clone();
+    request["max_plan_evaluations"] = json!(64);
+    assert_eq!(
+        ftx_wasm::sew_select(PATTERN, &request.to_string())
+            .unwrap_err()
+            .code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    request["max_plan_evaluations"] = json!(2);
+    // Invalid scheduling is one independent consumer, not a reason to erase complete assembly mass.
+    request["options"]["ordering"] = options["production"]["ordering"].clone();
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"independent","changes":{"schema":"ftx-material-bindings/1",
+            "default":pattern["fabric"]["material"]}}],"sewing_selection":request,
+        "assembly_mass":{"schema":"ftx-assembly-mass/1","inventory_complete":true,
+            "extras":[],"seam_allowance_mm":0}});
+    let outcome = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    assert_eq!(
+        outcome["alternatives"][0]["assembly_mass"]["status"],
+        "available"
+    );
+    assert_eq!(outcome["alternatives"][0]["sewing"]["status"], "refused");
+    assert!(outcome["alternatives"][0]["metrics"]["sewing_parallel_makespan_seconds"].is_null());
 }
 
 #[test]
