@@ -1,6 +1,6 @@
-//! Whole garments stay inside explicitly independent qualified cells. Each cell reuses the serial
-//! production solver, including its own setup, handling and finite fixture inventory. Optional
-//! qualified shared labor serializes attendance while machines perform explicitly autonomous feed.
+//! Whole garments stay inside independently qualified machines. Each cell reuses the serial
+//! production solver, including setup, handling and finite fixture lifecycles. Explicit shared labor
+//! serializes attendance; separately qualified common pools constrain concurrent fixture occupancy.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -22,6 +22,7 @@ const MAX_WORK: usize = 200_000;
 const MAX_EXACT_MILLISECONDS: u64 = 9_007_199_254_740_991;
 
 pub mod operator;
+pub mod shared_workholding;
 
 /// Independent physical cells with an explicitly qualified shared (v1) or per-cell (v2) configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -34,7 +35,8 @@ pub struct Policy {
     /// `ceil_cell_feed_milliseconds/1`, or `ceil_operation_feed_milliseconds/1` with shared labor.
     pub time_basis: String,
     /// `independent_machines_fixtures_and_handling_labor/1`, or the separately qualified
-    /// `independent_machines_and_fixtures_shared_operator/1`. Fixture inventories never overlap.
+    /// `independent_machines_and_fixtures_shared_operator/1`; explicit shared pools instead require
+    /// `independent_machines_shared_operator_and_workholding_pools/1`.
     pub independence: String,
     /// Shared upper bound for count schedules, baseline/selected replay and allocation transitions.
     pub max_search_nodes: usize,
@@ -45,9 +47,14 @@ pub struct Policy {
     /// One to eight separately identified physical cells, including their independent inventories.
     pub cells: Vec<Cell>,
     /// Optional one-person setup/handling authority with explicitly unattended machine feed.
-    /// Machines and fixture inventories remain independent; all attended phases share this person.
+    /// Machines remain independent; fixture inventory is independent unless explicitly pool-bound.
+    /// All attended phases share this person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_operator: Option<operator::Policy>,
+    /// Optional common inventory supplying explicitly bound cell-local fixture lifecycles.
+    /// This requires shared-operator dispatch and independently qualifies access/release semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_workholding: Option<shared_workholding::Policy>,
     /// Source qualifying these instances, configurations, declared availability windows and
     /// concurrent independence.
     pub source: Source,
@@ -80,7 +87,8 @@ pub struct Cell {
     pub ordering: ordering::Policy,
     /// Independent observed loading, transitions and final unloading for this cell.
     pub handling: handling::Policy,
-    /// Independent fixture inventory, never multiplied from the single-machine reference policy.
+    /// Admitted local fixture capacities and lifecycles, never multiplied from the serial reference.
+    /// Explicit shared-workholding bindings may supply these resources from a common finite pool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workholding: Option<workholding::Policy>,
     /// Version-2 independent cell configuration and source-qualified process recipes. Version 1
@@ -271,7 +279,7 @@ pub struct AvailabilityReport {
 /// Bounded assignment with exact replay and proof conditional on the declared integer time model.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` shared geometry; `/2` configured source plans; `/3` finite windows; `/4` shared operator.
+    /// `/1` shared geometry; `/2` configured sources; `/3` windows; `/4` shared labor; `/5` shared pools.
     pub schema: &'static str,
     /// Same explicit time convention as the qualified input.
     pub time_basis: &'static str,
@@ -294,6 +302,9 @@ pub struct Report {
     /// Exact exclusive operator and concurrent autonomous-feed replay, when explicitly qualified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared_operator: Option<operator::Report>,
+    /// Complete common-pool holds and exact capacity replay on both retained assignments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_workholding: Option<shared_workholding::Report>,
     /// Allocation optimum over the valid lower bounds of every cell/count serial subproblem.
     pub lower_bound_makespan_milliseconds: u64,
     /// Actual nested examinations, including reconstruction, plus both allocation DP transitions.
@@ -390,6 +401,7 @@ impl Policy {
         let configured = self.model == "independent_whole_garment_cells/2";
         let shared_operator = self.shared_operator.is_some();
         if (!configured && self.model != "independent_whole_garment_cells/1")
+            || self.shared_workholding.is_some() && !shared_operator
             || self.objective != "minimize_makespan"
             || self.time_basis
                 != if shared_operator {
@@ -398,7 +410,9 @@ impl Policy {
                     "ceil_cell_feed_milliseconds/1"
                 }
             || self.independence
-                != if shared_operator {
+                != if self.shared_workholding.is_some() {
+                    "independent_machines_shared_operator_and_workholding_pools/1"
+                } else if shared_operator {
                     "independent_machines_and_fixtures_shared_operator/1"
                 } else {
                     "independent_machines_fixtures_and_handling_labor/1"
@@ -572,6 +586,7 @@ fn trial(
     node_limit: usize,
     pattern: &Pattern,
     shared_operator: bool,
+    shared_workholding: Option<&shared_workholding::Policy>,
 ) -> Result<(Trial, super::Report), Refusal> {
     let mut ordering = cell.ordering.clone();
     ordering.max_search_nodes = node_limit;
@@ -634,7 +649,7 @@ fn trial(
         budget_exhausted: schedule.ordering.budget_exhausted,
         schedule_sha256: schedule_sha256(&schedule)?,
         phases: if shared_operator {
-            operator::phases(plan, cell, &schedule, feed_milliseconds)?
+            operator::phases(plan, cell, &schedule, feed_milliseconds, shared_workholding)?
         } else {
             Vec::new()
         },
@@ -731,6 +746,11 @@ fn assignment(
                 expected.node_limit,
                 pattern,
                 !expected.phases.is_empty(),
+                plan.options
+                    .production
+                    .as_ref()
+                    .and_then(|production| production.parallel.as_ref())
+                    .and_then(|parallel| parallel.shared_workholding.as_ref()),
             )?;
             if &replayed != expected {
                 return Err(Refusal::new(
@@ -797,6 +817,9 @@ pub(super) fn evaluate(
     if let Some(operator) = &policy.shared_operator {
         operator.validate(plan, &cells, copies)?;
     }
+    if let Some(workholding) = &policy.shared_workholding {
+        workholding.validate(plan, &cells)?;
+    }
     let mut cell_plans = Vec::new();
     let mut station_count: usize = plan.seams.iter().map(|seam| seam.stations.fa.len()).sum();
     for cell in &cells {
@@ -855,6 +878,7 @@ pub(super) fn evaluate(
                 node_limit,
                 pattern,
                 policy.shared_operator.is_some(),
+                policy.shared_workholding.as_ref(),
             )?;
             search_nodes += receipt.search_nodes;
             search_complete &= receipt.search_complete;
@@ -892,6 +916,7 @@ pub(super) fn evaluate(
                 copies,
                 &counts,
                 lower_bound_makespan_milliseconds,
+                policy.shared_workholding.as_ref(),
             )
         })
         .transpose()?;
@@ -957,6 +982,17 @@ pub(super) fn evaluate(
             )
         })
         .transpose()?;
+    let shared_workholding = policy
+        .shared_workholding
+        .as_ref()
+        .map(|workholding| {
+            workholding.report(
+                &baseline,
+                &selected,
+                shared_operator.as_ref().expect("qualified shared operator"),
+            )
+        })
+        .transpose()?;
     let availability = cells
         .iter()
         .any(|cell| cell.available_until_milliseconds.is_some())
@@ -993,7 +1029,9 @@ pub(super) fn evaluate(
     debug_assert!(search_nodes <= policy.max_search_nodes);
     let optimality_proven = selected.makespan_milliseconds == lower_bound_makespan_milliseconds;
     Ok(Report {
-        schema: if shared_operator.is_some() {
+        schema: if shared_workholding.is_some() {
+            "ftx-sewing-parallel/5"
+        } else if shared_operator.is_some() {
             "ftx-sewing-parallel/4"
         } else if availability.is_some() {
             "ftx-sewing-parallel/3"
@@ -1014,6 +1052,7 @@ pub(super) fn evaluate(
         selected,
         availability,
         shared_operator,
+        shared_workholding,
         lower_bound_makespan_milliseconds,
         search_nodes,
         search_complete,

@@ -4079,6 +4079,26 @@ material coefficients or new thermal solver, and does not close measured coupon/
 moisture/mechanical coupling, thermoregulation or warmth claims. See
 [material-thermal.md](docs/material-thermal.md).
 
+### 25.110 Shared fixture inventory constrains actual multi-cell production
+
+Qualified sewing cells can now bind their existing fixture lifecycles to finite common pools while
+sharing one operator. Source locks cover every cell's effective machine, recipe, material, timing,
+availability and local fixture policy. Pool access and return require their own explicit protocol
+within qualified handling; neither a shared name nor a matching needle implies free transfer.
+
+Allocation and dispatch reserve pool units before handling and retain them through autonomous feed,
+waits and any intervening operations until the declared release operation completes. A release can
+supply another acquisition at the same instant. Pending releases can delay dispatch; persistent holds
+can rule out an interleaving. Existing cell/operator windows and bounded complete-incumbent behavior
+remain authoritative. Actual selected cells still determine stitch geometry, yarn demand and cost.
+
+Native and portable reports retain exact baseline/selected reservations, global garment identities,
+capacities, peaks and final released inventory. The workbench exposes those same histories and source
+locks, with exact downloads and source-change invalidation. The bounded search continues to use
+retained serial orders; its exhaustion does not establish unrestricted physical infeasibility.
+This extends `ftx-pb2.2`; inter-cell garment routing, measured factory access/timing, seam quality and
+hardware execution remain separate gates. See [sewing-production.md](docs/sewing-production.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

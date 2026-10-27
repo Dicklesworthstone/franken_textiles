@@ -669,6 +669,62 @@ The page displays these exact timelines and withdraws them when inputs change. T
 the declared software model; physical seam quality, safe unattended equipment and hardware execution
 still require their own evidence and authorization.
 
+## Shared fixture and tool pools across cells
+
+Optional `production.parallel.shared_workholding` lets independently qualified cells draw from one
+finite fixture inventory while the existing shared operator handles their garments. This changes the
+actual allocation and dispatch search: a cell cannot start handling until its requested pool units
+are available. It retains the existing whole-garment cell assignment and each cell's admitted serial
+operation order.
+
+Use `independence: "independent_machines_shared_operator_and_workholding_pools/1"` together with
+`shared_operator` and `time_basis: "ceil_operation_feed_milliseconds/1"`. The pool policy has this shape:
+
+```json
+{
+  "model": "shared_workholding_pools/1",
+  "release_protocol": "available_at_feed_completion_with_access_in_cell_handling/1",
+  "cells": {"cell-a": "FULL_CELL_SOURCE_HASH", "cell-b": "FULL_CELL_SOURCE_HASH"},
+  "resources": [{"id": "common-jig-pool", "capacity": 1}],
+  "bindings": [
+    {"cell": "cell-a", "resource": "local-jig-a", "pool": "common-jig-pool"},
+    {"cell": "cell-b", "resource": "local-jig-b", "pool": "common-jig-pool"}
+  ],
+  "source": {"reference": "RETAINED_OBSERVATION", "accessed_on": "YYYY-MM-DD", "note": "EXACT_APPLICABILITY"},
+  "method": "QUALIFIED_COMMON_POOL_ACCESS_AND_RETURN_WITHIN_CELL_HANDLING",
+  "evidence": "measured"
+}
+```
+
+The names and capacity above illustrate the schema, not an observed factory inventory. Every binding
+names an existing resource in that cell's source-qualified `workholding` policy. Its existing per-copy
+holds remain authoritative, including integer units and acquire/release operation identities. Unbound
+local resources remain independent. A local resource can draw from only one pool, and the pool policy
+must lock every declared cell through `operator::cell_sha256`, including idle cells. Recipe, material,
+timing, fixture or availability changes invalidate those locks. Estimated inventory or applicability
+requires separate `shared_workholding.allow_estimates: true` consent.
+
+The release protocol must be independently supported by the source: pool access and return are
+included in the existing cell handling times, and units become available when the declared release
+operation's feed completes. No extra transfer duration is guessed. Acquisition occurs before handling
+starts and continues through setup, feed, intervening operations and waits. Release and another
+acquisition may occur at the same instant. The search waits for in-flight releases when possible and
+rejects dispatch branches blocked by holds that have not reached their release operation. Operator
+and cell windows still include all waiting and final unloading.
+
+Parallel report `/5` includes `shared_workholding` with the exact source locks, capacities, bindings,
+and complete baseline/selected reservation histories. Each hold records its physical cell, global
+garment copy, local operation identities, units, acquisition time and release time. An independent
+interval sweep verifies capacities, processes equal-time releases before acquisitions, and requires
+zero final occupancy. The workbench displays these histories in sewing, manufacturing and scenario
+results; ordinary report and options downloads preserve exact replay.
+
+The search still considers retained serial incumbents. Shared pools can make an allocation wait or
+fail, but they do not turn the cell-only timing lower bounds into a proof about shared-resource
+feasibility. A restricted search with no complete result remains unresolved unless an independent
+bound proves impossibility. Pool accounting does not establish physical access, safe unattended
+operation, garment transfers between cells or hardware permission.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **63 copy/operation pairs** and 1–200000 examined search nodes.
