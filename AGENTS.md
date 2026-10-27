@@ -76,17 +76,21 @@ file or folder of any kind.
 
 ---
 
-## Git Branch: ONLY Use `main`, NEVER `master`
+## Git Branch: Canonical `main`, Mirrored to `master`
 
-All work happens on `main`. Never create, switch to or push feature branches. Never reference `master`.
+All work happens on `main`. The only other permitted branch is `master`, an exact mirror of `main`.
+After publishing `main`, fast-forward both local and remote `master` to the same commit. Never develop on
+`master`, force-push it, or discard unique history to make it match; integrate useful work into `main` first.
 
 ## RULE 2: NO GIT BRANCHES. NO GIT WORKTREES. EVER.
 
-Forbidden: `git branch <other>`, `git checkout -b`, `git switch -c`, `git worktree add`, pushing non-main refs,
-pull requests from branches, scratch clones of this repository used to isolate work, and any tool that creates
-branches or worktrees as a side effect. Instead: commit to `main` when the work is ready, keep unfinished work
-in the tree, coordinate through Agent Mail reservations and Beads IDs, and never revert or stash another
-agent's changes.
+Forbidden: feature branches, `git checkout -b`, `git switch -c`, `git worktree add`, pushing refs other than
+`main` and its `master` mirror, creating pull requests, scratch clones of this repository used to isolate
+work, and any tool that creates branches or worktrees as a side effect. Integrate useful work from existing
+branches and pull requests into canonical `main`; merge existing pull requests into `main` after reviewing
+their changes. Instead of creating branches or pull requests, commit to `main` when the work is ready, keep
+unfinished work in the tree, coordinate through Agent Mail reservations and Beads IDs, and never revert or
+stash another agent's changes.
 
 ---
 
