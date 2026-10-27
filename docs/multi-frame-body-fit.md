@@ -30,8 +30,8 @@ physical-placement evidence described under **Join reviewed capture sources loca
 ftx measure capture-init-review decoded/manifest.json --model /path/to/anny.ftxbody \
     --calibration accepted-calibration.json --reference stationary-board.json \
     --reference-id capture-board --out capture-setup-001 --json
-# Inspect setup.json and complete capture-setup-001/capture-choices.json.
-ftx measure capture-init capture-setup-001/capture-choices.json \
+# Open capture-setup-001/index.html, complete the form, and download capture-choices.json.
+ftx measure capture-init /path/to/downloaded/capture-choices.json \
     --model /path/to/anny.ftxbody --out capture-input-001 --json
 ftx measure body-target-review capture-input-001/input.json \
     --model /path/to/anny.ftxbody --out target-review-001 --json
@@ -43,6 +43,22 @@ catalogue. Those indices identify the canonical manifest entries; timestamps sta
 are shown as exact text labels. All chosen frames must belong to one stream and camera epoch
 and match the checked calibration's oriented dimensions, rotation and supplied focal metadata.
 Displaying a candidate does not establish that its sheet camera will pass acquisition.
+
+The local setup page shows exact source-image copies and their native frame labels. Incompatible
+frames remain visible with selection disabled. Add shape and joint controls from the converted
+model's catalogue, enter their choices and bounds, and optionally add named independent tape
+observations. All six root components are visible with their original fixed-zero choices; the
+unselected shape defaults and rest-joint assumptions are also shown. New shape, joint and tape
+rows start blank, so their values, axes and roles must be supplied explicitly.
+
+**Check choices and prepare download** validates the complete form and makes a new choices file.
+Pending or invalid edits immediately withdraw that download. **Cancel pending edits** restores
+the last applied form; **Reset to original setup** restores the incomplete original choices and
+removes the edited download. The page uses only its local script and copied images, with no
+server, browser storage or upload. It does not estimate cameras or compute a body. `setup.json`
+and the original `capture-choices.json` remain available for explicit JSON authoring; the same
+native command validates either route. Downloaded choices keep the absolute setup path, so keep
+that setup directory and its original local sources available when applying them.
 
 Choose shared shape controls by their exact catalogue names. Each choice either fixes a value
 or fits a declared interval, for example the row structures

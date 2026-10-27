@@ -398,8 +398,31 @@ pub(super) fn review(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "reference":bundle.push("reference.json".into(), loaded.reference_bytes)?,
         "sheet":bundle.push("sheet.json".into(), loaded.sheet_bytes)?
     });
+    let base = Path::new(&loaded.setup.manifest.path)
+        .parent()
+        .ok_or_else(|| bad_input("setup manifest needs a parent directory"))?;
+    let mut views = Vec::with_capacity(loaded.setup.frames.len());
+    for candidate in &loaded.setup.frames {
+        let image = super::review::source_snapshot(
+            &mut bundle,
+            base,
+            &candidate.source,
+            candidate.frame_index,
+        )?;
+        // Full source records and u64 timestamps stay in setup.json, outside editable browser data.
+        views.push(
+            json!({"frame_index":candidate.frame_index,"label":candidate.label,
+            "cohort":candidate.cohort,"image_size_px":candidate.image_size_px,
+            "eligible":candidate.eligible,"image":image}),
+        );
+    }
+    let editor = super::setup_edit::attach(
+        &mut bundle,
+        &json!({"annotations":annotations,"catalogue":loaded.setup.catalogue,"frames":views}),
+    )?;
     let result = json!({"schema":"ftx-capture-setup-review/1","status":"CONFIGURATION_REQUIRED",
         "body_model_loaded":true,"body_fitted":false,"setup":context,"annotations":choices,
+        "editor":editor,"frames":views,
         "source_documents":originals,"model_sha256":loaded.setup.model_sha256,
         "selected_frames":loaded.setup.frames.len(),
         "calibration_compatible_frames":loaded.setup.frames.iter().filter(|f| f.eligible).count(),
@@ -410,7 +433,7 @@ pub(super) fn review(args: &Args) -> Result<(Value, i32, String), Refusal> {
         result,
         0,
         format!(
-            "Complete {}/capture-choices.json from setup.json, then run capture-init with the same model and a new output directory.",
+            "Open {}/index.html, choose frames and model controls, and download capture-choices.json. Run capture-init with the same model and a new output directory.",
             output.display()
         ),
     ))

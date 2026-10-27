@@ -127,7 +127,15 @@ pub(super) fn source_image(
     let base = Path::new(manifest)
         .parent()
         .ok_or_else(|| bad_input("capture manifest has no parent"))?;
-    let source = &record["source"];
+    source_snapshot(bundle, base, &record["source"], i)
+}
+
+pub(super) fn source_snapshot(
+    bundle: &mut Bundle,
+    base: &Path,
+    source: &Value,
+    index: usize,
+) -> Result<Value, Refusal> {
     let name = source["image"]
         .as_str()
         .ok_or_else(|| bad_input("capture source image is missing"))?;
@@ -142,7 +150,7 @@ pub(super) fn source_image(
     } else {
         "png"
     };
-    bundle.push(format!("source-{i:04}.{extension}"), bytes)
+    bundle.push(format!("source-{index:04}.{extension}"), bytes)
 }
 
 fn observed_silhouette(frame: &FitFrame) -> Result<(String, String), Refusal> {

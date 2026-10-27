@@ -39,6 +39,11 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   Empty targets/observations/starts keep the result a preparation draft. Independent optional metric
   observations retain their exact uncertainty, evidence and FIT/CHECK roles. Subsequent target, photo
   and initialization editors complete that ordinary input; ordinary fitting retains its original gates.
+  The private offline setup page shows exact copied images, native text labels and explicit model
+  choices. Browser payloads contain bounded frame ordinals instead of native timestamp numbers.
+  Blank new controls, visible fixed-root/default assumptions and explicit FIT/CHECK tape roles
+  retain operator authority. Apply prepares a choices download; pending/invalid edits, cancel and
+  reset revoke stale links. Native source bindings and camera/model admission remain authoritative.
 - `ftx measure body-target-review INPUT --model MODEL --out NEW_DIR [--json]` and
   `ftx measure body-targets ANNOTATIONS --model MODEL --out NEW_DIR [--json]`: author named
   correspondences on the exact array-verified converted model in a private offline mesh picker,

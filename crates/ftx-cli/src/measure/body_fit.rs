@@ -27,6 +27,7 @@ use crate::{Args, bad_input, known_options, read_json, required};
 mod capture;
 mod review;
 mod setup;
+mod setup_edit;
 mod start_edit;
 mod start_review;
 mod targets;
