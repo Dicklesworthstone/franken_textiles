@@ -295,6 +295,104 @@ fn usable_capture_has_human_summary_without_claiming_motion_evidence() {
 }
 
 #[test]
+fn rectangular_regions_match_binary_masks_without_creating_mask_files() {
+    let dir = setup();
+    let original = read(&dir.join("video/frames.json"));
+    let files = run(&dir, &[], 2)["result"].clone();
+    let mut rectangles = original.clone();
+    for frame in rectangles["frames"].as_array_mut().unwrap() {
+        frame["person_mask"] = json!({"rect_px":[0,0,16,16]});
+        frame["sheet_mask"] = json!({"rect_px":[16,0,16,16]});
+    }
+    save(&dir.join("video/frames.json"), &rectangles);
+    let regions = run(&dir, &[], 2)["result"].clone();
+    // The existing typed reader serializes focal lengths as f64 (800 -> 800.0).
+    // Preserve that whole legacy representation, changing only the declared mask sources.
+    let mut expected_frames = files["input"]["frames"].clone();
+    for frame in expected_frames.as_array_mut().unwrap() {
+        frame["person_mask"] = json!({"rect_px":[0,0,16,16]});
+        frame["sheet_mask"] = json!({"rect_px":[16,0,16,16]});
+    }
+    assert_eq!(regions["input"]["frames"], expected_frames);
+    let a = &files["selected_sources"][0];
+    let b = &regions["selected_sources"][0];
+    for key in [
+        "image_sha256",
+        "decoded_gray_sha256",
+        "person_mask_sha256",
+        "sheet_mask_sha256",
+    ] {
+        assert_eq!(a[key], b[key]);
+    }
+    assert!(a["person_mask"].is_string());
+    assert!(a["person_mask_file_sha256"].is_string());
+    assert!(b.get("person_mask_file_sha256").is_none());
+    assert!(b.get("sheet_mask_file_sha256").is_none());
+    assert_eq!(b["person_mask"], json!({"rect_px":[0,0,16,16]}));
+    // Every score, rejection, candidate, selected identity and advisory must remain equal.
+    let comparable = |mut report: Value| {
+        for key in ["input", "selected_sources"] {
+            report.as_object_mut().unwrap().remove(key);
+        }
+        report
+    };
+    assert_eq!(comparable(regions.clone()), comparable(files));
+    rectangles["frames"][2]["sheet_mask"] = json!("sheet.png");
+    save(&dir.join("video/frames.json"), &rectangles);
+    let mixed = run(&dir, &[], 2)["result"].clone();
+    assert_eq!(mixed["windows"], regions["windows"]);
+    assert!(mixed["selected_sources"][0]["sheet_mask_file_sha256"].is_string());
+    assert!(
+        mixed["selected_sources"][0]
+            .get("person_mask_file_sha256")
+            .is_none()
+    );
+    assert_eq!(std::fs::read_dir(dir.join("video")).unwrap().count(), 7);
+}
+
+#[test]
+fn rectangular_regions_refuse_invalid_bounds_and_keep_thin_regions_unusable() {
+    let dir = setup();
+    let original = read(&dir.join("video/frames.json"));
+    for field in ["person_mask", "sheet_mask"] {
+        for invalid in [
+            json!({"rect_px":[0,0,0,16]}),
+            json!({"rect_px":[0,0,16,0]}),
+            json!({"rect_px":[17,0,16,16]}),
+            json!({"rect_px":[0,1,16,16]}),
+            json!({"rect_px":[u32::MAX,0,16,16]}),
+            json!({"rect_px":[0,0,u32::MAX,16]}),
+            json!({"rect_px":[-1,0,16,16]}),
+            json!({"rect_px":[0.5,0,16,16]}),
+            json!({"rect_px":[0,0,16]}),
+            json!({"rect_px":[0,0,16,16],"path":"person.png"}),
+            json!({}),
+            Value::Null,
+        ] {
+            let mut manifest = original.clone();
+            manifest["frames"][0][field] = invalid;
+            save(&dir.join("video/frames.json"), &manifest);
+            run(&dir, &["--out", "refused-region.json"], 3);
+            assert!(!dir.join("refused-region.json").exists());
+        }
+    }
+    let mut thin = original;
+    for frame in thin["frames"].as_array_mut().unwrap() {
+        frame["person_mask"] = json!({"rect_px":[0,0,2,16]});
+    }
+    save(&dir.join("video/frames.json"), &thin);
+    let result = run(&dir, &[], 2)["result"].clone();
+    assert_eq!(result["status"], "NO_USABLE_FRAMES");
+    assert_eq!(result["selected_frames"], json!([]));
+    for window in result["windows"].as_array().unwrap() {
+        assert!(window["selected"].is_null());
+        for candidate in window["candidates"].as_array().unwrap() {
+            assert!(candidate["quality"]["person"]["laplacian_variance"].is_null());
+        }
+    }
+}
+
+#[test]
 fn malformed_manifest_and_masks_publish_no_output() {
     let dir = setup();
     let original = read(&dir.join("video/frames.json"));

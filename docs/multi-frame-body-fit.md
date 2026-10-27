@@ -214,7 +214,9 @@ Use [`ftx measure video-decode`](video-frame-selection.md#import-a-local-phone-c
 prepare a clip for selection. Its strict request declares the chosen video
 stream, camera epoch and clockwise turn; it snapshots the original clip locally,
 checks every original PTS against the actual decoder log, and writes `frames.json`
-with the oriented images. Supply the explicitly named masks before running
+with the oriented images. Supply the explicitly named masks, or replace each mask path with
+an explicit `{"rect_px":[left,top,width,height]}` sharpness region as documented in the
+selection guide, before running
 `video-select`, then use that selection in the capture declaration above.
 
 Choose the actual display transform from the acquisition and verify it against

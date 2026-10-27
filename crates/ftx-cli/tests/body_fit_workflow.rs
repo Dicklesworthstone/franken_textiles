@@ -459,7 +459,9 @@ fn capture_acquires_actual_charuco_pixels_and_replays_the_checked_cameras() {
     // no production input is rescaled or granted a different image budget.
     let (model, original) = fixture_scaled(0.25);
     std::fs::write(dir.join("model.ftxbody"), model).unwrap();
-    let input = capture::charuco(&dir, original);
+    let mut input = original;
+    // Actual marker pixels reach the detector; body correspondences remain synthetic.
+    capture::wrap_images(&dir, &mut input, true);
     save(&dir, &input);
     let review = capture_review(&dir, "charuco-review", 0)["result"].clone();
     assert_eq!(review["body_model_loaded"], false);
@@ -624,6 +626,125 @@ fn capture_acquires_actual_charuco_pixels_and_replays_the_checked_cameras() {
             .contains("every predeclared CHECK")
     );
     assert!(!dir.join("occluded-check").exists());
+}
+
+#[test]
+fn capture_rectangular_sharpness_regions_preserve_numerical_fit_and_bind_source_edits() {
+    let dir = setup();
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("input.json")).unwrap()).unwrap();
+    let mut input = capture::wrap(&dir, original);
+    save(&dir, &input);
+    let mut file_fit = run(&dir, &[], 0)["result"].clone();
+    let path = dir.join("capture-frames.json");
+    let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for (i, frame) in manifest["frames"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        frame["person_mask"] = json!({"rect_px":[0,0,640,960]});
+        frame["sheet_mask"] = json!({"rect_px":[640,0,640,960]});
+        // The new path must work without either binary mask file; preserve them under new names.
+        for kind in ["person", "sheet"] {
+            std::fs::rename(
+                dir.join(format!("capture-{kind}-{i}.png")),
+                dir.join(format!("capture-{kind}-{i}.unused")),
+            )
+            .unwrap();
+        }
+    }
+    std::fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    let selected = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args(["measure", "video-select", "capture-frames.json", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        selected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    let selected: Value = serde_json::from_slice(&selected.stdout).unwrap();
+    for frame in input["fit"]["frames"].as_array_mut().unwrap() {
+        let id = frame["source"]["metadata"]["frame"].clone();
+        frame["source"] = selected["result"]["selected_sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["metadata"]["frame"] == id)
+            .unwrap()
+            .clone();
+        assert!(frame["source"].get("person_mask_file_sha256").is_none());
+    }
+    save(&dir, &input);
+    let review = capture_review(&dir, "rect-review", 0)["result"].clone();
+    let old_capture = file_fit["capture_input"].clone();
+    let current = &review["capture_input"];
+    assert_ne!(current["sources_sha256"], old_capture["sources_sha256"]);
+    assert_eq!(
+        current["selection"]["windows"],
+        old_capture["selection"]["windows"]
+    );
+    for (a, b) in current["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(old_capture["frames"].as_array().unwrap())
+    {
+        for key in [
+            "frame",
+            "lens_id",
+            "calibration_sha256",
+            "calibration",
+            "sheet_pose",
+            "reference_input_sha256",
+        ] {
+            assert_eq!(a[key], b[key]);
+        }
+        for key in [
+            "image_sha256",
+            "decoded_gray_sha256",
+            "person_mask_sha256",
+            "sheet_mask_sha256",
+        ] {
+            assert_eq!(a["source"][key], b["source"][key]);
+        }
+    }
+    let replay: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("rect-review/capture.json")).unwrap())
+            .unwrap();
+    assert_eq!(replay["reviewed_sources_sha256"], current["sources_sha256"]);
+    save(&dir, &replay);
+    let mut region_fit = run(&dir, &[], 0)["result"].clone();
+    assert_eq!(
+        region_fit["input_sha256"],
+        sha256_hex(&std::fs::read(dir.join("input.json")).unwrap())
+    );
+    assert_eq!(region_fit["capture_input"]["input"], replay);
+    assert_eq!(
+        region_fit["capture_input"]["sources_sha256"],
+        current["sources_sha256"]
+    );
+    // Compare every numerical/model/fit field. Different source declarations and exact input
+    // bytes were checked separately above; they must not be presented as the same evidence.
+    for report in [&mut file_fit, &mut region_fit] {
+        report.as_object_mut().unwrap().remove("input_sha256");
+        report.as_object_mut().unwrap().remove("capture_input");
+    }
+    assert_eq!(region_fit, file_fit);
+    manifest["frames"][0]["person_mask"]["rect_px"][2] = json!(639);
+    std::fs::write(path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    std::fs::rename(dir.join("model.ftxbody"), dir.join("unused-model.ftxbody")).unwrap();
+    let stale = run(&dir, &["--out", "stale-region.json"], 3);
+    assert!(
+        stale["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("capture source changed")
+    );
+    assert!(!dir.join("stale-region.json").exists());
 }
 
 #[test]

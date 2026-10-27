@@ -31,13 +31,7 @@ pub(super) fn wrap(dir: &Path, mut request: Value) -> Value {
     request
 }
 
-/// Actual rendered marker pixels enter the native detector. Body correspondences remain synthetic.
-pub(super) fn charuco(dir: &Path, mut request: Value) -> Value {
-    wrap_images(dir, &mut request, true);
-    request
-}
-
-fn wrap_images(dir: &Path, request: &mut Value, charuco: bool) {
+pub(super) fn wrap_images(dir: &Path, request: &mut Value, charuco: bool) {
     // Reuse the independent analytical calibration input, with its original fit/held-out partitions.
     let calibration_input: Value = serde_json::from_slice(include_bytes!(
         "../../../../docs/examples/camera-calibration.json"

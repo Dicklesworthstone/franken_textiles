@@ -2025,6 +2025,16 @@ Letter 0.000143 (f 2871.5), as A4 0.000074 (f 4691.5).
 
 ### E.1 Native capture review extension (not reference parity)
 
+The decoded-frame selector's `person_mask` and `sheet_mask` each accept either the original
+binary PNG path or `{"rect_px":[left,top,width,height]}`. Rectangle values are integer stored-pixel
+coordinates with positive width/height, half-open bounds and no clipping or rotation. Each lies
+entirely inside the already-oriented frame. It rasterizes to the same 0/255 buffer consumed by
+the existing independent region scores; thin regions retain absent interior evidence. Receipts
+retain the exact declaration and decoded-mask hash, and include a file hash only for a file
+source. File-mask behavior and receipts stay unchanged. These are explicit sharpness sampling
+regions, not inferred segmentation or body-fit silhouettes; unrelated included texture still
+affects the score. Capture replay binds the declarations through ordinary selection evidence.
+
 For a new, unbound review only, a frame may declare `frame: {stream, timestamp_us}` instead of
 `source`; its `calibration_sha256` may be omitted. The review resolves that exact identity through
 the current decoded-frame selector and hashes the declared calibration file, then performs all

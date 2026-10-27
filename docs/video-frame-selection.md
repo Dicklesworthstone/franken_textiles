@@ -21,7 +21,7 @@ guesses them from a phone model or nominal frame rate.
 
 ```sh
 ftx measure video-decode decode-input.json --out capture-decode
-# Supply reviewed masks at the paths named in capture-decode/frames.json.
+# Supply reviewed masks or explicit rectangle regions in capture-decode/frames.json.
 ftx measure video-select capture-decode/frames.json --out selection.json
 ```
 
@@ -55,8 +55,9 @@ mapping retained. Container rotation metadata is retained, while `rotation_cw_de
 controls the applied transform. Review the images against the source before masking/calibration.
 
 Success is `DECODED_REQUIRES_MASKS`. The command creates **no person or sheet masks** and selects
-no frames. Provide the manifest's matching oriented binary PNG masks, or explicitly edit their
-paths, before running `video-select`. Decoding alone cannot establish segmentation, a fixed
+no frames. Provide the manifest's matching oriented binary PNG masks, explicitly edit their
+paths, or replace each mask path with a reviewed rectangle below before running `video-select`.
+Decoding alone cannot establish segmentation, a fixed
 lens, stillness, anatomical correspondence, calibrated physical accuracy or body-fit readiness.
 The opt-in `video_decode_workflow` integration test exercises real external variable-rate clips,
 large source-clock epochs, explicit rotation, private output, budget refusal and the ordinary
@@ -125,7 +126,26 @@ or identity (1). A rotation or reflection declaration refuses, even when it woul
 dimensions, because transforming only the frame would detach it from its masks and calibration.
 Apply the transform to all three before selection. JPEG damage, incomplete scans, unsupported color
 models and ambiguous orientation metadata retain the strict photo decoder's refusals.
-Masks must be 8-bit grayscale PNGs containing
+Each `person_mask` and `sheet_mask` may alternatively be an explicit rectangle:
+
+```json
+{"rect_px": [120, 80, 200, 300]}
+```
+
+The four integers are `[left, top, width, height]` in the already-oriented stored image, with
+half-open pixel bounds. Width and height must be positive and the entire rectangle must lie
+inside the frame; invalid bounds refuse without clipping. Choose a visibly textured patch on
+the person and a separate patch on the sheet. These are authored sharpness sampling regions:
+included background texture affects their scores, and no segmentation or containment check is
+inferred. No PNG mask files are needed for these declarations. File and rectangle masks can be
+mixed independently. The exact declaration and rasterized 0/255 buffer hash enter the selected
+source record; only file masks have a `*_mask_file_sha256` field. A later region edit changes
+the capture evidence and invalidates an existing reviewed binding.
+
+Rectangles reuse the same 3 × 3 interior rule below; a one- or two-pixel-wide region cannot
+supply sharpness evidence and is not enlarged. They add no fitting silhouette constraints.
+
+File masks must be 8-bit grayscale PNGs containing
 only 0 (outside) and 255 (inside), with exactly the oriented image's width and height. No
 resizing, mask inference or thresholding is performed. Transparency, embedded EXIF and animated
 PNGs are refused: remove these metadata/encodings after correctly decoding and orienting the

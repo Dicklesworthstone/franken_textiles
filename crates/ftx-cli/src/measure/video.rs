@@ -22,8 +22,21 @@ use crate::{Args, bad_input, known_options};
 struct FrameFiles {
     metadata: FrameMetadata,
     image: String,
-    person_mask: String,
-    sheet_mask: String,
+    person_mask: Mask,
+    sheet_mask: Mask,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum Mask {
+    File(String),
+    Rectangle(Rectangle),
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Rectangle {
+    rect_px: [u32; 4],
 }
 
 #[derive(Deserialize, Serialize)]
@@ -165,6 +178,34 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     Ok(result)
 }
 
+fn load_mask(
+    base: &Path,
+    source: &Mask,
+    size: [usize; 2],
+) -> Result<(Gray, Option<String>), Refusal> {
+    match source {
+        Mask::File(path) => load_hashed(base, path, true).map(|(mask, sha)| (mask, Some(sha))),
+        Mask::Rectangle(Rectangle { rect_px }) => {
+            let [x, y, width, height] = rect_px.map(|n| n as usize);
+            let bounds = x.checked_add(width).zip(y.checked_add(height));
+            let Some((right, bottom)) = bounds.filter(|&(right, bottom)| {
+                width > 0 && height > 0 && right <= size[0] && bottom <= size[1]
+            }) else {
+                return Err(bad_input(
+                    "mask rect_px needs positive width/height and in-image integer bounds; no clipping is performed",
+                ));
+            };
+            let mut mask = Gray::filled(size[0], size[1], 0);
+            // Half-open stored-pixel bounds. This is an authored sampling region, not
+            // segmentation: the ordinary 3 x 3 mask-interior rule still owns scoring.
+            for row in y..bottom {
+                mask.data[row * size[0] + x..row * size[0] + right].fill(255);
+            }
+            Ok((mask, None))
+        }
+    }
+}
+
 pub(super) fn analyze(path: &Path) -> Result<(Value, i32, String), Refusal> {
     let bytes = read_limited(path, 16 * 1024 * 1024)?;
     let mut input: Manifest = serde_json::from_slice(&bytes)
@@ -198,8 +239,8 @@ pub(super) fn analyze(path: &Path) -> Result<(Value, i32, String), Refusal> {
     let mut sources = Vec::with_capacity(input.frames.len());
     for frame in &input.frames {
         let (image, image_sha) = load_hashed(base, &frame.image, false)?;
-        let (person, person_sha) = load_hashed(base, &frame.person_mask, true)?;
-        let (sheet, sheet_sha) = load_hashed(base, &frame.sheet_mask, true)?;
+        let (person, person_sha) = load_mask(base, &frame.person_mask, [image.w, image.h])?;
+        let (sheet, sheet_sha) = load_mask(base, &frame.sheet_mask, [image.w, image.h])?;
         if [image.w, image.h] != [person.w, person.h] || [image.w, image.h] != [sheet.w, sheet.h] {
             return Err(bad_input(format!(
                 "{}: both masks must have the oriented frame's exact dimensions; no resampling is performed",
@@ -213,17 +254,20 @@ pub(super) fn analyze(path: &Path) -> Result<(Value, i32, String), Refusal> {
             &person.data,
             &sheet.data,
         )?);
-        sources.push((
-            frame.metadata.frame.clone(),
-            json!({"metadata":frame.metadata,"image":frame.image,
+        let mut record = json!({"metadata":frame.metadata,"image":frame.image,
             "person_mask":frame.person_mask,"sheet_mask":frame.sheet_mask,
             "image_size_px":[image.w,image.h],
-            "image_sha256":image_sha,"person_mask_file_sha256":person_sha,
-            "sheet_mask_file_sha256":sheet_sha,
+            "image_sha256":image_sha,
             "decoded_gray_sha256":sha256_hex(&image.data),
             "person_mask_sha256":sha256_hex(&person.data),
-            "sheet_mask_sha256":sha256_hex(&sheet.data)}),
-        ));
+            "sheet_mask_sha256":sha256_hex(&sheet.data)});
+        if let Some(sha) = person_sha {
+            record["person_mask_file_sha256"] = json!(sha);
+        }
+        if let Some(sha) = sheet_sha {
+            record["sheet_mask_file_sha256"] = json!(sha);
+        }
+        sources.push((frame.metadata.frame.clone(), record));
     }
     let report = select_frames(&scores, &input.options)?;
     let missing = report

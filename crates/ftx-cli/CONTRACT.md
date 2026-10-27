@@ -12,10 +12,17 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   and a quarter-turn rotation; the existing selector receives original PTS-derived microseconds,
   checked decoded pixels and a `ftx-video-frames/1` manifest. Independently probed and decoded
   timestamps/counts/dimensions must agree. No masks are invented: success is
-  `DECODED_REQUIRES_MASKS` until the operator supplies the named binary person/sheet masks.
+  `DECODED_REQUIRES_MASKS` until the operator supplies person/sheet masks or explicitly replaces
+  their paths with rectangle sampling regions in the manifest.
   New private output only, local container/protocol allowlists, explicit source/frame/pixel/byte/time
   limits, and no partial success on decoder failure. See `docs/video-frame-selection.md` and the
   opt-in real external `video_decode_workflow` test. No stillness, calibration, anatomy or fit claim.
+- `ftx measure video-select`: each person/sheet mask is a binary PNG path or explicit
+  `{"rect_px":[left,top,width,height]}` sharpness region in stored oriented pixels. Rectangles
+  reuse ordinary binary-mask scoring, refuse invalid integer bounds without clipping, and
+  retain their declaration and raster hash without inventing a file hash. Original file-mask
+  records stay unchanged. Small/empty-interior regions remain unusable. These sampling regions
+  infer no segmentation, stillness or fitting silhouette. Capture replay binds subsequent edits.
 - `ftx measure capture-review CAPTURE.json --out NEW_DIR [--silhouettes MANIFEST] [--json]`: reuse decoded source selection
   and checked same-lens sheet cameras without a model or body fit. The private create-only review
   shows original images and every supplied named FIT/CHECK keypoint, sigma and model target. Original
