@@ -346,7 +346,7 @@ fn find(root: &mut [usize], mut i: usize) -> usize {
 /// # Errors
 /// [`RefusalCode::DegenerateGeometry`] for an empty mesh, an index out of range, a degenerate triangle,
 /// or a skin that is open, non-manifold or inconsistently wound; [`RefusalCode::InwardWound`] for a
-/// negative enclosed volume; [`RefusalCode::NonFinite`] for a non-finite vertex.
+/// negative enclosed volume; [`RefusalCode::NonFinite`] for a non-finite vertex or derived metric.
 pub fn skin_mesh(vertices: &[Vec3], faces: &[[u32; 3]]) -> Result<SkinMesh, Refusal> {
     let degenerate = |m: String| Refusal::new(RefusalCode::DegenerateGeometry, m);
     if faces.is_empty()
@@ -425,6 +425,13 @@ pub fn skin_mesh(vertices: &[Vec3], faces: &[[u32; 3]]) -> Result<SkinMesh, Refu
         let ar = 0.5 * (b - a).cross(c - a).norm();
         area += ar;
         min_area = min_area.min(ar);
+    }
+    if !volume.is_finite() || !area.is_finite() || !min_area.is_finite() {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "the skin's derived area or volume is not finite",
+        )
+        .repair("check the body mesh units and coordinate magnitudes before retrying"));
     }
     if min_area <= 1e-14 {
         return Err(degenerate(format!(
@@ -612,6 +619,31 @@ mod tests {
         assert_eq!(s.report.triangles_dropped, 12);
         assert!((s.report.volume - 1.0).abs() < 1e-15);
         assert!((s.report.area - 6.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn skin_refuses_non_finite_derived_geometry() {
+        for side in [1.0, 1e50] {
+            let (v, f) = cube(Vec3::ZERO, side, 0);
+            let skin = skin_mesh(&v, &f).unwrap();
+            assert!(skin.report.volume.is_finite() && skin.report.volume > 0.0);
+            assert!(skin.report.area.is_finite() && skin.report.area > 0.0);
+            assert!(skin.report.min_triangle_area.is_finite());
+        }
+        let results = [1e100, 1e155].map(|side| {
+            let (v, f) = cube(Vec3::ZERO, side, 0);
+            assert!(v.iter().all(|p| p.is_finite()));
+            skin_mesh(&v, &f)
+                .map(|skin| {
+                    [
+                        skin.report.volume,
+                        skin.report.area,
+                        skin.report.min_triangle_area,
+                    ]
+                })
+                .map_err(|refusal| refusal.code)
+        });
+        assert_eq!(results, [Err(RefusalCode::NonFinite); 2]);
     }
 
     /// Inward winding, an open skin and a flipped triangle are refused.

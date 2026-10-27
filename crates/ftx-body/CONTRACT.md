@@ -133,9 +133,11 @@ The stored bone-roll matrices are the package's float32 values (not exactly orth
 inverse uses their transpose, as the package does.
 
 **Error model.** `Refusal`: `io` (file), `invalid_document` (malformed or inconsistent data, a missing
-bone or local change), `non_finite` (a parameter, delta or vertex), `out_of_range` (wrong vector lengths,
+bone or local change), `non_finite` (a parameter, delta, vertex or derived skin area/volume), `out_of_range` (wrong vector lengths,
 an abduction outside 0–180°, a ramp outside 0–1, a negative nappy), `degenerate_geometry` (an open,
 non-manifold or inconsistently wound skin, a degenerate triangle), `inward_wound` (negative volume).
+Finite vertices can still overflow geometry arithmetic; skin admission refuses non-finite derived
+metrics rather than publishing an unusable volume or area. This adds no coordinate clamp.
 
 **No claims.** Fit quality against real people (gate G1 on held-out measurements; the fit reaches the
 targets, which says nothing about whether the shape between them is the wearer's); the WHO-calibrated
