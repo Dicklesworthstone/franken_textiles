@@ -138,14 +138,26 @@ fn transients_match_complete_shared_reports_and_replay_without_catalog() {
         );
         assert_eq!(expected["comfort_claim"], false);
         assert_eq!(expected["empirical_validation_claim"], false);
-        for layer in input["layers"].as_array_mut().unwrap() {
-            let s: Selection = serde_json::from_value(layer.clone()).unwrap();
-            *layer = serde_json::to_value(db.resolve(&s).unwrap().frozen_selection()).unwrap();
+        let replay_text = expected["replay_request_json"].as_str().unwrap();
+        let replay: Request = serde_json::from_str(replay_text).unwrap();
+        let mut original_settings = serde_json::to_value(typed(&input)).unwrap();
+        let mut frozen_settings = serde_json::to_value(&replay).unwrap();
+        original_settings.as_object_mut().unwrap().remove("layers");
+        frozen_settings.as_object_mut().unwrap().remove("layers");
+        assert_eq!(frozen_settings, original_settings);
+        for (original, frozen) in typed(&input).layers.iter().zip(&replay.layers) {
+            assert_eq!(frozen.allow_estimates, original.allow_estimates);
+            assert!(frozen.record.is_some());
+            assert!(frozen.expected_sha256.is_some());
         }
-        assert_eq!(typed(&input).evaluate(&empty).unwrap(), expected);
-        assert_eq!(portable(&input), expected);
-        input["layers"][0]["record"]["sources"]["nist7282"]["reference"] = json!("test:changed");
-        same_refusal(&input);
+        assert_eq!(replay.evaluate(&empty).unwrap(), expected);
+        assert_eq!(
+            thermal::transient(replay_text).unwrap(),
+            thermal::transient(&input.to_string()).unwrap()
+        );
+        let mut changed: Value = serde_json::from_str(replay_text).unwrap();
+        changed["layers"][0]["record"]["sources"]["nist7282"]["reference"] = json!("test:changed");
+        same_refusal(&changed);
     }
 }
 
@@ -181,6 +193,14 @@ fn exterior_transients_preserve_material_sensitive_radiation_and_refusals() {
         first["exterior_exchange"]["conditions"],
         input["exterior_exchange"]
     );
+    let replay_text = first["replay_request_json"].as_str().unwrap();
+    let replay: Request = serde_json::from_str(replay_text).unwrap();
+    let empty = Catalog::from_json(r#"{"schema":"ftx-textile-catalog/1","materials":[]}"#).unwrap();
+    assert_eq!(replay.evaluate(&empty).unwrap(), first);
+    assert_eq!(
+        thermal::transient(replay_text).unwrap(),
+        thermal::transient(&input.to_string()).unwrap()
+    );
     let exterior = &first["exterior_exchange"];
     assert!(
         (first["outgoing_energy_j"].as_f64().unwrap()
@@ -204,6 +224,52 @@ fn exterior_transients_preserve_material_sensitive_radiation_and_refusals() {
     let mut bad = input;
     bad["exterior_exchange"]["allow_estimates"] = json!(false);
     same_refusal(&bad);
+}
+
+#[test]
+fn frozen_replay_preserves_mixed_layer_policies_exterior_controls_and_negative_zero() {
+    let mut input = exterior_fixture(0.8);
+    let mut strict = input["layers"][0].clone();
+    strict["id"] = json!("synthetic-strict-policy-sheet");
+    strict["record"]["id"] = strict["id"].clone();
+    strict["allow_estimates"] = json!(false);
+    strict["record"]["sources"]["synthetic"]["note"] =
+        json!("Synthetic evidence-classification fixture; no measured textile data");
+    for quantity in strict["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        quantity["evidence"] = json!("published");
+    }
+    let estimated = input["layers"][0].clone();
+    input["layers"] = json!([strict, estimated]);
+    input["interface_resistance_m2_k_w"] = json!([0.03]);
+    input["initial_temperature_c"] = json!(-0.0);
+    input["step_seconds"] = json!(0.125);
+    input["record_every"] = json!(3);
+    let output_text = thermal::transient(&input.to_string()).unwrap();
+    let output: Value = serde_json::from_str(&output_text).unwrap();
+    let replay_text = output["replay_request_json"].as_str().unwrap();
+    let replay: Request = serde_json::from_str(replay_text).unwrap();
+    assert_eq!(replay.initial_temperature_c.to_bits(), (-0.0_f64).to_bits());
+    assert_eq!(replay.step_seconds, 0.125);
+    assert_eq!(replay.steps, 4);
+    assert_eq!(replay.record_every, 3);
+    assert_eq!(replay.interface_resistance_m2_k_w, vec![0.03]);
+    assert!(!replay.layers[0].allow_estimates);
+    assert!(replay.layers[1].allow_estimates);
+    let original: Request = serde_json::from_value(input).unwrap();
+    assert_eq!(
+        serde_json::to_value(&replay.exterior_exchange).unwrap(),
+        serde_json::to_value(&original.exterior_exchange).unwrap()
+    );
+    let empty = Catalog::from_json(r#"{"schema":"ftx-textile-catalog/1","materials":[]}"#).unwrap();
+    assert_eq!(replay.evaluate(&empty).unwrap(), output);
+    assert_eq!(thermal::transient(replay_text).unwrap(), output_text);
+    assert_eq!(output["trace"].as_array().unwrap().len(), 3);
+    assert_eq!(output["trace"][1]["time_seconds"], json!(0.375));
+    assert_eq!(output["trace"][2]["time_seconds"], json!(0.5));
 }
 
 #[test]

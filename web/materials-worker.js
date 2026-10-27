@@ -146,6 +146,27 @@ self.onmessage = async ({ data: msg }) => {
       }
       case "catalog": result = json(ftx.material_catalog(msg.query)); break;
       case "inspect": result = json(ftx.material_inspect(msg.selection)); break;
+      case "thermalPoint": {
+        if (typeof ftx.thermal_at !== "function" || typeof ftx.material_inspect !== "function") throw Error("Rebuild web/pkg: missing material temperature engine.");
+        if (!Number.isFinite(msg.temperatureC)) throw Error("Supply a finite material temperature in degrees Celsius.");
+        raw = ftx.thermal_at(msg.selection, msg.temperatureC); result = json(raw);
+        const inspection = json(ftx.material_inspect(msg.selection));
+        if (result.schema !== "ftx-thermal-point/1" || typeof inspection.selection_json !== "string") throw Error("Rebuild web/pkg: incomplete material temperature result.");
+        const frozen = json(inspection.selection_json), hash = result.selection?.expected_sha256;
+        if (typeof hash !== "string" || !hash || frozen.expected_sha256 !== hash || result.material?.sha256 !== hash) throw Error("Material temperature and frozen selection source identities disagree.");
+        files = [file("thermal-point-report.json", raw), file("thermal-point-source-selection.json", msg.selection),
+          file("thermal-point-frozen-selection.json", inspection.selection_json)];
+        break;
+      }
+      case "thermalHistory": {
+        if (json(msg.thermalRequest).schema !== "ftx-thermal-transient/1") throw Error("Choose an ftx-thermal-transient/1 dry heating or cooling request.");
+        if (typeof ftx.thermal_transient !== "function") throw Error("Rebuild web/pkg: missing dry transient thermal engine.");
+        raw = ftx.thermal_transient(msg.thermalRequest); result = json(raw);
+        if (result.schema !== "ftx-thermal-transient-report/1" || typeof result.replay_request_json !== "string") throw Error("Rebuild web/pkg: missing frozen dry thermal replay.");
+        files = [file("thermal-history-report.json", raw), file("thermal-history-request.json", msg.thermalRequest),
+          file("thermal-history-replay.json", result.replay_request_json)];
+        break;
+      }
       case "treatment": {
         const schema = json(msg.treatmentRequest).schema;
         if (schema === "ftx-pattern-treatment/1") {

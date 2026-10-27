@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "price", "sew"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "treatment", "vapor", "calibrate",
-  "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit"];
+  "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory"];
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
@@ -23,6 +23,7 @@ for (const op of operations) {
   const title = document.createElement("h3"); title.textContent = ({ screen: "Source-qualified screening",
     study: "Fixed-pattern manufacturing alternatives", scenario: "Fresh drape and heat alternatives",
     pressure: "Pressure-conditioned material", treatment: "Laundering and dimensional treatment", vapor: "Potential evaporative transfer", calibrate: "Identified material behavior",
+    thermalPoint: "Material at the stated temperature", thermalHistory: "Dry heating and cooling history",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
     stripHistory: "Strip loading and recovery", vaporSurface: "Vapor transfer on this drape",
     stripFit: "Clamped-strip identification", outfit: "Imported joint outfit" })[op] || op;
@@ -47,6 +48,9 @@ function controls() {
   $("treatment").disabled ||= !has("treatmentRequest");
   $("useTreatment").disabled = !!pending || !preparedTreatment;
   $("vapor").disabled ||= !has("vaporRequest");
+  $("thermalPoint").disabled ||= !$("selection").value.trim() || !$("thermalPointTemperature").value.trim() ||
+    !Number.isFinite(Number($("thermalPointTemperature").value));
+  $("thermalHistory").disabled ||= !has("thermalRequest");
   $("calibrate").disabled ||= !has("calibrationRequest");
   $("stageInterface").disabled ||= !source || !interfaceReady || !calibratedPair;
   $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
@@ -89,6 +93,10 @@ function clear(keys) {
   }
 }
 function error(message) { $("error").textContent = message; $("error").hidden = false; }
+function invalidateThermalPoint() {
+  if (pending?.op === "thermalPoint") start();
+  clear(["thermalPoint"]); controls();
+}
 function start() {
   if (worker) worker.terminate();
   const generation = ++epoch;
@@ -1382,6 +1390,7 @@ function vaporComparison(op, parent, alternatives) {
   }
 }
 function inspectResult(r, selectionJson) {
+  clear(["thermalPoint"]);
   inspected = selectionJson || r.selection_json || text(r.selection);
   $("detail").textContent = text(r.snapshot);
   $("capabilities").replaceChildren();
@@ -1393,6 +1402,96 @@ function inspectResult(r, selectionJson) {
     row.append(a, b); table.append(row);
   }
   $("capabilities").append(table);
+}
+function thermalPointResult(parent, r) {
+  const properties = table(parent, "Source-qualified thermal properties", ["Quantity", "Value", "Unit"]);
+  cells(properties, ["Material temperature", metric(r.temperature_c), "°C"]);
+  cells(properties, ["Effective sheet resistance", metric(r.resistance_m2_k_w), "m² K/W"]);
+  cells(properties, ["Areal heat capacity", metric(r.areal_heat_capacity_j_m2_k), "J/(m² K)"]);
+  cells(properties, ["Common source temperature interval", Array.isArray(r.temperature_domain_c) ?
+    r.temperature_domain_c.map(metric).join(" to ") : "Not reported for this model", "°C"]);
+  const note = document.createElement("p");
+  note.textContent = "These properties describe the selected dry material at the stated temperature. " +
+    "A source-qualified property value does not establish garment warmth or comfort. Keep the frozen selection with the reported temperature to replay this point.";
+  parent.append(note);
+  detail(parent, "Material observations, thermal laws and source conditions", r.material);
+  return { schema: r.schema, material_id: r.selection?.id, material_sha256: r.material?.sha256,
+    allow_estimates: r.selection?.allow_estimates, model: r.model,
+    uncertainty_propagated: r.uncertainty_propagated, comfort_claim: r.comfort_claim,
+    empirical_validation_claim: r.empirical_validation_claim };
+}
+function thermalHistoryResult(parent, r) {
+  const energy = table(parent, "Signed heat and stored energy", ["Quantity", "Value", "Unit"]);
+  for (const [label, key, unit] of [
+    ["Incoming energy at the inside boundary", "incoming_energy_j", "J"],
+    ["Outgoing energy at the outside boundary", "outgoing_energy_j", "J"],
+    ["Stored energy change", "stored_energy_change_j", "J"],
+    ["Largest absolute step energy-balance error", "largest_step_energy_balance_error_j", "J"],
+    ["Steady heat through the same network", "steady_heat_w", "W"]
+  ]) cells(energy, [label, metric(r[key]), unit]);
+  if (r.exterior_exchange) {
+    const exterior = table(parent, "Qualified exterior convection and radiation", ["Quantity", "Value", "Unit"]);
+    for (const [label, key, unit] of [["Convective energy", "convective_energy_j", "J"],
+      ["Radiative energy", "radiative_energy_j", "J"], ["Steady convective heat", "steady_convective_heat_w", "W"],
+      ["Steady radiative heat", "steady_radiative_heat_w", "W"]]) cells(exterior, [label, metric(r.exterior_exchange[key]), unit]);
+    detail(parent, "Exterior observations and boundary conditions", r.exterior_exchange);
+  }
+  const note = document.createElement("p");
+  note.textContent = "Boundary heat keeps its native sign; cooling can produce negative stored energy and reversed heat flow. " +
+    "The initial sample has no reported boundary power or accumulated energy. A small energy residual checks numerical balance, not measured material accuracy. " +
+    (r.accuracy_note || "");
+  parent.append(note);
+  const trace = r.trace || [], count = r.steady_temperature_c?.length || 0;
+  if (trace.length && count) {
+    const label = document.createElement("label"), cell = document.createElement("input"), state = document.createElement("p");
+    label.textContent = `Inspect thermal cell (1–${count}, ordered from inside to outside)`;
+    cell.type = "number"; cell.min = "1"; cell.max = String(count); cell.step = "1"; cell.value = "1";
+    label.append(cell); parent.append(label, state);
+    const samples = table(parent, "Retained heating / cooling samples", ["Time (s)", "Selected cell temperature (°C)",
+      "Inside boundary heat (W)", "Outside boundary heat (W)", "Stored energy change (J)"]);
+    const body = document.createElement("tbody"); samples.append(body);
+    const navigation = document.createElement("div"), position = document.createElement("p");
+    const buttons = ["First samples", "Previous samples", "Next samples", "Final samples"].map(title => {
+      const button = document.createElement("button"); button.type = "button"; button.textContent = title;
+      navigation.append(button); return button;
+    });
+    parent.append(navigation, position);
+    const pageSize = 50, lastPage = Math.floor((trace.length - 1) / pageSize); let page = 0;
+    const render = () => {
+      body.replaceChildren();
+      const selected = Number(cell.value) - 1;
+      if (!cell.value.trim() || !Number.isInteger(selected) || selected < 0 || selected >= count) {
+        state.textContent = `Choose a whole cell number from 1 to ${count}.`; position.textContent = ""; return;
+      }
+      const layer = Math.floor(selected / r.model.cells_per_layer), material = r.model.layers[layer];
+      state.textContent = `Cell ${selected + 1}; layer ${layer + 1}: ${material?.authored?.id || "Unknown"}. ` +
+        `Initial ${metric(trace[0].temperature_c?.[selected])} °C; final ${metric(trace.at(-1).temperature_c?.[selected])} °C; ` +
+        `steady ${metric(r.steady_temperature_c[selected])} °C.`;
+      const start = page * pageSize, end = Math.min(trace.length, start + pageSize);
+      for (let i = start; i < end; i++) {
+        const sample = trace[i];
+        cells(body, [metric(sample.time_seconds), metric(sample.temperature_c?.[selected]), metric(sample.inside_heat_w),
+          metric(sample.outside_heat_w), metric(sample.stored_energy_change_j)]);
+      }
+      position.textContent = `Samples ${start + 1}–${end} of ${trace.length}. Every retained sample remains in the exact report download.`;
+      buttons[0].disabled = buttons[1].disabled = page === 0;
+      buttons[2].disabled = buttons[3].disabled = page === lastPage;
+    };
+    cell.addEventListener("input", render);
+    buttons[0].onclick = () => { page = 0; render(); };
+    buttons[1].onclick = () => { page = Math.max(0, page - 1); render(); };
+    buttons[2].onclick = () => { page = Math.min(lastPage, page + 1); render(); };
+    buttons[3].onclick = () => { page = lastPage; render(); };
+    render();
+  }
+  detail(parent, "Frozen layers, thermal laws and source conditions", r.model);
+  return { schema: r.schema, area_m2: r.area_m2, inside_c: r.inside_c, outside_c: r.outside_c,
+    inside_resistance_m2_k_w: r.inside_resistance_m2_k_w, outside_resistance_m2_k_w: r.outside_resistance_m2_k_w,
+    cells_per_layer: r.model?.cells_per_layer, temperature_domain_c: r.model?.temperature_domain_c,
+    step_seconds: r.step_seconds, steps: r.steps, record_every: r.record_every,
+    final_time_seconds: trace.at(-1)?.time_seconds, retained_samples: trace.length,
+    comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim,
+    scope: "Dry one-dimensional layers with prescribed boundaries; no garment comfort, moisture or transient seam storage." };
 }
 function compressionHistoryResult(parent, r) {
   const t = table(parent, "Compression and heat history — chronological holds", ["Time (s)", "Pressure (Pa)",
@@ -2371,6 +2470,7 @@ function show(op, msg) {
       $("calibratedInterfaceSummary").textContent = `Calibrated pair: ${r.binding.interface.materials.join(" / ")}. Stage this pair after assigning those exact materials.`;
     }
     if (op === "pressure" || (op === "calibrate" && !pairCalibration) || op === "stripFit") {
+      clear(["thermalPoint"]);
       ++selectionRead; preparedBy = op;
       if (typeof r.selection_json === "string" && (op !== "stripFit" || r.calibration?.accepted === true)) {
         $("selection").value = r.selection_json;
@@ -2400,6 +2500,8 @@ function show(op, msg) {
       op === "sew" ? sewingResult(s.comparison, r) :
       op === "treatment" ? treatmentResult(s.comparison, r) :
       op === "vapor" ? vaporResult(s.comparison, r) :
+      op === "thermalPoint" ? thermalPointResult(s.comparison, r) :
+      op === "thermalHistory" ? thermalHistoryResult(s.comparison, r) :
       op === "vaporSurface" ? vaporSurfaceResult(s.comparison, r) :
       op === "heat" || op === "coverage" ? coverageResult(s.comparison, r) :
       op === "pressure" && ["ftx-compressed-thermal-history-report/1", "ftx-compressed-thermal-history-report/2"].includes(r.schema) ? compressionHistoryResult(s.comparison, r) :
@@ -2510,6 +2612,11 @@ async function execute(op) {
     const msg = { type: op, request: id };
     if (op === "catalog") msg.query = $("query").value;
     else if (op === "inspect") msg.selection = $("selection").value;
+    else if (op === "thermalPoint") {
+      if (!$("thermalPointTemperature").value.trim() || !Number.isFinite(Number($("thermalPointTemperature").value))) throw Error("Supply a finite material temperature in degrees Celsius.");
+      msg.selection = $("selection").value; msg.temperatureC = Number($("thermalPointTemperature").value);
+    }
+    else if (op === "thermalHistory") msg.thermalRequest = await read("thermalRequest");
     else if (op === "bind") {
       if (!interfaceReady) throw Error("Load a valid replacement interface list or choose Keep original interfaces.");
       msg.pattern = sourceText; msg.changes = changes();
@@ -2585,21 +2692,24 @@ $("rollPreview").addEventListener("change", () => invalidate(["cut"]));
 $("cancel").onclick = () => { start(); $("status").textContent = "Cancelled; reloading local engine."; };
 $("catalog").onchange = () => {
   if (!$("catalog").value) return;
+  invalidateThermalPoint();
   ++selectionRead;
   if (selectionOperations.includes(pending?.op)) start();
   $("selection").value = text({ id: $("catalog").value, allow_estimates: false });
   preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren(); controls();
 };
 $("selection").addEventListener("input", () => {
+  invalidateThermalPoint();
   ++selectionRead;
   preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
   if (selectionOperations.includes(pending?.op)) start(); controls();
 });
 $("selectionFile").onchange = async () => {
+  invalidateThermalPoint();
   const rev = ++selectionRead; preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
   if (selectionOperations.includes(pending?.op)) start(); controls();
   try { const data = await read("selectionFile"); if (rev !== selectionRead) return;
-    $("selection").value = data; controls(); }
+    invalidateThermalPoint(); $("selection").value = data; controls(); }
   catch (e) { if (rev === selectionRead) error(String(e.message || e)); }
 };
 function installPattern(raw, label, garments = []) {
@@ -2732,6 +2842,8 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
   });
 }
 $("studyOnBody").addEventListener("change", () => invalidate(["study"]));
+$("thermalPointTemperature").addEventListener("input", invalidateThermalPoint);
+$("thermalRequest").addEventListener("change", () => invalidate(["thermalHistory"]));
 $("clearCoverageBridges").onclick = () => { $("coverageBridges").value = ""; invalidate(["coverage"]); };
 $("coverageBridges").addEventListener("change", () => invalidate(["coverage"]));
 window.addEventListener("pagehide", () => { ++epoch; worker?.terminate(); clear(["bind", ...operations]); });

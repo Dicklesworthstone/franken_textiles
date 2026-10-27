@@ -448,6 +448,15 @@ a moving body; an elastic's own mass or its friction in the casing; fabric param
 plan §11, research 07 §2.7). The §11.7 budgets are measured above, on one machine (native and node's
 wasm), not on a browser's.
 
+**Standalone thermal requests** (`thermal::request`). Source-qualified point evaluation and dry
+layer heating/cooling use one request authority for both native commands and portable/browser APIs.
+Successful transient results retain `replay_request_json`, serialized by Rust from the exact settings
+and canonical frozen layer selections. Initial temperature, independent estimate policies, interfaces,
+films, exterior observations and integration/trace controls survive empty-catalog replay, including
+negative zero. Expanded frozen input over 64 MiB refuses before integration. This adds no solver,
+coefficient, temperature extrapolation or physical validation claim. Tests: portable
+`transient_thermal`, actual native `nist_thermal_workflow` and the generated-WASM workbench regression.
+
 **Adaptive compressed thermal holds** (`thermal::compression`, `ftx-cp2.1`). Optional explicit
 time-integration tolerances reuse `thermal::adaptive` in both monotone and qualified cyclic histories.
 Actual accepted-half-step boundary heats enter the separate thermal ledger; final fluxes remain

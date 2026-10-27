@@ -37,6 +37,20 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <p class="note">Estimates stay disabled unless this selection explicitly sets <code>allow_estimates</code> to <code>true</code>. A digest-locked selection cannot be edited in place; author a new selection deliberately.</p>
 <button id="inspect" data-command="inspect">Inspect sources &amp; capabilities</button>
 <div id="capabilities"></div><details><summary>Original observations, normalized units and sources</summary><pre id="detail"></pre></details>
+<h3>Material temperature and dry heating / cooling</h3>
+<label>Material temperature (°C) <input id="thermalPointTemperature" type="number" step="any" placeholder="50"></label>
+<button id="thermalPoint" data-command="thermalPoint" disabled>Evaluate selected material at this temperature</button>
+<p class="note">Uses the exact selection above, including its estimate policy. Inspect effective thermal resistance,
+areal heat capacity and the common source temperature interval. Download the source report and frozen selection for reuse;
+temperature-dependent laws refuse extrapolation and missing heat capacity stays unavailable.</p>
+<label>Dry layer heating / cooling request JSON (<code>ftx-thermal-transient/1</code>) <input id="thermalRequest" type="file" accept=".json,application/json"></label>
+<button id="thermalHistory" data-command="thermalHistory" disabled>Run dry heating / cooling history</button>
+<p class="note">The file supplies its own ordered material selections, interface resistances, area, reservoir temperatures,
+separate films, initial material temperature, cells per layer, time step, step count and trace interval.
+Optional source-qualified exterior exchange is retained. This runs without a garment or body model and does not use the selection editor.
+Inspect signed heat and stored energy, browse every retained time and cell, and download the exact report, original input and frozen replay.
+Refine the time step and cell count to assess numerical convergence. These dry one-dimensional results do not establish garment warmth,
+comfort, moisture transport or seam heat storage.</p>
 <h3>Compression and heat histories</h3>
 <label>Source-qualified pressure, stack or compression/heat history JSON <input id="compressionRequest" type="file" accept=".json,application/json"></label>
 <label>Final stack layer ID to inspect and assign (leave empty for a prescribed-pressure request) <input id="compressionLayer" type="text" maxlength="4096" placeholder="outer"></label>

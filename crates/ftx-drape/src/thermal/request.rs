@@ -1,9 +1,9 @@
 //! File-free material point and dry transient requests shared by native and browser consumers.
 
 use super::{Boundary, DryThermalModel, invalid, steady::exterior::Exterior};
-use ftx_core::Refusal;
+use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::{material_catalog::Selection, materials::Catalog};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// Evaluate one source-qualified material at a stated temperature without extrapolation.
@@ -35,7 +35,7 @@ pub fn point(
 
 /// A fully declared dry layer experiment with the existing `ftx-thermal-transient/1` contract.
 /// Material selections and exterior observations retain their individual evidence policies.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
     /// Must be `ftx-thermal-transient/1`.
@@ -73,13 +73,15 @@ impl Request {
     /// Resolve the supplied catalog and advance the shared dry solver atomically.
     /// Frozen selections can replay without a built-in catalog. Signed boundary energy and
     /// integrated material enthalpy are retained; a numerical residual is not physical validation.
+    /// `replay_request_json` is the exact source-frozen request text: clients should save that string
+    /// unchanged rather than reconstructing hash-bearing selections through another JSON runtime.
     ///
     /// # Errors
     /// Invalid schema, input, work/trace budget, changed sources, missing evidence or consent,
     /// unsupported exterior exchange, temperature extrapolation, failed solve or arithmetic
     /// overflow. No partial history is returned after a failed step.
     pub fn evaluate(self, catalog: &Catalog) -> Result<Value, Refusal> {
-        let input = self;
+        let mut input = self;
         let cells = input.layers.len().checked_mul(input.cells_per_layer);
         if input.schema != "ftx-thermal-transient/1"
             || !input.area_m2.is_finite()
@@ -123,6 +125,18 @@ impl Request {
             .iter()
             .map(|s| catalog.resolve(s))
             .collect::<Result<Vec<_>, _>>()?;
+        input.layers = layers
+            .iter()
+            .map(|layer| layer.frozen_selection())
+            .collect();
+        let replay_request_json =
+            serde_json::to_string(&input).map_err(|e| invalid(e.to_string()))?;
+        if replay_request_json.len() > 64 * 1024 * 1024 {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "frozen thermal replay request exceeds the 64 MiB input limit",
+            ));
+        }
         let model = DryThermalModel::new(
             layers,
             input.interface_resistance_m2_k_w,
@@ -215,6 +229,7 @@ impl Request {
             "Constant effective layer properties; refine cells_per_layer and step_seconds to check discretization error."
         };
         let mut result = json!({"schema":"ftx-thermal-transient-report/1","model":model.snapshot(),
+            "replay_request_json":replay_request_json,
             "area_m2":input.area_m2,"step_seconds":input.step_seconds,"steps":input.steps,
             "record_every":input.record_every,"inside_c":input.inside_c,"outside_c":input.outside_c,
             "inside_resistance_m2_k_w":input.inside_resistance_m2_k_w,

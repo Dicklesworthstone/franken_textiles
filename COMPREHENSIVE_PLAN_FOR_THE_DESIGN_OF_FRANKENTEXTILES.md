@@ -4059,6 +4059,26 @@ replay retain the same source locks. These extensions remain conditional softwar
 `ftx-tm5`; physical seam measurements, transient bridge dynamics and empirical garment acceptance
 remain open. See [steady-thermal-coverage.md](docs/steady-thermal-coverage.md).
 
+### 25.109 Source-qualified heating and cooling become interactive and exactly replayable
+
+The materials workbench now exposes the shared material-point and dry transient thermal APIs.
+An explicit temperature evaluates the current source selection's resistance, areal heat capacity
+and admitted domain. A complete layered-history request runs independently of garment/body inputs
+and retains signed boundary energy, stored heat, numerical balance, steady targets and qualified
+exterior contributions. A bounded sample browser exposes every retained cell and time without
+creating an unbounded page. Source changes cancel or withdraw obsolete results and downloads.
+
+The shared Rust authority emits exact `replay_request_json` for each successful transient, preserving
+the original controls and independently qualified frozen layers. That text replays with an empty
+catalog and the same portable report; no browser reconstruction of hash-bearing material numbers
+is required. Expanded requests must fit the existing 64 MiB consumer limit before integration.
+Original inputs, complete reports and frozen replay remain separate downloadable products.
+
+This extends `ftx-tma.2` into ordinary user controls and exact replay under `ftx-tma.3`. It adds no
+material coefficients or new thermal solver, and does not close measured coupon/garment validation,
+moisture/mechanical coupling, thermoregulation or warmth claims. See
+[material-thermal.md](docs/material-thermal.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

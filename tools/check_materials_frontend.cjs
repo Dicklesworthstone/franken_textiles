@@ -8,6 +8,28 @@ const vm = require('node:vm');
 const read = name => fs.readFileSync(path.join(__dirname, '../web', name), 'utf8');
 const plain = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const thermalFrozenSelection = ' {"id":"<thermal specimen>","expected_sha256":"thermal-lock","allow_estimates":true,"record":{"source":"<literal source>","value":1.0,"x":-0.0}}\n';
+const thermalHistoryInput = ' {"schema":"ftx-thermal-transient/1","layers":[{"id":"<thermal specimen>","allow_estimates":true}],"interface_resistance_m2_k_w":[],"cells_per_layer":4,"area_m2":1.0,"inside_c":20.0,"outside_c":35.0,"inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.1,"initial_temperature_c":50.0,"step_seconds":0.5,"steps":52,"record_every":1}\n';
+// Explicit transport/display doubles, not empirical thermal predictions.
+function thermalPointReport() {
+  return {schema:'ftx-thermal-point/1',temperature_c:50,temperature_domain_c:[20,70],
+    resistance_m2_k_w:0.02,areal_heat_capacity_j_m2_k:1100,
+    selection:JSON.parse(thermalFrozenSelection),material:{sha256:'thermal-lock',authored:{id:'<thermal specimen>',sources:{fixture:'<literal source>'}}},
+    model:'synthetic effective dry sheet',uncertainty_propagated:false,comfort_claim:false,empirical_validation_claim:false};
+}
+function thermalHistoryReport() {
+  const replay=thermalHistoryInput.replace('{"id":"<thermal specimen>","allow_estimates":true}',thermalFrozenSelection);
+  return {schema:'ftx-thermal-transient-report/1',replay_request_json:replay,area_m2:1,inside_c:20,outside_c:35,
+    inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0.1,step_seconds:0.5,steps:52,record_every:1,
+    model:{schema:'ftx-dry-thermal-model/2',cells_per_layer:4,temperature_domain_c:[20,70],
+      layers:[{sha256:'thermal-lock',authored:{id:'<thermal specimen>',sources:{fixture:'<literal source>'}}}]},
+    trace:Array.from({length:53},(_,i)=>({time_seconds:i*0.5,temperature_c:[10,20,30,40].map(d=>50-i/d),
+      ...(i?{inside_heat_w:-6,outside_heat_w:-2,stored_energy_change_j:-2*i}:{})})),
+    steady_temperature_c:[21,24,28,32],steady_heat_w:-5,incoming_energy_j:-156,outgoing_energy_j:-52,
+    stored_energy_change_j:-104,largest_step_energy_balance_error_j:0.00000001,
+    exterior_exchange:{convective_energy_j:-40,radiative_energy_j:-12,steady_convective_heat_w:-3,steady_radiative_heat_w:-2},
+    accuracy_note:'Refine time and cells; this synthetic fixture is not validation.',comfort_claim:false,empirical_validation_claim:false};
+}
 // Retained Rust result doubles: these tests verify transport and UI lifecycle, not treatment physics.
 function treatmentReport(pattern = false) {
   const before=' {"id":"denim-before","expected_sha256":"before-lock","x":-0.0}\n',
@@ -346,6 +368,81 @@ test('material worker calls the shared consumers with exact current inputs and c
   assert.equal(r.files[0].name, 'round.zip'); assert.deepEqual([...r.files[0].bytes], [1, 2]);
   assert.deepEqual(w.freed, ['round']);
 });
+test('standalone thermal workers preserve exact selections, native reports and frozen history replay', async () => {
+  const calls=[], pointRaw=` ${JSON.stringify(thermalPointReport())}\n`, historyRaw=` ${JSON.stringify(thermalHistoryReport())}\n`;
+  const selection=' {"id":"<thermal specimen>","allow_estimates":true}\n';
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),
+    thermal_at:(s,t)=>{calls.push(['point',s,t]);return pointRaw;},
+    material_inspect:s=>{calls.push(['inspect',s]);return JSON.stringify({selection_json:thermalFrozenSelection});},
+    thermal_transient:input=>{calls.push(['history',input]);return historyRaw;}}});
+  const point=await w.send({type:'thermalPoint',request:301,selection,temperatureC:50});
+  assert.equal(point.type,'result',point.message); assert.equal(point.request,301);
+  assert.deepEqual(calls,[['point',selection,50],['inspect',selection]]);
+  assert.deepEqual(plain(point.result),JSON.parse(pointRaw));
+  assert.deepEqual(plain(point.files.map(f=>[f.name,f.text])),[['thermal-point-report.json',pointRaw],
+    ['thermal-point-source-selection.json',selection],['thermal-point-frozen-selection.json',thermalFrozenSelection]]);
+  const history=await w.send({type:'thermalHistory',request:302,thermalRequest:thermalHistoryInput});
+  assert.equal(history.type,'result',history.message); assert.deepEqual(calls.at(-1),['history',thermalHistoryInput]);
+  assert.deepEqual(plain(history.result),thermalHistoryReport());
+  assert.deepEqual(plain(history.files.map(f=>[f.name,f.text])),[['thermal-history-report.json',historyRaw],
+    ['thermal-history-request.json',thermalHistoryInput],['thermal-history-replay.json',thermalHistoryReport().replay_request_json]]);
+});
+test('standalone thermal workers refuse unavailable, stale or incomplete results without publishing files', async () => {
+  const pointInput={type:'thermalPoint',selection:'{}',temperatureC:50}, historyInput={type:'thermalHistory',thermalRequest:thermalHistoryInput};
+  const cases=[
+    [pointInput,{},/missing material temperature engine/],
+    [historyInput,{},/missing dry transient thermal engine/],
+    [{...historyInput,thermalRequest:'{"schema":"ftx-thermal-transient-report/1"}'},{},/Choose an ftx-thermal-transient/],
+    [{...pointInput,temperatureC:NaN},{thermal_at:()=>'',material_inspect:()=>''},/finite material temperature/],
+    [historyInput,{thermal_transient:()=>'{"schema":"ftx-thermal-transient-report/1"}'},/missing frozen dry thermal replay/],
+    [pointInput,{thermal_at:()=>JSON.stringify(thermalPointReport()),
+      material_inspect:()=>JSON.stringify({selection_json:'{"expected_sha256":"stale"}'})},/source identities disagree/],
+    [pointInput,{thermal_at:()=>{throw Error('temperature outside source domain');},material_inspect:()=>''},/outside source domain/],
+    [historyInput,{thermal_transient:()=>{throw Error('estimated heat capacity not admitted');}},/not admitted/]
+  ];
+  for (const [input,bindings,reason] of cases) {
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),...bindings}}),result=await w.send(input);
+    assert.equal(result.type,'error'); assert.match(result.message,reason); assert.equal(result.files,undefined);
+    assert.equal(w.sent.some(message=>message.type==='result'),false);
+  }
+});
+test('compiled WASM standalone thermal points and heating/cooling histories reach controls with exact frozen replay',
+  {skip:process.env.FTX_REAL_WASM!=='1'}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx}),p=await pageModule(),selection=' {"id":"nist/7282/cotton-duck-linear-cp","allow_estimates":true}\n';
+    p.e.selection.value=selection;p.e.selection.handlers.input();p.e.thermalPointTemperature.value='50';p.e.thermalPointTemperature.handlers.input();
+    await p.e.thermalPoint.onclick();const point=await w.send(p.current().messages.at(-1));
+    assert.equal(point.type,'result',point.message);p.current().emit(point);
+    const pointRaw=point.files.find(f=>f.name==='thermal-point-report.json').text;
+    assert.equal(pointRaw,ftx.thermal_at(selection,50));
+    const frozen=point.files.find(f=>f.name==='thermal-point-frozen-selection.json').text;
+    assert.equal(ftx.thermal_at(frozen,50),pointRaw);
+    assert.deepEqual(plain(point.result.temperature_domain_c),[20,70]);
+    assert.equal(section(p,'Material at the stated temperature').hidden,false);
+    const fixture=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/nist-7282-transient.json'),'utf8')
+      .replace('nist/7282/aralite','nist/7282/cotton-duck-linear-cp');
+    for (const cooling of [false,true]) {
+      const input=JSON.parse(fixture);
+      if (cooling) {input.initial_temperature_c=50;input.inside_c=20;input.outside_c=35;}
+      const thermalRequest=cooling?JSON.stringify(input):fixture;
+      p.select('thermalRequest',thermalRequest);p.e.thermalRequest.handlers.change();await p.e.thermalHistory.onclick();
+      const report=await w.send(p.current().messages.at(-1));assert.equal(report.type,'result',report.message);p.current().emit(report);
+      const raw=report.files.find(f=>f.name==='thermal-history-report.json').text,replay=report.files.find(f=>f.name==='thermal-history-replay.json').text;
+      assert.equal(raw,ftx.thermal_transient(thermalRequest));assert.equal(raw,ftx.thermal_transient(replay));
+      assert.equal(report.files.find(f=>f.name==='thermal-history-request.json').text,thermalRequest);
+      assert.equal(report.result.stored_energy_change_j<0,cooling);
+      const source=JSON.parse(replay);assert.ok(source.layers.every(layer=>layer.record&&layer.expected_sha256));
+      const s=section(p,'Dry heating and cooling history'),download=descendants(s).find(n=>n.download==='thermal-history-replay.json');
+      assert.equal(s.hidden,false);assert.equal(await p.blobs.get(download.href).text(),replay);
+      assert.ok(visibleText(s).includes(String(report.result.stored_energy_change_j)));
+    }
+    for (const [chosen,t] of [[selection,71],['{"id":"nist/7282/cotton-duck-linear-cp","allow_estimates":false}',50],
+      ['{"id":"nist/7282/cotton-duck","allow_estimates":true}',50]]) {
+      assert.equal((await w.send({type:'thermalPoint',selection:chosen,temperatureC:t})).type,'error');
+    }
+  });
 test('vapor worker retains the original request, exact Rust report and frozen replay bytes', async () => {
   const w=await workerModule(), vaporRequest=' {"schema":"ftx-vapor-stack/1","area_m2":1.0,"value":-0.0}\n';
   const result=await w.send({type:'vapor',request:41,vaporRequest});
@@ -1400,6 +1497,86 @@ test('partial sewing spans display both source sides without an ordering policy 
   p.e.sewOptions.handlers.change(); assert.equal(s.hidden,true);
 });
 
+test('material temperature points use the visible selection and invalidate changed sources or temperatures', async () => {
+  const p=await pageModule();
+  assert.equal(p.e.thermalPoint.disabled,true); assert.equal(p.e.thermalHistory.disabled,true);
+  const selection=' {"id":"<thermal specimen>","allow_estimates":true}\n',r=thermalPointReport(),raw=` ${JSON.stringify(r)}\n`;
+  p.e.selection.value=selection; p.e.selection.handlers.input();
+  p.e.thermalPointTemperature.value='50'; p.e.thermalPointTemperature.handlers.input();
+  assert.equal(p.e.thermalPoint.disabled,false);
+  await p.e.thermalPoint.onclick();
+  const request=p.current().messages.at(-1);
+  assert.equal(request.selection,selection); assert.equal(request.temperatureC,50); assert.equal(request.pattern,undefined);
+  const files=[{name:'thermal-point-report.json',text:raw},{name:'thermal-point-source-selection.json',text:selection},
+    {name:'thermal-point-frozen-selection.json',text:thermalFrozenSelection}].map(f=>({...f,mime:'application/json'}));
+  p.emit(r,files);
+  const s=section(p,'Material at the stated temperature'),table=descendants(s).find(n=>n.tag==='table');
+  assert.deepEqual(plain(table.children.slice(2).map(row=>row.children[1].textContent)),['50','0.02','1100','20 to 70']);
+  const details=descendants(s).find(n=>n.tag==='details');details.open=true;details.handlers.toggle();
+  assert.match(visibleText(details),/<literal source>/); assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  for (const f of files) {const a=descendants(s).find(n=>n.download===f.name);assert.equal(await p.blobs.get(a.href).text(),f.text);}
+  p.e.thermalPointTemperature.value='55';p.e.thermalPointTemperature.handlers.input();
+  assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  await p.e.thermalPoint.onclick();const old=p.current(),oldRequest=old.messages.at(-1).request;
+  p.e.selection.value='{"id":"different"}';p.e.selection.handlers.input();
+  assert.equal(old.dead,true);old.emit({type:'result',request:oldRequest,result:r,files});
+  assert.equal(s.hidden,true);assert.equal(p.live.size,0);p.ready();
+  await p.e.thermalPoint.onclick();p.emit(r,files);
+  p.e.catalog.value='new-catalog-record';p.e.catalog.onchange();assert.equal(s.hidden,true);
+  await p.e.thermalPoint.onclick();p.emit(r,files);
+  p.select('selectionFile',selection);await p.e.selectionFile.onchange();assert.equal(s.hidden,true);
+  p.e.thermalPointTemperature.value='';p.e.thermalPointTemperature.handlers.input();
+  await p.e.thermalPoint.onclick();assert.match(p.e.error.textContent,/finite material temperature/);assert.equal(s.hidden,true);
+});
+test('dry thermal history pages every retained sample and cell with signed energy and exact downloads', async () => {
+  const p=await pageModule(),r=thermalHistoryReport(),raw=` ${JSON.stringify(r)}\n`;
+  p.select('thermalRequest',thermalHistoryInput);p.e.thermalRequest.handlers.change();
+  assert.equal(p.e.thermalHistory.disabled,false);await p.e.thermalHistory.onclick();
+  assert.equal(p.current().messages.at(-1).thermalRequest,thermalHistoryInput);
+  assert.equal(p.current().messages.at(-1).pattern,undefined);
+  const files=[{name:'thermal-history-report.json',text:raw},{name:'thermal-history-request.json',text:thermalHistoryInput},
+    {name:'thermal-history-replay.json',text:r.replay_request_json}].map(f=>({...f,mime:'application/json'}));
+  p.emit(r,files);
+  const s=section(p,'Dry heating and cooling history'),tables=descendants(s).filter(n=>n.tag==='table');
+  assert.deepEqual(plain(tables[0].children.slice(2).map(row=>row.children[1].textContent)),['-156','-52','-104','1e-8','-5']);
+  assert.deepEqual(plain(tables[1].children.slice(2).map(row=>row.children[1].textContent)),['-40','-12','-3','-2']);
+  const trace=tables.find(t=>t.children[0].textContent==='Retained heating / cooling samples'),body=trace.children.at(-1);
+  assert.equal(body.children.length,50);
+  assert.deepEqual(plain(body.children[0].children.map(n=>n.textContent)),['0','50','Unknown','Unknown','Unknown']);
+  const cell=descendants(s).find(n=>n.tag==='input');cell.value='3';cell.handlers.input();
+  assert.equal(body.children[1].children[1].textContent,String(r.trace[1].temperature_c[2]));
+  const button=name=>descendants(s).find(n=>n.tag==='button'&&n.textContent===name);
+  button('Final samples').onclick();assert.equal(body.children.length,3);
+  assert.equal(body.children.at(-1).children[0].textContent,'26');assert.equal(button('Next samples').disabled,true);
+  assert.match(visibleText(s),/final 48.266666666666666 °C; steady 28 °C/);
+  cell.value='5';cell.handlers.input();assert.equal(body.children.length,0);assert.match(visibleText(s),/Choose a whole cell number/);
+  cell.value='4';cell.handlers.input();button('First samples').onclick();assert.equal(body.children.length,50);
+  for (const f of files) {const a=descendants(s).find(n=>n.download===f.name);assert.equal(await p.blobs.get(a.href).text(),f.text);}
+  const historyUrls=new Set(p.live);
+  p.e.selection.value='{"id":"unrelated selection"}';p.e.selection.handlers.input();assert.equal(s.hidden,false);
+  p.e.thermalPointTemperature.value='50';p.e.thermalPointTemperature.handlers.input();await p.e.thermalPoint.onclick();
+  p.emit(thermalPointReport(),[{name:'thermal-point-report.json',text:'{}',mime:'application/json'}]);
+  const point=section(p,'Material at the stated temperature');assert.equal(point.hidden,false);
+  p.e.thermalRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(point.hidden,false);
+  assert.ok([...historyUrls].every(url=>!p.live.has(url)));assert.equal(p.live.size,1);
+});
+test('thermal history replacement, cancellation and native refusals never restore an obsolete history', async () => {
+  const p=await pageModule(),delay=deferred(),r=thermalHistoryReport();
+  p.select('thermalRequest',thermalHistoryInput);p.e.thermalRequest.handlers.change();
+  p.e.thermalRequest.files[0].text=()=>delay.promise;
+  const old=p.current(),reading=p.e.thermalHistory.onclick();
+  p.e.cancel.onclick();assert.equal(old.dead,true);delay.resolve(thermalHistoryInput);await reading;
+  assert.equal(old.messages.some(m=>m.type==='thermalHistory'),false);p.ready();
+  p.select('thermalRequest',thermalHistoryInput);await p.e.thermalHistory.onclick();
+  p.emit(r,[{name:'thermal-history-report.json',text:'{}',mime:'application/json'}]);
+  const s=section(p,'Dry heating and cooling history');assert.equal(s.hidden,false);
+  await p.e.thermalHistory.onclick();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  const request=p.current().messages.at(-1);p.current().emit({type:'error',request:request.request,message:'source changed; history refused'});
+  assert.equal(s.hidden,true);assert.equal(p.live.size,0);assert.match(p.e.error.textContent,/source changed/);
+  await p.e.thermalHistory.onclick();const stale=p.current(),id=stale.messages.at(-1).request;
+  p.e.thermalRequest.handlers.change();assert.equal(stale.dead,true);
+  stale.emit({type:'result',request:id,result:r,files:[]});assert.equal(s.hidden,true);
+});
 test('vapor calculation works without a pattern and preserves unrelated inspected material', async () => {
   const p=await pageModule(); await p.inspect('existing-selection');
   assert.equal(p.e.vapor.disabled,true);
