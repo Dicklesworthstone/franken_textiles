@@ -1436,6 +1436,42 @@ test('shared operator timelines preserve resource waits, restricted proof and ce
     const download=descendants(s).find(n=>n.download==='operator-report.json');
     assert.equal(await p.blobs.get(download.href).text(),raw);
     assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    parallel.schema='ftx-sewing-parallel/5';
+    const pool='<shared jig>', poolHold=(cell,copy,start,end)=>({cell,copy,local_copy:0,hold:'0/<hold>',
+      resource:'<local fixture>',pool,units:1,acquire:'0/join',release:'0/join',
+      acquired_at_milliseconds:start,released_at_milliseconds:end});
+    const reservations={holds:[poolHold('cell-a',0,0,5100),poolHold('cell-b',1,1100,6200)],
+      peak_occupancy:{[pool]:2},final_occupancy:{[pool]:0}};
+    parallel.shared_workholding={schema:'ftx-sewing-shared-workholding/1',
+      release_protocol:'available_at_feed_completion_with_access_in_cell_handling/1',
+      cells:{'cell-a':'source-lock-a','cell-b':'source-lock-b'},resources:[{id:pool,capacity:2}],
+      bindings:[{cell:'cell-a',resource:'<local fixture>',pool},{cell:'cell-b',resource:'<local fixture>',pool}],
+      baseline:reservations,selected:reservations,physical_pool_access_validated:false};
+    plan.options.production.parallel.shared_workholding={source:{note:'<qualified pool access and return>'}};
+    const pooledRaw=JSON.stringify(report);
+    await p.e[op].onclick(); p.emit(report,[{name:'shared-pool-report.json',text:pooledRaw,mime:'application/json'}]);
+    assert.deepEqual(plain(table('shared fixture pools').children[2].children.map(n=>n.textContent)),
+      [pool,'2','2','2','0']);
+    assert.deepEqual(plain(table('cell fixtures using shared inventory').children[3].children.map(n=>n.textContent)),
+      ['cell-b','<local fixture>',pool]);
+    assert.deepEqual(plain(table('selected shared fixture reservations').children[3].children.map(n=>n.textContent)),
+      [pool,'cell-b','1','0/<hold>','1','0/join','0/join','1.1','6.2']);
+    assert.equal(table('cell-only window relaxation').children[2].children.at(-1).textContent,
+      'Fits without shared-resource contention');
+    assert.match(visibleText(s),/remain held through intervening operations and waits/);
+    assert.match(visibleText(s),/release can supply an acquisition at the same instant/);
+    const poolSource=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('shared pool source, exact cell locks and both reservation histories'));
+    poolSource.open=true; poolSource.handlers.toggle();
+    assert.match(visibleText(s),/qualified pool access and return/);
+    assert.match(visibleText(s),/enforces cell, operator and pool limits/);
+    assert.match(visibleText(s),/physical pool access, garment transfers and hardware execution/);
+    const pooledDownload=descendants(s).find(n=>n.download==='shared-pool-report.json');
+    assert.equal(await p.blobs.get(pooledDownload.href).text(),pooledRaw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    if(op==='sew') assert.equal(JSON.parse(s.children[1].textContent).shared_fixture_pools_enforced,true);
+    delete parallel.shared_workholding;
+    delete plan.options.production.parallel.shared_workholding;
+    parallel.schema='ftx-sewing-parallel/4';
   }
   p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
   assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);

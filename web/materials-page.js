@@ -1673,12 +1673,40 @@ function sewingHandling(parent, plan, label = "Selected sewing plan") {
   detail(parent, `${label}: handling evidence, exact qualifications and complete timelines`,
     { policy: plan.options?.production?.handling, report, timing });
 }
+function sewingSharedWorkholding(parent, plan, label) {
+  const report = plan.production.parallel.shared_workholding;
+  if (!report) return;
+  const inventory = table(parent, `${label}: shared fixture pools`,
+    ["Pool", "Available units", "Baseline peak", "Selected peak", "Held after completion"]);
+  for (const resource of report.resources) cells(inventory, [resource.id, metric(resource.capacity),
+    metric(report.baseline?.peak_occupancy?.[resource.id]), metric(report.selected?.peak_occupancy?.[resource.id]),
+    metric(report.selected?.final_occupancy?.[resource.id])]);
+  const bindings = table(parent, `${label}: cell fixtures using shared inventory`,
+    ["Cell", "Local fixture resource", "Shared pool"]);
+  for (const binding of report.bindings) cells(bindings, [binding.cell, binding.resource, binding.pool]);
+  const holds = table(parent, `${label}: selected shared fixture reservations`,
+    ["Pool", "Cell", "Global garment copy", "Local hold", "Units", "Acquire operation", "Release operation",
+      "Held from (s)", "Available again (s)"]);
+  for (const hold of report.selected?.holds || []) cells(holds, [hold.pool, hold.cell, metric(hold.copy),
+    hold.hold, metric(hold.units), hold.acquire, hold.release,
+    metric(typeof hold.acquired_at_milliseconds === "number" ? hold.acquired_at_milliseconds / 1000 : null),
+    metric(typeof hold.released_at_milliseconds === "number" ? hold.released_at_milliseconds / 1000 : null)]);
+  const note = document.createElement("p");
+  note.textContent = "These cells share the declared finite fixture inventory. Units are reserved before handling starts, " +
+    "remain held through intervening operations and waits, and become available at the release operation's feed completion. " +
+    "A release can supply an acquisition at the same instant. The qualified protocol includes pool access and return in cell handling. " +
+    "The computed allocation respects pool capacities; physical pool access, garment transfers and hardware execution still require their own qualification.";
+  parent.append(note);
+  detail(parent, `${label}: shared pool source, exact cell locks and both reservation histories`, {
+    policy: plan.options?.production?.parallel?.shared_workholding, report });
+}
 function sewingParallel(parent, plan, label = "Selected sewing plan") {
   const report = plan?.production?.parallel;
   if (!report) return;
   const heterogeneous = Boolean(report.cell_plans?.length);
   const windowed = Boolean(report.availability);
   const operator = report.shared_operator;
+  const pools = report.shared_workholding;
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: parallel completion and aggregate work`,
     ["Allocation", "Completion (s)", "Total feed work (s)", "Scheduled feed work (s)", "Total setup work (s)", "Total handling work (s)"]);
@@ -1729,7 +1757,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       for (const count of cell.counts || []) cells(windows, [cell.cell, metric(count.copies),
         typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended",
         metric(seconds(count.incumbent_finish_milliseconds)), metric(seconds(count.lower_bound_finish_milliseconds)),
-        count.feasible ? (operator ? "Fits without operator contention" : "Fits") : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
+        count.feasible ? (pools ? "Fits without shared-resource contention" : operator ? "Fits without operator contention" : "Fits") : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
     }
   }
   if (operator) {
@@ -1747,6 +1775,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
         metric(seconds(step.handling_start_milliseconds)), metric(seconds(step.setup_start_milliseconds)),
         metric(seconds(step.operator_release_milliseconds)), metric(seconds(step.feed_finish_milliseconds))]);
   }
+  sewingSharedWorkholding(parent, plan, label);
   const note = document.createElement("p");
   note.textContent = (report.optimality_proven ?
     "Minimum parallel completion time proved under the declared millisecond planning model. " :
@@ -1755,11 +1784,13 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     (report.budget_exhausted ? (operator ? "At least one serial or operator search reached its work limit. " : "At least one inner schedule reached its work limit. ") : "") +
     (windowed ? "Every used cell finishes inside its inclusive qualified availability window, including final unloading. " +
       "A lower bound that still fits leaves an over-limit incumbent unresolved. " : "") +
-    (report.availability?.baseline_replaced || operator?.baseline_replaced ? "The first-cell baseline failed a qualified cell or operator window; the displayed replacement is the complete selected feasible assignment. " : "") +
+    (report.availability?.baseline_replaced || operator?.baseline_replaced ?
+      `The first-cell baseline failed a qualified cell or operator window${pools ? " or shared fixture constraint" : ""}; the displayed replacement is the complete selected feasible assignment. ` : "") +
     "Every garment stays in one physical cell. " +
     (operator ? "One qualified operator performs exclusive travel, handling, setup and final unloading while explicitly qualified autonomous machine feed may overlap. " +
       "The operator search considers the retained serial operation orders; completing that search alone does not prove an unrestricted joint optimum. " +
-      "Cell-only window receipts ignore operator contention; the selected timeline enforces both cell and operator limits. " +
+      (pools ? "Cell-only window receipts ignore shared operator and fixture contention; the selected timeline enforces cell, operator and pool limits. " :
+        "Cell-only window receipts ignore operator contention; the selected timeline enforces both cell and operator limits. ") +
       "Each positive feed operation keeps its own upward-rounded time slot, including after attended work or waiting. " :
       "Concurrent operation requires independently qualified machines, fixtures and handling labor. Feed is rounded upward once per used cell. ") +
     "Each used cell includes its own availability, initial setup and final unloading; raw feed and padding remain separate. " +
@@ -1873,6 +1904,7 @@ function sewingResult(parent, r) {
       order.timing ? "minimize_setup_time" : "minimize_setup_changes") : undefined,
     ordering_optimality_proven: order?.optimality_proven,
     finite_workholding_enforced: (parallel ? parallel.selected.cells.some(cell => cell.schedule?.workholding) : production?.workholding) ? true : undefined,
+    shared_fixture_pools_enforced: parallel?.shared_workholding ? true : undefined,
     planar_access_checked_operations: (parallel?.cell_plans?.length ? parallel.selected.cells
       .filter(cell => cell.copies.length).reduce((count, cell) => count +
         (parallel.cell_plans.find(source => source.cell === cell.cell)?.plan.seams.filter(row => row.access).length || 0), 0) :
