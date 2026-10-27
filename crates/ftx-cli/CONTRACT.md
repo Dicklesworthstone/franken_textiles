@@ -187,6 +187,12 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
 - `ftx materials list|show|validate|fit|thermal ... [--json]`: inspects and validates the material
   catalogue, fits fabric parameters to cantilever/stretch tests, and computes dry/evaporative thermal
   resistance (`docs/material-catalog.md`, `docs/material-calibration.md`, `docs/material-thermal.md`).
+- `ftx materials sew-cell-svg PATTERN OPTIONS CELL OPERATION NEW.svg [--json]` and
+  `ftx-materials sew-cell-svg PATTERN OPTIONS CELL OPERATION NEW.svg` rebuild the full sewing job
+  and render the explicitly selected cell's actual machine/recipe stations. Frozen machine and
+  qualification identities, assigned global copies and actual feed remain in the SVG metadata.
+  Configured-cell jobs require this explicit cell; ordinary `sew-svg` refuses their ambiguous
+  reference geometry. SVG and receipt outputs retain create-new semantics. See `docs/sewing-production.md`.
 - `ftx materials thermal-vapor REQUEST.json [--json]` and companion
   `ftx-materials thermal-vapor REQUEST.json` expose the shared `ftx-vapor-stack/1` consumer.
   Canonical measured Ret and explicit area, vapor pressures, films and latent heat determine

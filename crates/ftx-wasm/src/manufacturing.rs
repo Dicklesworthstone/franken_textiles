@@ -337,10 +337,25 @@ pub fn sew_stitches(pattern: &str, options: &str) -> Result<String, Refusal> {
 /// The complete job is validated first; the preview neither reads files nor uses external resources.
 ///
 /// # Errors
-/// Input/planning refusals, unknown operation or preview geometry/label budgets.
+/// Input/planning refusals, unknown operation, an ambiguous configured-cell source, or preview budgets.
 pub fn sew_svg(pattern: &str, options: &str, operation: &str) -> Result<String, Refusal> {
     let (pattern, options) = inputs(pattern, options)?;
     ftx_export::sewing::preview::svg(&pattern, &options, operation)
+}
+
+/// Review one explicitly selected parallel cell's actual machine/recipe geometry and source locks.
+/// The full original job is admitted before selecting the cell, including finally idle cells.
+///
+/// # Errors
+/// Input/planning refusals, unknown cell/operation, or preview geometry/label budgets.
+pub fn sew_cell_svg(
+    pattern: &str,
+    options: &str,
+    cell: &str,
+    operation: &str,
+) -> Result<String, Refusal> {
+    let (pattern, options) = inputs(pattern, options)?;
+    ftx_export::sewing::preview::svg_cell(&pattern, &options, cell, operation)
 }
 
 #[cfg(test)]

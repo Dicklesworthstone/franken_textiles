@@ -16,6 +16,7 @@ const WORKHOLDING: &str = include_str!("../../../examples/sewing-workholding-opt
 const ACCESS: &str = include_str!("../../../examples/sewing-access-options.json");
 const HANDLING: &str = include_str!("../../../examples/sewing-handling-options.json");
 const PARALLEL: &str = include_str!("../../../examples/sewing-parallel-options.json");
+const HETEROGENEOUS: &str = include_str!("../../../examples/sewing-heterogeneous-options.json");
 const TIMED_SELECTION: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-timed-selection.json");
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -57,6 +58,178 @@ fn run(main: bool, directory: &Path, action: &str, pattern: &str, request: &str)
 
 fn portable(text: String) -> Value {
     serde_json::from_str(&text).unwrap()
+}
+
+#[test]
+fn heterogeneous_cells_replay_actual_stitches_and_combined_thread_orders_through_studies() {
+    let directory = workspace();
+    let options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, HETEROGENEOUS).unwrap());
+    let plan = &program["plan"];
+    let parallel = &plan["production"]["parallel"];
+    assert_eq!(parallel["schema"], "ftx-sewing-parallel/2");
+    assert_eq!(parallel["optimality_proven"], true);
+    assert_eq!(parallel["selected"]["makespan_milliseconds"], 9900);
+    let steps = program["stitches"].as_array().unwrap();
+    assert_eq!(steps.len(), 160);
+    let feed: f64 = steps
+        .iter()
+        .map(|step| step["feed_seconds"].as_f64().unwrap())
+        .sum();
+    assert!((feed - plan["production"]["feed_seconds"].as_f64().unwrap()).abs() < 1e-10);
+    for cell in parallel["selected"]["cells"].as_array().unwrap() {
+        let copies = cell["copies"].as_array().unwrap();
+        if copies.is_empty() {
+            continue;
+        }
+        let source = parallel["cell_plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["cell"] == cell["cell"])
+            .unwrap();
+        let policy = options["production"]["parallel"]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|policy| policy["id"] == cell["cell"])
+            .unwrap();
+        let mut local = source["plan"]["options"].clone();
+        local["production"] = json!({"production_copies":copies.len(),"ordering":policy["ordering"],
+            "handling":policy["handling"],"workholding":policy["workholding"]});
+        local["production"]["ordering"]["max_search_nodes"] = cell["schedule_node_limit"].clone();
+        let replay =
+            portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &local.to_string()).unwrap());
+        assert_eq!(replay["plan"]["production"], cell["schedule"]);
+        let expected: Vec<_> = replay["stitches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| {
+                let mut global = step.clone();
+                global["copy"] = copies[step["copy"].as_u64().unwrap() as usize].clone();
+                global["cell"] = cell["cell"].clone();
+                global
+            })
+            .collect();
+        assert_eq!(
+            steps
+                .iter()
+                .filter(|step| step["cell"] == cell["cell"])
+                .cloned()
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    let consumption = &plan["consumables"];
+    assert_eq!(consumption["complete_consumption_coverage"], true);
+    assert!((consumption["total_required_length_m"].as_f64().unwrap() - 3.0).abs() < 1e-12);
+    assert_eq!(
+        consumption["material_requirements"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        consumption["purchasing"]["material_orders"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        consumption["purchasing"]["least_observed_independent_order_total"],
+        14.0
+    );
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let mut study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"heterogeneous","changes":{"schema":"ftx-material-bindings/1",
+            "default":pattern["fabric"]["material"]}}],"sewing":options,
+        "assembly_mass":{"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[],"seam_allowance_mm":0},
+        "comparison":{"basis":"nominal","required_consumers":["sewing","sewing_consumables","sewing_purchasing"],
+            "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"},
+                {"metric":"thread_required_length_m","direction":"minimize"},
+                {"metric":"thread_required_mass_kg","direction":"minimize"},
+                {"metric":"thread_observed_order_cost","direction":"minimize"}]}});
+    let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    let row = &report["alternatives"][0];
+    assert_eq!(row["sewing"]["result"]["production"], plan["production"]);
+    assert_eq!(row["sewing"]["result"]["consumables"], *consumption);
+    assert_eq!(
+        row["metrics"]["feed_seconds"],
+        plan["production"]["feed_seconds"]
+    );
+    assert_eq!(row["metrics"]["stitch_intervals"], 160);
+    assert!((row["metrics"]["thread_required_length_m"].as_f64().unwrap() - 3.0).abs() < 1e-12);
+    assert_eq!(row["metrics"]["thread_observed_order_cost"], 14.0);
+    assert_eq!(report["comparison"]["frontier"], json!(["heterogeneous"]));
+    for (name, text) in [
+        ("pattern.json", PATTERN.to_owned()),
+        ("options.json", HETEROGENEOUS.to_owned()),
+        ("program.json", program.to_string()),
+        ("study.json", study.to_string()),
+        ("study-report.json", report.to_string()),
+    ] {
+        fs::write(directory.join(name), text).unwrap();
+    }
+    for main in [false, true] {
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "options.json"
+            ),
+            program
+        );
+        assert_eq!(
+            run(main, &directory, "study", "pattern.json", "study.json"),
+            report
+        );
+    }
+    eprintln!("heterogeneous production replay: {}", directory.display());
+    study["sewing"]["production"]["parallel"]["cells"][0]["configuration"]["machine"]["max_stitches_per_minute"] =
+        json!(1.0);
+    let refused = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    assert_eq!(refused["alternatives"][0]["sewing"]["status"], "refused");
+    assert_eq!(
+        refused["alternatives"][0]["assembly_mass"]["status"],
+        "available"
+    );
+}
+
+#[test]
+fn heterogeneous_recipe_selection_uses_cell_setup_domains_and_refuses_other_allocation_optima() {
+    let options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
+    let mut request = json!({"schema":"ftx-sewing-selection/5","options":options,
+        "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+        "alternatives":[{"operation":"join","recipes":[{"id":"faster-qualified",
+            "needle":"example-needle","thread":"example-thread-a","max_stitch_mm":2.5,"stitches_per_minute":1000.0}]}]});
+    let result = portable(ftx_wasm::sew_select(PATTERN, &request.to_string()).unwrap());
+    assert!(result["report"]["selected_plan"].is_object());
+    assert_eq!(result["report"]["search_complete"], true);
+    let selected = result["selected_options_json"].as_str().unwrap();
+    assert_eq!(
+        portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, selected).unwrap())["plan"],
+        result["report"]["selected_plan"]
+    );
+    for (schema, objective) in [
+        ("ftx-sewing-selection/1", "minimize_feed_seconds"),
+        (
+            "ftx-sewing-selection/3",
+            "minimize_thread_observed_order_cost",
+        ),
+    ] {
+        request["schema"] = json!(schema);
+        request["objective"] = json!(objective);
+        let refusal = ftx_wasm::sew_select(PATTERN, &request.to_string()).unwrap_err();
+        assert!(
+            refusal.message.contains("depend on that allocation"),
+            "{refusal}"
+        );
+    }
 }
 
 #[test]

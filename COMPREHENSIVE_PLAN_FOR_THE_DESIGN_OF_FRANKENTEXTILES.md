@@ -3774,6 +3774,40 @@ neither operation simultaneously identifies both unknown branches or resolves th
 problem's possible nonuniqueness. Synthetic recovery does not close measured cyclic textile,
 damage/rupture or unchanged-pattern garment acceptance.
 
+### 25.97 Plan production with different qualified machine and recipe configurations
+
+Version 2 of the independent whole-garment cell model gives each physical cell a complete
+source-locked machine, process qualifications and explicit recipe overrides. Omitted operations
+inherit the current parent candidate; fixed overrides remain fixed. Every cell regenerates its
+ordinary stitch stations, traversal count and feed on the unchanged pattern, including a cell
+that ultimately remains idle. Material-stack, reverse-feed, pressure and requested access checks
+retain their existing authority. Allocation and exact schedule reconstruction use these actual
+source plans while preserving the bounded receipt cache and replay accounting of section 25.94.
+
+Selected production, stitch output and thread inventory use the assigned cell's actual recipe.
+Demand for the same exact yarn is combined across used cells before one supplier minimum,
+increment, tier and stock evaluation. Missing used-cell coverage withholds complete totals.
+Material/design/scenario studies compare the same actual feed, thread mass, order cost and
+elapsed completion. Recipe search uses the explicit makespan objective; its resulting allocation
+does not also establish a minimum-feed or minimum-cost assignment. The outer serial plan stays
+a reference. Source-plan operation and retained-station budgets include every configured cell.
+
+Both native commands and the portable/WASM interface expose an explicit-cell SVG preview,
+retaining actual pitch/rate, machine and qualification locks and assigned global garment IDs.
+An ambiguous configured-cell preview refuses until the cell is named. Browser sewing and study
+views show actual machines, recipes and selected thread contributions. The complete artificial
+`examples/sewing-heterogeneous-options.json` specifies the independently computed three-garment
+acceptance case: 160 intervals, 9.9 modeled seconds, 3 m of the same yarn and one rounded 4 m
+synthetic USD 14 order. These are declared numerical targets, not measured production performance.
+See [sewing-production.md](docs/sewing-production.md).
+
+This delivers the implementation of `ftx-pb2.2.6`; fresh Rust typechecking and native/portable
+and compiled-WASM acceptance remain tracked there until those gates complete. The merged browser lifecycle
+suite passes 157 tests; compiled-WASM cases were explicitly skipped in the storage-exhausted
+local environment. Every garment still stays in one cell with independently qualified machines,
+fixture units and handling labor. Shared operators/resources, inter-cell transfers, coupled time/cost
+allocation, hardware execution and measured seam/garment acceptance remain open under `ftx-pb2.2`.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

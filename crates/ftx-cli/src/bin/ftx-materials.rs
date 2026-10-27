@@ -109,6 +109,7 @@ ftx-materials sew-plan PATTERN.json OPTIONS.json
 ftx-materials sew-select PATTERN.json REQUEST.json
 ftx-materials sew-stitches PATTERN.json OPTIONS.json
 ftx-materials sew-svg PATTERN.json OPTIONS.json OPERATION-ID NEW.svg
+ftx-materials sew-cell-svg PATTERN.json OPTIONS.json CELL-ID OPERATION-ID NEW.svg
 
 JSON output. `show` includes a portable selection, missing-property coverage and separate steady/transient readiness.
 `resolve` invokes the actual drape resolver without meshing; missing mechanics refuse.
@@ -153,6 +154,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `sew-select` searches explicit qualified recipes by feed time, feed plus setup time or complete thread order cost; its exact selected options replay through `sew-plan`.
 `sew-stitches` expands all directed stitch travel in paired pattern frames; neither command authorizes hardware.
 `sew-svg` writes a new operation preview with source/offset paths and needle stations; never a machine file.
+`sew-cell-svg` selects an explicit parallel cell's actual admitted machine/recipe geometry and source locks.
 Fitted coefficients are estimates: --allow-estimates explicitly admits them for commands listing that flag; forward strip requests retain their frozen selection's policy.";
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -317,6 +319,20 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
                 .map_err(|e| io(out, e))?;
             file.write_all(svg.as_bytes()).map_err(|e| io(out, e))?;
             Ok(json!({"out":out,"operation":operation,
+                "svg_sha256":ftx_core::receipt::sha256_hex(svg.as_bytes()),
+                "hardware_execution_authorized":false}))
+        }
+        ["sew-cell-svg", pattern, options, cell, operation, out] => {
+            let pattern = Pattern::new(read::<Value>(pattern)?);
+            let options = read::<ftx_export::sewing::SewOptions>(options)?;
+            let svg = ftx_export::sewing::preview::svg_cell(&pattern, &options, cell, operation)?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(out)
+                .map_err(|e| io(out, e))?;
+            file.write_all(svg.as_bytes()).map_err(|e| io(out, e))?;
+            Ok(json!({"out":out,"cell":cell,"operation":operation,
                 "svg_sha256":ftx_core::receipt::sha256_hex(svg.as_bytes()),
                 "hardware_execution_authorized":false}))
         }

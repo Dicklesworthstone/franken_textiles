@@ -1218,16 +1218,18 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
         metric(yarn.mass?.required_mass_kg), yarn.mass_unavailable_reason || (yarn.mass ? "None" : "Not supplied")]);
     }
     if (report?.operation_channels?.length) {
+      const physicalCells = report.operation_channels.some(channel => typeof channel.cell === "string");
       const channels = table(parent, `${row.key}: selected operation and thread channel requirements`,
-        ["Operation", "Qualification", "Channel", "Exact yarn snapshot", "Traversed intervals", "Required length (m)"]);
-      for (const channel of report.operation_channels) cells(channels, [channel.operation_id, channel.qualification_id,
+        [...(physicalCells ? ["Cell"] : []), "Operation", "Qualification", "Channel", "Exact yarn snapshot", "Traversed intervals", "Required length (m)"]);
+      for (const channel of report.operation_channels) cells(channels, [...(physicalCells ? [channel.cell || "Unknown"] : []),
+        channel.operation_id, channel.qualification_id,
         channel.channel_id, channel.material_sha256, metric(channel.stitch_intervals), metric(channel.required_length_m)]);
-      if (report.schema === "ftx-sewing-consumables/2") {
+      if (report.operation_channels.some(channel => channel.per_copy)) {
         const perCopy = table(parent, `${row.key}: thread consumption per garment before production aggregation`,
-          ["Operation", "Channel", "Traversed intervals", "Traversal length (m)", "Start allowance (m)", "End allowance (m)", "Required length (m)"]);
+          [...(physicalCells ? ["Cell"] : []), "Operation", "Channel", "Traversed intervals", "Traversal length (m)", "Start allowance (m)", "End allowance (m)", "Required length (m)"]);
         for (const channel of report.operation_channels) {
           const one = channel.per_copy;
-          cells(perCopy, [channel.operation_id, channel.channel_id, metric(one?.stitch_intervals),
+          cells(perCopy, [...(physicalCells ? [channel.cell || "Unknown"] : []), channel.operation_id, channel.channel_id, metric(one?.stitch_intervals),
             metric(one?.traversal_length_m), metric(one?.start_allowance_m), metric(one?.end_allowance_m), metric(one?.required_length_m)]);
         }
       }
@@ -1235,13 +1237,15 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
     if (report?.missing_operations?.length || purchase?.unavailable_reason) {
       const missing = document.createElement("p");
       missing.textContent = `${row.key}: ` + (report.missing_operations || [])
-        .map(item => `${item.operation_id}: ${item.reason}`).join("; ") +
+        .map(item => `${item.cell ? `${item.cell} / ` : ""}${item.operation_id}: ${item.reason}`).join("; ") +
         (purchase?.unavailable_reason ? ` ${purchase.unavailable_reason}` : "");
       parent.append(missing);
     }
     detail(parent, `${row.key}: selected thread channels, exact yarns and order evidence (display only)`, {
       selected_recipe_choices: available(row.sewing_selection)?.selected_choices,
       consumables: report || null, qualifications: plan?.options?.qualifications,
+      cell_qualifications: plan?.production?.parallel?.cell_plans?.map(source =>
+        ({ cell: source.cell, qualifications: source.plan.options.qualifications })),
       request: plan?.options?.consumables, sewing_refusal: row.sewing?.refusal
     });
   }
@@ -1548,6 +1552,7 @@ function sewingHandling(parent, plan, label = "Selected sewing plan") {
 function sewingParallel(parent, plan, label = "Selected sewing plan") {
   const report = plan?.production?.parallel;
   if (!report) return;
+  const heterogeneous = Boolean(report.cell_plans?.length);
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: parallel completion and aggregate work`,
     ["Allocation", "Completion (s)", "Total feed work (s)", "Scheduled feed work (s)", "Total setup work (s)", "Total handling work (s)"]);
@@ -1557,26 +1562,36 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       metric(seconds(allocation?.handling_milliseconds))]);
   }
   const machines = table(parent, `${label}: selected physical cells`,
-    ["Cell", "Global garment copies (zero-based)", "Available (s)", "Complete (s)", "Raw feed (s)", "Feed rounding (ms)", "Cell order minimum proved"]);
+    ["Cell", ...(heterogeneous ? ["Qualified machine"] : []), "Global garment copies (zero-based)", "Available (s)", "Complete (s)", "Raw feed (s)", "Feed rounding (ms)", "Cell order minimum proved"]);
   const operations = table(parent, `${label}: cell-local sewing order`,
-    ["Cell", "Position in cell", "Global garment copy", "Operation", "Needle", "Thread", "Required local predecessors"]);
+    ["Cell", "Position in cell", "Global garment copy", "Operation", "Needle", "Thread",
+      ...(heterogeneous ? ["Maximum stitch (mm)", "Stitches/min"] : []), "Required local predecessors"]);
   for (const cell of report.selected?.cells || []) {
     const schedule = cell.schedule;
-    cells(machines, [cell.cell, cell.copies.join(", ") || "Idle", metric(seconds(cell.available_at_milliseconds)),
+    const source = report.cell_plans?.find(item => item.cell === cell.cell);
+    const sourcePlan = source?.plan || plan;
+    cells(machines, [cell.cell, ...(heterogeneous ? [sourcePlan.options?.machine?.id || "Unavailable"] : []),
+      cell.copies.join(", ") || "Idle", metric(seconds(cell.available_at_milliseconds)),
       schedule ? metric(seconds(cell.finish_milliseconds)) : "Idle", metric(schedule?.feed_seconds),
       metric(typeof cell.feed_padding_seconds === "number" ? cell.feed_padding_seconds * 1000 : null),
       schedule ? String(schedule.ordering.optimality_proven) : "No work"]);
     if (!schedule) continue;
     for (const [i, id] of schedule.ordering.selected_order.entries()) {
       const operation = schedule.operations.find(item => item.id === id);
-      const pass = plan.seams[operation.seam_index].pass;
+      const pass = sourcePlan.seams[operation.seam_index].pass;
       cells(operations, [cell.cell, metric(i + 1), metric(cell.copies[operation.copy]),
-        operation.operation_id, pass.needle, pass.thread, operation.after.join(", ") || "None"]);
+        operation.operation_id, pass.needle, pass.thread,
+        ...(heterogeneous ? [metric(pass.max_stitch_mm), metric(pass.stitches_per_minute)] : []),
+        operation.after.join(", ") || "None"]);
     }
     const policy = plan.options?.production?.parallel?.cells?.find(item => item.id === cell.cell);
     const local = { production: schedule, options: { production: policy } };
     sewingWorkholding(parent, local, `${label}: cell ${cell.cell} (local copy IDs)`);
     sewingHandling(parent, local, `${label}: cell ${cell.cell} (local copy IDs)`);
+    if (heterogeneous) {
+      sewingAccess(parent, sourcePlan, `${label}: cell ${cell.cell}`);
+      detail(parent, `${label}: cell ${cell.cell} qualified machine, recipes and exact station geometry`, source);
+    }
   }
   const note = document.createElement("p");
   note.textContent = (report.optimality_proven ?
@@ -1587,12 +1602,15 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     "Every garment stays in one physical cell. Concurrent operation requires independently qualified machines, fixtures and handling labor. " +
     "Each used cell includes its own availability, initial setup and final unloading. Feed is rounded upward once per used cell; raw feed and padding remain separate. " +
     "Elapsed completion is distinct from summed machine work. The retained single-machine reference is not the selected concurrent order. " +
+    (heterogeneous ? "Stitch pitch, feed, qualifications and thread consumption come from each selected cell's own admitted plan. " +
+      "The allocation minimizes elapsed completion; its thread purchasing cost and total feed are reported consequences, not separately optimized quantities. " : "") +
     "This calculation does not qualify garment transfers, shared operators or hardware execution.";
   parent.append(note);
   detail(parent, `${label}: cell independence, timing sources and complete allocations`, {
     policy: plan.options?.production?.parallel, report });
 }
 function sewingAccess(parent, plan, label = "Selected sewing plan") {
+  if (plan?.production?.parallel?.cell_plans?.length) return;
   const seams = plan?.seams?.filter(row => row.access || row.pass?.access) || [];
   if (!seams.length) return;
   const clearances = table(parent, `${label}: planar tool and fixture clearance`,
@@ -1658,7 +1676,7 @@ function sewingResult(parent, r) {
   sewingWorkholding(parent, plan);
   sewingHandling(parent, plan);
   sewingParallel(parent, plan);
-  sewingAccess(parent, plan);
+  if (!parallel?.cell_plans?.length) sewingAccess(parent, plan);
   if (plan?.seams.some(row => row.source_span)) {
     const spans = table(parent, "Partial-seam operations — original source correspondence",
       ["Operation", "Source seam", "Side A range", "Side B range", "Full source lengths (mm)", "Traveled lengths (mm)", "Direction"]);
@@ -1692,11 +1710,16 @@ function sewingResult(parent, r) {
       order.timing ? "minimize_setup_time" : "minimize_setup_changes") : undefined,
     ordering_optimality_proven: order?.optimality_proven,
     finite_workholding_enforced: (parallel ? parallel.selected.cells.some(cell => cell.schedule?.workholding) : production?.workholding) ? true : undefined,
-    planar_access_checked_operations: plan?.seams?.filter(row => row.access).length || undefined,
+    planar_access_checked_operations: (parallel?.cell_plans?.length ? parallel.selected.cells
+      .filter(cell => cell.copies.length).reduce((count, cell) => count +
+        (parallel.cell_plans.find(source => source.cell === cell.cell)?.plan.seams.filter(row => row.access).length || 0), 0) :
+      plan?.seams?.filter(row => row.access).length) || undefined,
     search_nodes: order?.search_nodes, hardware_execution_authorized: plan?.hardware_execution_authorized };
 }
 function permanentStretchResult(parent, r) {
   const c = r.calibration, d = c.diagnostics;
+  const recovery = c.input.material.membrane_relaxation;
+  const joint = Boolean(recovery?.parallel_plasticity);
   const decision = document.createElement("p");
   decision.textContent = `Permanent-stretch identification: ${c.status}. Held-out replay: ${c.check_status}. ` +
     c.decision_reasons.join(" ") + (c.check_refusal ? ` ${c.check_refusal.message}` : "");
@@ -1720,6 +1743,32 @@ function permanentStretchResult(parent, r) {
     cells(domain, [name, sourceQuantity(properties[`membrane_strain_limit_${axis}`]),
       sourceQuantity(properties[`membrane_accumulation_limit_${axis}`])]);
   }
+  if (joint) {
+    const spectrum = table(parent, "Delayed recovery — independently supplied, held fixed during identification",
+      ["Branch", "Stiffness definition", "Relaxation time", "Time evidence", "Time source"]);
+    for (const branch of recovery.branches || []) cells(spectrum,
+      [branch.id, `Equilibrium-tensor ratio: ${sourceQuantity(branch.stiffness_ratio)}`,
+        sourceQuantity(branch.relaxation_time), branch.relaxation_time.evidence, branch.relaxation_time.source]);
+    for (const branch of recovery.orthotropic_branches || []) cells(spectrum,
+      [branch.id, ["warp", "weft", "coupling", "shear"].map(axis =>
+        `${axis}: ${sourceQuantity(branch.stiffness[axis])}`).join("; "),
+        sourceQuantity(branch.relaxation_time), branch.relaxation_time.evidence, branch.relaxation_time.source]);
+    detail(parent, "Fixed recovery spectrum, joint-network qualification and original sources",
+      { recovery, sources: c.input.material.sources });
+    const endings = new Map();
+    for (const prediction of c.predictions || []) if (prediction.parallel_history) endings.set(prediction.experiment, prediction);
+    if (endings.size) {
+      const histories = table(parent, "Final recorded state of each independent history — work per reference area",
+        ["History / partition", "Equilibrium storage (J/m²)", "Maxwell storage (J/m²)", "Total storage (J/m²)",
+          "Plastic loss (J/m²)", "Dashpot work (J/m²)"]);
+      for (const prediction of endings.values()) {
+        const state = prediction.parallel_history;
+        cells(histories, [`${prediction.experiment} / ${prediction.partition}`, metric(prediction.stored_j_m2),
+          metric(state.maxwell_stored_j_m2), metric(state.total_stored_j_m2),
+          metric(prediction.plastic_dissipation_j_m2), metric(state.maxwell_dissipation_j_m2)]);
+      }
+    }
+  }
   const work = table(parent, "Identification work and FIT excitation", ["Diagnostic", "Value"]);
   for (const row of [
     ["Completed / attempted starts", `${metric(d.starts_completed)} / ${metric(d.starts_attempted)}`],
@@ -1728,14 +1777,20 @@ function permanentStretchResult(parent, r) {
     ["Refused forward trials", metric(d.trials_refused)],
     ["FIT excitation pivot", d.sensitivity_evaluated ? metric(d.excitation_pivot) : "Not evaluated"]
   ]) cells(work, row);
+  if (joint) cells(work, ["Fixed Maxwell branch-node advances (included above)", metric(d.fixed_maxwell_branch_steps)]);
   const note = document.createElement("p");
-  note.textContent = "The shared rate-independent law follows every recorded loading, unloading and reversal node, including nodes with unobserved forces. " +
+  note.textContent = (joint ?
+    "Only the six permanent-stretch and hardening coefficients are identified. The independently qualified Maxwell spectrum stays fixed. " +
+    "Recorded elapsed times advance its delayed-recovery state, including nodes with unobserved forces; residuals compare the total parallel-network load. " :
+    "The shared rate-independent law follows every recorded loading, unloading and reversal node, including nodes with unobserved forces. ") +
     "Strains are raw material-frame Green strain; loads are second-Piola sheet resultants in N/m. " +
     "FIT chooses the coefficients before CHECK replay. Search ranges, force scales and local sensitivity are not confidence intervals or a proof of global uniqueness. " +
-    "Applicability limits remain supplied source observations; the fitter does not infer them from the largest load. Fitted coefficients remain estimates.";
+    "Applicability limits remain supplied source observations; the fitter does not infer them from the largest load. Fitted coefficients remain estimates." +
+    (joint ? " Equilibrium and Maxwell storage remain separate from plastic loss and physical dashpot work; none is automatically injected as heat." : "");
   parent.append(note);
   detail(parent, "Complete source histories, permanent strain, stored energy, dissipation and residuals", c);
-  return { response: "Permanent stretch and directional hardening", status: c.status,
+  return { response: joint ? "Permanent stretch with independently characterized delayed recovery" :
+    "Permanent stretch and directional hardening", status: c.status,
     held_out: c.check_status, input_sha256: c.input_sha256, material_id: r.selection?.id,
     allow_estimates: r.selection?.allow_estimates,
     mechanical_coefficients_available: r.material?.capabilities.mechanical_coefficients?.ready === true,

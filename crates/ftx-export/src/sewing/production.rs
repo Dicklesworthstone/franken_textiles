@@ -1,9 +1,10 @@
-//! Cross-copy scheduling on one admitted machine, reusing the ordinary dependency/setup authority.
-//! Repeated operations borrow source station geometry; no handling or fixture transition is inferred.
+//! Cross-copy scheduling on admitted machines, reusing the ordinary dependency/setup authority.
+//! Each cell's repeated operations borrow its own admitted source geometry; transitions are explicit.
 
 use std::borrow::Cow;
 
 use ftx_core::{Refusal, RefusalCode};
+use ftx_pattern::Pattern;
 use serde::{Deserialize, Serialize};
 
 use super::{SewOptions, SewPlan, bad, ordering};
@@ -58,7 +59,8 @@ pub struct Operation {
 /// Complete bounded schedule over every repeated operation. No geometry or source evidence is guessed.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` repeated operations; `/2` additionally enforces source-qualified finite workholding.
+    /// `/1` repeated operations, `/2` workholding, `/3` handling, `/4` shared parallel cells,
+    /// `/5` configured parallel cells whose actual selected feed and intervals are reported here.
     pub schema: &'static str,
     /// Actual garment quantity shared with any requested thread inventory.
     pub production_copies: usize,
@@ -160,7 +162,11 @@ pub(super) fn resolve_options(options: &SewOptions) -> Result<Cow<'_, SewOptions
     Ok(Cow::Owned(resolved))
 }
 
-pub(super) fn evaluate(plan: &SewPlan, policy: &Policy) -> Result<Report, Refusal> {
+pub(super) fn evaluate(
+    plan: &SewPlan,
+    policy: &Policy,
+    pattern: &Pattern,
+) -> Result<Report, Refusal> {
     let copies = count(policy.production_copies.unwrap_or(1))?;
     let expanded = plan.seams.len().checked_mul(copies).ok_or_else(|| {
         Refusal::new(
@@ -242,10 +248,36 @@ pub(super) fn evaluate(plan: &SewPlan, policy: &Policy) -> Result<Report, Refusa
     let parallel = policy
         .parallel
         .as_ref()
-        .map(|parallel| parallel::evaluate(plan, parallel, copies))
+        .map(|parallel| parallel::evaluate(plan, parallel, copies, pattern))
         .transpose()?;
+    let (stitch_intervals, feed_seconds) = if let Some(parallel) = &parallel
+        && !parallel.cell_plans.is_empty()
+    {
+        let intervals = parallel
+            .selected
+            .cells
+            .iter()
+            .filter_map(|cell| cell.schedule.as_ref())
+            .try_fold(0usize, |sum, schedule| {
+                sum.checked_add(schedule.stitch_intervals)
+            })
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "parallel selected stitch count overflows",
+                )
+            })?;
+        (intervals, parallel.selected.feed_seconds)
+    } else {
+        (stitch_intervals, feed_seconds)
+    };
     Ok(Report {
-        schema: if parallel.is_some() {
+        schema: if parallel
+            .as_ref()
+            .is_some_and(|parallel| !parallel.cell_plans.is_empty())
+        {
+            "ftx-sewing-production/5"
+        } else if parallel.is_some() {
             "ftx-sewing-production/4"
         } else if handling.is_some() {
             "ftx-sewing-production/3"

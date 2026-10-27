@@ -13,7 +13,8 @@ use super::compile;
 /// One traversed stitch interval, in paired original pattern-side frames (mm), not machine space.
 #[derive(Clone, Debug, Serialize)]
 pub struct StitchStep {
-    /// Index into the retained plan's operation-ordered `seams` array.
+    /// Index into the source plan's operation-ordered `seams` array. With configured parallel cells,
+    /// this is the `plan.parallel_cell_plan(cell)` array, not the outer serial-reference geometry.
     pub operation: usize,
     /// Zero-based physical garment copy when a production schedule was explicitly requested.
     /// Omission retains the existing single-garment program representation.
@@ -49,7 +50,8 @@ pub struct StitchStep {
 /// Fully expanded geometric stitch travel for software/CAM review. No device commands or permission.
 #[derive(Clone, Debug, Serialize)]
 pub struct SewProgram {
-    /// `/1` centerline, `/2` offset geometry, `/3` flat-fold correspondence, `/4` production copies.
+    /// `/1` centerline, `/2` offset, `/3` assembly, `/4` copies, `/5` shared parallel cells,
+    /// `/6` separately admitted cell geometry, recipes and rates.
     pub schema: &'static str,
     /// Original inputs, frozen source materials, paired station tables and directed operation order.
     pub plan: SewPlan,
@@ -134,7 +136,11 @@ impl SewProgram {
         };
         let mut stitches = Vec::with_capacity(total_intervals);
         for (cell, copy, operation) in sequence {
-            let seam = &plan.seams[operation];
+            let source = cell.as_deref().map_or(&plan, |cell| {
+                plan.parallel_cell_plan(cell)
+                    .expect("admitted parallel cell")
+            });
+            let seam = &source.seams[operation];
             for (run, travel) in seam.runs.iter().enumerate() {
                 let mut from = travel.from_station;
                 while from != travel.to_station {
@@ -171,6 +177,13 @@ impl SewProgram {
         }
         Ok(Self {
             schema: if plan
+                .production
+                .as_ref()
+                .and_then(|production| production.parallel.as_ref())
+                .is_some_and(|parallel| !parallel.cell_plans.is_empty())
+            {
+                "ftx-sewing-program/6"
+            } else if plan
                 .production
                 .as_ref()
                 .is_some_and(|production| production.parallel.is_some())

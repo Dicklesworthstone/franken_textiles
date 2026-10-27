@@ -1,0 +1,1152 @@
+{
+  "machine": {
+    "id": "example-configuration-not-a-qualified-machine",
+    "stitch_mm": [
+      0.5,
+      5.0
+    ],
+    "feed_b_over_a": [
+      0.5,
+      2.0
+    ],
+    "max_stack_mm": 3.0,
+    "max_stitches_per_minute": 1000.0
+  },
+  "passes": [
+    {
+      "id": "join",
+      "seam": "side",
+      "max_stitch_mm": 2.5,
+      "plies": [
+        1,
+        1
+      ],
+      "minimum_allowance_mm": 6.0,
+      "stitches_per_minute": 600.0,
+      "needle": "example-needle",
+      "thread": "example-thread-a",
+      "after": []
+    },
+    {
+      "id": "reinforce",
+      "seam": "side",
+      "max_stitch_mm": 2.5,
+      "plies": [
+        1,
+        1
+      ],
+      "minimum_allowance_mm": 6.0,
+      "stitches_per_minute": 600.0,
+      "needle": "example-needle",
+      "thread": "example-thread-b",
+      "after": [
+        "join"
+      ]
+    }
+  ],
+  "production": {
+    "production_copies": 3,
+    "ordering": {
+      "objective": "minimize_production_time",
+      "max_search_nodes": 2000,
+      "initial_setup": {
+        "needle": "example-needle",
+        "thread": "initial-thread"
+      },
+      "setup_times": {
+        "machine": "example-configuration-not-a-qualified-machine",
+        "source": {
+          "reference": "test:parallel-serial-reference",
+          "accessed_on": "2026-10-27",
+          "note": "Invented software timing, not measured factory throughput"
+        },
+        "method": "Synthetic nonoverlapping complete needle/thread changes; exclude feed and handling",
+        "evidence": "estimate",
+        "allow_estimates": true,
+        "transitions": [
+          {
+            "from": {
+              "needle": "example-needle",
+              "thread": "initial-thread"
+            },
+            "to": {
+              "needle": "example-needle",
+              "thread": "example-thread-a"
+            },
+            "milliseconds": 1000
+          },
+          {
+            "from": {
+              "needle": "example-needle",
+              "thread": "initial-thread"
+            },
+            "to": {
+              "needle": "example-needle",
+              "thread": "example-thread-b"
+            },
+            "milliseconds": 3000
+          },
+          {
+            "from": {
+              "needle": "example-needle",
+              "thread": "example-thread-a"
+            },
+            "to": {
+              "needle": "example-needle",
+              "thread": "example-thread-b"
+            },
+            "milliseconds": 500
+          },
+          {
+            "from": {
+              "needle": "example-needle",
+              "thread": "example-thread-b"
+            },
+            "to": {
+              "needle": "example-needle",
+              "thread": "example-thread-a"
+            },
+            "milliseconds": 2000
+          }
+        ]
+      }
+    },
+    "handling": {
+      "model": "serial_operation_transitions/1",
+      "machine_sha256": "560788cff0cfc3e842e0cda1be7db88a7f7b5ad094e560e1821a4ebad60cd1c4",
+      "qualifications": {
+        "join": [
+          {
+            "id": "synthetic-workholding-join",
+            "sha256": "8cdd5a0b2094be2c965379eff69fac69ea32fe95f2a343c8d0c3900f275656e2"
+          }
+        ],
+        "reinforce": [
+          {
+            "id": "synthetic-workholding-reinforce",
+            "sha256": "3b21aae3daea3359d86d3d939156b313505579cbb471f5b5b4170ff572dfaacc"
+          }
+        ]
+      },
+      "initial_milliseconds": {
+        "join": 100,
+        "reinforce": 100
+      },
+      "final_milliseconds": {
+        "join": 200,
+        "reinforce": 200
+      },
+      "transitions": [
+        {
+          "from": "join",
+          "to": "reinforce",
+          "relation": "same_copy",
+          "milliseconds": 100
+        },
+        {
+          "from": "reinforce",
+          "to": "join",
+          "relation": "same_copy",
+          "milliseconds": 100
+        },
+        {
+          "from": "join",
+          "to": "join",
+          "relation": "different_copy",
+          "milliseconds": 5000
+        },
+        {
+          "from": "join",
+          "to": "reinforce",
+          "relation": "different_copy",
+          "milliseconds": 5000
+        },
+        {
+          "from": "reinforce",
+          "to": "join",
+          "relation": "different_copy",
+          "milliseconds": 5000
+        },
+        {
+          "from": "reinforce",
+          "to": "reinforce",
+          "relation": "different_copy",
+          "milliseconds": 5000
+        }
+      ],
+      "source": {
+        "reference": "test:parallel-reference-handling",
+        "accessed_on": "2026-10-27",
+        "note": "Synthetic serial reference; each selected cell supplies independent timing and labor evidence"
+      },
+      "method": "Separate first load, inter-operation handling and final unload, excluding feed and setup",
+      "evidence": "estimate",
+      "allow_estimates": true
+    },
+    "parallel": {
+      "model": "independent_whole_garment_cells/2",
+      "objective": "minimize_makespan",
+      "time_basis": "ceil_cell_feed_milliseconds/1",
+      "independence": "independent_machines_fixtures_and_handling_labor/1",
+      "max_search_nodes": 10000,
+      "machine_sha256": "560788cff0cfc3e842e0cda1be7db88a7f7b5ad094e560e1821a4ebad60cd1c4",
+      "qualifications": {
+        "join": [
+          {
+            "id": "synthetic-workholding-join",
+            "sha256": "8cdd5a0b2094be2c965379eff69fac69ea32fe95f2a343c8d0c3900f275656e2"
+          }
+        ],
+        "reinforce": [
+          {
+            "id": "synthetic-workholding-reinforce",
+            "sha256": "3b21aae3daea3359d86d3d939156b313505579cbb471f5b5b4170ff572dfaacc"
+          }
+        ]
+      },
+      "source": {
+        "reference": "test:two-independent-heterogeneous-sewing-cells",
+        "accessed_on": "2026-10-27",
+        "note": "Invented software qualification of two distinct machine configurations, independent jigs and workers; no physical process or throughput evidence"
+      },
+      "method": "Synthetic qualification of each full cell configuration and recipe with separate machine, fixtures and handling labor",
+      "conditions": {
+        "cell-a": "machine-a, jigs-a1/a2, worker-a",
+        "cell-b": "machine-b, jigs-b1/b2, worker-b",
+        "sharing": "No machine, fixture unit or handling worker is shared"
+      },
+      "evidence": "estimate",
+      "allow_estimates": true,
+      "cells": [
+        {
+          "id": "cell-a",
+          "available_at_milliseconds": 0,
+          "ordering": {
+            "objective": "minimize_production_time",
+            "max_search_nodes": 2000,
+            "initial_setup": {
+              "needle": "example-needle",
+              "thread": "initial-thread"
+            },
+            "setup_times": {
+              "machine": "example-configuration-not-a-qualified-machine",
+              "source": {
+                "reference": "test:cell-a-setup",
+                "accessed_on": "2026-10-27",
+                "note": "Synthetic cell-a times, not physical observations"
+              },
+              "method": "Complete needle/thread changes by worker-a, excluding feed and handling",
+              "evidence": "estimate",
+              "allow_estimates": true,
+              "transitions": [
+                {
+                  "from": {
+                    "needle": "example-needle",
+                    "thread": "initial-thread"
+                  },
+                  "to": {
+                    "needle": "example-needle",
+                    "thread": "example-thread-a"
+                  },
+                  "milliseconds": 1000
+                },
+                {
+                  "from": {
+                    "needle": "example-needle",
+                    "thread": "initial-thread"
+                  },
+                  "to": {
+                    "needle": "example-needle",
+                    "thread": "example-thread-b"
+                  },
+                  "milliseconds": 3000
+                },
+                {
+                  "from": {
+                    "needle": "example-needle",
+                    "thread": "example-thread-a"
+                  },
+                  "to": {
+                    "needle": "example-needle",
+                    "thread": "example-thread-b"
+                  },
+                  "milliseconds": 500
+                },
+                {
+                  "from": {
+                    "needle": "example-needle",
+                    "thread": "example-thread-b"
+                  },
+                  "to": {
+                    "needle": "example-needle",
+                    "thread": "example-thread-a"
+                  },
+                  "milliseconds": 2000
+                }
+              ]
+            }
+          },
+          "handling": {
+            "model": "serial_operation_transitions/1",
+            "machine_sha256": "560788cff0cfc3e842e0cda1be7db88a7f7b5ad094e560e1821a4ebad60cd1c4",
+            "qualifications": {
+              "join": [
+                {
+                  "id": "synthetic-workholding-join",
+                  "sha256": "5c9bbe20a4399d9eac4a45b92e74f0cada6a64c7c54d2d16946ca8776f4c739b"
+                }
+              ],
+              "reinforce": [
+                {
+                  "id": "synthetic-workholding-reinforce",
+                  "sha256": "4dfeefbd9ff412fbdba58ebbc7d79a534bebae328efadd24c806b008b0dcd7d0"
+                }
+              ]
+            },
+            "initial_milliseconds": {
+              "join": 100,
+              "reinforce": 100
+            },
+            "final_milliseconds": {
+              "join": 200,
+              "reinforce": 200
+            },
+            "transitions": [
+              {
+                "from": "join",
+                "to": "reinforce",
+                "relation": "same_copy",
+                "milliseconds": 100
+              },
+              {
+                "from": "reinforce",
+                "to": "join",
+                "relation": "same_copy",
+                "milliseconds": 100
+              },
+              {
+                "from": "join",
+                "to": "join",
+                "relation": "different_copy",
+                "milliseconds": 5000
+              },
+              {
+                "from": "join",
+                "to": "reinforce",
+                "relation": "different_copy",
+                "milliseconds": 5000
+              },
+              {
+                "from": "reinforce",
+                "to": "join",
+                "relation": "different_copy",
+                "milliseconds": 5000
+              },
+              {
+                "from": "reinforce",
+                "to": "reinforce",
+                "relation": "different_copy",
+                "milliseconds": 5000
+              }
+            ],
+            "source": {
+              "reference": "test:cell-a-handling",
+              "accessed_on": "2026-10-27",
+              "note": "Synthetic durations supplied by worker-a independently of cell-b"
+            },
+            "method": "Separate first load, between-operation handling and final unload; exclude setup/feed",
+            "evidence": "estimate",
+            "allow_estimates": true
+          },
+          "workholding": {
+            "machine_sha256": "560788cff0cfc3e842e0cda1be7db88a7f7b5ad094e560e1821a4ebad60cd1c4",
+            "qualifications": {
+              "join": [
+                {
+                  "id": "synthetic-workholding-join",
+                  "sha256": "5c9bbe20a4399d9eac4a45b92e74f0cada6a64c7c54d2d16946ca8776f4c739b"
+                }
+              ],
+              "reinforce": [
+                {
+                  "id": "synthetic-workholding-reinforce",
+                  "sha256": "4dfeefbd9ff412fbdba58ebbc7d79a534bebae328efadd24c806b008b0dcd7d0"
+                }
+              ]
+            },
+            "resources": [
+              {
+                "id": "jigs-a",
+                "capacity": 2
+              }
+            ],
+            "holds": [
+              {
+                "id": "held-garment",
+                "resource": "jigs-a",
+                "units": 1,
+                "acquire": "join",
+                "release": "reinforce"
+              }
+            ],
+            "source": {
+              "reference": "test:cell-a-fixtures",
+              "accessed_on": "2026-10-27",
+              "note": "Invented jigs-a1 and a2, distinct from every fixture in cell-b"
+            },
+            "method": "Synthetic inventory and continuous hold from join through reinforcement",
+            "evidence": "estimate",
+            "allow_estimates": true
+          },
+          "configuration": {
+            "machine": {
+              "id": "example-configuration-not-a-qualified-machine",
+              "stitch_mm": [
+                0.5,
+                5.0
+              ],
+              "feed_b_over_a": [
+                0.5,
+                2.0
+              ],
+              "max_stack_mm": 3.0,
+              "max_stitches_per_minute": 1000.0
+            },
+            "qualifications": [
+              {
+                "id": "synthetic-workholding-join",
+                "materials": [
+                  "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b",
+                  "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"
+                ],
+                "machine": "example-configuration-not-a-qualified-machine",
+                "needle": "example-needle",
+                "thread": "example-thread-a",
+                "stitch_mm": [
+                  0.01,
+                  5.0
+                ],
+                "feed_b_over_a": [
+                  0.5,
+                  2.0
+                ],
+                "stack_mm": [
+                  0.01,
+                  3.0
+                ],
+                "stitches_per_minute": [
+                  1.0,
+                  1000.0
+                ],
+                "allow_reverse": false,
+                "source": {
+                  "reference": "test:finite-workholding-process",
+                  "accessed_on": "2026-10-27",
+                  "note": "Synthetic software example, not measured seam or fixture qualification"
+                },
+                "method": "Invented process envelope for the exact synthetic material stack and two-pass example",
+                "conditions": {
+                  "configuration": "synthetic sewing production example"
+                },
+                "evidence": "estimate",
+                "allow_estimates": true,
+                "thread_consumption": {
+                  "channels_complete": true,
+                  "evidence": "estimate",
+                  "allow_estimates": true,
+                  "source": {
+                    "reference": "test:cell-0-consumption",
+                    "accessed_on": "2026-10-27",
+                    "note": "Synthetic complete effective channel model, not physical thread-use evidence"
+                  },
+                  "method": "Independently declared per-traversal and per-operation allowances",
+                  "conditions": {},
+                  "channels": [
+                    {
+                      "id": "all-required-thread",
+                      "material": {
+                        "allow_estimates": false,
+                        "expected_sha256": "f5370a63379dfbcb4d26d3b29910c5670bad3e0802a15980cf69e503bb90a246",
+                        "id": "coats/epic-2994120-2026",
+                        "overrides": {},
+                        "record": {
+                          "composition": [],
+                          "composition_complete": false,
+                          "form": "yarn",
+                          "id": "coats/epic-2994120-2026",
+                          "name": "Coats Epic Ticket 120, Tex 24, 5000 m (August 2026)",
+                          "properties": {
+                            "put_up_length": {
+                              "bounds": null,
+                              "conditions": {
+                                "scope": "Not observed stock, purchase capacity or a per-seam consumption coefficient",
+                                "source_table": "Product Range, page 2; August 2026 edition",
+                                "specimen": "Article 2994120, standard 5000 m put-up"
+                              },
+                              "evidence": "published",
+                              "method": "Manufacturer Length column; nominal package length",
+                              "source": "coats-epic-2026",
+                              "unit": "m",
+                              "value": 5000.0
+                            },
+                            "supplier_average_thread_strength": {
+                              "bounds": null,
+                              "conditions": {
+                                "conditioning": "Gauge length, strain rate, humidity, temperature and test apparatus unspecified",
+                                "scope": "Source-defined thread observation only; not seam strength or a shell force limit",
+                                "source_table": "Product Range, page 2; August 2026 edition",
+                                "specimen": "Article 2994120, Ticket 120",
+                                "statistic": "Supplier indicative current average at publication; not a lower bound or current-lot guarantee"
+                              },
+                              "evidence": "published",
+                              "method": "Manufacturer Average Strength column; no named test method",
+                              "source": "coats-epic-2026",
+                              "unit": "cN",
+                              "value": 1190.0
+                            },
+                            "yarn_linear_density": {
+                              "bounds": null,
+                              "conditions": {
+                                "conditioning": "Test method, conditioning, lot and finish mass contribution not reported",
+                                "source_table": "Product Range, page 2; August 2026 edition",
+                                "specimen": "Article 2994120, Ticket 120"
+                              },
+                              "evidence": "published",
+                              "method": "Manufacturer nominal Tex column; independently unverified",
+                              "source": "coats-epic-2026",
+                              "unit": "tex",
+                              "value": 24.0
+                            }
+                          },
+                          "sources": {
+                            "coats-epic-2026": {
+                              "accessed_on": "2026-10-26",
+                              "note": "Coats Epic Product Information Sheet; August 2026 edition date on page 3. Product Range table and construction on page 2; lubricant on page 1. Original Tex, m and cN columns preserved; no conversion of Ticket to another count system. Source PDF SHA-256 b08de6e730a7f3993f21219ce189b2da0038091b9976f53fe0a154687bed0ca6. Factual observations only; source-document rights and trademarks retained. Publisher describes information as indicative current averages; no independent calibration, uncertainty or lot bounds supplied.",
+                              "reference": "https://www.coats.com/wp-content/uploads/2025/04/Coats-Epic-Product-Information-Sheet-2026.pdf"
+                            }
+                          },
+                          "structure": {
+                            "construction": "Polyester corespun with polyester wrap (page 2) and lubricant finish (page 1); constituent mass fractions not reported. [source: coats-epic-2026]",
+                            "elongation_reported_range": "[17, 26] percent in manufacturer Min-Max column; no nominal, load, test protocol or conditioning supplied. Not a fabric constitutive curve. [source: coats-epic-2026]",
+                            "recommended_needle_size_reported_range": "[75, 90] in manufacturer Recommended Needle Size column; size system/units unspecified. No machine qualification inferred. [source: coats-epic-2026]",
+                            "record_revision": "2026-10-27",
+                            "scope": "Published product observations only. No per-stitch consumption, seam strength, allowable load, shell mechanics, warmth, price or lot availability inferred.",
+                            "supplier_article": "2994120; Ticket 120; standard 5000 m put-up, not the separate 3000 m article. [source: coats-epic-2026]"
+                          }
+                        },
+                        "sources": {}
+                      },
+                      "metres_per_traversal": 0.01,
+                      "start_allowance_m": 0.1,
+                      "end_allowance_m": 0.2
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "synthetic-workholding-reinforce",
+                "materials": [
+                  "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b",
+                  "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"
+                ],
+                "machine": "example-configuration-not-a-qualified-machine",
+                "needle": "example-needle",
+                "thread": "example-thread-b",
+                "stitch_mm": [
+                  0.01,
+                  5.0
+                ],
+                "feed_b_over_a": [
+                  0.5,
+                  2.0
+                ],
+                "stack_mm": [
+                  0.01,
+                  3.0
+                ],
+                "stitches_per_minute": [
+                  1.0,
+                  1000.0
+                ],
+                "allow_reverse": false,
+                "source": {
+                  "reference": "test:finite-workholding-process",
+                  "accessed_on": "2026-10-27",
+                  "note": "Synthetic software example, not measured seam or fixture qualification"
+                },
+                "method": "Invented process envelope for the exact synthetic material stack and two-pass example",
+                "conditions": {
+                  "configuration": "synthetic sewing production example"
+                },
+                "evidence": "estimate",
+                "allow_estimates": true,
+                "thread_consumption": {
+                  "channels_complete": true,
+                  "evidence": "estimate",
+                  "allow_estimates": true,
+                  "source": {
+                    "reference": "test:cell-0-consumption",
+                    "accessed_on": "2026-10-27",
+                    "note": "Synthetic complete effective channel model, not physical thread-use evidence"
+                  },
+                  "method": "Independently declared per-traversal and per-operation allowances",
+                  "conditions": {},
+                  "channels": [
+                    {
+                      "id": "all-required-thread",
+                      "material": {
+                        "allow_estimates": false,
+                        "expected_sha256": "f5370a63379dfbcb4d26d3b29910c5670bad3e0802a15980cf69e503bb90a246",
+                        "id": "coats/epic-2994120-2026",
+                        "overrides": {},
+                        "record": {
+                          "composition": [],
+                          "composition_complete": false,
+                          "form": "yarn",
+                          "id": "coats/epic-2994120-2026",
+                          "name": "Coats Epic Ticket 120, Tex 24, 5000 m (August 2026)",
+                          "properties": {
+                            "put_up_length": {
+                              "bounds": null,
+                              "conditions": {
+                                "scope": "Not observed stock, purchase capacity or a per-seam consumption coefficient",
+                                "source_table": "Product Range, page 2; August 2026 edition",
+                                "specimen": "Article 2994120, standard 5000 m put-up"
+                              },
+                              "evidence": "published",
+                              "method": "Manufacturer Length column; nominal package length",
+                              "source": "coats-epic-2026",
+                              "unit": "m",
+                              "value": 5000.0
+                            },
+                            "supplier_average_thread_strength": {
+                              "bounds": null,
+                              "conditions": {
+                                "conditioning": "Gauge length, strain rate, humidity, temperature and test apparatus unspecified",
+                                "scope": "Source-defined thread observation only; not seam strength or a shell force limit",
+                                "source_table": "Product Range, page 2; August 2026 edition",
+                                "specimen": "Article 2994120, Ticket 120",
+                                "statistic": "Supplier indicative current average at publication; not a lower bound or current-lot guarantee"
+                              },
+                              "evidence": "published",
+                              "method": "Manufacturer Average Strength column; no named test method",
+                              "source": "coats-epic-2026",
+                              "unit": "cN",
+                              "value": 1190.0
+                            },
+                            "yarn_linear_density": {
+                              "bounds": null,
+                              "conditions": {
+                                "conditioning": "Test method, conditioning, lot and finish mass contribution not reported",
+                                "source_table": "Product Range, page 2; August 2026 edition",
+                                "specimen": "Article 2994120, Ticket 120"
+                              },
+                              "evidence": "published",
+                              "method": "Manufacturer nominal Tex column; independently unverified",
+                              "source": "coats-epic-2026",
+                              "unit": "tex",
+                              "value": 24.0
+                            }
+                          },
+                          "sources": {
+                            "coats-epic-2026": {
+                              "accessed_on": "2026-10-26",
+                              "note": "Coats Epic Product Information Sheet; August 2026 edition date on page 3. Product Range table and construction on page 2; lubricant on page 1. Original Tex, m and cN columns preserved; no conversion of Ticket to another count system. Source PDF SHA-256 b08de6e730a7f3993f21219ce189b2da0038091b9976f53fe0a154687bed0ca6. Factual observations only; source-document rights and trademarks retained. Publisher describes information as indicative current averages; no independent calibration, uncertainty or lot bounds supplied.",
+                              "reference": "https://www.coats.com/wp-content/uploads/2025/04/Coats-Epic-Product-Information-Sheet-2026.pdf"
+                            }
+                          },
+                          "structure": {
+                            "construction": "Polyester corespun with polyester wrap (page 2) and lubricant finish (page 1); constituent mass fractions not reported. [source: coats-epic-2026]",
+                            "elongation_reported_range": "[17, 26] percent in manufacturer Min-Max column; no nominal, load, test protocol or conditioning supplied. Not a fabric constitutive curve. [source: coats-epic-2026]",
+                            "recommended_needle_size_reported_range": "[75, 90] in manufacturer Recommended Needle Size column; size system/units unspecified. No machine qualification inferred. [source: coats-epic-2026]",
+                            "record_revision": "2026-10-27",
+                            "scope": "Published product observations only. No per-stitch consumption, seam strength, allowable load, shell mechanics, warmth, price or lot availability inferred.",
+                            "supplier_article": "2994120; Ticket 120; standard 5000 m put-up, not the separate 3000 m article. [source: coats-epic-2026]"
+                          }
+                        },
+                        "sources": {}
+                      },
+                      "metres_per_traversal": 0.01,
+                      "start_allowance_m": 0.1,
+                      "end_allowance_m": 0.2
+                    }
+                  ]
+                }
+              }
+            ],
+            "recipes": {},
+            "machine_sha256": "560788cff0cfc3e842e0cda1be7db88a7f7b5ad094e560e1821a4ebad60cd1c4",
+            "qualification_refs": {
+              "join": [
+                {
+                  "id": "synthetic-workholding-join",
+                  "sha256": "5c9bbe20a4399d9eac4a45b92e74f0cada6a64c7c54d2d16946ca8776f4c739b"
+                }
+              ],
+              "reinforce": [
+                {
+                  "id": "synthetic-workholding-reinforce",
+                  "sha256": "4dfeefbd9ff412fbdba58ebbc7d79a534bebae328efadd24c806b008b0dcd7d0"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "cell-b",
+          "available_at_milliseconds": 0,
+          "ordering": {
+            "objective": "minimize_production_time",
+            "max_search_nodes": 2000,
+            "initial_setup": {
+              "needle": "fast-needle",
+              "thread": "idle"
+            },
+            "setup_times": {
+              "machine": "synthetic-higher-rate-configuration",
+              "source": {
+                "reference": "test:cell-b-setup",
+                "accessed_on": "2026-10-27",
+                "note": "Synthetic cell-b times, not physical observations"
+              },
+              "method": "Complete needle/thread changes by worker-b, excluding feed and handling",
+              "evidence": "estimate",
+              "allow_estimates": true,
+              "transitions": [
+                {
+                  "from": {
+                    "needle": "fast-needle",
+                    "thread": "idle"
+                  },
+                  "to": {
+                    "needle": "fast-needle",
+                    "thread": "fast-thread"
+                  },
+                  "milliseconds": 500
+                }
+              ]
+            }
+          },
+          "handling": {
+            "model": "serial_operation_transitions/1",
+            "machine_sha256": "defa3ea66458a8fbdc3e82df2f64f872b2023d0d69a88b5d049df247938bba7e",
+            "qualifications": {
+              "join": [
+                {
+                  "id": "synthetic-fast-cell-qualification",
+                  "sha256": "17f483056a3fd95b61d0779977538ae7d3a90c46fb6ace96b7a5b532f977ffcb"
+                }
+              ],
+              "reinforce": [
+                {
+                  "id": "synthetic-fast-cell-qualification",
+                  "sha256": "17f483056a3fd95b61d0779977538ae7d3a90c46fb6ace96b7a5b532f977ffcb"
+                }
+              ]
+            },
+            "initial_milliseconds": {
+              "join": 100,
+              "reinforce": 100
+            },
+            "final_milliseconds": {
+              "join": 200,
+              "reinforce": 200
+            },
+            "transitions": [
+              {
+                "from": "join",
+                "to": "reinforce",
+                "relation": "same_copy",
+                "milliseconds": 100
+              },
+              {
+                "from": "reinforce",
+                "to": "join",
+                "relation": "same_copy",
+                "milliseconds": 100
+              },
+              {
+                "from": "join",
+                "to": "join",
+                "relation": "different_copy",
+                "milliseconds": 1000
+              },
+              {
+                "from": "join",
+                "to": "reinforce",
+                "relation": "different_copy",
+                "milliseconds": 1000
+              },
+              {
+                "from": "reinforce",
+                "to": "join",
+                "relation": "different_copy",
+                "milliseconds": 1000
+              },
+              {
+                "from": "reinforce",
+                "to": "reinforce",
+                "relation": "different_copy",
+                "milliseconds": 1000
+              }
+            ],
+            "source": {
+              "reference": "test:cell-b-handling",
+              "accessed_on": "2026-10-27",
+              "note": "Synthetic durations supplied by worker-b independently of cell-a"
+            },
+            "method": "Separate first load, between-operation handling and final unload; exclude setup/feed",
+            "evidence": "estimate",
+            "allow_estimates": true
+          },
+          "workholding": {
+            "machine_sha256": "defa3ea66458a8fbdc3e82df2f64f872b2023d0d69a88b5d049df247938bba7e",
+            "qualifications": {
+              "join": [
+                {
+                  "id": "synthetic-fast-cell-qualification",
+                  "sha256": "17f483056a3fd95b61d0779977538ae7d3a90c46fb6ace96b7a5b532f977ffcb"
+                }
+              ],
+              "reinforce": [
+                {
+                  "id": "synthetic-fast-cell-qualification",
+                  "sha256": "17f483056a3fd95b61d0779977538ae7d3a90c46fb6ace96b7a5b532f977ffcb"
+                }
+              ]
+            },
+            "resources": [
+              {
+                "id": "jigs-b",
+                "capacity": 2
+              }
+            ],
+            "holds": [
+              {
+                "id": "held-garment",
+                "resource": "jigs-b",
+                "units": 1,
+                "acquire": "join",
+                "release": "reinforce"
+              }
+            ],
+            "source": {
+              "reference": "test:cell-b-fixtures",
+              "accessed_on": "2026-10-27",
+              "note": "Invented jigs-b1 and b2, distinct from every fixture in cell-a"
+            },
+            "method": "Synthetic inventory and continuous hold from join through reinforcement",
+            "evidence": "estimate",
+            "allow_estimates": true
+          },
+          "configuration": {
+            "machine": {
+              "id": "synthetic-higher-rate-configuration",
+              "stitch_mm": [
+                0.5,
+                5.0
+              ],
+              "feed_b_over_a": [
+                0.5,
+                2.0
+              ],
+              "max_stack_mm": 3.0,
+              "max_stitches_per_minute": 1200.0
+            },
+            "qualifications": [
+              {
+                "id": "synthetic-fast-cell-qualification",
+                "materials": [
+                  "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b",
+                  "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"
+                ],
+                "machine": "synthetic-higher-rate-configuration",
+                "needle": "fast-needle",
+                "thread": "fast-thread",
+                "stitch_mm": [
+                  0.01,
+                  5.0
+                ],
+                "feed_b_over_a": [
+                  0.5,
+                  2.0
+                ],
+                "stack_mm": [
+                  0.01,
+                  3.0
+                ],
+                "stitches_per_minute": [
+                  1.0,
+                  1200.0
+                ],
+                "allow_reverse": false,
+                "source": {
+                  "reference": "test:finite-workholding-process",
+                  "accessed_on": "2026-10-27",
+                  "note": "Synthetic software example, not measured seam or fixture qualification"
+                },
+                "method": "Invented process envelope for the exact synthetic material stack and two-pass example",
+                "conditions": {
+                  "configuration": "synthetic sewing production example"
+                },
+                "evidence": "estimate",
+                "allow_estimates": true,
+                "thread_consumption": {
+                  "channels_complete": true,
+                  "evidence": "estimate",
+                  "allow_estimates": true,
+                  "source": {
+                    "reference": "test:cell-1-consumption",
+                    "accessed_on": "2026-10-27",
+                    "note": "Synthetic complete effective channel model, not physical thread-use evidence"
+                  },
+                  "method": "Independently declared per-traversal and per-operation allowances",
+                  "conditions": {},
+                  "channels": [
+                    {
+                      "id": "all-required-thread",
+                      "material": {
+                        "allow_estimates": false,
+                        "expected_sha256": "f5370a63379dfbcb4d26d3b29910c5670bad3e0802a15980cf69e503bb90a246",
+                        "id": "coats/epic-2994120-2026",
+                        "overrides": {},
+                        "record": {
+                          "composition": [],
+                          "composition_complete": false,
+                          "form": "yarn",
+                          "id": "coats/epic-2994120-2026",
+                          "name": "Coats Epic Ticket 120, Tex 24, 5000 m (August 2026)",
+                          "properties": {
+                            "put_up_length": {
+                              "bounds": null,
+                              "conditions": {
+                                "scope": "Not observed stock, purchase capacity or a per-seam consumption coefficient",
+                                "source_table": "Product Range, page 2; August 2026 edition",
+                                "specimen": "Article 2994120, standard 5000 m put-up"
+                              },
+                              "evidence": "published",
+                              "method": "Manufacturer Length column; nominal package length",
+                              "source": "coats-epic-2026",
+                              "unit": "m",
+                              "value": 5000.0
+                            },
+                            "supplier_average_thread_strength": {
+                              "bounds": null,
+                              "conditions": {
+                                "conditioning": "Gauge length, strain rate, humidity, temperature and test apparatus unspecified",
+                                "scope": "Source-defined thread observation only; not seam strength or a shell force limit",
+                                "source_table": "Product Range, page 2; August 2026 edition",
+                                "specimen": "Article 2994120, Ticket 120",
+                                "statistic": "Supplier indicative current average at publication; not a lower bound or current-lot guarantee"
+                              },
+                              "evidence": "published",
+                              "method": "Manufacturer Average Strength column; no named test method",
+                              "source": "coats-epic-2026",
+                              "unit": "cN",
+                              "value": 1190.0
+                            },
+                            "yarn_linear_density": {
+                              "bounds": null,
+                              "conditions": {
+                                "conditioning": "Test method, conditioning, lot and finish mass contribution not reported",
+                                "source_table": "Product Range, page 2; August 2026 edition",
+                                "specimen": "Article 2994120, Ticket 120"
+                              },
+                              "evidence": "published",
+                              "method": "Manufacturer nominal Tex column; independently unverified",
+                              "source": "coats-epic-2026",
+                              "unit": "tex",
+                              "value": 24.0
+                            }
+                          },
+                          "sources": {
+                            "coats-epic-2026": {
+                              "accessed_on": "2026-10-26",
+                              "note": "Coats Epic Product Information Sheet; August 2026 edition date on page 3. Product Range table and construction on page 2; lubricant on page 1. Original Tex, m and cN columns preserved; no conversion of Ticket to another count system. Source PDF SHA-256 b08de6e730a7f3993f21219ce189b2da0038091b9976f53fe0a154687bed0ca6. Factual observations only; source-document rights and trademarks retained. Publisher describes information as indicative current averages; no independent calibration, uncertainty or lot bounds supplied.",
+                              "reference": "https://www.coats.com/wp-content/uploads/2025/04/Coats-Epic-Product-Information-Sheet-2026.pdf"
+                            }
+                          },
+                          "structure": {
+                            "construction": "Polyester corespun with polyester wrap (page 2) and lubricant finish (page 1); constituent mass fractions not reported. [source: coats-epic-2026]",
+                            "elongation_reported_range": "[17, 26] percent in manufacturer Min-Max column; no nominal, load, test protocol or conditioning supplied. Not a fabric constitutive curve. [source: coats-epic-2026]",
+                            "recommended_needle_size_reported_range": "[75, 90] in manufacturer Recommended Needle Size column; size system/units unspecified. No machine qualification inferred. [source: coats-epic-2026]",
+                            "record_revision": "2026-10-27",
+                            "scope": "Published product observations only. No per-stitch consumption, seam strength, allowable load, shell mechanics, warmth, price or lot availability inferred.",
+                            "supplier_article": "2994120; Ticket 120; standard 5000 m put-up, not the separate 3000 m article. [source: coats-epic-2026]"
+                          }
+                        },
+                        "sources": {}
+                      },
+                      "metres_per_traversal": 0.015,
+                      "start_allowance_m": 0.05,
+                      "end_allowance_m": 0.05
+                    }
+                  ]
+                }
+              }
+            ],
+            "recipes": {
+              "join": {
+                "id": "fast-join",
+                "needle": "fast-needle",
+                "thread": "fast-thread",
+                "max_stitch_mm": 5.0,
+                "stitches_per_minute": 900.0
+              },
+              "reinforce": {
+                "id": "fast-reinforce",
+                "needle": "fast-needle",
+                "thread": "fast-thread",
+                "max_stitch_mm": 5.0,
+                "stitches_per_minute": 900.0
+              }
+            },
+            "machine_sha256": "defa3ea66458a8fbdc3e82df2f64f872b2023d0d69a88b5d049df247938bba7e",
+            "qualification_refs": {
+              "join": [
+                {
+                  "id": "synthetic-fast-cell-qualification",
+                  "sha256": "17f483056a3fd95b61d0779977538ae7d3a90c46fb6ace96b7a5b532f977ffcb"
+                }
+              ],
+              "reinforce": [
+                {
+                  "id": "synthetic-fast-cell-qualification",
+                  "sha256": "17f483056a3fd95b61d0779977538ae7d3a90c46fb6ace96b7a5b532f977ffcb"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "qualifications": [
+    {
+      "id": "synthetic-workholding-join",
+      "materials": [
+        "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b",
+        "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"
+      ],
+      "machine": "example-configuration-not-a-qualified-machine",
+      "needle": "example-needle",
+      "thread": "example-thread-a",
+      "stitch_mm": [
+        0.01,
+        5.0
+      ],
+      "feed_b_over_a": [
+        0.5,
+        2.0
+      ],
+      "stack_mm": [
+        0.01,
+        3.0
+      ],
+      "stitches_per_minute": [
+        1.0,
+        1000.0
+      ],
+      "allow_reverse": false,
+      "source": {
+        "reference": "test:finite-workholding-process",
+        "accessed_on": "2026-10-27",
+        "note": "Synthetic software example, not measured seam or fixture qualification"
+      },
+      "method": "Invented process envelope for the exact synthetic material stack and two-pass example",
+      "conditions": {
+        "configuration": "synthetic sewing production example"
+      },
+      "evidence": "estimate",
+      "allow_estimates": true
+    },
+    {
+      "id": "synthetic-workholding-reinforce",
+      "materials": [
+        "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b",
+        "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"
+      ],
+      "machine": "example-configuration-not-a-qualified-machine",
+      "needle": "example-needle",
+      "thread": "example-thread-b",
+      "stitch_mm": [
+        0.01,
+        5.0
+      ],
+      "feed_b_over_a": [
+        0.5,
+        2.0
+      ],
+      "stack_mm": [
+        0.01,
+        3.0
+      ],
+      "stitches_per_minute": [
+        1.0,
+        1000.0
+      ],
+      "allow_reverse": false,
+      "source": {
+        "reference": "test:finite-workholding-process",
+        "accessed_on": "2026-10-27",
+        "note": "Synthetic software example, not measured seam or fixture qualification"
+      },
+      "method": "Invented process envelope for the exact synthetic material stack and two-pass example",
+      "conditions": {
+        "configuration": "synthetic sewing production example"
+      },
+      "evidence": "estimate",
+      "allow_estimates": true
+    }
+  ],
+  "require_qualification": true,
+  "seam_allowance_mm": null,
+  "seam_tolerance_mm": 0.5,
+  "consumables": {
+    "purchasing": {
+      "quote_book": {
+        "schema": "ftx-textile-quotes/1",
+        "quotes": [
+          {
+            "offer_id": "synthetic-yarn-offer",
+            "material_id": "coats/epic-2994120-2026",
+            "material_sha256": "f5370a63379dfbcb4d26d3b29910c5670bad3e0802a15980cf69e503bb90a246",
+            "supplier": "synthetic-supplier",
+            "sku": "shared-yarn",
+            "price": 10.0,
+            "quantity": 2.0,
+            "unit": "linear_meter",
+            "minimum_quantity": 2.0,
+            "order_increment": 2.0,
+            "price_breaks": [
+              {
+                "minimum_quantity": 4.0,
+                "price": 7.0
+              }
+            ],
+            "currency": "USD",
+            "region": "test",
+            "quality": "new",
+            "terms": "synthetic merchandise only",
+            "observed_on": "2026-10-27",
+            "available": true,
+            "available_quantity": 4.0,
+            "maximum_continuous_quantity": 2.0,
+            "source": "test:shared-yarn-offer",
+            "source_sha256": "abababababababababababababababababababababababababababababababab"
+          }
+        ]
+      },
+      "market": {
+        "currency": "USD",
+        "region": "test",
+        "quality": "new",
+        "terms": "synthetic merchandise only",
+        "as_of": "2026-10-27",
+        "max_age_days": 2,
+        "require_observed_quantity": true,
+        "require_observed_continuous_length": true
+      }
+    }
+  }
+}

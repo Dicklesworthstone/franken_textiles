@@ -4,7 +4,7 @@ use ftx_core::{Refusal, RefusalCode, Vec2, curve::EDGE_DENSE};
 use ftx_pattern::Pattern;
 use serde_json::json;
 
-use super::{SewOptions, SewPlan, bad, pressure::PressureForceBasis};
+use super::{SewOptions, SewPlan, bad, pressure::PressureForceBasis, production::workholding};
 use crate::{Ctx, ExportOptions, fnum, outline::cut_outline, xml_escape};
 
 fn path(points: &[Vec2], closed: bool) -> String {
@@ -30,9 +30,82 @@ fn path(points: &[Vec2], closed: bool) -> String {
 ///
 /// # Errors
 /// Any planning refusal; unknown operation; excessive preview size; non-finite geometry; internal
-/// cuts/drills without explicit obstacle support; control characters in displayed labels.
+/// cuts/drills without explicit obstacle support; control characters in displayed labels; a
+/// configured-cell job without an explicit cell. Use [`svg_cell`] for its actual source geometry.
 pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<String, Refusal> {
     let plan = SewPlan::build(pattern, options)?;
+    if plan
+        .production
+        .as_ref()
+        .and_then(|production| production.parallel.as_ref())
+        .is_some_and(|parallel| !parallel.cell_plans.is_empty())
+    {
+        return Err(bad(
+            "configured-machine sewing preview requires an explicit parallel cell",
+        ));
+    }
+    render(pattern, &plan, operation, None)
+}
+
+/// Render the actual admitted machine/recipe geometry of one explicitly named parallel cell.
+/// The entire original job is rebuilt first. An admitted idle cell can be reviewed, with its empty
+/// assigned-copy list retained; this is not a claim that it contributes to selected production.
+///
+/// # Errors
+/// Any complete-job or preview refusal, or an unknown cell/operation. No reference-plan fallback.
+pub fn svg_cell(
+    pattern: &Pattern,
+    options: &SewOptions,
+    cell: &str,
+    operation: &str,
+) -> Result<String, Refusal> {
+    let plan = SewPlan::build(pattern, options)?;
+    let parallel = plan
+        .production
+        .as_ref()
+        .and_then(|production| production.parallel.as_ref())
+        .ok_or_else(|| bad("cell sewing preview requires an admitted parallel production job"))?;
+    let assignment = parallel
+        .selected
+        .cells
+        .iter()
+        .find(|candidate| candidate.cell == cell)
+        .ok_or_else(|| bad("unknown sewing preview cell"))?;
+    let source = plan
+        .parallel_cell_plan(cell)
+        .ok_or_else(|| bad("unknown sewing preview cell source"))?;
+    let configured = parallel
+        .cell_plans
+        .iter()
+        .find(|candidate| candidate.cell == cell);
+    render(
+        pattern,
+        source,
+        operation,
+        Some(CellPreview {
+            id: cell,
+            copies: &assignment.copies,
+            machine_sha256: configured
+                .map_or(&parallel.machine_sha256, |source| &source.machine_sha256),
+            qualifications: configured
+                .map_or(&parallel.qualifications, |source| &source.qualifications),
+        }),
+    )
+}
+
+struct CellPreview<'a> {
+    id: &'a str,
+    copies: &'a [usize],
+    machine_sha256: &'a str,
+    qualifications: &'a std::collections::BTreeMap<String, workholding::QualificationRef>,
+}
+
+fn render(
+    pattern: &Pattern,
+    plan: &SewPlan,
+    operation: &str,
+    cell: Option<CellPreview<'_>>,
+) -> Result<String, Refusal> {
     let seam = plan
         .seams
         .iter()
@@ -47,11 +120,15 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
     if seam.stations.a.len().saturating_add(seam.stations.b.len()) > 20_000 {
         return Err(budget());
     }
-    for text in [
+    let mut labels = vec![
         operation,
         &seam.sides[0].reference,
         &seam.sides[1].reference,
-    ] {
+    ];
+    if let Some(cell) = &cell {
+        labels.extend([cell.id, plan.options.machine.id.as_str()]);
+    }
+    for text in labels {
         if text.len() > 512
             || text
                 .chars()
@@ -63,7 +140,7 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
     let ctx = Ctx::new(
         pattern,
         ExportOptions {
-            sa: options.seam_allowance_mm,
+            sa: plan.options.seam_allowance_mm,
             ..ExportOptions::default()
         },
     )?;
@@ -150,11 +227,22 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
             10.0
         }
     });
-    let height = body_height + 68.0 + 5.0 * seam.runs.len() as f64 + foot_height;
+    let cell_height = if cell.is_some() { 10.0 } else { 0.0 };
+    let height = body_height + 68.0 + 5.0 * seam.runs.len() as f64 + foot_height + cell_height;
     let (ws, hs) = (fnum(width, 6), fnum(height, 6));
     let mut metadata = json!({"schema":"ftx-sewing-preview/1","pattern_sha256":plan.pattern_sha256,
         "operation":seam.pass,"material_sha256":[seam.sides[0].material_sha256,seam.sides[1].material_sha256],
         "plan_schema":plan.schema,"hardware_execution_authorized":false,"physical_seam_quality_validated":false});
+    if let Some(cell) = &cell {
+        metadata["schema"] = json!("ftx-sewing-preview/2");
+        metadata["cell"] = json!(cell.id);
+        metadata["production_copy_ids"] = json!(cell.copies);
+        metadata["machine"] = json!(plan.options.machine);
+        metadata["machine_sha256"] = json!(cell.machine_sha256);
+        metadata["qualifications"] = json!(cell.qualifications);
+        metadata["stitch_intervals"] = json!(seam.stitch_intervals);
+        metadata["feed_seconds"] = json!(seam.feed_seconds);
+    }
     if let Some(foot) = &seam.presser_foot {
         metadata["presser_foot"] = json!({"model":foot.model,"pressure_pa":foot.pressure_pa,
             "uncompressed_stack_mm":seam.stack_mm,"nominal_loaded_stack_mm":foot.nominal_stack_mm,
@@ -246,6 +334,11 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
                 fnum(fy,6), fnum(foot.pressure_pa,6), fnum(foot.nominal_stack_mm,6),
                 fnum(foot.stack_mm,6), fnum(fy+5.0,6)));
         }
+    }
+    if let Some(cell) = &cell {
+        out.push_str(&format!("<text class=\"cell-configuration\" x=\"5\" y=\"{}\">Cell: {} | selected garment copies: {}</text>\n<text class=\"cell-machine\" x=\"5\" y=\"{}\">Machine: {} | feed rate {} stitches/minute</text>\n",
+            fnum(height-10.0,6),xml_escape(cell.id),cell.copies.len(),fnum(height-5.0,6),
+            xml_escape(&plan.options.machine.id),fnum(seam.pass.stitches_per_minute,6)));
     }
     out.push_str("</g>\n</svg>\n");
     Ok(out)

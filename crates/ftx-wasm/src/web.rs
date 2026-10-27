@@ -462,6 +462,21 @@ pub fn sew_svg(pattern: &str, options: &str, operation: &str) -> Result<String, 
     crate::manufacturing::sew_svg(pattern, options, operation).map_err(|e| JsError::new(&e.message))
 }
 
+/// SVG review of one explicitly named parallel cell's actual admitted machine and stitch recipe.
+///
+/// # Errors
+/// Any complete-job planning refusal, unknown cell/operation or bounded preview failure.
+#[wasm_bindgen]
+pub fn sew_cell_svg(
+    pattern: &str,
+    options: &str,
+    cell: &str,
+    operation: &str,
+) -> Result<String, JsError> {
+    crate::manufacturing::sew_cell_svg(pattern, options, cell, operation)
+        .map_err(|e| JsError::new(&e.message))
+}
+
 /// Source-qualified steady textile conduction, with the native workbench's exact request schema.
 /// No files, network access, missing heat storage or comfort rating are introduced.
 ///

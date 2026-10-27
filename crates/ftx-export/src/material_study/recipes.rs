@@ -105,7 +105,9 @@ pub(super) fn check_budget(
     // Reject the whole configured search before binding any alternative. The selector still
     // enforces its per-job geometry, station, pass, candidate and source-qualification limits.
     let plans = request.max_plan_evaluations.saturating_mul(variants);
-    let passes = plans.saturating_mul(request.options.passes.len());
+    let passes = plans
+        .saturating_mul(request.options.passes.len())
+        .saturating_mul(request.options.source_plan_count());
     if plans > 256 || passes > 4096 {
         return Err(budget(
             "material study exceeds 256 aggregate sewing recipe plan evaluations or 4096 operation evaluations; reduce alternatives or recipe search limits",

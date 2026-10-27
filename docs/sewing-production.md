@@ -1,7 +1,8 @@
 # Sewing production across garment copies
 
-Optional `SewOptions.production` schedules the actual operations of several garment copies on one
-declared machine. Each copy retains its own seam dependencies; compatible operations from different
+Optional `SewOptions.production` schedules the actual operations of several garment copies on a
+declared machine, or across the independently qualified cells described below. Each copy retains
+its own seam dependencies; compatible operations from different
 copies can share an installed needle/thread setup. The existing bounded ordering solver minimizes
 identity changes, explicitly sourced directed setup durations, or complete declared serial
 feed/setup/handling time when the independent handling model is requested.
@@ -405,6 +406,115 @@ selected completion, aggregate work, physical copy assignments, each cell's loca
 occupancy and handling. The full source-bearing allocations remain downloadable, and changed
 inputs withdraw obsolete results.
 
+## Different machine configurations and actual cell recipes
+
+Version 2 of the existing parallel policy, `independent_whole_garment_cells/2`, supports a different
+fully qualified machine configuration in each independent cell. Every cell supplies a
+`configuration` with a complete `machine`, its typed `machine_sha256`, ordinary full process
+`qualifications`, and a `qualification_refs` map locking the qualifications admitted for every
+operation. Version 1 retains its original shared-configuration behavior and serialized output.
+
+The optional `configuration.recipes` map uses the existing recipe model, keyed by original
+operation ID: `id`, `needle`, `thread`, `max_stitch_mm` and `stitches_per_minute`. Explicit overrides
+remain fixed. Omitted operations inherit the current parent template or recipe-search candidate.
+The actual pattern, seam topology, operation dependencies, assemblies, paths, pressure requests,
+backtacks and source material assignments remain unchanged. A machine-specific optional `access`
+map supplies replacement source-qualified access policies for existing operations. Omission retains
+the original clearance requirement; changing a machine never silently removes it.
+
+Each cell builds a **fresh ordinary sewing plan** on the original pattern before allocation.
+The planner regenerates its actual stitch stations, traversal counts and feed durations, and reruns
+machine, material-stack, process, reverse-feed, pressure and requested access checks. Matching a
+machine name is insufficient: full configuration and qualification locks must match. Every cell
+is admitted, including one left idle by the selected allocation. Missing or changed applicability
+refuses the requested job rather than becoming a zero-cost cell or unproved ineligibility.
+
+The existing copy-count allocation and serial schedule optimizer then use those actual per-cell
+plans. No equivalent speed, stitch pitch or needle/thread suitability is inferred across machines.
+The complete ordinary cell plans are retained once in `parallel.cell_plans`; per-count schedules
+reuse their cell-local seam indices. The outer plan and serial ordering remain a reference.
+`SewPlan::parallel_cell_plan(cell)` retrieves the source actually used by a cell, and the active
+`total_feed_seconds()` and `total_stitch_intervals()` sum selected physical cell schedules.
+Stitch program `/6` resolves each `operation` index in the identified cell's own source plan, so
+coordinates, advances, rate, lock travel and global copy identity all come from the selected recipe.
+
+Thread inventory follows the **selected cell allocation**, including every actual traversal and
+per-operation/channel allowance. Contributions and missing-coverage records identify their cell.
+The same exact yarn's demand is summed across all used cells before applying one supplier minimum,
+increment, tier, stock check and complete order. The largest complete operation/channel demand
+still controls required continuous length; whole batch length is not mistaken for a continuous
+piece. Idle cells contribute no demand. Missing coverage in any used cell withholds complete
+quantity, mass and purchase totals, while retaining its partial diagnostics. Purchasing preflight
+reserves the union of yarn identities from all supplied cell qualifications, including unused ones.
+This uses the original canonical price engine and does not reserve or purchase inventory.
+
+Run the complete source-locked example:
+
+```sh
+cargo run -p ftx-cli --bin ftx-materials -- sew-plan \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  examples/sewing-heterogeneous-options.json
+
+cargo run -p ftx-cli --bin ftx-materials -- sew-stitches \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  examples/sewing-heterogeneous-options.json
+
+cargo run -p ftx-cli --bin ftx-materials -- sew-cell-svg \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  examples/sewing-heterogeneous-options.json cell-b join NEW-cell-b-join.svg
+```
+
+`sew-cell-svg` is also available through `ftx materials` and the file-free native/browser
+`sew_cell_svg(pattern_json, options_json, cell, operation)` API. It rebuilds the entire job before
+rendering the explicitly named cell's actual station spacing, recipe rate and feed duration.
+The SVG retains its exact machine and qualification content locks, cell identity and selected
+global copy IDs. An admitted idle cell can be reviewed with an empty copy list. Plain `sew-svg`
+refuses configured-cell jobs until a cell is named, so the outer serial reference cannot be
+mistaken for actual selected-cell geometry. Shared-configuration and ordinary previews retain
+their existing output. All SVG files use create-new semantics and remain planning views in
+independent source-pattern frames.
+
+The synthetic example keeps the two-pass garment and changes the second cell to an explicitly
+declared higher-rate configuration with a 5 mm recipe at 900 stitches/minute. Its separate source
+observations govern the changed setup, handling and consumption. The selected three-garment job
+assigns one copy to cell A and two to cell B:
+
+| Quantity | Selected result |
+|---|---:|
+| Modeled elapsed completion | 9.9 s |
+| Cell B completion, with explicit feed ceiling | 7.334 s |
+| Actual stitch intervals | 160 |
+| Aggregate continuous feed | 13.333333333333332 s |
+| Aggregate setup work | 2.0 s |
+| Aggregate handling work | 1.9 s |
+| Same-yarn requirement across both cells | 3.0 m |
+| Consumed inventory mass at the retained nominal 24 tex | 0.000072 kg |
+| One minimum/increment-rounded order | 4.0 m |
+| Complete observed synthetic order cost | USD 14.00 |
+
+The retained Coats Epic yarn density is an existing source observation. The cell configurations,
+seam/process envelopes, thread-consumption coefficients, handling times and offer are explicitly
+synthetic examples. Their arithmetic establishes neither measured seam quality nor factory throughput.
+Pricing each cell separately would miss the combined 4 m price tier and incorrectly report USD 20.
+
+Configured output uses plan `/17`, production `/5`, parallel `/2`, consumables `/3` and stitch `/6`.
+Complete frozen replay preserves each source plan, the selected allocation and its combined order.
+The existing makespan objective remains the allocation authority: actual feed, inventory and cost
+are conditional outputs of that assignment. Heterogeneous recipe searches therefore require
+`minimize_parallel_makespan`; they do not claim that its selected allocation also minimizes feed or
+thread cost. Joint time/cost allocation remains a separate future objective.
+
+The same eight-cell, 63-expanded-operation and aggregate 200000 scheduling-work bounds apply.
+The retained outer and all configured cell source plans additionally share a 250000-station bound.
+Before count search, every cell's all-copy possibility must also fit the ordinary 250000-interval
+stitch-program bound; this conservatively bounds every mixed allocation. Material/design studies
+reserve source operations across the outer plan, configured cells, variants and recipe trials,
+and count every retained source station table, including idle cells, once toward their aggregate
+limits. Scheduling replays and complete-order purchasing retain their own separate work reservations.
+Every garment still stays in one cell, with independently qualified machines, fixture units and
+handling labor. Shared-worker overlap, inter-cell transfer, hardware control and empirical seam
+qualification remain outside this model.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **63 copy/operation pairs** and 1–200000 examined search nodes.
@@ -415,7 +525,8 @@ or proves unvisited schedules infeasible. Full search proves only the declared c
 under the declared predecessor graph and source table.
 
 Serial mode covers a single declared machine/configuration; qualified parallel mode assigns whole
-garments to explicitly independent instances of that same configuration. Both retain needle/thread
+garments to explicitly independent instances, with separately admitted configurations in version 2.
+Both retain needle/thread
 transitions, optional source-qualified finite workholding and explicit serial operation/copy handling
 inside each used cell. Neither infers additional machines, undeclared inventory, grip adequacy, three-dimensional machine approach,
 acceleration or measured seam quality. Planar seam access requires its own independently qualified
