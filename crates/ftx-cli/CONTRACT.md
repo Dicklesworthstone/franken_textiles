@@ -7,6 +7,15 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
 `ftx outfit`, `ftx materials` and immutable `ftx round` workspaces with their local review.
 
 **Commands.**
+- `ftx measure video-decode REQUEST.json --out NEW_DIR [--json]`: explicitly invoke locally installed
+  FFmpeg/ffprobe on a private snapshot of one local clip. The caller supplies stream/lens identity
+  and a quarter-turn rotation; the existing selector receives original PTS-derived microseconds,
+  checked decoded pixels and a `ftx-video-frames/1` manifest. Independently probed and decoded
+  timestamps/counts/dimensions must agree. No masks are invented: success is
+  `DECODED_REQUIRES_MASKS` until the operator supplies the named binary person/sheet masks.
+  New private output only, local container/protocol allowlists, explicit source/frame/pixel/byte/time
+  limits, and no partial success on decoder failure. See `docs/video-frame-selection.md` and the
+  opt-in real external `video_decode_workflow` test. No stillness, calibration, anatomy or fit claim.
 - `ftx measure capture-review CAPTURE.json --out NEW_DIR [--silhouettes MANIFEST] [--json]`: reuse decoded source selection
   and checked same-lens sheet cameras without a model or body fit. The private create-only review
   shows original images and every supplied named FIT/CHECK keypoint, sigma and model target. Original
@@ -38,6 +47,13 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   replay contains full sources/hashes and preserves authored targets, observations and starts.
   Direct fitting, bound declarations, ambiguous frame/source pairs and incomplete full records
   refuse. No frame, pose or anatomy is inferred. Original input and bytes remain exact.
+  A frame reference may declare `ftx-charuco-sheet-reference/1` with an original sheet sidecar,
+  predeclared CHECK corner IDs and the stationary upright board's metric bottom-left. The existing
+  native detector acquires every corner from the exact selected pixels and checked lens; all declared
+  CHECK corners and at least four FIT corners are required. Existing sheet-pose gates and overlays
+  consume those observations unchanged. Source bindings retain the complete acquisition and refuse
+  changed sidecars, partitions, placement, images or calibration on replay. File-based references
+  retain their behavior. The source declaration does not verify stationarity, print scale or anatomy.
 - `ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]`: the
   reference's `drafting.py` on `ftx_pattern::draft`. Writes `DIR/pattern.json` and `DIR/fit_spec.json`
   (replacing them, as the reference does; Python's number formatting, keys sorted) and prints

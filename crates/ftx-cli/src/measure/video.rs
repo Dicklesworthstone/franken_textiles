@@ -66,7 +66,7 @@ pub(super) fn load(base: &Path, name: &str, mask: bool) -> Result<Gray, Refusal>
     load_hashed(base, name, mask).map(|(gray, _)| gray)
 }
 
-fn load_hashed(base: &Path, name: &str, mask: bool) -> Result<(Gray, String), Refusal> {
+pub(super) fn load_hashed(base: &Path, name: &str, mask: bool) -> Result<(Gray, String), Refusal> {
     if name.trim().is_empty() || name.len() > 4096 {
         return Err(bad_input(
             "image and mask paths must be nonempty and at most 4096 bytes",
