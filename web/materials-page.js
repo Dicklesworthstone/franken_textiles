@@ -1147,6 +1147,7 @@ function manufacturingComparison(op, parent, study, computed) {
     sewingWorkholding(parent, available(row.sewing), row.key);
     sewingHandling(parent, available(row.sewing), row.key);
     sewingParallel(parent, available(row.sewing), row.key);
+    sewingRouting(parent, available(row.sewing), row.key);
     sewingAccess(parent, available(row.sewing), row.key);
   }
   if (study.alternatives.some(row => row.finite_stock && row.finite_stock.status !== "not_requested")) {
@@ -1206,7 +1207,8 @@ function manufacturingComparison(op, parent, study, computed) {
       cells(timing, [row.key, state(row.sewing), metric(m.feed_seconds),
         metric(m.sewing_setup_seconds), metric(m.sewing_feed_and_setup_seconds)]);
       const sewing = available(row.sewing);
-      const source = sewing?.production?.parallel ? null : (sewing?.production?.ordering || sewing?.ordering)?.timing;
+      const source = sewing?.production?.parallel || sewing?.production?.routing ? null :
+        (sewing?.production?.ordering || sewing?.ordering)?.timing;
       if (source) detail(parent, `${row.key}: setup timing evidence and selected schedule (display only)`, source);
     }
     const note = document.createElement("p");
@@ -1282,7 +1284,7 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
     detail(parent, `${row.key}: selected thread channels, exact yarns and order evidence (display only)`, {
       selected_recipe_choices: available(row.sewing_selection)?.selected_choices,
       consumables: report || null, qualifications: plan?.options?.qualifications,
-      cell_qualifications: plan?.production?.parallel?.cell_plans?.map(source =>
+      cell_qualifications: (plan?.production?.routing?.cell_plans || plan?.production?.parallel?.cell_plans)?.map(source =>
         ({ cell: source.cell, qualifications: source.plan.options.qualifications })),
       request: plan?.options?.consumables, sewing_refusal: row.sewing?.refusal
     });
@@ -1628,7 +1630,7 @@ function treatmentResult(parent, r) {
       "Download the exact material selections or use this transition in a piece-treatment request." };
 }
 function sewingWorkholding(parent, plan, label = "Selected sewing plan") {
-  if (plan?.production?.parallel) return;
+  if (plan?.production?.parallel || plan?.production?.routing) return;
   const report = plan?.production?.workholding;
   if (!report) return;
   const resources = table(parent, `${label}: finite fixture inventory`,
@@ -1651,7 +1653,7 @@ function sewingWorkholding(parent, plan, label = "Selected sewing plan") {
     policy: plan.options?.production?.workholding, report });
 }
 function sewingHandling(parent, plan, label = "Selected sewing plan") {
-  if (plan?.production?.parallel) return;
+  if (plan?.production?.parallel || plan?.production?.routing) return;
   const report = plan?.production?.handling;
   if (!report) return;
   const timing = plan.production.ordering?.handling_timing;
@@ -1704,6 +1706,64 @@ function sewingSharedWorkholding(parent, plan, label) {
   parent.append(note);
   detail(parent, `${label}: shared pool source, exact cell locks and both reservation histories`, {
     policy: plan.options?.production?.parallel?.shared_workholding, report });
+}
+function sewingRouting(parent, plan, label = "Selected sewing plan") {
+  const report = plan?.production?.routing;
+  if (!report) return;
+  const policy = plan.options?.production?.routing;
+  const seconds = value => typeof value === "number" ? value / 1000 : null;
+  const totals = table(parent, `${label}: routed completion and aggregate work`,
+    ["Schedule", "Completion (s)", "Total feed work (s)", "Scheduled feed work (s)",
+      "Total setup work (s)", "Total loading/unloading (s)", "Total transfer work (s)"]);
+  for (const [name, timeline] of [[report.baseline_replaced ? "Feasible replacement baseline" : "Copy-order baseline", report.baseline],
+      ["Selected route dispatch", report.selected]]) cells(totals, [name,
+    metric(seconds(timeline?.makespan_milliseconds)), metric(timeline?.feed_seconds),
+    metric(seconds(timeline?.scheduled_feed_milliseconds)), metric(seconds(timeline?.setup_milliseconds)),
+    metric(seconds(timeline?.handling_milliseconds)), metric(seconds(timeline?.transfer_milliseconds))]);
+  const route = table(parent, `${label}: fixed garment route`,
+    ["Step", "Operation", "Physical cell", "Qualified machine", "Needle", "Thread", "Maximum stitch (mm)", "Stitches/min"]);
+  for (const [index, step] of (report.route || []).entries()) {
+    const source = report.cell_plans?.find(item => item.cell === step.cell);
+    const pass = source?.plan?.seams?.find(item => (item.pass.id || item.pass.seam) === step.operation)?.pass;
+    cells(route, [metric(index + 1), step.operation, step.cell, source?.plan?.options?.machine?.id || "Unavailable",
+      pass?.needle || "Unavailable", pass?.thread || "Unavailable", metric(pass?.max_stitch_mm), metric(pass?.stitches_per_minute)]);
+  }
+  const operations = table(parent, `${label}: selected routed operation timeline`,
+    ["Global garment copy", "Operation", "Cell", "Loading starts (s)", "Setup starts (s)",
+      "Feed starts (s)", "Feed finishes (s)", "Unloaded and cell free (s)"]);
+  for (const step of report.selected?.operations || []) cells(operations, [metric(step.copy), step.operation_id, step.cell,
+    metric(seconds(step.loading_start_milliseconds)), metric(seconds(step.setup_start_milliseconds)),
+    metric(seconds(step.feed_start_milliseconds)), metric(seconds(step.feed_finish_milliseconds)),
+    metric(seconds(step.finish_milliseconds))]);
+  const transfers = table(parent, `${label}: selected garment transfers`,
+    ["Global garment copy", "After operation", "Before operation", "From cell", "To cell", "Starts (s)", "Arrives (s)"]);
+  for (const step of report.selected?.transfers || []) cells(transfers, [metric(step.copy), step.from_operation,
+    step.to_operation, step.from, step.to, metric(seconds(step.start_milliseconds)), metric(seconds(step.finish_milliseconds))]);
+  const resources = table(parent, `${label}: qualified routing availability`,
+    ["Resource", "Available (s)", "Inclusive finish limit (s)"]);
+  for (const cell of policy?.cells || []) cells(resources, [cell.id, metric(seconds(cell.available_at_milliseconds)),
+    typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended"]);
+  if (policy?.transfer) cells(resources, [policy.transfer.id, metric(seconds(policy.transfer.available_at_milliseconds)),
+    typeof policy.transfer.available_until_milliseconds === "number" ? metric(seconds(policy.transfer.available_until_milliseconds)) : "Open ended"]);
+  for (const source of report.cell_plans || []) {
+    sewingAccess(parent, source.plan, `${label}: routed cell ${source.cell}`);
+    detail(parent, `${label}: routed cell ${source.cell} admitted operations and exact geometry`, source);
+  }
+  const note = document.createElement("p");
+  note.textContent = (report.optimality_proven ?
+    "Minimum completion time proved within the declared fixed-route dispatch search. " :
+    "Complete feasible routed schedule retained; minimum completion time is not proved. ") +
+    `Lower bound: ${metric(seconds(report.lower_bound_makespan_milliseconds))} s; search work: ${metric(report.search_nodes)}. ` +
+    (report.budget_exhausted ? "The dispatch search reached its work limit. " : "") +
+    (report.baseline_replaced ? "The copy-order seed did not fit the qualified windows; a complete feasible replacement is shown. " : "") +
+    "Each garment follows the same explicit operation route. Each specialist cell qualifies only its assigned operations, " +
+    "and its dedicated worker attends loading, setup, feed and unloading before the cell becomes free. " +
+    "One separately qualified transfer resource serializes unloaded garment handoffs; its source duration includes positioning, pickup, movement and deposit. " +
+    `Qualified staging has ${metric(policy?.staging_capacity)} garment slots. ` +
+    "Stitch geometry and thread demand come from the actual assigned cell. Elapsed completion is distinct from summed machine and transfer work. " +
+    "The proof covers the supplied route and dispatch model; it does not establish unrestricted factory optimality, measured seam quality or hardware authorization.";
+  parent.append(note);
+  detail(parent, `${label}: route sources, cell locks and complete baseline/selected timelines`, { policy, report });
 }
 function sewingParallel(parent, plan, label = "Selected sewing plan") {
   const report = plan?.production?.parallel;
@@ -1809,7 +1869,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     policy: plan.options?.production?.parallel, report });
 }
 function sewingAccess(parent, plan, label = "Selected sewing plan") {
-  if (plan?.production?.parallel?.cell_plans?.length) return;
+  if (plan?.production?.parallel?.cell_plans?.length || plan?.production?.routing) return;
   const seams = plan?.seams?.filter(row => row.access || row.pass?.access) || [];
   if (!seams.length) return;
   const clearances = table(parent, `${label}: planar tool and fixture clearance`,
@@ -1838,8 +1898,8 @@ function sewingAccess(parent, plan, label = "Selected sewing plan") {
   parent.append(note);
 }
 function sewingResult(parent, r) {
-  const plan = r.plan, production = plan?.production, parallel = production?.parallel;
-  const order = parallel ? null : production?.ordering || plan?.ordering;
+  const plan = r.plan, production = plan?.production, parallel = production?.parallel, routing = production?.routing;
+  const order = parallel || routing ? null : production?.ordering || plan?.ordering;
   if (order) {
     const counts = table(parent, "Sewing setup changes — declared needle and thread identities",
       ["Schedule", "Needle changes", "Thread changes", "Total changes"]);
@@ -1875,7 +1935,8 @@ function sewingResult(parent, r) {
   sewingWorkholding(parent, plan);
   sewingHandling(parent, plan);
   sewingParallel(parent, plan);
-  if (!parallel?.cell_plans?.length) sewingAccess(parent, plan);
+  sewingRouting(parent, plan);
+  if (!parallel?.cell_plans?.length && !routing) sewingAccess(parent, plan);
   if (plan?.seams.some(row => row.source_span)) {
     const spans = table(parent, "Partial-seam operations — original source correspondence",
       ["Operation", "Source seam", "Side A range", "Side B range", "Full source lengths (mm)", "Traveled lengths (mm)", "Direction"]);
@@ -1904,6 +1965,12 @@ function sewingResult(parent, r) {
     parallel_lower_bound_seconds: parallel ? parallel.lower_bound_makespan_milliseconds / 1000 : undefined,
     parallel_optimality_proven: parallel?.optimality_proven,
     parallel_search_work: parallel?.search_nodes,
+    routed_makespan_seconds: routing ? routing.selected.makespan_milliseconds / 1000 : undefined,
+    routed_lower_bound_seconds: routing ? routing.lower_bound_makespan_milliseconds / 1000 : undefined,
+    routed_optimality_proven: routing?.optimality_proven,
+    routed_search_work: routing?.search_nodes,
+    garment_transfers: routing?.selected?.transfers?.length,
+    transfer_seconds: routing ? routing.selected.transfer_milliseconds / 1000 : undefined,
     setup_changes: order?.selected_changes,
     ordering_objective: order ? (order.handling_timing ? "minimize_production_time" :
       order.timing ? "minimize_setup_time" : "minimize_setup_changes") : undefined,
