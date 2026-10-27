@@ -1,6 +1,6 @@
 //! Whole garments stay inside explicitly independent qualified cells. Each cell reuses the serial
-//! production solver, including its own setup, handling and finite fixture inventory. Integer
-//! makespan optimization uses the caller's explicit once-per-cell feed-ceiling time convention.
+//! production solver, including its own setup, handling and finite fixture inventory. Optional
+//! qualified shared labor serializes attendance while machines perform explicitly autonomous feed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -21,6 +21,8 @@ const MAX_CELLS: usize = 8;
 const MAX_WORK: usize = 200_000;
 const MAX_EXACT_MILLISECONDS: u64 = 9_007_199_254_740_991;
 
+pub mod operator;
+
 /// Independent physical cells with an explicitly qualified shared (v1) or per-cell (v2) configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,10 +31,10 @@ pub struct Policy {
     pub model: String,
     /// `minimize_makespan`, over complete cell assignments and their serial schedules.
     pub objective: String,
-    /// `ceil_cell_feed_milliseconds/1`: round total continuous feed upward once per used cell.
+    /// `ceil_cell_feed_milliseconds/1`, or `ceil_operation_feed_milliseconds/1` with shared labor.
     pub time_basis: String,
-    /// `independent_machines_fixtures_and_handling_labor/1`, covered by the retained source.
-    /// A shared operator or shared fixture pool cannot satisfy this declaration.
+    /// `independent_machines_fixtures_and_handling_labor/1`, or the separately qualified
+    /// `independent_machines_and_fixtures_shared_operator/1`. Fixture inventories never overlap.
     pub independence: String,
     /// Shared upper bound for count schedules, baseline/selected replay and allocation transitions.
     pub max_search_nodes: usize,
@@ -42,6 +44,10 @@ pub struct Policy {
     pub qualifications: BTreeMap<String, Vec<workholding::QualificationRef>>,
     /// One to eight separately identified physical cells, including their independent inventories.
     pub cells: Vec<Cell>,
+    /// Optional one-person setup/handling authority with explicitly unattended machine feed.
+    /// Machines and fixture inventories remain independent; all attended phases share this person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_operator: Option<operator::Policy>,
     /// Source qualifying these instances, configurations, declared availability windows and
     /// concurrent independence.
     pub source: Source,
@@ -194,9 +200,9 @@ pub struct CellSchedule {
     pub available_until_milliseconds: Option<u64>,
     /// Exact inner search cap used, retained alongside the unchanged source policy for replay.
     pub schedule_node_limit: usize,
-    /// Once-per-used-cell ceiling of generated feed under the explicitly chosen millisecond model.
+    /// Generated feed ceiled once per used cell, or once per operation with qualified shared labor.
     pub scheduled_feed_milliseconds: u64,
-    /// Numerical feed-ceiling padding, in [0, 0.001) seconds; not additional physical work.
+    /// Numerical feed-ceiling padding; below 1 ms per cell or per operation under the chosen model.
     pub feed_padding_seconds: f64,
     /// Common-origin completion of a used cell including its actual final unloading.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -217,7 +223,7 @@ pub struct Assignment {
     pub makespan_milliseconds: u64,
     /// Aggregate generated continuous feed across the assigned physical copies, without rounding.
     pub feed_seconds: f64,
-    /// Sum of once-per-cell feed ceilings; distinct from the elapsed makespan.
+    /// Sum of feed ceilings under the chosen model; distinct from the elapsed makespan.
     pub scheduled_feed_milliseconds: u64,
     /// Aggregate actual selected-cell setup work, including each used cell's initial setup.
     pub setup_milliseconds: u64,
@@ -257,7 +263,7 @@ pub struct CellAvailability {
 pub struct AvailabilityReport {
     /// Every positive cell/count choice, including proven exclusions and unresolved searches.
     pub cells: Vec<CellAvailability>,
-    /// The old all-garments-on-first-cell baseline exceeded its window. The returned baseline then
+    /// The old all-garments-on-first-cell baseline failed a cell/operator window. The baseline then
     /// equals the complete selected feasible assignment; no infeasible schedule is published as a seed.
     pub baseline_replaced: bool,
 }
@@ -265,7 +271,7 @@ pub struct AvailabilityReport {
 /// Bounded assignment with exact replay and proof conditional on the declared integer time model.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` shared source geometry; `/2` configured cell source plans; `/3` finite availability.
+    /// `/1` shared geometry; `/2` configured source plans; `/3` finite windows; `/4` shared operator.
     pub schema: &'static str,
     /// Same explicit time convention as the qualified input.
     pub time_basis: &'static str,
@@ -285,6 +291,9 @@ pub struct Report {
     /// Present only when at least one cell has an explicit end to its availability window.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub availability: Option<AvailabilityReport>,
+    /// Exact exclusive operator and concurrent autonomous-feed replay, when explicitly qualified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_operator: Option<operator::Report>,
     /// Allocation optimum over the valid lower bounds of every cell/count serial subproblem.
     pub lower_bound_makespan_milliseconds: u64,
     /// Actual nested examinations, including reconstruction, plus both allocation DP transitions.
@@ -321,15 +330,28 @@ impl Policy {
                 "parallel production supports 1..8 cells, 1..63 copies and at most 200000 total scheduling work units",
             ));
         }
-        // Two DPs (incumbent and rigorous subproblem bounds), including idle-cell choices.
-        let allocation = self.cells.len() * (copies + 1) * (copies + 2);
+        // Two count DPs; shared labor also needs a complete attended-work lower-bound DP.
+        let allocation = self.cells.len()
+            * (copies + 1)
+            * (copies + 2)
+            * if self.shared_operator.is_some() { 3 } else { 2 }
+            / 2;
+        let operator_work = self
+            .shared_operator
+            .as_ref()
+            .map_or(0, |policy| policy.max_search_nodes);
+        if self.shared_operator.is_some() && !(1..=MAX_WORK).contains(&operator_work) {
+            return Err(budget(
+                "shared operator search needs 1..200000 reserved work units",
+            ));
+        }
         let trials = self.cells.len() * copies;
         let replays = 1 + self.cells.len().min(copies);
         let remaining = self
             .max_search_nodes
-            .checked_sub(allocation)
+            .checked_sub(allocation + operator_work)
             .ok_or_else(|| {
-                budget("parallel work limit cannot cover the complete allocation dynamic programs")
+                budget("parallel work limit cannot cover the complete allocation dynamic programs and requested operator search")
             })?;
         let per_trial = remaining / (trials + replays);
         if per_trial == 0 {
@@ -366,10 +388,21 @@ impl Policy {
         plan: &SewPlan,
     ) -> Result<BTreeMap<String, workholding::QualificationRef>, Refusal> {
         let configured = self.model == "independent_whole_garment_cells/2";
+        let shared_operator = self.shared_operator.is_some();
         if (!configured && self.model != "independent_whole_garment_cells/1")
             || self.objective != "minimize_makespan"
-            || self.time_basis != "ceil_cell_feed_milliseconds/1"
-            || self.independence != "independent_machines_fixtures_and_handling_labor/1"
+            || self.time_basis
+                != if shared_operator {
+                    "ceil_operation_feed_milliseconds/1"
+                } else {
+                    "ceil_cell_feed_milliseconds/1"
+                }
+            || self.independence
+                != if shared_operator {
+                    "independent_machines_and_fixtures_shared_operator/1"
+                } else {
+                    "independent_machines_fixtures_and_handling_labor/1"
+                }
             || !sha256_text(&self.machine_sha256)
             || self.machine_sha256 != workholding::machine_sha256(&plan.options.machine)?
             || !qualified_text(&self.source.reference)
@@ -495,10 +528,13 @@ struct Trial {
     padding_seconds: f64,
     finish: u64,
     lower: u64,
+    attended_lower: u64,
     search_nodes: usize,
     search_complete: bool,
     budget_exhausted: bool,
     schedule_sha256: [u8; 32],
+    // Compact integer phase durations and operation indices, never duplicated station/history data.
+    phases: Vec<operator::Phase>,
 }
 
 struct ScheduleDigest(Sha256);
@@ -535,6 +571,7 @@ fn trial(
     copies: usize,
     node_limit: usize,
     pattern: &Pattern,
+    shared_operator: bool,
 ) -> Result<(Trial, super::Report), Refusal> {
     let mut ordering = cell.ordering.clone();
     ordering.max_search_nodes = node_limit;
@@ -547,7 +584,16 @@ fn trial(
     };
     let schedule = super::evaluate(plan, &policy, pattern)?;
     let feed = schedule.feed_seconds * 1000.0;
-    let rounded = feed.ceil();
+    let rounded = if shared_operator {
+        schedule
+            .operations
+            .iter()
+            .try_fold(0_u64, |sum, operation| {
+                sum_time(sum, operator::feed_milliseconds(operation.feed_seconds)?)
+            })? as f64
+    } else {
+        feed.ceil()
+    };
     if !rounded.is_finite() || !(0.0..=MAX_EXACT_MILLISECONDS as f64).contains(&rounded) {
         return Err(budget(
             "parallel feed duration exceeds exactly representable millisecond bounds",
@@ -582,10 +628,16 @@ fn trial(
         padding_seconds: (rounded - feed) / 1000.0,
         finish,
         lower,
+        attended_lower: handling.lower_bound_setup_and_handling_milliseconds,
         search_nodes: schedule.ordering.search_nodes,
         search_complete: schedule.ordering.search_complete,
         budget_exhausted: schedule.ordering.budget_exhausted,
         schedule_sha256: schedule_sha256(&schedule)?,
+        phases: if shared_operator {
+            operator::phases(plan, cell, &schedule, feed_milliseconds)?
+        } else {
+            Vec::new()
+        },
     };
     Ok((receipt, schedule))
 }
@@ -672,7 +724,14 @@ fn assignment(
                 .iter()
                 .find(|source| source.cell == cell.id)
                 .map_or(plan, |source| source.plan.as_ref());
-            let (replayed, schedule) = trial(source, cell, count, expected.node_limit, pattern)?;
+            let (replayed, schedule) = trial(
+                source,
+                cell,
+                count,
+                expected.node_limit,
+                pattern,
+                !expected.phases.is_empty(),
+            )?;
             if &replayed != expected {
                 return Err(Refusal::new(
                     RefusalCode::NotConverged,
@@ -735,6 +794,9 @@ pub(super) fn evaluate(
     }
     let mut cells: Vec<_> = policy.cells.iter().collect();
     cells.sort_by_key(|cell| &cell.id);
+    if let Some(operator) = &policy.shared_operator {
+        operator.validate(plan, &cells, copies)?;
+    }
     let mut cell_plans = Vec::new();
     let mut station_count: usize = plan.seams.iter().map(|seam| seam.stations.fa.len()).sum();
     for cell in &cells {
@@ -786,7 +848,14 @@ pub(super) fn evaluate(
         let node_limit = cell.ordering.max_search_nodes.min(reservation.per_trial);
         let mut row = Vec::with_capacity(copies);
         for count in 1..=copies {
-            let (receipt, _) = trial(source, cell, count, node_limit, pattern)?;
+            let (receipt, _) = trial(
+                source,
+                cell,
+                count,
+                node_limit,
+                pattern,
+                policy.shared_operator.is_some(),
+            )?;
             search_nodes += receipt.search_nodes;
             search_complete &= receipt.search_complete;
             budget_exhausted |= receipt.budget_exhausted;
@@ -797,7 +866,7 @@ pub(super) fn evaluate(
     let (incumbent, incumbent_work) = allocate(&trials, &cells, copies, false);
     let (bound, bound_work) = allocate(&trials, &cells, copies, true);
     search_nodes += incumbent_work + bound_work;
-    let Some((cost, counts)) = incumbent else {
+    let Some((mut cost, mut counts)) = incumbent else {
         return Err(if bound.is_some() {
             Refusal::new(
                 RefusalCode::NotConverged,
@@ -810,18 +879,47 @@ pub(super) fn evaluate(
                 .repair("supply independently qualified longer availability windows or additional cells, or reduce the production quantity")
         });
     };
-    let lower_bound_makespan_milliseconds =
+    let mut lower_bound_makespan_milliseconds =
         bound.expect("a feasible incumbent has a valid bound").0;
-    let baseline_replaced = cells[0]
-        .available_until_milliseconds
-        .is_some_and(|end| trials[0][copies - 1].finish > end);
+    let operator = policy
+        .shared_operator
+        .as_ref()
+        .map(|operator| {
+            operator::evaluate(
+                operator,
+                &cells,
+                &trials,
+                copies,
+                &counts,
+                lower_bound_makespan_milliseconds,
+            )
+        })
+        .transpose()?;
+    if let Some(operator) = &operator {
+        search_nodes += operator.nodes + operator.bound_work;
+        search_complete &= operator.complete;
+        budget_exhausted |= operator.exhausted;
+        lower_bound_makespan_milliseconds = operator.lower;
+        cost = operator.selected.makespan;
+        counts.clone_from(&operator.selected.counts);
+    }
+    let baseline_replaced = operator.as_ref().map_or_else(
+        || {
+            cells[0]
+                .available_until_milliseconds
+                .is_some_and(|end| trials[0][copies - 1].finish > end)
+        },
+        |operator| operator.baseline_replaced,
+    );
     let mut baseline_counts = vec![0; cells.len()];
-    if baseline_replaced {
+    if let Some(operator) = &operator {
+        baseline_counts.clone_from(&operator.baseline.counts);
+    } else if baseline_replaced {
         baseline_counts.clone_from(&counts);
     } else {
         baseline_counts[0] = copies;
     }
-    let baseline = assignment(
+    let mut baseline = assignment(
         plan,
         &cell_plans,
         &cells,
@@ -830,7 +928,9 @@ pub(super) fn evaluate(
         &mut search_nodes,
         pattern,
     )?;
-    let selected = if cost < baseline.makespan_milliseconds {
+    let mut selected = if counts != baseline_counts
+        && (operator.is_some() || cost < baseline.makespan_milliseconds)
+    {
         assignment(
             plan,
             &cell_plans,
@@ -843,6 +943,20 @@ pub(super) fn evaluate(
     } else {
         baseline.clone()
     };
+    let shared_operator = operator
+        .as_ref()
+        .map(|result| {
+            result.report(
+                policy
+                    .shared_operator
+                    .as_ref()
+                    .expect("requested shared operator"),
+                &mut baseline,
+                &mut selected,
+                &trials,
+            )
+        })
+        .transpose()?;
     let availability = cells
         .iter()
         .any(|cell| cell.available_until_milliseconds.is_some())
@@ -872,24 +986,34 @@ pub(super) fn evaluate(
                 .collect(),
             baseline_replaced,
         });
-    debug_assert_eq!(incumbent_work + bound_work, reservation.allocation);
+    debug_assert_eq!(
+        incumbent_work + bound_work + operator.as_ref().map_or(0, |operator| operator.bound_work),
+        reservation.allocation
+    );
     debug_assert!(search_nodes <= policy.max_search_nodes);
     let optimality_proven = selected.makespan_milliseconds == lower_bound_makespan_milliseconds;
     Ok(Report {
-        schema: if availability.is_some() {
+        schema: if shared_operator.is_some() {
+            "ftx-sewing-parallel/4"
+        } else if availability.is_some() {
             "ftx-sewing-parallel/3"
         } else if cell_plans.is_empty() {
             "ftx-sewing-parallel/1"
         } else {
             "ftx-sewing-parallel/2"
         },
-        time_basis: "ceil_cell_feed_milliseconds/1",
+        time_basis: if shared_operator.is_some() {
+            "ceil_operation_feed_milliseconds/1"
+        } else {
+            "ceil_cell_feed_milliseconds/1"
+        },
         machine_sha256: policy.machine_sha256.clone(),
         qualifications,
         cell_plans,
         baseline,
         selected,
         availability,
+        shared_operator,
         lower_bound_makespan_milliseconds,
         search_nodes,
         search_complete,

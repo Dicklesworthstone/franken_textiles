@@ -4,7 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode};
 use ftx_export::sewing::{
-    SewOptions, SewPlan, SewingMachine, SewingQualification, production::workholding,
+    SewOptions, SewPlan, SewingMachine, SewingQualification,
+    production::{parallel::operator, workholding},
     program::SewProgram,
 };
 use ftx_pattern::Pattern;
@@ -55,6 +56,79 @@ fn fixture(copies: usize) -> (Pattern, Value) {
 
 fn build(pattern: &Pattern, options: Value) -> Result<SewPlan, Refusal> {
     SewPlan::build(pattern, &serde_json::from_value(options).unwrap())
+}
+
+fn refresh_operator_locks(options: &mut Value) {
+    let typed: SewOptions = serde_json::from_value(options.clone()).unwrap();
+    let parallel = typed
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    let locks: BTreeMap<_, _> = parallel
+        .cells
+        .iter()
+        .map(|cell| {
+            (
+                cell.id.clone(),
+                operator::cell_sha256(cell, &typed).unwrap(),
+            )
+        })
+        .collect();
+    options["production"]["parallel"]["shared_operator"]["cells"] = json!(locks);
+}
+
+fn shared_operator(options: &mut Value, work: usize) {
+    let parallel = &mut options["production"]["parallel"];
+    parallel["time_basis"] = json!("ceil_operation_feed_milliseconds/1");
+    parallel["independence"] = json!("independent_machines_and_fixtures_shared_operator/1");
+    parallel["max_search_nodes"] = json!(60000);
+    parallel["shared_operator"] = json!({
+        "model":"exclusive_setup_handling_autonomous_feed/1", "operator":"synthetic-person",
+        "available_at_milliseconds":0, "cells":{},
+        "initial_arrival_milliseconds":{"cell-a":0,"cell-b":0},
+        "transfers":[{"from":"cell-a","to":"cell-b","milliseconds":0},
+            {"from":"cell-b","to":"cell-a","milliseconds":0}],
+        "max_search_nodes":work,
+        "source":{"reference":"test:one-shared-operator","accessed_on":"2026-10-27",
+            "note":"Invented one-person protocol; unattended feed, safe waiting and travel are explicitly synthetic"},
+        "method":"One person travels, handles and sets up a cell, then releases it to unattended feed; travel excludes handling",
+        "conditions":{"scope":"Independent physical machines and fixtures; one exclusive operator; no garment transfers"},
+        "evidence":"estimate","allow_estimates":true
+    });
+    refresh_operator_locks(options);
+}
+
+// One 40-interval, four-second operation per garment. Its attended phases are independently known:
+// first loading/setup 1100 ms, each later garment handling 5000 ms, final unloading 200 ms.
+fn one_operation(copies: usize) -> (Pattern, Value) {
+    let (pattern, mut options) = fixture(copies);
+    options["passes"].as_array_mut().unwrap().truncate(1);
+    let production = &mut options["production"];
+    production["workholding"] = Value::Null;
+    for key in [
+        "qualifications",
+        "initial_milliseconds",
+        "final_milliseconds",
+    ] {
+        production["handling"][key]
+            .as_object_mut()
+            .unwrap()
+            .remove("reinforce");
+    }
+    production["handling"]["transitions"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|row| row["from"] == "join" && row["to"] == "join");
+    let handling = production["handling"].clone();
+    production["parallel"]["qualifications"] = handling["qualifications"].clone();
+    for cell in production["parallel"]["cells"].as_array_mut().unwrap() {
+        cell["handling"] = handling.clone();
+        cell["workholding"] = Value::Null;
+    }
+    (pattern, options)
 }
 
 fn refresh_cell_locks(cell: &mut Value) {
@@ -1183,4 +1257,366 @@ fn source_independence_identity_missing_time_and_bounds_fail_closed_even_for_unu
         });
     let refusal = build(&pattern, wrong).unwrap_err();
     assert_eq!(refusal.code, RefusalCode::NotConverged);
+}
+
+#[test]
+fn shared_operator_overlaps_only_autonomous_feed_and_replays_every_attended_phase() {
+    let (pattern, mut options) = one_operation(2);
+    let independent = build(&pattern, options.clone()).unwrap();
+    assert_eq!(independent.parallel_makespan_seconds(), Some(5.3));
+    shared_operator(&mut options, 40000);
+    let typed: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let report = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    assert_eq!(report.schema, "ftx-sewing-parallel/4");
+    assert_eq!(report.time_basis, "ceil_operation_feed_milliseconds/1");
+    assert_eq!(report.baseline.makespan_milliseconds, 14300);
+    assert_eq!(report.selected.makespan_milliseconds, 6400);
+    assert_eq!(report.lower_bound_makespan_milliseconds, 5300);
+    assert!(!report.optimality_proven);
+    let labor = report.shared_operator.as_ref().unwrap();
+    assert!(labor.search_complete);
+    assert!(!labor.budget_exhausted);
+    assert_eq!(labor.serial_order_scope, "retained_serial_incumbents/1");
+    assert_eq!(labor.selected.busy_milliseconds, 2600);
+    assert_eq!(labor.selected.waiting_milliseconds, 3800);
+    assert_eq!(labor.selected.steps.len(), 4);
+    assert!(
+        labor.selected.steps[1].operator_release_milliseconds
+            < labor.selected.steps[0].feed_finish_milliseconds
+    );
+    let mut operator_free = 0;
+    let mut cell_ready = BTreeMap::<String, u64>::new();
+    let mut operation_copies = BTreeSet::new();
+    for step in &labor.selected.steps {
+        assert_eq!(step.departure_milliseconds, operator_free);
+        assert!(step.arrival_milliseconds >= step.departure_milliseconds);
+        assert!(step.handling_start_milliseconds >= step.arrival_milliseconds);
+        assert!(step.handling_start_milliseconds >= *cell_ready.get(&step.cell).unwrap_or(&0));
+        assert!(step.setup_start_milliseconds >= step.handling_start_milliseconds);
+        assert!(step.operator_release_milliseconds >= step.setup_start_milliseconds);
+        assert!(step.feed_finish_milliseconds >= step.operator_release_milliseconds);
+        if let Some(copy) = step.copy {
+            operation_copies.insert(copy);
+        }
+        operator_free = step.operator_release_milliseconds;
+        cell_ready.insert(step.cell.clone(), step.feed_finish_milliseconds);
+    }
+    assert_eq!(operation_copies, BTreeSet::from([0, 1]));
+    assert_eq!(operator_free, 6400);
+    for cell in &report.selected.cells {
+        assert_eq!(cell.copies.len(), 1);
+        assert_eq!(
+            cell.finish_milliseconds,
+            cell_ready.get(&cell.cell).copied()
+        );
+    }
+    assert_eq!(program.stitches.len(), 80);
+    for step in &program.stitches {
+        let cell = report
+            .selected
+            .cells
+            .iter()
+            .find(|cell| Some(&cell.cell) == step.cell.as_ref())
+            .unwrap();
+        assert!(cell.copies.contains(&step.copy.unwrap()));
+    }
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+    );
+    assert!(
+        report.search_nodes
+            <= typed
+                .production
+                .as_ref()
+                .unwrap()
+                .parallel
+                .as_ref()
+                .unwrap()
+                .max_search_nodes
+    );
+}
+
+#[derive(Clone, Copy)]
+struct OperatorCase {
+    starts: [u64; 2],
+    ends: [Option<u64>; 2],
+    available: u64,
+    until: Option<u64>,
+    arrivals: [u64; 2],
+    transfers: [[u64; 2]; 2],
+}
+
+// Exhaust all dispatch words for two fixed one-operation garment chains. This uses only independently
+// specified durations, and neither production receipts nor the scheduler's bounds/pruning/heuristics.
+fn operator_oracle(copies: usize, case: OperatorCase) -> Option<u64> {
+    fn enumerate(
+        case: OperatorCase,
+        phases: &[Vec<(u64, u64)>; 2],
+        positions: [usize; 2],
+        ready: [u64; 2],
+        previous: Option<usize>,
+        free: u64,
+    ) -> Option<u64> {
+        if (0..2).all(|cell| positions[cell] == phases[cell].len()) {
+            return Some(
+                (0..2)
+                    .filter(|&cell| !phases[cell].is_empty())
+                    .map(|cell| ready[cell])
+                    .max()
+                    .unwrap(),
+            );
+        }
+        (0..2)
+            .filter_map(|cell| {
+                let &(attended, feed) = phases[cell].get(positions[cell])?;
+                let travel =
+                    previous.map_or(case.arrivals[cell], |from| case.transfers[from][cell]);
+                let release = (free + travel).max(ready[cell]) + attended;
+                let finish = release + feed;
+                if case.until.is_some_and(|end| release > end)
+                    || case.ends[cell].is_some_and(|end| finish > end)
+                {
+                    return None;
+                }
+                let mut next = positions;
+                next[cell] += 1;
+                let mut completion = ready;
+                completion[cell] = finish;
+                enumerate(case, phases, next, completion, Some(cell), release)
+            })
+            .min()
+    }
+    (0..=copies)
+        .filter_map(|a| {
+            let phases = [a, copies - a].map(|count| {
+                if count == 0 {
+                    return Vec::new();
+                }
+                let mut phases: Vec<_> = (0..count)
+                    .map(|index| (if index == 0 { 1100 } else { 5000 }, 4000))
+                    .collect();
+                phases.push((200, 0));
+                phases
+            });
+            enumerate(case, &phases, [0, 0], case.starts, None, case.available)
+        })
+        .min()
+}
+
+#[test]
+fn shared_operator_matches_exhaustive_allocations_travel_waits_and_inclusive_windows() {
+    let base = OperatorCase {
+        starts: [0, 0],
+        ends: [None, None],
+        available: 0,
+        until: None,
+        arrivals: [0, 0],
+        transfers: [[0, 0], [0, 0]],
+    };
+    for (copies, case) in [
+        (2, base),
+        (3, base),
+        (
+            2,
+            OperatorCase {
+                arrivals: [700, 100],
+                transfers: [[0, 900], [200, 0]],
+                ..base
+            },
+        ),
+        (
+            3,
+            OperatorCase {
+                starts: [3000, 0],
+                available: 500,
+                transfers: [[0, 250], [600, 0]],
+                ..base
+            },
+        ),
+        (
+            2,
+            OperatorCase {
+                ends: [Some(6400), Some(6400)],
+                until: Some(6400),
+                ..base
+            },
+        ),
+        (
+            2,
+            OperatorCase {
+                ends: [Some(6399), Some(6399)],
+                ..base
+            },
+        ),
+        (
+            1,
+            OperatorCase {
+                ends: [Some(0), Some(5360)],
+                arrivals: [0, 60],
+                until: Some(5360),
+                ..base
+            },
+        ),
+    ] {
+        let (pattern, mut options) = one_operation(copies);
+        for cell in 0..2 {
+            options["production"]["parallel"]["cells"][cell]["available_at_milliseconds"] =
+                json!(case.starts[cell]);
+            options["production"]["parallel"]["cells"][cell]["available_until_milliseconds"] =
+                json!(case.ends[cell]);
+        }
+        shared_operator(&mut options, 40000);
+        let operator = &mut options["production"]["parallel"]["shared_operator"];
+        operator["available_at_milliseconds"] = json!(case.available);
+        operator["available_until_milliseconds"] = json!(case.until);
+        operator["initial_arrival_milliseconds"] =
+            json!({"cell-a":case.arrivals[0],"cell-b":case.arrivals[1]});
+        operator["transfers"][0]["milliseconds"] = json!(case.transfers[0][1]);
+        operator["transfers"][1]["milliseconds"] = json!(case.transfers[1][0]);
+        match (operator_oracle(copies, case), build(&pattern, options)) {
+            (Some(exact), Ok(plan)) => {
+                let report = plan.production.unwrap().parallel.unwrap();
+                assert_eq!(report.selected.makespan_milliseconds, exact);
+                assert!(report.lower_bound_makespan_milliseconds <= exact);
+                assert_eq!(
+                    report.optimality_proven,
+                    report.lower_bound_makespan_milliseconds == exact
+                );
+                let labor = report.shared_operator.unwrap();
+                assert!(labor.search_complete);
+                if case.ends[0].is_some() {
+                    assert!(labor.baseline_replaced);
+                }
+                for cell in report.selected.cells {
+                    if let (Some(finish), Some(end)) =
+                        (cell.finish_milliseconds, cell.available_until_milliseconds)
+                    {
+                        assert!(finish <= end);
+                    }
+                }
+            }
+            (None, Err(refusal)) => {
+                // Completing the restricted serial-incumbent search cannot prove that all other
+                // admitted serial orders fail, even when this deliberately simple fixture would.
+                assert_eq!(refusal.code, RefusalCode::NotConverged);
+                assert!(refusal.message.contains("infeasibility is not proved"));
+            }
+            (expected, actual) => panic!("expected {expected:?}, got {actual:?}"),
+        }
+    }
+}
+
+#[test]
+fn shared_operator_retains_a_bounded_complete_seed_and_refuses_only_valid_shift_bounds() {
+    let (pattern, mut options) = one_operation(2);
+    shared_operator(&mut options, 3);
+    let plan = build(&pattern, options.clone()).unwrap();
+    let report = plan.production.unwrap().parallel.unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 14300);
+    assert!(!report.optimality_proven);
+    assert!(report.budget_exhausted);
+    let labor = report.shared_operator.unwrap();
+    assert_eq!(labor.search_nodes, 3);
+    assert_eq!(labor.selected.steps.len(), 3);
+    assert!(!labor.search_complete);
+    options["production"]["parallel"]["shared_operator"]["max_search_nodes"] = json!(2);
+    let refused = build(&pattern, options.clone()).unwrap_err();
+    assert_eq!(refused.code, RefusalCode::BudgetExceeded);
+    assert!(refused.message.contains("complete first-cell seed"));
+    options["production"]["parallel"]["shared_operator"]["max_search_nodes"] = json!(40000);
+    options["production"]["parallel"]["shared_operator"]["available_until_milliseconds"] =
+        json!(2599);
+    let refused = build(&pattern, options.clone()).unwrap_err();
+    assert_eq!(refused.code, RefusalCode::InvalidDocument);
+    assert!(refused.message.contains("attended-work lower bounds"));
+    options["production"]["parallel"]["shared_operator"]["available_until_milliseconds"] =
+        json!(6399);
+    assert_eq!(
+        build(&pattern, options).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+}
+
+#[test]
+fn shared_operator_source_domain_and_independent_consent_cannot_survive_changed_inputs() {
+    let (pattern, mut original) = one_operation(2);
+    shared_operator(&mut original, 40000);
+    for field in [
+        "allow_estimates",
+        "model",
+        "cells",
+        "initial_arrival_milliseconds",
+        "transfers",
+    ] {
+        let mut wrong = original.clone();
+        wrong["production"]["parallel"]["shared_operator"][field] = match field {
+            "allow_estimates" => json!(false),
+            "model" => json!("fully-autonomous-with-no-source"),
+            "transfers" => json!([]),
+            _ => json!({}),
+        };
+        assert!(build(&pattern, wrong).is_err(), "{field}");
+    }
+    for (field, value) in [
+        ("available_at_milliseconds", json!(1)),
+        ("available_until_milliseconds", json!(50000)),
+    ] {
+        let mut wrong = original.clone();
+        wrong["production"]["parallel"]["cells"][1][field] = value;
+        let refused = build(&pattern, wrong).unwrap_err();
+        assert!(refused.message.contains("content lock mismatch"));
+    }
+    let mut wrong = original.clone();
+    wrong["passes"][0]["stitches_per_minute"] = json!(599.0);
+    assert!(
+        build(&pattern, wrong)
+            .unwrap_err()
+            .message
+            .contains("content lock mismatch")
+    );
+    let mut wrong = original;
+    wrong["production"]["parallel"]["time_basis"] = json!("ceil_cell_feed_milliseconds/1");
+    assert!(build(&pattern, wrong).is_err());
+}
+
+#[test]
+fn every_positive_autonomous_feed_keeps_its_own_ceiling_after_intervening_attended_work() {
+    let (pattern, mut options) = heterogeneous();
+    options["production"]["production_copies"] = json!(1);
+    options["production"]["parallel"]["cells"][0]["available_until_milliseconds"] = json!(0);
+    let fast = &mut options["production"]["parallel"]["cells"][1];
+    fast["configuration"]["machine"]["max_stitches_per_minute"] = json!(6_000_000.0);
+    fast["configuration"]["qualifications"][0]["stitches_per_minute"] = json!([1.0, 6_000_000.0]);
+    for operation in ["join", "reinforce"] {
+        fast["configuration"]["recipes"][operation]["stitches_per_minute"] = json!(6_000_000.0);
+    }
+    refresh_cell_locks(fast);
+    shared_operator(&mut options, 40000);
+    let plan = build(&pattern, options).unwrap();
+    let report = plan.production.unwrap().parallel.unwrap();
+    let fast = &report.selected.cells[1];
+    assert_eq!(fast.scheduled_feed_milliseconds, 2);
+    assert!((fast.feed_padding_seconds - 0.0016).abs() < 1e-12);
+    assert_eq!(fast.finish_milliseconds, Some(902));
+    assert_eq!(report.lower_bound_makespan_milliseconds, 902);
+    assert!(report.optimality_proven);
+    let steps = &report.shared_operator.unwrap().selected.steps;
+    assert_eq!(steps.len(), 3);
+    for step in &steps[..2] {
+        assert_eq!(
+            step.feed_finish_milliseconds - step.operator_release_milliseconds,
+            1
+        );
+    }
+    assert_eq!(steps[1].handling_start_milliseconds, 601);
+    assert_eq!(steps[2].handling_start_milliseconds, 702);
 }

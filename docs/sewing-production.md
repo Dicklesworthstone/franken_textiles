@@ -512,8 +512,8 @@ reserve source operations across the outer plan, configured cells, variants and 
 and count every retained source station table, including idle cells, once toward their aggregate
 limits. Scheduling replays and complete-order purchasing retain their own separate work reservations.
 Every garment still stays in one cell, with independently qualified machines, fixture units and
-handling labor. Shared-worker overlap, inter-cell transfer, hardware control and empirical seam
-qualification remain outside this model.
+handling labor. Shared labor requires the separately qualified optional protocol below. Inter-cell
+garment transfer, hardware control and empirical seam qualification remain outside this model.
 
 ## Finite cell availability windows
 
@@ -566,8 +566,108 @@ part of the planning convention, and the final unload cannot be hidden behind a 
 
 The ordinary stitch program, selected thread inventory, material studies, both native commands
 and portable/browser APIs all consume this same constrained assignment and frozen replay options.
-No calendar lookup, reservation, source update or hardware execution is implied. Shared labor,
-machine breaks/preemption and transfers between cells still require separate qualified models.
+No calendar lookup, reservation, source update or hardware execution is implied. Shared labor requires
+the additional protocol below; machine breaks/preemption and garment transfers remain unsupported.
+
+## One operator tending autonomous-feed cells
+
+Optional `production.parallel.shared_operator` supports a qualified person tending several machines.
+The machines and fixture inventories remain independent, and every garment stays in one cell.
+The source must explicitly qualify unattended feed, safe waiting, the actual handling/setup protocol
+and the operator's travel. Existing independent-cell mode keeps its original inputs and output.
+
+Shared mode requires these two declarations on the enclosing parallel policy:
+
+```json
+{
+  "time_basis": "ceil_operation_feed_milliseconds/1",
+  "independence": "independent_machines_and_fixtures_shared_operator/1"
+}
+```
+
+The new operator policy has this shape, alongside the existing complete cell policies:
+
+```json
+{
+  "model": "exclusive_setup_handling_autonomous_feed/1",
+  "operator": "qualified-person-identity",
+  "available_at_milliseconds": 0,
+  "available_until_milliseconds": 3600000,
+  "cells": {"cell-a": "FULL_CELL_SOURCE_HASH", "cell-b": "FULL_CELL_SOURCE_HASH"},
+  "initial_arrival_milliseconds": {"cell-a": 100, "cell-b": 500},
+  "transfers": [
+    {"from": "cell-a", "to": "cell-b", "milliseconds": 400},
+    {"from": "cell-b", "to": "cell-a", "milliseconds": 450}
+  ],
+  "max_search_nodes": 20000,
+  "source": {"reference": "RETAINED_OBSERVATION", "accessed_on": "YYYY-MM-DD", "note": "EXACT_APPLICABILITY"},
+  "method": "QUALIFIED_PHASE_TRAVEL_AND_UNATTENDED_FEED_PROTOCOL",
+  "evidence": "measured"
+}
+```
+
+The example numbers illustrate the input fields and are not physical observations. Actual inputs
+need the complete source and their own durations. Estimated applicability or travel additionally
+requires the operator policy's separate `allow_estimates: true`; material/process or setup consent
+does not supply it. The optional operator end is inclusive and omission leaves the shift open ended.
+All cell ends still apply. Every possible initial destination and every directed pair of different
+cells needs explicit travel, including a zero if zero is qualified. Travel is additional to the
+existing handling/setup timings and must be measured with compatible phase boundaries. Staying at
+the same cell adds no inter-cell travel.
+
+Use `production::parallel::operator::cell_sha256(&cell, &options)` to compute each content lock. It
+covers the full physical cell policy, availability, setup/handling tables, fixture policy and actual
+effective inherited/overridden recipes, access and process qualifications. Global production quantity,
+allocation and purchasing are excluded. All supplied cells are checked even when idle; changing a
+cell's recipe, timing or availability requires renewed qualification and its new lock. A hash alone
+does not establish source applicability or qualify safe autonomous machinery.
+
+For each operation the person travels, waits if necessary, handles the garment, changes the setup,
+then releases the cell to autonomous feed. Handling and setup form one nonpreemptive attended block.
+The person may travel to another cell during that feed. Final unloading is an explicit attended
+operation after the last feed; both the cell and person stay reserved until it ends. Waiting at a
+chosen destination occupies the person, so the search also considers different dispatch orders.
+Existing fixture lifecycles remain active through any added waits in their cell.
+
+Shared mode rounds **each complete operation's feed upward independently** to integer milliseconds.
+The cell and all copy-count lower bounds use the sum of those operation ceilings. Padding before an
+intervening setup, handling interval or wait cannot release later positive feed early: two 0.2 ms feeds
+separated by attended work each receive a full 1 ms slot. Raw feed and total numerical padding remain
+separate; padding can exceed 1 ms per cell. Independent-labor mode retains its prior once-per-cell
+rounding and unchanged serialization.
+
+The planner searches whole-garment allocations and all dispatch interleavings of the existing
+cell/count serial incumbents. It retains only compact integer phase durations and operation indices
+for these count trials; full source geometry and fixture histories are not duplicated. Seeds,
+allocation-prefix extensions and dispatch extensions consume the operator's reserved portion of the
+enclosing parallel work limit, alongside all ordinary count solves, lower-bound DPs and exact returned
+schedule replays. The operator cap must at least cover every operation plus final unloading of a
+complete first-cell seed. The combined serial-reference and parallel limit remains 200000 units.
+
+`ftx-sewing-parallel/4` includes `shared_operator.baseline` and `.selected` timelines with departure,
+arrival, handling start, setup start, operator release and feed completion, plus actual global garment
+identities. Travel, busy time and waiting are separate from aggregate machine feed and elapsed
+makespan. If the first-cell seed fails a cell or operator limit, the complete selected feasible
+assignment replaces it and `shared_operator.baseline_replaced` is true. Existing cell/count
+`availability` receipts are explicitly a **cell-only relaxation**: a count that fits without
+operator contention need not fit the combined timeline.
+
+The proof scope is `retained_serial_incumbents/1`. Completing that restricted search does not
+establish the unrestricted joint optimum, because another serial operation order may interleave
+better. Independent complete DPs supply valid lower bounds for cell completion and total attended
+work. The parent `optimality_proven` is true only when the actual feasible makespan meets their valid
+global bound. A missing incumbent is unresolved unless one of those independent bounds proves the
+windows impossible; unfinished or restricted search never proves unexamined operation orders fail.
+
+Synthetic one-operation tests give two four-second feeds with 1100 ms initial loading/setup and
+200 ms final unloading. Independent workers finish two cells in 5300 ms; one operator finishes in
+6400 ms while attending them exclusively. Independent exhaustive allocation/dispatch checks add
+asymmetric arrivals, directed travel, delayed cell starts and inclusive limits. Actual heterogeneous
+recipes, generated stitch streams, combined yarn orders and bound-material studies use the selected
+operator-constrained allocation through both native commands and the portable/browser interface.
+The page displays these exact timelines and withdraws them when inputs change. These checks establish
+the declared software model; physical seam quality, safe unattended equipment and hardware execution
+still require their own evidence and authorization.
 
 ## Bounds and remaining scope
 

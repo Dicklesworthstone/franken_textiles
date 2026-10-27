@@ -3983,6 +3983,26 @@ from reported group means. Missing mechanics, cubic discrepancies, independent c
 validation and cold-weather extrapolation remain unresolved. See
 [nist-thermal-materials.md](docs/nist-thermal-materials.md).
 
+### 25.105 One qualified operator can tend multiple autonomous-feed sewing cells
+
+Parallel production now admits one explicitly shared operator while retaining independent machines,
+fixtures and whole-garment cell ownership. Source-qualified initial arrival, directed travel,
+waiting, handling, setup and final unloading occupy that person exclusively; only independently
+qualified autonomous feed releases the operator. Both cell and operator availability ends remain
+inclusive. The actual assignment still drives stitch geometry, yarn consumption and purchasing.
+
+The bounded search considers complete garment allocations and operator interleavings of retained
+serial schedules. It distinguishes that restricted search from the unrestricted joint optimum;
+optimality requires a complete feasible result meeting an independently valid lower bound. Every
+positive operation feed receives its own millisecond ceiling, so earlier rounding cannot release
+a later machine operation prematurely. Shared work admission reserves a complete baseline seed.
+
+This delivers the bounded scheduling capability `ftx-pb2.2.8` through ordinary native, portable,
+material-study and browser consumers. The browser retains the timed operator phases and withdraws
+them after source changes. Existing independent-labor inputs retain their old representation.
+Measured labor/autonomy applicability, heterogeneous shared fixtures, garment transfers and hardware
+execution remain separate work. See [sewing-production.md](docs/sewing-production.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

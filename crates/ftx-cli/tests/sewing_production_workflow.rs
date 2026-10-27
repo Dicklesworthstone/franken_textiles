@@ -61,6 +61,163 @@ fn portable(text: String) -> Value {
 }
 
 #[test]
+fn shared_operator_replays_actual_heterogeneous_geometry_inventory_and_bound_material_study() {
+    for windowed in [false, true] {
+        let directory = workspace();
+        let mut options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
+        let parallel = &mut options["production"]["parallel"];
+        parallel["time_basis"] = json!("ceil_operation_feed_milliseconds/1");
+        parallel["independence"] = json!("independent_machines_and_fixtures_shared_operator/1");
+        parallel["max_search_nodes"] = json!(60000);
+        if windowed {
+            parallel["cells"][0]["available_until_milliseconds"] = json!(9899);
+            parallel["cells"][1]["available_until_milliseconds"] = json!(11104);
+        }
+        parallel["shared_operator"] = json!({
+            "model":"exclusive_setup_handling_autonomous_feed/1","operator":"synthetic-worker",
+            "available_at_milliseconds":0,"available_until_milliseconds":if windowed {11104} else {50000},
+            "cells":{},"initial_arrival_milliseconds":{"cell-a":0,"cell-b":0},
+            "transfers":[{"from":"cell-a","to":"cell-b","milliseconds":0},
+                {"from":"cell-b","to":"cell-a","milliseconds":0}],"max_search_nodes":40000,
+            "source":{"reference":"test:portable-shared-operator","accessed_on":"2026-10-27",
+                "note":"Invented one-worker protocol, zero travel and unattended feed; no measured machine claim"},
+            "method":"Nonpreemptive travel, handling and setup followed by qualified unattended feed; safe waiting explicitly assumed",
+            "evidence":"estimate","allow_estimates":true
+        });
+        let typed: ftx_export::sewing::SewOptions =
+            serde_json::from_value(options.clone()).unwrap();
+        let locks: std::collections::BTreeMap<_, _> = typed
+            .production
+            .as_ref()
+            .unwrap()
+            .parallel
+            .as_ref()
+            .unwrap()
+            .cells
+            .iter()
+            .map(|cell| {
+                (
+                    cell.id.clone(),
+                    ftx_export::sewing::production::parallel::operator::cell_sha256(cell, &typed)
+                        .unwrap(),
+                )
+            })
+            .collect();
+        options["production"]["parallel"]["shared_operator"]["cells"] = json!(locks);
+        let text = options.to_string();
+        let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &text).unwrap());
+        let plan = &program["plan"];
+        let parallel = &plan["production"]["parallel"];
+        assert_eq!(parallel["schema"], "ftx-sewing-parallel/4");
+        assert_eq!(
+            parallel["selected"]["makespan_milliseconds"],
+            if windowed { 11104 } else { 9900 }
+        );
+        assert_eq!(
+            parallel["shared_operator"]["serial_order_scope"],
+            "retained_serial_incumbents/1"
+        );
+        assert_eq!(parallel["shared_operator"]["baseline_replaced"], windowed);
+        assert_eq!(
+            program["stitches"].as_array().unwrap().len(),
+            if windowed { 120 } else { 160 }
+        );
+        let yarn = plan["consumables"]["total_required_length_m"]
+            .as_f64()
+            .unwrap();
+        assert!((yarn - if windowed { 2.4 } else { 3.0 }).abs() < 1e-12);
+        let mut free = 0;
+        for phase in parallel["shared_operator"]["selected"]["steps"]
+            .as_array()
+            .unwrap()
+        {
+            assert_eq!(phase["departure_milliseconds"], free);
+            free = phase["operator_release_milliseconds"].as_u64().unwrap();
+            if let Some(copy) = phase["copy"].as_u64() {
+                assert!(
+                    program["stitches"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|step| step["cell"] == phase["cell"] && step["copy"] == copy)
+                );
+            }
+        }
+        assert_eq!(parallel["selected"]["makespan_milliseconds"], free);
+        assert_eq!(
+            portable(
+                ftx_wasm::manufacturing::sew_plan(PATTERN, &plan["options"].to_string()).unwrap()
+            ),
+            *plan
+        );
+        let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+        let study = json!({"schema":"ftx-material-study/1",
+            "variants":[{"key":"one-worker","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern["fabric"]["material"]}}],"sewing":options,
+            "comparison":{"basis":"nominal","required_consumers":["sewing","sewing_consumables","sewing_purchasing"],
+                "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"}]}});
+        let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+        let row = &report["alternatives"][0];
+        let bound = row["binding"]["result"]["pattern_json"].as_str().unwrap();
+        let rebound = portable(ftx_wasm::manufacturing::sew_plan(bound, &text).unwrap());
+        assert_eq!(row["sewing"]["result"], rebound);
+        assert_eq!(
+            rebound["production"]["parallel"]["shared_operator"],
+            parallel["shared_operator"]
+        );
+        assert_eq!(
+            row["metrics"]["sewing_parallel_makespan_seconds"],
+            if windowed { 11.104 } else { 9.9 }
+        );
+        assert_eq!(report["comparison"]["frontier"], json!(["one-worker"]));
+        fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+        fs::write(directory.join("options.json"), &text).unwrap();
+        fs::write(directory.join("study.json"), study.to_string()).unwrap();
+        fs::write(directory.join("bound.json"), bound).unwrap();
+        for main in [false, true] {
+            assert_eq!(
+                run(main, &directory, "sew-plan", "pattern.json", "options.json"),
+                *plan
+            );
+            assert_eq!(
+                run(
+                    main,
+                    &directory,
+                    "sew-stitches",
+                    "pattern.json",
+                    "options.json"
+                ),
+                program
+            );
+            assert_eq!(
+                run(main, &directory, "study", "pattern.json", "study.json"),
+                report
+            );
+            assert_eq!(
+                run(main, &directory, "sew-plan", "bound.json", "options.json"),
+                rebound
+            );
+        }
+        let mut refused_study = study;
+        refused_study["sewing"]["production"]["parallel"]["shared_operator"]["available_until_milliseconds"] =
+            json!(0);
+        assert!(
+            ftx_wasm::manufacturing::sew_plan(PATTERN, &refused_study["sewing"].to_string())
+                .is_err()
+        );
+        let refused =
+            portable(ftx_wasm::materials::study(PATTERN, &refused_study.to_string()).unwrap());
+        assert_eq!(refused["alternatives"][0]["sewing"]["status"], "refused");
+        assert!(
+            refused["comparison"]["frontier"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
 fn finite_cell_windows_replay_actual_assignment_and_inventory_in_both_commands() {
     let directory = workspace();
     let mut options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();

@@ -1269,6 +1269,62 @@ test('parallel cells display elapsed completion, local-to-global copies and exac
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
+test('shared operator timelines preserve resource waits, restricted proof and cell-only window scope in every result view', async () => {
+  const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
+  const schedule={feed_seconds:4,operations:[{id:'0/join',copy:0,operation_id:'join',seam_index:0,after:[]}],
+    ordering:{selected_order:['0/join'],optimality_proven:true}};
+  const selected={makespan_milliseconds:6400,feed_seconds:8,scheduled_feed_milliseconds:8000,
+    setup_milliseconds:2000,handling_milliseconds:600,cells:[
+      {cell:'cell-a',copies:[0],available_at_milliseconds:0,available_until_milliseconds:6400,
+        finish_milliseconds:5300,feed_padding_seconds:0,schedule},
+      {cell:'cell-b',copies:[1],available_at_milliseconds:0,available_until_milliseconds:6400,
+        finish_milliseconds:6400,feed_padding_seconds:0,schedule}]};
+  const step=(cell,operation,copy,departure,arrival,handling,setup,release,feed)=>({cell,operation,copy,
+    departure_milliseconds:departure,arrival_milliseconds:arrival,handling_start_milliseconds:handling,
+    setup_start_milliseconds:setup,operator_release_milliseconds:release,feed_finish_milliseconds:feed});
+  const timeline={busy_milliseconds:2600,transfer_milliseconds:0,waiting_milliseconds:3800,steps:[
+    step('cell-a','0/join',0,0,0,0,100,1100,5100),
+    step('cell-b','0/join',1,1100,1100,1100,1200,2200,6200),
+    step('cell-a',null,null,2200,2200,5100,5300,5300,5300),
+    step('cell-b',null,null,5300,5300,6200,6400,6400,6400)]};
+  const parallel={schema:'ftx-sewing-parallel/4',time_basis:'ceil_operation_feed_milliseconds/1',
+    baseline:selected,selected,lower_bound_makespan_milliseconds:5300,optimality_proven:false,search_nodes:73,budget_exhausted:false,
+    availability:{baseline_replaced:true,cells:[{cell:'cell-a',available_until_milliseconds:6400,
+      counts:[{copies:1,incumbent_finish_milliseconds:5300,lower_bound_finish_milliseconds:5300,feasible:true,infeasibility_proven:false}]}]},
+    shared_operator:{operator:'<one qualified person>',baseline:timeline,selected:timeline,baseline_replaced:true,
+      serial_order_scope:'retained_serial_incumbents/1',search_complete:true,budget_exhausted:false}};
+  const plan={options:{production:{parallel:{cells:[],shared_operator:{source:{note:'<qualified unattended feed>'}}}}},
+    seams:[{pass:{id:'join',seam:'side',needle:'N',thread:'A'}}],
+    production:{production_copies:2,feed_seconds:8,parallel}};
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('one-operator'); row.sewing=outcome(plan); row.metrics.sewing_parallel_makespan_seconds=6.4;
+    const study=studyReport([row]);
+    const report=op==='sew'?{plan,stitches:[]}:op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=JSON.stringify(report);
+    await p.e[op].onclick(); p.emit(report,[{name:'operator-report.json',text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    assert.deepEqual(plain(table('shared operator work').children[2].children.map(n=>n.textContent)),
+      ['<one qualified person>','2.6','0','3.8','true','false']);
+    assert.deepEqual(plain(table('selected shared operator timeline').children[3].children.map(n=>n.textContent)),
+      ['cell-b','0/join','1','1.1','1.1','1.1','1.2','2.2','6.2']);
+    assert.deepEqual(plain(table('selected shared operator timeline').children.at(-1).children.map(n=>n.textContent)),
+      ['cell-b','Final unloading','Batch end','5.3','5.3','6.2','6.4','6.4','6.4']);
+    assert.equal(table('cell-only window relaxation').children[2].children.at(-1).textContent,'Fits without operator contention');
+    assert.match(visibleText(s),/minimum parallel completion time is not proved/);
+    assert.match(visibleText(s),/completing that search alone does not prove an unrestricted joint optimum/);
+    assert.match(visibleText(s),/Each positive feed operation keeps its own upward-rounded time slot/);
+    assert.match(visibleText(s),/Feasible replacement baseline/);
+    assert.doesNotMatch(visibleText(s),/requires independently qualified machines, fixtures and handling labor/);
+    const download=descendants(s).find(n=>n.download==='operator-report.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
 test('heterogeneous cells display their actual machine recipes and selected thread contributions', async () => {
   const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions'); await p.e.sew.onclick();
   const source=(cell,machine,thread,pitch,rate)=>({cell,machine_sha256:machine+'-hash',

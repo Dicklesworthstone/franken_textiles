@@ -1554,10 +1554,11 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
   if (!report) return;
   const heterogeneous = Boolean(report.cell_plans?.length);
   const windowed = Boolean(report.availability);
+  const operator = report.shared_operator;
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: parallel completion and aggregate work`,
     ["Allocation", "Completion (s)", "Total feed work (s)", "Scheduled feed work (s)", "Total setup work (s)", "Total handling work (s)"]);
-  const baselineLabel = report.availability?.baseline_replaced ? "Feasible replacement baseline" : "Single-cell baseline";
+  const baselineLabel = report.availability?.baseline_replaced || operator?.baseline_replaced ? "Feasible replacement baseline" : "Single-cell baseline";
   for (const [name, allocation] of [[baselineLabel, report.baseline], ["Selected cells", report.selected]]) {
     cells(totals, [name, metric(seconds(allocation?.makespan_milliseconds)), metric(allocation?.feed_seconds),
       metric(seconds(allocation?.scheduled_feed_milliseconds)), metric(seconds(allocation?.setup_milliseconds)),
@@ -1598,30 +1599,51 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     }
   }
   if (windowed) {
-    const windows = table(parent, `${label}: qualified cell availability`,
+    const windows = table(parent, `${label}: ${operator ? "cell-only window relaxation" : "qualified cell availability"}`,
       ["Cell", "Garment count", "Finish limit (s)", "Complete incumbent finish (s)", "Finish lower bound (s)", "Window admission"]);
     for (const cell of report.availability.cells || []) {
       for (const count of cell.counts || []) cells(windows, [cell.cell, metric(count.copies),
         typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended",
         metric(seconds(count.incumbent_finish_milliseconds)), metric(seconds(count.lower_bound_finish_milliseconds)),
-        count.feasible ? "Fits" : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
+        count.feasible ? (operator ? "Fits without operator contention" : "Fits") : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
     }
+  }
+  if (operator) {
+    const labor = table(parent, `${label}: shared operator work`,
+      ["Operator", "Busy (s)", "Travel (s)", "Waiting (s)", "Restricted search complete", "Operator work limit reached"]);
+    cells(labor, [operator.operator, metric(seconds(operator.selected?.busy_milliseconds)),
+      metric(seconds(operator.selected?.transfer_milliseconds)), metric(seconds(operator.selected?.waiting_milliseconds)),
+      String(operator.search_complete), String(operator.budget_exhausted)]);
+    const timeline = table(parent, `${label}: selected shared operator timeline`,
+      ["Cell", "Local operation", "Global copy", "Departure (s)", "Arrival (s)", "Handling starts (s)",
+        "Setup starts (s)", "Operator free (s)", "Feed complete (s)"]);
+    for (const step of operator.selected?.steps || []) cells(timeline,
+      [step.cell, step.operation ?? "Final unloading", typeof step.copy === "number" ? metric(step.copy) : "Batch end",
+        metric(seconds(step.departure_milliseconds)), metric(seconds(step.arrival_milliseconds)),
+        metric(seconds(step.handling_start_milliseconds)), metric(seconds(step.setup_start_milliseconds)),
+        metric(seconds(step.operator_release_milliseconds)), metric(seconds(step.feed_finish_milliseconds))]);
   }
   const note = document.createElement("p");
   note.textContent = (report.optimality_proven ?
     "Minimum parallel completion time proved under the declared millisecond planning model. " :
     "Complete feasible cell allocation retained; the minimum parallel completion time is not proved. ") +
     `Lower bound: ${metric(seconds(report.lower_bound_makespan_milliseconds))} s; search work: ${metric(report.search_nodes)}. ` +
-    (report.budget_exhausted ? "At least one inner schedule reached its work limit. " : "") +
+    (report.budget_exhausted ? (operator ? "At least one serial or operator search reached its work limit. " : "At least one inner schedule reached its work limit. ") : "") +
     (windowed ? "Every used cell finishes inside its inclusive qualified availability window, including final unloading. " +
       "A lower bound that still fits leaves an over-limit incumbent unresolved. " : "") +
-    (report.availability?.baseline_replaced ? "The first-cell baseline exceeded its window; the displayed replacement is the complete selected feasible assignment. " : "") +
-    "Every garment stays in one physical cell. Concurrent operation requires independently qualified machines, fixtures and handling labor. " +
-    "Each used cell includes its own availability, initial setup and final unloading. Feed is rounded upward once per used cell; raw feed and padding remain separate. " +
+    (report.availability?.baseline_replaced || operator?.baseline_replaced ? "The first-cell baseline failed a qualified cell or operator window; the displayed replacement is the complete selected feasible assignment. " : "") +
+    "Every garment stays in one physical cell. " +
+    (operator ? "One qualified operator performs exclusive travel, handling, setup and final unloading while explicitly qualified autonomous machine feed may overlap. " +
+      "The operator search considers the retained serial operation orders; completing that search alone does not prove an unrestricted joint optimum. " +
+      "Cell-only window receipts ignore operator contention; the selected timeline enforces both cell and operator limits. " +
+      "Each positive feed operation keeps its own upward-rounded time slot, including after attended work or waiting. " :
+      "Concurrent operation requires independently qualified machines, fixtures and handling labor. Feed is rounded upward once per used cell. ") +
+    "Each used cell includes its own availability, initial setup and final unloading; raw feed and padding remain separate. " +
     "Elapsed completion is distinct from summed machine work. The retained single-machine reference is not the selected concurrent order. " +
     (heterogeneous ? "Stitch pitch, feed, qualifications and thread consumption come from each selected cell's own admitted plan. " +
       "The allocation minimizes elapsed completion; its thread purchasing cost and total feed are reported consequences, not separately optimized quantities. " : "") +
-    "This calculation does not qualify garment transfers, shared operators or hardware execution.";
+    (operator ? "This calculation does not qualify garment transfers, unmodeled shared resources or hardware execution." :
+      "This calculation does not qualify garment transfers, shared operators or hardware execution.");
   parent.append(note);
   detail(parent, `${label}: cell independence, timing sources and complete allocations`, {
     policy: plan.options?.production?.parallel, report });

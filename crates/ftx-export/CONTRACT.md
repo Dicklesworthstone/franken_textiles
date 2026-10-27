@@ -189,6 +189,25 @@ complete allocation. An unavailable first-cell seed is explicitly replaced by th
 assignment. Parallel `/3` retains bounded count/admission receipts and supplied ends; no-window
 schemas and serialization stay unchanged. Actual cell recipes, stitches, yarn inventory and material
 studies follow the constrained assignment. Reconstruction shares the existing work reservation.
+
+**One shared operator** (`production.parallel.shared_operator`). The explicit
+`exclusive_setup_handling_autonomous_feed/1` protocol shares one qualified person across otherwise
+independent machines and fixtures. Full cell/effective-recipe/timing hashes, separate estimate consent,
+all initial arrivals and every directed inter-cell travel observation are required, including idle
+cells. Travel, waiting, handling, setup and final unloading hold that one person; only explicitly
+qualified feed releases them. The new `ceil_operation_feed_milliseconds/1` convention reserves every
+positive operation's complete feed ceiling independently, so previous rounding never permits early
+machine reuse after attended work. Each used cell and the operator must finish inside their inclusive
+windows. Parallel `/4` retains both complete exclusive attendance/overlapping-feed timelines and
+actual global garment mappings; ordinary cell source geometry, stitches and combined purchasing remain
+the same authorities. Allocation and interleaving use retained serial incumbents, with all seeds and
+extensions charged to a reserved portion of the existing whole-job cap. Independent cell-finish and
+complete attended-work DPs supply unrestricted lower bounds; restricted exhaustion alone proves neither
+global optimality nor infeasibility. A cap must cover a complete first-cell seed. The optional compact
+phase cache contains only bounded integer durations and source indices, not duplicated station or
+fixture histories. Omission preserves independent-mode wire output. Synthetic exhaustive, travel,
+deadline, conservative submillisecond feed, source invalidation and native/portable study regressions
+exercise this model. Source timing does not establish safe physical autonomy or hardware permission.
 Tests: exhaustive and bounded `sewing_parallel`, native/portable `sewing_production_workflow`.
 Declared windows do not imply calendar reservations, shared labor, preemption or physical execution.
 
