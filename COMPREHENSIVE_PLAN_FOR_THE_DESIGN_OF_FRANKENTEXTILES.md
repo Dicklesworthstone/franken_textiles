@@ -3621,6 +3621,35 @@ This implements `ftx-vc2.1`, not the full empirical moisture program. Sorption, 
 drainage, mechanical water mass, general garment dew-location prediction and measured wet-property
 qualification remain open. See [textile-surface-water.md](docs/textile-surface-water.md).
 
+### 25.92 A qualified textile can retain permanent set and delayed recovery together
+
+An explicit `parallel_green_maxwell_plastic/1` declaration now qualifies an elastoplastic equilibrium
+membrane in parallel with the existing Maxwell branches. Every branch uses the same physical
+material-frame Green strain. Plastic flow responds to equilibrium-branch stress; Maxwell arms retain
+their own viscous strains. Their stored energies and stresses add, while plastic and viscous losses
+remain separate. This particular network does not describe plastic flow inside a Maxwell arm.
+
+Joint admission requires matching specimen and conditioning evidence, compatible equilibrium
+stiffness interpretation, unit compression factors and the intersection of the original characterized
+domains. Private paired identities bind both compiled laws to the complete resolved material. An
+atomic solver binder admits the complete network; either joint half alone refuses. Ordinary records
+without the declaration keep the previous exclusivity and serialization.
+
+The canonical sewn-scene and timed-strip consumers use this binder. Each material triangle keeps its
+own two histories after seam welding, and failed steps commit neither trial history. Reports retain
+the network interpretation and source identity. The synthetic shared selection and direct known-answer
+regressions exercise loading, holds, unloading, derivatives, ledgers, initialization and rollback.
+See [material-parallel-memory.md](docs/material-parallel-memory.md).
+
+Both native strip-history commands and the portable/browser boundary retain the complete source-locked
+network in frozen replay. The workbench explains the branch interpretation and keeps the two loss
+ledgers separate; input changes withdraw the prior result.
+
+This advances the constitutive capability under `ftx-tm4`. It supplies no guessed fabric parameters,
+joint inverse calibration or measured linen/leather/performance-knit acceptance. Matched complete
+loading/recovery observations and independent garment validation remain under `ftx-tm2` and
+`ftx-tm8`.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

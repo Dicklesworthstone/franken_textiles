@@ -3,6 +3,7 @@
 
 use ftx_core::{Refusal, RefusalCode, Vec3};
 use ftx_pattern::material_membrane_plasticity::{MODEL, Memory, PlasticMembrane};
+use ftx_pattern::material_relaxation::CompiledRelaxation;
 use ftx_pattern::material_response::StrainDomain;
 use serde_json::{Value, json};
 
@@ -48,6 +49,13 @@ pub(super) struct Field {
 impl Field {
     pub(super) fn has(&self, triangle: usize) -> bool {
         self.entries.get(triangle).is_some_and(Option::is_some)
+    }
+
+    pub(super) fn admits_relaxation(&self, triangle: usize, law: &CompiledRelaxation) -> bool {
+        self.entries
+            .get(triangle)
+            .and_then(Option::as_ref)
+            .is_some_and(|bound| bound.law.accepts_parallel(law))
     }
 
     pub(super) fn check(&self, model: &ClothModel, x: &[Vec3]) -> Result<(), Refusal> {
@@ -152,6 +160,41 @@ impl Field {
 }
 
 impl Solver {
+    /// Atomically install complete membrane histories on the retained triangle ownership map.
+    /// Same-triangle Maxwell and permanent-strain branches require a common source-qualified
+    /// parallel-network lock. An incomplete joint network cannot escape as an executable solver.
+    /// Independent laws on different triangles retain their original initialization and arithmetic.
+    ///
+    /// # Errors
+    /// Incomplete/mismatched joint laws, unqualified same-triangle combinations, rebinding, or any
+    /// original branch's topology, tangent, strain-domain or compression-mapping refusal.
+    pub fn with_membrane_histories(
+        self,
+        relaxation: &[Option<CompiledRelaxation>],
+        plasticity: &[Option<PlasticMembrane>],
+    ) -> Result<Self, Refusal> {
+        if relaxation.len() != self.model.membranes.len() || plasticity.len() != relaxation.len() {
+            return Err(bad(
+                "one complete membrane-history selection per retained triangle is required",
+            ));
+        }
+        for (relaxation, plasticity) in relaxation.iter().zip(plasticity) {
+            let admitted = match (relaxation, plasticity) {
+                (Some(relaxation), Some(plasticity)) => plasticity.accepts_parallel(relaxation),
+                (Some(relaxation), None) => relaxation.parallel_material_sha256().is_none(),
+                (None, Some(plasticity)) => plasticity.parallel_material_sha256().is_none(),
+                (None, None) => true,
+            };
+            if !admitted {
+                return Err(bad(
+                    "each parallel membrane network requires both branches from the same complete material and common domain",
+                ));
+            }
+        }
+        self.bind_relaxation(relaxation)?
+            .bind_membrane_plasticity(plasticity)
+    }
+
     /// Bind one optional permanent-set law per retained material triangle after grain mapping
     /// and welding. Selected triangles require the exact linear tensor, unit compression factors,
     /// and no Maxwell/nonlinear membrane response. Other triangles retain their own laws.
@@ -161,6 +204,22 @@ impl Solver {
     /// Rebinding, topology mismatch, unsupported coupled laws, softened compression/gathers,
     /// a different elastic tensor or an initial physical strain outside the declared domain.
     pub fn with_membrane_plasticity(
+        self,
+        laws: &[Option<PlasticMembrane>],
+    ) -> Result<Self, Refusal> {
+        if laws
+            .iter()
+            .flatten()
+            .any(|law| law.parallel_material_sha256().is_some())
+        {
+            return Err(bad(
+                "a parallel plastic half-law requires atomic with_membrane_histories binding",
+            ));
+        }
+        self.bind_membrane_plasticity(laws)
+    }
+
+    pub(super) fn bind_membrane_plasticity(
         mut self,
         laws: &[Option<PlasticMembrane>],
     ) -> Result<Self, Refusal> {
@@ -188,7 +247,8 @@ impl Solver {
             if material.q != law.tensor() || self.model.membrane_response(i).is_some() {
                 return Err(bad("plastic membrane requires its exact linear elastic tensor without a nonlinear equilibrium law"));
             }
-            if self.relaxation.as_ref().is_some_and(|field| field.has(i)) {
+            if self.relaxation.as_ref().is_some_and(|field|
+                field.has(i) && !field.admits_plastic(i, law)) {
                 return Err(bad("plastic membrane and Maxwell memory need a jointly characterized law on the same triangle"));
             }
             let element = self.model.membranes[i];
@@ -211,7 +271,8 @@ impl Solver {
     }
 
     /// Actual stored membrane energy, including accepted permanent-set hardening and Maxwell
-    /// branch storage on other triangles. Excludes bending, contact, inertia and dissipated work.
+    /// branch storage, including qualified parallel networks. Excludes bending, contact, inertia
+    /// and dissipated work.
     /// This is not the incremental potential minimized during a trial step.
     ///
     /// # Errors
@@ -284,24 +345,39 @@ impl Solver {
                 let response = b.memory.response(strain, false)?;
                 let energy = b.element.area * response.energy;
                 stored += energy;
-                elements.push(json!({"triangle":i,"vertices":b.element.v,
+                let mut element = json!({"triangle":i,"vertices":b.element.v,
                     "reference_area_m2":b.element.area,"law_sha256":b.law.fingerprint(),
                     "plastic_green_strain":b.memory.plastic_strain(),
                     "accumulated_plastic_green_strain":b.memory.accumulated_strain(),
                     "current_green_strain":strain,"elastic_stress_n_m":response.stress,
                     "plastic_dissipation_j":b.dissipated_j,
-                    "stored_elastic_and_hardening_energy_j":energy}));
+                    "stored_elastic_and_hardening_energy_j":energy});
+                if let Some(identity) = b.law.parallel_material_sha256() {
+                    element["parallel_network"] = json!({"model":ftx_pattern::material_relaxation::parallel::MODEL,
+                        "material_sha256":identity,"stress_basis":"elastoplastic_equilibrium_branch_only"});
+                }
+                elements.push(element);
             }
         }
         if !stored.is_finite() {
             return Err(bad("plastic membrane storage overflows"));
         }
+        let scope = if field
+            .entries
+            .iter()
+            .flatten()
+            .any(|b| b.law.parallel_material_sha256().is_some())
+        {
+            "Rate-independent orthotropic equilibrium-branch yield and hardening in physical Green strain, with source-qualified Maxwell branches in parallel where marked. Yield excludes Maxwell stress. Excludes same-branch viscoplasticity, damage, rupture, nonlinear equilibrium curves, gather softening, remeshing and thermal feedback"
+        } else {
+            "Rate-independent orthotropic yield and directional isotropic hardening in physical Green strain; excludes damage, rupture, simultaneous Maxwell/nonlinear membrane response, gather softening, remeshing and thermal feedback"
+        };
         Ok(Some(
             json!({"schema":"ftx-membrane-plasticity-history/1","model":MODEL,
             "initialization":"pristine_relative_to_authored_reference_metric",
             "accepted_steps":field.steps,"stored_elastic_and_hardening_energy_j":stored,
             "plastic_dissipation_j":field.dissipated_j,"elements":elements,
-            "scope":"Rate-independent orthotropic yield and directional isotropic hardening in physical Green strain; excludes damage, rupture, simultaneous Maxwell/nonlinear membrane response, gather softening, remeshing and thermal feedback",
+            "scope":scope,
             "empirical_validation_claim":false,"restart_import":false}),
         ))
     }
@@ -311,6 +387,78 @@ impl Solver {
 mod tests {
     use super::*;
     use ftx_core::Vec2;
+
+    #[test]
+    fn parallel_network_geometric_derivatives_match_the_actual_incremental_potential() {
+        use ftx_pattern::{
+            material_catalog::Selection,
+            materials::{CATALOG_SCHEMA, Catalog},
+        };
+        let selected: Selection = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-parallel-membrane.json"
+        ))
+        .unwrap();
+        let material = Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: Vec::new(),
+        }
+        .resolve(&selected)
+        .unwrap();
+        let model = ClothModel::new(
+            vec![Vec2::ZERO, Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)],
+            &[[0, 1, 2]],
+            Membrane::orthotropic(1000.0, 600.0, 0.0, 300.0, 1.0),
+            0.0,
+            0.2,
+        )
+        .unwrap();
+        let x = vec![
+            Vec3::ZERO,
+            Vec3::new(1.15, 0.05, 0.08),
+            Vec3::new(0.035, 1.0, 0.0),
+        ];
+        let solver = Solver::new(model, x.clone(), &[[false; 3]; 3], Vec3::ZERO)
+            .with_membrane_histories(
+                &[material.membrane_relaxation().unwrap()],
+                &[material.membrane_plasticity().unwrap()],
+            )
+            .unwrap();
+        let plastic = solver.membrane_plasticity_report().unwrap();
+        let relaxation = solver.relaxation_report().unwrap();
+        let (gradient, hessian) = solver.assemble(&x, Some((&x, 0.2)), false);
+        let eps = 2e-6;
+        for i in 0..9 {
+            let mut plus = x.clone();
+            let mut minus = x.clone();
+            let offset = match i % 3 {
+                0 => Vec3::new(eps, 0.0, 0.0),
+                1 => Vec3::new(0.0, eps, 0.0),
+                _ => Vec3::new(0.0, 0.0, eps),
+            };
+            plus[i / 3] += offset;
+            minus[i / 3] -= offset;
+            let numeric = (solver.potential(&plus, Some((&x, 0.2))).unwrap()
+                - solver.potential(&minus, Some((&x, 0.2))).unwrap())
+                / (2.0 * eps);
+            assert!(
+                (numeric - gradient[i]).abs() < 2e-6 * gradient[i].abs().max(1.0),
+                "gradient {i}: {numeric} vs {}",
+                gradient[i]
+            );
+            let gp = solver.assemble(&plus, Some((&x, 0.2)), false).0;
+            let gm = solver.assemble(&minus, Some((&x, 0.2)), false).0;
+            for j in 0..9 {
+                let numeric = (gp[j] - gm[j]) / (2.0 * eps);
+                let exact = hessian.get(j, i);
+                assert!(
+                    (numeric - exact).abs() < 2e-6 * exact.abs().max(1.0),
+                    "Hessian {j},{i}: {numeric} vs {exact}"
+                );
+            }
+        }
+        assert_eq!(plastic, solver.membrane_plasticity_report().unwrap());
+        assert_eq!(relaxation, solver.relaxation_report().unwrap());
+    }
 
     #[test]
     fn condensed_geometric_derivatives_match_the_actual_incremental_potential() {

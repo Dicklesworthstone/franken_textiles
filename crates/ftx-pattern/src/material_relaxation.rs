@@ -15,6 +15,7 @@ use crate::materials::{Evidence, Quantity, Source};
 mod binding;
 pub mod calibration;
 pub mod heating;
+pub mod parallel;
 
 /// Stress-free reference strain or a pre-relaxed start; neither is inferred from a garment pose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +90,10 @@ pub struct Relaxation {
     /// Conditions shared by the law, not inferred from fiber or brand.
     #[serde(default)]
     pub conditions: BTreeMap<String, String>,
+    /// Explicit qualification of a parallel elastoplastic equilibrium branch. Omitting this
+    /// declaration preserves the refusal to combine Maxwell recovery with permanent strain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_plasticity: Option<parallel::ParallelPlasticity>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -109,6 +114,7 @@ pub struct CompiledRelaxation {
     initialization: Initialization,
     fingerprint: String,
     orthotropic_branches: bool,
+    parallel: Option<parallel::Lock>,
 }
 
 /// Accepted history for one material point. No mutating trial-evaluation API is provided.
@@ -217,7 +223,7 @@ impl Relaxation {
         &self,
         material: &crate::materials::Material,
     ) -> Result<(), Refusal> {
-        if self.orthotropic_branches.is_empty() {
+        if self.orthotropic_branches.is_empty() && self.parallel_plasticity.is_none() {
             return Ok(());
         }
         if let Some(response) = &material.membrane_response {
@@ -255,6 +261,9 @@ impl Relaxation {
     /// # Errors
     /// Invalid model/data, unresolved sources or estimated quantities without explicit admission.
     pub fn validate(&self, sources: &BTreeMap<String, Source>, allow: bool) -> Result<(), Refusal> {
+        if let Some(parallel) = &self.parallel_plasticity {
+            parallel.validate(sources, allow)?;
+        }
         if self.model != "green_maxwell/1"
             || !(1..=16).contains(
                 &self
@@ -347,6 +356,20 @@ impl Relaxation {
         allow: bool,
         q: [[f64; 3]; 3],
     ) -> Result<CompiledRelaxation, Refusal> {
+        if self.parallel_plasticity.is_some() {
+            return Err(bad(
+                "parallel plastic/Maxwell response requires the complete material compiler",
+            ));
+        }
+        self.compile_inner(sources, allow, q)
+    }
+
+    fn compile_inner(
+        &self,
+        sources: &BTreeMap<String, Source>,
+        allow: bool,
+        q: [[f64; 3]; 3],
+    ) -> Result<CompiledRelaxation, Refusal> {
         self.validate(sources, allow)?;
         let scale = q.iter().flatten().map(|x| x.abs()).fold(0.0, f64::max);
         if scale <= 0.0 || q.iter().flatten().any(|x| !x.is_finite()) {
@@ -414,11 +437,25 @@ impl Relaxation {
             initialization: self.initialization,
             fingerprint: sha256_hex(&bytes),
             orthotropic_branches: !self.orthotropic_branches.is_empty(),
+            parallel: None,
         })
     }
 }
 
 impl CompiledRelaxation {
+    /// Exact material identity of an admitted joint network. A joint law must be installed with
+    /// its matching permanent-strain branch through the solver's atomic history binder.
+    #[must_use]
+    pub fn parallel_material_sha256(&self) -> Option<&str> {
+        self.parallel
+            .as_ref()
+            .map(|lock| lock.material_sha256.as_str())
+    }
+
+    pub(crate) fn parallel_lock(&self) -> Option<&parallel::Lock> {
+        self.parallel.as_ref()
+    }
+
     /// Whether the spectrum contains independently specified directional tensors.
     #[must_use]
     pub fn has_orthotropic_branches(&self) -> bool {

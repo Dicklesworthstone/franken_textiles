@@ -401,6 +401,7 @@ fn law(input: &Input, candidates: &[Candidate], source: &str) -> Relaxation {
     };
     Relaxation {
         model: "green_maxwell/1".into(),
+        parallel_plasticity: None,
         branches: Vec::new(),
         orthotropic_branches: candidates
             .iter()

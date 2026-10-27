@@ -10,6 +10,7 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde::Serialize;
 
 use crate::material_catalog::ResolvedMaterial;
+use crate::material_relaxation::{CompiledRelaxation, parallel};
 use crate::material_response::Response;
 use crate::material_return_map::{self, Failure, Parameters};
 use crate::materials::{Form, Material};
@@ -77,6 +78,8 @@ pub struct PlasticMembrane {
     strain_limit: [f64; 3],
     accumulation_limit: [f64; 3],
     source_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parallel: Option<parallel::Lock>,
 }
 
 /// Accepted signed permanent Green strain and accumulated absolute increments.
@@ -143,6 +146,7 @@ impl PlasticMembrane {
             strain_limit,
             accumulation_limit,
             source_sha256: None,
+            parallel: None,
         })
     }
 
@@ -150,6 +154,28 @@ impl PlasticMembrane {
     #[must_use]
     pub fn tensor(&self) -> [[f64; 3]; 3] {
         self.tensor_n_m
+    }
+
+    pub(crate) fn strain_limits(&self) -> [f64; 3] {
+        self.strain_limit
+    }
+
+    /// Complete material identity of a qualified parallel network. Such a half-law must be
+    /// installed atomically with its matching Maxwell branch, never as a standalone membrane.
+    #[must_use]
+    pub fn parallel_material_sha256(&self) -> Option<&str> {
+        self.parallel
+            .as_ref()
+            .map(|lock| lock.material_sha256.as_str())
+    }
+
+    /// Both laws were admitted from the same complete material under the same joint domain.
+    /// Equal numeric tangents alone never qualify a combined rheological network.
+    #[must_use]
+    pub fn accepts_parallel(&self, relaxation: &CompiledRelaxation) -> bool {
+        self.parallel
+            .as_ref()
+            .is_some_and(|lock| relaxation.parallel_lock() == Some(lock))
     }
 
     /// Model, numerical-parameter and optional full source-record identity.
@@ -162,6 +188,11 @@ impl PlasticMembrane {
     #[must_use]
     pub fn contains(&self, strain: [f64; 3]) -> bool {
         (0..3).all(|i| strain[i].is_finite() && strain[i].abs() <= self.strain_limit[i])
+            && self.parallel.as_ref().is_none_or(|lock| {
+                (0..3).all(|i| {
+                    strain[i] >= lock.strain_range[i][0] && strain[i] <= lock.strain_range[i][1]
+                })
+            })
             && positive_metric(strain)
     }
 
@@ -280,7 +311,7 @@ impl Memory {
 impl Material {
     /// Compile optional bounded permanent stretch from the four scalar elastic observations and
     /// twelve directional history quantities, all sharing specimen_id and conditioning.
-    /// This path does not call mechanics(), fabricate a joint nonlinear/Maxwell model, or convert
+    /// This path does not call mechanics(), infer a joint nonlinear/Maxwell model, or convert
     /// tensile breaking force to a yield resultant. Properties must already use canonical units.
     ///
     /// # Errors
@@ -290,13 +321,27 @@ impl Material {
         allow_estimates: bool,
     ) -> Result<Option<PlasticMembrane>, Refusal> {
         let Some(model) = self.structure.get("membrane_plasticity_model") else {
+            if self
+                .membrane_relaxation
+                .as_ref()
+                .is_some_and(|law| law.parallel_plasticity.is_some())
+            {
+                return Err(bad(
+                    "parallel Maxwell declaration requires its permanent-strain branch",
+                ));
+            }
             return Ok(None);
         };
         self.validate()?;
         if model != MODEL {
             return Err(bad("unsupported permanent membrane model"));
         }
-        if self.membrane_response.is_some() || self.membrane_relaxation.is_some() {
+        if self.membrane_response.is_some()
+            || self
+                .membrane_relaxation
+                .as_ref()
+                .is_some_and(|law| law.parallel_plasticity.is_none())
+        {
             return Err(bad(
                 "permanent membrane stretch cannot combine with nonlinear or Maxwell membrane laws without a qualified joint model",
             ));
@@ -353,7 +398,14 @@ impl Material {
             [poisson * weft / d, weft / d, 0.0],
             [0.0, 0.0, shear],
         ];
-        PlasticMembrane::new(q, values[0], values[1], values[2], values[3]).map(Some)
+        let mut law = PlasticMembrane::new(q, values[0], values[1], values[2], values[3])?;
+        if self.membrane_relaxation.is_some() {
+            let digest =
+                sha256_hex(&serde_json::to_vec(self).map_err(|error| bad(error.to_string()))?);
+            let relaxation = parallel::compile(self, allow_estimates, &law, digest)?;
+            law.parallel = relaxation.parallel_lock().cloned();
+        }
+        Ok(Some(law))
     }
 }
 
@@ -368,6 +420,15 @@ impl ResolvedMaterial {
             .compiled_membrane_plasticity(self.allows_estimates())?;
         if let Some(law) = &mut law {
             law.source_sha256 = Some(self.sha256().to_owned());
+            if law.parallel.is_some() {
+                let relaxation = parallel::compile(
+                    self.material(),
+                    self.allows_estimates(),
+                    law,
+                    self.sha256().to_owned(),
+                )?;
+                law.parallel = relaxation.parallel_lock().cloned();
+            }
         }
         Ok(law)
     }

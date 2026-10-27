@@ -310,6 +310,13 @@ fn source_selection_reaches_only_assigned_retained_triangles_in_real_sewn_scene(
 }
 
 fn check_sewn_selection(selected: Selection) {
+    let parallel = selected
+        .record
+        .as_ref()
+        .unwrap()
+        .membrane_relaxation
+        .as_ref()
+        .is_some_and(|law| law.parallel_plasticity.is_some());
     let mut p = pattern().raw().clone();
     p["fabric"]["material"] = json!(selected);
     let mut equilibrium = selected;
@@ -350,6 +357,15 @@ fn check_sewn_selection(selected: Selection) {
             "front"
         );
     }
+    if parallel {
+        let plastic = &run.report["membrane_plasticity_history"];
+        assert_eq!(plastic["accepted_steps"], 6);
+        for entry in plastic["elements"].as_array().unwrap() {
+            let triangle = entry["triangle"].as_u64().unwrap() as usize;
+            let front = run.scene.mesh.instances[run.scene.triangle_owner[triangle]] == "front";
+            assert_eq!(entry.get("parallel_network").is_some(), front);
+        }
+    }
     p["fabric"]["material"] = json!(equilibrium);
     let eq = drape(&Pattern::new(p), &json!({}), &body, &opts, |_| {}).unwrap();
     assert!(eq.report.get("membrane_history").is_none());
@@ -357,6 +373,15 @@ fn check_sewn_selection(selected: Selection) {
     assert_eq!(eq.scene.weld, run.scene.weld);
     assert_eq!(eq.scene.solver.model.mass, run.scene.solver.model.mass);
     assert_ne!(eq.scene.solver.x, run.scene.solver.x);
+}
+
+#[test]
+fn qualified_parallel_network_follows_real_sewn_piece_ownership() {
+    let selected = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-parallel-membrane.json"
+    ))
+    .unwrap();
+    check_sewn_selection(selected);
 }
 
 #[test]

@@ -56,6 +56,17 @@ impl Field {
         self.entries.get(triangle).is_some_and(Option::is_some)
     }
 
+    pub(super) fn admits_plastic(
+        &self,
+        triangle: usize,
+        law: &ftx_pattern::material_membrane_plasticity::PlasticMembrane,
+    ) -> bool {
+        self.entries
+            .get(triangle)
+            .and_then(Option::as_ref)
+            .is_some_and(|bound| law.accepts_parallel(&bound.law))
+    }
+
     // Public model fields may have been edited by a low-level caller. A different rest frame,
     // compression map or equilibrium law must not silently reuse an old material's history.
     pub(super) fn check(&self, model: &ClothModel, x: &[Vec3]) -> Result<(), Refusal> {
@@ -144,7 +155,23 @@ impl Solver {
     ///
     /// # Errors
     /// Wrong field size, repeated binding, stale/invalid tangent or initial strain outside the domain.
-    pub fn with_relaxation(mut self, laws: &[Option<CompiledRelaxation>]) -> Result<Self, Refusal> {
+    pub fn with_relaxation(self, laws: &[Option<CompiledRelaxation>]) -> Result<Self, Refusal> {
+        if laws
+            .iter()
+            .flatten()
+            .any(|law| law.parallel_material_sha256().is_some())
+        {
+            return Err(bad(
+                "a parallel Maxwell half-law requires atomic with_membrane_histories binding",
+            ));
+        }
+        self.bind_relaxation(laws)
+    }
+
+    pub(super) fn bind_relaxation(
+        mut self,
+        laws: &[Option<CompiledRelaxation>],
+    ) -> Result<Self, Refusal> {
         if self.relaxation.is_some() || laws.len() != self.model.membranes.len() {
             return Err(bad(
                 "one Maxwell selector per triangle is required; history cannot be rebound",
@@ -166,7 +193,8 @@ impl Solver {
                 let Some(law) = law else {
                     return Ok(None);
                 };
-                if self.membrane_plasticity.as_ref().is_some_and(|field| field.has(i)) {
+                if self.membrane_plasticity.as_ref().is_some_and(|field|
+                    field.has(i) && !field.admits_relaxation(i, law)) {
                     return Err(bad("Maxwell memory and plastic membrane need a jointly characterized law on the same triangle"));
                 }
                 let material = self.model.material(i);
@@ -294,12 +322,24 @@ impl Solver {
         for (i, b) in field.entries.iter().enumerate() {
             if let Some(b) = b {
                 let response = b.memory.response(b.effective_strain(&self.x)?, None)?;
-                elements.push(json!({"triangle":i,"law_sha256":b.law.fingerprint(),
+                let mut element = json!({"triangle":i,"law_sha256":b.law.fingerprint(),
                     "viscous_green_strain":b.memory.viscous_strains(),
-                    "effective_transient_stress_n_m":response.stress}));
+                    "effective_transient_stress_n_m":response.stress});
+                if let Some(identity) = b.law.parallel_material_sha256() {
+                    element["parallel_network"] = json!({"model":ftx_pattern::material_relaxation::parallel::MODEL,
+                        "material_sha256":identity,"strain_basis":"total_physical_green_strain"});
+                }
+                elements.push(element);
             }
         }
         let scope = if field
+            .entries
+            .iter()
+            .flatten()
+            .any(|b| b.law.parallel_material_sha256().is_some())
+        {
+            "Source-qualified Maxwell branch tensors; marked parallel networks use TOTAL physical Green strain and add transient stress independently of equilibrium-branch plastic flow. Excludes same-branch viscoplasticity, numerical dissipation, damage and thermal feedback"
+        } else if field
             .entries
             .iter()
             .flatten()

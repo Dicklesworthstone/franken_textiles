@@ -139,6 +139,7 @@ pub struct Report {
 }
 
 const SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation; backward-Euler integration preserves the selected Maxwell or permanent-strain history. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, thermal feedback, joint Maxwell/plastic laws, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
+const PARALLEL_SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation. The explicitly qualified parallel network drives plastic flow with only equilibrium-branch stress; every Maxwell branch sees total physical Green strain and retains its own viscous strain. Stored energies and plastic/viscous dissipation remain separate. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, thermal feedback, same-branch viscoplasticity, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
 
 fn vector(v: Vec3) -> [f64; 3] {
     [v.x, v.y, v.z]
@@ -344,6 +345,9 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
     membrane.validate()?;
     let relaxation = resolved.membrane_relaxation()?;
     let plasticity = resolved.membrane_plasticity()?;
+    let parallel = relaxation
+        .as_ref()
+        .is_some_and(|law| law.parallel_material_sha256().is_some());
     let [nx, ny] = input.fixture.cells;
     let history_scalars = material.membrane_relaxation.as_ref().map_or(0, |law| {
         4 + 3 * (law.branches.len() + law.orthotropic_branches.len())
@@ -387,8 +391,10 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         })
         .collect();
     let mut solver = Solver::new(model, reference.clone(), &fixed, Vec3::ZERO)
-        .with_relaxation(&vec![relaxation; triangles.len()])?
-        .with_membrane_plasticity(&vec![plasticity; triangles.len()])?;
+        .with_membrane_histories(
+            &vec![relaxation; triangles.len()],
+            &vec![plasticity; triangles.len()],
+        )?;
     solver.tol = input.controls.velocity_tolerance_m_s;
     solver.max_newton = input.controls.max_newton;
     let recorder = Recorder {
@@ -452,6 +458,6 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         reference_mass_kg: solver.model.mass.iter().sum(),
         states,
         newton_iterations: iterations,
-        model_scope: SCOPE.into(),
+        model_scope: if parallel { PARALLEL_SCOPE } else { SCOPE }.into(),
     })
 }

@@ -19,6 +19,18 @@ contribution keeps the aggregate range unavailable while preserving nominal resu
 do not require an independence assumption; no SD/CV conversion, confidence level, unsampled-motion
 error bound, moisture supply or latent cooling follows from these ranges.
 
+**Qualified parallel material memory.** `Solver::with_membrane_histories` atomically binds matching
+per-triangle elastoplastic/Maxwell branches from one qualified complete material. The original
+individual binders refuse a joint half-law; absent joint declarations retain mutual rejection.
+The existing incremental potential, exact derivative chain and reactions add Maxwell response to
+the elastoplastic equilibrium branch once. Both histories and their separate physical dissipation
+ledgers commit with accepted geometry/velocity/contact state; failed steps roll back both. Unit
+compression and original grain/rest ownership are required. Canonical sewn scenes and timed strips
+use the same binder. `tests/parallel_membrane.rs`, `tests/strip_history.rs`, `tests/relaxation.rs` and
+the internal geometric derivative test cover known answers, source/domain refusal, independent
+ledgers, real sewn ownership and rollback. This is a declared parallel network, not same-branch
+viscoplasticity or measured textile acceptance; see `docs/material-parallel-memory.md`.
+
 **Purpose.** The cloth solver that replaces Blender's (plan §11): an orthotropic Green-strain membrane
 rotated to the grain, quadratic hinge bending, lumped inertia, and implicit Euler solved by Newton on a
 sparse LDLᵀ with an Armijo line search; a static solve; and contact with a static body (IPC barrier on the
@@ -640,8 +652,8 @@ qualify a measured coupon or supply missing material properties.
 unloads a planar, fully gripped sheet through the existing implicit dynamic solver. Canonical membrane
 observations and real reference areal mass are required; unrelated bending/contact/thermal evidence
 is not fabricated. The pristine stationary initialization, explicit increasing clock, piecewise-linear
-grip motion and globally bounded subdivisions preserve one accepted Maxwell or permanent-strain
-history throughout. Every accepted step reports membrane reactions, interior momentum residuals,
+grip motion and globally bounded subdivisions preserve accepted Maxwell, permanent-strain or explicitly
+qualified parallel-network histories throughout. Every accepted step reports membrane reactions, interior momentum residuals,
 stored/kinetic energy and separate existing physical viscous/plastic work. A failed complete request
 publishes no partial success. Frozen inputs replay offline. Synthetic analytical Green-strain bar
 reactions/work, continuous Maxwell ramp/hold refinement, mass-dependent dynamics and refusal tests

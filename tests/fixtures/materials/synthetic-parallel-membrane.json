@@ -1,0 +1,63 @@
+{
+  "id": "synthetic-parallel-membrane",
+  "allow_estimates": true,
+  "record": {
+    "id": "synthetic-parallel-membrane",
+    "name": "Synthetic parallel permanent-set and Maxwell sheet; NOT measured textile data",
+    "form": "woven",
+    "structure": {
+      "membrane_plasticity_model": "orthotropic_green_return_map/1",
+      "scope": "Artificial parallel-network software example; no measured textile, same-branch viscoplasticity, damage or garment qualification"
+    },
+    "properties": {
+      "areal_density": {"value": 0.2, "unit": "kg/m2", "source": "test", "evidence": "estimate", "method": "Synthetic reference mass"},
+      "thickness": {"value": 0.0006, "unit": "m", "source": "test", "evidence": "estimate", "method": "Synthetic unchanged contact thickness"},
+      "bending_rigidity": {"value": 0.00003, "unit": "N*m", "source": "test", "evidence": "estimate", "method": "Synthetic independent recoverable bending"},
+      "friction_skin": {"value": 0.2, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic body friction"},
+      "friction_self": {"value": 0.3, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic self friction"},
+      "warp_stiffness": {"value": 1000.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic elastic stiffness of the plastic branch, not total instantaneous stiffness", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "weft_stiffness": {"value": 600.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic plastic-branch elastic weft coefficient", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "poisson_warp_weft": {"value": 0.0, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic zero normal coupling", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "shear_stiffness": {"value": 300.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic plastic-branch shear stiffness", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_yield_warp": {"value": 20.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic equilibrium-branch yield resultant", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_yield_weft": {"value": 30.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic equilibrium-branch yield resultant", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_yield_shear": {"value": 10.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic equilibrium-branch yield resultant", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_hardening_warp": {"value": 100.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic isotropic hardening", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_hardening_weft": {"value": 80.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic isotropic hardening", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_hardening_shear": {"value": 40.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic isotropic hardening", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_strain_limit_warp": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic raw Green-strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_strain_limit_weft": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic raw Green-strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_strain_limit_shear": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic raw Green-strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_accumulation_limit_warp": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated permanent strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_accumulation_limit_weft": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated permanent strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_accumulation_limit_shear": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated permanent strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}}
+    },
+    "membrane_relaxation": {
+      "model": "green_maxwell/1",
+      "initialization": "stress_free_reference",
+      "strain_range": [[-0.3, 0.3], [-0.3, 0.3], [-0.3, 0.3]],
+      "source": "test",
+      "method": "Synthetic Maxwell branches driven by TOTAL physical Green strain; ratio relative to the plastic branch's elastic tensor",
+      "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"},
+      "branches": [{
+        "id": "recovery",
+        "stiffness_ratio": {"value": 2.0, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic branch ratio", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+        "relaxation_time": {"value": 0.05, "unit": "s", "source": "test", "evidence": "estimate", "method": "Synthetic branch time", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}}
+      }],
+      "parallel_plasticity": {
+        "model": "parallel_green_maxwell_plastic/1",
+        "evidence": "estimate",
+        "source": "test",
+        "method": "Explicit artificial parallel network: plastic flow uses only equilibrium-branch stress; Maxwell stress is added after its own internal update",
+        "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}
+      }
+    },
+    "sources": {
+      "test": {
+        "reference": "test:ftx-parallel-membrane-known-answers",
+        "accessed_on": "2026-10-27",
+        "note": "Every parameter and the branch-network qualification are synthetic estimates for software tests. No real textile, empirical constitutive identification, textile damage, fit, or machine authorization is represented."
+      }
+    }
+  }
+}
