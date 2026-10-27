@@ -81,6 +81,47 @@ is written last. The original static review needs no scripts; editing uses its s
 local images/scripts and no network connections. Visual agreement does not establish correct anatomy,
 lens accuracy, observability or physical fit.
 
+## Choose anatomical model targets locally
+
+Before placing photo observations, define what each correspondence name means on the exact
+converted model. The local target picker accepts either capture or prepared-fit input, including
+an initially empty `model.keypoints` map:
+
+```sh
+ftx measure body-target-review capture/input.json --model /path/to/anny.ftxbody \
+    --out target-review-001 --json
+# Open target-review-001/index.html, select and name the model locations,
+# then download body-targets.json.
+ftx measure body-targets /path/to/body-targets.json --model /path/to/anny.ftxbody \
+    --out target-input-001 --json
+ftx measure capture-review target-input-001/input.json --out capture-review-001 --json
+```
+
+Orbit and zoom the mesh to inspect the intended side of the body. A surface selection retains the
+actual triangle and its barycentric weights; a vertex selection retains its original model index.
+Bone head and tail selections use the exact named rig endpoints. Give every target a reviewed
+correspondence name that can then be selected in the photo editor. The preview is an **unfitted
+rest shape**, using the declared fixed shape and midpoints of free shape bounds; its displayed
+geometry is not a fitted person or an automatic anatomical definition. Choose the same physical
+location consistently in every image. Do not infer a visible skin point from an internal bone
+endpoint without an independently justified correspondence.
+
+The picker can add targets and correct existing definitions. A name already used by an image
+observation cannot be removed. The downloaded annotation contains only the target map and exact
+source/model bindings. Native `body-targets` reloads the original input, verifies its byte hash and
+the converted model's file and array hashes, and applies the target map through the ordinary
+fitter's validation. It rejects missing observed names, duplicate physical locations, invalid
+indices, unknown bones and invalid barycentric weights. It preserves the remaining input values,
+including full-width decoded timestamps; capture paths are rebased to their original local files.
+Neither command selects FIT/CHECK roles, changes measurements or computes a fit.
+
+Both outputs require a new directory. `review.json` records the preview and its source identity;
+`targets.json` records the applied annotations and new `input.json`. Original input bytes and
+annotation files remain available in their bundles. Source files remain required when using the
+reconstructed capture. If the original input changes, generate a new target review instead of
+editing its recorded hash. The page uses local assets only and keeps edits in memory; pending,
+invalid, cancelled or reset edits withdraw the previous edited download.
+
 ## Inspect starting poses before fitting
 
 Once the photo observations and targets are reviewed, inspect every declared initialization in
@@ -289,7 +330,7 @@ The `model` object specifies:
 | `root_translation_m`, `root_rotation_rad` | Optional fixed root translation and rotation vector, both defaulting to `[0,0,0]`; named free pose parameters override their respective components |
 | `joints` | Optional map from exact bone label to `{axis: [x,y,z], angle_rad: 0}`; axis is a unit vector in that bone's **local rest frame**, not a world axis |
 | `pose_parameters` | Ordered array of `{name, lower, upper}` repeated independently in every frame |
-| `keypoints` | Map from correspondence name to an explicit vertex/bone target |
+| `keypoints` | Map from correspondence name to an explicit vertex, triangle-surface or bone target |
 | `measurements` | Ordered array of requested rest-body tape functional names |
 
 Shared shape names are `height`, `weight`, `muscle`, `proportions` (within 0–1), or exact
@@ -311,6 +352,7 @@ Keypoint targets have one of these forms (syntax examples, not anatomical mappin
 ```json
 {
   "marked_surface_point": {"kind": "vertex", "index": 123},
+  "interior_surface_point": {"kind": "surface", "face": 42, "barycentric": [0.2, 0.3, 0.5]},
   "named_joint_head": {"kind": "bone_head", "bone": "EXACT_BONE_LABEL"},
   "named_joint_tail": {"kind": "bone_tail", "bone": "ANOTHER_EXACT_BONE_LABEL"}
 }
@@ -319,6 +361,9 @@ Keypoint targets have one of these forms (syntax examples, not anatomical mappin
 Vertex indices are zero-based final-model indices, not MakeHuman base-mesh indices. Bone heads
 and tails follow the same forward kinematics as the skinned surface. Unknown or out-of-range
 targets, non-unit axes and duplicate target definitions under different names are refused.
+Surface targets use the triangle's original vertex order and nonnegative weights summing to one
+within `1e-12`; weights are never silently normalized. The target interpolates the three **posed**
+vertices, so an interior point follows actual skinning instead of a blended rest-frame transform.
 
 The `fit` object has exactly the `ftx-body-fit-input/1` contract:
 

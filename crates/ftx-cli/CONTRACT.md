@@ -16,6 +16,18 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   malformed input still refuses. Distorted cameras show projected vertices without invented
   straight lens-warped edges. `INITIALIZATION_REVIEW` and exact original/source/model bindings
   establish no optimized body, observability, fit acceptance, collision skin or READY status.
+- `ftx measure body-target-review INPUT --model MODEL --out NEW_DIR [--json]` and
+  `ftx measure body-targets ANNOTATIONS --model MODEL --out NEW_DIR [--json]`: author named
+  correspondences on the exact array-verified converted model in a private offline mesh picker,
+  then materialize the ordinary capture/prepared-fit input through native target validation.
+  The unfitted rest preview uses declared fixed shape and midpoints of free shape bounds;
+  surface selections preserve original triangle/barycentric identities, vertices preserve indices,
+  and rig endpoints use exact bone labels. Empty target maps can be reviewed without placeholder
+  anatomy. Application requires all observed names and rejects duplicates/invalid locations.
+  Browser annotations carry only source/model bindings and the target map; native reconstruction
+  preserves every other input value, including full-width timestamps, and rebases capture paths.
+  New private directories, exact original bytes and report-last publication retain existing rules.
+  No automatic anatomical mapping, photo observation, fit, READY or physical-accuracy approval.
 - `ftx measure video-mask-review MANIFEST.json --out NEW_DIR [--json]` and
   `ftx measure video-masks POLYGONS.json --out NEW_DIR [--json]`: author person/sheet sharpness
   regions in a private offline editor, then materialize opaque binary PNGs using the existing native

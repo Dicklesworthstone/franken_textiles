@@ -27,9 +27,18 @@ use crate::{Args, bad_input, known_options, read_json, required};
 mod capture;
 mod review;
 mod start_review;
+mod targets;
 
 pub(super) fn capture_review(args: &Args) -> Result<(Value, i32, String), Refusal> {
     capture::run(args)
+}
+
+pub(super) fn target_review(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    targets::review(args)
+}
+
+pub(super) fn apply_targets(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    targets::apply(args)
 }
 
 pub(super) fn fit_start_review(args: &Args) -> Result<(Value, i32, String), Refusal> {
@@ -256,6 +265,25 @@ fn surface_identity(indices: [usize; 3], weights: [f64; 3]) -> Vec<(usize, u64)>
 
 impl Adapter {
     fn new(model: AnnyModel, config: Configuration, hash: &str) -> Result<Self, Refusal> {
+        Self::checked(model, config, hash, false)
+    }
+
+    // Target authoring must bootstrap an empty map without inventing a model correspondence.
+    // Ordinary fitting and materialization still require at least one authored target.
+    fn for_target_review(
+        model: AnnyModel,
+        config: Configuration,
+        hash: &str,
+    ) -> Result<Self, Refusal> {
+        Self::checked(model, config, hash, true)
+    }
+
+    fn checked(
+        model: AnnyModel,
+        config: Configuration,
+        hash: &str,
+        allow_empty_targets: bool,
+    ) -> Result<Self, Refusal> {
         if hash != config.model_sha256
             || hash.len() != 64
             || model.data().header.anny_version != "0.6.1"
@@ -272,7 +300,7 @@ impl Adapter {
             || !config.root_translation_m.is_finite()
             || !config.root_rotation_rad.is_finite()
             || config.root_rotation_rad.norm() > std::f64::consts::PI
-            || config.keypoints.is_empty()
+            || (!allow_empty_targets && config.keypoints.is_empty())
             || config.keypoints.len() > 128
             || config.measurements.len() > 32
             || config.joints.len() > 32
