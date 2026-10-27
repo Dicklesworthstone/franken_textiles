@@ -272,6 +272,28 @@ fn sheet_review(
     Ok((artifact, text))
 }
 
+fn silhouette_editability(frame: &FitFrame, capture: &Value) -> (bool, &'static str) {
+    if capture["silhouette_input"]["masks"]
+        .as_array()
+        .is_some_and(|masks| masks.iter().any(|mask| mask["frame"] == json!(frame.frame)))
+    {
+        return (
+            false,
+            "Imported mask samples are read-only. Correct their original source and prepare a new review.",
+        );
+    }
+    if silhouette::require_rectified(&frame.camera).is_err() {
+        return (
+            false,
+            "Silhouette authoring requires a valid camera with zero lens distortion. Rectify the image, keypoints and calibration together; do not just zero coefficients.",
+        );
+    }
+    (
+        true,
+        "The checked camera permits sampled silhouettes. Confirm that image, keypoints and calibration share the same rectified coordinates.",
+    )
+}
+
 pub(super) fn prepare_capture(
     request: &super::Request,
     capture: &Value,
@@ -295,7 +317,8 @@ pub(super) fn prepare_capture(
          <title>Review capture before fitting</title>\
          <style>body{font:16px system-ui;max-width:1100px;margin:2em auto;padding:0 1em}svg{width:100%;max-height:75vh;border:1px solid #888}\
          section{margin:2em 0}td,th{padding:.4em;text-align:left;overflow-wrap:anywhere}table{width:100%;table-layout:fixed}p{line-height:1.5}\
-         button,input{font:inherit;padding:.3em}input{width:9em}label{margin-right:1em}tr[data-changed=true]{background:#fff2cf}\
+         button,input,select,textarea{font:inherit;padding:.3em}input{width:9em}input[type=checkbox]{width:auto}textarea{width:95%;max-width:45em}\
+         label{margin-right:1em}fieldset{margin:1em 0}tr[data-changed=true]{background:#fff2cf}\
          button[aria-pressed=true]{outline:3px solid #0369a1}svg[data-editing=true]{cursor:crosshair}[hidden]{display:none!important}</style>\
          <h1>Review capture before fitting</h1>\
          <p>PREPARED means current source selection and sheet cameras passed their checks. No body model was loaded or fitted. \
@@ -303,7 +326,7 @@ pub(super) fn prepare_capture(
          on each original image. Correct coordinates below, then generate a new review directory from the downloaded input. \
          No points or partitions were inferred. Pixels retain their stored orientation and lens distortion.</p>\
          <p>This does not establish anatomical correspondence, observability, physical accuracy, READY measurements or garment fit. \
-         Supplied silhouette samples appear as read-only scanlines; segmentation and occlusion remain caller-reviewed.</p>\
+         Sampled silhouettes are caller-reviewed constraints. Inline samples can be authored on checked rectified frames; imported masks remain read-only.</p>\
          <p><a href=\"capture.json\">Original input for fit-body (requires original source files)</a> · \
          <a href=\"original-input.json\">Original input bytes</a> · <a href=\"review.json\">Complete preparation evidence</a></p>",
     );
@@ -325,9 +348,34 @@ pub(super) fn prepare_capture(
         <label>X (px) <input id=\"editX\" type=\"number\" step=\"any\" disabled></label>\
         <label>Y (px) <input id=\"editY\" type=\"number\" step=\"any\" disabled></label>\
         <button id=\"applyPoint\" type=\"submit\" disabled>Apply coordinates</button></form>\
+        <fieldset id=\"silhouetteFields\" disabled><legend>Author sampled body silhouettes</legend>\
+        <p>Use already rectified images and cameras. Declare FIT/CHECK slices before fitting and describe clothing and occluders. \
+        These are manually observed foreground intervals, not automatic segmentation or evidence of real-body accuracy. \
+        Existing slice locations, roles and sigmas stay fixed while correcting endpoints.</p>\
+        <label>Frame <select id=\"silhouetteFrame\"><option value=\"\">Choose frame</option></select></label>\
+        <p id=\"silhouetteAvailability\"></p><fieldset id=\"silhouetteInputs\" disabled><legend>Slice and observed foreground</legend>\
+        <label>Slice <select id=\"silhouetteLine\"><option value=\"\">New slice</option></select></label>\
+        <label>Axis <select id=\"silhouetteAxis\"><option value=\"\">Choose axis</option>\
+        <option value=\"horizontal\">Horizontal (fixed y)</option><option value=\"vertical\">Vertical (fixed x)</option></select></label>\
+        <label>Fixed coordinate (px) <input id=\"silhouetteAt\" type=\"number\" step=\"any\" min=\"0\"></label>\
+        <label>Role <select id=\"silhouettePartition\"><option value=\"\">Choose FIT or CHECK</option>\
+        <option value=\"fit\">FIT</option><option value=\"held_out\">CHECK</option></select></label>\
+        <label>Sigma (px) <input id=\"silhouetteSigma\" type=\"number\" step=\"any\" min=\"0.000001\" max=\"1000000\"></label>\
+        <p><label>Foreground intervals: one increasing start, end pair per line<br>\
+        <textarea id=\"silhouetteIntervals\" rows=\"3\" placeholder=\"120.5, 245.5&#10;310.5, 380.5\"></textarea></label><br>\
+        <label><input id=\"silhouetteBackground\" type=\"checkbox\">Explicit empty/background slice</label></p>\
+        <p><label>Evidence for this frame: contour definition, clothing and occluders<br>\
+        <textarea id=\"silhouetteEvidence\" rows=\"3\"></textarea></label></p>\
+        <p>Enter intervals directly, or choose <strong>Pick endpoints on image</strong>, then click start and end in increasing order. \
+        Clicks supply positions along the declared slice; coordinates are not rounded or clamped. \
+        At most 64 unique slices and eight disjoint intervals per slice; a silhouette needs some foreground.</p>\
+        <button id=\"prepareSilhouette\" type=\"button\">Pick endpoints on image</button> \
+        <button id=\"applySilhouette\" type=\"button\">Apply slice</button> \
+        <button id=\"removeSilhouette\" type=\"button\" disabled>Remove selected slice</button></fieldset>\
+        <button id=\"cancelSilhouette\" type=\"button\">Cancel pending silhouette edit</button></fieldset>\
         <p><button id=\"resetPoints\" type=\"button\">Reset all corrections</button> · \
         <a id=\"correctedInput\" download=\"capture-edited.json\" hidden>Download corrected input</a></p></div>\
-        <noscript><p>Point editing needs the supplied local script. The original review and input remain usable.</p></noscript>");
+        <noscript><p>Annotation editing needs the supplied local script. The original review and input remain usable.</p></noscript>");
     let mut frames = Vec::new();
     for (i, frame) in request.fit.frames.iter().enumerate() {
         let [w, h] = frame.image_size_px;
@@ -337,7 +385,13 @@ pub(super) fn prepare_capture(
             ));
         }
         let photograph = source_image(&mut bundle, capture, frame, i)?;
-        let (silhouette_svg, silhouette_text) = observed_silhouette(frame)?;
+        let (silhouette_svg, mut silhouette_text) = observed_silhouette(frame)?;
+        if silhouette_text.is_empty() {
+            silhouette_text =
+                "<div class=\"silhouette-review\"><p>No authored silhouette samples.</p></div>"
+                    .into();
+        }
+        let (silhouette_editable, silhouette_reason) = silhouette_editability(frame, capture);
         let name = photograph["file"].as_str().unwrap();
         let (sheet_svg, sheet_text) = sheet_review(&mut bundle, capture, frame, i, name)?;
         let mut svg = format!(
@@ -390,10 +444,10 @@ pub(super) fn prepare_capture(
         svg.push_str("</svg>\n");
         let svg_name = format!("frame-{i:04}.svg");
         let overlay = bundle.push(svg_name.clone(), svg.as_bytes().to_vec())?;
-        write!(page, "<section><h2>{} @ {} us</h2><p>{w} × {h} stored pixels; {}° clockwise rotation already applied. \
+        write!(page, "<section data-silhouette-editable=\"{silhouette_editable}\" data-silhouette-reason=\"{}\"><h2>{} @ {} us</h2><p>{w} × {h} stored pixels; {}° clockwise rotation already applied. \
             <a href=\"{svg_name}\">Original keypoint SVG</a></p>{svg}\
             <table><thead><tr><th>Name</th><th>Partition</th><th>Pixel x, y</th><th>Sigma px</th><th>Model target</th></tr></thead><tbody>{rows}</tbody></table>{silhouette_text}{sheet_text}</section>",
-            label(&frame.frame.stream), frame.frame.timestamp_us, frame.rotation_cw_deg).unwrap();
+            label(silhouette_reason), label(&frame.frame.stream), frame.frame.timestamp_us, frame.rotation_cw_deg).unwrap();
         let mut record = json!({"frame":frame.frame,"image_size_px":frame.image_size_px,
             "rotation_cw_deg":frame.rotation_cw_deg,"keypoints":frame.keypoints,
             "source_image":photograph,"keypoint_svg":overlay,"sheet_svg":sheet_svg});
@@ -869,6 +923,13 @@ mod tests {
             }),
         };
         let original = serde_json::to_value(&frame).unwrap();
+        assert!(silhouette_editability(&frame, &json!({})).0);
+        let imported = json!({"silhouette_input":{"masks":[{"frame":frame.frame}]}});
+        assert!(!silhouette_editability(&frame, &imported).0);
+        let unrelated = json!({"silhouette_input":{"masks":[{
+            "frame":{"stream":"other","timestamp_us":0}
+        }]}});
+        assert!(silhouette_editability(&frame, &unrelated).0);
         let (observed, text) = observed_silhouette(&frame).unwrap();
         assert_eq!(observed.matches("data-silhouette=").count(), 3);
         assert!(observed.contains("x1=\"20\" y1=\"0\" x2=\"20\" y2=\"99\""));
@@ -877,8 +938,12 @@ mod tests {
         assert!(text.contains("sigma 2 px"));
         assert!(!text.contains("<source>"));
         frame.camera.intrinsics.distortion.radial[0] = 0.01;
+        assert!(!silhouette_editability(&frame, &json!({})).0);
         assert!(observed_silhouette(&frame).is_err());
         frame.camera.intrinsics.distortion.radial[0] = 0.;
+        frame.camera.intrinsics.distortion.tangential[0] = 0.001;
+        assert!(!silhouette_editability(&frame, &json!({})).0);
+        frame.camera.intrinsics.distortion.tangential[0] = 0.;
         let (svg, data) = contours(&mesh, &frame).unwrap();
         assert!(svg.contains("x1=\"10\" y1=\"40\" x2=\"30\" y2=\"40\""));
         assert!(svg.contains("x1=\"50\" y1=\"40\" x2=\"70\" y2=\"40\""));

@@ -349,6 +349,176 @@ async function sheetReview(page, records = report) {
     await maskedPage.screenshot({path: path.join(out, "sampled-silhouettes.png"), fullPage: true});
     await maskedPage.locator("#resetPoints").click(); await hidden(maskedPage);
     assert.deepEqual(await maskedPage.locator("g[data-silhouette]").evaluateAll(ns => ns.map(n => n.outerHTML)), observedMarkup);
+    // Imported masks remain authoritative even if a caller tampers with the live DOM flag.
+    assert.equal(await maskedPage.locator('section[data-silhouette-editable="false"]').count(), 2);
+    await maskedPage.evaluate(() => {
+      document.querySelector("section").dataset.silhouetteEditable = "true";
+      const frame = document.getElementById("silhouetteFrame");
+      frame.value = "0"; frame.dispatchEvent(new Event("change", {bubbles: true}));
+      document.getElementById("applySilhouette").click();
+    });
+    await hidden(maskedPage);
+    assert.deepEqual(await maskedPage.locator("g[data-silhouette]").evaluateAll(ns => ns.map(n => n.outerHTML)), observedMarkup);
+    // Author inline sampled contours on the actual generated page, retaining the complete source
+    // binding. The native fixture keeps a separately prepared positive fit for this exact evidence.
+    const inlineDir = path.join(root, "inline-review"), inlineReport = read("inline-review/review.json");
+    const inlineReplay = read("inline-review/capture.json"), inlineGood = read("inline-good.json");
+    const disjoint = read("inline-disjoint.json").fit.frames[0].silhouette;
+    verifyFiles(inlineDir, inlineReport);
+    assert.equal(read("expected-inline-fit.json").status, "ACCEPTED");
+    assert.equal(read("inline-check-fit.json").solution, null);
+    const contour = await context.newPage();
+    await contour.goto(pathToFileURL(path.join(inlineDir, "index.html")).href);
+    await contour.waitForFunction(() => !document.getElementById("silhouetteFields").disabled);
+    assert.equal(await contour.locator('section[data-silhouette-editable="true"]').count(), 2);
+    assert.equal(await contour.locator("g[data-silhouette]").count(), 0);
+    async function declareSlice(i, line, evidence, page = contour) {
+      await page.locator("#silhouetteFrame").selectOption(String(i));
+      await page.locator("#silhouetteLine").selectOption("");
+      await page.locator("#silhouetteAxis").selectOption(line.axis);
+      await page.locator("#silhouetteAt").fill(String(line.at_px));
+      await page.locator("#silhouettePartition").selectOption(line.partition);
+      await page.locator("#silhouetteSigma").fill(String(line.sigma_px));
+      await page.locator("#silhouetteEvidence").fill(evidence);
+      await page.locator("#silhouetteBackground").setChecked(false);
+      await page.locator("#silhouetteIntervals").fill(line.intervals_px.map(pair => pair.join(", ")).join("\n"));
+      await page.locator("#silhouetteBackground").setChecked(line.intervals_px.length === 0);
+      await hidden(page);
+    }
+    await declareSlice(0, disjoint.lines[1], disjoint.evidence);
+    await contour.locator("#applySilhouette").click(); await hidden(contour);
+    assert.equal(await contour.locator("g[data-silhouette]").count(), 0);
+    const partialContour = structuredClone(inlineReplay);
+    partialContour.fit.frames[0].silhouette = {evidence: disjoint.evidence, lines: []};
+    for (const line of disjoint.lines) {
+      await declareSlice(0, line, disjoint.evidence);
+      await contour.locator("#applySilhouette").click();
+      partialContour.fit.frames[0].silhouette.lines.push(structuredClone(line));
+    }
+    await download(contour, "capture-disjoint-slices.json", partialContour);
+    assert.equal(await contour.locator("section").nth(0).locator("g[data-silhouette]").count(), 2);
+    // Existing evidence keeps its acquisition line, role and uncertainty during endpoint edits.
+    await contour.locator("#silhouetteLine").selectOption("0");
+    for (const id of ["silhouetteAxis", "silhouetteAt", "silhouettePartition", "silhouetteSigma"]) {
+      assert(await contour.locator("#" + id).isDisabled());
+    }
+    await contour.locator("#silhouetteIntervals").fill("101, 121\n201, 226");
+    await hidden(contour);
+    await contour.locator("#applySilhouette").click();
+    const movedContour = structuredClone(partialContour);
+    movedContour.fit.frames[0].silhouette.lines[0].intervals_px = [[101, 121], [201, 226]];
+    await download(contour, "capture-moved-slices.json", movedContour);
+    await contour.locator("#silhouetteLine").selectOption("1");
+    await contour.locator("#removeSilhouette").click();
+    movedContour.fit.frames[0].silhouette.lines.pop();
+    await download(contour, "capture-removed-slice.json", movedContour);
+    await contour.locator("#resetPoints").click(); await hidden(contour);
+    assert.equal(await contour.locator("g[data-silhouette]").count(), 0);
+    // A horizontal/vertical slice is a fixed coordinate. Actual image clicks supply only interval
+    // endpoints through the SVG inverse transform, including responsive sizing and CSS zoom.
+    await contour.setViewportSize({width: 600, height: 1000});
+    await contour.evaluate(() => document.body.style.zoom = 1.4);
+    const clickedLine = {axis: "vertical", at_px: 100.5, partition: "held_out", sigma_px: 2.5,
+      intervals_px: [[200, 250]]};
+    await declareSlice(1, clickedLine, disjoint.evidence);
+    await contour.locator("#silhouetteIntervals").fill("");
+    await contour.locator("#prepareSilhouette").click();
+    const contourSvg = contour.locator("section").nth(1).locator(":scope > svg");
+    async function contourClick(x, y) {
+      await contourSvg.scrollIntoViewIfNeeded();
+      const screen = await contourSvg.evaluate((svg, xy) => {
+        svg.addEventListener("click", e => {
+          const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
+          globalThis.__contourPixel = [p.x, p.y];
+        }, {once: true, capture: true});
+        const p = new DOMPoint(...xy).matrixTransform(svg.getScreenCTM()); return [p.x, p.y];
+      }, [x, y]);
+      await contour.mouse.click(...screen);
+      return contour.evaluate(() => globalThis.__contourPixel);
+    }
+    const firstEnd = await contourClick(120.25, 200.25);
+    await contour.locator("#applySilhouette").click(); await hidden(contour);
+    const secondEnd = await contourClick(80.5, 250.75);
+    await contour.locator("#applySilhouette").click();
+    const clickedContour = structuredClone(inlineReplay);
+    clickedContour.fit.frames[1].silhouette = {evidence: disjoint.evidence, lines: [
+      {...clickedLine, intervals_px: [[firstEnd[1], secondEnd[1]]]}]};
+    await download(contour, "capture-clicked-slice.json", clickedContour);
+    const contourUrl = await contour.locator("#correctedInput").getAttribute("href");
+    await contour.locator("#silhouetteIntervals").fill("250, 200");
+    await hidden(contour);
+    assert(await contour.evaluate(url => globalThis.__revoked.includes(url), contourUrl));
+    await contour.locator("#applySilhouette").click(); await hidden(contour);
+    await contour.locator("#cancelSilhouette").click(); await hidden(contour);
+    await contour.locator("#resetPoints").click();
+    for (const intervals of [[[100, 210], [200, 225]], [[100, 200], [200, 225]], [[-1, 120]], [[10, 1280]]]) {
+      await declareSlice(0, {...disjoint.lines[0], intervals_px: intervals}, disjoint.evidence);
+      await contour.locator("#applySilhouette").click(); await hidden(contour);
+      assert.equal(await contour.locator("g[data-silhouette]").count(), 0);
+    }
+    await contour.locator("#resetPoints").click();
+    for (let i = 0; i < inlineGood.fit.frames.length; ++i) {
+      const silhouette = inlineGood.fit.frames[i].silhouette;
+      // Native canonical order may start with background. Explicitly establish foreground first.
+      for (const line of [...silhouette.lines].sort((a, b) => Number(!a.intervals_px.length) - Number(!b.intervals_px.length))) {
+        await declareSlice(i, line, silhouette.evidence);
+        await contour.locator("#applySilhouette").click();
+      }
+    }
+    const authoredContour = structuredClone(inlineReplay);
+    authoredContour.fit.frames.forEach((f, i) => {
+      const silhouette = structuredClone(inlineGood.fit.frames[i].silhouette);
+      silhouette.lines.sort((a, b) => Number(!a.intervals_px.length) - Number(!b.intervals_px.length));
+      f.silhouette = silhouette;
+    });
+    const inlineFile = await download(contour, "capture-inline-silhouettes.json", authoredContour);
+    assert.equal(authoredContour.reviewed_sources_sha256, inlineReplay.reviewed_sources_sha256);
+    assert.equal(await contour.locator("g[data-silhouette]").count(), 10);
+    await contour.locator("#resetPoints").click(); await hidden(contour);
+    assert.equal(await contour.locator("g[data-silhouette]").count(), 0);
+    // Committing a contour cannot silently discard a still-visible point correction or a new
+    // observation awaiting placement. Both Apply and Remove must wait for explicit resolution.
+    for (const newPoint of [false, true]) for (const action of ["apply", "remove"]) {
+      const page = newPoint ? placing : contour, original = newPoint ? empty : inlineReplay;
+      await page.locator("#resetPoints").click();
+      for (const line of disjoint.lines) {
+        await declareSlice(0, line, disjoint.evidence, page);
+        await page.locator("#applySilhouette").click();
+      }
+      await page.locator("#silhouetteLine").selectOption(action === "apply" ? "0" : "1");
+      if (action === "apply") await page.locator("#silhouetteIntervals").fill("101, 121\n201, 226");
+      const pixel = newPoint ? p0.pixel_px : [original.fit.frames[0].keypoints[0].pixel_px[0] + .125,
+        original.fit.frames[0].keypoints[0].pixel_px[1]];
+      if (newPoint) await declare(0, p0);
+      else await page.locator('.edit-point[data-frame="0"][data-point="0"]').click();
+      await page.locator("#editX").fill(String(pixel[0]));
+      await page.locator("#editY").fill(String(pixel[1]));
+      const observedBefore = await page.locator("g[data-silhouette]").evaluateAll(nodes => nodes.map(n => n.outerHTML));
+      const button = page.locator(action === "apply" ? "#applySilhouette" : "#removeSilhouette");
+      await button.click(); await hidden(page);
+      assert.deepEqual(await page.locator("g[data-silhouette]").evaluateAll(nodes => nodes.map(n => n.outerHTML)), observedBefore);
+      assert.equal(await page.locator("#editX").inputValue(), String(pixel[0]));
+      assert.equal(await page.locator("#editY").inputValue(), String(pixel[1]));
+      if (newPoint) assert.equal(await page.locator("tbody tr").count(), 0);
+      else assert.deepEqual(await displayed(page, 0, 0), original.fit.frames[0].keypoints[0].pixel_px);
+      const expected = structuredClone(original);
+      expected.fit.frames[0].silhouette = structuredClone(disjoint);
+      if (newPoint && action === "remove") {
+        await page.locator("#cancelPoint").click();
+        assert.equal(await page.locator("tbody tr").count(), 0);
+      } else {
+        await page.locator("#applyPoint").click();
+        if (newPoint) expected.fit.frames[0].keypoints.push(structuredClone(p0));
+        else expected.fit.frames[0].keypoints[0].pixel_px = pixel;
+      }
+      await hidden(page);
+      await button.click();
+      if (action === "apply") expected.fit.frames[0].silhouette.lines[0].intervals_px = [[101, 121], [201, 226]];
+      else expected.fit.frames[0].silhouette.lines.pop();
+      await download(page, "capture-pending-" + (newPoint ? "new" : "existing") + "-" + action + ".json", expected);
+      await page.locator("#resetPoints").click(); await hidden(page);
+    }
+    verifyFiles(inlineDir, inlineReport);
     const staticContext = await browser.newContext({javaScriptEnabled: false, userAgent});
     observe(staticContext);
     const staticPage = await staticContext.newPage();
@@ -370,18 +540,21 @@ async function sheetReview(page, records = report) {
     assert(await unsafePage.locator("#applyPoint").isDisabled());
     assert(await unsafePage.locator("#preparePoint").isDisabled());
     assert.equal(await unsafePage.locator("#newPointFields").evaluate(n => n.disabled), true);
+    assert.equal(await unsafePage.locator("#silhouetteFields").evaluate(n => n.disabled), true);
     assert.equal(await unsafePage.locator("section > svg circle").count(), 20);
     assert((await unsafePage.locator("#captureInput").textContent()).includes("9007199254740993"));
     assert.deepEqual(errors, []);
     verifyFiles(maskDir, maskReport);
     assert.deepEqual(maskSources.map(file => hash(fs.readFileSync(path.join(root, file)))), maskHashes);
-    const allowed = [reviewDir, emptyDir, maskDir, path.join(root, "numeric-unsafe/review")].map(dir => pathToFileURL(dir + path.sep).href);
+    const allowed = [reviewDir, emptyDir, maskDir, inlineDir, path.join(root, "numeric-unsafe/review")].map(dir => pathToFileURL(dir + path.sep).href);
     assert(requests.every(r => r.method === "GET" && allowed.some(prefix => r.url.startsWith(prefix))));
     verifyFiles();
     console.log(JSON.stringify({status: "PASS", frames: 2, points: 20, clickLayouts: 3,
       invalidEdits: 5, correctedFile: final, sha256: hash(fs.readFileSync(final)),
       initiallyPlaced: 20, annotatedFile, annotatedSha256: hash(fs.readFileSync(annotatedFile)), errors, requests,
       observedSlices: 10, sheetPoints, maskedFile, maskedSha256: hash(fs.readFileSync(maskedFile)),
+      authoredSlices: 10, inlineFile, inlineSha256: hash(fs.readFileSync(inlineFile)),
+      crossEditorPendingCases: 4,
       boundary: "Synthetic actual page and data only; fit acceptance is a separate ordinary CLI run"}, null, 2));
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

@@ -55,10 +55,16 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   sheet edit/detection, physical reference or calibration accuracy approval occurs in the page.
   Optional capture `silhouettes` paths or the review flag reuse the strict mask reader without a
   body model. Inline/imported slices pass existing rectification and interval checks, then appear
-  as read-only observed FIT/CHECK foreground/background lines with original sigma/evidence.
+  as observed FIT/CHECK foreground/background lines with original sigma/evidence.
   Replay rereads source masks and binds manifest bytes, samples and decoded hashes; changed sources
   refuse. No-manifest digests are unchanged. Neither a manifest nor inline constraints can be
   overwritten by another declaration. No segmentation, full-mask or occlusion approval follows.
+  The local editor authors inline sampled silhouettes on checked rectified frames: explicit
+  axis/position, foreground intervals or background, FIT/CHECK role, sigma and clothing/occlusion
+  evidence. Existing slices retain their axis/position/role/sigma during endpoint corrections.
+  Imported mask frames remain read-only, distorted cameras refuse authoring, and invalid or
+  pending edits withdraw downloads. The ordinary inline schema and fitter retain validation,
+  held-out isolation and acceptance authority; no inferred contour or body-fit approval.
   New unbound reviews may declare explicit `frame` identities instead of full `source` records,
   omitting calibration hashes. Existing selection/camera checks resolve those exact timestamps;
   replay contains full sources/hashes and preserves authored targets, observations and starts.
