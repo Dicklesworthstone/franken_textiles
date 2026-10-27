@@ -3917,7 +3917,7 @@ test('compiled WASM purchases exact catalog yarn by mass and exposes complete co
     const order=inventory.purchasing.material_orders[0].least_observed_order;
     assert.equal(order.quote.unit,'kilogram'); assert.equal(order.order_quantity,0.0002);
     assert.ok(Math.abs(order.yarn_linear_density_kg_m-0.000024)<1e-18);
-    assert.equal(order.within_observed_continuous_limit,null);
+    assert.equal(Object.hasOwn(order,'within_observed_continuous_limit'),false);
     assert.deepEqual(result.result.comparison.frontier,['original']);
   });
 
