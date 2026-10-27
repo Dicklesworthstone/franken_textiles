@@ -3,6 +3,73 @@
 use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::thermal::steady::request::{Request, SurfaceConditions};
 
+/// Evaluate a source-bearing material selection at one temperature in degrees Celsius.
+/// Returns the same `ftx-thermal-point/1` report as `ftx-materials thermal-at`, including the
+/// frozen selection. An embedded selection preserves its source lock and estimate policy.
+///
+/// # Errors
+/// Selection over 64 MiB, invalid JSON, changed sources, missing/unadmitted heat storage or
+/// transport, invalid temperature, or temperature extrapolation.
+pub fn point(selection: &str, temperature_c: f64) -> Result<String, Refusal> {
+    if selection.len() > 64 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "material input exceeds 64 MiB",
+        ));
+    }
+    let invalid =
+        |error: serde_json::Error| Refusal::new(RefusalCode::InvalidDocument, error.to_string());
+    let selection = serde_json::from_str(selection).map_err(invalid)?;
+    let result = ftx_drape::thermal::request::point(
+        &selection,
+        temperature_c,
+        &ftx_pattern::textile_import::catalog()?,
+    )?;
+    serde_json::to_string(&result).map_err(invalid)
+}
+
+/// Browser binding for the source-qualified material point consumer, without file or network I/O.
+///
+/// # Errors
+/// The same evidence, source-lock and temperature refusals as [`point`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn thermal_at(selection: &str, temperature_c: f64) -> Result<String, wasm_bindgen::JsError> {
+    point(selection, temperature_c).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
+/// Advance `ftx-thermal-transient/1` JSON through the identical shared request as the native CLI.
+/// Returns the complete `ftx-thermal-transient-report/1` history, frozen material snapshots and
+/// signed energy accounting. Optional source-qualified exterior exchange is preserved.
+///
+/// # Errors
+/// Input over 64 MiB, invalid JSON/schema, exceeded cell/step/trace budgets, missing evidence or
+/// consent, changed sources, temperature extrapolation or any failed step. No partial history.
+pub fn transient(input: &str) -> Result<String, Refusal> {
+    if input.len() > 64 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "material input exceeds 64 MiB",
+        ));
+    }
+    let invalid =
+        |error: serde_json::Error| Refusal::new(RefusalCode::InvalidDocument, error.to_string());
+    let request: ftx_drape::thermal::request::Request =
+        serde_json::from_str(input).map_err(invalid)?;
+    let result = request.evaluate(&ftx_pattern::textile_import::catalog()?)?;
+    serde_json::to_string(&result).map_err(invalid)
+}
+
+/// Browser binding for bounded dry layer transients with the same native source and physics rules.
+///
+/// # Errors
+/// The same evidence, budget, boundary and solver refusals as [`transient`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn thermal_transient(input: &str) -> Result<String, wasm_bindgen::JsError> {
+    transient(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Evaluate qualified clearance changes followed by dry thermal holds, retaining material heat
 /// state, mass and source-locked final selections. Mechanical work is not injected as heat.
 /// This is the same local operation as `ftx materials thermal-compression`.

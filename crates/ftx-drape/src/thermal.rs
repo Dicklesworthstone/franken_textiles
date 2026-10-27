@@ -14,6 +14,7 @@ pub mod compression;
 pub mod exterior;
 mod heating;
 mod nonlinear;
+pub mod request;
 pub mod steady;
 pub mod surface;
 pub mod vapor;

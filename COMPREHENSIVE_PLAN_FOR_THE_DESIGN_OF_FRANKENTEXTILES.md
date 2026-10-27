@@ -4025,6 +4025,20 @@ heterogeneous seam laws and empirical warmth claims. Matched physical seam/closu
 and garment validation remain under `ftx-tm5` and `ftx-tmf`. See
 [steady-thermal-coverage.md](docs/steady-thermal-coverage.md).
 
+### 25.107 Published material laws reach standalone browser heating and cooling
+
+Standalone point and transient thermal calculations now share one source-resolving authority
+between the native workbench and WebAssembly. Browser clients can evaluate a selected material at
+a stated temperature, or integrate a layered heating/cooling history with the existing prescribed
+films and qualified exterior exchange. Temperature-dependent source laws, material enthalpy,
+estimate consent, applicability domains and finite work/trace limits retain the native behavior.
+
+The browser accepts original catalog selections or exact frozen selections, and the existing
+native report schemas remain stable. This makes the published Cotton Duck linear-Cp alternative
+usable in browser transient calculations without adding another solver or duplicating the workflow.
+The implementation is tracked by `ftx-tma.2`; measured garment validation, absent material
+observations, comfort physiology and graphical history-authoring controls remain separate work.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

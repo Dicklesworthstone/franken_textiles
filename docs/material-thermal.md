@@ -18,6 +18,53 @@ step count and trace interval. An empty interface array is correct for a one-lay
 declared perfect thermal contact, not an estimated air gap. Zero film resistance prescribes a surface
 temperature; it does not supply a wind model.
 
+## Browser and shared Rust API
+
+The generated WebAssembly module exposes `thermal_transient(input_json)` with the same request
+and complete report as the native command. `thermal_at(selection_json, temperature_c)` returns
+the same `ftx-thermal-point/1` report as `ftx-materials thermal-at`, and accepts either a catalog ID
+selection or a complete frozen selection. Both are local, synchronous calls with no file or network
+access; callers can place repeated runs in a Web Worker.
+
+```js
+import init, { thermal_at, thermal_transient } from "./ftx_wasm.js";
+await init();
+const selection = {
+  id: "nist/7282/cotton-duck-linear-cp",
+  allow_estimates: true
+};
+const point = JSON.parse(thermal_at(JSON.stringify(selection), 50));
+const history = JSON.parse(thermal_transient(JSON.stringify({
+  schema: "ftx-thermal-transient/1",
+  layers: [point.selection],
+  interface_resistance_m2_k_w: [],
+  cells_per_layer: 4,
+  area_m2: 1,
+  inside_c: 35,
+  outside_c: 20,
+  inside_resistance_m2_k_w: 0.1,
+  outside_resistance_m2_k_w: 0.1,
+  initial_temperature_c: 23,
+  step_seconds: 0.5,
+  steps: 20,
+  record_every: 5
+})));
+```
+
+This example's area, boundaries and schedule are illustrative. The historical Cotton Duck model
+requires estimate consent and admits only the common 20–70 °C characterization interval. Its frozen
+selection carries the source record and digest; changing an observation while keeping its digest
+refuses. Missing heat capacity, disallowed estimates, source conflicts and extrapolation remain
+errors in the browser. See [the NIST source qualifications](nist-thermal-materials.md).
+
+Rust callers use `ftx_drape::thermal::request::point` and `Request::evaluate` with an explicit
+catalog; complete frozen selections replay with an empty catalog. The native and browser adapters
+delegate to this one authority. Requests retain the existing limits: 64 MiB JSON at the adapters,
+4096 cells, 100,000 steps, ten million cell steps and one million retained temperature values.
+Invalid stack dimensions refuse before material snapshots are expanded. A failed step returns
+no partial history. Optional source-qualified `exterior_exchange` supports the same convection
+and radiation behavior in both adapters; see [exterior exchange](exterior-thermal-exchange.md).
+
 ## What is solved
 
 Each layer supplies effective resistance R (m² K/W), areal mass (kg/m²) and specific heat (J/(kg K)).
@@ -47,10 +94,11 @@ films and latent heat; it does not add evaporation to this dry transient model.
 
 ## Scope and next acceptance work
 
-This is a constant-property effective **dry one-dimensional model**, not a prediction of garment
+This is an effective **dry one-dimensional model** with constant or source-qualified
+temperature-dependent properties, not a prediction of garment
 comfort, safe outdoor temperature or survival time. It does not yet extract air gaps from the draped
 mesh, change loft with pressure, model liquid/vapor transport or evaporation, infer wind-dependent
-films, solve radiation, include seam thermal bridges, or simulate human thermoregulation. Effective
+films, include seam thermal bridges in this transient, or simulate human thermoregulation. Effective
 R and cp must be qualified for the specimen and relevant conditions; a small energy residual only
 checks the numerical balance, not the empirical model. Geometry and material parameters are held
 fixed throughout each run; time-varying boundaries are available through the Rust API.

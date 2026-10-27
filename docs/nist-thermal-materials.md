@@ -32,6 +32,13 @@ user inputs**, not a measured experiment. Swap only a selected catalog ID to rec
 The same `Selection` and compiled thermal laws reach the existing layer, surface and coverage
 solvers. Mechanical simulation still refuses any required missing mechanical coefficients.
 
+The browser uses the same point and transient request authority through
+`thermal_at(selection_json, temperature_c)` and `thermal_transient(input_json)` in the generated
+WebAssembly module. Both retain the source lock, explicit estimate policy, common temperature
+domain and complete native output. The point result's frozen selection can replace a transient
+layer for replay. [The browser example](material-thermal.md#browser-and-shared-rust-api) runs the
+Cotton Duck linear fit without file access; it does not add garment validation or inferred weather.
+
 ## Coverage
 
 All IDs start with `nist/7282/`. Construction is `sheet` unless established more specifically;

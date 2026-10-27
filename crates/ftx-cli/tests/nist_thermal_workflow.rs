@@ -276,3 +276,46 @@ fn unapproved_extrapolated_incomplete_and_malformed_requests_publish_no_result()
     input["layers"][0]["allow_estimates"] = json!(false);
     refused(&transient(&input).0);
 }
+
+#[test]
+fn native_point_and_signed_transients_match_the_portable_request_authority_completely() {
+    use ftx_drape::thermal::request::{self, Request};
+    use ftx_pattern::{material_catalog::Selection, textile_import::catalog};
+
+    let db = catalog().unwrap();
+    let selection = Selection {
+        id: "nist/7282/cotton-duck-linear-cp".into(),
+        allow_estimates: true,
+        ..Selection::default()
+    };
+    assert_eq!(
+        success(&command(&[
+            "thermal-at",
+            &selection.id,
+            "50",
+            "--allow-estimates"
+        ])),
+        request::point(&selection, 50.0, &db).unwrap()
+    );
+    for cooling in [false, true] {
+        let mut input = fixture();
+        input["layers"][0]["id"] = json!(selection.id);
+        if cooling {
+            input["initial_temperature_c"] = json!(50.0);
+            input["inside_c"] = json!(20.0);
+            input["outside_c"] = json!(35.0);
+        }
+        let request: Request = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(
+            success(&transient(&input).0),
+            request.evaluate(&db).unwrap()
+        );
+    }
+    let malformed = command(&["thermal-at", &selection.id, "50C", "--allow-estimates"]);
+    refused(&malformed);
+    let error: Value = serde_json::from_slice(&malformed.stderr).unwrap();
+    assert_eq!(
+        error["refusal"]["message"],
+        "temperature must be in degrees Celsius"
+    );
+}

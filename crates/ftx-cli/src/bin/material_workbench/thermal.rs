@@ -1,10 +1,9 @@
 //! Bounded CLI adapter for the shared dry thermal solver. All material evidence policies survive.
 
 use ftx_core::Refusal;
-use ftx_drape::thermal::{Boundary, DryThermalModel, steady::exterior::Exterior};
+use ftx_drape::thermal::request::{self, Request as Input};
 use ftx_pattern::{material_catalog::Selection, textile_import::catalog};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{invalid, read};
 
@@ -12,193 +11,19 @@ pub(super) fn point(id: &str, temperature: &str, allow_estimates: bool) -> Resul
     let t: f64 = temperature
         .parse()
         .map_err(|_| invalid("temperature must be in degrees Celsius"))?;
-    let snapshot = catalog()?.resolve(&Selection {
-        id: id.into(),
-        allow_estimates,
-        ..Selection::default()
-    })?;
-    let law = ftx_pattern::material_thermal::ThermalLaw::from_material(
-        snapshot.material(),
-        snapshot.allows_estimates(),
-    )?;
-    let resistance = law.resistance_at(t)?;
-    let capacity = law.capacity_at(t)?;
-    Ok(json!({"schema":"ftx-thermal-point/1", "temperature_c":t,
-        "temperature_domain_c":law.domain(), "resistance_m2_k_w":resistance,
-        "areal_heat_capacity_j_m2_k":capacity, "selection":snapshot.frozen_selection(),
-        "material":snapshot, "model":"effective dry sheet at the stated material temperature",
-        "uncertainty_propagated":false, "comfort_claim":false, "empirical_validation_claim":false}))
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Input {
-    schema: String,
-    layers: Vec<Selection>,
-    interface_resistance_m2_k_w: Vec<f64>,
-    cells_per_layer: usize,
-    area_m2: f64,
-    inside_c: f64,
-    outside_c: f64,
-    inside_resistance_m2_k_w: f64,
-    outside_resistance_m2_k_w: f64,
-    #[serde(default)]
-    exterior_exchange: Option<Exterior>,
-    initial_temperature_c: f64,
-    step_seconds: f64,
-    steps: usize,
-    record_every: usize,
+    request::point(
+        &Selection {
+            id: id.into(),
+            allow_estimates,
+            ..Selection::default()
+        },
+        t,
+        &catalog()?,
+    )
 }
 
 fn evaluate(input: Input) -> Result<Value, Refusal> {
-    let cells = input.layers.len().checked_mul(input.cells_per_layer);
-    if input.schema != "ftx-thermal-transient/1"
-        || !input.area_m2.is_finite()
-        || input.area_m2 <= 0.0
-        || input.steps == 0
-        || input.steps > 100_000
-        || input.record_every == 0
-        || cells
-            .and_then(|n| n.checked_mul(input.steps))
-            .is_none_or(|n| n > 10_000_000)
-        || !input.step_seconds.is_finite()
-        || input.step_seconds <= 0.0
-        || !(input.steps as f64 * input.step_seconds).is_finite()
-    {
-        return Err(invalid(
-            "invalid thermal schema, area, time or integration budget (at most 10 million cell steps)",
-        ));
-    }
-    let frames = input.steps / input.record_every + 2;
-    if cells
-        .and_then(|n| n.checked_mul(frames))
-        .is_none_or(|n| n > 1_000_000)
-    {
-        return Err(invalid(
-            "thermal trace exceeds one million temperature values; increase record_every",
-        ));
-    }
-    let db = catalog()?;
-    let layers = input
-        .layers
-        .iter()
-        .map(|s| db.resolve(s))
-        .collect::<Result<Vec<_>, _>>()?;
-    let model = DryThermalModel::new(
-        layers,
-        input.interface_resistance_m2_k_w,
-        input.cells_per_layer,
-    )?;
-    let b = Boundary {
-        inside_c: input.inside_c,
-        outside_c: input.outside_c,
-        inside_resistance: input.inside_resistance_m2_k_w,
-        outside_resistance: input.outside_resistance_m2_k_w,
-    };
-    let (steady, steady_exchange) = match &input.exterior_exchange {
-        Some(e) => {
-            let solved = model.steady_exterior(b, e)?;
-            (solved.state, Some(solved.exchange))
-        }
-        None => (model.steady(b)?, None),
-    };
-    let mut temperatures = vec![input.initial_temperature_c; model.cells()];
-    let mut trace = vec![json!({"time_seconds":0.0,"temperature_c":temperatures})];
-    let mut stored = 0.0;
-    let mut incoming = 0.0;
-    let mut outgoing = 0.0;
-    let mut convective = 0.0;
-    let mut radiative = 0.0;
-    let mut max_balance_error = 0.0_f64;
-    for i in 1..=input.steps {
-        let (state, exchange) = match &input.exterior_exchange {
-            Some(e) => {
-                let next = model.advance_exterior(&temperatures, input.step_seconds, b, e)?;
-                (next.state, Some(next.exchange))
-            }
-            None => (model.advance(&temperatures, input.step_seconds, b)?, None),
-        };
-        stored += input.area_m2 * state.stored_change_j_m2;
-        incoming += input.area_m2 * input.step_seconds * state.inside_flux_w_m2;
-        outgoing += input.area_m2 * input.step_seconds * state.outside_flux_w_m2;
-        max_balance_error = max_balance_error.max(input.area_m2 * state.balance_error_j_m2.abs());
-        let inside_w = input.area_m2 * state.inside_flux_w_m2;
-        let outside_w = input.area_m2 * state.outside_flux_w_m2;
-        let (convective_w, radiative_w) = match &exchange {
-            Some(e) => (
-                input.area_m2 * e.convective_flux_w_m2,
-                input.area_m2 * e.radiative_flux_w_m2,
-            ),
-            None => (0., 0.),
-        };
-        convective += input.step_seconds * convective_w;
-        radiative += input.step_seconds * radiative_w;
-        if [
-            stored,
-            incoming,
-            outgoing,
-            max_balance_error,
-            inside_w,
-            outside_w,
-            convective_w,
-            radiative_w,
-            convective,
-            radiative,
-        ]
-        .iter()
-        .any(|v| !v.is_finite())
-        {
-            return Err(invalid(
-                "thermal area-scaled heat or accumulated energy overflow",
-            ));
-        }
-        temperatures = state.temperature_c;
-        if i % input.record_every == 0 || i == input.steps {
-            let mut sample = json!({"time_seconds":i as f64*input.step_seconds,"temperature_c":temperatures,
-                "inside_heat_w":inside_w,"outside_heat_w":outside_w,
-                "stored_energy_change_j":stored});
-            if let Some(e) = exchange {
-                sample["exterior_exchange"] = json!({"field":e,
-                    "convective_heat_w":convective_w,"radiative_heat_w":radiative_w,
-                    "convective_energy_j":convective,"radiative_energy_j":radiative});
-            }
-            trace.push(sample);
-        }
-    }
-    let steady_w = input.area_m2 * steady.inside_flux_w_m2;
-    if !steady_w.is_finite() {
-        return Err(invalid("steady area-scaled heat overflow"));
-    }
-    let accuracy_note = if model.temperature_domain().is_some() {
-        "Condition-qualified temperature interpolation or published fit; enthalpy-conservative time stepping. No extrapolation. Refine cells_per_layer and step_seconds to check discretization error; this is not garment validation."
-    } else {
-        "Constant effective layer properties; refine cells_per_layer and step_seconds to check discretization error."
-    };
-    let mut result = json!({"schema":"ftx-thermal-transient-report/1","model":model.snapshot(),
-        "area_m2":input.area_m2,"step_seconds":input.step_seconds,"steps":input.steps,
-        "record_every":input.record_every,"inside_c":input.inside_c,"outside_c":input.outside_c,
-        "inside_resistance_m2_k_w":input.inside_resistance_m2_k_w,
-        "outside_resistance_m2_k_w":input.outside_resistance_m2_k_w,
-        "trace":trace,"steady_temperature_c":steady.temperature_c,"steady_heat_w":steady_w,
-        "incoming_energy_j":incoming,"outgoing_energy_j":outgoing,"stored_energy_change_j":stored,
-        "largest_step_energy_balance_error_j":max_balance_error,
-        "comfort_claim":false,"empirical_validation_claim":false,
-        "accuracy_note":accuracy_note});
-    if let Some(e) = input.exterior_exchange {
-        let steady_exchange = steady_exchange.expect("exterior branch solved");
-        let convective_w = input.area_m2 * steady_exchange.convective_flux_w_m2;
-        let radiative_w = input.area_m2 * steady_exchange.radiative_flux_w_m2;
-        if !convective_w.is_finite() || !radiative_w.is_finite() {
-            return Err(invalid("steady area-scaled exterior heat overflow"));
-        }
-        result["exterior_exchange"] = json!({"conditions":e,"steady":steady_exchange,
-            "steady_convective_heat_w":convective_w,"steady_radiative_heat_w":radiative_w,
-            "convective_energy_j":convective,"radiative_energy_j":radiative});
-        result["exterior_model"] = json!(
-            "prescribed convection; optional source-qualified opaque-gray large-isothermal-enclosure radiation; no wind correlation or interlayer radiation"
-        );
-    }
-    Ok(result)
+    input.evaluate(&catalog()?)
 }
 
 pub(super) fn run(path: &str) -> Result<Value, Refusal> {
@@ -208,6 +33,8 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftx_drape::thermal::{Boundary, DryThermalModel};
+    use serde_json::json;
 
     fn fixture() -> Input {
         serde_json::from_str(include_str!(
