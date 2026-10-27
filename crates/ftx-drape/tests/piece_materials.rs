@@ -293,6 +293,14 @@ fn piece_laws_drive_the_actual_sewn_garment_without_changing_its_pattern() {
     let contact = mixed.scene.solver.contact.as_ref().unwrap();
     assert_eq!(contact.params.thickness, 0.0003);
     assert_eq!(contact.params.mu, 0.2);
+    let mut expected_reactions = contact.reaction_map(&mixed.scene.solver.x).unwrap();
+    expected_reactions["material_report_sha256"] = json!(ftx_core::receipt::sha256_hex(
+        &serde_json::to_vec(&mixed.report["material"]).unwrap()
+    ));
+    assert_eq!(
+        mixed.report["contact_diagnostics"]["final_reactions"],
+        json!({"status":"available","result":expected_reactions})
+    );
 }
 
 #[test]

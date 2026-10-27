@@ -95,8 +95,17 @@ fn mid_loft_and_precompressed_insulations_change_shared_heat_results_and_mass_ob
         "pre-compressed Type B product; not an uncompressed precursor"
     );
     for material in [&mid_loft, &footwear] {
-        assert!(material.authored().properties["thermal_resistance"].bounds.is_none());
-        assert!(!material.material().properties.contains_key("thermal_conductivity"));
+        assert!(
+            material.authored().properties["thermal_resistance"]
+                .bounds
+                .is_none()
+        );
+        assert!(
+            !material
+                .material()
+                .properties
+                .contains_key("thermal_conductivity")
+        );
         assert!(!material.material().properties.contains_key("specific_heat"));
         let source_id = &material.authored().properties["thermal_resistance"].source;
         let source = &material.authored().sources[source_id];

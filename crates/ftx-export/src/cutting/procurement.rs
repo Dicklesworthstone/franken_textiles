@@ -1,10 +1,10 @@
 //! A computed marker's source-locked stock requirements feed the existing dated quote evaluator.
 //! Pure library boundary shared by CLI and potential browser consumers; no I/O or checkout action.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode};
-use ftx_pattern::material_cost::{Basis, QuoteBook, Scope};
+use ftx_pattern::material_cost::{Basis, Quote, QuoteBook, Scope};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -47,6 +47,47 @@ pub struct Market {
     pub split_orders: Option<allocation::Policy>,
 }
 
+// Every current base/tier SKU of one supplier is an inventory alias. Canonical market/as-of
+// selection includes unused bridging offers, without importing future or superseded identities.
+pub(crate) fn stock_components(quotes: &[&Quote]) -> (BTreeMap<String, usize>, usize) {
+    fn root(parents: &mut [usize], index: usize) -> usize {
+        let mut representative = index;
+        while parents[representative] != representative {
+            representative = parents[representative];
+        }
+        let mut next = index;
+        while parents[next] != next {
+            let previous = parents[next];
+            parents[next] = representative;
+            next = previous;
+        }
+        representative
+    }
+    let mut parents: Vec<_> = (0..quotes.len()).collect();
+    let mut owner = BTreeMap::new();
+    let mut count = 0;
+    for (index, quote) in quotes.iter().enumerate() {
+        for sku in std::iter::once(&quote.sku)
+            .chain(quote.price_breaks.iter().filter_map(|p| p.sku.as_ref()))
+        {
+            count += 1;
+            if let Some(previous) = owner.insert((&quote.supplier, sku), index) {
+                let left = root(&mut parents, index);
+                let right = root(&mut parents, previous);
+                parents[left] = right;
+            }
+        }
+    }
+    (
+        quotes
+            .iter()
+            .enumerate()
+            .map(|(i, q)| (q.offer_id.clone(), root(&mut parents, i)))
+            .collect(),
+        count,
+    )
+}
+
 /// Price each exact material's gross stock area in one whole order, including all of its markers.
 /// An empty offer sample for ANY material makes the total unknown, never zero or a partial total.
 /// This composes the existing `QuoteBook` policies; it does not reimplement quote/currency logic.
@@ -81,12 +122,7 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
             .push(index);
     }
     let multiple = groups.values().any(|indices| indices.len() > 1);
-    let mut priced = Vec::new();
-    let mut orders = Vec::new();
-    let mut complete = true;
-    let mut observed_quantity = true;
-    let mut continuous_limit = true;
-    let mut total = 0.0;
+    let mut prepared = Vec::with_capacity(groups.len());
     for indices in groups.values() {
         let roll = &plan.rolls[indices[0]];
         let mut area = 0.0;
@@ -125,11 +161,49 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
             require_observed_continuous_length: market.require_observed_continuous_length,
         };
         let sample = book.evaluate(&roll.material, &scope)?;
-        let cheapest = sample.offers.iter().min_by(|a, b| {
-            a.order_cost
-                .total_cmp(&b.order_cost)
-                .then_with(|| a.quote.offer_id.cmp(&b.quote.offer_id))
-        });
+        prepared.push((indices, area, length, longest, sample));
+    }
+    let current = book.latest_observations(&prepared[0].4.scope)?;
+    let (components, _) = stock_components(&current);
+    let mut owners: BTreeMap<usize, BTreeSet<&str>> = BTreeMap::new();
+    for (_, _, _, _, sample) in &prepared {
+        for offer in &sample.offers {
+            owners
+                .entry(components[&offer.quote.offer_id])
+                .or_default()
+                .insert(&sample.material_sha256);
+        }
+    }
+    let shared: BTreeSet<_> = owners
+        .iter()
+        .filter_map(|(&id, hashes)| (hashes.len() > 1).then_some(id))
+        .collect();
+    drop(owners);
+    let mut priced = Vec::new();
+    let mut orders = Vec::new();
+    let mut complete = true;
+    let mut observed_quantity = true;
+    let mut continuous_limit = true;
+    let mut total = 0.0;
+    for (indices, area, length, longest, sample) in prepared {
+        let roll = &plan.rolls[indices[0]];
+        // Separate snapshot orders cannot each consume the same physical stock. Keep canonical
+        // samples intact, but exclude ambiguous components before selecting independent minima.
+        let excluded: Vec<_> = sample
+            .offers
+            .iter()
+            .filter(|offer| shared.contains(&components[&offer.quote.offer_id]))
+            .map(|offer| &offer.quote.offer_id)
+            .collect();
+        let cheapest = sample
+            .offers
+            .iter()
+            .filter(|offer| !shared.contains(&components[&offer.quote.offer_id]))
+            .min_by(|a, b| {
+                a.order_cost
+                    .total_cmp(&b.order_cost)
+                    .then_with(|| a.quote.offer_id.cmp(&b.quote.offer_id))
+            });
         if let Some(offer) = cheapest {
             observed_quantity &= offer.quantity_sufficiency_observed;
             continuous_limit &= offer.within_observed_continuous_limit == Some(true);
@@ -163,21 +237,23 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
                     "required_length_m":marker.length_m,"required_stock_area_m2":marker.stock_area_m2,
                     "continuity":continuity,"material_order_index":order_index}));
             }
-            orders.push(json!({"material_order_index":order_index,"material_sha256":roll.material.sha256(),
+            let mut order = json!({"material_order_index":order_index,"material_sha256":roll.material.sha256(),
                 "roll_indices":indices,"required_length_m":length,"required_stock_area_m2":area,
                 "required_continuous_length_m":longest,
                 "marker_lengths_m":indices.iter().map(|&i| plan.rolls[i].length_m).collect::<Vec<_>>(),
-                "continuity":continuity,"least_observed_order":cheapest,"sample":sample}));
+                "continuity":continuity,"least_observed_order":cheapest,"sample":sample});
+            if !excluded.is_empty() {
+                order["excluded_shared_stock_offer_ids"] = json!(excluded);
+            }
+            orders.push(order);
         } else {
-            priced.push(
-                json!({"roll_index":indices[0],"material_sha256":roll.material.sha256(),
+            let mut order = json!({"roll_index":indices[0],"material_sha256":roll.material.sha256(),
             "required_length_m":roll.length_m,"required_stock_area_m2":roll.stock_area_m2,
-            "continuity":if cheapest.is_none() {"no_eligible_offer"}
-                else if cheapest.is_some_and(|offer| offer.within_observed_continuous_limit == Some(true)) {
-                    "within_observed_limit"
-                } else {"source_limit_unknown"},
-            "least_observed_order":cheapest,"sample":sample}),
-            );
+            "continuity":continuity,"least_observed_order":cheapest,"sample":sample});
+            if !excluded.is_empty() {
+                order["excluded_shared_stock_offer_ids"] = json!(excluded);
+            }
+            priced.push(order);
         }
     }
     priced.sort_by_key(|row| row["roll_index"].as_u64());
@@ -191,7 +267,8 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
             "An offer without available_quantity has unknown capacity; require_observed_quantity excludes it when quantified stock is required.",
             "Each actual marker needs one uninterrupted full-width segment; no marker or cutter is split to fit a supplier limit.",
             "A source maximum continuous cut is an upper limit, not guaranteed continuous inventory; unknown limits stay explicit unless require_observed_continuous_length excludes them.",
-            "The total is the sum of observed minimum whole-order costs, not a market percentile or an optimal nesting claim.",
+            "The total is the sum of observed minimum unambiguous whole-order costs, not a market percentile or an optimal nesting claim.",
+            "Current supplier/base/tier SKU aliases share one physical stock identity. Components offered to distinct required material snapshots are excluded from independent orders, including links through unused current offers; unresolved stock never supplies a complete total.",
             "Different material snapshots are not pooled even when their product IDs coincide."]});
     if multiple {
         result["material_orders"] = json!(orders);

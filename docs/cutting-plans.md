@@ -93,6 +93,14 @@ present only when every material has an eligible whole-order offer; otherwise it
 of the lowest
 observed whole-order costs per snapshot, not the sum of percentiles or a representative market estimate.
 Different snapshots, even sharing a product ID, are conservatively ordered separately.
+Their offers must also represent independent stock. Base and quantity-tier SKUs from the same
+supplier form transitive inventory aliases across the latest observations in the declared market.
+Links through unused or unavailable offers still identify the same stock; future and superseded
+observations do not. If one component offers stock to more than one required material snapshot,
+its eligible offers stay in the canonical price samples but cannot supply independent orders.
+Affected orders list `excluded_shared_stock_offer_ids`; another unambiguous offer may supply the
+material. Otherwise the complete total and observed-stock coverage remain unavailable, preserving
+the cut geometry and per-material price diagnostics. No cross-revision stock allocation is inferred.
 
 ## Planning at the source-reported lower width
 

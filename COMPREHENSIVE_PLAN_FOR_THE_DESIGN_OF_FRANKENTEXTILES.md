@@ -3335,6 +3335,58 @@ assembly mass keep their per-garment scope. Cross-garment scheduling and combine
 orders remain separate capabilities. Track this functional integration in `ftx-pb1`; see
 [material-sewing-plans.md](docs/material-sewing-plans.md#production-quantities-share-cutting-and-thread-purchasing).
 
+### 25.80 Compare source-bound body contact loads through actual scenarios
+
+Optional `contact_loads` evaluates the production contact model on the selected union of welded
+garment vertices, retaining material thickness, surface fields and seam envelopes. Initial and
+complete accepted-motion reports bind the exact retained material assignments, cloth/body geometry,
+active contact policy and selected source instances. Moving bodies keep those same material fields.
+Explicit vertex and candidate-pair allowances bound the additional evaluation; optional refusal
+preserves independently available motion, thermal and manufacturing outputs.
+
+Four nominal comparison metrics cover the initial resultant, initial maximum nodal force and their
+peaks across accepted motion. Admission reconciles complete sample histories, source ownership,
+independent initial collider identity, force-vector reductions, extrema witnesses and work totals.
+Browser tables expose region, vector components and sample/time/vertex witnesses; source replacement
+invalidates stale outputs. Force cancellation and mesh dependence remain explicit. These body barrier
+loads exclude tangential friction and are not contact pressure, empirical comfort, safe fit or
+continuous-time bounds. Track the slice in `ftx-cl1`; see
+[material-scenario-studies.md](docs/material-scenario-studies.md#body-contact-loads-in-material-studies).
+
+### 25.81 Connect sourced sewing yarn choices to the shared production inventory
+
+Four exact Coats Epic articles add published tex, put-up length and source-defined average strength
+to the existing yarn catalog, with original units, table page, edition, retrieval date and document
+hash. The resolver preserves both authored observations and normalized linear density. Exact frozen
+yarns can feed existing qualified sewing-consumption channels and separately observed length offers,
+including shared cutting/sewing production quantities. Package lengths do not invent purchasing
+increments, source averages do not establish seam-strength limits, and reported elongation ranges
+do not supply a constitutive law. No consumption coefficient, stock or price is fabricated.
+The catalog now contains 265 records; `ftx-yb1` tracks this source-qualified slice. See
+[supplier-apparel-catalog.md](docs/supplier-apparel-catalog.md#coats-epic-sewing-thread-observations-august-2026).
+
+### 25.82 Remaining functional priorities after source, load and production integration
+
+The principal physical acceptance gap remains `ftx-tm2` / `ftx-tm8`: exact specimen/lot and
+construction-dependent characterization, followed by held-out unchanged-pattern/body tests spanning
+linen, leather and performance knit. Published composition, mass, marketing stretch or thread counts
+cannot replace directional loading/recovery, bending, friction, compression and transport data.
+Preserve missing capabilities rather than making the demonstration pass through guessed laws.
+
+Add source-qualified treatment and laundering transitions for an exact fabric variant, process,
+cycle count and conditioning (`ftx-care1`). Connect admitted directional shrinkage to cloth rest
+geometry and optional pattern compensation, then recompute cutting yield and seam compatibility.
+Change mass, mechanical and thermal properties only where supported post-treatment evidence exists;
+retain unknown effects as unknown. Freeze before/after states and provenance for replay. Existing
+`shrinkage_warp` and `shrinkage_weft` observations currently have no such consumer and must not imply
+automatic treatment propagation.
+
+Complete actual multi-garment production scheduling (`ftx-pb2`) on top of shared quantities.
+Expand per-copy operation dependencies and qualified machine/fixture setup transitions, retain finite
+material and tool constraints, and expose a bounded incumbent when scheduling is incomplete. Batch
+thread demand is already aggregated; per-garment feed/setup durations must not masquerade as a
+validated cross-garment schedule. Keep hardware execution behind explicit machine/process qualification.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

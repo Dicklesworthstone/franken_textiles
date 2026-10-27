@@ -830,12 +830,30 @@ impl Contact {
     /// # Errors
     /// Invalid geometry, penetrating gaps or non-finite reactions. No physical pressure area is inferred.
     pub fn reaction_map(&self, x: &[Vec3]) -> Result<Value, Refusal> {
+        self.reaction_map_bounded(x, usize::MAX).map(|(map, _)| map)
+    }
+
+    // Bound expensive derivative evaluations for optional sampled consumers. Candidate generation
+    // remains the ordinary production broad phase; no pair can be dropped to meet this allowance.
+    pub(crate) fn reaction_map_bounded(
+        &self,
+        x: &[Vec3],
+        max_pairs: usize,
+    ) -> Result<(Value, usize), Refusal> {
         self.check_cloth(x)?;
+        let candidates = self.candidates(x, None, self.activation_range());
+        let pair_count = candidates.len();
+        if pair_count > max_pairs {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "contact-reaction pair-evaluation budget exhausted; no partial map published",
+            ));
+        }
         let mut body = vec![Vec3::ZERO; x.len()];
         let mut own = vec![Vec3::ZERO; x.len()];
         let mut policies = Vec::new();
         let mut barrier_energy_j = 0.;
-        for pair in self.candidates(x, None, self.activation_range()) {
+        for pair in candidates {
             let st = stencil(pair, x, &self.body, &self.cloth);
             let (kind, _) = classify(pair, &st.pts);
             let p = self.pair_params(pair);
@@ -879,7 +897,8 @@ impl Contact {
                 &serde_json::to_vec(v).expect("finite contact map identity"),
             )
         };
-        Ok(json!({"schema":"ftx-contact-reactions/1",
+        Ok((
+            json!({"schema":"ftx-contact-reactions/1",
             "barrier_energy_j":barrier_energy_j,
             "vertex_basis":"welded solver vertices; forces follow positions_m",
             "positions_m":x,"triangles":self.cloth.triangles,
@@ -890,7 +909,9 @@ impl Contact {
             "self_force_on_cloth_n":self.self_params.map(|_| own),
             "pressure_pa":null,
             "pressure_basis":"unavailable: no justified physical contact-area allocation",
-            "basis":"negative gradient of the accepted endpoint barrier energy including edge mollifiers; each assembled primitive once; excludes Coulomb friction and measured pressure/comfort/fit"}))
+            "basis":"negative gradient of the accepted endpoint barrier energy including edge mollifiers; each assembled primitive once; excludes Coulomb friction and measured pressure/comfort/fit"}),
+            pair_count,
+        ))
     }
 
     /// A contact state for a cloth with these triangles and rest positions (2D material coordinates
@@ -1615,6 +1636,11 @@ mod tests {
         assert_eq!(domain.minimum_active_gap_thickness_m, Some(p.thickness));
         assert!(sample.self_contact.is_none());
         let map = contact.reaction_map(&x).unwrap();
+        let (bounded, pairs) = contact.reaction_map_bounded(&x, usize::MAX).unwrap();
+        assert_eq!(bounded, map);
+        assert!(pairs >= 3);
+        assert_eq!(contact.reaction_map_bounded(&x, pairs).unwrap().0, map);
+        assert!(contact.reaction_map_bounded(&x, pairs - 1).is_err());
         let r = gap - p.dhat;
         // Independent derivative of -kappa*(g-dhat)^2*ln(g/dhat), in N.
         let expected = p.kappa * (2. * r * (gap / p.dhat).ln() + r * r / gap);

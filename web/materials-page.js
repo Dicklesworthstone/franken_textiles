@@ -302,6 +302,12 @@ function objectiveComparison(parent, r) {
     thread_required_length_m: "Required thread length",
     thread_observed_order_cost: "Complete thread order cost"
   };
+  const contactLabels = {
+    body_contact_resultant_n: "Initial body-contact resultant",
+    max_body_contact_vertex_force_n: "Initial maximum nodal body-contact force",
+    motion_peak_body_contact_resultant_n: "Motion peak body-contact resultant",
+    motion_max_body_contact_vertex_force_n: "Motion maximum nodal body-contact force"
+  };
   const textileWaterLabels = {
     textile_water_evaporated_mass_kg: "Evaporated textile water",
     textile_water_remaining_mass_kg: "Remaining textile liquid",
@@ -322,6 +328,14 @@ function objectiveComparison(parent, r) {
       "The requested instances define the spatial scope; motion extrema include the initial state and every accepted sample. " +
       "Inclusive constraints are declared design requirements. They do not establish fabric rupture limits, continuous-time bounds, wearer comfort or measured fit.";
     parent.append(strain);
+  }
+  if (metrics.some(o => Object.hasOwn(contactLabels, o.metric)) ||
+      r.policy.required_consumers?.some(name => ["contact_loads", "motion_contact_loads"].includes(name))) {
+    const contact = document.createElement("p");
+    contact.textContent = "Body-contact objectives use normal barrier forces in newtons over the selected garment vertices. " +
+      "Shared seam vertices count once, and opposite forces can cancel in a resultant. Nodal maxima depend on mesh resolution. " +
+      "Motion extrema cover the initial state and every accepted sample; these declared limits do not establish contact pressure, friction loads, comfort or measured fit.";
+    parent.append(contact);
   }
   if (metrics.some(o => Object.hasOwn(textileWaterLabels, o.metric))) {
     const textileWater = document.createElement("p");
@@ -358,7 +372,7 @@ function objectiveComparison(parent, r) {
     parent.append(water);
   }
   const t = table(parent, "Declared computed objectives — authoritative Rust comparison", ["Alternative", "Admission", "Dominated by",
-    ...metrics.map(o => `${wetFilmLabels[o.metric] || textileWaterLabels[o.metric] || strainLabels[o.metric] || threadLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
+    ...metrics.map(o => `${wetFilmLabels[o.metric] || textileWaterLabels[o.metric] || strainLabels[o.metric] || contactLabels[o.metric] || threadLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
   for (const row of r.alternatives) {
     cells(t, [row.key, row.eligible ? "Eligible" : `Excluded: ${row.exclusions.map(e => e.message).join("; ")}`,
       row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
@@ -435,6 +449,40 @@ function materialStrainComparison(parent, key, output, dependency, requested, mo
     parent.append(note);
   }
   detail(parent, `${key}: ${label} strain scope, sources and sampled witnesses (display only)`, result || {refusal: output?.refusal || dependency?.refusal});
+}
+function contactLoadsComparison(parent, key, output, dependency, requested, moving = false) {
+  if (!requested && (!output || output.status === "not_requested")) return;
+  const result = available(output), label = moving ? "accepted-motion" : "initial";
+  const status = document.createElement("p");
+  status.textContent = `${key}: ${label} body-contact loads — ${output ? state(output) : `Unavailable: ${state(dependency)}`}. ` +
+    (result ? `${metric(result.vertex_samples)} vertex evaluations; ${metric(result.pair_evaluations)} contact-pair evaluations.` : "");
+  parent.append(status);
+  if (result) {
+    const frames = result.frames || [];
+    const witness = index => {
+      const frame = frames.find(f => f.sample_index === index);
+      return frame ? `Sample ${metric(frame.sample_index)} at ${metric(frame.time_s)} s` : "Unknown";
+    };
+    const summary = table(parent, `${key}: ${label} body-contact loads`,
+      ["Peak resultant (N)", "Resultant witness", "Maximum nodal force (N)", "Nodal-force witness"]);
+    cells(summary, [metric(result.peak_body_resultant_n), witness(result.peak_body_resultant_sample),
+      metric(result.max_body_vertex_force_n), witness(result.max_body_vertex_force_sample)]);
+    const samples = table(parent, `${key}: ${label} sampled body-contact forces`,
+      ["Sample", "Time (s)", "Resultant x (N)", "Resultant y (N)", "Resultant z (N)", "Resultant magnitude (N)", "Maximum nodal force (N)", "Source vertex"]);
+    for (const frame of frames) {
+      const body = frame.body;
+      cells(samples, [metric(frame.sample_index), metric(frame.time_s),
+        ...[0, 1, 2].map(i => metric(body?.resultant_n?.[i])), metric(body?.resultant_magnitude_n),
+        metric(body?.max_vertex_force_n), metric(body?.max_force_vertex)]);
+    }
+    const scope = document.createElement("p");
+    scope.textContent = `Selected garment instances: ${Object.keys(result.source?.instances || {}).join(", ") || "Unknown"}. ` +
+      "The shared vertices of sewn pieces are counted once. Resultants can hide opposing local loads; compare nodal maxima at the same mesh resolution. " +
+      "These normal barrier forces exclude tangential friction and do not establish pressure, safe wear or continuous-time load bounds.";
+    parent.append(scope);
+  }
+  detail(parent, `${key}: ${label} contact scope, materials and sampled force witnesses (display only)`,
+    result || { refusal: output?.refusal || dependency?.refusal });
 }
 function transientHeatComparison(parent, key, result, dependency, policy) {
   const consumers = [["transient_surface", "Independent sheets"], ["transient_coverage", "Body coverage + exposed cloth"]]
@@ -692,6 +740,8 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
       metric(result?.duration_s), metric(result?.samples?.length), metric(result?.trials), metric(result?.metrics?.max_absolute_edge_strain_pct)]);
     materialStrainComparison(parent, row.key, result?.material_strain, initial?.motion || evaluation,
       initial?.material_strain && initial.material_strain.status !== "not_requested", true);
+    contactLoadsComparison(parent, row.key, result?.contact_loads, initial?.motion || evaluation,
+      initial?.contact_loads && initial.contact_loads.status !== "not_requested", true);
     transientHeatComparison(parent, row.key, result, initial?.motion || evaluation, requested);
     motionVaporComparison(op, parent, row.key, index, result, initial?.motion || evaluation, requested, filePrefix);
     if (!result) continue;
@@ -772,6 +822,7 @@ function comparison(op, r, parent = sections.get(op).comparison, { skipManufactu
         placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
         surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
       materialStrainComparison(parent, row.key, result?.material_strain, outcome, r.scenario?.scenario?.material_strain);
+      contactLoadsComparison(parent, row.key, result?.contact_loads, outcome, r.scenario?.scenario?.contact_loads);
     }
     vaporCoverageComparison(op, parent, study.alternatives, simulations, r.scenario?.scenario?.vapor_coverage, filePrefix);
     if ([...simulations.values()].some(o => {
@@ -1099,7 +1150,7 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
   if (!requested && !alternatives.some(row => available(row.sewing)?.consumables ||
       metrics.some(name => row.metrics?.[name] != null))) return;
   const totals = table(parent, "Thread for the selected sewing plan — complete or unknown",
-    ["Alternative", "Thread quantities", "Required length (m)", "Thread purchasing", "Thread currency", "Complete order cost"]);
+    ["Alternative", "Production copies", "Thread quantities", "Required length (m)", "Thread purchasing", "Thread currency", "Complete order cost"]);
   for (const row of alternatives) {
     const plan = available(row.sewing), report = plan?.consumables, purchase = report?.purchasing;
     const complete = report?.complete_consumption_coverage === true;
@@ -1109,13 +1160,23 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
       "Incomplete offer coverage") : report || plan ? "Not requested" : state(row.sewing);
     const cost = metric(complete && purchase?.complete_offer_coverage === true ?
       purchase.least_observed_independent_order_total : null);
-    cells(totals, [row.key, quantity, metric(complete ? report.total_required_length_m : null), pricing,
+    const copies = report?.schema === "ftx-sewing-consumables/1" ? 1 : report?.production_copies;
+    cells(totals, [row.key, metric(copies), quantity, metric(complete ? report.total_required_length_m : null), pricing,
       purchase?.currency || "Unknown", cost === "Unknown" ? cost : `${cost} ${purchase?.currency || "(currency unavailable)"}`]);
     if (report?.operation_channels?.length) {
       const channels = table(parent, `${row.key}: selected operation and thread channel requirements`,
         ["Operation", "Qualification", "Channel", "Exact yarn snapshot", "Traversed intervals", "Required length (m)"]);
       for (const channel of report.operation_channels) cells(channels, [channel.operation_id, channel.qualification_id,
         channel.channel_id, channel.material_sha256, metric(channel.stitch_intervals), metric(channel.required_length_m)]);
+      if (report.schema === "ftx-sewing-consumables/2") {
+        const perCopy = table(parent, `${row.key}: thread consumption per garment before production aggregation`,
+          ["Operation", "Channel", "Traversed intervals", "Traversal length (m)", "Start allowance (m)", "End allowance (m)", "Required length (m)"]);
+        for (const channel of report.operation_channels) {
+          const one = channel.per_copy;
+          cells(perCopy, [channel.operation_id, channel.channel_id, metric(one?.stitch_intervals),
+            metric(one?.traversal_length_m), metric(one?.start_allowance_m), metric(one?.end_allowance_m), metric(one?.required_length_m)]);
+        }
+      }
     }
     if (report?.missing_operations?.length || purchase?.unavailable_reason) {
       const missing = document.createElement("p");
@@ -1131,10 +1192,12 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
     });
   }
   const note = document.createElement("p");
-  note.textContent = "Thread demand follows every traversal in the selected sewing plan, with each declared start/end allowance applied once per operation and channel. " +
+  note.textContent = "Thread demand follows every traversal in the selected sewing plan, with each declared start/end allowance applied once per operation and channel in each garment. " +
     "Partial channel rows are diagnostic; they are never a complete bill of materials or a priced subtotal. " +
     "Exact yarn requirements aggregate before supplier minimums, increments and observed stock are applied. " +
-    "This is one sewing job: cutting copies do not multiply its demand, and purchased thread is not retained assembly mass. " +
+    "Study thread inventories use the same production copies as cutting; standalone sewing uses its explicitly declared production copies or one garment. " +
+    "One continuous operation/channel requirement is retained without multiplying its splice-free length by the production count. " +
+    "Sewing geometry, feed duration and setup schedules still describe one garment; purchased thread is not retained assembly mass. " +
     "Thread prices retain their own currency and market; they are not combined with cutting costs. " +
     "Time-based recipe selection does not prove the least thread cost.";
   parent.append(note);

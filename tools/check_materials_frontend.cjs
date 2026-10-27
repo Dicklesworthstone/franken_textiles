@@ -2865,6 +2865,32 @@ function selectedThreadPlan() {
         least_observed_independent_order_total:6,unavailable_reason:null}}};
 }
 
+test('production thread inventory displays batch and per-garment quantities without repricing', async()=>{
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const row=studyRow('three garments'), plan=selectedThreadPlan(), report=plan.consumables;
+  report.schema='ftx-sewing-consumables/2'; report.production_copies=3;
+  report.total_required_length_m=10.2;
+  report.purchasing.least_observed_independent_order_total=9;
+  for (const channel of report.operation_channels) {
+    channel.per_copy=Object.fromEntries(['stitch_intervals','traversal_length_m','start_allowance_m','end_allowance_m','required_length_m']
+      .map(name=>[name,channel[name]]));
+    channel.stitch_intervals=30;
+    channel.required_length_m=channel.channel_id==='needle'?6.6:3.6;
+  }
+  row.sewing=outcome(plan); row.metrics.thread_required_length_m=10.2; row.metrics.thread_observed_order_cost=9;
+  await p.e.study.onclick(); p.emit(studyReport([row]));
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+  assert.deepEqual(plain(table('Thread for the selected sewing plan — complete or unknown').children[2].children.map(n=>n.textContent)),
+    ['three garments','3','Complete channel coverage','10.2','Complete offer coverage','EUR','9 EUR']);
+  assert.deepEqual(plain(table('three garments: thread consumption per garment before production aggregation').children[2].children.map(n=>n.textContent)),
+    ['hem <selected>','needle','10','2','0.1','0.1','2.2']);
+  assert.equal(table('three garments: selected operation and thread channel requirements').children[2].children[5].textContent,'6.6');
+  assert.match(visibleText(s),/feed duration and setup schedules still describe one garment/);
+  assert.match(visibleText(s),/without multiplying its splice-free length/);
+  p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
 test('selected thread study quantities and orders retain independent currencies, unknowns and source invalidation', async()=>{
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const selected=studyRow('selected'), unpriced=studyRow('unpriced'), missing=studyRow('missing offer'),
@@ -2904,12 +2930,12 @@ test('selected thread study quantities and orders retain independent currencies,
     const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
     const totals=table('Thread for the selected sewing plan — complete or unknown');
     assert.deepEqual(plain(totals.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
-      ['selected','Complete channel coverage','3.4','Complete offer coverage','EUR','6 EUR'],
-      ['unpriced','Complete channel coverage','3.4','Not requested','Unknown','Unknown'],
-      ['missing offer','Complete channel coverage','3.4','Incomplete offer coverage','EUR','Unknown'],
-      ['partial channels','Incomplete channel coverage','Unknown','Incomplete offer coverage','EUR','Unknown'],
-      ['failed','Refused: No qualified selected sewing recipe','Unknown','Refused: No qualified selected sewing recipe','Unknown','Unknown'],
-      ['not requested','Not requested','Unknown','Not requested','Unknown','Unknown']]);
+      ['selected','1','Complete channel coverage','3.4','Complete offer coverage','EUR','6 EUR'],
+      ['unpriced','1','Complete channel coverage','3.4','Not requested','Unknown','Unknown'],
+      ['missing offer','1','Complete channel coverage','3.4','Incomplete offer coverage','EUR','Unknown'],
+      ['partial channels','1','Incomplete channel coverage','Unknown','Incomplete offer coverage','EUR','Unknown'],
+      ['failed','Unknown','Refused: No qualified selected sewing recipe','Unknown','Refused: No qualified selected sewing recipe','Unknown','Unknown'],
+      ['not requested','Unknown','Not requested','Unknown','Not requested','Unknown','Unknown']]);
     assert.equal(table('Independent manufacturing outcomes').children[2].children[8].textContent,'14 USD');
     assert.deepEqual(plain(table('Declared computed objectives — authoritative Rust comparison').children[2].children.slice(3).map(n=>n.textContent)),
       ['3.4 m','6 EUR','14 USD']);
@@ -2918,7 +2944,7 @@ test('selected thread study quantities and orders retain independent currencies,
       ['hem <selected>','qualified-recipe','needle','exact-needle','10','2.2'],
       ['hem <selected>','qualified-recipe','bobbin','exact-bobbin','10','1.2']]);
     assert.match(visibleText(s),/Bobbin consumption is not qualified/); assert.match(visibleText(s),/No eligible exact-yarn offer/);
-    assert.match(visibleText(s),/cutting copies do not multiply/); assert.doesNotMatch(visibleText(s),/unused recipe/);
+    assert.match(visibleText(s),/same production copies as cutting/); assert.doesNotMatch(visibleText(s),/unused recipe/);
     const receipt=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='selected: selected thread channels, exact yarns and order evidence (display only)');
     receipt.open=true; receipt.handlers.toggle(); assert.match(visibleText(receipt),/<independent consumption observation>/);
     assert.match(visibleText(receipt),/fixture:thread-order/); assert.match(visibleText(receipt),/unlocked-offer/);
@@ -2944,7 +2970,7 @@ test('required thread consumers reveal unknown quantities without hiding success
   await p.e.study.onclick(); p.emit(report);
   let s=section(p,'Fixed-pattern manufacturing alternatives');
   const totals=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Thread for the selected sewing plan — complete or unknown');
-  assert.deepEqual(plain(totals.children[2].children.map(n=>n.textContent)),['A','Not requested','Unknown','Not requested','Unknown','Unknown']);
+  assert.deepEqual(plain(totals.children[2].children.map(n=>n.textContent)),['A','Unknown','Not requested','Unknown','Not requested','Unknown','Unknown']);
   assert.match(visibleText(s),/Thread consumption was not requested/);
   const manufacturing=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Independent manufacturing outcomes');
   assert.equal(manufacturing.children[2].children[3].textContent,'Available');
@@ -4308,6 +4334,46 @@ test('material-direction strain preserves signed axes, regional witnesses and in
   assert.equal(table('A: accepted-motion material-direction strain'),undefined);
   assert.ok(table('A: initial material-direction strain'));
   assert.match(visibleText(s),/material-strain triangle-sample budget exhausted/);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('body-contact loads retain signed vectors, force witnesses and independent motion refusal', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const report=scenarioReport();
+  report.scenario.scenario={contact_loads:{schema:'ftx-contact-loads/1',instances:['<cuff>'],max_vertex_samples:100,max_pair_evaluations:1000},motion:{}};
+  const frames=[{sample_index:0,time_s:0,body:{resultant_n:[-3,0,4],resultant_magnitude_n:5,max_vertex_force_n:4,max_force_vertex:7}},
+    {sample_index:1,time_s:0.5,body:{resultant_n:[0,-8,6],resultant_magnitude_n:10,max_vertex_force_n:6,max_force_vertex:9}}];
+  const loads={schema:'ftx-contact-loads-report/1',source:{instances:{'<cuff>':'<material digest>'}},
+    frames,peak_body_resultant_n:10,peak_body_resultant_sample:1,max_body_vertex_force_n:6,max_body_vertex_force_sample:1,
+    vertex_samples:24,pair_evaluations:32,duration_s:0.5};
+  const initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  initial.contact_loads=outcome({...loads,frames:frames.slice(0,1),peak_body_resultant_n:5,peak_body_resultant_sample:0,
+    max_body_vertex_force_n:4,max_body_vertex_force_sample:0,duration_s:0});
+  initial.motion=outcome({samples:[{}],keyframes:[],contact_loads:outcome(loads)});
+  report.comparison={policy:{basis:'nominal',allow_mixed_protocols:false,required_consumers:['motion_contact_loads'],
+    objectives:[{metric:'motion_peak_body_contact_resultant_n',direction:'minimize'}],
+    constraints:[{metric:'max_body_contact_vertex_force_n',maximum:5}]},frontier:['A'],motion_required:true,
+    uncertainty_propagated:false,incomparable:[],alternatives:[{key:'A',eligible:true,dominated_by:[],exclusions:[],
+      readings:{motion_peak_body_contact_resultant_n:{value:10,unit:'N'},max_body_contact_vertex_force_n:{value:4,unit:'N'}}}]};
+  await p.e.scenario.onclick(); p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+  assert.deepEqual(plain(table('A: accepted-motion body-contact loads').children[2].children.map(n=>n.textContent)),
+    ['10','Sample 1 at 0.5 s','6','Sample 1 at 0.5 s']);
+  assert.deepEqual(plain(table('A: accepted-motion sampled body-contact forces').children[3].children.map(n=>n.textContent)),
+    ['1','0.5','0','-8','6','10','6','9']);
+  assert.match(visibleText(s),/Motion peak body-contact resultant/);
+  assert.match(visibleText(s),/Nodal maxima depend on mesh resolution/);
+  assert.match(visibleText(s),/Selected garment instances: <cuff>/);
+  assert.match(visibleText(s),/exclude tangential friction/);
+  const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='A: accepted-motion contact scope, materials and sampled force witnesses (display only)');
+  source.open=true; source.handlers.toggle(); assert.match(visibleText(source),/<material digest>/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  initial.motion.result.contact_loads=refused('contact-load pair budget exhausted');
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.equal(table('A: accepted-motion body-contact loads'),undefined);
+  assert.ok(table('A: initial body-contact loads'));
+  assert.match(visibleText(s),/contact-load pair budget exhausted/);
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
