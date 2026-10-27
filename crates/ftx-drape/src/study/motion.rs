@@ -659,6 +659,7 @@ mod tests {
             &mut run,
             &mut heat::Budget::default(),
             None,
+            None,
             |_| {},
         )
         .unwrap_err();
