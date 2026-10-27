@@ -687,6 +687,10 @@ fn a_bound_physical_remnant_offer_cannot_also_supply_the_roll_route() {
     let quotes = &mut request.purchasing.as_mut().unwrap().quotes.quotes;
     quotes[0].material_id = "mixed-example-lining".into();
     quotes[0].price = 0.1;
+    let mut alias = quotes[0].clone();
+    alias.offer_id = "item/hide-alias".into();
+    alias.price = 0.05;
+    quotes.push(alias);
     let plan = request.build(&pattern).unwrap();
     let pricing = plan.purchasing.as_ref().unwrap();
     near(pricing.least_observed_independent_order_total.unwrap(), 1.1);
@@ -698,6 +702,136 @@ fn a_bound_physical_remnant_offer_cannot_also_supply_the_roll_route() {
         value(&pricing.finite_stock)["result"]["stocks"][0]["least_observed_offer_id"],
         "item/hide-001"
     );
+    assert_eq!(
+        pricing.roll_excluded_physical_stock_offer_ids,
+        ["item/hide-001", "item/hide-alias"]
+    );
+
+    // With no independent roll source, keep the finite item and geometry but not a whole-job cost.
+    request
+        .purchasing
+        .as_mut()
+        .unwrap()
+        .quotes
+        .quotes
+        .retain(|quote| quote.offer_id != "roll/lining");
+    let missing = request.build(&pattern).unwrap();
+    assert!(missing.complete_inventory);
+    assert_eq!(missing.inventory, plan.inventory);
+    let price = missing.purchasing.as_ref().unwrap();
+    assert!(!price.complete_offer_coverage && !price.complete_observed_quantity_coverage);
+    assert!(price.least_observed_independent_order_total.is_none());
+    assert!(price.selected_observed_order_total.is_none());
+    assert!(!price.order_allocation_optimality_proven);
+    assert_eq!(value(&price.roll)["status"], "available");
+    assert_eq!(
+        value(&price.finite_stock)["result"]["stocks"],
+        value(&pricing.finite_stock)["result"]["stocks"]
+    );
+
+    let mut study: Value = serde_json::from_str(STUDY).unwrap();
+    study["cutting_job"] = value(&request);
+    study["comparison"] = json!({"basis":"nominal",
+        "required_consumers":["cutting_job_purchasing"],
+        "objectives":[{"metric":"cutting_job_selected_order_cost","direction":"minimize"}]});
+    let study: material_study::Request = serde_json::from_value(study).unwrap();
+    let report = value(&study.evaluate(&pattern).unwrap());
+    assert_eq!(
+        report["alternatives"][0]["cutting_job"]["status"],
+        "available"
+    );
+    assert!(report["alternatives"][0]["metrics"]["cutting_job_selected_order_cost"].is_null());
+    assert_eq!(report["comparison"]["frontier"], json!([]));
+}
+
+#[test]
+fn mixed_job_physical_stock_exclusion_follows_current_transitive_aliases() {
+    let (pattern, request) = inputs();
+    let mut request = priced(&pattern, &request);
+    let original = request.build(&pattern).unwrap();
+    let quotes = &mut request.purchasing.as_mut().unwrap().quotes.quotes;
+    let mut bridge = quotes[0].clone();
+    bridge.offer_id = "unused-bridge-a".into();
+    bridge.material_id = "unneeded-product".into();
+    bridge.material_sha256 = None;
+    bridge.available = false;
+    bridge.price_breaks = serde_json::from_value(json!([{
+        "minimum_quantity":bridge.minimum_quantity * 2.0,
+        "price":bridge.price,"sku":"middle-stock"
+    }]))
+    .unwrap();
+    quotes.push(bridge.clone());
+    bridge.offer_id = "unused-bridge-b".into();
+    bridge.sku = "middle-stock".into();
+    bridge.price_breaks[0].sku = Some("lining".into());
+    quotes.push(bridge.clone());
+    for split in [false, true] {
+        let mut request = request.clone();
+        if split {
+            request.purchasing.as_mut().unwrap().market.split_orders = Some(
+                serde_json::from_value(json!({"schema":"ftx-cut-order-allocation/1",
+                    "max_search_nodes":10000}))
+                .unwrap(),
+            );
+        }
+        let blocked = request.build(&pattern).unwrap();
+        assert!(blocked.complete_inventory);
+        assert_eq!(blocked.inventory, original.inventory);
+        let price = blocked.purchasing.as_ref().unwrap();
+        assert!(!price.complete_offer_coverage && !price.complete_observed_quantity_coverage);
+        assert!(price.least_observed_independent_order_total.is_none());
+        assert!(price.selected_observed_order_total.is_none());
+        assert_eq!(
+            value(&price.roll)["result"]["complete_offer_coverage"],
+            false
+        );
+        assert_eq!(
+            value(&price.finite_stock)["result"]["complete_offer_coverage"],
+            true
+        );
+        assert_eq!(
+            price.roll_excluded_physical_stock_offer_ids,
+            [
+                "item/hide-001",
+                "roll/lining",
+                "unused-bridge-a",
+                "unused-bridge-b"
+            ]
+        );
+
+        // The latest source disconnects the bridge. Its superseded alias cannot reappear.
+        let mut disconnected = bridge.clone();
+        disconnected.observed_on = "2026-10-23".into();
+        disconnected.price_breaks.clear();
+        request
+            .purchasing
+            .as_mut()
+            .unwrap()
+            .quotes
+            .quotes
+            .push(disconnected);
+        // Future observations do not change the earlier declared market's stock identity.
+        let earlier = request.build(&pattern).unwrap();
+        let earlier_price = earlier.purchasing.as_ref().unwrap();
+        assert_eq!(value(&earlier_price.roll), value(&price.roll));
+        assert_eq!(
+            earlier_price.roll_excluded_physical_stock_offer_ids,
+            price.roll_excluded_physical_stock_offer_ids
+        );
+
+        request.purchasing.as_mut().unwrap().market.as_of = "2026-10-23".into();
+        request.purchasing.as_mut().unwrap().market.max_age_days = 1;
+        let complete = request.build(&pattern).unwrap();
+        let price = complete.purchasing.as_ref().unwrap();
+        assert!(price.complete_offer_coverage && price.complete_observed_quantity_coverage);
+        near(price.selected_observed_order_total.unwrap(), 8.0);
+        near(price.least_observed_independent_order_total.unwrap(), 8.0);
+        assert!(
+            !price
+                .roll_excluded_physical_stock_offer_ids
+                .contains(&"roll/lining".into())
+        );
+    }
 }
 
 fn material_routing_inputs() -> (Pattern, job::Request, [Value; 2]) {

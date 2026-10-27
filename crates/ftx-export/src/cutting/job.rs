@@ -5,7 +5,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
-use ftx_pattern::{Pattern, material_binding::Changes, material_cost::QuoteBook, textile_import};
+use ftx_pattern::{
+    Pattern,
+    material_binding::Changes,
+    material_cost::{Basis, QuoteBook, Scope},
+    textile_import,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -136,6 +141,10 @@ pub struct PriceReport {
     pub roll: Outcome<Value>,
     /// Ordinary exact-item procurement or its independent refusal.
     pub finite_stock: Outcome<procurement::finite::Report>,
+    /// Explicit finite-item offer IDs and their current supplier SKU aliases withheld from roll
+    /// orders. Entire histories are excluded so an older price cannot revive physical stock.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub roll_excluded_physical_stock_offer_ids: Vec<String>,
     /// Common market currency; no conversion is performed.
     pub currency: String,
     /// Every used material and physical item has a valid complete offer.
@@ -655,6 +664,57 @@ impl Request {
     }
 }
 
+fn roll_quote_book(request: &Purchasing) -> Result<(QuoteBook, Vec<String>), Refusal> {
+    let mut physical_offers: BTreeSet<_> = request
+        .finite_bindings
+        .iter()
+        .flat_map(|binding| binding.offer_ids.iter().map(String::as_str))
+        .collect();
+    if physical_offers.is_empty() {
+        return Ok((request.quotes.clone(), Vec::new()));
+    }
+    // Observation membership uses only market/time; no hypothetical quantity is priced here.
+    let market = &request.market;
+    let current = request.quotes.latest_observations(&Scope {
+        currency: market.currency.clone(),
+        region: market.region.clone(),
+        quality: market.quality.clone(),
+        terms: market.terms.clone(),
+        as_of: market.as_of.clone(),
+        as_of_at: market.as_of_at.clone(),
+        max_age_days: market.max_age_days,
+        requirement: 1.0,
+        basis: Basis::Area,
+        require_observed_quantity: market.require_observed_quantity,
+        continuous_length_m: None,
+        require_observed_continuous_length: market.require_observed_continuous_length,
+    })?;
+    let (components, _) = procurement::stock_components(&current);
+    let physical_components: BTreeSet<_> = physical_offers
+        .iter()
+        .filter_map(|id| components.get(*id).copied())
+        .collect();
+    physical_offers.extend(components.iter().filter_map(|(id, component)| {
+        physical_components
+            .contains(component)
+            .then_some(id.as_str())
+    }));
+    let quotes = QuoteBook {
+        schema: request.quotes.schema.clone(),
+        quotes: request
+            .quotes
+            .quotes
+            .iter()
+            .filter(|quote| !physical_offers.contains(quote.offer_id.as_str()))
+            .cloned()
+            .collect(),
+    };
+    Ok((
+        quotes,
+        physical_offers.into_iter().map(str::to_owned).collect(),
+    ))
+}
+
 fn price(
     roll: Option<&CutPlan>,
     finite: Option<&stock::Plan>,
@@ -677,6 +737,7 @@ fn price(
                 finite_stock: Outcome::Refused {
                     refusal: refusal.clone(),
                 },
+                roll_excluded_physical_stock_offer_ids: Vec::new(),
                 currency: request.market.currency.clone(),
                 complete_offer_coverage: false,
                 complete_observed_quantity_coverage: false,
@@ -688,26 +749,17 @@ fn price(
             };
         }
     }
-    // A quote explicitly bound to a physical remnant cannot also supply a fungible roll order.
-    // Without this separation, two routes using the same sheet snapshot could buy one item twice.
-    let physical_offers: BTreeSet<_> = request
-        .finite_bindings
-        .iter()
-        .flat_map(|binding| binding.offer_ids.iter().map(String::as_str))
-        .collect();
-    let roll_quotes = QuoteBook {
-        schema: request.quotes.schema.clone(),
-        quotes: request
-            .quotes
-            .quotes
-            .iter()
-            .filter(|quote| !physical_offers.contains(quote.offer_id.as_str()))
-            .cloned()
-            .collect(),
-    };
-    let roll = match roll {
-        Some(plan) => result(procurement::evaluate(plan, &roll_quotes, &request.market)),
-        None => Outcome::NotRequested,
+    // A bound remnant and any current alias represent the same physical stock. Neither may
+    // supply a second roll order, including through unused, unavailable bridging observations.
+    let (roll, roll_excluded_physical_stock_offer_ids) = match roll {
+        Some(plan) => match roll_quote_book(request) {
+            Ok((quotes, excluded)) => (
+                result(procurement::evaluate(plan, &quotes, &request.market)),
+                excluded,
+            ),
+            Err(refusal) => (Outcome::Refused { refusal }, Vec::new()),
+        },
+        None => (Outcome::NotRequested, Vec::new()),
     };
     let finite_stock = match finite {
         Some(plan) => result(procurement::finite::evaluate(
@@ -773,6 +825,7 @@ fn price(
         request: request.clone(),
         roll,
         finite_stock,
+        roll_excluded_physical_stock_offer_ids,
         currency: request.market.currency.clone(),
         complete_offer_coverage: selected.is_some(),
         complete_observed_quantity_coverage: observed && selected.is_some(),

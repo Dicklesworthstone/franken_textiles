@@ -5,11 +5,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::material_catalog::{ResolvedMaterial, Selection};
-use ftx_pattern::material_cost::{Basis, Offer, PriceSample, Quote, QuoteBook, Scope};
+use ftx_pattern::material_cost::{Basis, Offer, PriceSample, QuoteBook, Scope};
 use ftx_pattern::materials::{CATALOG_SCHEMA, Catalog, Evidence, Form, Source};
 use serde::{Deserialize, Serialize};
 
-use crate::cutting::procurement::Market;
+use crate::cutting::procurement::{Market, stock_components};
 
 use super::{SewOptions, SewPlan, bad, positive, qualified_text};
 
@@ -501,48 +501,6 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
         report.purchasing = Some(price(&report, &resolved, purchasing)?);
     }
     Ok(report)
-}
-
-// Every current base/tier SKU of one supplier is an inventory alias. Canonical market/as-of
-// selection includes unused bridging offers, without importing future or superseded identities.
-// At most 4096 observations / the preflight alias budget.
-fn stock_components(quotes: &[&Quote]) -> (BTreeMap<String, usize>, usize) {
-    fn root(parents: &mut [usize], index: usize) -> usize {
-        let mut representative = index;
-        while parents[representative] != representative {
-            representative = parents[representative];
-        }
-        let mut next = index;
-        while parents[next] != next {
-            let previous = parents[next];
-            parents[next] = representative;
-            next = previous;
-        }
-        representative
-    }
-    let mut parents: Vec<_> = (0..quotes.len()).collect();
-    let mut owner = BTreeMap::new();
-    let mut count = 0;
-    for (index, quote) in quotes.iter().enumerate() {
-        for sku in std::iter::once(&quote.sku)
-            .chain(quote.price_breaks.iter().filter_map(|p| p.sku.as_ref()))
-        {
-            count += 1;
-            if let Some(previous) = owner.insert((&quote.supplier, sku), index) {
-                let left = root(&mut parents, index);
-                let right = root(&mut parents, previous);
-                parents[left] = right;
-            }
-        }
-    }
-    (
-        quotes
-            .iter()
-            .enumerate()
-            .map(|(i, q)| (q.offer_id.clone(), root(&mut parents, i)))
-            .collect(),
-        count,
-    )
 }
 
 fn purchase_scope(requirement: &Requirement, market: &Market) -> Scope {
