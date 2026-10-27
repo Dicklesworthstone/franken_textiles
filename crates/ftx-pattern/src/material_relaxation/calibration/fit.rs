@@ -364,6 +364,7 @@ mod tests {
                 equilibrium: [0.; 4],
                 observed: [Some(0.); 4],
                 scale: 1.,
+                plastic_equilibrium: None,
             })
             .collect(),
         };
