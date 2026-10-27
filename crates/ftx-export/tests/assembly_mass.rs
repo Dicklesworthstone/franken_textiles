@@ -23,6 +23,77 @@ fn request() -> Request {
     )
     .unwrap()
 }
+
+fn retained_liquid(raw: &mut Value) {
+    let record = &mut raw["fabric"]["material"]["record"];
+    record["structure"]["mechanical_mass_model"] =
+        json!(ftx_pattern::material_mass::RETAINED_LIQUID_MODEL);
+    record["properties"]["areal_density"]["conditions"] = json!({
+        "specimen_id":"synthetic-retained-liquid", "conditioning":"closed laboratory fixture",
+        "reference_area_basis":"dry_textile_reference_area", "mass_basis":"dry_textile_excluding_retained_liquid"});
+    record["properties"]["retained_liquid_areal_density"] = json!({"value":100.,"unit":"g/m2","bounds":[80.,120.],
+        "source":"test","evidence":"estimate","method":"Synthetic retained liquid observation",
+        "conditions":{"specimen_id":"synthetic-retained-liquid", "conditioning":"closed laboratory fixture",
+            "reference_area_basis":"dry_textile_reference_area","mass_basis":"additional_retained_liquid",
+            "retention_basis":"closed_co_moving_no_exchange","qualification":"Synthetic fixed-liquid reference-area test"}});
+}
+
+#[test]
+fn liquid_and_dry_sheet_sum_once_across_all_cut_instances_and_keep_independent_bounds() {
+    let mut raw = pattern();
+    retained_liquid(&mut raw);
+    raw["fabric"]["material"]["record"]["properties"]["width"] = json!({"value":0.1,"unit":"m",
+        "source":"test","evidence":"estimate","method":"Synthetic stock width"});
+    let result = request().evaluate(&Pattern::new(raw.clone())).unwrap();
+    let area: f64 = result.pieces.iter().map(|p| p.retained_area_m2).sum();
+    close(result.assembly_mass.kg.unwrap(), area * 0.3);
+    let bounds = result.assembly_mass.reported_bounds_kg.unwrap();
+    close(bounds[0], area * 0.26);
+    close(bounds[1], area * 0.34);
+    for piece in &result.pieces {
+        let receipt = piece.retained_liquid.unwrap();
+        close(receipt.dry_textile_kg_m2, 0.2);
+        close(receipt.retained_liquid_kg_m2, 0.1);
+        close(
+            piece.mass.kg.unwrap(),
+            piece.retained_area_m2 * receipt.total_kg_m2,
+        );
+    }
+    let cut_options = serde_json::from_value(
+        json!({"copies":1,"gap_mm":0.,"edge_margin_mm":0.,"end_margin_mm":0.}),
+    )
+    .unwrap();
+    let cut = CutPlan::build(&Pattern::new(raw.clone()), &cut_options).unwrap();
+    close(
+        cut.rolls[0].stock_mass_kg.unwrap(),
+        cut.rolls[0].stock_area_m2 * 0.3,
+    );
+    let finite: ftx_export::cutting::stock::Request = serde_json::from_value(json!({
+        "schema":"ftx-finite-stock-request/1", "stocks":[{"id":"wet-remnant",
+            "material":raw["fabric"]["material"],"outline_mm":[[0,0],[300,0],[300,300],[0,300]],
+            "grain_mm":[[0,0],[0,10]],"geometry_source":{"reference":"test:wet-stock",
+                "accessed_on":"2026-10-27","note":"Synthetic fixed area for wet mass accounting"}}],
+        "options":{"copies":1,"gap_mm":2.,"boundary_margin_mm":2.,"step_mm":2.,"work_limit":2000000}
+    }))
+    .unwrap();
+    let finite = finite.build(&Pattern::new(raw.clone())).unwrap();
+    close(
+        finite.markers()[0].stock_mass_kg.unwrap(),
+        finite.markers()[0].gross_area_m2 * 0.3,
+    );
+    raw["fabric"]["material"]["record"]["properties"]["retained_liquid_areal_density"]
+        .as_object_mut()
+        .unwrap()
+        .remove("bounds");
+    let incomplete = request().evaluate(&Pattern::new(raw.clone())).unwrap();
+    close(incomplete.assembly_mass.kg.unwrap(), area * 0.3);
+    assert!(incomplete.assembly_mass.reported_bounds_kg.is_none());
+    raw["fabric"]["material"]["record"]["properties"]["areal_density"]["conditions"]["mass_basis"] =
+        json!("already_total_wet_mass");
+    let refused = request().evaluate(&Pattern::new(raw)).unwrap();
+    assert!(refused.assembly_mass.kg.is_none());
+    assert!(refused.pieces.iter().all(|p| p.mass.unavailable.is_some()));
+}
 fn extra() -> Value {
     json!({"id":"all-thread-and-closures","mass":{"value":0.03,"unit":"kg","bounds":[0.028,0.032],"evidence":"estimate","source":"test","method":"Synthetic complete retained group, not measured"},
         "sources":{"test":{"reference":"test:extras","accessed_on":"2026-10-16","note":"Synthetic software test"}},"allow_estimates":true})

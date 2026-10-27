@@ -91,6 +91,15 @@ preserves the existing path and wire output. Contract: `docs/attached-mass.md`; 
 `tests/attached_mass.rs` (independent static/dynamic balances, welded/mirrored mapping, substitution,
 thermal separation, deterministic replay and motion rollback).
 
+**Fixed retained-liquid inertia** (`ftx-vc2.2`). The canonical material mechanical mass consumer
+qualifies and sums dry substrate plus closed co-moving liquid per reference area. Existing source
+piece triangle assembly distributes each contribution once through the real weld map; static
+gravity, implicit inertia, casing loads and prescribed body motion retain that constant mass.
+Timed clamped strips use the same consumer and report the separate source densities. Accessory
+mass remains additive once. Dry thermal/vapor and changing-water histories cannot silently reuse
+the wet state. No variable mass, liquid slip or unmeasured wet constitutive change is inferred.
+Tests: `attached_mass`; source contract: `docs/attached-mass.md`.
+
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
 and conservative Frame/remap APIs. Time-zero temperatures and spatially uniform interval films are

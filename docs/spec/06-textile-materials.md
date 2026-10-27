@@ -51,6 +51,19 @@ stay in conditions; neither force becomes a warp/weft stiffness or strength per 
 `reported_thickness` is inspectable gauge thickness in m and does not supply the separately
 qualified `thickness` required for contact or sewing clearance.
 
+## Fixed retained-liquid mechanical state
+
+The optional `structure.mechanical_mass_model` selector
+`dry_textile_plus_fixed_retained_liquid/1` adds `retained_liquid_areal_density` (kg/m²) to
+explicitly dry substrate mass on dry reference textile area. Both quantities must identify the
+same specimen and conditioning; additional liquid requires a qualified closed co-moving
+no-exchange regime. All consumed mechanical observations additionally require the exact
+`retained_liquid_kg_m2` qualification. Ordinary mechanical and assembly-mass consumers use the
+same total, while retaining the two source terms and only complete summed endpoints. This model
+does not infer wet stiffness from dry stiffness or convert moisture regain into mass. Dry thermal
+and vapor consumers refuse the selected state pending independent coupled liquid storage/transport.
+Full input and consumer contract: [attached-mass.md](../attached-mass.md#fixed-retained-liquid-on-a-textile).
+
 ## Thermal consumer
 
 `ThermalStack::evaluate` computes dry one-dimensional steady conduction through series layers, with

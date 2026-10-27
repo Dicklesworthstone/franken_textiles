@@ -754,6 +754,109 @@ fn mass_comparison_respects_density_protocols_constraints_and_same_cut_geometry(
 }
 
 #[test]
+fn fixed_liquid_mass_and_retention_protocol_reach_the_actual_material_frontier() {
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = request();
+    r.variants
+        .retain(|v| ["wide", "narrow"].contains(&v.key.as_str()));
+    r.assembly_mass = Some(mass_request());
+    r.sewing = None;
+    r.purchasing = None;
+    comparison(
+        &mut r,
+        json!([{"metric":"assembly_mass_kg","direction":"minimize"}]),
+        json!([]),
+        json!([]),
+    );
+    for variant in &mut r.variants {
+        let mut selection =
+            serde_json::to_value(variant.changes.default.as_ref().unwrap()).unwrap();
+        let record = &mut selection["record"];
+        record["structure"]["mechanical_mass_model"] =
+            json!(ftx_pattern::material_mass::RETAINED_LIQUID_MODEL);
+        record["properties"]["areal_density"]["conditions"] = json!({"specimen_id":"synthetic-liquid",
+            "conditioning":"closed numerical test", "reference_area_basis":"dry_textile_reference_area",
+            "mass_basis":"dry_textile_excluding_retained_liquid"});
+        record["properties"]["retained_liquid_areal_density"] = json!({"value":0.1,"unit":"kg/m2",
+            "evidence":"estimate","source":"test","method":"Synthetic source liquid-loading method",
+            "conditions":{"specimen_id":"synthetic-liquid", "conditioning":"closed numerical test",
+                "reference_area_basis":"dry_textile_reference_area", "mass_basis":"additional_retained_liquid",
+                "retention_basis":"closed_co_moving_no_exchange", "qualification":"Explicit synthetic fixed-liquid retention"}});
+        variant.changes.default = Some(serde_json::from_value(selection).unwrap());
+    }
+    let matched = evaluate(&r, &p);
+    assert_eq!(matched["comparison"]["incomparable"], json!([]));
+    assert!(
+        (row(&matched, "wide")["metrics"]["assembly_mass_kg"]
+            .as_f64()
+            .unwrap()
+            - (0.0096 * 0.3 + 0.02))
+            .abs()
+            < 1e-12
+    );
+    let material = r.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap();
+    material
+        .properties
+        .get_mut("retained_liquid_areal_density")
+        .unwrap()
+        .method = "Different liquid acquisition protocol".into();
+    let mixed = evaluate(&r, &p);
+    assert_eq!(
+        mixed["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(row(&mixed, "wide")["assembly_mass"]["status"], "available");
+    r.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    assert!(
+        !evaluate(&r, &p)["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    r.comparison.as_mut().unwrap().allow_mixed_protocols = false;
+    let material = r.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap();
+    material
+        .properties
+        .get_mut("retained_liquid_areal_density")
+        .unwrap()
+        .method = "Synthetic source liquid-loading method".into();
+    material.structure.remove("mechanical_mass_model");
+    let regimes = evaluate(&r, &p);
+    assert_eq!(
+        regimes["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        (row(&regimes, "wide")["metrics"]["assembly_mass_kg"]
+            .as_f64()
+            .unwrap()
+            - (0.0096 * 0.2 + 0.02))
+            .abs()
+            < 1e-12
+    );
+}
+
+#[test]
 fn aggregate_extra_inventory_is_admitted_before_any_study_evaluation() {
     let p = Pattern::from_json(PATTERN).unwrap();
     let mut r = request();

@@ -388,6 +388,7 @@ impl Request {
         for (index, layer) in self.layers.iter().enumerate() {
             let resolved = catalog.resolve(&layer.selection)?;
             let material = resolved.material();
+            material.require_dry_mass_transport()?;
             if matches!(material.form, Form::Fiber | Form::Yarn) {
                 return Err(invalid(format!(
                     "{}: fiber/yarn observations are not a characterized vapor-transport sheet or fill layer",

@@ -96,6 +96,15 @@ admitted nominal kg value. Structural, evidence and budget failures are typed re
 shared-ID semantics and the point-mass/no-accessory-geometry boundary are in `docs/attached-mass.md`;
 synthetic tests are `tests/attached_mass.rs`.
 
+**Fixed retained liquid** (`material_mass`, `ftx-vc2.2`). The explicit
+`dry_textile_plus_fixed_retained_liquid/1` mechanical mass selector adds separately sourced liquid
+to explicitly dry reference-area mass. Exact specimen/conditioning and closed co-moving no-exchange
+qualification prevent wet-total double counting; mechanics additionally requires each consumed
+observation and history to name the exact liquid loading. Assembly accounting shares the same
+nominal mass and only sums complete source bounds. Dry heat/vapor consumers refuse this state,
+because mechanical mass supplies no liquid thermal storage or wet transport. Missing selector
+preserves existing behavior. See `docs/attached-mass.md`; tests: `attached_mass`.
+
 **Permanent membrane identification** (`material_membrane_plasticity::calibration`). Whole acquired
 histories replay the existing raw-Green/second-Piola incremental return map from explicitly pristine
 reference states. Four source-qualified elastic observations and six independently supplied strain/

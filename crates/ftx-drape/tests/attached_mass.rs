@@ -70,6 +70,228 @@ fn loaded() -> Value {
     raw
 }
 
+fn wet_sheet() -> Value {
+    let mut selected = sheet(200.);
+    let record = &mut selected["record"];
+    record["structure"]["mechanical_mass_model"] =
+        json!(ftx_pattern::material_mass::RETAINED_LIQUID_MODEL);
+    let conditions = json!({"specimen_id":"synthetic-retained-sheet", "conditioning":"closed wet test",
+        "retained_liquid_kg_m2":"0.1"});
+    for q in record["properties"].as_object_mut().unwrap().values_mut() {
+        q["conditions"] = conditions.clone();
+    }
+    record["properties"]["areal_density"]["conditions"]["reference_area_basis"] =
+        json!("dry_textile_reference_area");
+    record["properties"]["areal_density"]["conditions"]["mass_basis"] =
+        json!("dry_textile_excluding_retained_liquid");
+    record["properties"]["retained_liquid_areal_density"] = json!({"value":0.1,"unit":"kg/m2",
+        "evidence":"estimate","source":"test","method":"Independent synthetic retained-liquid mass",
+        "conditions":{"specimen_id":"synthetic-retained-sheet","conditioning":"closed wet test",
+            "reference_area_basis":"dry_textile_reference_area", "mass_basis":"additional_retained_liquid",
+            "retention_basis":"closed_co_moving_no_exchange","qualification":"Synthetic no-exchange co-moving liquid experiment"}});
+    selected
+}
+
+#[test]
+fn fixed_retained_liquid_changes_sewn_weight_and_inertia_without_double_counting_extras_or_heat() {
+    let plain = run(band()).unwrap();
+    let mut wet = band();
+    wet["fabric"]["material"] = wet_sheet();
+    let result = run(wet.clone()).unwrap();
+    let dry_mass: f64 = plain.scene.solver.model.mass.iter().sum();
+    let wet_mass: f64 = result.scene.solver.model.mass.iter().sum();
+    assert!((wet_mass - 1.5 * dry_mass).abs() < 1e-15);
+    assert_eq!(plain.scene.mesh.faces, result.scene.mesh.faces);
+    assert_eq!(plain.scene.mesh.verts2d, result.scene.mesh.verts2d);
+    assert_eq!(plain.scene.weld, result.scene.weld);
+    for (a, b) in plain
+        .scene
+        .solver
+        .model
+        .mass
+        .iter()
+        .zip(&result.scene.solver.model.mass)
+    {
+        assert!((b - 1.5 * a).abs() < 1e-17);
+    }
+    assert_ne!(plain.scene.solver.x, result.scene.solver.x);
+    assert_eq!(
+        result.report["material"]["retained_liquid_mass"]["mass"]["dry_textile_kg_m2"],
+        0.2
+    );
+    assert_eq!(
+        result.report["material"]["retained_liquid_mass"]["mass"]["retained_liquid_kg_m2"],
+        0.1
+    );
+    assert!(Surface::from_drape_report(&result.report).is_err());
+    assert_eq!(result.report, run(wet).unwrap().report);
+    let mut with_extra = loaded();
+    with_extra["fabric"]["material"] = wet_sheet();
+    let extra_result = run(with_extra).unwrap();
+    let receipt = extra_result
+        .scene
+        .solver
+        .model
+        .attached_mass_report()
+        .unwrap()
+        .unwrap();
+    assert!((receipt.total_inertial_mass_kg - wet_mass - 0.03).abs() < 1e-15);
+    assert_eq!(receipt.attached_mass_kg, 0.03);
+    assert_eq!(receipt.cloth_mass_kg, wet_mass);
+
+    let target = 0;
+    let mut wet_static = one_dof(
+        &result,
+        target,
+        plain.scene.solver.x.clone(),
+        Vec3::new(0., 0., -9.81),
+    );
+    wet_static.static_solve().unwrap();
+    assert!(
+        (wet_static.checked_elastic_forces().unwrap()[target].z
+            - wet_static.model.mass[target] * 9.81)
+            .abs()
+            < 1e-7
+    );
+    let mut disturbed = plain.scene.solver.x.clone();
+    disturbed[target].z += 0.002;
+    let mut wet_dynamic = one_dof(&result, target, disturbed.clone(), Vec3::ZERO);
+    wet_dynamic.step(0.001).unwrap();
+    let expected =
+        wet_dynamic.model.mass[target] * (wet_dynamic.x[target].z - disturbed[target].z) / 1e-6;
+    assert!((wet_dynamic.checked_elastic_forces().unwrap()[target].z - expected).abs() < 1e-7);
+}
+
+#[test]
+fn retained_liquid_follows_actual_piece_ownership_and_survives_motion_without_reset_or_exchange() {
+    let plain = run(band()).unwrap();
+    let mut raw = band();
+    raw["pieces"][0]["fabric"] = json!({"material":wet_sheet()});
+    let result = run(raw).unwrap();
+    let model = &result.scene.solver.model;
+    let mut expected = plain.scene.solver.model.mass.clone();
+    for (element, owner) in model.membranes.iter().zip(&result.scene.triangle_owner) {
+        if result.scene.mesh.instances[*owner] == "front" {
+            for v in element.v {
+                expected[v] += 0.1 * element.area / 3.;
+            }
+        }
+    }
+    for (a, b) in model.mass.iter().zip(&expected) {
+        assert!((a - b).abs() < 1e-17);
+    }
+    let mut moving = result.scene.solver.clone();
+    let mass = moving.model.mass.clone();
+    let target: Vec<_> = moving
+        .contact
+        .as_ref()
+        .unwrap()
+        .body
+        .vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0.00001, 0., 0.))
+        .collect();
+    let motion = advance_body(
+        &mut moving,
+        &target,
+        0.002,
+        MotionOptions {
+            max_step_s: 0.001,
+            ..MotionOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(motion.samples.len(), 2);
+    assert_eq!(moving.model.mass, mass);
+    assert_ne!(moving.x, result.scene.solver.x);
+    let mut bad = band();
+    bad["fabric"]["material"] = wet_sheet();
+    bad["fabric"]["material"]["record"]["properties"]["friction_skin"]["conditions"]["retained_liquid_kg_m2"] =
+        json!("0");
+    assert!(run(bad).err().unwrap().message.contains("wet mechanics"));
+}
+
+#[test]
+fn timed_strip_consumes_the_same_fixed_liquid_density_and_frozen_source() {
+    let input = |material: Value| {
+        serde_json::from_value::<ftx_drape::strip::history::Request>(json!({
+        "schema":"ftx-strip-history/1", "material":material,
+        "fixture":{"gauge_length_m":0.1,"width_m":0.06,"warp_axis":[0.,1.],"cells":[2,2]},
+        "loading":[{"time_s":0.,"extension_fraction":0.},
+            {"time_s":0.01,"extension_fraction":0.01},{"time_s":0.02,"extension_fraction":0.01}],
+        "controls":{"max_step_s":0.002}
+    })).unwrap()
+    };
+    let dry = ftx_drape::strip::history::evaluate(&input(sheet(200.))).unwrap();
+    let wet = ftx_drape::strip::history::evaluate(&input(wet_sheet())).unwrap();
+    assert!((wet.reference_mass_kg - 1.5 * dry.reference_mass_kg).abs() < 1e-15);
+    assert_eq!(wet.reference_positions_m, dry.reference_positions_m);
+    assert_eq!(wet.triangles, dry.triangles);
+    assert_eq!(wet.retained_liquid.unwrap().retained_liquid_kg_m2, 0.1);
+    assert_ne!(wet.states[1].positions_m, dry.states[1].positions_m);
+    let replay = ftx_drape::strip::history::evaluate(
+        &serde_json::from_str(&wet.replay_request_json).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(wet).unwrap(),
+        serde_json::to_value(replay).unwrap()
+    );
+}
+
+#[test]
+fn both_static_strip_consumers_require_the_selected_wet_response_but_not_dry_mass() {
+    let check = |selected: Value| {
+        let material = ftx_pattern::textile_import::catalog()
+            .unwrap()
+            .resolve(&serde_json::from_value(selected.clone()).unwrap())
+            .unwrap();
+        let a = ftx_drape::strip::simulate(
+            &material,
+            &ftx_drape::strip::Geometry {
+                gauge_m: 0.1,
+                width_m: 0.06,
+                warp_angle_deg: 0.,
+                length_cells: 2,
+                width_cells: 2,
+            },
+            &[0.01],
+            &ftx_drape::strip::Options::default(),
+        );
+        let request: ftx_drape::strip::Request = serde_json::from_value(json!({
+            "schema":"ftx-strip-experiment/1","material":selected,
+            "fixture":{"gauge_length_m":0.1,"width_m":0.06,"warp_axis":[0.,1.],"cells":[2,2]},
+            "extensions":[0.01]
+        }))
+        .unwrap();
+        let b = ftx_drape::strip::evaluate(&request);
+        (a, b)
+    };
+    let (a, b) = check(wet_sheet());
+    assert!(a.is_ok() && b.is_ok());
+    let mut stale = wet_sheet();
+    stale["record"]["properties"]["warp_stiffness"]["conditions"]["retained_liquid_kg_m2"] =
+        json!("0");
+    let (a, b) = check(stale);
+    assert!(a.unwrap_err().message.contains("wet mechanics"));
+    assert!(b.unwrap_err().message.contains("wet mechanics"));
+    let mut dry = sheet(200.);
+    dry["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|key, _| {
+            [
+                "warp_stiffness",
+                "weft_stiffness",
+                "poisson_warp_weft",
+                "shear_stiffness",
+            ]
+            .contains(&key.as_str())
+        });
+    let (a, b) = check(dry);
+    assert!(a.is_ok() && b.is_ok());
+}
+
 struct Form;
 impl PartFrames for Form {
     fn frame(&self, _: &str) -> Option<PartFrame> {

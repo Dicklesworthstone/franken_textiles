@@ -14,6 +14,23 @@ fn fixture() -> Input {
     .unwrap()
 }
 
+#[test]
+fn pressure_conditioning_cannot_silently_strip_selected_retained_liquid_mass() {
+    let mut input = fixture();
+    input.material.structure.insert(
+        "mechanical_mass_model".into(),
+        ftx_pattern::material_mass::RETAINED_LIQUID_MODEL.into(),
+    );
+    let before = serde_json::to_value(&input).unwrap();
+    assert!(
+        condition(&input)
+            .unwrap_err()
+            .message
+            .contains("retained-liquid")
+    );
+    assert_eq!(serde_json::to_value(&input).unwrap(), before);
+}
+
 fn catalog() -> Catalog {
     Catalog {
         schema: CATALOG_SCHEMA.into(),

@@ -63,7 +63,7 @@ fn invalid(message: impl Into<String>) -> Refusal {
 #[must_use]
 pub fn property_unit(key: &str) -> Option<&'static str> {
     Some(match key {
-        "areal_density" => "kg/m2",
+        "areal_density" | "retained_liquid_areal_density" => "kg/m2",
         "thickness"
         | "reported_thickness"
         | "width"

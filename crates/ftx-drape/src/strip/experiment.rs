@@ -304,6 +304,9 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
     }
     let resolved = textile_import::catalog()?.resolve(&input.material)?;
     let material = resolved.material();
+    if material.structure.contains_key("mechanical_mass_model") {
+        material.mechanical_areal_density(resolved.allows_estimates())?;
+    }
     if matches!(material.form, Form::Fiber | Form::Yarn | Form::Fill) {
         return Err(invalid(
             "clamped strip experiments require a sheet material; fiber, yarn and loose fill cannot supply a sheet law",

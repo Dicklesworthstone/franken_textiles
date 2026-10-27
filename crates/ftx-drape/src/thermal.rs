@@ -154,6 +154,9 @@ impl DryThermalModel {
         for &r in &interfaces {
             nonnegative("interface resistance", r)?;
         }
+        for layer in &layers {
+            layer.material().require_dry_mass_transport()?;
+        }
         if layers
             .iter()
             .any(|m| m.material().thermal_response.is_some())

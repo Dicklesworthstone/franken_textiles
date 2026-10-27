@@ -50,7 +50,8 @@ fn supplier_records_enter_the_shared_catalog_and_freeze_without_invented_physics
 }
 
 #[test]
-fn fabricmart_quarter_yard_manifest_locks_exact_knit_without_inventing_composition_or_usable_width() {
+fn fabricmart_quarter_yard_manifest_locks_exact_knit_without_inventing_composition_or_usable_width()
+{
     let catalog = supplier_catalog();
     let material = catalog
         .resolve(&Selection {
@@ -77,7 +78,10 @@ fn fabricmart_quarter_yard_manifest_locks_exact_knit_without_inventing_compositi
     assert_eq!(material.material().properties.len(), 1);
     let empty = Catalog::from_json(r#"{"schema":"ftx-textile-catalog/1","materials":[]}"#).unwrap();
     assert_eq!(
-        empty.resolve(&material.frozen_selection()).unwrap().sha256(),
+        empty
+            .resolve(&material.frozen_selection())
+            .unwrap()
+            .sha256(),
         material.sha256()
     );
 }

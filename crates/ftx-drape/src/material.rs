@@ -266,6 +266,9 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
         });
     };
     let mechanics = record.mechanics()?;
+    let retained_liquid = record
+        .material()
+        .retained_liquid_mass(record.allows_estimates())?;
     let response = record.membrane_response()?;
     let relaxation = record.membrane_relaxation()?;
     let membrane_plasticity = record.membrane_plasticity()?;
@@ -385,6 +388,13 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
     {
         inputs.report["physical_area_ratio_range"] = json!(range);
         inputs.report["area_response_model"] = json!(ftx_pattern::material_response::AREA_MODEL);
+    }
+    if let Some(mass) = retained_liquid {
+        inputs.report["retained_liquid_mass"] = json!({
+            "model":ftx_pattern::material_mass::RETAINED_LIQUID_MODEL,
+            "mass":mass,
+            "basis":"source-qualified fixed co-moving liquid on dry textile reference area; conserved through sewing, draping and motion",
+            "not_simulated":["liquid exchange/drainage/evaporation","liquid relative momentum","unqualified wet mechanical changes","liquid thermal storage/transport"]});
     }
     if let Some(law) = &inputs.plasticity {
         inputs.report["bending_plasticity_law_sha256"] = json!(law.fingerprint());

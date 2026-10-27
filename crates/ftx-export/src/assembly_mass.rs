@@ -67,8 +67,11 @@ pub struct PieceMass {
     pub removed_cutout_area_m2: f64,
     /// Retained sheet area, m². Simulation-only deformation, omission and scaling have no effect.
     pub retained_area_m2: f64,
-    /// Mass computed only from admitted source areal density and retained area.
+    /// Mass from admitted sheet plus optional fixed retained liquid and retained area.
     pub mass: Mass,
+    /// Independent dry/liquid mass authority when the material opts into closed retained liquid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retained_liquid: Option<ftx_pattern::material_mass::RetainedLiquidMass>,
 }
 
 /// A complete-or-unknown assembly calculation with explicit physical scope.
@@ -352,9 +355,11 @@ impl Request {
                         "pattern area requires a sheet/batt/hide, not raw fiber or yarn",
                     ));
                 }
-                m.material()
-                    .require("areal_density", "kg/m2", m.allows_estimates())?;
-                scale(&m.material().properties["areal_density"], retained)
+                let (density, bounds) = m.material().sheet_areal_mass(m.allows_estimates())?;
+                let mut observation = m.material().properties["areal_density"].clone();
+                observation.value = density;
+                observation.bounds = bounds;
+                scale(&observation, retained)
             }));
             pieces.push(PieceMass {
                 piece: instance.piece.clone(),
@@ -364,6 +369,12 @@ impl Request {
                 removed_cutout_area_m2: cutouts,
                 retained_area_m2: retained,
                 mass,
+                retained_liquid: material.as_ref().ok().and_then(|m| {
+                    m.material()
+                        .retained_liquid_mass(m.allows_estimates())
+                        .ok()
+                        .flatten()
+                }),
             });
         }
         let sheet_mass = Mass::sum(pieces.iter().map(|p| &p.mass));
@@ -376,7 +387,8 @@ impl Request {
         } else {
             Mass::unknown("extra-component inventory is not declared complete")
         };
-        Ok(Report {
+        let has_retained_liquid = pieces.iter().any(|p| p.retained_liquid.is_some());
+        let mut result = Report {
             schema: "ftx-assembly-mass-report/1",
             pattern_sha256: hash(pattern.raw())?,
             request_sha256: hash(self)?,
@@ -394,7 +406,11 @@ impl Request {
                 "Completeness is conditional on the author's explicit extra-component inventory, not automatic discovery of thread, decoration, closures or hidden layers. A laminate density must describe the complete selected laminate; separately represented layers must not count it again.",
                 "Reported endpoints are propagated only through fixed authored area and additive mass accounting. They are not statistical confidence, geometry/quantity uncertainty, a weighed garment or empirical fit validation.",
             ],
-        })
+        };
+        if has_retained_liquid {
+            result.limitations.push("The selected fixed retained-liquid mass model adds its independently sourced loading once to explicitly dry substrate mass. It describes closed co-moving liquid on reference area, not an automatic moisture-regain estimate or a changing-water process.");
+        }
+        Ok(result)
     }
 }
 

@@ -78,6 +78,39 @@ fn unchanged_pattern_material_swap_changes_stack_and_receipt_not_station_geometr
 }
 
 #[test]
+fn fixed_liquid_sewing_requires_wet_thickness_without_requiring_unrelated_membrane_data() {
+    let mut raw = pattern();
+    let record = &mut raw["fabric"]["material"]["record"];
+    record["structure"]["mechanical_mass_model"] =
+        json!(ftx_pattern::material_mass::RETAINED_LIQUID_MODEL);
+    record["properties"]["areal_density"] = json!({"value":0.2,"unit":"kg/m2",
+        "source":"t","evidence":"estimate","method":"Synthetic dry mass",
+        "conditions":{"specimen_id":"synthetic-wet-sewing","conditioning":"closed numerical test",
+            "reference_area_basis":"dry_textile_reference_area","mass_basis":"dry_textile_excluding_retained_liquid"}});
+    record["properties"]["retained_liquid_areal_density"] = json!({"value":0.1,"unit":"kg/m2",
+        "source":"t","evidence":"estimate","method":"Synthetic additional liquid",
+        "conditions":{"specimen_id":"synthetic-wet-sewing","conditioning":"closed numerical test",
+            "reference_area_basis":"dry_textile_reference_area","mass_basis":"additional_retained_liquid",
+            "retention_basis":"closed_co_moving_no_exchange","qualification":"Independent synthetic fixed liquid retention"}});
+    assert!(
+        plan(raw.clone(), options())
+            .unwrap_err()
+            .message
+            .contains("wet mechanics")
+    );
+    raw["fabric"]["material"]["record"]["properties"]["thickness"]["conditions"] = json!({
+        "specimen_id":"synthetic-wet-sewing","conditioning":"closed numerical test","retained_liquid_kg_m2":"0.1"});
+    let result = plan(raw, options()).unwrap();
+    assert!((result.seams[0].stack_mm - 0.8).abs() < 1e-12);
+    assert!(
+        result
+            .materials
+            .values()
+            .all(|s| s.record.as_ref().unwrap().missing_mechanics().len() > 1)
+    );
+}
+
+#[test]
 fn per_piece_plies_and_reported_upper_thickness_are_not_averaged_away() {
     let mut p = pattern();
     p["pieces"][1]["fabric"] = fabric("lining", 0.2);

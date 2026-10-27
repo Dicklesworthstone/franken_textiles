@@ -158,3 +158,74 @@ sewn dynamics, source-sheet thermal storage, deterministic replay, prescribed mo
 and refusal of stale low-level state. They establish the stated software/mechanics behavior. They do
 not establish empirical fit, seam or fastener safety, rigid accessory dynamics, distributed trim
 bending, accessory/body contact or wearer warmth.
+
+## Fixed retained liquid on a textile
+
+A material can independently select
+`structure.mechanical_mass_model: "dry_textile_plus_fixed_retained_liquid/1"`.
+This adds a uniform, source-qualified `retained_liquid_areal_density` to an explicitly dry
+`areal_density`, once per reference textile area. Both observations normalize to kg/m²; authored
+g/m² values and bounds remain in the frozen source record. The dry observation must exclude this
+liquid. An observed total wet density cannot be supplied as the dry term and added again.
+
+This is a **closed, co-moving mechanical state**. Liquid stays attached to the same material area,
+has the same velocity as the cloth, and neither enters nor leaves during sewing, draping or motion.
+No variable-mass momentum term is therefore omitted. The model does not simulate sorption,
+capillary migration, drainage, evaporation, condensation or liquid sloshing. Those require a joint
+mass, momentum and thermal integrator; the existing changing surface-water history must not be
+combined with this fixed mass as if it already provided that coupling.
+
+The mass observations require these source conditions:
+
+| Observation | Required conditions |
+|---|---|
+| Both | Identical nonempty `specimen_id` and `conditioning`; `reference_area_basis: "dry_textile_reference_area"` |
+| `areal_density` | `mass_basis: "dry_textile_excluding_retained_liquid"` |
+| `retained_liquid_areal_density` | `mass_basis: "additional_retained_liquid"`; `retention_basis: "closed_co_moving_no_exchange"`; nonempty source `qualification` describing this retention regime |
+
+The liquid value is nonnegative, the dry value positive, and both use the selection's normal
+evidence and estimate policy. The sum must be representable without losing either positive term.
+Reported total endpoints are available only when **both** source observations provide complete
+physical bounds. Missing liquid bounds do not imply zero uncertainty or reuse the dry interval.
+
+Mechanical admission additionally requires every consumed scalar, directional/nonlinear curve,
+Maxwell coefficient and network qualification to name that same `specimen_id`, `conditioning`,
+and `retained_liquid_kg_m2` (a string containing the exact SI nominal loading). This is explicit
+qualification of the wet mechanical response. The software does not copy a dry modulus, bending
+law, thickness or friction coefficient and assume wetting leaves it unchanged. Synthetic examples
+may deliberately use equal wet and dry coefficients, with explicit estimate admission, to isolate
+the inertial effect in a numerical test.
+
+The shared material resolver supplies the total to the ordinary triangle mass assembler. Piece
+selection, mirroring, grain and seam welding retain their normal behavior; different wet panels
+contribute their own reference-area shares at a shared welded vertex. Static gravity, implicit
+inertia, elastic-casing weight, timed clamped strips and prescribed body motion all use this same
+mass. Accessory groups remain separate and are added once afterwards. Material substitution
+rebuilds the mass from the new frozen source observations without changing simulation code.
+
+`material.retained_liquid_mass` in the uniform drape receipt (or the corresponding per-piece record)
+retains separate dry, liquid and total densities and complete reported bounds. Timed-strip reports
+add optional `retained_liquid`; their `reference_mass_kg` includes both terms. Complete assembly
+accounting uses the same density on each actual retained cut area and adds the same optional receipt
+to each `PieceMass`. Simulation and cutting still have different geometric scopes when allowances,
+cutouts, omitted panels or simulation scales differ; identical reference areas use identical mass.
+Roll and finite-stock gross mass use the same selected-state density on their declared gross areas,
+including waste. Material comparison protocols retain the mass model and liquid acquisition method
+and conditions, so incompatible dry/wet regimes or liquid protocols need explicit mixed-protocol
+consent. Sewing requires its thickness observation to qualify the same loading, independently of
+whether a membrane law exists. Static strip consumers apply the same wet-state admission while
+preserving the existing membrane-only capability for ordinary dry records.
+
+The current dry steady/transient thermal and vapor consumers refuse this selected fixed-liquid
+state. Its mechanical loading does not supply liquid heat capacity, wet conductivity, changed Ret,
+latent storage or a thermal boundary. Mechanical results remain usable while those capabilities
+are unavailable. A fully coupled liquid thermal model needs its own matched state and evidence.
+Without the selector, existing material, output and mass behavior remain unchanged.
+The existing pressure-conditioning transform also refuses this selected regime: it may not strip
+the mass model, discard retained liquid or infer that compression preserves its loading.
+
+Direct synthetic regressions in the existing `attached_mass` and `assembly_mass` suites check
+normalization, source and loading mismatches, denied estimates, whole reported bounds, actual
+welded allocations, static weight balance, dynamic momentum balance, material substitution, real
+motion continuation, timed-strip replay and independent thermal refusal. These tests do not qualify
+the wet behavior of a real textile.

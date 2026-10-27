@@ -1483,6 +1483,7 @@ impl Policy {
         if transient {
             keys.extend(["areal_density", "specific_heat", "thickness"]);
         }
+        let mass = keys.contains("areal_density");
         let textile_water = consumers.contains(&Consumer::TransientSurface)
             && !descriptor["scenario"]["motion"]["transient_surface"]["surface_water"].is_null();
         if textile_water {
@@ -1542,6 +1543,9 @@ impl Policy {
                 .as_ref()
                 .ok_or_else(|| invalid("frozen source record unavailable"))?;
             let mut relevant = keys.clone();
+            if mass && material.structure.contains_key("mechanical_mass_model") {
+                relevant.insert("retained_liquid_areal_density");
+            }
             if (consumers.contains(&Consumer::CuttingJob)
                 || consumers.contains(&Consumer::CuttingJobPurchasing))
                 && row.cutting_job.value().is_some_and(|job| {
@@ -1581,7 +1585,8 @@ impl Policy {
                 .structure
                 .iter()
                 .filter(|(key, _)| {
-                    mechanics && (key.starts_with("bending_") || key.starts_with("membrane_"))
+                    (mechanics && (key.starts_with("bending_") || key.starts_with("membrane_")))
+                        || (mass && key.as_str() == "mechanical_mass_model")
                 })
                 .collect();
             protocols.insert(id, json!({"properties":profile, "constitutive_models":models,

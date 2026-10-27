@@ -349,6 +349,15 @@ fn lerp(a: f64, b: f64, weight: f64) -> f64 {
 /// Invalid provenance/units/pressure/loft, mixed conditioning, unsupported invariance, ambiguous
 /// transport, extrapolation, denied estimates, nonrepresentable arithmetic or prior conditioning.
 pub fn condition(input: &Input) -> Result<Report, Refusal> {
+    if input
+        .material
+        .structure
+        .contains_key("mechanical_mass_model")
+    {
+        return Err(invalid(
+            "pressure conditioning cannot discard a selected retained-liquid mass model; compression-dependent liquid retention is not qualified",
+        ));
+    }
     input.material.validate()?;
     if input.schema != SCHEMA
         || matches!(input.material.form, Form::Fiber | Form::Yarn)

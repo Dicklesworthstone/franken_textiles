@@ -179,6 +179,9 @@ pub fn simulate(
         ));
     }
     let m = material.material();
+    if m.structure.contains_key("mechanical_mass_model") {
+        m.mechanical_areal_density(material.allows_estimates())?;
+    }
     if matches!(m.form, Form::Fiber | Form::Yarn | Form::Fill)
         || m.membrane_relaxation.is_some()
         || m.structure.contains_key("membrane_plasticity_model")

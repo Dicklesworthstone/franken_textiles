@@ -3903,6 +3903,35 @@ Broader supplier coverage, representative market percentiles and empirical speci
 remain under `ftx-tm6`, `ftx-pq1` and `ftx-tm2`.
 See [fabricmart-stock-refresh.md](docs/fabricmart-stock-refresh.md).
 
+### 25.102 Retained liquid shares one mechanical and assembly mass authority
+
+An explicit `dry_textile_plus_fixed_retained_liquid/1` selection adds independently qualified
+liquid mass once to the dry substrate on the same reference textile area. Specimen,
+conditioning, dry/additional mass bases and a closed co-moving no-exchange regime are required.
+Mechanical observations must qualify that exact liquid loading; a heavier wet selection cannot
+silently retain unqualified dry membrane, bending, thickness or friction observations.
+
+The shared authority supplies ordinary per-piece/sewn cloth, gravity and inertia, body motion,
+timed strip experiments, retained assembly mass and roll/remnant gross-stock mass. Reports keep
+dry, liquid and total components, and propagate reported endpoints only when both observations
+provide usable bounds. Attached accessories remain independent. Material studies compare the
+actual combined results and include liquid acquisition/retention protocols in their admission.
+Static membrane experiments and sewing thickness also enforce the selected wet state without
+forcing otherwise independent dry consumers to acquire unrelated properties.
+
+This completes the bounded software scope of `ftx-vc2.2`, with source, conservation, motion,
+stock-accounting and consumer-refusal regressions. It supplies no new empirical wet-textile
+coefficients. Existing dry thermal/vapor and pressure-conditioning consumers explicitly refuse
+this fixed-liquid selection until the corresponding liquid storage, transport and retention
+effects are independently supported. The unchanged-pattern linen/leather/performance-knit
+acceptance remains dependent on matched real specimens under `ftx-tm2` and `ftx-tm8`.
+
+The next coupling task, `ftx-vc2.3`, must advance changing textile liquid and cloth together:
+evaporation, supply, condensation and drainage change local mass and require explicit incoming/
+outgoing momentum, wet constitutive domains and conservative energy accounting. Accepted-step
+rollback must include every coupled state. A thermal history computed after a dry mechanical
+run cannot establish this two-way behavior. See [attached-mass.md](docs/attached-mass.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

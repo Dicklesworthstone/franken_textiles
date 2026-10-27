@@ -1171,6 +1171,7 @@ fn sheet(pattern: &Pattern, piece_index: usize) -> Result<(ResolvedMaterial, f64
         ));
     }
     let thickness = material.require("thickness", "m", selected.allows_estimates())?;
+    material.qualify_retained_liquid_property("thickness", selected.allows_estimates())?;
     let bounds = material.properties["thickness"].bounds;
     let thickness_mm = bounds.map_or(thickness, |v| v[1]) * 1000.0;
     if !positive(thickness) || !positive(thickness_mm) || bounds.is_some_and(|v| !positive(v[0])) {

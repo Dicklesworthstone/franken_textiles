@@ -395,7 +395,7 @@ impl Material {
         // joint history law before a consumer can silently fall back to elastic mechanics.
         self.compiled_membrane_plasticity(allow_estimates)?;
         let mut v = [0.0; 9];
-        v[0] = self.require("areal_density", "kg/m2", allow_estimates)?;
+        v[0] = self.mechanical_areal_density(allow_estimates)?;
         if let Some(law) = self.compiled_membrane(allow_estimates)? {
             let [q11, q22, q12, g12] = law.origin_stiffness();
             let nu12 = q12 / q22;
@@ -475,6 +475,7 @@ impl Material {
     /// Incomplete, unapproved, nonpositive or non-finite thermal data.
     pub fn thermal_resistance(&self, allow_estimates: bool) -> Result<f64, Refusal> {
         self.validate()?;
+        self.require_dry_mass_transport()?;
         let r = if self.properties.contains_key("thermal_resistance") {
             self.require("thermal_resistance", "m2*K/W", allow_estimates)?
         } else {

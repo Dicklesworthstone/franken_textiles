@@ -720,8 +720,8 @@ fn finish_marker(
     }
     let mass = material
         .material()
-        .require("areal_density", "kg/m2", material.allows_estimates())
-        .and_then(|rho| positive("areal density", rho))
+        .sheet_areal_mass(material.allows_estimates())
+        .and_then(|(rho, _)| positive("areal density", rho))
         .and_then(|rho| positive("gross stock mass", rho * stock_area_m2));
     Ok(RollMarker {
         material,

@@ -128,8 +128,11 @@ pub struct Report {
     pub reference_positions_m: Vec<[f64; 3]>,
     /// Production triangles in deterministic row-major order.
     pub triangles: Vec<[usize; 3]>,
-    /// Sourced reference areal density times gauge area, including constrained edge shares, kg.
+    /// Source dry sheet plus qualified fixed retained liquid times gauge area, including grips, kg.
     pub reference_mass_kg: f64,
+    /// Independent dry/liquid source densities when fixed retained-liquid mechanics is selected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retained_liquid: Option<ftx_pattern::material_mass::RetainedLiquidMass>,
     /// Initial state followed by every accepted integration step, without decimation.
     pub states: Vec<State>,
     /// Total Newton iterations across every accepted step.
@@ -329,7 +332,7 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
             "timed strip experiments require a characterized sheet",
         ));
     }
-    let mass = material.require("areal_density", "kg/m2", resolved.allows_estimates())?;
+    let mass = material.mechanical_areal_density(resolved.allows_estimates())?;
     let response = resolved.membrane_response()?;
     let [warp, weft, poisson, shear] = if let Some(law) = &response {
         law.reference_moduli()?
@@ -456,6 +459,7 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         reference_positions_m: reference.into_iter().map(vector).collect(),
         triangles,
         reference_mass_kg: solver.model.mass.iter().sum(),
+        retained_liquid: material.retained_liquid_mass(resolved.allows_estimates())?,
         states,
         newton_iterations: iterations,
         model_scope: if parallel { PARALLEL_SCOPE } else { SCOPE }.into(),

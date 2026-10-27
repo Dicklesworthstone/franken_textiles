@@ -47,6 +47,7 @@ impl ConductionLaw {
     /// Invalid record, missing transport/geometry, evidence denial or mismatched conditions.
     pub fn from_material(material: &Material, allow_estimates: bool) -> Result<Self, Refusal> {
         material.validate()?;
+        material.require_dry_mass_transport()?;
         if matches!(material.form, Form::Fiber | Form::Yarn) {
             return Err(invalid(
                 "fiber/yarn observations are not a characterized thermal sheet",

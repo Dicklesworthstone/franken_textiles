@@ -281,8 +281,8 @@ fn marker(stock: &Stock, material: ResolvedMaterial, work: &mut Work) -> Result<
     let zones = zones::compile(stock, &r, &outline, work)?;
     let mass = material
         .material()
-        .require("areal_density", "kg/m2", material.allows_estimates())
-        .and_then(|rho| positive("areal density", rho))
+        .sheet_areal_mass(material.allows_estimates())
+        .and_then(|(rho, _)| positive("areal density", rho))
         .and_then(|rho| positive("whole stock mass", rho * gross));
     Ok(Marker {
         id: stock.id.clone(),
