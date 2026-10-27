@@ -1,13 +1,40 @@
 //! Material alternatives reuse the qualified production recipe selector. The selected station
 //! geometry lives once in the ordinary sewing outcome; this receipt preserves the entire search.
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::Pattern;
 use serde::Serialize;
 
-use super::{Outcome, budget};
-use crate::{sewing::SewPlan, sewing_selection};
+use super::{Outcome, budget, invalid};
+use crate::{
+    sewing::{SewOptions, SewPlan},
+    sewing_selection,
+};
+
+pub(super) fn production_options(
+    options: &SewOptions,
+    cutting_copies: Option<usize>,
+) -> Result<Cow<'_, SewOptions>, Refusal> {
+    let Some(consumables) = &options.consumables else {
+        return Ok(Cow::Borrowed(options));
+    };
+    if let (Some(thread), Some(cut)) = (consumables.production_copies, cutting_copies)
+        && thread != cut
+    {
+        return Err(invalid(
+            "thread production_copies must match every requested cutting quantity",
+        ));
+    }
+    if consumables.production_copies.is_none()
+        && let Some(copies) = cutting_copies.filter(|copies| *copies != 1)
+    {
+        let mut resolved = options.clone();
+        resolved.consumables.as_mut().unwrap().production_copies = Some(copies);
+        return Ok(Cow::Owned(resolved));
+    }
+    Ok(Cow::Borrowed(options))
+}
 
 /// Recipe-selection receipt for one material-study alternative. Its selected complete plan is
 /// `Alternative.sewing`, not a duplicated set of source/material/needle station arrays.
@@ -76,8 +103,19 @@ pub(super) fn check_budget(
 pub(super) fn evaluate(
     pattern: &Pattern,
     request: &sewing_selection::Request,
+    cutting_copies: Result<Option<usize>, Refusal>,
 ) -> (Outcome<SewPlan>, Outcome<Selection>) {
-    let report = match request.select(pattern) {
+    let report = match (|| {
+        let options = production_options(&request.options, cutting_copies?)?;
+        match options {
+            Cow::Borrowed(_) => request.select(pattern),
+            Cow::Owned(options) => {
+                let mut resolved = request.clone();
+                resolved.options = options;
+                resolved.select(pattern)
+            }
+        }
+    })() {
         Ok(report) => report,
         Err(refusal) => {
             return (

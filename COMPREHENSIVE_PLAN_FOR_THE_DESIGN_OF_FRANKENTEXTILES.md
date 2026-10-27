@@ -3303,6 +3303,38 @@ all accepted samples and consistent extrema. The browser exposes both the spatia
 samples. These are nominal design constraints: characterized strain domains are not failure limits,
 and sampled compliance establishes neither continuous-time safety nor comfort or physical garment fit.
 
+### 25.78 Extend actual insulation choices through the shared material authority
+
+The built-in catalog adds ten source-qualified manufacturer grades: six Type G polyester insulation
+sheets and four pre-compressed Type B footwear sheets. Their original mass, thickness, thermal
+resistance and nominal width observations retain document revision, table page, source digest and
+test method. ASTM D5736 thickness pressure is not assigned to the separate ASTM F1868 thermal result;
+rounded clo columns do not replace the published SI observations. Type B composition stays unknown
+where the source omits it. See [insulation-data.md](docs/insulation-data.md).
+
+Existing resolution, freezing, mass/width screening and steady thermal consumers use these records
+without a second database or solver edits. A material-only G100/B100 substitution changes conditional
+steady heat flow through the existing series model. This is useful commercial coverage, not a measured
+garment, a temperature rating, a wet-state law or complete transient/mechanical characterization.
+Matched lot-specific measurements and the unchanged-pattern linen/leather/performance-knit acceptance
+in `ftx-tm2` and `ftx-tm8` remain the principal physical-data gaps. The source-import slice is `ftx-ti1`.
+
+### 25.79 One production quantity for cutting and sewing-thread orders
+
+The sewing consumables request accepts an explicit `production_copies` count. Material and design
+studies inherit the actual roll, finite-stock or mixed cutting-job count when it is omitted; all
+requested routes must agree and explicit conflicts refuse sewing. Qualified operation/channel
+traversals and start/end allowances repeat per garment, then exact yarn requirements aggregate before
+the existing price engine evaluates minimums, increments, tiers and observed inventory. Continuity
+remains one complete operation/channel rather than one unbroken thread across all garments.
+
+Both fixed sewing and qualified recipe search use this quantity. Version-2 consumables reports retain
+per-copy contributions and complete production totals; selected options replay independently. Omitted
+standalone counts preserve the original one-garment output. Sewing geometry, feed/setup durations and
+assembly mass keep their per-garment scope. Cross-garment scheduling and combined fabric/thread supplier
+orders remain separate capabilities. Track this functional integration in `ftx-pb1`; see
+[material-sewing-plans.md](docs/material-sewing-plans.md#production-quantities-share-cutting-and-thread-purchasing).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

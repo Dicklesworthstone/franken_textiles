@@ -145,6 +145,99 @@ fn thread_cost_selection_matches_portable_and_both_native_commands() {
 }
 
 #[test]
+fn production_thread_orders_follow_cutting_copies_in_native_and_portable_consumers() {
+    let mut source: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+    ))
+    .unwrap();
+    source["fabric"]["material"]["record"]["properties"]["width"] = json!({
+        "value":0.1,"unit":"m","evidence":"estimate","source":"test",
+        "method":"Synthetic stock width for production-copy integration"});
+    let material = ftx_pattern::materials::Catalog {
+        schema: ftx_pattern::materials::CATALOG_SCHEMA.into(),
+        materials: Vec::new(),
+    }
+    .resolve(&serde_json::from_value(source["fabric"]["material"].clone()).unwrap())
+    .unwrap()
+    .frozen_selection();
+    source["fabric"]["material"] = json!(material);
+    let mut selection: Value = serde_json::from_str(include_str!(
+        "../../../examples/sewing-thread-cost-selection.json"
+    ))
+    .unwrap();
+    for qualification in selection["options"]["qualifications"]
+        .as_array_mut()
+        .unwrap()
+    {
+        qualification["materials"] = json!([material.expected_sha256, material.expected_sha256]);
+    }
+    selection["options"]["consumables"]["purchasing"]["quote_book"]["quotes"][0]["available_quantity"] =
+        json!(16.0);
+    let study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"batch","changes":{"schema":"ftx-material-bindings/1","default":material}}],
+        "cutting":{"copies":2,"gap_mm":2.0,"edge_margin_mm":0.0,"end_margin_mm":0.0},
+        "sewing_selection":selection,
+        "comparison":{"basis":"nominal","required_consumers":["cutting","sewing_purchasing"],
+            "objectives":[{"metric":"thread_observed_order_cost","direction":"minimize"}]}});
+    let pattern = source.to_string();
+    let study_text = study.to_string();
+    let portable: Value =
+        serde_json::from_str(&ftx_wasm::materials::study(&pattern, &study_text).unwrap()).unwrap();
+    let row = &portable["alternatives"][0];
+    assert_eq!(row["cutting"]["status"], "available");
+    assert_eq!(
+        row["sewing"]["result"]["consumables"]["production_copies"],
+        2
+    );
+    assert_eq!(row["metrics"]["thread_observed_order_cost"], 14.0);
+    assert_eq!(row["sewing_selection"]["result"]["optimality_proven"], true);
+    assert_eq!(portable["comparison"]["frontier"], json!(["batch"]));
+    let selected = &row["sewing_selection"]["result"]["request"];
+    let standalone: Value =
+        serde_json::from_str(&ftx_wasm::sew_select(&pattern, &selected.to_string()).unwrap())
+            .unwrap();
+    assert_eq!(
+        standalone["report"]["selected_plan"],
+        row["sewing"]["result"]
+    );
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-production-thread-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("pattern.json"), pattern).unwrap();
+    fs::write(dir.join("study.json"), study_text).unwrap();
+    fs::write(dir.join("selection.json"), selected.to_string()).unwrap();
+    for main in [false, true] {
+        assert_eq!(run(main, &dir), portable);
+        let mut command = Command::new(if main {
+            env!("CARGO_BIN_EXE_ftx")
+        } else {
+            env!("CARGO_BIN_EXE_ftx-materials")
+        });
+        command.current_dir(&dir);
+        if main {
+            command.args(["--json", "materials"]);
+        }
+        let output = command
+            .args(["sew-select", "pattern.json", "selection.json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(actual.get("result").unwrap_or(&actual), &standalone);
+    }
+}
+
+#[test]
 fn both_native_commands_expand_design_material_pairs_and_preserve_exact_replay() {
     let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
     let input = include_str!("../../../examples/design-study.json");
