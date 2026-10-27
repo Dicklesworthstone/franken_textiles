@@ -3452,6 +3452,27 @@ workholding, seam-access and handling constraints. Synthetic timings and complet
 do not establish physical execution readiness. `ftx-care1`, `ftx-pb2`, `ftx-tm2`, `ftx-tm8` and
 `ftx-sp2` retain those unsatisfied physical requirements; no hardware authorization is created.
 
+### 25.85 Released fabric observations expand real material discovery
+
+The Fabric-101 source adapter adds 96 individually identified released specimens, taking the
+canonical catalog from 275 to 371 records. Its 192 measured observations preserve original areal
+mass and reported thickness, with fiber composition and construction only where the exact source
+identities agree. Coverage includes linen/ramie, cotton, silk, wool, polyester and nylon, blends,
+jerseys, rib, fleece and coated sheets. Exact release revision, CSV hashes, specimen IDs, instrument
+header paths/blob hashes, conditioning and source discrepancies accompany each record. Catalog
+search, ordinary bindings, assembly mass and material screening consume these records directly.
+
+The authors' 103-row catalog has 98 mapped released specimens; two disagree with their instrument
+mass metadata and are excluded, leaving 96 concordant entries. Stale article labels and values are
+retained as explicit discrepancies rather than silently joined across specimen IDs. Unqualified
+gauge thickness remains `reported_thickness`, separate from contact/sewing thickness. No curve fit,
+stiffness, friction, thermal property or uncertainty interval is manufactured from these metadata.
+The cylinder force/torque experiments need a separately justified forward model, raw timing/tare
+and geometry qualification, and independent CHECK evidence before they can supply solver laws.
+See [fabric101-materials.md](docs/fabric101-materials.md) for exact sources, exclusions and usage.
+This useful data expansion leaves the principal measured substitution gates `ftx-tm2` and `ftx-tm8`
+open; source-backed mass is not complete garment simulation readiness.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

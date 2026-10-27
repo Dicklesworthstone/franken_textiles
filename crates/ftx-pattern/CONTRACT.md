@@ -1,5 +1,13 @@
 # ftx-pattern contract
 
+**Released Fabric-101 observations** (`material_catalog::fabric101`). Ninety-six concordant,
+individually identified release records add measured areal density and reported gauge thickness to
+the ordinary catalog, bindings, mass and screening paths. Immutable release/source pins, raw
+specimen/header identities and conflicting article metadata remain attached. Conflicting or
+unreleased rows are excluded. Reported thickness does not qualify contact or sewing clearance;
+raw cylinder force/torque data do not become membrane, bending or friction laws. Missing transport
+and mechanics remain missing. Tests: `fabric101_catalog`; source notes: `docs/fabric101-materials.md`.
+
 **Source-qualified treatment** (`material_treatment`, `ftx-care1`). Frozen before/after selections,
 exact process/cycles/conditioning and sourced directional dimensional changes produce one nominal
 material-axis map. Both states qualify the specimen and their respective conditioning on every
