@@ -112,6 +112,98 @@ and times are **always model estimates**, even from measured forces. The command
 separately admits estimated properties to subsequent simulation. Without it the fit can be inspected
 but its frozen selection will not authorize those estimated inputs. No uncertainty bounds are invented.
 
+## Recovery alongside an independently characterized permanent-set branch
+
+Run the complete, explicitly synthetic acquisition
+[relaxation-plastic-equilibrium.json](../examples/relaxation-plastic-equilibrium.json) through either
+existing native entry point:
+
+```sh
+cargo run -p ftx-cli --bin ftx -- --json materials calibrate-relaxation \
+  examples/relaxation-plastic-equilibrium.json --allow-estimates
+cargo run -p ftx-cli --bin ftx-materials -- calibrate-relaxation \
+  examples/relaxation-plastic-equilibrium.json --allow-estimates
+```
+
+The example retains nine FIT nodes and seven independently initialized CHECK nodes. Its artificial
+warp equilibrium uses stiffness 1000 N/m, yield 20 N/m and hardening 100 N/m; the full material's
+elastic, plastic, mass, bending and contact observations remain fixed. Its forces were constructed
+independently from the scalar return-map formulas and analytic Maxwell convolution with stiffness
+ratio **2** and relaxation time **0.05 s**. Those are recovery parameters to identify, not supplied
+measured textile properties. At 0.03 s the FIT path reaches Green strain 0.08 with all four force
+channels `null`. That unobserved-force peak still advances permanent strain and recovery memory;
+the following forces must retain its effects. The source notes, complete paths and supplied network
+qualification stay in the result alongside the ordinary frozen selection.
+
+The same calibration command can identify Maxwell recovery when an independently characterized
+elastoplastic equilibrium branch is already available. Add an explicit `plastic_equilibrium`
+declaration to the ordinary acquisition input:
+
+```json
+"plastic_equilibrium": {
+  "initialization": "pristine_reference",
+  "allow_estimated_network": false,
+  "network": {
+    "model": "parallel_green_maxwell_plastic/1",
+    "evidence": "measured",
+    "source": "your-independent-network-source",
+    "method": "Your evidence supporting this parallel branch interpretation",
+    "conditions": {
+      "specimen_id": "your-exact-specimen",
+      "conditioning": "your-qualified-state"
+    }
+  }
+}
+```
+
+These strings describe the input shape; they are not supplied measurements or a qualified specimen.
+The source must exist in `material.sources`, and the network conditions must equal the acquisition's
+shared `conditions`. The ordinary material must retain its existing
+`orthotropic_green_return_map/1` selector, four elastic observations and twelve yield, hardening and
+domain observations. Their values and source records stay fixed. Each must match the network's
+declared specimen and conditioning. Additional temperature or moisture conditions stay explicit;
+missing conditions never become temperature independence or a wet-fabric law.
+
+`equilibrium_is_long_time` remains mandatory. Here the fixed elastic tensor belongs to the plastic
+equilibrium branch, not the sum of instantaneous branch stiffnesses. The independently qualified
+network is the existing parallel material described in [material-parallel-memory.md](material-parallel-memory.md).
+Permanent flow sees only equilibrium-branch stress. Every Maxwell arm sees total physical Green
+strain, and its force adds to the known plastic equilibrium force. The fitter never substitutes
+`e - plastic_strain` for the Maxwell driving strain and never identifies yield or hardening in this mode.
+
+Every acquisition must begin at a recorded zero-Green-strain node with zero permanent and accumulated
+strain. The explicit preparation applies separately to each complete experiment; a `relaxed_start`
+Maxwell setting does not erase unknown preload or initialize permanent strain from the first pose.
+All later acquisition nodes advance the canonical plastic return map, including nodes whose four
+forces are all `null`. Omitting an unloaded peak, reversal or hold can change subsequent forces and
+cannot be repaired by treating missing forces as zero. The requested Maxwell domain is intersected
+with the original plastic and fitted-equilibrium domains, and accumulated-strain limits remain active.
+
+Proportional, fixed-time orthotropic, bounded directional-time and model-comparison inputs share
+this preparation. Their existing excitation, stationarity, source, parameter-bound and residual gates
+are unchanged. Only FIT forces select coefficients, times or competing models. A CHECK refusal or
+excess residual rejects the fixed choice without selecting a replacement. Fixed plastic estimates,
+acquisition estimates and an estimated network interpretation require their respective independent
+opt-ins. Published Maxwell coefficients remain estimates, so using the resulting Selection still
+requires ordinary estimate consent.
+
+Each prediction additionally retains `plastic_equilibrium`: accepted `plastic_strain`,
+`accumulated_strain`, known equilibrium `nominal_n_m`, `step_dissipated_j_m2` and
+`cumulative_dissipated_j_m2`. Cumulative work starts again for each independently initialized
+acquisition. The output is an ordinary material whose `membrane_relaxation.parallel_plasticity`
+retains the supplied network qualification. The full material compiler admits both histories together;
+the frozen selection can enter existing sewn or timed-strip consumers without another material engine.
+An all-zero orthotropic spectrum refuses this requested parallel interpretation rather than quietly
+publishing a different network. Omitting `plastic_equilibrium` preserves previous serialization and
+the refusal to mix an undeclared permanent-strain branch with Maxwell identification.
+
+The plastic part is an explicitly discrete recorded-node return-map experiment. The Maxwell
+convolution is exact for the declared piecewise-linear Green-strain interpolation; this does not make
+the nonlinear plastic path continuous-time exact. No unobserved turning points, time/space refinement,
+parameter confidence, measured specimen agreement, heat conversion or garment fit are inferred.
+Retain complete acquisition histories and verify temporal/spatial resolution independently when
+using an identified material in a finite strip or garment simulation.
+
 ## Independent directional recovery at fixed candidate times
 
 The same `ftx-relaxation-calibration/1` input can replace the proportional time search with:
@@ -324,7 +416,7 @@ fit. Independent real specimens and garment checks remain necessary.
 
 ## Solver agreement and remaining work
 
-Calibration uses continuous-time analytic history integration. The actual cloth solver uses backward
+The Maxwell part of calibration uses continuous-time analytic history integration. The actual cloth solver uses backward
 Euler, so finite time-step force predictions differ by discretization error. Refine the simulation
 time step; do not retune a material to hide integration error. An independent clamped-triangle test
 compares the actual solver reaction to the discrete Maxwell decay, and another demonstrates convergence
@@ -341,7 +433,7 @@ Additional automatic-time checks recover the independent three-branch truth, one
 with inactive axes, and a constrained noisy spectrum with differently scaled force sensors. The exact
 profile-objective gradient is checked against finite differences that re-fit the PSD tensors.
 Unbounded model-order discovery, fixed-equilibrium error, strain uncertainty, temperature/wet
-dependence, plastic set and damage remain outside this estimator. Broader measurements and independent
+dependence, simultaneous identification of permanent-set coefficients and damage remain outside this estimator. Broader measurements and independent
 garment checks are required.
 
 Primary formula/identification references, checked 2026-10-14; no external source code copied:

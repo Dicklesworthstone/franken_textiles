@@ -540,9 +540,14 @@ pub fn calibrate_relaxation(input: &str, allow_estimates: bool) -> Result<String
     })?;
     let selection = snapshot.frozen_selection();
     let selection_json = serde_json::to_string(&selection).map_err(invalid)?;
+    let time_integration = if report.input.plastic_equilibrium.is_some() {
+        "Maxwell calibration analytically integrates piecewise-linear total Green strain; the independently characterized plastic equilibrium advances at every recorded node, including unobserved loads. This is not a continuous-path plasticity solution. The drape solver uses backward Euler and requires time-step refinement."
+    } else {
+        "Calibration analytically integrates piecewise-linear Green strain; the drape solver uses backward Euler and requires time-step refinement."
+    };
     let mut output = json!({"calibration":report,"selection":selection,"selection_json":selection_json,
         "material":detail(&snapshot)?,"fit_claim":false,"empirical_validation_claim":false,
-        "time_integration":"Calibration analytically integrates piecewise-linear Green strain; the drape solver uses backward Euler and requires time-step refinement."});
+        "time_integration":time_integration});
     if let Some(comparison) = comparison {
         output["comparison"] = json!(comparison);
     }

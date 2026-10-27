@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 
-use super::{Initialization, MaxwellBranch, Relaxation};
+use super::{
+    CompiledRelaxation, Initialization, MaxwellBranch, Relaxation, parallel::ParallelPlasticity,
+};
 use crate::material_calibration::{Partition, Quality, fitted_domain};
 use crate::material_catalog::normalize;
 use crate::materials::{Evidence, Form, Material, Quantity, Source};
@@ -55,6 +57,28 @@ pub struct Experiment {
     pub samples: Vec<Sample>,
 }
 
+/// Independently declared initial state of the known permanent-strain branch in every acquisition.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlasticInitialization {
+    /// Zero permanent and accumulated strain at a recorded zero-Green-strain first node.
+    PristineReference,
+}
+
+/// Identify only Maxwell branches alongside an independently characterized plastic equilibrium.
+/// This declares nodal return-map replay, not joint identification of yield and recovery.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlasticEquilibrium {
+    /// Explicit preparation of every complete acquisition; preload or annealing is not inferred.
+    pub initialization: PlasticInitialization,
+    /// Independently admit an estimated network interpretation, not its fixed coefficients or data.
+    #[serde(default)]
+    pub allow_estimated_network: bool,
+    /// Existing complete-material parallel-network qualification, with its own source and domain.
+    pub network: ParallelPlasticity,
+}
+
 /// Source-bearing calibration problem. No files, network, new material type or solver dependency.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,6 +99,9 @@ pub struct Input {
     /// Replace a previous relaxation law only with explicit consent; original remains in the report.
     #[serde(default)]
     pub replace_existing: bool,
+    /// Explicit known elastoplastic equilibrium. Absence preserves memoryless-equilibrium fitting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plastic_equilibrium: Option<PlasticEquilibrium>,
     /// Protocol, including how nominal loads, F, equilibrium and initial states were obtained.
     pub method: String,
     /// Shared condition record; different moisture/temperature/finish states need separate fits.
@@ -118,6 +145,24 @@ pub struct Prediction {
     pub nominal_n_m: [[f64; 2]; 2],
     /// Predicted minus observed, preserving unobserved components as null.
     pub residual_n_m: [[Option<f64>; 2]; 2],
+    /// Known irreversible branch after this acquisition node, including unobserved force nodes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plastic_equilibrium: Option<PlasticPrediction>,
+}
+
+/// Canonical recorded-node return-map state; no continuous-path or refinement claim is implied.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlasticPrediction {
+    /// Accepted permanent raw Green strain [E11,E22,2E12].
+    pub plastic_strain: [f64; 3],
+    /// Accepted accumulated absolute permanent increments in the same physical coordinates.
+    pub accumulated_strain: [f64; 3],
+    /// Known equilibrium-branch nominal force; the fitted Maxwell force is added separately.
+    pub nominal_n_m: [[f64; 2]; 2],
+    /// Irreversible work at this recorded node, J per reference square metre.
+    pub step_dissipated_j_m2: f64,
+    /// Sum since this acquisition's independently pristine start, not a shared specimen history.
+    pub cumulative_dissipated_j_m2: f64,
 }
 
 /// Ready for the existing material resolver; fitted quantities always remain estimates.
@@ -164,6 +209,7 @@ struct Point {
     equilibrium: [f64; 4],
     observed: [Option<f64>; 4],
     scale: f64,
+    plastic_equilibrium: Option<PlasticPrediction>,
 }
 
 struct History {
@@ -204,6 +250,13 @@ fn datum(value: f64, unit: &str, source: &str) -> Quantity {
 }
 
 fn law(input: &Input, ratios: &[f64], times: &[f64], source: &str) -> Relaxation {
+    let quantity = |value, unit| {
+        let mut quantity = datum(value, unit, source);
+        if input.plastic_equilibrium.is_some() {
+            quantity.conditions = input.conditions.clone();
+        }
+        quantity
+    };
     Relaxation {
         model: "green_maxwell/1".into(),
         initialization: input.initialization,
@@ -215,18 +268,44 @@ fn law(input: &Input, ratios: &[f64], times: &[f64], source: &str) -> Relaxation
         ),
         conditions: input.conditions.clone(),
         orthotropic_branches: Vec::new(),
-        parallel_plasticity: None,
+        parallel_plasticity: input
+            .plastic_equilibrium
+            .as_ref()
+            .map(|p| p.network.clone()),
         branches: ratios
             .iter()
             .zip(times)
             .enumerate()
             .map(|(i, (&r, &t))| MaxwellBranch {
                 id: format!("fitted-{}", i + 1),
-                stiffness_ratio: datum(r, "1", source),
-                relaxation_time: datum(t, "s", source),
+                stiffness_ratio: quantity(r, "1"),
+                relaxation_time: quantity(t, "s"),
             })
             .collect(),
     }
+}
+
+// A joint spectrum must be compiled against the entire unchanged fixed branch. The standalone
+// compiler intentionally refuses half-networks. Only fitted quantities receive estimate consent
+// here: prepare() independently admits every fixed coefficient and the network interpretation.
+fn compile_law(
+    input: &Input,
+    material: &Material,
+    law: &Relaxation,
+    q: [[f64; 3]; 3],
+) -> Result<CompiledRelaxation, Refusal> {
+    if input.plastic_equilibrium.is_none() {
+        return law.compile(&material.sources, true, q);
+    }
+    let mut complete = normalize(material)?;
+    complete.membrane_relaxation = Some(law.clone());
+    let plastic = complete
+        .compiled_membrane_plasticity(true)?
+        .ok_or_else(|| {
+            bad("plastic equilibrium requires its independently characterized branch")
+        })?;
+    let digest = sha256_hex(&serde_json::to_vec(&complete).map_err(|e| bad(e.to_string()))?);
+    super::parallel::compile(&complete, true, &plastic, digest)
 }
 
 fn prepare(input: &Input, include_check: bool) -> Result<(Vec<History>, [[f64; 3]; 3]), Refusal> {
@@ -235,6 +314,7 @@ fn prepare(input: &Input, include_check: bool) -> Result<(Vec<History>, [[f64; 3
         .material
         .structure
         .contains_key("membrane_plasticity_model")
+        && input.plastic_equilibrium.is_none()
     {
         return Err(bad(
             "Maxwell calibration does not identify permanent membrane history; a recoverable spectrum cannot silently retain the irreversible law",
@@ -279,9 +359,29 @@ fn prepare(input: &Input, include_check: bool) -> Result<(Vec<History>, [[f64; 3
     }
     // Resolve only the equilibrium consumer: absent mass, bending and friction do not block fitting.
     let material = normalize(&input.material)?;
+    let plastic = if let Some(known) = &input.plastic_equilibrium {
+        known
+            .network
+            .validate(&material.sources, known.allow_estimated_network)?;
+        if known.network.conditions != input.conditions {
+            return Err(bad(
+                "plastic equilibrium and acquired histories need identical shared specimen/conditioning qualifications",
+            ));
+        }
+        // Replacement consent above concerns only the old Maxwell spectrum. The independently
+        // supplied elastic/plastic observations and their original domains are never replaced.
+        let mut fixed = material.clone();
+        fixed.membrane_relaxation = None;
+        Some(fixed.compiled_membrane_plasticity(input.allow_estimated_equilibrium)?
+            .ok_or_else(|| bad("plastic_equilibrium requires the known permanent-strain model and all independently supplied coefficients"))?)
+    } else {
+        None
+    };
     let equilibrium_domain = fitted_domain(&material)?;
     let nonlinear = material.compiled_membrane(input.allow_estimated_equilibrium)?;
-    let q = if let Some(curve) = &nonlinear {
+    let q = if let Some(plastic) = &plastic {
+        plastic.tensor()
+    } else if let Some(curve) = &nonlinear {
         let [a, b, c, g] = curve.origin_stiffness();
         [[a, c, 0.], [c, b, 0.], [0., 0., g]]
     } else {
@@ -308,8 +408,12 @@ fn prepare(input: &Input, include_check: bool) -> Result<(Vec<History>, [[f64; 3
         ]
     };
     // Reuse the consuming law's source, domain and positive-definiteness validation.
-    let domain =
-        law(input, &[1.], &[1.], &input.domain_source).compile(&material.sources, true, q)?;
+    let domain = compile_law(
+        input,
+        &material,
+        &law(input, &[1.], &[1.], &input.domain_source),
+        q,
+    )?;
     let mut ids = BTreeSet::new();
     let mut histories = Vec::new();
     let mut fit_components = 0;
@@ -332,6 +436,8 @@ fn prepare(input: &Input, include_check: bool) -> Result<(Vec<History>, [[f64; 3
         let mut points = Vec::new();
         let mut last = -1.;
         let mut components = 0;
+        let mut plastic_memory = plastic.as_ref().map(|law| law.pristine());
+        let mut plastic_dissipation = 0.0;
         for (i, s) in e.samples.iter().enumerate() {
             if !s.time_seconds.is_finite()
                 || (i == 0 && s.time_seconds != 0.)
@@ -351,6 +457,12 @@ fn prepare(input: &Input, include_check: bool) -> Result<(Vec<History>, [[f64; 3
             }
             last = s.time_seconds;
             let strain = green(s.deformation)?;
+            if i == 0 && plastic_memory.is_some() && strain != [0.0; 3] {
+                return Err(bad(format!(
+                    "{}: pristine plastic equilibrium needs a zero-Green-strain first acquisition node; unknown preload is not inferred",
+                    e.id
+                )));
+            }
             if equilibrium_domain.is_some_and(|domain| !domain.contains(strain)) {
                 return Err(bad(format!(
                     "{}: history node {i} outside fitted equilibrium strain domain",
@@ -360,9 +472,29 @@ fn prepare(input: &Input, include_check: bool) -> Result<(Vec<History>, [[f64; 3
             if !domain.contains(strain) {
                 return Err(bad("observed strain outside declared domain"));
             }
-            let stress = match &nonlinear {
-                Some(curve) => curve.try_evaluate(strain)?.stress,
-                None => super::mul(&q, strain),
+            let mut plastic_state = None;
+            let stress = if let Some(memory) = &mut plastic_memory {
+                let update = memory.advance(strain)?;
+                plastic_dissipation += update.dissipated_j_m2;
+                if !plastic_dissipation.is_finite() {
+                    return Err(bad("known plastic acquisition dissipation overflows"));
+                }
+                *memory = update.memory;
+                let stress = memory.response(strain, false)?.stress;
+                let nominal = piola(s.deformation, stress);
+                plastic_state = Some(PlasticPrediction {
+                    plastic_strain: memory.plastic_strain(),
+                    accumulated_strain: memory.accumulated_strain(),
+                    nominal_n_m: [[nominal[0], nominal[1]], [nominal[2], nominal[3]]],
+                    step_dissipated_j_m2: update.dissipated_j_m2,
+                    cumulative_dissipated_j_m2: plastic_dissipation,
+                });
+                stress
+            } else {
+                match &nonlinear {
+                    Some(curve) => curve.try_evaluate(strain)?.stress,
+                    None => super::mul(&q, strain),
+                }
             };
             let equilibrium = piola(s.deformation, stress);
             if equilibrium.iter().any(|v| !v.is_finite()) {
@@ -377,6 +509,7 @@ fn prepare(input: &Input, include_check: bool) -> Result<(Vec<History>, [[f64; 3
                 equilibrium,
                 observed,
                 scale: s.scale_n_m,
+                plastic_equilibrium: plastic_state,
             });
         }
         if components == 0 {
@@ -474,6 +607,7 @@ fn evaluate_residuals(
                 strain: point.strain,
                 nominal_n_m: [[values[0], values[1]], [values[2], values[3]]],
                 residual_n_m: residual,
+                plastic_equilibrium: point.plastic_equilibrium.clone(),
             });
         }
     }
@@ -532,7 +666,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     })?;
     let (mut material, source, digest) = receipt(input)?;
     let fitted = law(input, &ratios, &times, &source);
-    fitted.compile(&material.sources, true, q)?;
+    compile_law(input, &material, &fitted, q)?;
     material.membrane_relaxation = Some(fitted);
     material.validate()?;
     let missing_mechanics = material

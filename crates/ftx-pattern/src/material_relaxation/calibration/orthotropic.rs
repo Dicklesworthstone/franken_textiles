@@ -401,7 +401,10 @@ fn law(input: &Input, candidates: &[Candidate], source: &str) -> Relaxation {
     };
     Relaxation {
         model: "green_maxwell/1".into(),
-        parallel_plasticity: None,
+        parallel_plasticity: input
+            .plastic_equilibrium
+            .as_ref()
+            .map(|p| p.network.clone()),
         branches: Vec::new(),
         orthotropic_branches: candidates
             .iter()
@@ -588,9 +591,14 @@ fn calibrate_with_policy(
     let (mut material, source, digest) = super::receipt(input)?;
     let fitted = law(input, &candidates, &source);
     let compiled = if fitted.orthotropic_branches.is_empty() {
+        if input.plastic_equilibrium.is_some() {
+            return Err(bad(
+                "the declared parallel network has no identified active Maxwell branch; a zero spectrum cannot silently erase its interpretation",
+            ));
+        }
         None
     } else {
-        Some(fitted.compile(&material.sources, true, q)?)
+        Some(super::compile_law(input, &material, &fitted, q)?)
     };
     let (predictions, fit_quality, check) = if comparing {
         super::evaluate_residuals(input, &histories, false, false, |h| {
@@ -634,7 +642,7 @@ pub(super) fn replay_checks(report: &mut Report) -> Result<(), Refusal> {
         .material
         .membrane_relaxation
         .as_ref()
-        .map(|law| law.compile(&report.material.sources, true, q))
+        .map(|law| super::compile_law(&report.input, &report.material, law, q))
         .transpose()?;
     let (predictions, fit, check) =
         super::evaluate_residuals(&report.input, &histories, true, false, |history| {

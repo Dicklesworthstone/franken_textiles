@@ -30,6 +30,7 @@ fn input(modes: &[(f64, f64)], ramp: bool) -> Input {
         allow_estimated_equilibrium: true,
         allow_estimated_observations: true,
         replace_existing: false,
+        plastic_equilibrium: None,
         method: "Synthetic exact continuous-time convolution; not laboratory measurements".into(),
         conditions: BTreeMap::from([("scope".into(), "synthetic".into())]),
         domain_source: "test".into(),
@@ -463,5 +464,363 @@ fn nonlinear_equilibrium_is_not_replaced_with_its_origin_tangent() {
     assert_eq!(
         serde_json::to_value(&result.material.membrane_response).unwrap(),
         serde_json::to_value(&raw.material.membrane_response).unwrap()
+    );
+}
+
+fn green(f: [[f64; 2]; 2]) -> [f64; 3] {
+    [
+        0.5 * (f[0][0] * f[0][0] + f[1][0] * f[1][0] - 1.),
+        0.5 * (f[0][1] * f[0][1] + f[1][1] * f[1][1] - 1.),
+        f[0][0] * f[0][1] + f[1][0] * f[1][1],
+    ]
+}
+
+struct PlasticOracle {
+    plastic: [f64; 3],
+    accumulated: [f64; 3],
+    stress: [f64; 3],
+    dissipated: f64,
+}
+
+// Independent diagonal scalar yield/hardening formulas, not the candidate's active-set return map.
+fn plastic_oracle(samples: &[Sample]) -> Vec<PlasticOracle> {
+    let mut plastic = [0.; 3];
+    let mut accumulated = [0.; 3];
+    samples
+        .iter()
+        .map(|sample| {
+            let strain = green(sample.deformation);
+            let mut stress = [0.; 3];
+            let mut dissipated = 0.;
+            for (axis, (q, yield_value, hardening)) in
+                [(1000., 20., 100.), (600., 30., 80.), (300., 10., 40.)]
+                    .into_iter()
+                    .enumerate()
+            {
+                let trial = q * (strain[axis] - plastic[axis]);
+                let excess = (trial.abs() - yield_value - hardening * accumulated[axis]).max(0.);
+                let increment = trial.signum() * excess / (q + hardening);
+                plastic[axis] += increment;
+                accumulated[axis] += increment.abs();
+                dissipated += yield_value * increment.abs();
+                stress[axis] = q * (strain[axis] - plastic[axis]);
+            }
+            PlasticOracle {
+                plastic,
+                accumulated,
+                stress,
+                dissipated,
+            }
+        })
+        .collect()
+}
+
+// Every number is a synthetic software oracle. Each acquisition begins independently pristine;
+// the hidden peak and reversal still alter both branch histories. Maxwell forces use direct
+// integration over every preceding ramp, without the candidate's recurrence or fitting code.
+fn plastic_input() -> Input {
+    use ftx_pattern::material_relaxation::calibration::{
+        PlasticEquilibrium, PlasticInitialization,
+    };
+    let selection: Selection = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-parallel-membrane.json"
+    ))
+    .unwrap();
+    let mut material = selection.record.unwrap();
+    let old = material.membrane_relaxation.take().unwrap();
+    let mut input = input(&[(1.4, 0.7)], true);
+    input.material = material;
+    input.conditions = old.conditions;
+    input.plastic_equilibrium = Some(PlasticEquilibrium {
+        initialization: PlasticInitialization::PristineReference,
+        allow_estimated_network: true,
+        network: old.parallel_plasticity.unwrap(),
+    });
+    input.method = "Synthetic independent diagonal yield law plus analytic Maxwell ramp integrals; not physical acquisitions".into();
+    input.strain_range = [[-0.2, 0.3]; 3];
+    input.experiments.clear();
+    for (index, amplitude) in [
+        [0.08, 0., 0.],
+        [0., 0.1, 0.],
+        [0., 0., 0.12],
+        [0.06, 0.08, 0.1],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let factor = [0., 0.3, 0.8, 1., 0.7, -0.4, -0.4, 0., 0.5, 0.5, 0., 0., 0.];
+        let times = [
+            0., 0.01, 0.03, 0.1, 0.3, 0.7, 1.5, 3., 5., 8., 12., 20., 40.,
+        ];
+        let mut samples: Vec<_> = times
+            .into_iter()
+            .zip(factor)
+            .map(|(time, factor)| {
+                let strain: [f64; 3] = amplitude.map(|a| a * factor);
+                let a = (1. + 2. * strain[0]).sqrt();
+                let b = strain[2] / a;
+                Sample {
+                    time_seconds: time * if index == 3 { 1.3 } else { 1. },
+                    deformation: [[a, b], [0., (1. + 2. * strain[1] - b * b).sqrt()]],
+                    nominal_n_m: [[None; 2]; 2],
+                    scale_n_m: 1.,
+                }
+            })
+            .collect();
+        let strains: Vec<_> = samples.iter().map(|s| green(s.deformation)).collect();
+        let times: Vec<_> = samples.iter().map(|s| s.time_seconds).collect();
+        let known = plastic_oracle(&samples);
+        for (i, sample) in samples.iter_mut().enumerate() {
+            let mut stress = known[i].stress;
+            for axis in 0..3 {
+                let mut lag = 0.;
+                for node in 1..=i {
+                    let rate = (strains[node][axis] - strains[node - 1][axis])
+                        / (times[node] - times[node - 1]);
+                    lag += rate
+                        * 0.7
+                        * ((-(times[i] - times[node]) / 0.7).exp()
+                            - (-(times[i] - times[node - 1]) / 0.7).exp());
+                }
+                stress[axis] += [1000., 600., 300.][axis] * 1.4 * lag;
+            }
+            let [[a, b], [c, d]] = sample.deformation;
+            let [x, y, s] = stress;
+            sample.nominal_n_m = [
+                [Some(a * x + b * s), Some(a * s + b * y)],
+                [Some(c * x + d * s), Some(c * s + d * y)],
+            ];
+            if i == 3 {
+                sample.nominal_n_m = [[None; 2]; 2];
+            }
+        }
+        input.experiments.push(Experiment {
+            id: format!("independent-{index}"),
+            source: "test".into(),
+            evidence: Evidence::Estimate,
+            partition: if index == 3 {
+                Partition::Check
+            } else {
+                Partition::Fit
+            },
+            initialization: Initialization::StressFreeReference,
+            samples,
+        });
+    }
+    input.max_rms_scaled = 1e-5;
+    input.max_peak_scaled = 1e-5;
+    input
+}
+
+#[test]
+fn known_plastic_equilibrium_identifies_recovery_and_retains_every_acquisition_state() {
+    let input = plastic_input();
+    assert_modes(&input, &[(1.4, 0.7)]);
+    let report = calibrate(&input).unwrap();
+    assert_eq!(
+        serde_json::to_value(&report.material.properties).unwrap(),
+        serde_json::to_value(&input.material.properties).unwrap()
+    );
+    let catalog = Catalog::builtin().unwrap();
+    let resolved = catalog
+        .resolve(&Selection {
+            id: report.material.id.clone(),
+            record: Some(report.material.clone()),
+            allow_estimates: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let plastic = resolved.membrane_plasticity().unwrap().unwrap();
+    let relaxation = resolved.membrane_relaxation().unwrap().unwrap();
+    assert!(plastic.accepts_parallel(&relaxation));
+    let denied = catalog
+        .resolve(&Selection {
+            id: report.material.id.clone(),
+            record: Some(report.material),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(denied.membrane_relaxation().is_err());
+    for experiment in &input.experiments {
+        let known = plastic_oracle(&experiment.samples);
+        let mut cumulative = 0.;
+        for (prediction, expected) in report
+            .predictions
+            .iter()
+            .filter(|p| p.experiment == experiment.id)
+            .zip(known)
+        {
+            let state = prediction.plastic_equilibrium.as_ref().unwrap();
+            cumulative += expected.dissipated;
+            for axis in 0..3 {
+                assert!((state.plastic_strain[axis] - expected.plastic[axis]).abs() < 1e-13);
+                assert!(
+                    (state.accumulated_strain[axis] - expected.accumulated[axis]).abs() < 1e-13
+                );
+            }
+            assert!((state.step_dissipated_j_m2 - expected.dissipated).abs() < 1e-12);
+            assert!((state.cumulative_dissipated_j_m2 - cumulative).abs() < 1e-12);
+        }
+        let first = report
+            .predictions
+            .iter()
+            .find(|p| p.experiment == experiment.id)
+            .unwrap();
+        assert_eq!(
+            first
+                .plastic_equilibrium
+                .as_ref()
+                .unwrap()
+                .accumulated_strain,
+            [0.; 3]
+        );
+    }
+    let hidden = &report.predictions[3];
+    assert!(hidden.residual_n_m.iter().flatten().all(Option::is_none));
+    assert!(
+        hidden
+            .plastic_equilibrium
+            .as_ref()
+            .unwrap()
+            .step_dissipated_j_m2
+            > 0.
+    );
+}
+
+#[test]
+fn known_plastic_equilibrium_supports_fixed_and_identified_directional_times() {
+    use ftx_pattern::material_relaxation::calibration::OrthotropicInput;
+    for searched in [false, true] {
+        let mut input = plastic_input();
+        input.time_bounds_seconds.clear();
+        input.orthotropic = Some(OrthotropicInput {
+            times_seconds: if searched { vec![] } else { vec![0.7] },
+            time_bounds_seconds: if searched { vec![[0.2, 2.]] } else { vec![] },
+            zero_threshold_n_m: 1e-7,
+        });
+        let report = calibrate(&input).unwrap();
+        let branch = &report
+            .material
+            .membrane_relaxation
+            .as_ref()
+            .unwrap()
+            .orthotropic_branches[0];
+        assert!((branch.relaxation_time.value - 0.7).abs() < 1e-5);
+        for (actual, expected) in [
+            (branch.stiffness.warp.value, 1400.),
+            (branch.stiffness.weft.value, 840.),
+            (branch.stiffness.coupling.value, 0.),
+            (branch.stiffness.shear.value, 420.),
+        ] {
+            assert!((actual - expected).abs() < 1e-3, "{actual} != {expected}");
+        }
+        assert!(report.check.unwrap().rms_scaled < 1e-5);
+        assert!(
+            report
+                .predictions
+                .iter()
+                .all(|p| p.plastic_equilibrium.is_some())
+        );
+    }
+}
+
+#[test]
+fn known_plastic_equilibrium_requires_qualified_sources_domains_and_pristine_preparation() {
+    for change in [
+        |i: &mut Input| i.plastic_equilibrium = None,
+        |i: &mut Input| {
+            i.material.structure.remove("membrane_plasticity_model");
+        },
+        |i: &mut Input| i.allow_estimated_equilibrium = false,
+        |i: &mut Input| i.allow_estimated_observations = false,
+        |i: &mut Input| {
+            i.plastic_equilibrium
+                .as_mut()
+                .unwrap()
+                .allow_estimated_network = false
+        },
+        |i: &mut Input| i.plastic_equilibrium.as_mut().unwrap().network.source = "missing".into(),
+        |i: &mut Input| {
+            i.conditions
+                .insert("conditioning".into(), "unknown temperature".into());
+        },
+        |i: &mut Input| {
+            i.material
+                .properties
+                .get_mut("membrane_yield_weft")
+                .unwrap()
+                .conditions
+                .insert("specimen_id".into(), "different specimen".into());
+        },
+        |i: &mut Input| {
+            i.material
+                .properties
+                .get_mut("membrane_strain_limit_warp")
+                .unwrap()
+                .value = 0.01
+        },
+        |i: &mut Input| {
+            i.material
+                .properties
+                .get_mut("membrane_accumulation_limit_warp")
+                .unwrap()
+                .value = 0.001
+        },
+        |i: &mut Input| i.experiments[0].samples[0].deformation[0][0] = 1.01,
+        |i: &mut Input| i.strain_range[0] = [-0.01, 0.01],
+    ] {
+        let mut input = plastic_input();
+        change(&mut input);
+        assert!(calibrate(&input).is_err());
+    }
+    let mut missing = serde_json::to_value(plastic_input()).unwrap();
+    missing["plastic_equilibrium"]
+        .as_object_mut()
+        .unwrap()
+        .remove("initialization");
+    assert!(serde_json::from_value::<Input>(missing).is_err());
+    let mut omitted = serde_json::to_value(input(&[(1.4, 0.7)], true)).unwrap();
+    assert!(omitted.get("plastic_equilibrium").is_none());
+    omitted["plastic_equilibrium"] = serde_json::json!({"initialization":"infer_preload"});
+    assert!(serde_json::from_value::<Input>(omitted).is_err());
+}
+
+#[test]
+fn known_plastic_equilibrium_model_choice_is_fit_only_when_check_history_fails() {
+    use ftx_pattern::material_relaxation::calibration::comparison::{Status, compare};
+    let mut input = plastic_input();
+    input.time_bounds_seconds.clear();
+    let mut compared = serde_json::from_value(serde_json::json!({
+        "schema":"ftx-relaxation-model-comparison/1", "calibration":input,
+        "candidates":[
+            {"id":"known-time", "orthotropic":{"times_seconds":[0.7]}},
+            {"id":"different-time", "orthotropic":{"times_seconds":[1.2]}}
+        ], "fit_rms_equivalence_scaled":1e-6
+    }))
+    .unwrap();
+    let accepted = compare(&compared).unwrap();
+    assert_eq!(accepted.status, Status::Accepted);
+    assert_eq!(
+        accepted.fit_decision.chosen_candidate_id.as_deref(),
+        Some("known-time")
+    );
+    compared.calibration.experiments[3].samples[4].nominal_n_m[0][0] = Some(1e5);
+    let rejected = compare(&compared).unwrap();
+    assert_eq!(rejected.status, Status::ChosenCandidateRejected);
+    assert_eq!(
+        serde_json::to_value(&rejected.fit_decision).unwrap(),
+        serde_json::to_value(&accepted.fit_decision).unwrap()
+    );
+    assert!(rejected.selected_calibration().is_none());
+    assert_eq!(
+        rejected.objective_evaluations,
+        accepted.objective_evaluations
+    );
+    compared.calibration.experiments[3].samples[0].deformation[0][0] = 1.01;
+    let inadmissible_check = compare(&compared).unwrap();
+    assert_eq!(inadmissible_check.status, Status::ChosenCandidateRejected);
+    assert_eq!(
+        serde_json::to_value(&inadmissible_check.fit_decision).unwrap(),
+        serde_json::to_value(&accepted.fit_decision).unwrap()
     );
 }

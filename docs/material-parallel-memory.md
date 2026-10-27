@@ -156,9 +156,12 @@ The prescribed path loads, holds, unloads and holds again. The report retains ev
 endpoint, both dissipation ledgers and a frozen request for offline replay. Refine time step and
 mesh for a particular physical claim; convergence of a single synthetic path is not garment
 qualification. Ordinary pattern bindings and per-piece overrides consume the same material without
-editing sewing geometry. Existing separate elastic, plastic and relaxation calibration commands
-retain their stated model scopes; this declaration does not add a joint inverse-identification
-algorithm.
+editing sewing geometry. The existing relaxation calibration command also supports an explicitly
+qualified `plastic_equilibrium` input: it retains independently characterized elastic/yield/hardening
+observations, replays their recorded-node history and identifies only Maxwell recovery branches.
+See [relaxation-calibration.md](relaxation-calibration.md#recovery-alongside-an-independently-characterized-permanent-set-branch).
+This does not jointly identify plastic and viscous coefficients or infer the parallel interpretation
+from held-out force histories.
 
 ## Resolving small Newton corrections
 

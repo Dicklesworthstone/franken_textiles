@@ -1,0 +1,102 @@
+{
+  "schema": "ftx-relaxation-calibration/1",
+  "material": {
+    "id": "synthetic-parallel-membrane",
+    "name": "Synthetic parallel permanent-set and Maxwell sheet; NOT measured textile data",
+    "form": "woven",
+    "structure": {
+      "membrane_plasticity_model": "orthotropic_green_return_map/1",
+      "scope": "Artificial parallel-network software example; no measured textile, same-branch viscoplasticity, damage or garment qualification"
+    },
+    "properties": {
+      "areal_density": {"value": 0.2, "unit": "kg/m2", "source": "test", "evidence": "estimate", "method": "Synthetic reference mass"},
+      "thickness": {"value": 0.0006, "unit": "m", "source": "test", "evidence": "estimate", "method": "Synthetic unchanged contact thickness"},
+      "bending_rigidity": {"value": 0.00003, "unit": "N*m", "source": "test", "evidence": "estimate", "method": "Synthetic independent recoverable bending"},
+      "friction_skin": {"value": 0.2, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic body friction"},
+      "friction_self": {"value": 0.3, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic self friction"},
+      "warp_stiffness": {"value": 1000.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic elastic stiffness of the plastic branch, not total instantaneous stiffness", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "weft_stiffness": {"value": 600.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic plastic-branch elastic weft coefficient", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "poisson_warp_weft": {"value": 0.0, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic zero normal coupling", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "shear_stiffness": {"value": 300.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic plastic-branch shear stiffness", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_yield_warp": {"value": 20.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic equilibrium-branch yield resultant", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_yield_weft": {"value": 30.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic equilibrium-branch yield resultant", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_yield_shear": {"value": 10.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic equilibrium-branch yield resultant", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_hardening_warp": {"value": 100.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic isotropic hardening", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_hardening_weft": {"value": 80.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic isotropic hardening", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_hardening_shear": {"value": 40.0, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic isotropic hardening", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_strain_limit_warp": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic raw Green-strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_strain_limit_weft": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic raw Green-strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_strain_limit_shear": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic raw Green-strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_accumulation_limit_warp": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated permanent strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_accumulation_limit_weft": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated permanent strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}},
+      "membrane_accumulation_limit_shear": {"value": 0.4, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated permanent strain support", "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}}
+    },
+    "sources": {
+      "test": {
+        "reference": "test:ftx-parallel-membrane-known-answers",
+        "accessed_on": "2026-10-27",
+        "note": "Every parameter and the branch-network qualification are synthetic estimates for software tests. No real textile, empirical constitutive identification, textile damage, fit, or machine authorization is represented. Acquisition forces in this example are independently constructed by a scalar return map (Q=1000 N/m, Y=20 N/m, H=100 N/m) plus exact piecewise-linear Green-strain Maxwell convolution (ratio=2, tau=0.05 s). The all-null peak is retained as a history node. These are synthetic software inputs, not measurements."
+      }
+    }
+  },
+  "equilibrium_is_long_time": true,
+  "allow_estimated_equilibrium": true,
+  "allow_estimated_observations": true,
+  "replace_existing": false,
+  "plastic_equilibrium": {
+    "initialization": "pristine_reference",
+    "allow_estimated_network": true,
+    "network": {
+      "model": "parallel_green_maxwell_plastic/1",
+      "evidence": "estimate",
+      "source": "test",
+      "method": "Explicit artificial parallel network: plastic flow uses only equilibrium-branch stress; Maxwell stress is added after its own internal update",
+      "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"}
+    }
+  },
+  "method": "Synthetic nodal scalar plastic return plus independent continuous Maxwell convolution; no measured textile evidence",
+  "conditions": {"specimen_id": "parallel-test", "conditioning": "synthetic dry state"},
+  "domain_source": "test",
+  "strain_range": [[-0.3, 0.3], [-0.3, 0.3], [-0.3, 0.3]],
+  "initialization": "stress_free_reference",
+  "fitted_on": "2026-10-27",
+  "time_bounds_seconds": [[0.01, 0.2]],
+  "experiments": [
+    {
+      "id": "fit-cycle",
+      "source": "test",
+      "evidence": "estimate",
+      "partition": "fit",
+      "initialization": "stress_free_reference",
+      "samples": [
+        {"time_seconds": 0.0, "deformation": [[1.0, 0.0], [0.0, 1.0]], "nominal_n_m": [[0.0, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.015, "deformation": [[1.0119288512538813, 0.0], [0.0, 1.0]], "nominal_n_m": [[33.1250278319652, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.03, "deformation": [[1.0770329614269007, 0.0], [0.0, 1.0]], "nominal_n_m": [[null, null], [null, null]], "scale_n_m": 1.0},
+        {"time_seconds": 0.06, "deformation": [[1.044030650891055, 0.0], [0.0, 1.0]], "nominal_n_m": [[11.201371554408393, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.1, "deformation": [[1.044030650891055, 0.0], [0.0, 1.0]], "nominal_n_m": [[-0.4547476138612145, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.15, "deformation": [[1.0, 0.0], [0.0, 1.0]], "nominal_n_m": [[-81.63868432477823, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.3, "deformation": [[1.0, 0.0], [0.0, 1.0]], "nominal_n_m": [[-30.764748836859713, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.4, "deformation": [[1.02469507659596, 0.0], [0.0, 1.0]], "nominal_n_m": [[18.605079026765388, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.6, "deformation": [[1.02469507659596, 0.0], [0.0, 1.0]], "nominal_n_m": [[-2.7767788542784886, 0.0], [0.0, 0.0]], "scale_n_m": 1.0}
+      ]
+    },
+    {
+      "id": "held-out-cycle",
+      "source": "test",
+      "evidence": "estimate",
+      "partition": "check",
+      "initialization": "stress_free_reference",
+      "samples": [
+        {"time_seconds": 0.0, "deformation": [[1.0, 0.0], [0.0, 1.0]], "nominal_n_m": [[0.0, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.025, "deformation": [[1.0295630140987, 0.0], [0.0, 1.0]], "nominal_n_m": [[70.1394042514298, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.08, "deformation": [[1.0677078252031311, 0.0], [0.0, 1.0]], "nominal_n_m": [[94.7920286343791, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.12, "deformation": [[1.0677078252031311, 0.0], [0.0, 1.0]], "nominal_n_m": [[57.02444576137232, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.2, "deformation": [[1.014889156509222, 0.0], [0.0, 1.0]], "nominal_n_m": [[-75.22861171820651, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.4, "deformation": [[1.0, 0.0], [0.0, 1.0]], "nominal_n_m": [[-34.707154922963696, 0.0], [0.0, 0.0]], "scale_n_m": 1.0},
+        {"time_seconds": 0.6, "deformation": [[1.0, 0.0], [0.0, 1.0]], "nominal_n_m": [[-26.597584175565263, 0.0], [0.0, 0.0]], "scale_n_m": 1.0}
+      ]
+    }
+  ],
+  "max_rms_scaled": 0.00001,
+  "max_peak_scaled": 0.0001
+}
