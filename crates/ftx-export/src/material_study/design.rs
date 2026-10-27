@@ -15,6 +15,7 @@ use crate::cutting::geometry::{Work, simple};
 pub mod adaptive;
 pub mod fit;
 pub mod grid;
+pub mod treatment;
 
 const BASELINE: &str = "baseline";
 const MAX_DESIGNS: usize = 31;
@@ -74,6 +75,12 @@ pub enum Operation {
         /// Positive target total cap length divided by total armhole length.
         target_ratio: f64,
     },
+    /// Apply one source-qualified treatment or cutting compensation in each selected grain frame.
+    /// Subsequent material bindings must retain the final treated states of these source pieces.
+    Treatment {
+        /// Canonical frozen transition, source-piece assignments and optional interface evidence.
+        request: Box<ftx_pattern::material_treatment::geometry::Input>,
+    },
 }
 
 impl Operation {
@@ -83,10 +90,17 @@ impl Operation {
             // then produces its final document. Reserve those trials even when it refuses early.
             Self::TrueSeam { .. } | Self::CapEase { .. } => 64,
             Self::SlashSpread { .. } | Self::Move { .. } => 1,
+            // Canonical before/after geometry, material binding and the full retained report.
+            Self::Treatment { .. } => 8,
         }
     }
 
-    fn apply(&self, pattern: &Value) -> Result<Value, Refusal> {
+    fn apply(
+        &self,
+        pattern: &Value,
+        operation_index: usize,
+        treatments: &mut Vec<treatment::Applied>,
+    ) -> Result<Value, Refusal> {
         match self {
             Self::SlashSpread {
                 piece,
@@ -106,6 +120,9 @@ impl Operation {
                 seams,
                 target_ratio,
             } => alter::cap_ease(pattern, piece, seams, *target_ratio),
+            Self::Treatment { request } => {
+                treatment::apply(request, pattern, operation_index, treatments)
+            }
         }
     }
 }
@@ -163,6 +180,10 @@ pub struct Receipt {
     /// Explicit fit targets, fixed body identity and the canonical report or unavailable evidence.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fit: Option<Outcome<fit::Report>>,
+    /// Exact intermediate before/after patterns and dimensional evidence for each completed
+    /// treatment operation, including usable compensated cutting geometry. Absent on old designs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub treatments: Vec<treatment::Applied>,
 }
 
 pub(super) struct Prepared {
@@ -392,6 +413,22 @@ pub(super) fn expand(
             "design study exceeds 256 expanded alteration operations"
         }));
     }
+    let mut treatment_work = treatment::Reservation::default();
+    let mut largest_treatment_document = 0usize;
+    for (design, _) in &designs {
+        let reserved = treatment::reserve(pattern, &design.operations)?;
+        largest_treatment_document = largest_treatment_document.max(reserved.bytes);
+        treatment_work.add(reserved, if screened { 1 } else { materials.len() })?;
+    }
+    if screened {
+        // Every inspected receipt is retained. Selected candidates additionally cache the same
+        // full reports and clone them into their final material rows; no treatment is rerun.
+        treatment_work.bytes = treatment_work.bytes.saturating_add(
+            largest_treatment_document
+                .saturating_mul(selected_bound)
+                .saturating_mul(materials.len().saturating_add(2)),
+        );
+    }
     let document_passes = designs
         .iter()
         .flat_map(|(design, _)| &design.operations)
@@ -432,6 +469,7 @@ pub(super) fn expand(
                 ),
         )
         .saturating_add(material_bytes.saturating_mul(selected_bound + 1))
+        .saturating_add(treatment_work.bytes)
         .saturating_add(
             body_identity_bytes.saturating_mul(geometry_evaluations.saturating_add(rows)),
         )
@@ -568,12 +606,14 @@ impl Prepared {
             geometry_changed: None,
             validation: None,
             fit: None,
+            treatments: Vec::new(),
         };
         let altered = receipt
             .operations
             .iter()
-            .try_fold(source.raw().clone(), |pattern, operation| {
-                operation.apply(&pattern)
+            .enumerate()
+            .try_fold(source.raw().clone(), |pattern, (index, operation)| {
+                operation.apply(&pattern, index, &mut receipt.treatments)
             });
         let altered = match altered {
             Ok(pattern) => pattern,
@@ -656,6 +696,13 @@ fn geometry_changed(source: &Pattern, altered: &Pattern) -> bool {
                 }
                 let mut normalized = source.clone();
                 normalized.grain.clone_from(&altered.grain);
+                // Treatment also freezes piece-local material selections. A zero-dimensional
+                // transition can change those records without changing any geometry or marks.
+                if let Some(fabric) = altered.extra.get("fabric") {
+                    normalized.extra.insert("fabric".into(), fabric.clone());
+                } else {
+                    normalized.extra.remove("fabric");
+                }
                 normalized != *altered
             })
 }

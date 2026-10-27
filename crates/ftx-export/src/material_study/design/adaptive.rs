@@ -248,6 +248,17 @@ impl Request {
                 "adaptive design exceeds 4096 reserved alteration operations",
             ));
         }
+        let treatment = super::treatment::reserve(pattern, &self.after)?;
+        let mut treatment_work = super::treatment::Reservation::default();
+        treatment_work.add(treatment, self.max_evaluations)?;
+        // Adaptive trials retain every completed operation report, including fit refusals. Chosen
+        // trials also keep cached geometry and later clone their receipts across material rows.
+        treatment_work.bytes = treatment_work.bytes.saturating_add(
+            treatment
+                .bytes
+                .saturating_mul(self.max_designs)
+                .saturating_mul(materials.len().saturating_add(2)),
+        );
         let outline_work = pattern
             .instances
             .iter()
@@ -330,6 +341,7 @@ impl Request {
                     .saturating_add(rows.saturating_mul(3)),
             )
             .saturating_add(material_bytes.saturating_mul(self.max_designs + 1))
+            .saturating_add(treatment_work.bytes)
             > MAX_DOCUMENT_WORK_BYTES
         {
             return Err(budget(

@@ -3473,6 +3473,27 @@ See [fabric101-materials.md](docs/fabric101-materials.md) for exact sources, exc
 This useful data expansion leaves the principal measured substitution gates `ftx-tm2` and `ftx-tm8`
 open; source-backed mass is not complete garment simulation readiness.
 
+### 25.86 Fit and manufacturing are evaluated after treatment
+
+The ordinary design operation `treatment` now runs the existing source-qualified geometry
+authority inside authored designs and grid/adaptive `after` sequences. Final seam, outline and
+selected-body fit gates evaluate the transformed pattern. This closes the software gap where a
+pre-wash pattern could pass fit while its post-wash dimensions were never tested. Search variables
+can describe pre-treatment alterations, with admission against explicit post-treatment targets.
+
+Each completed stage retains the exact canonical request, before pattern and resulting pattern.
+The final design still replays through `altered_pattern_json` and `frozen_changes`. After design
+operations, material variants cannot replace a treated piece's last promised material identity;
+unrelated lining/fill substitutions remain possible. Refused final seams, fit or bindings withhold
+downstream consumers while preserving completed stages for inspection. A material-only transition
+does not claim changed geometry. Work reservations include all attempted grid/adaptive operations
+and replicated per-piece material/history records, not only selected candidates.
+
+Both native commands and the existing portable study interfaces use this same authority. The
+laundered-denim example can emit a complete comparison of untreated, treated, compensated and
+compensated-then-treated panels. This implements the software scope of `ftx-care1.3`; measured sewn
+restraint, process-dependent contact and held-out garment behavior remain under `ftx-care1`.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

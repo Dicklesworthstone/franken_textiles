@@ -107,6 +107,50 @@ Mass comes from transformed retained area and the measured post-state areal dens
 consumers use the corresponding post-state resistance or law. Neither mass conservation nor
 unchanged mechanics is inferred from a change in dimensions.
 
+## Compare and optimize the design after treatment
+
+Treatment is also an ordinary design operation:
+
+```json
+{"op":"treatment","request":"REPLACE WITH THE COMPLETE ftx-pattern-treatment/1 OBJECT"}
+```
+
+Use it in `designs[].operations`, `design_grid.after`, or `design_adaptive.after`. Each operation
+uses the same standalone authority, then the normal flat geometry, seam, outline and selected-body
+fit gates inspect the resulting dimensions. A grid or adaptive search can therefore vary the
+pre-treatment pattern and admit candidates against **post-treatment fit targets**. Put any required
+seam corrections in the explicit operation sequence. A mismatched final seam or failed fit stays a
+refused design and cannot enter downstream manufacturing or scenario comparison.
+
+The existing source adapter emits a complete runnable study, without placeholders:
+
+```sh
+cargo run -p ftx-pattern --example laundered_denim_treatment -- 1 pattern > panel.json
+cargo run -p ftx-pattern --example laundered_denim_treatment -- 1 study > treatment-study.json
+cargo run -p ftx-cli --bin ftx -- --json materials study panel.json treatment-study.json
+```
+
+It compares the unchanged panel, washed panel, cutting compensation, and compensation followed by
+washing. Retained mass uses each candidate's actual area and correct before/after areal density.
+The measured example does not request unsupported cutting stock, mechanics or seam qualification.
+The companion `ftx-materials study` accepts the same two files. Existing scenario studies use these
+same final ordinary patterns to rebuild their drape and thermal consumers whenever the selected
+material supplies the necessary observations.
+
+Completed stages retain `design.treatments[]`, each containing `operation_index` and the full
+canonical treatment `report`. Its exact `source_pattern_json`, `pattern_json`, and
+`frozen_request_json` replay every intermediate step. A later refused operation can retain earlier
+completed stages for inspection without admitting the final design. Final manufacturing replay
+still uses `design.altered_pattern_json` plus the row's `frozen_changes`.
+
+Material variants are bound after the design sequence. The final effective material of each treated
+piece must match the last treatment's promised state: AFTER for treatment, BEFORE for compensation.
+Replacing an unrelated lining remains allowed; silently attaching an untreated material to shrunken
+geometry refuses before consumers run. A zero-dimensional transition can change mass or other
+material properties without claiming that the geometry changed. Fixed-geometry
+`ftx-material-study/1` requests still reject design operations. All screened and adaptive attempts
+reserve geometry and retained-document work, including repeated embedded material records.
+
 ## Browser workflow
 
 In `web/materials.html`, open **Laundering and dimensional treatment**, choose a material or pattern

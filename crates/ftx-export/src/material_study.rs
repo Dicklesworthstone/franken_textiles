@@ -991,7 +991,11 @@ impl Request {
                 let bound = variant.changes.apply(source)?;
                 variant.changes.interfaces = combinations.interfaces_for(&bound)?;
             }
-            variant.changes.apply(source)
+            let bound = variant.changes.apply(source)?;
+            if let Some(design) = &design {
+                design::treatment::protect_bindings(&design.treatments, &bound)?;
+            }
+            Ok(bound)
         })();
         let mut row = Alternative {
             key: variant.key,

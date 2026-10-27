@@ -1,5 +1,18 @@
 # ftx-export
 
+**Treatment-aware design evaluation** (`material_study::design::treatment`, `ftx-care1.3`).
+The canonical `treatment` operation accepts an ordinary pattern-treatment request in authored
+designs and grid/adaptive `after` operations. Final geometry, seam, outline and selected-body fit
+admission see the resulting dimensions before any material/manufacturing/scenario consumer.
+Completed operations retain exact canonical intermediate reports; later refusal does not admit
+those partial results. Final binding preserves each piece's last promised BEFORE/AFTER material
+hash while allowing unrelated piece substitutions. Zero-dimensional property changes do not claim
+changed geometry. Existing altered-pattern plus frozen-change replay is unchanged; treatment
+receipts are omitted when absent, and fixed-geometry schemas still reject design operations.
+Repeated geometry, per-piece record growth and retained report work are reserved across screened
+and adaptive attempts. Tests: `design_treatment`, existing `design_study`, and both native commands
+through `material_treatment_workflow`. Free coupon treatment does not establish sewn garment fit.
+
 **Selected-body design synthesis** (`material_study::design`, plan §25.70 / `ftx-ds2`).
 Optional finite variable grids generate linked canonical alterations and retain baseline, exact
 coordinates/operations and incomplete-domain receipts. Explicit flat fit bands use a borrowed live

@@ -183,6 +183,122 @@ fn both_commands_write_exact_ordinary_patterns_and_refuse_to_replace_existing_fi
 }
 
 #[test]
+fn both_commands_evaluate_treated_designs_and_replay_exact_intermediate_patterns() {
+    let dir = workspace();
+    let mut pattern: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("pattern.json")).unwrap()).unwrap();
+    pattern["pieces"][0]["cut"] = json!({"qty":1});
+    let source = pattern.to_string();
+    fs::write(dir.join("pattern.json"), &source).unwrap();
+    let treatment: Value = serde_json::from_str(DENIM).unwrap();
+    let wash: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("pattern-treatment.json")).unwrap())
+            .unwrap();
+    let mut compensation = wash.clone();
+    compensation["mode"] = json!("compensate");
+    let mut request = json!({"schema":"ftx-design-study/1",
+        "designs":[
+            {"key":"washed","operations":[{"op":"treatment","request":wash}]},
+            {"key":"compensated","operations":[{"op":"treatment","request":compensation},
+                {"op":"treatment","request":wash}]}],
+        "variants":[{"key":"retained","changes":{"schema":"ftx-material-bindings/1"}}],
+        "assembly_mass":{"schema":"ftx-assembly-mass/1","inventory_complete":true,
+            "extras":[],"seam_allowance_mm":0.0}});
+    let evaluate = |request: &Value| -> Value {
+        serde_json::from_str(&ftx_wasm::materials::study(&source, &request.to_string()).unwrap())
+            .unwrap()
+    };
+    let report = evaluate(&request);
+    assert_eq!(report["schema"], "ftx-design-study-report/1");
+    assert_eq!(report["geometry_changed"], true);
+    for row in report["alternatives"].as_array().unwrap() {
+        assert_eq!(row["binding"]["status"], "available", "{row}");
+        assert_eq!(row["assembly_mass"]["status"], "available", "{row}");
+        let key = row["design"]["key"].as_str().unwrap();
+        let (area, density, count) = match key {
+            "baseline" => (0.02, 0.33993, 0),
+            "washed" => (0.02 * 0.9517 * 0.945, 0.37010, 1),
+            "compensated" => (0.02, 0.37010, 2),
+            _ => panic!("unexpected design {key}"),
+        };
+        assert!(
+            (row["metrics"]["assembly_mass_kg"].as_f64().unwrap() - area * density).abs() < 1e-12
+        );
+        let stages = row["design"]["treatments"].as_array();
+        assert_eq!(stages.map_or(0, Vec::len), count);
+        if let Some(stages) = stages {
+            for (index, stage) in stages.iter().enumerate() {
+                assert_eq!(stage["operation_index"], index);
+                let receipt = &stage["report"];
+                let replay: Value = serde_json::from_str(
+                    &ftx_wasm::materials::treatment_pattern(
+                        receipt["source_pattern_json"].as_str().unwrap(),
+                        receipt["frozen_request_json"].as_str().unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(replay, *receipt);
+            }
+        }
+        let rebound: Value = serde_json::from_str(
+            &ftx_wasm::materials::bind(
+                row["design"]["altered_pattern_json"].as_str().unwrap(),
+                &row["frozen_changes"].to_string(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            rebound["pattern_json"],
+            row["binding"]["result"]["pattern_json"]
+        );
+    }
+    fs::write(dir.join("study.json"), request.to_string()).unwrap();
+    for main in [false, true] {
+        assert_eq!(
+            result(
+                main,
+                invoke(main, &dir, &["study", "pattern.json", "study.json"])
+            ),
+            report
+        );
+    }
+    // A later material variant must not attach the untreated material to the treated geometry.
+    request["variants"][0]["changes"]["pieces"] = json!({"panel":treatment["before"]});
+    let overwritten = evaluate(&request);
+    for row in overwritten["alternatives"].as_array().unwrap() {
+        if row["design"]["key"] == "baseline" {
+            assert_eq!(row["binding"]["status"], "available");
+        } else {
+            assert_eq!(row["binding"]["status"], "refused");
+            assert!(
+                row["binding"]["refusal"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("treatment state")
+            );
+            assert!(row["metrics"]["assembly_mass_kg"].is_null());
+            assert!(!row["design"]["treatments"].as_array().unwrap().is_empty());
+        }
+    }
+    fs::write(dir.join("overwritten.json"), request.to_string()).unwrap();
+    for main in [false, true] {
+        assert_eq!(
+            result(
+                main,
+                invoke(main, &dir, &["study", "pattern.json", "overwritten.json"])
+            ),
+            overwritten
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(dir.join("pattern.json")).unwrap(),
+        source
+    );
+}
+
+#[test]
 fn native_refusals_never_publish_patterns_from_unknown_or_stale_requests() {
     for main in [true, false] {
         let dir = workspace();
