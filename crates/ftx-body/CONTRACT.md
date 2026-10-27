@@ -38,8 +38,8 @@ order; the previous unfiltered hull returned 236.619 mm with an unrelated lower 
 qualifies geometric section selection, not the anatomical waist axis. Outseam runs from the waist's
 side point over the hip, as a hull of the
 right-side torso and leg seen from the front, to the hip's widest point, then straight down to the
-floor. A straight or two-vertex projected outseam is a valid open tape path; only a missing waist
-section or fewer than two profile points makes it unavailable. Independent box/frustum controls
+floor. A straight or two-vertex projected outseam is a valid open tape path. Fewer than two profile
+points remains unavailable, and the existing waist/landmark checks still apply. Independent box/frustum controls
 check 100 mm vertical paths and a known diagonal plus its floor drop under translation and triangle
 reordering. `fit_stature` bisects the height parameter to a stature. `fit_tape` runs Levenberg–Marquardt
 (central differences, step 1e-3; stops when a step gains less than 1e-5 of the cost) over four phenotype
