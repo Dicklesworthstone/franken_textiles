@@ -205,6 +205,12 @@ The bounded policy admits 1–16 resources, 1–64 source holds, at most 1024 ex
 Fixture geometry, mechanical grip adequacy, seam accessibility and machine execution are not inferred
 from these inventory counts. `fixture_geometry_and_access_validated` remains false.
 
+The materials browser shows each resource's capacity and baseline/selected peak, followed by the
+selected operation timeline with occupancy before acquisition, during execution and after release.
+The same display is available in direct stitch-program results and manufacturing/scenario
+comparisons. Expand the source detail to inspect the retained policy, machine/qualification locks
+and both complete timelines. All values come from the Rust report; edits withdraw stale results.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **63 copy/operation pairs** and 1–200000 examined search nodes.
