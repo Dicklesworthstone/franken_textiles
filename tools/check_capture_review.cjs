@@ -203,6 +203,7 @@ async function sheetReview(page, records = report) {
     await page.locator('.edit-point[data-frame="0"][data-point="4"]').click();
     const beforeRemovalUrl = await page.locator("#correctedInput").getAttribute("href");
     await page.locator("#removePoint").click();
+    assert.match(await page.locator("#editStatus").innerText(), /^Removed p4\. 2 changed point\(s\)/);
     assert(await page.evaluate(url => globalThis.__revoked.includes(url), beforeRemovalUrl));
     assert(await page.locator("#removePoint").isDisabled());
     assert(await page.locator("#applyPoint").isDisabled());

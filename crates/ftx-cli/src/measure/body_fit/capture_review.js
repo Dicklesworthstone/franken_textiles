@@ -83,8 +83,9 @@
         [...sections[i].querySelectorAll("g[data-point]")].slice(frame.keypoints.length).forEach(n => n.remove());
         frame.keypoints.forEach((point, j) => {
           if (j >= body.children.length) appendDisplay(i, j, point);
-          const row = body.children[j], [x, y] = point.pixel_px, before = original.fit.frames[i].keypoints[j];
-          const different = before === undefined || point.name !== before.name ||
+          const row = body.children[j], [x, y] = point.pixel_px;
+          const before = original.fit.frames[i].keypoints.find(other => other.name === point.name);
+          const different = before === undefined ||
             point.partition !== before.partition || point.sigma_px !== before.sigma_px ||
             x !== before.pixel_px[0] || y !== before.pixel_px[1];
           if (different) ++changed;
@@ -96,7 +97,8 @@
           mark.querySelector("text").setAttribute("x", x + 7);
           mark.querySelector("text").setAttribute("y", y - 7);
         });
-        changed += Math.max(0, original.fit.frames[i].keypoints.length - frame.keypoints.length);
+        changed += original.fit.frames[i].keypoints.filter(before =>
+          !frame.keypoints.some(point => point.name === before.name)).length;
         if (JSON.stringify(frame.silhouette) !== JSON.stringify(original.fit.frames[i].silhouette)) ++changed;
         if (silhouetteEditable[i]) renderSilhouette(i);
       });
