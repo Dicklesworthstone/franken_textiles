@@ -3,7 +3,8 @@
 Optional `SewOptions.production` schedules the actual operations of several garment copies on one
 declared machine. Each copy retains its own seam dependencies; compatible operations from different
 copies can share an installed needle/thread setup. The existing bounded ordering solver minimizes
-either identity changes or explicitly sourced, directed setup durations.
+identity changes, explicitly sourced directed setup durations, or complete declared serial
+feed/setup/handling time when the independent handling model is requested.
 
 Every source operation first passes the ordinary material, thickness, geometry, stitch/feed, seam,
 pressure and requested process-qualification checks. A material substitution reruns those checks.
@@ -115,8 +116,8 @@ Using the same three-copy setup table above, a qualification covering one fixtur
 
 Feed remains 24 seconds. These are independent exhaustive software checks over synthetic process
 observations. The resource constraint changes the sequence, rather than merely annotating an
-otherwise unconstrained result. Loading, unloading and handling durations remain outside the timing
-model; a shared needle/thread identity does not establish zero handling time.
+otherwise unconstrained result. Loading, unloading and handling are included only by the independent
+handling policy below; a shared needle/thread identity does not establish zero handling time.
 
 Run the complete two-fixture example, including its actual source locks and explicit synthetic
 qualification/estimate permissions:
@@ -211,6 +212,74 @@ The same display is available in direct stitch-program results and manufacturing
 comparisons. Expand the source detail to inspect the retained policy, machine/qualification locks
 and both complete timelines. All values come from the Rust report; edits withdraw stale results.
 
+## Handling changes the production schedule
+
+Optional `production.handling` adds explicit initial loading, directed between-operation handling
+and final unloading to the actual optimizer. Use `production.ordering.objective:
+"minimize_production_time"`, the ordinary complete setup-time table and an explicit initial setup.
+Handling and the production-time objective require each other. Feed remains determined by the
+qualified operation geometry and rate; the variable search objective is setup plus handling.
+
+The model is `serial_operation_transitions/1`: the source protocol must identify nonoverlapping
+feed, setup and handling phases whose durations are added. It cannot express simultaneous worker
+activity, parallel machines, queueing, unobserved breakdowns or probabilistic durations. Do not put
+needle/thread setup or continuous stitch feed into the handling rows a second time.
+
+`initial_milliseconds` and `final_milliseconds` are maps from every original operation ID to its
+explicit loading/unloading duration. Each `transitions` row supplies `from`, `to`, `relation` and
+`milliseconds`. The relation is `same_copy` or `different_copy`; switching between garments must
+remain explicit even if the needle, thread and original operation are identical. Same-copy
+self-transitions cannot occur and refuse. Every other pair in the expanded operation domain needs
+a row, including pairs excluded by prerequisites. This conservative coverage check prevents an
+unmeasured transfer from becoming zero. Unused rows are allowed for a reusable source table.
+
+Every duration is an integer from 0 through 86400000 milliseconds. Zero must be explicit. There
+are at most 63 original operations, 8192 transition rows and 256 qualification references; the
+existing 63 expanded-operation and 200000 search-node limits still apply. Integer accumulated
+durations use u64 on native and WASM, including the complete final unload. The search lower bound
+includes a valid minimum possible final unloading duration, so an expensive final operation can
+change which operation is scheduled last.
+
+The policy carries the same full `machine_sha256` and per-operation `qualifications` content locks
+as workholding, plus independent `source`, `method`, `conditions`, `evidence` and `allow_estimates`.
+Use the existing `production::workholding::machine_sha256` and `qualification_sha256` functions to
+construct these typed locks. Every actual admitted sewing qualification must be covered. A machine,
+material/process qualification or source revision invalidates its old applicability. Missing
+transition evidence or uncovered admitted qualifications yield `NotConverged`; recipe search retains
+these as unresolved trials instead of claiming the unmeasured recipe is infeasible.
+
+For the synthetic three-copy, two-pass job, specify 100 ms first loading, 100 ms for the same-copy
+join-to-reinforcement transition, 5000 ms for changing garments, and 200 ms final unloading. Minimizing
+setup alone groups garments and uses 1.5 seconds of setup. Minimizing setup plus handling instead
+finishes each garment in turn: 6.5 seconds of setup plus 10.6 seconds of handling plus 24 seconds of
+feed gives **41.1 modeled seconds**. With only a 2000 ms inter-copy duration, a mixed schedule can win;
+the optimizer evaluates these costs jointly with finite workholding and all ordinary seam/access
+requirements. Independent exhaustive software enumeration checks capacities one, two and three.
+These timings are synthetic test inputs, not observed manufacturing performance.
+
+Requested handling produces plan `/15`, production `/3` and `ftx-sewing-handling/1`. The complete
+policy remains in ordinary replay options. `production.handling.baseline` and `.selected` retain
+every scoped transition plus initial/final steps and exact handling totals. The emitted stitch
+program follows that same selected order. The ordinary `ordering.timing` still reports the actual
+setup total and feed-plus-setup total of that order; joint optimality does not establish that setup
+alone is minimal. Its setup-only lower bound is conservatively zero in combined mode.
+
+`ordering.handling_timing` reports separate baseline/selected handling milliseconds,
+baseline/selected modeled production seconds, and the combined lower bound
+`lower_bound_setup_and_handling_milliseconds`. Add the unchanged feed duration to that bound when
+comparing complete modeled time. `SewPlan::modeled_production_seconds()` returns the selected full
+model only when qualified handling is present. Budget exhaustion retains complete handling,
+resource and stitch replay for the incumbent while leaving optimality unproved. Omission preserves
+existing wire output and timing meanings.
+
+For recipe selection, use `ftx-sewing-selection/4` and
+`objective: "minimize_modeled_production_seconds"`. Every complete recipe runs the same joint
+scheduler, and the selector uses its actual modeled total. Missing timing or an incomplete inner
+search prevents an optimum claim. In the three-copy synthetic case, a slower common-thread recipe
+loses the feed-plus-setup comparison but wins with handling at 38.0 modeled seconds. Template and
+alternative process/source qualifications remain mandatory. Source timing and software feasibility
+do not establish empirical seam quality or authorize machine execution.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **63 copy/operation pairs** and 1–200000 examined search nodes.
@@ -220,10 +289,11 @@ bound with `budget_exhausted: true` and `optimality_proven: false`; it never ret
 or proves unvisited schedules infeasible. Full search proves only the declared count/time objective
 under the declared predecessor graph and source table.
 
-This slice covers a single declared machine/configuration, needle/thread transitions and optional
-source-qualified finite workholding. It does not infer additional machines, undeclared inventory,
-physical seam access, inter-copy transfers, handling, acceleration or measured seam quality. Those
-require their own qualified constraints and remain open under `ftx-pb2`/`ftx-sp2`. Hardware
+This slice covers a single declared machine/configuration, needle/thread transitions, optional
+source-qualified finite workholding and explicit serial operation/copy handling. It does not infer
+additional machines, undeclared inventory, grip adequacy, three-dimensional machine approach,
+acceleration or measured seam quality. Planar seam access requires its own independently qualified
+policy. These other physical constraints remain open under `ftx-pb2`/`ftx-sp2`; hardware
 authorization remains false.
 
 The focused `sewing_production` tests cover shared setups, directed timing, complete incumbents,

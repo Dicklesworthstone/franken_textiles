@@ -13,7 +13,7 @@ const MAX_PRODUCTION_PASSES: usize = 63;
 const MAX_SEARCH_NODES: usize = 200_000;
 
 mod timing;
-pub use timing::{SetupTimes, TimingReport, Transition};
+pub use timing::{HandlingTimingReport, SetupTimes, TimingReport, Transition};
 
 /// Explicitly chosen manufacturing objective; neither component has a hidden time/cost weight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +23,8 @@ pub enum Objective {
     MinimizeSetupChanges,
     /// Minimize declared directed setup durations; requires known initial setup and complete times.
     MinimizeSetupTime,
+    /// Minimize serial feed, setup and explicitly qualified garment handling in production.
+    MinimizeProductionTime,
 }
 
 /// Caller-declared setup immediately before the first operation; no final reset is assumed.
@@ -60,6 +62,11 @@ pub struct Policy {
 
 impl Policy {
     pub(super) fn validate(&self, passes: usize, machine: &str) -> Result<(), Refusal> {
+        if self.objective == Objective::MinimizeProductionTime {
+            return Err(bad(
+                "production-time ordering requires a production handling policy",
+            ));
+        }
         self.validate_count(passes, MAX_PASSES, machine)
     }
 
@@ -87,7 +94,9 @@ impl Policy {
         }
         match (self.objective, &self.setup_times) {
             (Objective::MinimizeSetupChanges, None) => {}
-            (Objective::MinimizeSetupTime, Some(times)) if self.initial_setup.is_some() => {
+            (Objective::MinimizeSetupTime | Objective::MinimizeProductionTime, Some(times))
+                if self.initial_setup.is_some() =>
+            {
                 times.validate(machine)?;
             }
             _ => {
@@ -137,6 +146,9 @@ pub struct Report {
     /// Exact time accounting, absent in legacy count mode; source table stays in plan.options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timing: Option<TimingReport>,
+    /// Complete serial handling objective, including the first load and final unload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handling_timing: Option<HandlingTimingReport>,
     /// Deterministic incumbent and traversal tie policy; no hidden secondary objective.
     pub tie_break: &'static str,
 }
@@ -164,6 +176,14 @@ pub(super) struct ResourceHold {
     pub(super) units: u32,
     pub(super) acquire: u64,
     pub(super) release: u64,
+}
+
+/// Qualified operation/copy-aware handling costs in the same sorted operation order as search.
+pub(super) struct HandlingCosts {
+    pub(super) ids: Vec<String>,
+    /// The last row contains initial loading; diagonal entries are unused.
+    pub(super) transitions: Vec<Vec<u64>>,
+    pub(super) final_milliseconds: Vec<u64>,
 }
 
 impl ResourceLimits {
@@ -199,6 +219,7 @@ struct Search<'a> {
     all: u64,
     times: Option<Vec<Vec<u64>>>,
     resources: Option<&'a ResourceLimits>,
+    final_milliseconds: Option<&'a [u64]>,
 }
 
 struct Frame {
@@ -276,17 +297,26 @@ impl Search<'_> {
                 last = Some(next);
                 cost
             })
-            .sum()
+            .sum::<u64>()
+            + self.final_cost(last)
+    }
+
+    fn final_cost(&self, last: Option<usize>) -> u64 {
+        last.and_then(|i| self.final_milliseconds.map(|times| times[i]))
+            .unwrap_or(0)
     }
 
     fn lower_bound(&self, mask: u64, last: Option<usize>) -> u64 {
+        if mask == self.all {
+            return self.final_cost(last);
+        }
         if self.times.is_none() {
             return self.count_lower_bound(mask, last) as u64;
         }
         // Every remaining operation needs one incoming transition, from the current setup or
         // another remaining operation. Independent minima relax order/degree/dependency constraints,
         // so their sum is a lower bound even for asymmetric, nonmetric durations and repeated setups.
-        (0..self.tasks.len())
+        let incoming: u64 = (0..self.tasks.len())
             .filter(|&j| mask & (1 << j) == 0)
             .map(|j| {
                 (0..self.tasks.len())
@@ -294,7 +324,16 @@ impl Search<'_> {
                     .map(|i| self.cost(Some(i), j))
                     .fold(self.cost(last, j), u64::min)
             })
-            .sum()
+            .sum();
+        // Exactly one still-unvisited operation must be last. Relaxing which one yields a bound.
+        incoming
+            + self.final_milliseconds.map_or(0, |times| {
+                (0..self.tasks.len())
+                    .filter(|&i| mask & (1 << i) == 0)
+                    .map(|i| times[i])
+                    .min()
+                    .unwrap_or(0)
+            })
     }
 
     fn frame(&self, mask: u64, last: Option<usize>, cost: u64) -> Frame {
@@ -347,7 +386,7 @@ pub(super) fn optimize_operations(
     baseline_passes: &[Operation<'_>],
     feed_seconds: f64,
 ) -> Result<Report, Refusal> {
-    optimize_operations_with_resources(policy, baseline_passes, feed_seconds, None)
+    optimize_operations_with_resources(policy, baseline_passes, feed_seconds, None, None)
 }
 
 // Resource-qualified callers first admit the complete baseline, including added lifecycle edges.
@@ -357,6 +396,7 @@ pub(super) fn optimize_operations_with_resources(
     baseline_passes: &[Operation<'_>],
     feed_seconds: f64,
     resources: Option<&ResourceLimits>,
+    handling: Option<&HandlingCosts>,
 ) -> Result<Report, Refusal> {
     let mut passes = baseline_passes.to_vec();
     passes.sort_by_key(|p| p.id);
@@ -371,7 +411,26 @@ pub(super) fn optimize_operations_with_resources(
             "workholding resource indices do not match admitted operations",
         ));
     }
-    let times = policy
+    if (policy.objective == Objective::MinimizeProductionTime) != handling.is_some()
+        || handling.is_some_and(|handling| {
+            handling
+                .ids
+                .iter()
+                .map(String::as_str)
+                .ne(passes.iter().map(|pass| pass.id))
+                || handling.transitions.len() != passes.len() + 1
+                || handling
+                    .transitions
+                    .iter()
+                    .any(|row| row.len() != passes.len())
+                || handling.final_milliseconds.len() != passes.len()
+        })
+    {
+        return Err(bad(
+            "production-time ordering needs matching qualified handling costs",
+        ));
+    }
+    let setup_times = policy
         .setup_times
         .as_ref()
         .map(|times| {
@@ -390,6 +449,17 @@ pub(super) fn optimize_operations_with_resources(
             )
         })
         .transpose()?;
+    let mut times = setup_times.clone();
+    if let Some(handling) = handling {
+        let times = times
+            .as_mut()
+            .ok_or_else(|| bad("handling needs complete setup times"))?;
+        for (row, additions) in times.iter_mut().zip(&handling.transitions) {
+            for (value, addition) in row.iter_mut().zip(additions) {
+                *value += addition;
+            }
+        }
+    }
     let ids: BTreeMap<_, _> = passes
         .iter()
         .enumerate()
@@ -419,6 +489,7 @@ pub(super) fn optimize_operations_with_resources(
         tasks,
         times,
         resources,
+        final_milliseconds: handling.map(|handling| handling.final_milliseconds.as_slice()),
         // An explicitly installed identity absent from the job is a known different setup (zero),
         // not the omitted/unknown setup represented by None.
         initial: policy.initial_setup.as_ref().map(|s| {
@@ -462,7 +533,7 @@ pub(super) fn optimize_operations_with_resources(
         if mask == search.all {
             best.clone_from(&path);
             best.push(next);
-            best_cost = cost;
+            best_cost = cost + search.final_cost(Some(next));
         } else {
             path.push(next);
             stack.push(search.frame(mask, Some(next), cost));
@@ -474,6 +545,23 @@ pub(super) fn optimize_operations_with_resources(
             .map(|&i| search.tasks[i].id.to_string())
             .collect()
     };
+    let sum_transitions = |matrix: &[Vec<u64>], order: &[usize]| {
+        let mut last = search.tasks.len();
+        order
+            .iter()
+            .map(|&next| {
+                let cost = matrix[last][next];
+                last = next;
+                cost
+            })
+            .sum::<u64>()
+    };
+    let baseline_setup = setup_times
+        .as_ref()
+        .map(|times| sum_transitions(times, &baseline));
+    let selected_setup = setup_times
+        .as_ref()
+        .map(|times| sum_transitions(times, &best));
     Ok(Report {
         objective: policy.objective,
         baseline_order: names(&baseline),
@@ -492,16 +580,35 @@ pub(super) fn optimize_operations_with_resources(
             best_cost as usize
         },
         timing: search.times.as_ref().map(|_| TimingReport {
-            baseline_setup_milliseconds: baseline_cost,
-            selected_setup_milliseconds: best_cost,
-            lower_bound_setup_milliseconds: if budget_exhausted {
+            baseline_setup_milliseconds: baseline_setup.expect("timed baseline"),
+            selected_setup_milliseconds: selected_setup.expect("timed incumbent"),
+            lower_bound_setup_milliseconds: if handling.is_some() {
+                // Combined optimality does not establish setup-only optimality.
+                0
+            } else if budget_exhausted {
                 root_bound
             } else {
                 best_cost
             },
-            feed_and_setup_seconds: feed_seconds + best_cost as f64 / 1000.0,
+            feed_and_setup_seconds: feed_seconds
+                + selected_setup.expect("timed incumbent") as f64 / 1000.0,
         }),
-        tie_break: if search.times.is_some() {
+        handling_timing: handling.map(|handling| HandlingTimingReport {
+            baseline_handling_milliseconds: sum_transitions(&handling.transitions, &baseline)
+                + search.final_cost(baseline.last().copied()),
+            selected_handling_milliseconds: sum_transitions(&handling.transitions, &best)
+                + search.final_cost(best.last().copied()),
+            baseline_modeled_production_seconds: feed_seconds + baseline_cost as f64 / 1000.0,
+            selected_modeled_production_seconds: feed_seconds + best_cost as f64 / 1000.0,
+            lower_bound_setup_and_handling_milliseconds: if budget_exhausted {
+                root_bound
+            } else {
+                best_cost
+            },
+        }),
+        tie_break: if handling.is_some() {
+            "Retain the incumbent on equal integer setup-plus-handling milliseconds; explore by immediate duration and operation ID."
+        } else if search.times.is_some() {
             "Retain the incumbent on equal integer setup milliseconds; start with the lexicographic topological schedule, then explore by immediate duration and operation ID."
         } else {
             "Retain the incumbent on equal total changes; start with the lexicographic topological schedule, then explore by immediate total changes and operation ID."

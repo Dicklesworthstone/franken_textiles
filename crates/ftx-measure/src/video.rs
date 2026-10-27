@@ -26,7 +26,8 @@ pub struct FrameMetadata {
 }
 
 impl FrameMetadata {
-    fn validate(&self) -> Result<(), Refusal> {
+    /// Check acquisition identity and oriented calibration metadata before scoring or mask review.
+    pub fn validate(&self) -> Result<(), Refusal> {
         if self.frame.stream.trim().is_empty()
             || self.frame.stream.len() > 256
             || self.camera_epoch.trim().is_empty()

@@ -1098,6 +1098,7 @@ function manufacturingComparison(op, parent, study, computed) {
       splitProcurementResult(parent, purchase, `${row.key}: whole-marker supplier allocation`);
     }
     sewingWorkholding(parent, available(row.sewing), row.key);
+    sewingAccess(parent, available(row.sewing), row.key);
   }
   if (study.alternatives.some(row => row.finite_stock && row.finite_stock.status !== "not_requested")) {
     const stock = table(parent, "Finite hides and remnants — used physical inventory", ["Alternative", "Finite stock",
@@ -1489,6 +1490,34 @@ function sewingWorkholding(parent, plan, label = "Selected sewing plan") {
   detail(parent, `${label}: fixture source, qualification locks and both complete timelines`, {
     policy: plan.options?.production?.workholding, report });
 }
+function sewingAccess(parent, plan, label = "Selected sewing plan") {
+  const seams = plan?.seams?.filter(row => row.access || row.pass?.access) || [];
+  if (!seams.length) return;
+  const clearances = table(parent, `${label}: planar tool and fixture clearance`,
+    ["Operation", "Result", "Tool radius (mm)", "Required gap (mm)", "Minimum gap (mm)", "Fixtures", "Complete path segments"]);
+  const witnesses = table(parent, `${label}: limiting planar clearance witnesses`,
+    ["Operation", "Fixture", "Needle segment", "Fixture edge", "Needle point (mm)", "Fixture point (mm)"]);
+  const point = value => Array.isArray(value) ? `[${value.map(metric).join(", ")}]` : "Unknown";
+  for (const seam of seams) {
+    const report = seam.access, operation = seam.pass.id || seam.pass.seam;
+    cells(clearances, [operation, report ? "Declared planar model checked" : "No retained clearance result",
+      metric(report?.tool_radius_mm), metric(report?.required_clearance_mm), metric(report?.minimum_clearance_mm),
+      metric(report?.fixture_count), metric(report?.checked_segments)]);
+    if (report?.witness) {
+      const w = report.witness;
+      cells(witnesses, [operation, w.fixture, point(w.needle_segment), point(w.fixture_edge),
+        point(w.needle_mm), point(w.fixture_mm)]);
+    }
+    detail(parent, `${label}: ${operation} tool geometry, assembly and qualification sources`, {
+      policy: seam.pass.access, assembly: seam.assembly, report });
+  }
+  const note = document.createElement("p");
+  note.textContent = "Clearance uses the declared circular tool envelope over every complete needle-path segment in the operation-local assembly frame. " +
+    "Reverse and backtack runs revisit the same swept geometry. The source policy is tied to the exact machine and admitted material/process qualification. " +
+    "These retained planar calculations do not establish fixture grip, three-dimensional approach clearance, machine registration or hardware authorization. " +
+    "Operations without a retained result remain unchecked.";
+  parent.append(note);
+}
 function sewingResult(parent, r) {
   const plan = r.plan, production = plan?.production, order = production?.ordering || plan?.ordering;
   if (order) {
@@ -1522,6 +1551,7 @@ function sewingResult(parent, r) {
     detail(parent, "Baseline order, selected order and bounded search result", order);
   }
   sewingWorkholding(parent, plan);
+  sewingAccess(parent, plan);
   if (plan?.seams.some(row => row.source_span)) {
     const spans = table(parent, "Partial-seam operations — original source correspondence",
       ["Operation", "Source seam", "Side A range", "Side B range", "Full source lengths (mm)", "Traveled lengths (mm)", "Direction"]);
@@ -1548,6 +1578,7 @@ function sewingResult(parent, r) {
     ordering_objective: order ? (order.timing ? "minimize_setup_time" : "minimize_setup_changes") : undefined,
     ordering_optimality_proven: order?.optimality_proven,
     finite_workholding_enforced: production?.workholding ? true : undefined,
+    planar_access_checked_operations: plan?.seams?.filter(row => row.access).length || undefined,
     search_nodes: order?.search_nodes, hardware_execution_authorized: plan?.hardware_execution_authorized };
 }
 function permanentStretchResult(parent, r) {

@@ -114,6 +114,396 @@ fn one_hold() -> Value {
     json!([{"id":"held-garment","resource":"jig","units":1,"acquire":"a","release":"b"}])
 }
 
+fn handling(pattern: &Value, options: &mut Value, different_copy_ms: u32) {
+    let mut original = options.clone();
+    original["production"]
+        .as_object_mut()
+        .unwrap()
+        .remove("handling");
+    original["production"]["ordering"]["objective"] = json!("minimize_setup_time");
+    let plan = build(pattern.clone(), original).unwrap();
+    let qualifications: BTreeMap<_, _> = plan
+        .seams
+        .iter()
+        .map(|seam| {
+            let id = seam.qualification_id.as_ref().unwrap();
+            let qualification = plan
+                .options
+                .qualifications
+                .iter()
+                .find(|q| &q.id == id)
+                .unwrap();
+            (
+                seam.pass.operation_id().to_string(),
+                json!([{
+                    "id":id,"sha256":workholding::qualification_sha256(qualification).unwrap()
+                }]),
+            )
+        })
+        .collect();
+    let mut transitions = Vec::new();
+    for from in ["a", "b"] {
+        for to in ["a", "b"] {
+            transitions.push(json!({"from":from,"to":to,"relation":"different_copy","milliseconds":different_copy_ms}));
+            if from != to {
+                transitions
+                    .push(json!({"from":from,"to":to,"relation":"same_copy","milliseconds":100}));
+            }
+        }
+    }
+    options["production"]["ordering"]["objective"] = json!("minimize_production_time");
+    options["production"]["handling"] = json!({
+        "model":"serial_operation_transitions/1",
+        "machine_sha256":workholding::machine_sha256(&plan.options.machine).unwrap(),
+        "qualifications":qualifications,
+        "initial_milliseconds":{"a":100,"b":100},"final_milliseconds":{"a":200,"b":200},
+        "transitions":transitions,
+        "source":{"reference":"test:qualified-serial-handling","accessed_on":"2026-10-27",
+            "note":"Invented software timing observations, not measured machine throughput"},
+        "method":"Separate additive initial load, between-operation handling and final unload; exclude feed and setup",
+        "evidence":"estimate","allow_estimates":true
+    });
+}
+
+// Independent garment-state enumeration, including the final unload. No optimizer matrix/bounds.
+fn exhaustive_handling_cost(copies: usize, capacity: usize, transfer: u64) -> u64 {
+    fn visit(
+        states: &mut [u8],
+        capacity: usize,
+        transfer: u64,
+        previous: Option<(usize, u8)>,
+        cost: u64,
+        best: &mut u64,
+    ) {
+        if states.iter().all(|&state| state == 2) {
+            *best = (*best).min(cost + 200);
+            return;
+        }
+        for copy in 0..states.len() {
+            let phase = states[copy];
+            if phase == 2
+                || (phase == 0 && states.iter().filter(|&&state| state == 1).count() == capacity)
+            {
+                continue;
+            }
+            let setup = match (previous.map(|(_, phase)| phase), phase) {
+                (None, 0) => 1000,
+                (None, 1) => 3000,
+                (Some(0), 1) => 500,
+                (Some(1), 0) => 2000,
+                _ => 0,
+            };
+            let handling = match previous {
+                None => 100,
+                Some((last, _)) if last == copy => 100,
+                Some(_) => transfer,
+            };
+            states[copy] += 1;
+            visit(
+                states,
+                capacity,
+                transfer,
+                Some((copy, phase)),
+                cost + setup + handling,
+                best,
+            );
+            states[copy] -= 1;
+        }
+    }
+    let mut best = u64::MAX;
+    visit(&mut vec![0; copies], capacity, transfer, None, 0, &mut best);
+    best
+}
+
+#[test]
+fn handling_changes_the_actual_batch_order_and_matches_independent_exhaustive_optima() {
+    for transfer in [0, 2000, 5000] {
+        for capacity in [1, 2, 3] {
+            let (pattern, mut options) = fixture();
+            batch(&mut options, 3);
+            timed(&mut options);
+            fixtures(&pattern, &mut options, capacity, one_hold());
+            handling(&pattern, &mut options, transfer);
+            let plan = build(pattern.clone(), options).unwrap();
+            complete(&plan);
+            assert_eq!(plan.schema, "ftx-sewing-plan/15");
+            let production = plan.production.as_ref().unwrap();
+            assert_eq!(production.schema, "ftx-sewing-production/3");
+            let order = &production.ordering;
+            let times = order.handling_timing.as_ref().unwrap();
+            let actual = order.timing.as_ref().unwrap().selected_setup_milliseconds
+                + times.selected_handling_milliseconds;
+            let expected = exhaustive_handling_cost(3, capacity as usize, u64::from(transfer));
+            assert_eq!(actual, expected);
+            assert!(order.optimality_proven);
+            assert_eq!(times.lower_bound_setup_and_handling_milliseconds, expected);
+            assert_eq!(
+                times.selected_modeled_production_seconds,
+                plan.total_feed_seconds() + expected as f64 / 1000.0
+            );
+            assert_eq!(
+                order
+                    .timing
+                    .as_ref()
+                    .unwrap()
+                    .lower_bound_setup_milliseconds,
+                0
+            );
+            let handling = production.handling.as_ref().unwrap();
+            assert_eq!(
+                handling.selected.total_milliseconds,
+                times.selected_handling_milliseconds
+            );
+            assert_eq!(
+                handling.selected.steps.len(),
+                production.operations.len() + 1
+            );
+            assert!(handling.selected.steps.first().unwrap().from.is_none());
+            assert!(handling.selected.steps.last().unwrap().to.is_none());
+            assert!(!handling.physical_timing_validated);
+            assert!(!plan.hardware_execution_authorized);
+            if transfer == 2000 && capacity == 2 {
+                let program =
+                    SewProgram::build(&Pattern::new(pattern.clone()), &plan.options).unwrap();
+                let mut sequence = Vec::new();
+                for step in &program.stitches {
+                    let operation = format!(
+                        "{}/{}",
+                        step.copy.unwrap(),
+                        program.plan.seams[step.operation].pass.operation_id()
+                    );
+                    if sequence.last() != Some(&operation) {
+                        sequence.push(operation);
+                    }
+                }
+                assert_eq!(sequence, order.selected_order);
+                assert_eq!(
+                    program
+                        .plan
+                        .production
+                        .as_ref()
+                        .unwrap()
+                        .handling
+                        .as_ref()
+                        .unwrap()
+                        .selected
+                        .total_milliseconds,
+                    times.selected_handling_milliseconds
+                );
+            }
+            let replay = build(
+                pattern.clone(),
+                serde_json::to_value(&plan.options).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(&plan).unwrap(),
+                serde_json::to_value(&replay).unwrap()
+            );
+            if transfer == 5000 {
+                assert_eq!(order.selected_order, order.baseline_order);
+                assert_eq!(actual, 17100);
+                assert_eq!(
+                    order.timing.as_ref().unwrap().selected_setup_milliseconds,
+                    6500
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn terminal_unload_changes_the_selected_last_operation_and_bounded_incumbents_stay_complete() {
+    let (pattern, mut options) = fixture();
+    options["passes"][1]["after"] = json!([]);
+    batch(&mut options, 1);
+    timed(&mut options);
+    handling(&pattern, &mut options, 5000);
+    options["production"]["handling"]["final_milliseconds"] = json!({"a":0,"b":10000});
+    let plan = build(pattern.clone(), options.clone()).unwrap();
+    let order = plan.ordering_report().unwrap();
+    assert_eq!(order.selected_order, ["0/b", "0/a"]);
+    let handled = order.handling_timing.as_ref().unwrap();
+    assert_eq!(handled.selected_handling_milliseconds, 200);
+    assert_eq!(handled.lower_bound_setup_and_handling_milliseconds, 5200);
+
+    let (pattern, mut options) = fixture();
+    batch(&mut options, 3);
+    timed(&mut options);
+    handling(&pattern, &mut options, 2000);
+    options["production"]["ordering"]["max_search_nodes"] = json!(1);
+    let plan = build(pattern, options).unwrap();
+    complete(&plan);
+    let order = plan.ordering_report().unwrap();
+    assert!(order.budget_exhausted && !order.optimality_proven);
+    assert_eq!(order.selected_order, order.baseline_order);
+    let times = order.handling_timing.as_ref().unwrap();
+    assert!(
+        times.lower_bound_setup_and_handling_milliseconds <= exhaustive_handling_cost(3, 3, 2000)
+    );
+    assert_eq!(
+        plan.production
+            .as_ref()
+            .unwrap()
+            .handling
+            .as_ref()
+            .unwrap()
+            .selected
+            .steps
+            .len(),
+        7
+    );
+}
+
+#[test]
+fn handling_requires_exact_source_applicability_and_never_fills_missing_times() {
+    let (pattern, mut options) = fixture();
+    batch(&mut options, 3);
+    timed(&mut options);
+    handling(&pattern, &mut options, 5000);
+    for (pointer, value) in [
+        ("/machine/max_stitches_per_minute", json!(1100)),
+        (
+            "/qualifications/0/source/note",
+            json!("changed timing/material applicability"),
+        ),
+        ("/production/handling/allow_estimates", json!(false)),
+        (
+            "/production/handling/initial_milliseconds/a",
+            json!(86400001),
+        ),
+        ("/production/handling/final_milliseconds/b", json!(86400001)),
+        ("/production/handling/model", json!("overlapping-phases")),
+        (
+            "/production/ordering/objective",
+            json!("minimize_setup_time"),
+        ),
+    ] {
+        let mut changed = options.clone();
+        *changed.pointer_mut(pointer).unwrap() = value;
+        assert!(build(pattern.clone(), changed).is_err(), "{pointer}");
+    }
+    let mut missing = options.clone();
+    missing["production"]["handling"]["transitions"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        build(pattern.clone(), missing).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+    let mut missing = options.clone();
+    missing["production"]["handling"]["qualifications"]["a"] = json!([]);
+    assert_eq!(
+        build(pattern.clone(), missing).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+    for field in ["initial_milliseconds", "final_milliseconds"] {
+        let mut missing = options.clone();
+        missing["production"]["handling"][field]
+            .as_object_mut()
+            .unwrap()
+            .remove("b");
+        assert!(build(pattern.clone(), missing).is_err());
+    }
+    let mut duplicate = options;
+    let row = duplicate["production"]["handling"]["transitions"][0].clone();
+    duplicate["production"]["handling"]["transitions"]
+        .as_array_mut()
+        .unwrap()
+        .push(row);
+    assert!(build(pattern, duplicate).is_err());
+}
+
+#[test]
+fn handling_changes_recipe_selection_and_unknown_handling_never_proves_a_recipe_infeasible() {
+    let (pattern, mut options) = fixture();
+    batch(&mut options, 3);
+    timed(&mut options);
+    let alternatives = json!([{"operation":"b","recipes":[{"id":"same-thread-slower",
+        "needle":options["passes"][0]["needle"],"thread":"thread-a","max_stitch_mm":2.5,"stitches_per_minute":500.0}]}]);
+    let request = |options: Value, handled| {
+        serde_json::from_value::<ftx_export::sewing_selection::Request>(json!({
+        "schema":if handled {"ftx-sewing-selection/4"} else {"ftx-sewing-selection/2"},
+        "options":options,"alternatives":alternatives,
+        "objective":if handled {"minimize_modeled_production_seconds"} else {"minimize_feed_and_setup_seconds"},
+        "max_plan_evaluations":2
+    })).unwrap()
+    };
+    let without = request(options.clone(), false)
+        .select(&Pattern::new(pattern.clone()))
+        .unwrap();
+    assert_eq!(without.selected_choices.as_ref().unwrap()["b"], "template");
+    handling(&pattern, &mut options, 5000);
+    let first_lock = options["production"]["handling"]["qualifications"]["a"][0].clone();
+    options["production"]["handling"]["qualifications"]["b"]
+        .as_array_mut()
+        .unwrap()
+        .push(first_lock);
+    let with = request(options.clone(), true)
+        .select(&Pattern::new(pattern.clone()))
+        .unwrap();
+    assert_eq!(with.schema, "ftx-sewing-selection-report/4");
+    assert_eq!(
+        with.selected_choices.as_ref().unwrap()["b"],
+        "same-thread-slower"
+    );
+    assert!(with.optimality_proven);
+    assert_eq!(with.selected_objective_seconds, Some(38.0));
+    options["production"]["handling"]["qualifications"]["b"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    let unknown = request(options, true)
+        .select(&Pattern::new(pattern))
+        .unwrap();
+    assert_eq!(unknown.unresolved_trials, 1);
+    assert!(!unknown.optimality_proven && !unknown.no_feasible_listed_recipe);
+    assert!(unknown.selected_plan.is_some());
+}
+
+#[test]
+fn handling_totals_remain_exact_above_wasm_u32_with_sixty_three_operations() {
+    let (pattern, mut options) = fixture();
+    options["passes"].as_array_mut().unwrap().pop();
+    batch(&mut options, 63);
+    timed(&mut options);
+    options["production"]["ordering"]["initial_setup"]["thread"] = json!("thread-a");
+    handling(&pattern, &mut options, 86400000);
+    options["production"]["handling"]["initial_milliseconds"] = json!({"a":86400000});
+    options["production"]["handling"]["final_milliseconds"] = json!({"a":86400000});
+    options["production"]["handling"]["transitions"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|row| row["from"] == "a" && row["to"] == "a");
+    let plan = build(pattern, options).unwrap();
+    let timing = plan
+        .ordering_report()
+        .unwrap()
+        .handling_timing
+        .as_ref()
+        .unwrap();
+    assert_eq!(timing.selected_handling_milliseconds, 64_u64 * 86400000);
+    assert!(timing.selected_handling_milliseconds > u64::from(u32::MAX));
+    assert_eq!(
+        timing.lower_bound_setup_and_handling_milliseconds,
+        timing.selected_handling_milliseconds
+    );
+    assert!(plan.ordering_report().unwrap().optimality_proven);
+    assert_eq!(
+        plan.production
+            .as_ref()
+            .unwrap()
+            .handling
+            .as_ref()
+            .unwrap()
+            .selected
+            .steps
+            .len(),
+        64
+    );
+}
+
 // Independent full enumeration of the small two-operation garment example. This uses explicit
 // garment state and acquired/released inventory, not the optimizer's bit masks or lower bounds.
 fn exhaustive_fixture_cost(copies: usize, capacity: usize, timed: bool) -> u64 {

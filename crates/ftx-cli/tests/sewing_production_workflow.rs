@@ -13,6 +13,7 @@ const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
 const OPTIONS: &str = include_str!("../../../examples/sewing-production-options.json");
 const WORKHOLDING: &str = include_str!("../../../examples/sewing-workholding-options.json");
+const ACCESS: &str = include_str!("../../../examples/sewing-access-options.json");
 const TIMED_SELECTION: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-timed-selection.json");
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -160,6 +161,79 @@ fn finite_fixture_inventory_changes_both_native_schedules_and_the_real_stitch_pr
     assert_eq!(
         fs::read_to_string(directory.join("pattern.json")).unwrap(),
         PATTERN
+    );
+}
+
+#[test]
+fn both_native_commands_and_portable_exports_enforce_the_same_planar_tool_sweep() {
+    let directory = workspace();
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    fs::write(directory.join("access.json"), ACCESS).unwrap();
+    let plan = portable(ftx_wasm::manufacturing::sew_plan(PATTERN, ACCESS).unwrap());
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, ACCESS).unwrap());
+    assert_eq!(plan["schema"], "ftx-sewing-plan/14");
+    assert_eq!(program["plan"], plan);
+    assert_eq!(program["stitches"].as_array().unwrap().len(), 240);
+    for seam in plan["seams"].as_array().unwrap() {
+        assert_eq!(seam["access"]["minimum_clearance_mm"], 3.0);
+        assert_eq!(seam["access"]["checked_segments"], 40);
+        assert_eq!(seam["access"]["physical_access_validated"], false);
+    }
+    let mut collision: Value = serde_json::from_str(ACCESS).unwrap();
+    collision["passes"][0]["access"]["tool_radius_mm"] = json!(6.0);
+    let collision = collision.to_string();
+    fs::write(directory.join("collision.json"), &collision).unwrap();
+    assert!(
+        ftx_wasm::manufacturing::sew_plan(PATTERN, &collision)
+            .unwrap_err()
+            .message
+            .contains("planar access")
+    );
+    assert!(
+        ftx_wasm::manufacturing::sew_stitches(PATTERN, &collision)
+            .unwrap_err()
+            .message
+            .contains("planar access")
+    );
+    for main in [false, true] {
+        for (action, expected) in [("sew-plan", &plan), ("sew-stitches", &program)] {
+            assert_eq!(
+                run(main, &directory, action, "pattern.json", "access.json"),
+                *expected
+            );
+            let mut command = Command::new(if main {
+                env!("CARGO_BIN_EXE_ftx")
+            } else {
+                env!("CARGO_BIN_EXE_ftx-materials")
+            });
+            command.current_dir(&directory);
+            if main {
+                command.args(["--json", "materials"]);
+            }
+            let refused = command
+                .args([action, "pattern.json", "collision.json"])
+                .output()
+                .unwrap();
+            assert!(!refused.status.success());
+            let message = format!(
+                "{}{}",
+                String::from_utf8_lossy(&refused.stdout),
+                String::from_utf8_lossy(&refused.stderr)
+            );
+            assert!(message.contains("planar access"), "{message}");
+        }
+    }
+    assert_eq!(
+        fs::read_to_string(directory.join("pattern.json")).unwrap(),
+        PATTERN
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join("access.json")).unwrap(),
+        ACCESS
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join("collision.json")).unwrap(),
+        collision
     );
 }
 

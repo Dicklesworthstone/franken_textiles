@@ -66,6 +66,8 @@ pub enum Objective {
     /// Minimize generated feed plus source-qualified setup seconds, including initial setup.
     /// Requires the timed ordering objective; neither term includes handling or final reset.
     MinimizeFeedAndSetupSeconds,
+    /// Minimize serial feed, setup and source-qualified copy/operation handling, including endpoints.
+    MinimizeModeledProductionSeconds,
     /// Minimize complete source-locked thread orders from the shared consumables price result.
     /// Unknown consumption or incomplete eligible offer coverage cannot supply a score.
     MinimizeThreadObservedOrderCost,
@@ -75,7 +77,7 @@ pub enum Objective {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// `/1` for feed only; `/2` for feed plus setup; `/3` for complete thread order cost.
+    /// `/1` feed; `/2` feed plus setup; `/3` thread cost; `/4` modeled production time.
     pub schema: String,
     /// Complete template job. `require_qualification` must be true; it is never silently enabled.
     pub options: SewOptions,
@@ -204,11 +206,12 @@ impl Request {
         let schema = match self.objective {
             Objective::MinimizeFeedSeconds => "ftx-sewing-selection/1",
             Objective::MinimizeFeedAndSetupSeconds => "ftx-sewing-selection/2",
+            Objective::MinimizeModeledProductionSeconds => "ftx-sewing-selection/4",
             Objective::MinimizeThreadObservedOrderCost => "ftx-sewing-selection/3",
         };
         if self.schema != schema || !self.options.require_qualification {
             return Err(invalid(
-                "sewing selection needs schema /1 for feed, /2 for feed plus setup or /3 for thread cost, and explicit require_qualification=true",
+                "sewing selection needs schema /1 for feed, /2 for feed plus setup, /3 for thread cost or /4 for modeled production time, and explicit require_qualification=true",
             ));
         }
         if !(1..=MAX_TRIALS).contains(&self.max_plan_evaluations)
@@ -287,6 +290,7 @@ impl Request {
         }
         groups.sort_by(|a, b| a.operation.cmp(b.operation));
         let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds;
+        let handled = self.objective == Objective::MinimizeModeledProductionSeconds;
         if timed
             && self.options.ordering_policy().is_none_or(|policy| {
                 policy.objective != ordering::Objective::MinimizeSetupTime
@@ -298,13 +302,29 @@ impl Request {
                 "joint timed selection requires minimize_setup_time ordering with initial_setup and source setup_times",
             ));
         }
+        if handled
+            && self.options.production.as_ref().is_none_or(|production| {
+                production.handling.is_none()
+                    || production.ordering.objective != ordering::Objective::MinimizeProductionTime
+                    || production.ordering.initial_setup.is_none()
+                    || production.ordering.setup_times.is_none()
+            })
+        {
+            return Err(invalid(
+                "modeled production selection requires qualified handling, minimize_production_time ordering, explicit initial setup and setup times",
+            ));
+        }
         if let Some(policy) = self.options.ordering_policy()
             && let Some(times) = &policy.setup_times
         {
             let initial = policy.initial_setup.as_ref().ok_or_else(|| {
                 invalid("timed recipe ordering requires an explicit initial setup")
             })?;
-            if policy.objective != ordering::Objective::MinimizeSetupTime {
+            if !matches!(
+                policy.objective,
+                ordering::Objective::MinimizeSetupTime
+                    | ordering::Objective::MinimizeProductionTime
+            ) {
                 return Err(invalid("setup times require the timed ordering objective"));
             }
             let choices: BTreeSet<_> = self
@@ -346,7 +366,8 @@ impl Request {
         let mut trials = Vec::new();
         let mut selected_plan: Option<SewPlan> = None;
         let mut selected_choices = None;
-        let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds;
+        let handled = self.objective == Objective::MinimizeModeledProductionSeconds;
+        let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds || handled;
         let cost = self.objective == Objective::MinimizeThreadObservedOrderCost;
         let objective_currency = if cost {
             Some(
@@ -405,9 +426,14 @@ impl Request {
                         let time = schedule.timing.as_ref().ok_or_else(|| {
                             invalid("admitted timed recipe lost its duration accounting")
                         })?;
-                        trial.objective_seconds = Some(time.feed_and_setup_seconds);
+                        let seconds = if handled {
+                            schedule.handling_timing.as_ref().ok_or_else(|| invalid("admitted modeled production recipe lost its handling accounting"))?.selected_modeled_production_seconds
+                        } else {
+                            time.feed_and_setup_seconds
+                        };
+                        trial.objective_seconds = Some(seconds);
                         trial.ordering_optimality_proven = Some(schedule.optimality_proven);
-                        Some(time.feed_and_setup_seconds)
+                        Some(seconds)
                     } else {
                         Some(plan.total_feed_seconds())
                     };
@@ -454,6 +480,8 @@ impl Request {
         Ok(Report {
             schema: if cost {
                 "ftx-sewing-selection-report/3"
+            } else if handled {
+                "ftx-sewing-selection-report/4"
             } else if timed {
                 "ftx-sewing-selection-report/2"
             } else {
@@ -475,6 +503,8 @@ impl Request {
             no_feasible_listed_recipe: search_complete && !has_plan && unresolved_trials == 0,
             tie_break: if cost {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal complete thread order cost"
+            } else if handled {
+                "template first, then operation ID / recipe ID lexicographic; retain first equal modeled feed-plus-setup-plus-handling time"
             } else if timed {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal feed-plus-setup time"
             } else {

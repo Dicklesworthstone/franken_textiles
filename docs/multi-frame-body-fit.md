@@ -214,10 +214,11 @@ Use [`ftx measure video-decode`](video-frame-selection.md#import-a-local-phone-c
 prepare a clip for selection. Its strict request declares the chosen video
 stream, camera epoch and clockwise turn; it snapshots the original clip locally,
 checks every original PTS against the actual decoder log, and writes `frames.json`
-with the oriented images. Supply the explicitly named masks, or replace each mask path with
-an explicit `{"rect_px":[left,top,width,height]}` sharpness region as documented in the
-selection guide, before running
-`video-select`, then use that selection in the capture declaration above.
+with the oriented images. Use `video-mask-review` to author person/sheet sharpness
+regions locally and `video-masks` to materialize their binary masks. Run `video-select`
+on the resulting manifest, then use that selection in the capture declaration above.
+You can also supply the original manifest's named binary masks or explicit
+`{"rect_px":[left,top,width,height]}` sampling regions as documented in the selection guide.
 
 Choose the actual display transform from the acquisition and verify it against
 the source. Apply that same orientation to reviewed masks and coordinates;
