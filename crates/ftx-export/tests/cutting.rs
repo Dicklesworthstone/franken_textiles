@@ -1067,6 +1067,154 @@ fn split_quote_book(quotes: Vec<Value>) -> ftx_pattern::material_cost::QuoteBook
 }
 
 #[test]
+fn ordinary_procurement_does_not_reuse_one_stock_for_changed_material_snapshots() {
+    use ftx_export::cutting::procurement::evaluate;
+    let (_, base_quotes, mut market) = split_order_fixture();
+    market.split_orders = None;
+    let mut lining = piece("lining", 40.0, 100.0);
+    lining["fabric"] = fabric("shell", 0.11);
+    let source = pattern(vec![piece("front", 40.0, 100.0), lining]);
+    let plan = CutPlan::build(&source, &options()).unwrap();
+    assert_eq!(plan.rolls.len(), 2);
+    let mut shared = base_quotes[0].clone();
+    shared["material_sha256"] = Value::Null;
+    let book = split_quote_book(vec![shared.clone()]);
+    let priced = evaluate(&plan, &book, &market).unwrap();
+    assert_eq!(priced["complete_offer_coverage"], false);
+    assert_eq!(priced["complete_observed_quantity_coverage"], false);
+    assert!(priced["least_observed_independent_order_total"].is_null());
+    for order in priced["roll_prices"].as_array().unwrap() {
+        assert_eq!(order["sample"]["offers"].as_array().unwrap().len(), 1);
+        assert_eq!(order["excluded_shared_stock_offer_ids"], json!(["a"]));
+        assert!(order["least_observed_order"].is_null());
+    }
+
+    let study: ftx_export::material_study::Request = serde_json::from_value(json!({
+        "schema":"ftx-material-study/1",
+        "variants":[{"key":"original","changes":{"schema":"ftx-material-bindings/1"}}],
+        "cutting":options(),"purchasing":{"quotes":book,"market":market},
+        "comparison":{"basis":"nominal","objectives":[{"metric":"observed_order_cost","direction":"minimize"}]}
+    })).unwrap();
+    let report = serde_json::to_value(study.evaluate(&source).unwrap()).unwrap();
+    assert_eq!(report["alternatives"][0]["cutting"]["status"], "available");
+    assert_eq!(
+        report["alternatives"][0]["purchasing"]["status"],
+        "available"
+    );
+    assert!(
+        report["alternatives"][0]["metrics"]["least_observed_independent_order_total"].is_null()
+    );
+    assert_eq!(report["comparison"]["frontier"], json!([]));
+
+    // Independent exact-revision offers remain usable even when the ambiguous cheaper one exists.
+    let mut quotes = vec![shared];
+    for (i, roll) in plan.rolls.iter().enumerate() {
+        let mut independent = base_quotes[0].clone();
+        independent["offer_id"] = json!(format!("independent-{i}"));
+        independent["supplier"] = json!(format!("independent-source-{i}"));
+        independent["material_sha256"] = json!(roll.material.sha256());
+        independent["price"] = json!(10.0);
+        quotes.push(independent);
+    }
+    let complete = evaluate(&plan, &split_quote_book(quotes), &market).unwrap();
+    assert_eq!(complete["complete_offer_coverage"], true);
+    assert_eq!(complete["complete_observed_quantity_coverage"], true);
+    assert!(
+        (complete["least_observed_independent_order_total"]
+            .as_f64()
+            .unwrap()
+            - 3.0)
+            .abs()
+            < 1e-12
+    );
+    for order in complete["roll_prices"].as_array().unwrap() {
+        assert!(
+            order["least_observed_order"]["quote"]["offer_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("independent-")
+        );
+        assert_eq!(order["excluded_shared_stock_offer_ids"], json!(["a"]));
+    }
+}
+
+#[test]
+fn ordinary_procurement_uses_current_transitive_supplier_aliases_across_products() {
+    use ftx_export::cutting::procurement::evaluate;
+    let (_, base_quotes, mut market) = split_order_fixture();
+    market.split_orders = None;
+    let mut lining = piece("lining", 40.0, 100.0);
+    lining["fabric"] = fabric("lining", 0.1);
+    let source = pattern(vec![piece("front", 40.0, 100.0), lining]);
+    let mut quotes = Vec::new();
+    for (id, sku) in [("shell", "x"), ("lining", "z")] {
+        let mut quote = base_quotes[0].clone();
+        quote["offer_id"] = json!(id);
+        quote["material_id"] = json!(id);
+        quote["material_sha256"] = Value::Null;
+        quote["supplier"] = json!("shared source");
+        quote["sku"] = json!(sku);
+        quote["available_quantity"] = json!(0.5);
+        quotes.push(quote);
+    }
+    let mut bridge = quotes[0].clone();
+    bridge["offer_id"] = json!("unneeded-product");
+    bridge["material_id"] = json!("unneeded-product");
+    bridge["available"] = json!(false);
+    bridge["price_breaks"] = json!([{"minimum_quantity":0.25,"price":1.0,"sku":"y"}]);
+    quotes.push(bridge);
+    let mut bridge = quotes[2].clone();
+    bridge["offer_id"] = json!("unneeded-product-2");
+    bridge["material_id"] = json!("unneeded-product-2");
+    bridge["sku"] = json!("y");
+    bridge["price_breaks"][0]["sku"] = json!("z");
+    quotes.push(bridge);
+    for copies in [1, 3] {
+        let mut options = options();
+        options.copies = copies;
+        options.maximum_marker_length_m = Some(0.12);
+        let plan = CutPlan::build(&source, &options).unwrap();
+        let priced = evaluate(&plan, &split_quote_book(quotes.clone()), &market).unwrap();
+        assert_eq!(priced["complete_offer_coverage"], false);
+        assert!(priced["least_observed_independent_order_total"].is_null());
+        let orders = if copies == 1 {
+            &priced["roll_prices"]
+        } else {
+            &priced["material_orders"]
+        };
+        for order in orders.as_array().unwrap() {
+            assert_eq!(
+                order["excluded_shared_stock_offer_ids"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert!(order["least_observed_order"].is_null());
+        }
+        // A later source observation removes the bridge; an older one cannot reconnect it.
+        let mut disconnected = quotes.clone();
+        let mut later = disconnected[2].clone();
+        later["observed_on"] = json!("2026-10-19");
+        later["price_breaks"] = json!([]);
+        disconnected.push(later);
+        let mut later_market = market.clone();
+        later_market.as_of = "2026-10-19".into();
+        let complete = evaluate(
+            &plan,
+            &split_quote_book(disconnected.clone()),
+            &later_market,
+        )
+        .unwrap();
+        assert_eq!(complete["complete_offer_coverage"], true);
+        assert_eq!(complete["complete_observed_quantity_coverage"], true);
+        // Future changes never affect an earlier declared decision.
+        let earlier = evaluate(&plan, &split_quote_book(disconnected), &market).unwrap();
+        assert_eq!(earlier, priced);
+    }
+}
+
+#[test]
 fn whole_markers_can_use_multiple_finite_suppliers_with_canonical_order_rounding() {
     use ftx_export::cutting::procurement::evaluate;
     use ftx_pattern::material_cost::Scope;
