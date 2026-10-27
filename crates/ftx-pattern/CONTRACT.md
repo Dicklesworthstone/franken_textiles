@@ -1,5 +1,12 @@
 # ftx-pattern contract
 
+**Released bovine tensile specimens** (`material_catalog::leather_tensile`). Ten exact source trials
+retain 40 direct caliper, force and instrument-displacement observations. Ordinary unit normalization,
+condition-qualified screening and frozen selections consume them. Conflicting source gauge/stress
+metadata prevents derived strain, modulus or membrane admission; `reported_thickness` cannot supply
+contact/sewing clearance. Source, license and verified workbook identity are documented in
+`docs/leather-tensile-materials.md`; regressions: `leather_tensile_catalog`.
+
 **Released Fabric-101 observations** (`material_catalog::fabric101`). Ninety-six concordant,
 individually identified release records add measured areal density and reported gauge thickness to
 the ordinary catalog, bindings, mass and screening paths. Immutable release/source pins, raw

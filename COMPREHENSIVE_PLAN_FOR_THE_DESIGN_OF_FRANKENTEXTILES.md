@@ -3808,6 +3808,25 @@ local environment. Every garment still stays in one cell with independently qual
 fixture units and handling labor. Shared operators/resources, inter-cell transfers, coupled time/cost
 allocation, hardware execution and measured seam/garment acceptance remain open under `ftx-pb2.2`.
 
+### 25.98 Released bovine tensile observations enter ordinary material selection
+
+Ten individually identified bovine specimens from Schneider's 2026 CC BY 4.0 tensile release add
+40 direct observations to the shared catalog: reported caliper thickness, maximum force, force at
+break and instrument displacement at break. Original workbook units, cells, source directions,
+version and verified asset hash remain attached. Canonical kgf-to-N normalization makes the force
+observations usable in existing condition-qualified screening and frozen material selections.
+
+The source's 33-versus-65 mm gauge discrepancy and inconsistent calculated stress columns remain
+explicit. No stress, strain, modulus, warp/weft direction, contact thickness or simulation law is
+derived from them. Missing specimen conditioning, hide location, supplier and finish stay missing.
+This supplies useful cowhide selection data without promoting incomplete geometry into mechanics.
+See [leather-tensile-materials.md](docs/leather-tensile-materials.md).
+
+Three focused source/screening/replay tests and the existing catalog and screening suites pass.
+The bounded data integration is `ftx-tm2.2`; resolving source geometry and matching a complete
+mechanical/transport characterization remain under `ftx-tm2` and the unchanged-garment `ftx-tm8`
+acceptance gate.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
