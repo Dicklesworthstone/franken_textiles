@@ -83,6 +83,10 @@ pub struct Request {
 /// One actual operation/channel contribution, retaining the separately applied allowances.
 #[derive(Clone, Debug, Serialize)]
 pub struct Contribution {
+    /// Physical cell when the selected production allocation uses independently configured recipes.
+    /// Operation and qualification IDs below belong to this cell's retained ordinary source plan.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell: Option<String>,
     /// Exact operation identity, independent of the selected schedule's position.
     pub operation_id: String,
     /// Admitted parent qualification; its retained consumption source governs this contribution.
@@ -153,6 +157,9 @@ pub struct MassRequirement {
 /// Why an operation cannot contribute a complete thread inventory.
 #[derive(Clone, Debug, Serialize)]
 pub struct MissingOperation {
+    /// Physical cell whose selected recipe lacks consumption evidence, when configured separately.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell: Option<String>,
     /// Exact operation whose consumption is unknown or only partial.
     pub operation_id: String,
     /// Missing process qualification, missing consumption or incomplete channel coverage.
@@ -200,7 +207,7 @@ pub struct PurchasingReport {
 /// Source-qualified inventory derived from the actual selected production sewing plan.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` for an omitted single-garment policy; `/2` for explicit production quantities.
+    /// `/1` single-garment policy; `/2` repeated shared recipe; `/3` selected configured-cell recipes.
     pub schema: &'static str,
     /// Repeated garment count for thread quantities and prices. Sewing geometry/time stay per copy.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -209,7 +216,8 @@ pub struct Report {
     pub complete_consumption_coverage: bool,
     /// Missing quantities are not zero and cannot be repaired by a later price lookup.
     pub missing_operations: Vec<MissingOperation>,
-    /// Canonically ordered by operation/channel ID, independent of schedule optimization.
+    /// Canonically ordered by cell (when present), operation and channel ID. Configured production
+    /// uses its selected cell counts; chronological operation order does not alter a contribution.
     pub operation_channels: Vec<Contribution>,
     /// Exact frozen yarn selections; no sheet properties are required or inferred.
     pub materials: BTreeMap<String, Selection>,
@@ -348,6 +356,15 @@ pub fn purchasing_work_bound(options: &SewOptions) -> Result<usize, Refusal> {
     for model in options
         .qualifications
         .iter()
+        .chain(
+            options
+                .production
+                .iter()
+                .flat_map(|production| production.parallel.iter())
+                .flat_map(|parallel| &parallel.cells)
+                .flat_map(|cell| cell.configuration.iter())
+                .flat_map(|configuration| &configuration.qualifications),
+        )
         .filter_map(|q| q.thread_consumption.as_ref())
     {
         if model.channels.is_empty() || model.channels.len() > MAX_CHANNELS {
@@ -399,8 +416,15 @@ pub fn purchasing_work_bound(options: &SewOptions) -> Result<usize, Refusal> {
 
 pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refusal> {
     let copies = request.copies()?;
+    let configured = plan
+        .production
+        .as_ref()
+        .and_then(|production| production.parallel.as_ref())
+        .filter(|parallel| !parallel.cell_plans.is_empty());
     let mut report = Report {
-        schema: if request.production_copies.is_some() {
+        schema: if configured.is_some() {
+            "ftx-sewing-consumables/3"
+        } else if request.production_copies.is_some() {
             "ftx-sewing-consumables/2"
         } else {
             "ftx-sewing-consumables/1"
@@ -418,103 +442,125 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
         purchasing: None,
         purchasing_work_bound: purchasing_work_bound(&plan.options)?,
     };
-    let qualifications: BTreeMap<_, _> = plan
-        .options
-        .qualifications
-        .iter()
-        .map(|q| (q.id.as_str(), q))
-        .collect();
+    let batches: Vec<_> = if let Some(parallel) = configured {
+        parallel
+            .selected
+            .cells
+            .iter()
+            .filter(|cell| !cell.copies.is_empty())
+            .map(|cell| {
+                (
+                    Some(cell.cell.as_str()),
+                    plan.parallel_cell_plan(&cell.cell)
+                        .expect("admitted configured cell"),
+                    cell.copies.len(),
+                )
+            })
+            .collect()
+    } else {
+        vec![(None, plan, copies)]
+    };
     let mut resolved = BTreeMap::new();
     let mut requirements: BTreeMap<String, Requirement> = BTreeMap::new();
-    let mut operations: Vec<_> = plan.seams.iter().collect();
-    operations.sort_by_key(|seam| seam.pass.operation_id());
-    for seam in operations {
-        let id = seam.pass.operation_id();
-        let qualification = seam
-            .qualification_id
-            .as_deref()
-            .and_then(|id| qualifications.get(id).copied());
-        let missing = match qualification {
-            None => Some("no admitted process qualification for this operation"),
-            Some(q) if q.thread_consumption.is_none() => {
-                Some("admitted qualification has no thread consumption evidence")
-            }
-            Some(q) if !q.thread_consumption.as_ref().unwrap().channels_complete => {
-                Some("source does not establish all required thread channels")
-            }
-            _ => None,
-        };
-        if let Some(reason) = missing {
-            report.missing_operations.push(MissingOperation {
-                operation_id: id.into(),
-                reason: reason.into(),
-            });
-        }
-        let Some((q, model)) =
-            qualification.and_then(|q| q.thread_consumption.as_ref().map(|m| (q, m)))
-        else {
-            continue;
-        };
-        let mut channels: Vec<_> = model.channels.iter().collect();
-        channels.sort_by_key(|c| &c.id);
-        for channel in channels {
-            let hash = channel
-                .material
-                .expected_sha256
-                .as_ref()
-                .ok_or_else(|| bad("thread snapshot lock is absent"))?;
-            if !resolved.contains_key(hash) {
-                let selected = resolve_thread(&channel.material)?;
-                report
-                    .materials
-                    .insert(hash.clone(), selected.frozen_selection());
-                resolved.insert(hash.clone(), selected);
-            }
-            let traversal = seam.stitch_intervals as f64 * channel.metres_per_traversal;
-            if !positive(traversal) {
-                return Err(bad(
-                    "thread traversal requirement must be representable and positive",
-                ));
-            }
-            let length = add(
-                add(traversal, channel.start_allowance_m)?,
-                channel.end_allowance_m,
-            )?;
-            let batch_length = repeat(length, copies)?;
-            let requirement = requirements
-                .entry(hash.clone())
-                .or_insert_with(|| Requirement {
-                    material_sha256: hash.clone(),
-                    required_length_m: 0.0,
-                    required_continuous_length_m: 0.0,
-                    mass: None,
-                    mass_unavailable_reason: None,
+    for (cell, source, copies) in batches {
+        let qualifications: BTreeMap<_, _> = source
+            .options
+            .qualifications
+            .iter()
+            .map(|q| (q.id.as_str(), q))
+            .collect();
+        let mut operations: Vec<_> = source.seams.iter().collect();
+        operations.sort_by_key(|seam| seam.pass.operation_id());
+        for seam in operations {
+            let id = seam.pass.operation_id();
+            let qualification = seam
+                .qualification_id
+                .as_deref()
+                .and_then(|id| qualifications.get(id).copied());
+            let missing = match qualification {
+                None => Some("no admitted process qualification for this operation"),
+                Some(q) if q.thread_consumption.is_none() => {
+                    Some("admitted qualification has no thread consumption evidence")
+                }
+                Some(q) if !q.thread_consumption.as_ref().unwrap().channels_complete => {
+                    Some("source does not establish all required thread channels")
+                }
+                _ => None,
+            };
+            if let Some(reason) = missing {
+                report.missing_operations.push(MissingOperation {
+                    cell: cell.map(str::to_string),
+                    operation_id: id.into(),
+                    reason: reason.into(),
                 });
-            requirement.required_length_m = add(requirement.required_length_m, batch_length)?;
-            requirement.required_continuous_length_m =
-                requirement.required_continuous_length_m.max(length);
-            report.operation_channels.push(Contribution {
-                operation_id: id.into(),
-                qualification_id: q.id.clone(),
-                channel_id: channel.id.clone(),
-                material_sha256: hash.clone(),
-                stitch_intervals: seam
-                    .stitch_intervals
-                    .checked_mul(copies)
-                    .ok_or_else(|| bad("production thread traversal count overflows"))?,
-                metres_per_traversal: channel.metres_per_traversal,
-                traversal_length_m: repeat(traversal, copies)?,
-                start_allowance_m: repeat(channel.start_allowance_m, copies)?,
-                end_allowance_m: repeat(channel.end_allowance_m, copies)?,
-                required_length_m: batch_length,
-                per_copy: request.production_copies.map(|_| PerCopyContribution {
-                    stitch_intervals: seam.stitch_intervals,
-                    traversal_length_m: traversal,
-                    start_allowance_m: channel.start_allowance_m,
-                    end_allowance_m: channel.end_allowance_m,
-                    required_length_m: length,
-                }),
-            });
+            }
+            let Some((q, model)) =
+                qualification.and_then(|q| q.thread_consumption.as_ref().map(|m| (q, m)))
+            else {
+                continue;
+            };
+            let mut channels: Vec<_> = model.channels.iter().collect();
+            channels.sort_by_key(|c| &c.id);
+            for channel in channels {
+                let hash = channel
+                    .material
+                    .expected_sha256
+                    .as_ref()
+                    .ok_or_else(|| bad("thread snapshot lock is absent"))?;
+                if !resolved.contains_key(hash) {
+                    let selected = resolve_thread(&channel.material)?;
+                    report
+                        .materials
+                        .insert(hash.clone(), selected.frozen_selection());
+                    resolved.insert(hash.clone(), selected);
+                }
+                let traversal = seam.stitch_intervals as f64 * channel.metres_per_traversal;
+                if !positive(traversal) {
+                    return Err(bad(
+                        "thread traversal requirement must be representable and positive",
+                    ));
+                }
+                let length = add(
+                    add(traversal, channel.start_allowance_m)?,
+                    channel.end_allowance_m,
+                )?;
+                let batch_length = repeat(length, copies)?;
+                let requirement = requirements
+                    .entry(hash.clone())
+                    .or_insert_with(|| Requirement {
+                        material_sha256: hash.clone(),
+                        required_length_m: 0.0,
+                        required_continuous_length_m: 0.0,
+                        mass: None,
+                        mass_unavailable_reason: None,
+                    });
+                requirement.required_length_m = add(requirement.required_length_m, batch_length)?;
+                requirement.required_continuous_length_m =
+                    requirement.required_continuous_length_m.max(length);
+                report.operation_channels.push(Contribution {
+                    cell: cell.map(str::to_string),
+                    operation_id: id.into(),
+                    qualification_id: q.id.clone(),
+                    channel_id: channel.id.clone(),
+                    material_sha256: hash.clone(),
+                    stitch_intervals: seam
+                        .stitch_intervals
+                        .checked_mul(copies)
+                        .ok_or_else(|| bad("production thread traversal count overflows"))?,
+                    metres_per_traversal: channel.metres_per_traversal,
+                    traversal_length_m: repeat(traversal, copies)?,
+                    start_allowance_m: repeat(channel.start_allowance_m, copies)?,
+                    end_allowance_m: repeat(channel.end_allowance_m, copies)?,
+                    required_length_m: batch_length,
+                    per_copy: request.production_copies.map(|_| PerCopyContribution {
+                        stitch_intervals: seam.stitch_intervals,
+                        traversal_length_m: traversal,
+                        start_allowance_m: channel.start_allowance_m,
+                        end_allowance_m: channel.end_allowance_m,
+                        required_length_m: length,
+                    }),
+                });
+            }
         }
     }
     report.complete_consumption_coverage = report.missing_operations.is_empty();

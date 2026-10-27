@@ -134,6 +134,25 @@ pub struct SewOptions {
 }
 
 impl SewOptions {
+    /// Source geometry builds described by one complete job: the outer reference plus every
+    /// explicitly configured cell, including idle cells. Shared-configuration cells reuse the
+    /// reference. This conservative work reservation does not admit a malformed cell policy.
+    #[must_use]
+    pub fn source_plan_count(&self) -> usize {
+        1usize.saturating_add(
+            self.production
+                .as_ref()
+                .and_then(|production| production.parallel.as_ref())
+                .map_or(0, |parallel| {
+                    parallel
+                        .cells
+                        .iter()
+                        .filter(|cell| cell.configuration.is_some())
+                        .count()
+                }),
+        )
+    }
+
     /// Conservative configured scheduling-work reservation for one complete recipe evaluation.
     /// Includes the serial reference and the parallel policy's entire shared inner/allocation cap.
     /// It stays conservative when a later manufacturing consumer inherits a larger cutting count.
@@ -479,6 +498,47 @@ impl SewPlan {
             .map(|parallel| parallel.optimality_proven)
     }
 
+    /// Source geometry and qualifications actually used by this physical parallel cell. Version 1
+    /// shares the parent source plan; version 2 retains a separately admitted ordinary cell plan.
+    #[must_use]
+    pub fn parallel_cell_plan(&self, cell: &str) -> Option<&Self> {
+        let parallel = self.production.as_ref()?.parallel.as_ref()?;
+        if parallel.cell_plans.is_empty() {
+            parallel
+                .selected
+                .cells
+                .iter()
+                .any(|candidate| candidate.cell == cell)
+                .then_some(self)
+        } else {
+            parallel
+                .cell_plans
+                .iter()
+                .find(|candidate| candidate.cell == cell)
+                .map(|candidate| candidate.plan.as_ref())
+        }
+    }
+
+    /// Retained source station slots, once per outer/cell geometry table rather than per garment
+    /// copy or count schedule. Includes admitted idle cells; version 1 shares the outer table.
+    #[must_use]
+    pub fn retained_source_station_count(&self) -> usize {
+        let source_count = |plan: &Self| {
+            plan.seams.iter().fold(0usize, |total, seam| {
+                total.saturating_add(seam.stations.a.len())
+            })
+        };
+        let outer = source_count(self);
+        self.production
+            .as_ref()
+            .and_then(|production| production.parallel.as_ref())
+            .map_or(outer, |parallel| {
+                parallel.cell_plans.iter().fold(outer, |total, cell| {
+                    total.saturating_add(source_count(&cell.plan))
+                })
+            })
+    }
+
     /// Actual traversal scope, matching [`Self::total_feed_seconds`].
     #[must_use]
     pub fn total_stitch_intervals(&self) -> usize {
@@ -657,6 +717,13 @@ impl SewPlan {
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
             schema: if options
+                .production
+                .as_ref()
+                .and_then(|production| production.parallel.as_ref())
+                .is_some_and(|parallel| parallel.model == "independent_whole_garment_cells/2")
+            {
+                "ftx-sewing-plan/17"
+            } else if options
                 .production
                 .as_ref()
                 .is_some_and(|production| production.parallel.is_some())
@@ -1040,11 +1107,11 @@ impl SewPlan {
                 .sort_by_key(|seam| ranks[seam.pass.operation_id()]);
             out.ordering = Some(report);
         }
+        if let Some(policy) = &options.production {
+            out.production = Some(production::evaluate(&out, policy, pattern)?);
+        }
         if let Some(request) = &options.consumables {
             out.consumables = Some(consumables::evaluate(&out, request)?);
-        }
-        if let Some(policy) = &options.production {
-            out.production = Some(production::evaluate(&out, policy)?);
         }
         Ok(out)
     }

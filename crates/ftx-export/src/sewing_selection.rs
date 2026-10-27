@@ -39,7 +39,7 @@ pub struct Recipe {
 }
 
 impl Recipe {
-    fn apply(&self, pass: &mut SewingPass) {
+    pub(crate) fn apply(&self, pass: &mut SewingPass) {
         pass.needle.clone_from(&self.needle);
         pass.thread.clone_from(&self.thread);
         pass.max_stitch_mm = self.max_stitch_mm;
@@ -176,6 +176,47 @@ struct Group<'a> {
     recipes: Vec<&'a Recipe>,
 }
 
+fn check_timing_choices(
+    policy: &ordering::Policy,
+    options: &SewOptions,
+    groups: &[Group<'_>],
+    fixed: Option<&BTreeMap<String, Recipe>>,
+) -> Result<(), Refusal> {
+    let Some(times) = &policy.setup_times else {
+        return Ok(());
+    };
+    let initial = policy
+        .initial_setup
+        .as_ref()
+        .ok_or_else(|| invalid("timed recipe ordering requires an explicit initial setup"))?;
+    if !matches!(
+        policy.objective,
+        ordering::Objective::MinimizeSetupTime | ordering::Objective::MinimizeProductionTime
+    ) {
+        return Err(invalid("setup times require the timed ordering objective"));
+    }
+    let choices: BTreeSet<_> = options
+        .passes
+        .iter()
+        .map(|pass| ordering::Setup {
+            needle: pass.needle.clone(),
+            thread: pass.thread.clone(),
+        })
+        .chain(
+            groups
+                .iter()
+                .filter(|group| fixed.is_none_or(|recipes| !recipes.contains_key(group.operation)))
+                .flat_map(|group| {
+                    group.recipes.iter().map(|recipe| ordering::Setup {
+                        needle: recipe.needle.clone(),
+                        thread: recipe.thread.clone(),
+                    })
+                }),
+        )
+        .collect();
+    times.check_choices(&options.machine.id, &choices, initial)
+}
+
 impl Request {
     /// Reserve the complete configured recipe search's thread-purchasing work before evaluation.
     /// Cost mode additionally validates the common canonical market once, visiting every quote.
@@ -300,6 +341,16 @@ impl Request {
             .production
             .as_ref()
             .and_then(|production| production.parallel.as_ref());
+        if parallel.is_some_and(|policy| policy.model == "independent_whole_garment_cells/2")
+            && matches!(
+                self.objective,
+                Objective::MinimizeFeedSeconds | Objective::MinimizeThreadObservedOrderCost
+            )
+        {
+            return Err(invalid(
+                "heterogeneous cells allocate garments for minimum makespan; feed and thread cost depend on that allocation and cannot claim their own minimum; use minimize_parallel_makespan and inspect the actual feed and thread orders",
+            ));
+        }
         if (timed || handled) && parallel.is_some() {
             return Err(invalid(
                 "serial time objectives cannot score a parallel-cell plan; use minimize_parallel_makespan",
@@ -333,39 +384,18 @@ impl Request {
                 "modeled production selection requires qualified handling, minimize_production_time ordering, explicit initial setup and setup times",
             ));
         }
-        let policies = self.options.ordering_policy().into_iter().chain(
-            parallel
-                .into_iter()
-                .flat_map(|policy| policy.cells.iter().map(|cell| &cell.ordering)),
-        );
-        for policy in policies {
-            if let Some(times) = &policy.setup_times {
-                let initial = policy.initial_setup.as_ref().ok_or_else(|| {
-                    invalid("timed recipe ordering requires an explicit initial setup")
-                })?;
-                if !matches!(
-                    policy.objective,
-                    ordering::Objective::MinimizeSetupTime
-                        | ordering::Objective::MinimizeProductionTime
-                ) {
-                    return Err(invalid("setup times require the timed ordering objective"));
-                }
-                let choices: BTreeSet<_> = self
-                    .options
-                    .passes
-                    .iter()
-                    .map(|p| ordering::Setup {
-                        needle: p.needle.clone(),
-                        thread: p.thread.clone(),
-                    })
-                    .chain(groups.iter().flat_map(|g| {
-                        g.recipes.iter().map(|r| ordering::Setup {
-                            needle: r.needle.clone(),
-                            thread: r.thread.clone(),
-                        })
-                    }))
-                    .collect();
-                times.check_choices(&self.options.machine.id, &choices, initial)?;
+        if let Some(policy) = self.options.ordering_policy() {
+            check_timing_choices(policy, &self.options, &groups, None)?;
+        }
+        if let Some(parallel) = parallel {
+            for cell in &parallel.cells {
+                let configured = cell.configured_options(&self.options)?;
+                check_timing_choices(
+                    &cell.ordering,
+                    configured.as_ref().unwrap_or(&self.options),
+                    &groups,
+                    cell.configuration.as_ref().map(|source| &source.recipes),
+                )?;
             }
         }
         Ok(groups)

@@ -1660,32 +1660,62 @@ impl Policy {
                             })
                         }));
             let mut mass_protocols = BTreeMap::new();
-            for seam in &plan.seams {
-                let q = plan
-                    .options
-                    .qualifications
-                    .iter()
-                    .find(|q| Some(q.id.as_str()) == seam.qualification_id.as_deref())
-                    .ok_or_else(|| {
-                        invalid("admitted sewing qualification for thread protocols unavailable")
+            let mut sources = Vec::new();
+            if let Some(parallel) = plan
+                .production
+                .as_ref()
+                .and_then(|production| production.parallel.as_ref())
+                .filter(|parallel| !parallel.cell_plans.is_empty())
+            {
+                for cell in &parallel.selected.cells {
+                    if !cell.copies.is_empty() {
+                        sources.push((
+                            Some(cell.cell.as_str()),
+                            plan.parallel_cell_plan(&cell.cell).ok_or_else(|| {
+                                invalid("selected physical cell lost its qualified sewing plan")
+                            })?,
+                        ));
+                    }
+                }
+            } else {
+                sources.push((None, plan));
+            }
+            for (cell, source_plan) in sources {
+                for seam in &source_plan.seams {
+                    let q = source_plan
+                        .options
+                        .qualifications
+                        .iter()
+                        .find(|q| Some(q.id.as_str()) == seam.qualification_id.as_deref())
+                        .ok_or_else(|| {
+                            invalid(
+                                "admitted sewing qualification for thread protocols unavailable",
+                            )
+                        })?;
+                    let model = q.thread_consumption.as_ref().ok_or_else(|| {
+                        invalid("independent thread consumption protocol unavailable")
                     })?;
-                let model = q.thread_consumption.as_ref().ok_or_else(|| {
-                    invalid("independent thread consumption protocol unavailable")
-                })?;
-                let channels: BTreeSet<_> = model.channels.iter().map(|c| c.id.as_str()).collect();
-                consumption_protocols.insert(seam.pass.operation_id(), json!({
+                    let protocol_key = cell.map_or_else(
+                        || Ok(seam.pass.operation_id().to_owned()),
+                        |cell| {
+                            serde_json::to_string(&(cell, seam.pass.operation_id()))
+                                .map_err(|error| invalid(error.to_string()))
+                        },
+                    )?;
+                    let channels: BTreeSet<_> =
+                        model.channels.iter().map(|c| c.id.as_str()).collect();
+                    consumption_protocols.insert(protocol_key.clone(), json!({
                     "process":{"method":q.method,"conditions":q.conditions,"evidence":q.evidence},
                     "consumption":{"method":model.method,"conditions":model.conditions,"evidence":model.evidence},
                     "channels":channels,
                 }));
-                if mass_protocol {
-                    let materials = &plan
-                        .consumables
-                        .as_ref()
-                        .ok_or_else(|| invalid("resolved thread materials unavailable"))?
-                        .materials;
-                    let channels: BTreeMap<_, _> =
-                        model
+                    if mass_protocol {
+                        let materials = &plan
+                            .consumables
+                            .as_ref()
+                            .ok_or_else(|| invalid("resolved thread materials unavailable"))?
+                            .materials;
+                        let channels: BTreeMap<_, _> = model
                             .channels
                             .iter()
                             .map(|channel| {
@@ -1711,7 +1741,8 @@ impl Policy {
                         }))))
                             })
                             .collect::<Result<_, Refusal>>()?;
-                    mass_protocols.insert(seam.pass.operation_id(), channels);
+                        mass_protocols.insert(protocol_key, channels);
+                    }
                 }
             }
             base = hash(&(base, consumption_protocols))?;

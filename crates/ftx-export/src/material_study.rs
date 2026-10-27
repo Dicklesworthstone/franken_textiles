@@ -765,10 +765,13 @@ impl Request {
             .checked_mul(copies)
             .and_then(|n| n.checked_mul(variants.len()))
             .is_none_or(|n| n > 16_384)
-            || self
-                .sewing
-                .as_ref()
-                .is_some_and(|s| s.passes.len().saturating_mul(variants.len()) > 4096)
+            || self.sewing.as_ref().is_some_and(|s| {
+                s.passes
+                    .len()
+                    .saturating_mul(s.source_plan_count())
+                    .saturating_mul(variants.len())
+                    > 4096
+            })
             || self.assembly_mass.as_ref().is_some_and(|m| {
                 // Invalid attachment inventories remain independent per-row mass refusals.
                 // Retain the existing explicit-extra budget when no merged work can run.
@@ -867,13 +870,7 @@ impl Request {
                 ));
             }
             if let Some(sewing) = row.sewing.value() {
-                stations = stations.saturating_add(
-                    sewing
-                        .seams
-                        .iter()
-                        .map(|s| s.stations.a.len())
-                        .sum::<usize>(),
-                );
+                stations = stations.saturating_add(sewing.retained_source_station_count());
                 if stations > 250_000 {
                     return Err(budget(
                         "material study exceeds 250000 aggregate sewing stations",

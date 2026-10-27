@@ -85,6 +85,7 @@ const USAGE: &str = "usage:
   ftx materials treatment REQUEST.json [--json]
   ftx materials treatment-pattern PATTERN.json REQUEST.json [NEW-PATTERN.json] [--json]
   ftx materials sew-plan|sew-stitches PATTERN.json OPTIONS.json [--json]
+  ftx materials sew-cell-svg PATTERN.json OPTIONS.json CELL-ID OPERATION-ID NEW.svg [--json]
   ftx measure catalogue [--garment KIND] [--out FILE] [--json]
   ftx measure prior|reference --stature-mm MM [--age-months N] [--sex M|F] [--out FILE] [--json]
   ftx measure init --label NICKNAME --out FILE [--stature 92cm] [--age-months N] [--taken-on DATE] [--json]

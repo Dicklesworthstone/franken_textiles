@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 const INPUT: &str = include_str!(
     "../../../tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json"
 );
+const PARALLEL_INPUT: &str = include_str!("../../../examples/material-parallel-calibration.json");
 
 struct Workspace(PathBuf);
 impl Workspace {
@@ -60,6 +61,92 @@ impl Workspace {
             .output()
             .unwrap()
     }
+}
+
+#[test]
+fn joint_calibration_publishes_one_frozen_material_for_actual_timed_cloth_history() {
+    let workspace = Workspace::new();
+    fs::write(workspace.0.join("histories.json"), PARALLEL_INPUT).unwrap();
+    let input: Value = serde_json::from_str(PARALLEL_INPUT).unwrap();
+    let identified = workspace.identify(false, true);
+    assert_eq!(identified, workspace.identify(true, true));
+    assert_eq!(identified["calibration"]["status"], "ACCEPTED");
+    assert_eq!(identified["simulation_ready"], true);
+    assert_eq!(
+        identified["selection"]["record"]["membrane_relaxation"],
+        input["material"]["membrane_relaxation"]
+    );
+    let portable_text =
+        ftx_wasm::materials::calibrate_membrane_plasticity(PARALLEL_INPUT, true).unwrap();
+    let portable: Value = serde_json::from_str(&portable_text).unwrap();
+    for key in ["calibration", "selection", "selection_json"] {
+        assert_eq!(portable[key], identified[key]);
+    }
+    assert_eq!(
+        portable["material"]["capabilities"]["mechanical_coefficients"]["ready"],
+        true
+    );
+    let denied = workspace.identify(false, false);
+    assert_eq!(denied["calibration"], identified["calibration"]);
+    assert_eq!(denied["simulation_ready"], false);
+
+    let history = json!({"schema":"ftx-strip-history/1","material":identified["selection"],
+        "fixture":{"gauge_length_m":0.1,"width_m":0.06,"warp_axis":[0.0,1.0],"cells":[2,2]},
+        "loading":[{"time_s":0.0,"extension_fraction":0.0},
+            {"time_s":0.05,"extension_fraction":0.08},{"time_s":0.15,"extension_fraction":0.08},
+            {"time_s":0.2,"extension_fraction":0.0},{"time_s":0.25,"extension_fraction":0.0}],
+        "controls":{"max_step_s":0.01,"max_steps":32,"max_newton":100,
+            "velocity_tolerance_m_s":1e-9,"force_tolerance_n":1e-6}});
+    let request = serde_json::from_value(history.clone()).unwrap();
+    let direct = ftx_drape::strip::history::evaluate(&request).unwrap();
+    let last = direct.states.last().unwrap();
+    assert!(last.plastic_dissipation_j > 0.0 && last.maxwell_dissipation_j > 0.0);
+    assert!(last.relaxation.is_some() && last.plasticity.is_some());
+    for state in &direct.states[1..] {
+        assert!(state.solve.unwrap().converged);
+        assert!(state.free_dynamic_residual_n <= 1e-6);
+    }
+    let report = serde_json::to_value(&direct).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &ftx_wasm::materials::strip_history(&history.to_string()).unwrap()
+        )
+        .unwrap(),
+        report
+    );
+    let replay = serde_json::from_str(&direct.replay_request_json).unwrap();
+    assert_eq!(
+        serde_json::to_value(ftx_drape::strip::history::evaluate(&replay).unwrap()).unwrap(),
+        report
+    );
+    fs::write(workspace.0.join("portable.json"), portable_text).unwrap();
+    workspace.write("forward-request.json", &history);
+    workspace.write("forward-report.json", &report);
+    eprintln!("joint calibration replay: {}", workspace.0.display());
+
+    let mut failed = input;
+    let check = failed["experiments"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|experiment| experiment["partition"] == "check")
+        .unwrap();
+    check["samples"].as_array_mut().unwrap().last_mut().unwrap()["second_piola_n_m"][0] =
+        json!(1e6);
+    let rejected: Value = serde_json::from_str(
+        &ftx_wasm::materials::calibrate_membrane_plasticity(&failed.to_string(), true).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rejected["calibration"]["status"], "REJECTED");
+    assert_eq!(
+        rejected["calibration"]["parameters"],
+        identified["calibration"]["parameters"]
+    );
+    assert_eq!(
+        rejected["calibration"]["fit"],
+        identified["calibration"]["fit"]
+    );
+    assert!(rejected["selection_json"].is_null());
 }
 
 #[test]

@@ -4,6 +4,7 @@ use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::textile_import;
 use serde_json::{Value, json};
+use std::{fs::OpenOptions, io::Write};
 
 #[path = "bin/material_workbench/bending.rs"]
 mod bending_calibration;
@@ -77,6 +78,29 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             ));
         };
         let result = sewing_selection::plan(pattern, options, action == "sew-stitches")?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if action == "sew-cell-svg" {
+        known_options(args, "materials", &[])?;
+        let [pattern, options, cell, operation, out] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials sew-cell-svg PATTERN.json OPTIONS.json CELL-ID OPERATION-ID NEW.svg [--json]",
+            ));
+        };
+        let pattern = ftx_pattern::Pattern::new(read::<Value>(pattern)?);
+        let options = read::<ftx_export::sewing::SewOptions>(options)?;
+        let svg = ftx_export::sewing::preview::svg_cell(&pattern, &options, cell, operation)?;
+        let io = |error| Refusal::new(RefusalCode::Io, format!("{out}: {error}"));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(out)
+            .map_err(io)?;
+        file.write_all(svg.as_bytes()).map_err(io)?;
+        let result = json!({"out":out,"cell":cell,"operation":operation,
+            "svg_sha256":ftx_core::receipt::sha256_hex(svg.as_bytes()),
+            "hardware_execution_authorized":false});
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }

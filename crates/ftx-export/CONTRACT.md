@@ -153,6 +153,32 @@ with local-to-global physical-copy maps; every output stitch identifies its cell
 exhaustive, budget, fixture, source and stitch cases live in `sewing_parallel`. This does not qualify
 shared workers, cross-cell transfers, arbitrary configurations, grip or hardware execution.
 
+**Configured independent cells** (`independent_whole_garment_cells/2`). Each physical cell supplies
+a full machine/configuration hash, its own complete process qualifications/content references and
+explicit optional operation recipe overrides. Omitted recipe settings inherit the current parent
+candidate; source pattern/topology/assembly/paths/backtacks stay fixed. Optional per-operation access
+replacements retain independent machine/source admission and never erase inherited requirements.
+Each cell builds one fresh ordinary plan on the actual pattern, including idle cells; actual station
+pitch, traversal count, feed, materials, pressure and clearance are rechecked. Existing count DP and
+valid inner bounds operate on these cell-specific costs. Source geometry is retained once per cell;
+the outer source and serial schedule remain a reference. Selected total feed/count and stitch `/6`
+use actual cell geometry/rates and the existing global-copy mapping. The source plans share 250000
+station slots; scheduling retains the global 200000-work cap. Consumables `/3` aggregates selected
+cell-qualified yarn demand and per-operation continuity before one canonical complete order per yarn,
+preserving minimum/increment/tier/stock/source rules. Idle demand is excluded; missing used-cell
+coverage withholds complete quantity/mass/cost. Quote preflight unions all supplied cell yarn locks.
+Plan `/17`, production `/5` and parallel `/2` retain all cell plans and original frozen options.
+Conditional feed/cost reporting does not imply their optimization: heterogeneous recipe selection
+requires makespan. Focused `sewing_parallel` cases cover actual machine/pitch/rate substitution,
+source invalidation, selected-cell inventory, combined pricing, idle/partial demand and frozen
+stitch replay. Version 1 output is preserved. No shared-labor, transfer or physical-execution claim.
+Explicit `preview::svg_cell` rebuilds the whole original job before rendering the retained cell's
+actual station geometry/rate and source machine/qualification locks. SVG `/2` identifies cell and
+selected global copies, including an empty list for an idle source. Plain `svg` refuses configured
+jobs without a named cell; legacy previews retain their bytes. Portable native/browser and both
+CLI adapters use the same renderer; CLI files are create-new. The focused regression checks actual
+2.5-versus-5 mm needle spacing, feed, full-job revalidation and escaped labels.
+
 **Planar sewing access** (`passes[].access`). Optional `planar_disk_sweep/1` requires an explicit
 flat assembly and an admitted source process qualification. Full machine and qualification hashes
 bind the independent tool/fixture acquisition to the current configuration and material stack.
