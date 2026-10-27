@@ -23,6 +23,9 @@ fn acquisition_metadata_round_trips_without_losing_focal_lengths() {
 fn documented_manifest_uses_the_actual_metadata_and_policy_schema() {
     let docs = include_str!("../../../docs/video-frame-selection.md");
     let block = docs
+        .split_once("## Decoded input manifest\n")
+        .unwrap()
+        .1
         .split("```json\n")
         .nth(1)
         .unwrap()
@@ -30,9 +33,12 @@ fn documented_manifest_uses_the_actual_metadata_and_policy_schema() {
         .next()
         .unwrap();
     let input: serde_json::Value = serde_json::from_str(block).unwrap();
+    assert_eq!(input["schema"], "ftx-video-frames/1");
     let options: SelectionOptions = serde_json::from_value(input["options"].clone()).unwrap();
     options.validate().unwrap();
-    for frame in input["frames"].as_array().unwrap() {
+    let frames = input["frames"].as_array().unwrap();
+    assert!(!frames.is_empty());
+    for frame in frames {
         let metadata: FrameMetadata = serde_json::from_value(frame["metadata"].clone()).unwrap();
         score_frame(metadata, [3, 3], &[80; 9], &[255; 9], &[255; 9]).unwrap();
     }
