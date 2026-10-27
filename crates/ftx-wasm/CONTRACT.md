@@ -234,6 +234,22 @@ hashes, and returns exact `interfaces_json` / `changes_json` without changing so
 `tests/materials.rs` replays actual material/contact consumers and preserves incomplete readiness,
 independent consent, retained numeric evidence, and refusal of stale or duplicate interfaces.
 
+**Evaluated GarmentCode import.** `import_garmentcode(input, annotations)` calls the canonical
+`ftx-pattern` importer without files or network access. Both original inputs retain their separate
+4 MiB limits and exact source hashes. The response keeps the converted `pattern` and review `report`,
+and supplies Rust-generated `pattern_json`, `report_json` and optional `fit_spec_json` strings. These
+pretty JSON strings include a final newline and match native CLI artifacts byte-for-byte, preserving
+signed zero and round-trip-sensitive numbers without a browser serialization step. The complete
+escaped response must fit the existing 16 MiB output limit.
+
+The materials workbench separates conversion/review from explicit pattern adoption. Adoption uses the
+existing original-pattern lifecycle, clearing old assignments, interface substitutions, outfit maps,
+combinations and downstream results. Source/annotation edits cancel pending work and withdraw stale
+reviews and adopted inputs; a delayed read or worker reply cannot replace a later pattern. Original
+inputs and all native artifacts stay downloadable. Optional fit remains an explicit separately chosen
+consumer input. `REVIEW_REQUIRED`, missing construction semantics and source limitations remain visible;
+conversion does not supply measured body readiness, physical fit or complete garment construction.
+
 **Joint-outfit material workbench.** `materials::outfit::prepare` and its wasm32 export
 `material_outfit_prepare(input)` use the production outfit composer to freeze an `ftx-outfit-drape/1`
 request into one ordinary pattern. The import retains exact request bytes, their SHA-256, exact

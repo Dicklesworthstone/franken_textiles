@@ -4099,6 +4099,25 @@ retained serial orders; its exhaustion does not establish unrestricted physical 
 This extends `ftx-pb2.2`; inter-cell garment routing, measured factory access/timing, seam quality and
 hardware execution remain separate gates. See [sewing-production.md](docs/sewing-production.md).
 
+### 25.111 Evaluated vector patterns enter the ordinary browser workbench
+
+The existing evaluated GarmentCode importer now has local file controls in the materials workbench.
+Users select source geometry and optional construction annotations, review the canonical conversion
+report, and explicitly adopt the native pattern for material binding, manufacturing and supported
+studies. Review retains physical panel/source mapping, missing semantics and `REVIEW_REQUIRED`;
+conversion alone does not replace the active pattern or establish measured readiness or garment fit.
+
+The portable adapter returns exact Rust-generated native pattern, report and optional fit-contract
+texts alongside its existing structured values. Browser downloads and downstream input use those
+strings directly, matching native artifact bytes and preserving signed zero and precise numeric
+round-trips. Existing input and aggregate output limits remain enforced. Source changes, cancellation,
+late reads and obsolete worker replies cannot publish an old conversion over current work. Adoption
+uses the existing original-pattern reset for assignments, interfaces, outfit ownership and results.
+
+This extends `ftx-a9dm` into a user-facing browser workflow without adding another geometry converter.
+Unsupported source semantics, physical limb placement and garment-completeness/fit qualification
+remain with the canonical import and downstream consumers. See the [README](README.md#import-an-evaluated-garmentcode-pattern).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

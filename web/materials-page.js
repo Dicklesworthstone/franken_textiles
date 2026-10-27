@@ -3,12 +3,13 @@ const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "price", "sew"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "treatment", "vapor", "calibrate",
-  "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory"];
+  "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode"];
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
 let preparedBy = null;
 let preparedTreatment = null;
+let preparedImport = null, adoptedImport = false;
 let sourceText = null, outfit = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
@@ -26,7 +27,7 @@ for (const op of operations) {
     thermalPoint: "Material at the stated temperature", thermalHistory: "Dry heating and cooling history",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
     stripHistory: "Strip loading and recovery", vaporSurface: "Vapor transfer on this drape",
-    stripFit: "Clamped-strip identification", outfit: "Imported joint outfit" })[op] || op;
+    stripFit: "Clamped-strip identification", outfit: "Imported joint outfit", garmentcode: "Imported GarmentCode pattern — review required" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
   section.append(title, summary, comparison, links); $("outputs").append(section);
@@ -47,6 +48,9 @@ function controls() {
   $("pressure").disabled ||= !has("compressionRequest");
   $("treatment").disabled ||= !has("treatmentRequest");
   $("useTreatment").disabled = !!pending || !preparedTreatment;
+  $("garmentcode").disabled ||= !has("garmentcodeSource");
+  $("useGarmentcode").disabled = !!pending || !preparedImport;
+  $("clearGarmentcodeAnnotations").disabled = !has("garmentcodeAnnotations");
   $("vapor").disabled ||= !has("vaporRequest");
   $("thermalPoint").disabled ||= !$("selection").value.trim() || !$("thermalPointTemperature").value.trim() ||
     !Number.isFinite(Number($("thermalPointTemperature").value));
@@ -85,6 +89,7 @@ function clear(keys) {
     if (key === "stock") { $("stockMarker").hidden = true; $("stockMarker").removeAttribute("src"); }
     if (key === "bind") { bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren(); }
     if (key === "treatment") preparedTreatment = null;
+    if (key === "garmentcode") preparedImport = null;
     if (key === "calibrate") {
       calibratedPair = null;
       $("calibratedInterfaceSummary").textContent = "No current calibrated contact pair.";
@@ -2471,6 +2476,22 @@ function show(op, msg) {
     }
   } else if (op === "inspect") {
     preparedBy = null; inspectResult(r);
+  } else if (op === "garmentcode") {
+    preparedImport = r.pattern_json;
+    const report = r.report, s = sections.get(op); s.section.hidden = false;
+    s.summary.textContent = text({ status: report.status, scope: report.scope,
+      source_units_per_meter: report.source_units_per_meter, counts: report.counts,
+      source_sha256: report.source_sha256, annotations_sha256: report.annotations_sha256,
+      missing_semantics: report.missing_semantics, limitations: report.limitations });
+    const note = document.createElement("p");
+    note.textContent = "REVIEW_REQUIRED: conversion preserves supported evaluated geometry; it does not establish garment completeness or fit. " +
+      "Review the missing construction information, then choose Use imported pattern to replace the current workbench pattern. " +
+      (r.fit_spec_json ? "A supplied fit specification is available to download and select in section 3." : "No fit specification was supplied.");
+    s.comparison.append(note);
+    const panels = table(s.comparison, "Original panels and native physical pieces", ["Source panel", "Native piece", "Winding reversed"]);
+    for (const panel of report.panels) cells(panels, [panel.source_panel, panel.piece, panel.winding_reversed ? "Yes" : "No"]);
+    detail(s.comparison, "Complete panel, edge, stitch, geometry and source review", report);
+    for (const f of msg.files) link(op, s.links, f);
   } else if (op === "outfit") {
     outfit = { request_json: r.request_json, composition_json: r.composition_json };
     installPattern(r.pattern_json, `${r.composition.garments.length} garments in one composed outfit`, r.composition.garments);
@@ -2573,6 +2594,18 @@ async function read(id, binary = false) {
   if (!binary) JSON.parse(data);
   return data;
 }
+async function readGarmentcode(id) {
+  const f = $(id).files[0]; if (!f) throw Error(`Choose ${id} first.`);
+  if (f.size > 4 * 1024 * 1024) throw Error("Each GarmentCode input is limited to 4 MiB.");
+  const bytes = await f.arrayBuffer();
+  if (bytes.byteLength > 4 * 1024 * 1024) throw Error("Each GarmentCode input is limited to 4 MiB.");
+  let raw;
+  try { raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
+  catch { throw Error(`${id} must be valid UTF-8; no replacement characters were substituted.`); }
+  // Preserve every valid source byte. Retaining a BOM also preserves the native JSON refusal.
+  JSON.parse(raw);
+  return raw;
+}
 function changes() {
   const pieces = [...pieceChanges].map(([id, selection]) => `${JSON.stringify(id)}:${selection}`).join(",");
   const interfaces = interfaceChange === null ? "" : `,"interfaces":${interfaceChange}`;
@@ -2649,6 +2682,10 @@ async function execute(op) {
       msg.selection = $("selection").value; msg.temperatureC = Number($("thermalPointTemperature").value);
     }
     else if (op === "thermalHistory") msg.thermalRequest = await read("thermalRequest");
+    else if (op === "garmentcode") {
+      msg.source = await readGarmentcode("garmentcodeSource");
+      if (has("garmentcodeAnnotations")) msg.annotations = await readGarmentcode("garmentcodeAnnotations");
+    }
     else if (op === "bind") {
       if (!interfaceReady) throw Error("Load a valid replacement interface list or choose Keep original interfaces.");
       msg.pattern = sourceText; msg.changes = changes();
@@ -2764,13 +2801,19 @@ function installPattern(raw, label, garments = []) {
     }
   }
 }
-$("patternFile").onchange = async () => {
-  const rev = ++patternRead; source = null; sourceText = null; outfit = null; defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
+function resetPatternInput(keepImport = false) {
+  ++patternRead; source = null; sourceText = null; outfit = null; adoptedImport = false;
+  defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
   outfitTargets.clear();
   combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
-  invalidate(["bind", ...boundOperations, "study", "scenario", "outfit"]); $("patternName").textContent = "No pattern loaded.";
+  invalidate(["bind", ...boundOperations, "study", "scenario", "outfit", ...(keepImport ? [] : ["garmentcode"])]);
+  $("patternName").textContent = "No pattern loaded.";
   $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
   base.textContent = "Pattern default (preserve explicit piece choices)"; $("target").append(base);
+  return patternRead;
+}
+$("patternFile").onchange = async () => {
+  const rev = resetPatternInput();
   try { const raw = await read("patternFile"), data = JSON.parse(raw); if (rev !== patternRead) return;
     if (data.schema === "ftx-outfit-drape/1") {
       const id = ++sequence; pending = { id, op: "outfit" };
@@ -2794,15 +2837,29 @@ $("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); resetIn
 $("useTreatment").onclick = () => {
   if (!preparedTreatment || pending) return;
   const raw = preparedTreatment;
-  ++patternRead; outfit = null; defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
-  outfitTargets.clear(); combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
-  $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
-  base.textContent = "Pattern default (preserve explicit piece choices)"; $("target").append(base);
-  invalidate(["bind", ...boundOperations, "study", "scenario", "outfit"]);
+  resetPatternInput();
   installPattern(raw, "Derived treatment pattern");
   $("status").textContent = "Derived pattern loaded. Freeze selections and bind to recompute its consumers.";
   controls();
 };
+$("useGarmentcode").onclick = () => {
+  if (!preparedImport || pending) return;
+  const raw = preparedImport;
+  resetPatternInput(true); preparedImport = null;
+  $("patternFile").value = "";
+  installPattern(raw, "Imported GarmentCode pattern — REVIEW_REQUIRED");
+  adoptedImport = true;
+  $("status").textContent = "Imported pattern loaded for review. Assign materials and freeze selections to recompute its consumers. Conversion does not establish fit.";
+  controls();
+};
+function invalidateGarmentcode() {
+  if (adoptedImport) {
+    resetPatternInput();
+    $("patternName").textContent = "Imported pattern withdrawn. Convert the changed inputs and review the new result before adopting it.";
+  } else invalidate(["garmentcode"]);
+}
+for (const id of ["garmentcodeSource", "garmentcodeAnnotations"]) $(id).addEventListener("change", invalidateGarmentcode);
+$("clearGarmentcodeAnnotations").onclick = () => { $("garmentcodeAnnotations").value = ""; invalidateGarmentcode(); };
 $("addCombination").onclick = () => {
   if (!inspected || !source || pending) return;
   try {
