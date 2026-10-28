@@ -3,10 +3,14 @@
 
 #[path = "accepted_body_workflow/adaptive.rs"]
 mod adaptive;
+#[path = "accepted_body_workflow/consumer_adaptive.rs"]
+mod consumer_adaptive;
 #[path = "accepted_body_workflow/outfit.rs"]
 mod outfit;
 #[path = "accepted_body_workflow/surface_water.rs"]
 mod surface_water;
+#[path = "accepted_body_workflow/thermal_bridges.rs"]
+mod thermal_bridges;
 
 #[test]
 fn finite_grid_linked_vertex_moves_reach_native_and_portable_selected_body_workflows() {

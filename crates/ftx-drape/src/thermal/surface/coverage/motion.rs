@@ -29,6 +29,14 @@ use crate::thermal::{
 };
 use projection::clip::{Work, area, bounds_overlap, intersection};
 
+fn temperature_range(values: &[f64]) -> [f64; 2] {
+    values
+        .iter()
+        .fold([f64::INFINITY, f64::NEG_INFINITY], |r, &t| {
+            [r[0].min(t), r[1].max(t)]
+        })
+}
+
 // The supplied model has reference-area-scaled capacities, so both arguments and returned
 // requested/realized energies are joules. Inversion and source-domain checks stay in one kernel.
 fn preload(
@@ -145,6 +153,9 @@ pub struct Step {
     exposed_balance_error_j: f64,
     exposed_exterior_exchange: Option<ExposedExteriorExchange>,
     internal_heat: Option<InternalHeat>,
+    // Source preloading is an actual intermediate temperature, even when the boundary solve then
+    // cools it. Keep its covered-path extrema for independently qualified zero-storage bridges.
+    preloaded_temperature_range_c: Option<Vec<[f64; 2]>>,
 }
 
 /// A prescribed source apportioned over the complete retained material domain, in joules.
@@ -161,6 +172,23 @@ pub struct InternalHeat {
     pub allocation_residual_j: f64,
 }
 impl Step {
+    pub(crate) fn bridge_temperature_ranges(&self) -> Vec<[f64; 2]> {
+        self.heat
+            .state
+            .temperatures
+            .iter()
+            .enumerate()
+            .map(|(i, row)| {
+                let mut range = temperature_range(row);
+                if let Some(preloaded) = &self.preloaded_temperature_range_c {
+                    range[0] = range[0].min(preloaded[i][0]);
+                    range[1] = range[1].max(preloaded[i][1]);
+                }
+                range
+            })
+            .collect()
+    }
+
     /// Present after a nonzero source-bearing step; omitted steps retain the original output.
     #[must_use]
     pub fn internal_heat(&self) -> Option<&InternalHeat> {
@@ -334,6 +362,39 @@ pub struct Transfer {
 }
 
 impl Frame {
+    pub(crate) fn bridge_domains(
+        &self,
+        state: &State,
+    ) -> Result<Vec<crate::thermal::steady::coverage::bridges::Domain>, Refusal> {
+        self.check(state)?;
+        self.coverage
+            .layout
+            .regions
+            .iter()
+            .zip(state.temperature_c())
+            .map(|(region, temperatures)| {
+                let body_area = super::area(
+                    self.coverage.layout.body_triangles[region.body_triangle],
+                    &self.body,
+                )? * region.body_fraction;
+                let ratios =
+                    region
+                        .layers
+                        .iter()
+                        .map(|portion| {
+                            let patch = &self.coverage.source.patches[portion.cloth_triangle];
+                            Ok(super::area(patch.vertices, &self.cloth)? * portion.fraction
+                                / body_area)
+                        })
+                        .collect::<Result<_, Refusal>>()?;
+                Ok(crate::thermal::steady::coverage::bridges::Domain {
+                    layer_area_ratios: ratios,
+                    temperature_range_c: temperature_range(temperatures),
+                })
+            })
+            .collect()
+    }
+
     /// Derive a coverage partition from actual geometry using the existing projection closure.
     /// Material topology/reference areas remain immutable; body triangulation may change per frame.
     ///
@@ -673,6 +734,7 @@ impl Frame {
             exposed_balance_error_j: 0.,
             exposed_exterior_exchange: None,
             internal_heat: None,
+            preloaded_temperature_range_c: None,
         })
     }
 
@@ -772,6 +834,7 @@ impl Frame {
                 exposed_balance_error_j: 0.,
                 exposed_exterior_exchange: None,
                 internal_heat: None,
+                preloaded_temperature_range_c: None,
             });
         };
         let fractions = self.exposed_fractions();
@@ -863,6 +926,7 @@ impl Frame {
             exposed_balance_error_j: error,
             exposed_exterior_exchange: exchange,
             internal_heat: None,
+            preloaded_temperature_range_c: None,
         };
         if step
             .exterior_totals()
@@ -991,6 +1055,14 @@ impl Frame {
             covered_exterior,
             exposed_conditions,
         )?;
+        step.preloaded_temperature_range_c = Some(
+            heated
+                .inner
+                .temperatures
+                .iter()
+                .map(|row| temperature_range(row))
+                .collect(),
+        );
         // The ordinary solver measures storage from the temporary preloaded state. Restore the
         // physical old-to-new change and retain preload roundoff against the requested energy.
         for (region, (requested, realized)) in step.heat.regions.iter_mut().zip(covered) {

@@ -250,7 +250,8 @@ impl Body {
         validate_mesh(&self.vertices, &self.triangles)?;
         validate_mesh(end, &self.triangles)?;
         let edges = edges_of(&self.triangles);
-        let used: std::collections::BTreeSet<_> = self.triangles.iter().flatten().copied().collect();
+        let used: std::collections::BTreeSet<_> =
+            self.triangles.iter().flatten().copied().collect();
         let used: Vec<_> = used.into_iter().collect();
         let dp: Vec<_> = end
             .iter()
@@ -447,7 +448,9 @@ mod tests {
             RefusalCode::InvalidDocument
         );
         assert_eq!(
-            body.self_motion_bound(&body.vertices[..2], 1).unwrap_err().code,
+            body.self_motion_bound(&body.vertices[..2], 1)
+                .unwrap_err()
+                .code,
             RefusalCode::InvalidDocument
         );
         let mut end = body.vertices.clone();

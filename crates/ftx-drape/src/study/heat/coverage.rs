@@ -26,6 +26,8 @@ use crate::{
     },
 };
 
+pub mod bridges;
+
 /// One explicit, source-locked body domain followed through every accepted mechanical sample.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -70,6 +72,10 @@ pub struct Request {
     /// reference material. Initial drape work, elastic/hardening storage and seam work are excluded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bending_plastic_dissipation_heat: Option<DissipationHeatDistribution>,
+    /// Independently source-qualified, zero-storage seam/closure excess over the same covered
+    /// reservoir films. Its equal boundary energies do not change baseline material temperatures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_bridges: Option<bridges::Request>,
     /// Maximum physical thermal substep, seconds, independent of mechanical adaptive steps.
     pub max_step_s: f64,
     /// Maximum cell plus body-face advances, including all substeps, in 1..=10000000. Heating
@@ -87,6 +93,18 @@ impl Request {
         intervals: usize,
         work: &mut Budget,
     ) -> Result<History, Refusal> {
+        if let Some(bridges) = &self.thermal_bridges {
+            bridges.validate()?;
+            if self
+                .exterior_exchange
+                .as_ref()
+                .is_some_and(|v| v.iter().any(Option::is_some))
+            {
+                return Err(invalid(
+                    "moving zero-storage bridges require their characterized covered reservoir films; covered convection/radiation is outside this law",
+                ));
+            }
+        }
         if self.schema != "ftx-motion-coverage-heat/1"
             || !(1..=16).contains(&intervals)
             || self.boundaries.len() != intervals
@@ -219,6 +237,11 @@ impl Request {
                 plastic::Heating::new_kind(run, self.initial_temperature_c, plastic::Kind::Bending)
             })
             .transpose()?;
+        let bridge_authority = self
+            .thermal_bridges
+            .as_ref()
+            .map(|_| bridges::Authority::from_run(run))
+            .transpose()?;
         Ok(History {
             request: self.clone(),
             source,
@@ -248,6 +271,8 @@ impl Request {
             plastic,
             relaxation,
             bending,
+            bridge_authority,
+            bridge_j: 0.,
         })
     }
 }
@@ -290,6 +315,8 @@ pub(in crate::study) struct History {
     plastic: Option<plastic::Heating>,
     relaxation: Option<plastic::Heating>,
     bending: Option<plastic::Heating>,
+    bridge_authority: Option<bridges::Authority>,
+    bridge_j: f64,
 }
 
 impl History {
@@ -406,6 +433,12 @@ impl History {
             Some(transfer.balance)
         };
         self.frame = next;
+        let mut bridge_domains = self
+            .request
+            .thermal_bridges
+            .as_ref()
+            .map(|_| self.frame.bridge_domains(&self.state))
+            .transpose()?;
         let source = if heated {
             let temperatures = self.frame.source_temperatures(&self.state)?;
             let mut total = vec![0.0; self.frame.cloth_triangle_count()];
@@ -501,6 +534,11 @@ impl History {
                     heating.check_temperatures(&temperatures)?;
                 }
             }
+            if let Some(domains) = &mut bridge_domains {
+                for (domain, range) in domains.iter_mut().zip(step.bridge_temperature_ranges()) {
+                    domain.include(range);
+                }
+            }
             self.inside_j += dt * step.inside_heat_w();
             self.outside_j += dt * step.outside_heat_w();
             if let Some(e) = &step.heat().exterior_exchange {
@@ -534,6 +572,54 @@ impl History {
             self.final_field["supplied_heat_j"] = json!(last.supplied_heat_j());
             self.final_field["internal_heat"] = json!(last.internal_heat());
         }
+        let bridge_sample = if let Some(policy) = &self.request.thermal_bridges {
+            let mut bridge = policy.evaluate(
+                self.bridge_authority
+                    .as_ref()
+                    .expect("compiled bridge source"),
+                cloth,
+                self.frame.projection(),
+                bridge_domains.as_deref().expect("live bridge domains"),
+                &boundaries,
+                [self.time_s, time_s],
+            )?;
+            bridge.report["frame_sha256"] = json!(self.frame.sha256());
+            bridge.report["positions_sha256"] = json!(hash(&cloth)?);
+            bridge.report["body_positions_sha256"] = json!(hash(&body)?);
+            self.geometry(bridge.geometry_operations)?;
+            self.bridge_j =
+                crate::thermal::steady::coverage::bridges::add(self.bridge_j, bridge.energy_j)?;
+            for (field, value) in [
+                ("body_inside_heat_w", heat.inside_heat_w),
+                ("body_outside_heat_w", heat.outside_heat_w),
+            ] {
+                self.final_field[format!("baseline_{field}")] = json!(value);
+                self.final_field[field] = json!(crate::thermal::steady::coverage::bridges::add(
+                    value,
+                    bridge.power_w
+                )?);
+            }
+            self.final_field["bridge_power_w"] = json!(bridge.power_w);
+            for (field, &power) in self.final_field["body"]
+                .as_array_mut()
+                .expect("computed body field")
+                .iter_mut()
+                .zip(&bridge.body_power_w)
+            {
+                for name in ["inside_heat_w", "outside_heat_w"] {
+                    let baseline = field[name].as_f64().expect("computed body power");
+                    field[format!("baseline_{name}")] = json!(baseline);
+                    field[name] = json!(crate::thermal::steady::coverage::bridges::add(
+                        baseline, power
+                    )?);
+                }
+                field["bridge_power_w"] = json!(power);
+            }
+            self.final_field["thermal_bridges"] = bridge.report.clone();
+            Some(bridge.report)
+        } else {
+            None
+        };
         self.state = last.into_state();
         if [
             self.inside_j,
@@ -548,6 +634,7 @@ impl History {
             self.signed_remap_j,
             self.absolute_remap_j,
             self.absolute_step_error_j,
+            self.bridge_j,
             self.stored_j - self.net_j - self.supplied_heat_j(),
         ]
         .iter()
@@ -575,9 +662,14 @@ impl History {
             "covered_area_m2":self.final_field["covered_area_m2"],
             "bare_energy_j":self.bare_j,"net_boundary_energy_j":self.net_j,"physical_stored_change_j":self.stored_j,
             "signed_remap_residual_j":self.signed_remap_j,"balance_error_j":self.stored_j-self.net_j-self.supplied_heat_j()});
-        if heated {
-            sample["inside_energy_j"] = json!(self.inside_j);
-            sample["outside_energy_j"] = json!(self.outside_j);
+        if heated || bridge_sample.is_some() {
+            sample["inside_energy_j"] = json!(self.total_inside_j()?);
+            sample["outside_energy_j"] = json!(self.total_outside_j()?);
+        }
+        if let Some(interval) = bridge_sample {
+            let mut accounting = self.bridge_accounting()?;
+            accounting["interval"] = interval;
+            sample["thermal_bridges"] = accounting;
         }
         if let Some(heating) = &self.plastic {
             sample["plastic_dissipation_heat"] = heating.snapshot(false);
@@ -610,6 +702,22 @@ impl History {
         Ok(())
     }
 
+    fn total_inside_j(&self) -> Result<f64, Refusal> {
+        crate::thermal::steady::coverage::bridges::add(self.inside_j, self.bridge_j)
+    }
+
+    fn total_outside_j(&self) -> Result<f64, Refusal> {
+        crate::thermal::steady::coverage::bridges::add(self.outside_j, self.bridge_j)
+    }
+
+    fn bridge_accounting(&self) -> Result<Value, Refusal> {
+        Ok(
+            json!({"baseline_inside_energy_j":self.inside_j,"baseline_outside_energy_j":self.outside_j,
+            "bridge_energy_j":self.bridge_j,"total_inside_energy_j":self.total_inside_j()?,
+            "total_outside_energy_j":self.total_outside_j()?,"bridge_stored_change_j":0.,"excess_balance_residual_j":0.}),
+        )
+    }
+
     pub(in crate::study) fn finish(
         self,
         path_hash: &str,
@@ -626,13 +734,26 @@ impl History {
             "path_sha256":path_hash,"initial_positions_sha256":initial_hash,
             "initial_frame_sha256":self.initial_frame_sha256,"duration_s":duration_s,
             "cell_steps":self.cell_steps,"thermal_steps":self.thermal_steps,"geometry_operations":self.geometry_operations,
-            "inside_energy_j":self.inside_j,"outside_energy_j":self.outside_j,"net_boundary_energy_j":self.net_j,
+            "inside_energy_j":self.total_inside_j()?,"outside_energy_j":self.total_outside_j()?,"net_boundary_energy_j":self.net_j,
             "physical_stored_change_j":self.stored_j,"bare_energy_j":self.bare_j,
             "signed_remap_residual_j":self.signed_remap_j,"absolute_remap_residual_j":self.absolute_remap_j,
             "balance_error_j":self.stored_j-self.net_j-supplied_heat_j,"absolute_step_balance_error_j":self.absolute_step_error_j,
             "trace":self.trace,"final_field":self.final_field,"checkpoint":self.frame.checkpoint(&self.state)?,
             "uncertainty_propagated":false,"physical_validation_claim":false,"comfort_claim":false,
             "scope":"One-way transient heat on the explicit collision-body domain with first-order source-material enthalpy remap at each accepted cloth/body sample. Remap has no elapsed time; heat substeps use the sample's right-endpoint geometry. Reference mass and exposed-sheet storage persist. Bare parallel paths store no energy. No anatomical coverage certification, human thermoregulation, mechanical heating, moisture, two-way coupling or empirical warmth claim."});
+        if let Some(authority) = &self.bridge_authority {
+            let mut bridge = self.bridge_accounting()?;
+            bridge["schema"] = json!("ftx-motion-thermal-bridge-result/1");
+            bridge["model"] = json!("qualified_zero_storage_centerline_exchange/1");
+            bridge["surface_model_sha256"] = json!(authority.model_sha256());
+            bridge["storage_modeled"] = json!(false);
+            bridge["temperature_feedback"] = json!(false);
+            bridge["empirical_validation_claim"] = json!(false);
+            bridge["scope"] = json!(
+                "Explicitly source-qualified instantaneous excess at each accepted right-endpoint geometry. Equal signed inside/outside boundary energies leave baseline material temperatures, stored heat and remap accounting unchanged. Full paths must remain covered and every live temperature, source, time, film and geometry domain must qualify. No bridge heat capacity, transient seam storage, inferred seam microgeometry or physical garment claim."
+            );
+            result["thermal_bridges"] = bridge;
+        }
         if let Some(heating) = &self.plastic {
             result["plastic_dissipation_heat"] = heating.snapshot(true);
             result["scope"] = json!(

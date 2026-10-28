@@ -4361,6 +4361,34 @@ case aggregation rule exists. Unvisited values, global optimality and empirical 
 unqualified. This bounded extension is tracked by `ftx-ds2.1`; the broader `ftx-ds2` remains open.
 See [material-screening-and-studies.md](docs/material-screening-and-studies.md).
 
+### 25.123 Carry independently qualified seam and closure exchange through motion
+
+Moving coverage heat can now apply an explicitly sourced zero-storage excess-conductance law to
+retained seam or closure centerlines. The existing bridge geometry authority checks actual endpoint
+length, exactly-once ownership, material stacks, interfaces, reservoir films and deformation domains.
+A separate temporal qualification binds the complete steady observation and covers both elapsed-time
+endpoints, the accepted mechanical interval and actual transient material temperatures, including
+source-preloaded extrema. A steady measurement alone does not qualify this moving law.
+
+Each accepted interval integrates signed excess power over its actual duration and adds equal excess
+energy to the inside and outside boundary ledgers. Baseline textile temperatures, sensible storage,
+net boundary energy and material-coordinate remapping remain unchanged. Ordinary incoming-energy
+comparison therefore includes the bridge automatically, while temperature and storage objectives keep
+their existing meaning. Reports retain baseline and total energies separately, exact path portions,
+consumed source identities and the complete accepted history. The browser exposes those same values.
+
+Bridge geometry and qualification work share existing coverage and scenario-session budgets. A late
+source, geometry or domain failure refuses the complete affected heat history while independent
+mechanics and manufacturing remain available. Comparison admission reconciles source locks, actual
+accepted edge lengths, partitions, signed interval arithmetic, body totals and the baseline storage
+balance; large equal bridge additions cannot hide a residual through floating-point cancellation.
+
+This bounded software delivery is tracked by `ftx-tm5.3`; see
+[moving-thermal-bridges.md](docs/moving-thermal-bridges.md). Geometry remains held at accepted right
+endpoints, so thermal subdivisions do not resolve intervening motion. Seam heat capacity, recovery,
+inferred pressure/compression laws and empirical garment warmth remain separate work under `ftx-tm5`.
+No material receives an invented temporal qualification or a measured-property upgrade.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

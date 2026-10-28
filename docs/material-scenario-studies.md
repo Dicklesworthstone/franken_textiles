@@ -289,6 +289,16 @@ enthalpy remapper transfers covered/exposed cloth storage without elapsed time. 
 or leaving body coverage therefore keeps its heat rather than resetting to the initial temperature.
 Bare body fractions remain single-counted parallel paths with no textile heat storage.
 
+`motion.transient_coverage.thermal_bridges` adds source-qualified instantaneous seam/closure excess
+to the actual incoming and outgoing history energies. It requires the exact steady reference
+observation **and** an independent zero-storage qualification covering elapsed time, each accepted
+mechanical interval and all live material temperatures. Current mesh-edge lengths and projected
+ownership are rebuilt at each accepted sample. Baseline textile temperatures, stored heat and remap
+remain unchanged; this is a parallel memoryless exchange law, not seam heat capacity. The ordinary
+`transient_coverage_inside_energy_j` comparison objective consumes its total, and independent source
+or late geometry/time failures refuse the complete thermal history. See
+[moving thermal bridges](moving-thermal-bridges.md) for the source schema, boundary ledger and limits.
+
 Each requested history is independently `available` or `refused` beneath `motion.result`. A missing
 property, invalid thermal domain or even late work-budget failure retains the complete mechanical
 trajectory, the other thermal consumer, manufacturing and the initial static results. No partial
@@ -312,7 +322,8 @@ charges 129 units per cloth cell/substep in either domain). Whole-session reserv
 across both thermal consumers and all attempted material alternatives are capped at 20000000
 cell steps and 40000000 coverage geometry operations. Reservations persist after a later refusal;
 use realistic declared limits rather than maximum values for every candidate. Projection/remap work
-is checked after each existing bounded kernel; limit exhaustion refuses rather than truncating.
+is checked after each existing bounded kernel; opted-in bridge ownership and qualification work
+charges this same history/session geometry reservation. Limit exhaustion refuses rather than truncating.
 
 These are **one-way** motion-to-heat calculations with prescribed films or explicit exterior
 exchange. Mechanical heating requires the separate qualified material option below. They do not

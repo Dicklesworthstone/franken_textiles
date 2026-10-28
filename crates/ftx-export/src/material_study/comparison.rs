@@ -17,6 +17,7 @@ mod contact_loads;
 mod heating_tests;
 mod material_strain;
 mod matrix;
+mod motion_bridges;
 mod surface_water;
 mod wet_film;
 
@@ -1669,6 +1670,12 @@ impl Policy {
                 }
                 base = hash(&(base, thermal_bridge_protocol(result)?))?;
             }
+        }
+        if consumers.contains(&Consumer::TransientCoverage)
+            && let Some(history) = &admitted.transient_coverage
+            && !history.result["thermal_bridges"].is_null()
+        {
+            base = hash(&(base, motion_bridges::protocol(history.result)?))?;
         }
         if thread {
             let plan = row
@@ -3552,6 +3559,7 @@ fn admit_heat<'a>(
             }
         }
     }
+    let bridged = motion_bridges::admit(simulation, motion, h, request, coverage)?;
     // Reconcile each source independently, then check storage against their SUM once. Neither
     // source may borrow the other's evidence or make its own full-temperature energy claim.
     let mut supplied = vec![0.; trace.len() + 1];
@@ -3591,16 +3599,33 @@ fn admit_heat<'a>(
         coverage,
         &supplied,
     )?;
-    if heated || liquid.is_some() {
+    if heated || liquid.is_some() || bridged {
         for (i, (row, supplied)) in trace
             .iter()
             .chain(std::iter::once(h))
             .zip(supplied)
             .enumerate()
         {
-            let inside = finite(&row["inside_energy_j"])
+            // Equal bridge additions can erase a small stored-heat difference when large totals
+            // are rounded. Reconcile storage against the retained baseline boundary ledger.
+            let boundary_ledger = if bridged {
+                &row["thermal_bridges"]
+            } else {
+                row
+            };
+            let inside_field = if bridged {
+                "baseline_inside_energy_j"
+            } else {
+                "inside_energy_j"
+            };
+            let outside_field = if bridged {
+                "baseline_outside_energy_j"
+            } else {
+                "outside_energy_j"
+            };
+            let inside = finite(&boundary_ledger[inside_field])
                 .ok_or_else(|| fail("missing source/boundary balance"))?;
-            let outside = finite(&row["outside_energy_j"])
+            let outside = finite(&boundary_ledger[outside_field])
                 .ok_or_else(|| fail("missing source/boundary balance"))?;
             let net = finite(&row["net_boundary_energy_j"])
                 .ok_or_else(|| fail("missing source/boundary balance"))?;
