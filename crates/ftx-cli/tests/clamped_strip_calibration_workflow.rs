@@ -1,7 +1,12 @@
 //! Synthetic finite-strip observations through both native commands and frozen material binding.
 //! Identified membrane coefficients do not establish empirical textile or garment validation.
 
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use ftx_core::receipt::sha256_hex;
 use ftx_drape::strip::fit::Input;
@@ -91,13 +96,15 @@ struct Workspace(PathBuf);
 
 impl Workspace {
     fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "ftx-clamped-strip-{}-{}",
+            "ftx-clamped-strip-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
         fs::write(path.join("acquisition.json"), INPUT).unwrap();

@@ -1,6 +1,10 @@
 //! Real binary acquisition/selection/resolution; all specimens and forces are synthetic.
 use serde_json::{Value, json};
-use std::{fs, process::Command};
+use std::{
+    fs,
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!(
@@ -9,13 +13,15 @@ fn fixture() -> Value {
     .unwrap()
 }
 fn workspace() -> std::path::PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let p = std::env::temp_dir().join(format!(
-        "ftx-friction-cli-{}-{}",
+        "ftx-friction-cli-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir(&p).unwrap();
     p
