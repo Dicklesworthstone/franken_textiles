@@ -4187,6 +4187,29 @@ source orders preserve their prior representation. Native serial, parallel and s
 regressions cover this integration under `ftx-pb2.2.9`; measured fixture adequacy, factory timing and
 hardware execution remain separate acceptance gates under `ftx-pb2.2` and `ftx-sp2`.
 
+### 25.116 Published insulation specimens drive ordinary material comparisons
+
+Nine source-identified nonwovens from Lupescu et al. (2025), DOI `10.3390/textiles5010005`,
+extend the canonical catalog to 392 records. Seven milkweed/LM 2.2/PLA air-laid feed constructions
+and the study's Thinsulate/Primaloft comparison specimens retain 108 measured or source-derived
+scalar values from Tables 2–6. Original units, methods, specimen groups, humidity conditions,
+reported variability, version-of-record PDF identity and CC BY attribution remain attached.
+
+The existing material selection, unchanged-pattern mass accounting, steady conduction, condition-
+qualified screening and frozen offline replay consume this cohort. Conductivity in mW/(m K)
+normalizes at the shared boundary; the separately rounded source resistance remains authoritative
+for steady comparisons. Gauge thickness at 100 Pa does not become unloaded contact thickness.
+Input recipes do not become final composition after preferential fiber loss, and the branded
+comparison specimens do not become arbitrary current supplier grades or purchase offers.
+
+Humidity observations, compression percentages and recovery endpoints remain separately scoped
+facts. They do not supply missing wet geometry, heat capacity, compression branches, membrane,
+bending or interface friction. Five source/consumer regressions and eleven canonical catalog tests
+verify the bounded software integration (`ftx-tm2.3`), without closing `ftx-tm2` or `ftx-tm8`.
+Follow-up `ftx-tm2.4` acquires matched pressure-area/thickness/transport, humidity and heat-storage
+observations for fills so the same material authority can drive measured load-to-loft-to-heat
+comparisons. See [airlaid-insulation-materials.md](docs/airlaid-insulation-materials.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

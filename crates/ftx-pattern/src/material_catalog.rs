@@ -8,6 +8,7 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod airlaid_insulation;
 mod fabric101;
 pub mod knit_strips;
 pub mod laundered_denim;
@@ -167,6 +168,7 @@ fn factor(unit: &str, expected: &str) -> Option<f64> {
         ("mN*m", "N*m") => 0.001,
         ("lbf*in2", "N*m2") => 4.448_221_615_260_5 * 0.0254 * 0.0254,
         ("%", "1") => 0.01,
+        ("mW/(m*K)", "W/(m*K)") => 0.001,
         ("clo", "m2*K/W") => 0.155,
         ("tog", "m2*K/W") => 0.1,
         ("tex", "kg/m") => 1e-6,
@@ -228,6 +230,7 @@ impl Catalog {
         catalog.materials.extend(measured.materials);
         let hfm = Self::from_json(include_str!("material_catalog/hfm-runs.json"))?;
         catalog.materials.extend(hfm.materials);
+        catalog.materials.extend(airlaid_insulation::records());
         catalog.materials.extend(nist::records());
         catalog.materials.extend(sportswear::records());
         catalog.materials.extend(mit::records());
