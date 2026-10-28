@@ -231,7 +231,7 @@ self.onmessage = async ({ data: msg }) => {
       }
       case "pressure": {
         const schema = json(msg.compressionRequest).schema;
-        const history = ["ftx-compressed-thermal-history/1", "ftx-compressed-thermal-history/2"].includes(schema);
+        const history = ["ftx-compressed-thermal-history/1", "ftx-compressed-thermal-history/2", "ftx-compressed-thermal-history/3"].includes(schema);
         if (history || schema === "ftx-compression-stack/1") {
           if (typeof msg.compressionLayer !== "string" || !msg.compressionLayer.trim()) throw Error("Name the stack layer to inspect and assign; no layer is selected automatically.");
           const prepare = history ? ftx.thermal_compression_history : ftx.material_compression_stack;

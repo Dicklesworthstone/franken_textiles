@@ -498,6 +498,18 @@ temperature/heat error estimates are not global/spatial error bounds, empirical 
 mechanical heating, a recovery law or garment/comfort qualification. Tests: `compressed_thermal`
 and `compressed_thermal_path`; consumer contract: `docs/compressed-thermal-history.md`.
 
+**Prescribed pressure reaches loft and heat** (`thermal::compression`, history schema `/3`). Each
+hold explicitly selects pressure or clearance while sharing the existing conditioned materials,
+reference-mass cells, conservative heat step and source-qualified branch joins. The forward pressure
+path admits thickness plateaus without inventing an inverse; its preload clearance is checked and
+the final loft is an output. All accepted temperatures/work/heat histories and one adaptive budget
+continue through mixed controls and qualified reversals. A failure rolls back the full physical
+state. Reports distinguish prescribed pressure, including zero, from inferred pressure and preserve
+ordinary frozen layer selections. Original `/1` and `/2` behavior is retained. Analytical layer/work
+and RC tests, plateau/direction/source refusals, rollback and actual native/portable consumer replay
+cover the software composition; no inferred garment contact pressure, physical compression recovery,
+mechanical heating or empirical clothing warmth follows. See `docs/compressed-thermal-history.md`.
+
 **Explicit thermal coverage** (`thermal::surface::coverage`, plan §25.6 / `ftx-tmb`).
 `Coverage` composes the existing source-locked independent-sheet `Surface` into declared disjoint
 body-area fractions and inside-to-outside layers. It checks both body and cloth allocation budgets,

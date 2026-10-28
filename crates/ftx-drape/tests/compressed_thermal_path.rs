@@ -4,7 +4,7 @@ use ftx_core::RefusalCode;
 use ftx_drape::thermal::{
     Boundary, DryThermalModel, adaptive,
     compression::{
-        CompressedStack, Hold, Setup,
+        CompressedStack, Control, ControlledHold, Hold, Setup,
         path::{self, BranchChange, Leg, TransitionEvidence},
     },
 };
@@ -131,6 +131,159 @@ fn near(a: f64, b: f64) {
 }
 fn fingerprint(s: &CompressedStack) -> Value {
     json!({"compression": s.compression(), "temperature":s.temperatures(), "last":s.last()})
+}
+
+fn controlled_input() -> path::ControlledInput {
+    let mut value = serde_json::to_value(input()).unwrap();
+    value["schema"] = json!("ftx-compressed-thermal-history/3");
+    let mut pressures = [500.0, 250.0, 0.0, 250.0].into_iter();
+    for leg in value["legs"].as_array_mut().unwrap() {
+        for hold in leg["holds"].as_array_mut().unwrap() {
+            hold.as_object_mut().unwrap().remove("gap_m");
+            hold["control"] = json!({"kind":"pressure","pressure_pa":pressures.next().unwrap()});
+        }
+    }
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn pressure_driven_source_cycles_keep_temperatures_and_independent_work_ledgers() {
+    let legacy = path::evaluate(&input()).unwrap();
+    let mut request = controlled_input();
+    // Switching back to a clearance boundary does not change the active reloading branch.
+    request.legs[2].holds[0].control = Control::Gap { gap_m: 0.015 };
+    let result = path::evaluate_controlled(&request).unwrap();
+    assert_eq!(result.schema, "ftx-compressed-thermal-history-report/3");
+    assert_eq!(result.transitions.len(), 2);
+    for (actual, expected) in result.steps.iter().zip(&legacy.steps) {
+        near(actual.temperature_c[0], expected.temperature_c[0]);
+        near(actual.external_work_j, expected.external_work_j);
+        near(
+            actual.cumulative_stored_change_j,
+            expected.cumulative_stored_change_j,
+        );
+        near(actual.cumulative_heat_balance_error_j, 0.0);
+        near(actual.reference_mass_kg, 0.025);
+    }
+    assert_eq!(result.steps[0].prescribed_pressure_pa, Some(500.0));
+    assert_eq!(result.steps[1].prescribed_pressure_pa, Some(250.0));
+    assert_eq!(result.steps[2].prescribed_pressure_pa, Some(0.0));
+    assert_eq!(result.steps[3].prescribed_pressure_pa, None);
+    near(result.steps[2].cumulative_external_work_j, 0.75 * 0.25);
+    near(
+        result.steps[3].cumulative_external_work_j,
+        (0.75 + 0.625) * 0.25,
+    );
+    assert_eq!(result.steps[3].elapsed_s, 40.0);
+    for transition in &result.transitions {
+        assert_eq!(transition.result.entry_compression.external_work_j, 0.0);
+    }
+    let frozen = &result.final_compression.layers[0]
+        .conditioned
+        .selection_json;
+    let material = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    }
+    .resolve(&serde_json::from_str(frozen).unwrap())
+    .unwrap();
+    assert_eq!(result.steps[3].layer_material_sha256[0], material.sha256());
+}
+
+#[test]
+fn controlled_branch_changes_cannot_leak_on_missing_evidence_or_late_thermal_failure() {
+    let request = controlled_input();
+    let mut state = CompressedStack::new(&request.setup).unwrap();
+    state.advance_controlled(&request.legs[0].holds[0]).unwrap();
+    let before = fingerprint(&state);
+    let transition = request.legs[1].branch_change.as_ref().unwrap();
+    let mut hold: ControlledHold = request.legs[1].holds[0].clone();
+    let mut bad = transition.clone();
+    bad.transitions.values_mut().next().unwrap().source = "absent".into();
+    assert!(state.advance_controlled_on(&hold, &bad).is_err());
+    assert_eq!(fingerprint(&state), before);
+    hold.outside_c = -300.0;
+    assert!(state.advance_controlled_on(&hold, transition).is_err());
+    assert_eq!(fingerprint(&state), before);
+    hold.outside_c = 0.0;
+    let accepted = state.advance_controlled_on(&hold, transition).unwrap();
+    near(accepted.step.thickness_m, 0.012);
+    assert_eq!(accepted.step.prescribed_pressure_pa, Some(250.0));
+    assert_eq!(accepted.step.elapsed_s, 20.0);
+    near(accepted.step.cumulative_heat_balance_error_j, 0.0);
+    // Reusing the just-consumed source transition at a different physical state must refuse.
+    let last = fingerprint(&state);
+    assert!(state.advance_controlled_on(&hold, transition).is_err());
+    assert_eq!(fingerprint(&state), last);
+}
+
+#[test]
+fn independently_qualified_pressure_join_can_enter_a_flat_unloading_interval() {
+    let request = controlled_input();
+    let mut state = CompressedStack::new(&request.setup).unwrap();
+    state.advance_controlled(&request.legs[0].holds[0]).unwrap();
+    let mut transition = request.legs[1].branch_change.clone().unwrap();
+    for layer in &mut transition.entry.layers {
+        let middle = &mut layer.preparation.samples[1];
+        middle.properties.get_mut("thickness").unwrap().value = 10.0;
+        middle
+            .properties
+            .get_mut("thermal_resistance")
+            .unwrap()
+            .value = 0.25;
+    }
+    // The source link already establishes the actual 500 Pa join. Its flat 250..500 Pa
+    // thickness interval cannot determine that pressure by inverse clearance alone.
+    assert!(
+        stack::close(&transition.entry)
+            .unwrap_err()
+            .message
+            .contains("nonunique")
+    );
+    let mut hold = request.legs[1].holds[0].clone();
+    // The join is established by its known preload even when the target hold uses clearance.
+    // On the new branch 14 mm uniquely gives 150 Pa; work from 500 Pa is -200*.004*.25 J.
+    let mut gap_state = state.clone();
+    hold.control = Control::Gap { gap_m: 0.014 };
+    let gap = gap_state.advance_controlled_on(&hold, &transition).unwrap();
+    assert_eq!(gap.entry_compression.prescribed_pressure_pa, Some(500.0));
+    assert_eq!(gap.entry_compression.external_work_j, 0.0);
+    assert_eq!(gap.step.prescribed_pressure_pa, None);
+    near(gap.step.pressure_pa, 150.0);
+    near(gap.step.thickness_m, 0.014);
+    near(gap.step.external_work_j, -0.2);
+    near(gap.step.cumulative_external_work_j, 0.425);
+    near(gap.step.cumulative_heat_balance_error_j, 0.0);
+    hold.control = Control::Pressure { pressure_pa: 375.0 };
+    let result = state.advance_controlled_on(&hold, &transition).unwrap();
+    assert_eq!(result.entry_compression.prescribed_pressure_pa, Some(500.0));
+    assert_eq!(result.entry_compression.external_work_j, 0.0);
+    assert_eq!(result.step.prescribed_pressure_pa, Some(375.0));
+    near(result.step.thickness_m, 0.010);
+    assert_eq!(result.step.external_work_j, 0.0);
+    near(result.step.cumulative_external_work_j, 0.625);
+    near(result.step.cumulative_heat_balance_error_j, 0.0);
+    assert!(result.step.temperature_c[0] > request.setup.initial_temperature_c[0]);
+}
+
+#[test]
+fn pressure_controlled_paths_keep_one_adaptive_budget_across_reversals() {
+    let mut request = controlled_input();
+    request.adaptive = Some(adaptive_options());
+    let result = path::evaluate_controlled(&request).unwrap();
+    let mut work = 0;
+    for step in &result.steps {
+        let integration = step.integration.as_ref().unwrap();
+        work += integration.cell_solves;
+        assert_eq!(integration.cumulative_cell_solves, work);
+        near(step.cumulative_heat_balance_error_j, 0.0);
+    }
+    let first_work = result.steps[0].integration.as_ref().unwrap().cell_solves;
+    request.adaptive.as_mut().unwrap().max_cell_solves = first_work;
+    assert_eq!(
+        path::evaluate_controlled(&request).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
 }
 
 fn adaptive_options() -> adaptive::Options {

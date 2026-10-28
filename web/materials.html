@@ -53,16 +53,18 @@ Refine the time step and cell count to assess numerical convergence. These dry o
 comfort, moisture transport or seam heat storage.</p>
 <h3>Compression and heat histories</h3>
 <label>Source-qualified pressure, stack or compression/heat history JSON <input id="compressionRequest" type="file" accept=".json,application/json"></label>
-<label>Final stack layer ID to inspect and assign (leave empty for a prescribed-pressure request) <input id="compressionLayer" type="text" maxlength="4096" placeholder="outer"></label>
+<label>Final stack layer ID to inspect and assign (leave empty only for single-material pressure conditioning) <input id="compressionLayer" type="text" maxlength="4096" placeholder="outer"></label>
 <button id="pressure" data-command="pressure" disabled>Prepare compression or run heat history</button>
 <p class="note">The request supplies its exact specimen, loading branch, pressure observations and target pressure in pascals.
 Interpolation requires explicit consent. Properties without pressure qualification remain unavailable.
 Alternatively, <code>ftx-compression-stack/1</code> supplies layer branches, a known initial pressure, clearance and fixed reference area:
 it solves common normal pressure between rigid parallel faces and reports signed work, not generated heat.
 Enter the exact layer ID to select; every layer's frozen selection is available for download.
-Heat histories (<code>ftx-compressed-thermal-history/1</code> or <code>/2</code>) retain cell temperatures
-across prescribed gap changes and thermal holds. Version 2 also requires explicit source-qualified
-links for loading/unloading branch changes. Review chronological heat and external work separately,
+Heat histories (<code>ftx-compressed-thermal-history/1</code>, <code>/2</code> or <code>/3</code>) retain cell temperatures
+across compression changes and thermal holds. Version 2 supports explicit source-qualified
+links for loading/unloading branch changes. Version 3 additionally lets each hold prescribe pressure
+in pascals or gap in metres; the selected material branches determine the resulting thickness or pressure.
+Review the prescribed boundary alongside chronological heat and external work,
 and keep the full report with its original input; a final selection alone is not saved heat state.
 These local column calculations do not solve 3D garment contact or qualify presser-foot clearance.</p>
 <h3>Laundering and dimensional treatment</h3>

@@ -4210,6 +4210,36 @@ Follow-up `ftx-tm2.4` acquires matched pressure-area/thickness/transport, humidi
 observations for fills so the same material authority can drive measured load-to-loft-to-heat
 comparisons. See [airlaid-insulation-materials.md](docs/airlaid-insulation-materials.md).
 
+### 25.117 Prescribed pressure controls the same compression and heat history
+
+The existing stack authority now accepts a declared normal pressure and computes each layer's
+source-qualified loft and transport before the thermal hold. Version
+`ftx-compressed-thermal-history/3` admits either pressure or clearance on every hold and keeps
+the same material cells, temperatures, reference mass, branch work and heat ledgers. It uses the
+existing thermal integrator, including an optional request-wide adaptive work budget; material
+changes therefore propagate without another physics implementation.
+
+Forward pressure control admits characterized constant-thickness intervals that cannot be inverted
+uniquely from clearance. Qualified loading/unloading transitions join at the independently known
+current pressure and thickness, including when the next hold changes to clearance control.
+Source/specimen/conditioning/storage identity, pressure ranges and loading direction remain
+mandatory; unsupported reversals and over-domain loads refuse atomically. Attempted adaptive
+work remains charged after a failed step, while physical state rolls back. Mechanical work stays
+separate from sensible heat.
+
+Both native material commands and the portable browser engine expose the same request and exact
+frozen final layer selections. The existing workbench labels the prescribed boundary separately
+from the computed pressure and loft and retains the original input, complete report and every
+final layer selection for ordinary pattern assignment. Version-1/2 requests retain their existing
+semantics. Known-answer pressure/loft/work/heat, mixed controls, source-qualified plateau joins,
+native replay, downstream material binding and refusal regressions cover this bounded software
+delivery under `ftx-cp2.2`; see [compressed-thermal-history.md](docs/compressed-thermal-history.md).
+
+This is prescribed-boundary coupling. Solving pressure from a moving garment/body contact field,
+identifying real loading/unloading/recovery behavior, and validating measured layered insulation
+remain open under `ftx-cp2`, `ftx-tm2.4` and the empirical garment gates. A fiber name, a branded
+garment or one compression percentage cannot supply those missing constitutive observations.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

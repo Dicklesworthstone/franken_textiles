@@ -1505,15 +1505,24 @@ function thermalHistoryResult(parent, r) {
     scope: "Dry one-dimensional layers with prescribed boundaries; no garment comfort, moisture or transient seam storage." };
 }
 function compressionHistoryResult(parent, r) {
-  const t = table(parent, "Compression and heat history — chronological holds", ["Time (s)", "Pressure (Pa)",
+  const controlled = r.schema === "ftx-compressed-thermal-history-report/3";
+  const controls = controlled ? r.input.legs.flatMap(leg => leg.holds.map(hold => hold.control)) : [];
+  const t = table(parent, "Compression and heat history — chronological holds", ["Time (s)",
+    ...(controlled ? ["Prescribed boundary"] : []), "Pressure (Pa)",
     "Gap (m)", "Cell temperatures (°C)", "Cumulative external work (J)", "Cumulative entering heat (J)",
     "Cumulative leaving heat (J)", "Stored energy change (J)", "Heat balance error (J)"]);
-  for (const step of r.steps) cells(t, [metric(step.elapsed_s), metric(step.pressure_pa), metric(step.thickness_m),
-    step.temperature_c.map(metric).join(", "), metric(step.cumulative_external_work_j),
-    metric(step.cumulative_inside_heat_j), metric(step.cumulative_outside_heat_j),
-    metric(step.cumulative_stored_change_j), metric(step.cumulative_heat_balance_error_j)]);
+  for (const [index, step] of r.steps.entries()) {
+    const control = controls[index];
+    const boundary = control?.kind === "pressure" ? `Pressure: ${metric(control.pressure_pa)} Pa` :
+      control?.kind === "gap" ? `Gap: ${metric(control.gap_m)} m` : "Unavailable";
+    cells(t, [metric(step.elapsed_s), ...(controlled ? [boundary] : []), metric(step.pressure_pa), metric(step.thickness_m),
+      step.temperature_c.map(metric).join(", "), metric(step.cumulative_external_work_j),
+      metric(step.cumulative_inside_heat_j), metric(step.cumulative_outside_heat_j),
+      metric(step.cumulative_stored_change_j), metric(step.cumulative_heat_balance_error_j)]);
+  }
   const note = document.createElement("p");
   note.textContent = "External mechanical work is separate from sensible heat; no work-to-heat conversion is inferred. " +
+    (controlled ? "Each hold prescribes either pressure or gap; the other value is computed from the same qualified material branches. " : "") +
     "Temperatures follow the same material cells across qualified branch changes. A final material selection does not save this temperature state; keep the full history report.";
   parent.append(note);
   if (r.transitions) detail(parent, "Source-qualified branch transitions", r.transitions);
@@ -1637,8 +1646,9 @@ function sewingWorkholding(parent, plan, label = "Selected sewing plan") {
   if (plan?.production?.parallel || plan?.production?.routing) return;
   const report = plan?.production?.workholding;
   if (!report) return;
+  const replaced = plan.production.ordering?.baseline_replaced === true;
   const resources = table(parent, `${label}: finite fixture inventory`,
-    ["Resource", "Available units", "Original order peak", "Selected order peak"]);
+    ["Resource", "Available units", replaced ? "Feasible baseline peak" : "Original order peak", "Selected order peak"]);
   for (const resource of report.resources) cells(resources, [resource.id, metric(resource.capacity),
     metric(report.baseline.peak_occupancy[resource.id]), metric(report.selected.peak_occupancy[resource.id])]);
   const occupancy = values => Object.entries(values).map(([id, units]) => `${id}: ${metric(units)}`).join("; ");
@@ -1649,6 +1659,7 @@ function sewingWorkholding(parent, plan, label = "Selected sewing plan") {
     step.released.join(", ") || "None", occupancy(step.occupied_after)]);
   const note = document.createElement("p");
   note.textContent = "The complete selected order respects the declared finite fixture inventory. " +
+    (replaced ? "The original copy order could not satisfy the declared fixtures or lifecycle prerequisites; a complete feasible replacement baseline was found within the same search budget. " : "") +
     "Each garment acquires its units before the named operation starts and releases them after the named operation completes. " +
     "The inventory and holds are tied to the exact machine configuration and admitted material/process qualifications. " +
     "Fixture geometry, seam access, handling duration and hardware execution remain unvalidated.";
@@ -1663,7 +1674,8 @@ function sewingHandling(parent, plan, label = "Selected sewing plan") {
   const timing = plan.production.ordering?.handling_timing;
   const totals = table(parent, `${label}: serial production durations`,
     ["Schedule", "Feed (s)", "Setup (s)", "Handling (s)", "Modeled production (s)"]);
-  for (const [name, prefix] of [["Original dependency order", "baseline"], ["Selected order", "selected"]]) {
+  const baselineLabel = plan.production.ordering?.baseline_replaced ? "Feasible replacement baseline" : "Original dependency order";
+  for (const [name, prefix] of [[baselineLabel, "baseline"], ["Selected order", "selected"]]) {
     const setup = plan.production.ordering?.timing?.[`${prefix}_setup_milliseconds`];
     const handling = timing?.[`${prefix}_handling_milliseconds`];
     cells(totals, [name, metric(plan.production.feed_seconds),
@@ -1907,7 +1919,7 @@ function sewingResult(parent, r) {
   if (order) {
     const counts = table(parent, "Sewing setup changes — declared needle and thread identities",
       ["Schedule", "Needle changes", "Thread changes", "Total changes"]);
-    for (const [label, changes] of [["Original dependency order", order.baseline_changes],
+    for (const [label, changes] of [[order.baseline_replaced ? "Feasible replacement baseline" : "Original dependency order", order.baseline_changes],
       ["Selected order", order.selected_changes]]) {
       cells(counts, [label, metric(changes.needle_changes), metric(changes.thread_changes), metric(changes.total_changes)]);
     }
@@ -2645,7 +2657,7 @@ function show(op, msg) {
       op === "thermalHistory" ? thermalHistoryResult(s.comparison, r) :
       op === "vaporSurface" ? vaporSurfaceResult(s.comparison, r) :
       op === "heat" || op === "coverage" ? coverageResult(s.comparison, r) :
-      op === "pressure" && ["ftx-compressed-thermal-history-report/1", "ftx-compressed-thermal-history-report/2"].includes(r.schema) ? compressionHistoryResult(s.comparison, r) :
+      op === "pressure" && ["ftx-compressed-thermal-history-report/1", "ftx-compressed-thermal-history-report/2", "ftx-compressed-thermal-history-report/3"].includes(r.schema) ? compressionHistoryResult(s.comparison, r) :
       op === "pressure" && r.schema === "ftx-compression-stack-report/1" ? {
         selected_layer: r.chosen_layer_id, pressure_pa: r.pressure_pa,
         common_pressure_range_pa: r.common_pressure_range_pa, requested_gap_m: r.input.gap_m,

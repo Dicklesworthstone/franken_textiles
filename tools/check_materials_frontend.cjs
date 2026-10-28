@@ -712,7 +712,7 @@ test('pressure conditioning preserves exact request and frozen selection through
 });
 
 test('compression histories use the shared heat API and preserve every final layer selection', async () => {
-  for (const version of [1, 2]) {
+  for (const version of [1, 2, 3]) {
     const request = ` {"schema":"ftx-compressed-thermal-history/${version}","source_value":-0.0}\n`;
     const selections = ['{"id":"inner","value":-0.0}', '{"id":"outer","coefficient":1.0}'];
     const raw = JSON.stringify({schema:`ftx-compressed-thermal-history-report/${version}`,
@@ -2130,6 +2130,82 @@ test('heat histories display chronological ledgers and withdraw final selections
   p.e.compressionLayer.value='inner'; p.e.compressionLayer.handlers.input();
   assert.equal(s.hidden,true); assert.equal(p.e.assign.disabled,true); assert.equal(p.live.size,0);
 });
+
+test('mixed pressure and gap heat histories show the prescribed boundary and retain exact reusable selections', async () => {
+  const p = await pageModule(); await p.load();
+  const input = {schema:'ftx-compressed-thermal-history/3',legs:[{holds:[
+    {control:{kind:'pressure',pressure_pa:250}}, {control:{kind:'gap',gap_m:0.01}}]}]};
+  const request = ' '+JSON.stringify(input)+'\n';
+  p.select('compressionRequest',request); p.e.compressionRequest.handlers.change();
+  p.e.compressionLayer.value='fill'; await p.e.pressure.onclick();
+  assert.equal(p.current().messages.at(-1).compressionRequest,request);
+  const selection='{"id":"compressed-fill","expected_sha256":"locked","value":-0.0}';
+  const report={schema:'ftx-compressed-thermal-history-report/3',input,chosen_layer_id:'fill',
+    selection:JSON.parse(selection),selection_json:selection,inspection:{snapshot:{id:'compressed-fill'},capabilities:{}},
+    initial_compression:{external_work_j:0},final_compression:{reference_mass_kg:0.025},transitions:[],
+    no_claim:'Synthetic display test only',steps:[250,500].map((pressure_pa,i)=>({elapsed_s:10*(i+1),
+      pressure_pa,thickness_m:i?0.01:0.015,temperature_c:[10+i],
+      ...(i?{}:{prescribed_pressure_pa:250}),cumulative_external_work_j:0.15625,
+      cumulative_inside_heat_j:20,cumulative_outside_heat_j:5,cumulative_stored_change_j:15,
+      cumulative_heat_balance_error_j:0}))};
+  const raw=' '+JSON.stringify(report)+'\n';
+  p.emit(report,[{name:'compression-thermal-report.json',text:raw,mime:'application/json'},
+    {name:'compression-request.json',text:request,mime:'application/json'}]);
+  const s=section(p,'Pressure-conditioned material'), t=descendants(s).find(n=>n.tag==='table');
+  assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),
+    ['10','Pressure: 250 Pa','250','0.015','10','0.15625','20','5','15','0']);
+  assert.deepEqual(plain(t.children[3].children.map(n=>n.textContent)),
+    ['20','Gap: 0.01 m','500','0.01','11','0.15625','20','5','15','0']);
+  assert.match(visibleText(s),/Each hold prescribes either pressure or gap/);
+  assert.equal(p.e.selection.value,selection); assert.equal(p.e.assign.disabled,false);
+  const link=descendants(s).find(n=>n.download==='compression-thermal-report.json');
+  assert.equal(await p.blobs.get(link.href).text(),raw);
+  p.e.compressionRequest.handlers.change();
+  assert.equal(s.hidden,true); assert.equal(p.e.assign.disabled,true); assert.equal(p.live.size,0);
+});
+
+test('compiled WASM prescribed pressure and gap histories carry loft, heat and exact material selections through the browser',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const preparation=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-compression.json'),'utf8'));
+    preparation.pressure_pa=0;
+    const hold=control=>({seconds:10,control,interface_resistance_m2_k_w:[],inside_c:40,outside_c:0,
+      inside_resistance_m2_k_w:0,outside_resistance_m2_k_w:0});
+    const input={schema:'ftx-compressed-thermal-history/3',setup:{
+      stack:{schema:'ftx-compression-stack/1',gap_m:0.02,reference_area_m2:0.25,direction:'loading',allow_estimates:true,
+        layers:[{id:'fill',preparation}]},cells_per_layer:1,initial_temperature_c:[0],
+      thermal_evidence:'Synthetic constant storage and prescribed reservoirs; software verification only'},
+      legs:[{holds:[hold({kind:'pressure',pressure_pa:250}),hold({kind:'gap',gap_m:0.01})]}]};
+    const request=' '+JSON.stringify(input)+'\n',w=await workerModule({bindings:ftx}),p=await pageModule();
+    await p.load();p.select('compressionRequest',request);p.e.compressionRequest.handlers.change();
+    p.e.compressionLayer.value='fill';await p.e.pressure.onclick();
+    const message=p.current().messages.at(-1),response=await w.send(message);
+    assert.equal(response.type,'result',response.message);p.current().emit(response);
+    const report=response.result,near=(actual,expected)=>assert.ok(Math.abs(actual-expected)<1e-10,`${actual} != ${expected}`);
+    assert.equal(report.schema,'ftx-compressed-thermal-history-report/3');
+    assert.equal(report.steps[0].prescribed_pressure_pa,250);assert.equal(report.steps[1].prescribed_pressure_pa,undefined);
+    near(report.steps[0].thickness_m,0.015);near(report.steps[1].thickness_m,0.01);
+    near(report.steps[0].temperature_c[0],10.32258064516129);near(report.steps[1].temperature_c[0],16.27791563275434);
+    near(report.steps[1].pressure_pa,500);near(report.steps[1].cumulative_external_work_j,0.625);
+    near(report.steps[1].cumulative_heat_balance_error_j,0);near(report.final_compression.reference_mass_kg,0.025);
+    const selection=report.final_compression.layers[0].conditioned.selection_json;
+    assert.equal(response.files.find(f=>f.name==='compression-layer-1-selection.json').text,selection);
+    assert.equal(response.files.find(f=>f.name==='compression-request.json').text,request);
+    assert.equal(response.files.find(f=>f.name==='compression-thermal-report.json').text,ftx.thermal_compression_history(request));
+    assert.deepEqual(report.inspection,JSON.parse(ftx.material_inspect(selection)));
+    assert.equal(p.e.selection.value,selection);assert.equal(p.e.assign.disabled,false);
+    const result=section(p,'Pressure-conditioned material');
+    assert.match(visibleText(result),/Pressure: 250 Pa/);assert.match(visibleText(result),/Gap: 0.01 m/);
+    p.e.target.value='front';p.e.assign.onclick();await p.e.bind.onclick();
+    assert.ok(p.current().messages.at(-1).changes.includes(selection));
+    p.emit({pattern:{},pattern_json:'{}',pieces:[],pattern_sha256:'bound'});
+    p.e.compressionRequest.handlers.change();assert.equal(result.hidden,true);assert.equal(p.e.assign.disabled,true);
+    const bad=structuredClone(input);bad.legs[0].holds[1].control={kind:'pressure',pressure_pa:501};
+    const refused=await w.send({type:'pressure',request:902,compressionRequest:JSON.stringify(bad),compressionLayer:'fill'});
+    assert.equal(refused.type,'error');assert.equal(refused.files,undefined);
+  });
 
 test('identified swatches show independent errors, retain their source across pattern loading and bind without numeric mutation', async () => {
   const p=await pageModule(), input='{"coefficient":1.0,"origin":-0.0}';
@@ -4012,6 +4088,15 @@ test('finite sewing fixtures retain capacities, operation lifecycles and source 
     assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
     const link=descendants(s).find(n=>n.download===file); assert.equal(await p.blobs.get(link.href).text(),raw);
     if(op==='sew') assert.equal(JSON.parse(s.children[1].textContent).finite_workholding_enforced,true);
+    const changes={needle_changes:0,thread_changes:0,total_changes:0};
+    plan.production.ordering = {baseline_replaced:true,baseline_changes:changes,selected_changes:changes,
+      baseline_order:[],selected_order:[],optimality_proven:false,budget_exhausted:false};
+    plan.options.production.ordering = {};
+    await p.e[op].onclick(); p.emit(report,[{name:file,text:JSON.stringify(report),mime:'application/json'}]);
+    assert.match(visibleText(table('finite fixture inventory')),/Feasible baseline peak/);
+    assert.match(visibleText(s),/complete feasible replacement baseline was found within the same search budget/);
+    delete plan.production.ordering;
+    delete plan.options.production.ordering;
   }
   p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
   assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);

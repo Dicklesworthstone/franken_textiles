@@ -73,7 +73,8 @@ pub fn thermal_transient(input: &str) -> Result<String, wasm_bindgen::JsError> {
 /// Evaluate qualified clearance changes followed by dry thermal holds, retaining material heat
 /// state, mass and source-locked final selections. Mechanical work is not injected as heat.
 /// This is the same local operation as `ftx materials thermal-compression`.
-/// Accepts original single-branch version 1 and source-qualified cyclic version 2 histories.
+/// Accepts original single-branch version 1, source-qualified cyclic version 2, and version 3
+/// histories with explicit pressure or clearance control.
 ///
 /// # Errors
 /// Input over 64 MiB, invalid evidence/schema, exceeded work limits or any refused hold. No partial

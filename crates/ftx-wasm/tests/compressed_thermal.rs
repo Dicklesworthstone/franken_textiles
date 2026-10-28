@@ -172,7 +172,7 @@ fn cyclic_shared_api_is_identical_to_the_typed_engine_without_a_temperature_rest
 #[test]
 fn cyclic_api_rejects_unknown_versions_missing_links_and_cross_version_fields() {
     for mutate in [
-        |v: &mut Value| v["schema"] = json!("ftx-compressed-thermal-history/3"),
+        |v: &mut Value| v["schema"] = json!("ftx-compressed-thermal-history/4"),
         |v: &mut Value| v["schema"] = json!("ftx-compressed-thermal-history/1"),
         |v: &mut Value| v["holds"] = json!([]),
         |v: &mut Value| {
@@ -183,6 +183,92 @@ fn cyclic_api_rejects_unknown_versions_missing_links_and_cross_version_fields() 
         let mut v = cyclic_input();
         mutate(&mut v);
         assert!(ftx_wasm::thermal::compression_history(&v.to_string()).is_err());
+    }
+}
+
+fn pressure_input() -> Value {
+    let mut value = cyclic_input();
+    value["schema"] = json!("ftx-compressed-thermal-history/3");
+    for (leg, pressure) in value["legs"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip([500.0, 0.0])
+    {
+        let hold = &mut leg["holds"][0];
+        hold.as_object_mut().unwrap().remove("gap_m");
+        hold["control"] = json!({"kind":"pressure","pressure_pa":pressure});
+    }
+    value
+}
+
+#[test]
+fn prescribed_pressure_paths_replay_identically_through_the_portable_engine() {
+    let input = pressure_input();
+    let text = input.to_string();
+    let actual = ftx_wasm::thermal::compression_history(&text).unwrap();
+    let typed = serde_json::from_str(&text).unwrap();
+    let expected = ftx_drape::thermal::compression::path::evaluate_controlled(&typed).unwrap();
+    assert_eq!(actual, serde_json::to_string(&expected).unwrap());
+    let report: Value = serde_json::from_str(&actual).unwrap();
+    assert_eq!(report["schema"], "ftx-compressed-thermal-history-report/3");
+    assert_eq!(report["steps"][0]["prescribed_pressure_pa"], 500.0);
+    assert_eq!(report["steps"][1]["prescribed_pressure_pa"], 0.0);
+    assert_eq!(report["steps"][0]["thickness_m"], 0.020);
+    assert_eq!(report["steps"][1]["thickness_m"], 0.040);
+    assert_eq!(report["steps"][1]["cumulative_external_work_j"], 0.0);
+    assert_eq!(report["steps"][1]["temperature_c"], json!(vec![20.0; 4]));
+    assert_eq!(
+        report["final_compression"]["schema"],
+        "ftx-compression-stack-pressure-report/1"
+    );
+    for (i, layer) in report["final_compression"]["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let selected = layer["conditioned"]["selection_json"].as_str().unwrap();
+        let material = Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: vec![],
+        }
+        .resolve(&serde_json::from_str(selected).unwrap())
+        .unwrap();
+        assert_eq!(
+            report["steps"][1]["layer_material_sha256"][i],
+            material.sha256()
+        );
+        assert_eq!(material.mechanics().unwrap().thickness_m, 0.020);
+    }
+    assert_eq!(
+        actual,
+        ftx_wasm::thermal::compression_history(&text).unwrap()
+    );
+    assert_eq!(text, input.to_string());
+}
+
+#[test]
+fn prescribed_pressure_refuses_conflicting_controls_out_of_domain_loads_and_unlinked_reversals() {
+    for mutate in [
+        |v: &mut Value| v["legs"][0]["holds"][0]["control"]["gap_m"] = json!(0.020),
+        |v: &mut Value| v["legs"][0]["holds"][0]["control"]["pressure_pa"] = json!(501.0),
+        |v: &mut Value| v["legs"][0]["holds"][0]["control"]["kind"] = json!("force"),
+        |v: &mut Value| v["legs"][0]["holds"][0]["gap_m"] = json!(0.020),
+        |v: &mut Value| {
+            v["legs"][1]
+                .as_object_mut()
+                .unwrap()
+                .remove("branch_change");
+        },
+        |v: &mut Value| v["legs"][1]["holds"][0]["outside_c"] = json!(-300.0),
+        |v: &mut Value| {
+            v["legs"][1]["branch_change"]["transitions"]["a"]["source"] = json!("absent")
+        },
+    ] {
+        let mut input = pressure_input();
+        mutate(&mut input);
+        assert!(ftx_wasm::thermal::compression_history(&input.to_string()).is_err());
     }
 }
 

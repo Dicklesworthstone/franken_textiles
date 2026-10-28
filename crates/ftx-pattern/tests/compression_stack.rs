@@ -43,6 +43,112 @@ fn near(a: f64, b: f64) {
 }
 
 #[test]
+fn prescribed_pressure_changes_actual_layer_loft_work_and_frozen_transport() {
+    let mut request = input();
+    request.gap_m = 0.030; // Known INITIAL clearance, not a second final boundary.
+    let original = serde_json::to_value(&request).unwrap();
+    let report = stack::at_pressure(&request, 250.0).unwrap();
+    assert_eq!(report.schema, "ftx-compression-stack-pressure-report/1");
+    assert_eq!(report.prescribed_pressure_pa, Some(250.0));
+    assert_eq!(report.pressure_pa, 250.0);
+    assert_eq!(serde_json::to_value(&report.input).unwrap(), original);
+    near(report.thickness_m, 0.023);
+    near(report.layers[0].thickness_m, 0.015);
+    near(report.layers[1].thickness_m, 0.008);
+    near(report.normal_force_n, 62.5);
+    near(report.external_work_j, 0.5 * 250.0 * 0.007 * 0.25);
+    near(report.reference_mass_kg.unwrap(), 0.05);
+    near(report.material_resistance_m2_k_w.unwrap(), 0.5625);
+    assert!(report.reported_bounds.is_none());
+    assert!(report.bounds_unavailable[0].contains("prescribed"));
+    for layer in &report.layers {
+        let selected: Selection = serde_json::from_str(&layer.conditioned.selection_json).unwrap();
+        let resolved = Catalog::builtin().unwrap().resolve(&selected).unwrap();
+        near(resolved.mechanics().unwrap().thickness_m, layer.thickness_m);
+        near(
+            resolved.thermal_resistance().unwrap(),
+            layer.material_resistance_m2_k_w.unwrap(),
+        );
+    }
+    // Equal nominal physics under a different boundary retains a distinct replay identity.
+    request.gap_m = 0.023;
+    let inverse = stack::close(&request).unwrap();
+    near(inverse.thickness_m, report.thickness_m);
+    assert_ne!(inverse.input_sha256, report.input_sha256);
+    assert!(
+        serde_json::to_value(&inverse)
+            .unwrap()
+            .get("prescribed_pressure_pa")
+            .is_none()
+    );
+}
+
+#[test]
+fn prescribed_pressure_resolves_plateaus_without_inventing_an_inverse() {
+    let mut request = input();
+    request.gap_m = 0.030;
+    for layer in &mut request.layers {
+        let first = layer.preparation.samples[0].properties["thickness"].clone();
+        let last = layer.preparation.samples[1]
+            .properties
+            .get_mut("thickness")
+            .unwrap();
+        last.value = first.value;
+        last.unit = first.unit;
+        last.bounds = first.bounds;
+    }
+    assert!(
+        stack::close(&request)
+            .unwrap_err()
+            .message
+            .contains("nonunique")
+    );
+    let first = stack::at_pressure(&request, 250.0).unwrap();
+    let second = stack::at_pressure(&request, 375.0).unwrap();
+    assert_eq!(first.thickness_m, second.thickness_m);
+    assert_eq!(first.external_work_j, 0.0);
+    assert_eq!(second.external_work_j, 0.0);
+    assert_eq!(second.pressure_pa, 375.0);
+    assert_ne!(first.input_sha256, second.input_sha256);
+    assert_ne!(
+        first.material_resistance_m2_k_w,
+        second.material_resistance_m2_k_w
+    );
+}
+
+#[test]
+fn prescribed_pressure_enforces_preload_direction_source_domain_and_initial_clearance() {
+    let mut request = input();
+    request.gap_m = 0.030;
+    for pressure in [-1.0, 501.0, f64::NAN, f64::INFINITY] {
+        assert!(stack::at_pressure(&request, pressure).is_err());
+    }
+    request.gap_m = 0.029;
+    assert!(
+        stack::at_pressure(&request, 250.0)
+            .unwrap_err()
+            .message
+            .contains("initial clearance")
+    );
+    request.gap_m = 0.023;
+    for layer in &mut request.layers {
+        layer.preparation.pressure_pa = 250.0;
+    }
+    assert!(stack::at_pressure(&request, 100.0).is_err());
+    request.direction = stack::Direction::Unloading;
+    let unloaded = stack::at_pressure(&request, 100.0).unwrap();
+    near(unloaded.thickness_m, 0.0272);
+    near(unloaded.external_work_j, -175.0 * 0.0042 * 0.25);
+    assert!(stack::at_pressure(&request, 300.0).is_err());
+    request.layers[0].preparation.samples[0]
+        .properties
+        .get_mut("thickness")
+        .unwrap()
+        .source = "missing".into();
+    assert!(stack::at_pressure(&request, 100.0).is_err());
+}
+
+#[test]
 fn unequal_layers_close_at_common_pressure_with_conserved_mass_and_exact_path_work() {
     let input = input();
     let original = serde_json::to_value(&input).unwrap();

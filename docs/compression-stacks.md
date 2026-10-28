@@ -152,3 +152,24 @@ comfort, thermal-safety or real-wearer fit claim follows from this result.
 
 Rust: `ftx_pattern::material_compression::stack::close`. Shared browser API:
 `ftx_wasm::materials::compression_stack`, exported as `material_compression_stack` in WebAssembly.
+
+## Apply a known pressure through the same source branches
+
+Rust `stack::at_pressure(&initial, pressure_pa)` provides the forward boundary condition used by
+version 3 of [compressed thermal histories](compressed-thermal-history.md). `initial` retains the
+same ordered source acquisitions, reference area and direction as `close`; its `gap_m` must match
+the actual initial thickness at the known common preload. The final clearance is an output.
+
+The forward calculation uses the same pressure-domain intersection, source/estimate admission,
+normalized layer observations and exact piecewise-linear external-work integral as the inverse.
+A thickness plateau is admissible because the final pressure is supplied. Out-of-domain loads,
+travel against the declared branch, inconsistent initial clearances and missing source evidence
+refuse. A material or load change produces new ordinary frozen layer selections automatically.
+
+Its report schema is `ftx-compression-stack-pressure-report/1`, with an explicit
+`prescribed_pressure_pa`. `thickness_m` is the final total loft; `input.gap_m` remains the checked
+initial clearance and `closure_residual_m` is zero because no final gap constraint was imposed.
+The complete identity hashes both the initial request and the pressure boundary. Source thickness
+bounds do not become uncertainty in that prescribed pressure; each conditioned layer retains its
+own bounds, while the inverse-pressure enclosure is unavailable. This local uniform-pressure
+boundary does not identify a garment contact pressure field or convert branch work into heat.

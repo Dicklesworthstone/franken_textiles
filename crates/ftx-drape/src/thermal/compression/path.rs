@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::thermal::adaptive;
 
 use super::{
-    CompressedStack, Hold, MAX_STEPS, Setup, StepReport, adaptive_budget, check_storage, invalid,
-    model,
+    CompressedStack, ControlledHold, Hold, MAX_STEPS, Setup, StepReport, adaptive_budget,
+    check_storage, invalid, model,
 };
 
 /// Receipt for traversing from one acquired branch to another on the same specimen/history.
@@ -79,7 +79,7 @@ impl CompressedStack {
         hold: &Hold,
         change: &BranchChange,
     ) -> Result<BranchStep, Refusal> {
-        self.advance_on_inner(hold, change, None)
+        self.advance_on_inner(hold, None, false, change, None)
     }
 
     /// Commit a qualified reversal and adaptive hold without resetting the caller's work budget.
@@ -93,12 +93,44 @@ impl CompressedStack {
         change: &BranchChange,
         budget: &mut adaptive::Budget,
     ) -> Result<BranchStep, Refusal> {
-        self.advance_on_inner(hold, change, Some(budget))
+        self.advance_on_inner(hold, None, false, change, Some(budget))
+    }
+
+    /// Qualify a branch reversal and its first explicitly pressure- or gap-controlled hold in
+    /// one transaction. The source join remains at the actual current pressure and layer states.
+    ///
+    /// # Errors
+    /// The same source continuity and thermal failures as [`Self::advance_on`], or an inadmissible
+    /// prescribed pressure. A failed first hold does not activate the replacement branch.
+    pub fn advance_controlled_on(
+        &mut self,
+        hold: &ControlledHold,
+        change: &BranchChange,
+    ) -> Result<BranchStep, Refusal> {
+        let (hold, pressure) = hold.parameters(self.compression.thickness_m);
+        self.advance_on_inner(&hold, pressure, true, change, None)
+    }
+
+    /// Advance a qualified reversal and explicit boundary while retaining charged adaptive work.
+    ///
+    /// # Errors
+    /// As [`Self::advance_controlled_on`], or adaptive tolerance/work exhaustion. All physical
+    /// state and cumulative ledgers roll back together on failure.
+    pub fn advance_controlled_on_adaptive(
+        &mut self,
+        hold: &ControlledHold,
+        change: &BranchChange,
+        budget: &mut adaptive::Budget,
+    ) -> Result<BranchStep, Refusal> {
+        let (hold, pressure) = hold.parameters(self.compression.thickness_m);
+        self.advance_on_inner(&hold, pressure, true, change, Some(budget))
     }
 
     fn advance_on_inner(
         &mut self,
         hold: &Hold,
+        prescribed_pressure: Option<f64>,
+        known_pressure_entry: bool,
         change: &BranchChange,
         budget: Option<&mut adaptive::Budget>,
     ) -> Result<BranchStep, Refusal> {
@@ -172,7 +204,14 @@ impl CompressedStack {
             }
         }
         check_storage(new)?;
-        let entry = stack::close(new)?;
+        let entry = if known_pressure_entry {
+            // The independently qualified join already supplies its actual pressure. A flat
+            // thickness interval cannot make this forward boundary condition indeterminate,
+            // including when the following hold selects a unique clearance farther along it.
+            stack::at_pressure(new, self.compression.pressure_pa)?
+        } else {
+            stack::close(new)?
+        };
         if entry.pressure_pa != entry.initial_pressure_pa
             || entry.external_work_j != 0.0
             || entry.layers.iter().any(|l| l.external_work_j_m2 != 0.0)
@@ -204,10 +243,7 @@ impl CompressedStack {
         let mut trial = self.clone();
         trial.setup.stack = new.clone();
         trial.compression = entry.clone();
-        let step = match budget {
-            Some(budget) => trial.advance_adaptive(hold, budget)?,
-            None => trial.advance(hold)?,
-        };
+        let step = trial.advance_inner(hold, prescribed_pressure, budget)?;
         let report = BranchStep {
             previous_compression_sha256: self.compression.input_sha256.clone(),
             change: change.clone(),
@@ -339,5 +375,120 @@ pub fn evaluate(input: &Input) -> Result<Report, Refusal> {
         transitions,
         final_compression: state.compression().clone(),
         no_claim: "Explicit source-qualified monotone branches joined at the same pressure and each layer's thickness. Fixed area/reference mass/heat capacity, no temperature resets, quasi-static changes followed by prescribed dry thermal holds. No inferred minor loop, recovery time, damage law, continuous squeeze, thermomechanical feedback, mechanical heat conversion, garment pressure field or empirical qualification. Net cycle work remains external work, not a measured dissipation or heat claim.",
+    })
+}
+
+/// Consecutive holds with explicit pressure/clearance control, on one acquired source branch.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlledLeg {
+    /// Independently source-qualified reversal before this leg's first hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_change: Option<BranchChange>,
+    /// One to 512 holds across the entire request; each declares exactly one mechanical boundary.
+    pub holds: Vec<ControlledHold>,
+}
+
+/// Version 3 applies known pressures as well as inverse clearances without guessing source branches.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlledInput {
+    /// `ftx-compressed-thermal-history/3`.
+    pub schema: String,
+    /// Original gap-qualified preparation and independent post-preparation temperature state.
+    pub setup: Setup,
+    /// Explicit source legs; switching controls alone does not switch the active source branch.
+    pub legs: Vec<ControlledLeg>,
+    /// One shared adaptive thermal work policy across all controls, holds and reversals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive: Option<adaptive::Options>,
+}
+
+/// Complete pressure/clearance-controlled path using the original compression and heat authorities.
+#[derive(Clone, Debug, Serialize)]
+pub struct ControlledReport {
+    /// `ftx-compressed-thermal-history-report/3`.
+    pub schema: &'static str,
+    /// Exact typed source inputs and control schedule.
+    pub input: ControlledInput,
+    /// Identity of the complete typed request.
+    pub input_sha256: String,
+    /// Initial preparation; its work remains outside the heat-history ledger.
+    pub initial_compression: stack::Report,
+    /// Every accepted hold and its explicit pressure-control marker when applicable.
+    pub steps: Vec<StepReport>,
+    /// Independently qualified source branch joins, indexed in the complete history.
+    pub transitions: Vec<TransitionReport>,
+    /// Final source-qualified selections for ordinary downstream material consumers.
+    pub final_compression: stack::Report,
+    /// Numerical and physical scope of the supported boundary conditions.
+    pub no_claim: &'static str,
+}
+
+/// Apply explicit pressures/clearances to source-qualified loading and unloading paths.
+/// All histories, controls and transitions use one state and one aggregate work admission.
+///
+/// # Errors
+/// Invalid schema/control, excessive work, unsupported source domains, missing branch links or
+/// any refused thermal hold. No partial path or replacement material is returned on failure.
+pub fn evaluate_controlled(input: &ControlledInput) -> Result<ControlledReport, Refusal> {
+    if input.schema != "ftx-compressed-thermal-history/3" {
+        return Err(invalid("expected ftx-compressed-thermal-history/3"));
+    }
+    let holds = input
+        .legs
+        .iter()
+        .try_fold(0usize, |n, leg| n.checked_add(leg.holds.len()));
+    let work = input
+        .setup
+        .stack
+        .layers
+        .len()
+        .checked_mul(input.setup.cells_per_layer)
+        .and_then(|cells| holds.and_then(|h| cells.checked_mul(h)));
+    if !(1..=32).contains(&input.legs.len())
+        || input.legs.iter().any(|l| l.holds.is_empty())
+        || holds.is_none_or(|h| h > MAX_STEPS)
+        || work.is_none_or(|w| w > 262_144)
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "controlled compressed thermal path needs 1..32 nonempty legs, at most 512 total holds and 262144 cell-holds",
+        ));
+    }
+    let mut budget = adaptive_budget(input.adaptive.as_ref())?;
+    let mut state = CompressedStack::new(&input.setup)?;
+    let initial_compression = state.compression().clone();
+    let mut steps = Vec::with_capacity(holds.expect("checked hold budget"));
+    let mut transitions = Vec::new();
+    for leg in &input.legs {
+        for (i, hold) in leg.holds.iter().enumerate() {
+            if let Some(change) = leg.branch_change.as_ref().filter(|_| i == 0) {
+                let result = match &mut budget {
+                    Some(budget) => state.advance_controlled_on_adaptive(hold, change, budget)?,
+                    None => state.advance_controlled_on(hold, change)?,
+                };
+                steps.push(result.step.clone());
+                transitions.push(TransitionReport {
+                    before_hold: steps.len() - 1,
+                    result,
+                });
+            } else {
+                steps.push(match &mut budget {
+                    Some(budget) => state.advance_controlled_adaptive(hold, budget)?,
+                    None => state.advance_controlled(hold)?,
+                });
+            }
+        }
+    }
+    Ok(ControlledReport {
+        schema: "ftx-compressed-thermal-history-report/3",
+        input: input.clone(),
+        input_sha256: sha256_hex(&serde_json::to_vec(input).map_err(|e| invalid(e.to_string()))?),
+        initial_compression,
+        steps,
+        transitions,
+        final_compression: state.compression().clone(),
+        no_claim: "Explicit quasi-static uniform pressure or rigid-face clearance drives source-qualified layer thickness and dry transport at fixed reference area and conserved mass/heat capacity. A change of control does not qualify a branch reversal. Source joins preserve every layer's pressure/thickness and all temperatures/ledgers; pressure-controlled plateaus require no inverse. No inferred garment pressure field, lateral deformation, continuous squeeze, transient recovery, mechanical heat conversion, thermomechanical feedback, moisture, empirical garment warmth or comfort claim.",
     })
 }

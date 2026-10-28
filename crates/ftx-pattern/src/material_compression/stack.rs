@@ -98,25 +98,33 @@ pub struct ReportedBounds {
 /// Atomic stack result. Invalid or nonunique inverse problems return a refusal, not partial states.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Report {
-    /// `ftx-compression-stack-report/1`.
+    /// `ftx-compression-stack-report/1`, or `ftx-compression-stack-pressure-report/1` for a
+    /// prescribed-pressure boundary rather than an inverse clearance calculation.
     pub schema: String,
-    /// Complete authored inputs and ordered layer preimages, unchanged.
+    /// Complete authored inputs and ordered layer preimages, unchanged. For pressure control,
+    /// `gap_m` is the independently checked INITIAL clearance, not a second final constraint.
     pub input: Input,
-    /// Digest of the complete typed request, also referenced by every resulting material.
+    /// Digest of the complete typed request, also referenced by every resulting material. For
+    /// pressure control it includes both this initial state and the explicit final pressure.
     pub input_sha256: String,
     /// Intersection of all acquired pressure domains, before the direction restriction, Pa.
     pub common_pressure_range_pa: [f64; 2],
     /// Known initial common pressure, Pa.
     pub initial_pressure_pa: f64,
-    /// Inferred final common pressure, Pa. This is a model estimate, not a pressure observation.
+    /// Explicit final pressure boundary, when used. Omitted on the original inverse path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prescribed_pressure_pa: Option<f64>,
+    /// Final common pressure, Pa. Inferred for gap control; prescribed when the optional boundary
+    /// above is present. Neither case establishes an independently measured garment contact load.
     pub pressure_pa: f64,
-    /// The union-knot interval used by the inverse, or [p,p] at an exact knot.
+    /// Union-knot interval containing the final pressure, or [p,p] at an exact knot.
     pub bracket_pa: [f64; 2],
     /// Sum of initial full thicknesses, metres.
     pub initial_thickness_m: f64,
     /// Sum of final full thicknesses, metres.
     pub thickness_m: f64,
-    /// Final thickness minus requested clearance, metres; numerical, not experimental error.
+    /// Final thickness minus requested clearance for gap control, metres; numerical, not
+    /// experimental error. Zero under pressure control, where there is no final gap constraint.
     pub closure_residual_m: f64,
     /// Normal force at the final state, pressure times the declared reference area, newtons.
     pub normal_force_n: f64,
@@ -338,6 +346,23 @@ fn optional_sum(
 /// extrapolation, flat/ill-conditioned inverse intervals, nonfinite arithmetic or a refused final
 /// conditioning. The entire operation fails before publishing any selections.
 pub fn close(input: &Input) -> Result<Report, Refusal> {
+    evaluate(input, None)
+}
+
+/// Apply a prescribed uniform pressure to the same acquired branches and fixed reference area.
+/// `input.gap_m` must match the known INITIAL pressure's total thickness. The final clearance is
+/// an output, so a constant-thickness plateau does not make this forward problem indeterminate.
+/// The original layer conditioning, source, estimate and branch-work authorities remain shared.
+///
+/// # Errors
+/// The ordinary source, domain, direction and arithmetic refusals, or an inconsistent initial
+/// clearance. No inferred pressure enclosure or pressure uncertainty is manufactured from a
+/// prescribed boundary; conditioned layer thickness bounds remain available independently.
+pub fn at_pressure(input: &Input, pressure_pa: f64) -> Result<Report, Refusal> {
+    evaluate(input, Some(pressure_pa))
+}
+
+fn evaluate(input: &Input, prescribed_pressure: Option<f64>) -> Result<Report, Refusal> {
     if input.schema != SCHEMA
         || !input.allow_estimates
         || !(1..=32).contains(&input.layers.len())
@@ -409,7 +434,9 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
             "compression-stack thickness lost monotonicity numerically",
         ));
     }
-    if input.gap_m > totals[0] || input.gap_m < *totals.last().unwrap() {
+    if prescribed_pressure.is_none()
+        && (input.gap_m > totals[0] || input.gap_m < *totals.last().unwrap())
+    {
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
             "requested gap is outside the common characterized branch in the declared direction; no extrapolation or uncharacterized air gap",
@@ -418,7 +445,8 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
     // A whole interval at the target thickness determines no unique pressure. Check it BEFORE
     // accepting a matching knot; otherwise the first knot would conceal this nonuniqueness.
     for (p, t) in knots.windows(2).zip(totals.windows(2)) {
-        if t[0] >= input.gap_m
+        if prescribed_pressure.is_none()
+            && t[0] >= input.gap_m
             && input.gap_m >= t[1]
             && t[0] - t[1] <= 64.0 * f64::EPSILON * t[0].max(t[1])
         {
@@ -428,7 +456,32 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
             )));
         }
     }
-    let (pressure, bracket) = if let Some(i) = totals.iter().position(|&t| t == input.gap_m) {
+    let (pressure, bracket) = if let Some(pressure) = prescribed_pressure {
+        if !pressure.is_finite() || pressure < travel[0] || pressure > travel[1] {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "prescribed stack pressure is outside the common characterized branch in the declared direction; no extrapolation",
+            ));
+        }
+        let initial_thickness = sum_finite(
+            curves.iter().map(|c| c.thickness(initial)),
+            "initial thickness",
+        )?;
+        if (initial_thickness - input.gap_m).abs()
+            > 128.0 * f64::EPSILON * initial_thickness.max(input.gap_m)
+        {
+            return Err(invalid(
+                "pressure-controlled stack needs the actual initial clearance at its known preload; no conflicting final gap constraint",
+            ));
+        }
+        let hi = knots.partition_point(|&p| p < pressure);
+        let bracket = if knots[hi] == pressure {
+            [pressure; 2]
+        } else {
+            [knots[hi - 1], knots[hi]]
+        };
+        (pressure, bracket)
+    } else if let Some(i) = totals.iter().position(|&t| t == input.gap_m) {
         (knots[i], [knots[i]; 2])
     } else {
         let hi = totals.partition_point(|&t| t > input.gap_m);
@@ -440,12 +493,22 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
         }
         (p, [knots[lo], knots[hi]])
     };
-    let (reported_bounds, bounds_unavailable) =
+    let (reported_bounds, bounds_unavailable) = if prescribed_pressure.is_some() {
+        (None, vec!["Pressure is prescribed, not inferred from thickness bounds; the exact boundary has no inferred pressure enclosure. Each conditioned layer retains its own reported thickness bounds.".into()])
+    } else {
         match reported_bounds(input, &curves, &knots, pressure) {
             Ok(bounds) => (Some(bounds), Vec::new()),
             Err(reason) => (None, vec![reason]),
-        };
-    let input_sha256 = sha256_hex(&serde_json::to_vec(input).map_err(|e| invalid(e.to_string()))?);
+        }
+    };
+    let input_bytes = match prescribed_pressure {
+        Some(pressure) => serde_json::to_vec(&serde_json::json!({
+            "initial": input, "prescribed_pressure_pa": pressure,
+        })),
+        None => serde_json::to_vec(input),
+    }
+    .map_err(|e| invalid(e.to_string()))?;
+    let input_sha256 = sha256_hex(&input_bytes);
     let source_id = format!("compression-stack/{input_sha256}");
     let mut results = Vec::with_capacity(curves.len());
     for (layer, curve) in input.layers.iter().zip(&curves) {
@@ -455,10 +518,15 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
                 "compression-stack receipt cannot replace an existing source",
             ));
         }
+        let pressure_basis = if prescribed_pressure.is_some() {
+            "Explicitly prescribed common pressure"
+        } else {
+            "Model-inferred common pressure"
+        };
         preparation.material.sources.insert(source_id.clone(), Source {
             reference: format!("local:ftx-compression-stack/{input_sha256}"),
             accessed_on: preparation.conditioned_on.clone(),
-            note: format!("Model-inferred common pressure for layer {} in a coextensive, fixed-area, rigid-face stack. Retain the complete stack receipt for clearance, area, branch direction and all layer acquisitions. This is not an observed pressure or a garment contact solution.", layer.id),
+            note: format!("{pressure_basis} for layer {} in a coextensive, fixed-area, rigid-face stack. Retain the complete stack receipt for clearance, area, branch direction and all layer acquisitions. This is not an observed pressure or a garment contact solution.", layer.id),
         });
         preparation.pressure_pa = pressure;
         let conditioned = condition(&preparation)?;
@@ -502,7 +570,11 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
         "initial thickness",
     )?;
     let thickness_m = sum_finite(results.iter().map(|r| r.thickness_m), "final thickness")?;
-    let closure_residual_m = thickness_m - input.gap_m;
+    let closure_residual_m = if prescribed_pressure.is_some() {
+        0.0
+    } else {
+        thickness_m - input.gap_m
+    };
     if closure_residual_m.abs() > 128.0 * f64::EPSILON * thickness_m.max(input.gap_m) {
         return Err(invalid(
             "conditioned layer thicknesses do not close the requested gap numerically",
@@ -519,11 +591,16 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
         return Err(invalid("compression-stack force/work is not representable"));
     }
     Ok(Report {
-        schema: "ftx-compression-stack-report/1".into(),
+        schema: if prescribed_pressure.is_some() {
+            "ftx-compression-stack-pressure-report/1"
+        } else {
+            "ftx-compression-stack-report/1"
+        }.into(),
         input: input.clone(),
         input_sha256,
         common_pressure_range_pa: domain,
         initial_pressure_pa: initial,
+        prescribed_pressure_pa: prescribed_pressure,
         pressure_pa: pressure,
         bracket_pa: bracket,
         initial_thickness_m,
@@ -536,6 +613,10 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
         reference_mass_kg: optional_sum(results.iter().map(|r| r.reference_mass_kg), "total mass")?,
         material_resistance_m2_k_w: optional_sum(results.iter().map(|r| r.material_resistance_m2_k_w), "series material resistance")?,
         layers: results,
-        no_claim: "Quasi-static uniform normal pressure between rigid parallel faces over one fixed common reference area, on caller-qualified monotone branches. Central thickness values determine nominal states and work. Available reported bounds enclose pressure and force under complete thickness intervals and monotone piecewise-linear branches, conditional on exact gap, area, pressure knots and preload; they are not confidence intervals or work/material-property uncertainty. No lateral expansion, buckling, garment contact topology, recovery-time law, branch switching, recoverable/dissipated energy split, heat generation, physical specimen validation or wearer-comfort claim.".into(),
+        no_claim: if prescribed_pressure.is_some() {
+            "Prescribed quasi-static uniform normal pressure between rigid parallel faces over one fixed common reference area, on caller-qualified monotone branches. Source thicknesses determine final clearance and external branch work; no final clearance is separately imposed. Layer thickness bounds do not become pressure uncertainty. No lateral expansion, buckling, garment contact topology, recovery-time law, branch switching, recoverable/dissipated energy split, heat generation, physical specimen validation or wearer-comfort claim."
+        } else {
+            "Quasi-static uniform normal pressure between rigid parallel faces over one fixed common reference area, on caller-qualified monotone branches. Central thickness values determine nominal states and work. Available reported bounds enclose pressure and force under complete thickness intervals and monotone piecewise-linear branches, conditional on exact gap, area, pressure knots and preload; they are not confidence intervals or work/material-property uncertainty. No lateral expansion, buckling, garment contact topology, recovery-time law, branch switching, recoverable/dissipated energy split, heat generation, physical specimen validation or wearer-comfort claim."
+        }.into(),
     })
 }

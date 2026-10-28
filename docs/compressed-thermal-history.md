@@ -1,17 +1,20 @@
 # Heat history during prescribed layered compression
 
-`thermal-compression` connects the existing inverse stack-closure and dry heat solvers. It solves
-pressure from each prescribed clearance, updates the source-qualified transport coefficients, and
+`thermal-compression` connects the existing layer-compression and dry heat solvers. It either solves
+pressure from a prescribed clearance or applies an explicit pressure to the characterized layers,
+updates the source-qualified transport coefficients, and
 advances a thermal hold **without resetting the material temperatures or changing reference mass**.
 It returns the history and the final ordinary frozen selection for every layer.
 
-This is a one-way sequence: a quasi-static gap change, followed by a hold at that new state. It is
+This is a one-way sequence: a quasi-static pressure or gap change, followed by a hold at that new state. It is
 not a continuously moving squeeze, a recovery law, or a garment contact-pressure simulation.
 Mechanical branch work is reported separately and is **not converted into generated heat**.
 
 This page documents the original version-1 single-branch request. The same commands now also accept
 version 2 for [explicit source-qualified load/unload/reload paths](cyclic-compression-heat.md),
 preserving temperature and work histories across validated branch reversals rather than restarting.
+Version 3 adds explicit pressure or clearance control for every hold, using the same source branches,
+thermal state and conserved reference mass.
 
 ## Runnable numerical example
 
@@ -88,6 +91,58 @@ The standalone command emits the report directly; the unified command wraps it u
 Success exits 0; refusals exit 2 standalone, or 3 unified (4 for `budget_exceeded`). A late refusal emits no successful partial
 history or final selection. Inputs are only read, and no source path mentioned in evidence is opened.
 The commands print to standard output; shell redirection itself is not an overwrite-safe writer.
+
+## Prescribed pressure and mixed controls
+
+Use `schema: "ftx-compressed-thermal-history/3"` when a load rather than a final clearance is known.
+Keep the existing `setup`, optional `adaptive` policy and version-2 `legs`/`branch_change` structure.
+Replace each hold's `gap_m` with exactly one `control` object. For example, this complete hold applies
+250 Pa to a single layer before ten seconds of heat exchange:
+
+```json
+{
+  "seconds": 10.0,
+  "control": { "kind": "pressure", "pressure_pa": 250.0 },
+  "interface_resistance_m2_k_w": [],
+  "inside_c": 40.0,
+  "outside_c": 0.0,
+  "inside_resistance_m2_k_w": 0.0,
+  "outside_resistance_m2_k_w": 0.0
+}
+```
+
+The alternative `"control": { "kind": "gap", "gap_m": 0.010 }` uses the existing inverse
+clearance calculation. Controls may change between holds while the same material temperatures,
+reference masses and external-work ledger continue. Changing the control does not establish a
+loading/unloading reversal: reversals still require the existing source-qualified `branch_change`
+at the actual current pressure and every layer's actual thickness.
+
+For the synthetic example above, pressure holds at 250 Pa and 500 Pa reproduce the table's 15 mm
+and 10 mm lofts, temperature history and 0.625 J cumulative external work. The supplied pressure
+is exact as a boundary assumption; it is not inferred from the thickness curve. In particular,
+a constant-thickness interval is well-posed under pressure control even when its inverse cannot
+identify a unique pressure. Source-qualified transport may still change along such a plateau.
+Pressure must be finite, nonnegative and inside the common characterized domain in the declared
+direction from the current preload. Extrapolation, simultaneous pressure/gap constraints and
+implicit branch reversals refuse. Initial `setup.stack` preparation retains its original
+gap-qualified contract; version 3 does not silently bypass an indeterminate initial preparation.
+
+The same native commands and portable `compression_history` API dispatch all three versions.
+Version-3 results use `ftx-compressed-thermal-history-report/3`. A pressure-controlled step includes
+`prescribed_pressure_pa`, including an explicit zero on a fully unloaded boundary; a gap-controlled
+step omits that marker. The actual resulting thickness is always `thickness_m`.
+
+A final pressure-controlled stack uses `ftx-compression-stack-pressure-report/1`. Its `input.gap_m`
+retains the checked **initial** clearance for that last traverse; it is not a second final constraint.
+The report and every frozen layer identity include the prescribed pressure. No inverse pressure
+enclosure is claimed from thickness bounds, which remain with the source-qualified layer observations.
+Preserve the ordinary exact `selection_json` strings for downstream material substitution.
+
+All versions use the same aggregate work limits, thermal conservation checks and atomic rollback.
+A failed late hold or branch join returns no successful partial history or replacement material.
+This is a load-to-loft-to-heat calculation between rigid faces with explicit source acquisitions;
+it does not infer garment contact area/pressure, transient compression recovery, mechanical heating,
+or measured clothing warmth.
 
 ## Source, time and discretization contract
 

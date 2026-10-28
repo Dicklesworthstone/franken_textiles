@@ -131,6 +131,77 @@ fn both_commands_preserve_heat_history_and_replay_the_final_material_without_clo
 }
 
 #[test]
+fn both_native_commands_apply_pressure_to_loft_heat_and_the_ordinary_material_resolver() {
+    let mut request = input();
+    request["schema"] = json!("ftx-compressed-thermal-history/3");
+    let mut holds = request.as_object_mut().unwrap().remove("holds").unwrap();
+    for (hold, pressure) in holds.as_array_mut().unwrap().iter_mut().zip([250.0, 500.0]) {
+        hold.as_object_mut().unwrap().remove("gap_m");
+        hold["control"] = json!({"kind":"pressure","pressure_pa":pressure});
+    }
+    request["legs"] = json!([{"holds":holds}]);
+    let dir = setup(&request);
+    let original = std::fs::read(dir.join("request.json")).unwrap();
+    let standalone = run(&dir, false, &["thermal-compression", "request.json"], 0);
+    let report: Value = serde_json::from_slice(&standalone.stdout).unwrap();
+    let unified = run(&dir, true, &["thermal-compression", "request.json"], 0);
+    let envelope: Value = serde_json::from_slice(&unified.stdout).unwrap();
+    let shared: Value = serde_json::from_str(
+        &ftx_drape::thermal::compression::evaluate_json(&request.to_string()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(envelope["result"], report);
+    assert_eq!(shared, report);
+    assert_eq!(report["schema"], "ftx-compressed-thermal-history-report/3");
+    assert_eq!(report["steps"][0]["prescribed_pressure_pa"], 250.0);
+    assert_eq!(report["steps"][1]["prescribed_pressure_pa"], 500.0);
+    assert!((report["steps"][0]["thickness_m"].as_f64().unwrap() - 0.015).abs() < 1e-14);
+    assert!(
+        (report["steps"][1]["temperature_c"][0].as_f64().unwrap() - 16.27791563275434).abs()
+            < 1e-10
+    );
+    assert!(
+        (report["steps"][1]["cumulative_external_work_j"]
+            .as_f64()
+            .unwrap()
+            - 0.625)
+            .abs()
+            < 1e-12
+    );
+    let selection = report["final_compression"]["layers"][0]["conditioned"]["selection_json"]
+        .as_str()
+        .unwrap();
+    std::fs::write(dir.join("selection.json"), selection).unwrap();
+    std::fs::write(
+        dir.join("pattern.json"),
+        include_bytes!("../../../tests/fixtures/materials/synthetic-stock-pattern.json"),
+    )
+    .unwrap();
+    run(
+        &dir,
+        false,
+        &["bind", "pattern.json", "selection.json", "bound.json"],
+        0,
+    );
+    let resolved = run(&dir, false, &["resolve", "bound.json"], 0);
+    let physical: Value = serde_json::from_slice(&resolved.stdout).unwrap();
+    assert_eq!(physical["body_offset_m"], 0.005);
+    assert_eq!(physical["mechanics"]["areal_kg_m2"], 0.1);
+    assert_eq!(std::fs::read(dir.join("request.json")).unwrap(), original);
+
+    request["legs"][0]["holds"][1]["control"]["pressure_pa"] = json!(501.0);
+    let refused = setup(&request);
+    assert!(
+        run(&refused, false, &["thermal-compression", "request.json"], 2)
+            .stdout
+            .is_empty()
+    );
+    let refused = run(&refused, true, &["thermal-compression", "request.json"], 3);
+    let refused: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert!(refused.get("result").is_none_or(Value::is_null));
+}
+
+#[test]
 fn late_failure_or_unknown_options_cannot_publish_a_partial_success() {
     let mut value = input();
     value["holds"][1]["inside_c"] = json!(-300.0);

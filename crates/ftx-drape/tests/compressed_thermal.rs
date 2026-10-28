@@ -1,7 +1,7 @@
 //! Independent RC and pressure/work answers; no measured textile or private wearer evidence.
 use ftx_drape::thermal::{
     Boundary, DryThermalModel, adaptive,
-    compression::{CompressedStack, Hold, Input, Setup, evaluate},
+    compression::{CompressedStack, Control, ControlledHold, Hold, Input, Setup, evaluate},
 };
 use ftx_pattern::{
     material_compression::{self, stack},
@@ -56,6 +56,142 @@ fn near(a: f64, b: f64, tolerance: f64) {
 
 fn fingerprint(s: &CompressedStack) -> serde_json::Value {
     serde_json::json!({"compression": s.compression(), "temperature":s.temperatures(), "last":s.last()})
+}
+
+fn controlled(control: Control, n: usize) -> ControlledHold {
+    let thermal = hold(0.020 * n as f64, n);
+    ControlledHold {
+        seconds: thermal.seconds,
+        control,
+        interface_resistance_m2_k_w: thermal.interface_resistance_m2_k_w,
+        inside_c: thermal.inside_c,
+        outside_c: thermal.outside_c,
+        inside_resistance_m2_k_w: thermal.inside_resistance_m2_k_w,
+        outside_resistance_m2_k_w: thermal.outside_resistance_m2_k_w,
+    }
+}
+
+#[test]
+fn explicit_pressure_then_gap_preserve_the_same_mass_heat_and_branch_work_history() {
+    let mut initial = setup(1, 1);
+    initial.initial_temperature_c[0] = 0.0;
+    let mut state = CompressedStack::new(&initial).unwrap();
+    let first = state
+        .advance_controlled(&controlled(Control::Pressure { pressure_pa: 250.0 }, 1))
+        .unwrap();
+    let t1 = ((2.0 / 0.375) * 40.0) / (10.0 + 4.0 / 0.375);
+    near(first.temperature_c[0], t1, 1e-12);
+    near(first.thickness_m, 0.015, 1e-14);
+    near(first.external_work_j, 0.15625, 1e-12);
+    near(first.reference_mass_kg, 0.025, 1e-14);
+    assert_eq!(first.prescribed_pressure_pa, Some(250.0));
+    assert_eq!(state.compression().prescribed_pressure_pa, Some(250.0));
+    assert_eq!(state.compression().input.gap_m, 0.020);
+    let second = state
+        .advance_controlled(&controlled(Control::Gap { gap_m: 0.010 }, 1))
+        .unwrap();
+    let t2 = (10.0 * t1 + (2.0 / 0.25) * 40.0) / (10.0 + 4.0 / 0.25);
+    near(second.temperature_c[0], t2, 1e-12);
+    near(second.cumulative_external_work_j, 0.625, 1e-12);
+    near(second.cumulative_stored_change_j, 25.0 * t2, 1e-10);
+    near(second.cumulative_heat_balance_error_j, 0.0, 1e-10);
+    assert_eq!(second.prescribed_pressure_pa, None);
+    assert_eq!(state.compression().prescribed_pressure_pa, None);
+    assert_eq!(second.elapsed_s, 20.0);
+    let held = state
+        .advance_controlled(&controlled(Control::Pressure { pressure_pa: 500.0 }, 1))
+        .unwrap();
+    assert_eq!(held.external_work_j, 0.0);
+    assert_eq!(held.elapsed_s, 30.0);
+    assert!(held.temperature_c[0] > second.temperature_c[0]);
+}
+
+#[test]
+fn source_pressure_plateau_updates_heat_without_an_inferred_pressure_or_reset() {
+    let mut initial = setup(1, 1);
+    initial.initial_temperature_c[0] = 0.0;
+    let p = &mut initial.stack.layers[0].preparation;
+    let mut middle = p.samples[0].clone();
+    middle.pressure_pa = 250.0;
+    for q in middle.properties.values_mut() {
+        q.conditions.insert("pressure_pa".into(), "250".into());
+        q.bounds = None;
+    }
+    middle.properties.get_mut("thickness").unwrap().value = 15.0;
+    middle
+        .properties
+        .get_mut("thermal_resistance")
+        .unwrap()
+        .value = 0.375;
+    let end = p.samples[1].properties.get_mut("thickness").unwrap();
+    end.value = 1.5; // This original row is in centimetres.
+    end.bounds = None;
+    p.samples.insert(1, middle);
+    let mut state = CompressedStack::new(&initial).unwrap();
+    let original = fingerprint(&state);
+    assert!(state.advance(&hold(0.015, 1)).is_err());
+    assert_eq!(fingerprint(&state), original);
+    let first = state
+        .advance_controlled(&controlled(Control::Pressure { pressure_pa: 375.0 }, 1))
+        .unwrap();
+    near(first.thickness_m, 0.015, 1e-14);
+    near(first.external_work_j, 0.15625, 1e-12);
+    let second = state
+        .advance_controlled(&controlled(Control::Pressure { pressure_pa: 500.0 }, 1))
+        .unwrap();
+    near(second.thickness_m, first.thickness_m, 0.0);
+    assert_eq!(second.external_work_j, 0.0);
+    assert_ne!(first.layer_material_sha256, second.layer_material_sha256);
+    assert!(second.temperature_c[0] > first.temperature_c[0]);
+    near(second.cumulative_heat_balance_error_j, 0.0, 1e-10);
+}
+
+#[test]
+fn pressure_failures_and_exhausted_adaptive_holds_roll_back_all_physical_state() {
+    let mut initial = setup(1, 1);
+    initial.initial_temperature_c[0] = 0.0;
+    let mut state = CompressedStack::new(&initial).unwrap();
+    state
+        .advance_controlled(&controlled(Control::Pressure { pressure_pa: 250.0 }, 1))
+        .unwrap();
+    let accepted = fingerprint(&state);
+    for pressure in [-1.0, 200.0, 501.0, f64::NAN, f64::INFINITY] {
+        assert!(
+            state
+                .advance_controlled(&controlled(
+                    Control::Pressure {
+                        pressure_pa: pressure
+                    },
+                    1
+                ))
+                .is_err()
+        );
+        assert_eq!(fingerprint(&state), accepted);
+    }
+    let mut late = controlled(Control::Pressure { pressure_pa: 500.0 }, 1);
+    late.outside_c = -300.0;
+    assert!(state.advance_controlled(&late).is_err());
+    assert_eq!(fingerprint(&state), accepted);
+    late.outside_c = 0.0;
+    let mut options = adaptive_options();
+    options.max_cell_solves = 5;
+    let mut budget = adaptive::Budget::new(options).unwrap();
+    assert_eq!(
+        state
+            .advance_controlled_adaptive(&late, &mut budget)
+            .unwrap_err()
+            .code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    assert_eq!(fingerprint(&state), accepted);
+    assert_eq!(budget.used()[1], 5);
+    let mut budget = adaptive::Budget::new(adaptive_options()).unwrap();
+    let solved = state
+        .advance_controlled_adaptive(&late, &mut budget)
+        .unwrap();
+    assert!(solved.integration.is_some());
+    assert_eq!(solved.prescribed_pressure_pa, Some(500.0));
+    near(solved.cumulative_heat_balance_error_j, 0.0, 1e-8);
 }
 
 fn adaptive_options() -> adaptive::Options {

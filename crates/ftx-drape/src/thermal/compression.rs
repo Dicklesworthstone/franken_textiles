@@ -69,6 +69,64 @@ impl Hold {
     }
 }
 
+/// Explicit quasi-static normal boundary; pressure and final clearance cannot both be imposed.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Control {
+    /// Prescribed rigid-face separation; the qualified branches determine pressure.
+    Gap {
+        /// Positive final clearance, metres.
+        gap_m: f64,
+    },
+    /// Prescribed uniform pressure; the qualified branches determine separation.
+    Pressure {
+        /// Nonnegative normal pressure, Pa, within every active source branch.
+        pressure_pa: f64,
+    },
+}
+
+/// A version-3 hold with one explicit pressure or clearance boundary. All thermal inputs retain
+/// the original hold's meaning; pressure does not imply a film or interface heat-transfer law.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlledHold {
+    /// Positive duration after the quasi-static change, seconds.
+    pub seconds: f64,
+    /// Exactly one prescribed mechanical boundary.
+    pub control: Control,
+    /// One independently prescribed resistance per physical layer interface, m² K/W.
+    pub interface_resistance_m2_k_w: Vec<f64>,
+    /// Prescribed inner temperature, degrees Celsius.
+    pub inside_c: f64,
+    /// Prescribed outer temperature, degrees Celsius.
+    pub outside_c: f64,
+    /// Explicit inner film resistance, m² K/W.
+    pub inside_resistance_m2_k_w: f64,
+    /// Explicit outer film resistance, m² K/W.
+    pub outside_resistance_m2_k_w: f64,
+}
+
+impl ControlledHold {
+    fn parameters(&self, initial_gap: f64) -> (Hold, Option<f64>) {
+        let (gap_m, pressure) = match self.control {
+            Control::Gap { gap_m } => (gap_m, None),
+            Control::Pressure { pressure_pa } => (initial_gap, Some(pressure_pa)),
+        };
+        (
+            Hold {
+                seconds: self.seconds,
+                gap_m,
+                interface_resistance_m2_k_w: self.interface_resistance_m2_k_w.clone(),
+                inside_c: self.inside_c,
+                outside_c: self.outside_c,
+                inside_resistance_m2_k_w: self.inside_resistance_m2_k_w,
+                outside_resistance_m2_k_w: self.outside_resistance_m2_k_w,
+            },
+            pressure,
+        )
+    }
+}
+
 /// A committed hold's geometry, source identity and separate thermal/mechanical ledgers.
 #[derive(Clone, Debug, Serialize)]
 pub struct StepReport {
@@ -76,6 +134,10 @@ pub struct StepReport {
     pub elapsed_s: f64,
     /// Common normal pressure obtained by the existing inverse solver, Pa.
     pub pressure_pa: f64,
+    /// Explicit pressure boundary, present only on pressure-controlled holds. Otherwise pressure
+    /// was inferred from the prescribed clearance. No measured contact field is implied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prescribed_pressure_pa: Option<f64>,
     /// Sum of the conditioned layer thicknesses, metres.
     pub thickness_m: f64,
     /// Closure residual relative to this hold's gap, metres.
@@ -251,7 +313,7 @@ impl CompressedStack {
     /// Refused compression/thermal solve, unrepresentable time/energy, changed storage or more than
     /// 512 committed steps. Preparation and all ledgers commit together only after every check.
     pub fn advance(&mut self, hold: &Hold) -> Result<StepReport, Refusal> {
-        self.advance_inner(hold, None)
+        self.advance_inner(hold, None, None)
     }
 
     /// Advance a hold with the existing adaptive thermal integrator and a caller-owned budget.
@@ -264,12 +326,37 @@ impl CompressedStack {
         hold: &Hold,
         budget: &mut adaptive::Budget,
     ) -> Result<StepReport, Refusal> {
-        self.advance_inner(hold, Some(budget))
+        self.advance_inner(hold, None, Some(budget))
+    }
+
+    /// Apply an explicit pressure or clearance change, then advance the same conservative heat
+    /// state. A pressure plateau is well-posed under pressure control; no inverse is fabricated.
+    ///
+    /// # Errors
+    /// Unqualified sources, domain/direction violations, inconsistent storage, invalid thermal
+    /// boundaries or exhausted work. Every failed hold leaves all physical state unchanged.
+    pub fn advance_controlled(&mut self, hold: &ControlledHold) -> Result<StepReport, Refusal> {
+        let (hold, pressure) = hold.parameters(self.compression.thickness_m);
+        self.advance_inner(&hold, pressure, None)
+    }
+
+    /// Apply an explicit pressure or clearance boundary with one caller-owned adaptive budget.
+    ///
+    /// # Errors
+    /// As [`Self::advance_controlled`]; failed work remains charged without committing physics.
+    pub fn advance_controlled_adaptive(
+        &mut self,
+        hold: &ControlledHold,
+        budget: &mut adaptive::Budget,
+    ) -> Result<StepReport, Refusal> {
+        let (hold, pressure) = hold.parameters(self.compression.thickness_m);
+        self.advance_inner(&hold, pressure, Some(budget))
     }
 
     fn advance_inner(
         &mut self,
         hold: &Hold,
+        prescribed_pressure: Option<f64>,
         budget: Option<&mut adaptive::Budget>,
     ) -> Result<StepReport, Refusal> {
         if self.committed_steps == MAX_STEPS {
@@ -293,7 +380,10 @@ impl CompressedStack {
         for layer in &mut request.layers {
             layer.preparation.pressure_pa = self.compression.pressure_pa;
         }
-        let next = stack::close(&request)?;
+        let next = match prescribed_pressure {
+            Some(pressure) => stack::at_pressure(&request, pressure)?,
+            None => stack::close(&request)?,
+        };
         let thermal = model(
             &next,
             &hold.interface_resistance_m2_k_w,
@@ -382,6 +472,7 @@ impl CompressedStack {
         let report = StepReport {
             elapsed_s: next_time,
             pressure_pa: next.pressure_pa,
+            prescribed_pressure_pa: prescribed_pressure,
             thickness_m: next.thickness_m,
             closure_residual_m: next.closure_residual_m,
             normal_force_n: next.normal_force_n,
@@ -510,7 +601,8 @@ pub fn evaluate(input: &Input) -> Result<Report, Refusal> {
 }
 
 /// Bounded JSON boundary shared by native and WebAssembly callers. Version 1 retains its original
-/// single-branch contract; version 2 adds explicit acquired-branch legs without guessing reversals.
+/// single-branch contract; version 2 adds acquired-branch legs; version 3 selects one explicit
+/// pressure or clearance boundary per hold. No version infers a loading/unloading reversal.
 ///
 /// # Errors
 /// More than 64 MiB, invalid/unsupported schema or fields, or any refused setup, transition or hold.
@@ -538,6 +630,12 @@ pub fn evaluate_json(input: &str) -> Result<String, Refusal> {
             let input: path::Input = serde_json::from_str(input).map_err(parse_error)?;
             serde_json::to_string(&path::evaluate(&input)?).map_err(parse_error)
         }
-        _ => Err(invalid("expected ftx-compressed-thermal-history/1 or /2")),
+        "ftx-compressed-thermal-history/3" => {
+            let input: path::ControlledInput = serde_json::from_str(input).map_err(parse_error)?;
+            serde_json::to_string(&path::evaluate_controlled(&input)?).map_err(parse_error)
+        }
+        _ => Err(invalid(
+            "expected ftx-compressed-thermal-history/1, /2 or /3",
+        )),
     }
 }
