@@ -244,6 +244,7 @@ fn setup() -> PathBuf {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::create_dir(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
     let (bytes, input) = fixture();
     std::fs::write(dir.join("model.ftxbody"), bytes).unwrap();
     save(&dir, &input);

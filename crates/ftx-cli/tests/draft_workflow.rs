@@ -228,7 +228,13 @@ fn standalone_drafting_recomputes_record_evidence_like_workspace_drafting() {
 fn valid_cache_cannot_hide_invalid_records_before_standalone_publication() {
     let dir = workspace();
     let fixtures = programs();
-    let mut input = fixtures["cases"][0]["input"]["measurements"].clone();
+    let case = fixtures["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["input"]["program"] == "zouave_bolero")
+        .unwrap();
+    let mut input = case["input"]["measurements"].clone();
     input["records"][0]["sigma_mm"] = serde_json::json!(-1);
     let bytes = serde_json::to_vec(&input).unwrap();
     std::fs::write(dir.join("invalid.json"), &bytes).unwrap();
@@ -248,7 +254,7 @@ fn valid_cache_cannot_hide_invalid_records_before_standalone_publication() {
     assert!(!dir.join("invalid").exists());
     std::fs::write(
         dir.join("pattern.json"),
-        serde_json::to_vec(&fixtures["cases"][0]["output"]["pattern"]).unwrap(),
+        serde_json::to_vec(&case["output"]["pattern"]).unwrap(),
     )
     .unwrap();
     for args in [

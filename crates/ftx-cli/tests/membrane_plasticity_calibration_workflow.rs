@@ -1,6 +1,11 @@
 //! Acquired permanent-stretch histories through both real commands and the existing material binding.
 //! The shared fixture is synthetic and establishes no empirical textile or garment claim.
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use ftx_pattern::material_membrane_plasticity::calibration;
 use serde_json::{Value, json};
@@ -14,13 +19,15 @@ const JOINT_INPUT: &str = include_str!("../../../examples/material-joint-calibra
 struct Workspace(PathBuf);
 impl Workspace {
     fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "ftx-permanent-calibration-{}-{}",
+            "ftx-permanent-calibration-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
         Self(path)

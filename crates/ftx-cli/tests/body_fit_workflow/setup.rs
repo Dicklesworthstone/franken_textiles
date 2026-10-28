@@ -41,6 +41,7 @@ fn sources(retain: bool, first_timestamp: u64) -> (PathBuf, Value) {
         std::env::temp_dir().join(format!("ftx-capture-setup-{}-{stamp}", std::process::id()))
     };
     std::fs::create_dir(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
     // This is the existing actual ChArUco acquisition fixture's physical scale and raster.
     // Do not use setup(): a pre-existing capture/model request is exactly what is absent.
     let (model, mut truth) = fixture_scaled(0.25);

@@ -512,7 +512,7 @@ fn circular_import_refuses_implicit_approximation_and_unattainable_bounds_withou
     std::fs::write(dir.join("tight-arcs.json"), &tight).unwrap();
     let refusal = ftx_wasm::import_garmentcode(&source, Some(&tight)).unwrap_err();
     assert_eq!(refusal.code, ftx_core::RefusalCode::BudgetExceeded);
-    run(
+    let refused = run(
         &dir,
         &[
             "import",
@@ -523,7 +523,8 @@ fn circular_import_refuses_implicit_approximation_and_unattainable_bounds_withou
             "--out",
             "unattainable-arcs",
         ],
-        3,
+        4,
     );
+    assert_eq!(refused["refusal"]["code"], "budget_exceeded");
     assert!(!dir.join("unattainable-arcs").exists());
 }
