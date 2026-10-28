@@ -303,3 +303,78 @@ fn body_face_collapse_inside_a_motion_is_refused_not_skipped() {
     ));
     assert_eq!(format!("{s:?}"), before);
 }
+
+// Two body patches far above the cloth: only body/body admission can reject these cases.
+fn separated_body_patches() -> Solver {
+    let mut s = sliding_patch(0.0, true);
+    let mut vertices = triangle(2.0, 1.0);
+    vertices.extend(triangle(3.0, 1.0));
+    s.contact.as_mut().unwrap().body =
+        Body::new(vertices, vec![[0, 1, 2], [3, 4, 5]], 0.1).unwrap();
+    s
+}
+
+#[test]
+fn intersecting_body_start_and_target_refuse_without_changing_the_solver() {
+    for invalid_start in [false, true] {
+        let mut s = separated_body_patches();
+        let mut target = s.contact.as_ref().unwrap().body.vertices.clone();
+        for p in &mut target[3..] {
+            p.z = 2.0;
+        }
+        if invalid_start {
+            s.contact.as_mut().unwrap().body =
+                Body::new(target.clone(), vec![[0, 1, 2], [3, 4, 5]], 0.1).unwrap();
+        }
+        let before = format!("{s:?}");
+        let refusal = advance_body(&mut s, &target, 0.1, MotionOptions::default()).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::IntersectingStart);
+        assert!(refusal.message.contains("body triangles 0 and 1"));
+        assert_eq!(format!("{s:?}"), before);
+    }
+}
+
+#[test]
+fn crossing_body_keyframes_refuse_even_when_both_endpoints_are_valid() {
+    let mut s = separated_body_patches();
+    let mut target = s.contact.as_ref().unwrap().body.vertices.clone();
+    for p in &mut target {
+        p.z = 5.0 - p.z;
+    }
+    ftx_drape::collider::audit_surface(&target, &[[0, 1, 2], [3, 4, 5]], 1).unwrap();
+    let before = format!("{s:?}");
+    let refusal = advance_body(
+        &mut s,
+        &target,
+        1.0,
+        MotionOptions {
+            max_step_s: 0.25,
+            ..MotionOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::IntersectingStart);
+    assert!(refusal.message.contains("body triangles 0 and 1"));
+    assert_eq!(format!("{s:?}"), before);
+}
+
+#[test]
+fn valid_body_motion_retains_legal_shared_features_and_reports_audit_work() {
+    let mut s = sliding_patch(0.0, true);
+    let vertices = vec![
+        Vec3::new(-1.0, -1.0, 2.0),
+        Vec3::new(1.0, -1.0, 2.0),
+        Vec3::new(1.0, 1.0, 2.0),
+        Vec3::new(-1.0, 1.0, 2.0),
+    ];
+    let target: Vec<_> = vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0.1, 0.0, 0.0))
+        .collect();
+    s.contact.as_mut().unwrap().body =
+        Body::new(vertices, vec![[0, 1, 2], [0, 2, 3]], 0.1).unwrap();
+    let report = advance_body(&mut s, &target, 0.01, MotionOptions::default()).unwrap();
+    assert_eq!(report.samples.len(), 1);
+    assert_eq!(report.pairs_tested, 3); // start, target and one accepted trial; no cloth overlap
+    assert_eq!(s.contact.as_ref().unwrap().body.vertices, target);
+}

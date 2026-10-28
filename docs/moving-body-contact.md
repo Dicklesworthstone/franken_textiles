@@ -51,6 +51,11 @@ between endpoints, including a collider that crosses cloth and emerges clear.
 
 Each trial first admits the prescribed body motion against the old cloth. It then
 runs the existing implicit-Euler/Newton cloth solve at the endpoint collider.
+The starting, requested and trial body surfaces also pass a bounded exact
+self-intersection audit. Legal shared vertices and edges are retained; crossing,
+coincident and folded-over faces are refused with their source triangle indices.
+The audit reuses the existing BVH and shared-feature predicates, does not move
+vertices, and refuses rather than treating an exhausted budget as a clear surface.
 Lagged Coulomb friction measures **relative** cloth/body material displacement,
 with the same frozen contact weights at both body endpoints. The combined
 cloth/body trajectory must pass CCD, conservative face-noncollapse checks and
@@ -62,25 +67,32 @@ collider geometry and indices, friction history, symbolic analysis and cached
 factors. No partially completed motion report is returned as a successful result.
 
 `MotionOptions` defaults are 1/60 second maximum step, 512 trial attempts,
-1,000,000 candidate pairs per swept query and 4,000,000 retained body-plus-cloth
-vertex positions. These bound subdivision and output, not the wall time of a
+1,000,000 candidate pairs per swept query or body-surface audit and 4,000,000
+retained body-plus-cloth vertex positions. These bound subdivision and output,
+not the wall time of a
 Newton iteration. The solver's existing Newton/friction/PCG policies still apply.
 Contact thickness and cloth material parameters are never relaxed to finish motion.
+`MotionReport.pairs_tested` includes completed initial-contact queries and
+body-surface audits as well as swept queries, including rejected trials.
 
 ## Evidence and boundaries
 
 `tests/moving_contact.rs` covers tunnelling with clear endpoints, co-translation,
 self-contact, candidate/geometry refusals, frictional surface transport, a lifting
-collider with every returned substep rechecked, interior face collapse, and rollback
-after accepted internal substeps. The streamed BVH query also matches exhaustive
+collider with every returned substep rechecked, interior face collapse, body-surface
+intersections at initial/target/intermediate configurations, and rollback after
+accepted internal substeps. Valid shared-edge motion retains exact audit work.
+The streamed BVH query also matches exhaustive
 feature enumeration in the contact module's unit test. Existing static contact
 known-answer tests and pinned digest remain unchanged.
 
 This is conservative continuation for an already valid prescribed body path, not
 IPC's augmented-Lagrangian treatment of large moving boundary displacements. Fast,
 blocked, ill-conditioned or excessive-turning motion may refuse rather than finish.
-Body self-intersection, anatomically valid motion, moving pins, mesh remapping,
-pose extraction and human-motion accuracy are not certified. The returned solver
+The body-surface audits certify only the sampled configurations, not absence of
+body self-intersection between those samples. Anatomically valid motion, moving
+pins, mesh remapping, pose extraction and human-motion accuracy are not certified.
+The returned solver
 can continue normally after a successful motion, but success is neither settledness
 nor a garment-fit verdict. Body-driven motion can add mechanical energy. No
 production Anny motion benchmark or browser-runtime qualification is claimed.

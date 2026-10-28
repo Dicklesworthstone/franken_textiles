@@ -5,8 +5,9 @@
 //! commits or refuses, including collider, velocities, friction history and solver caches.
 //! This bounded continuation is not IPC's augmented-Lagrangian large-motion method.
 
-use ftx_core::{Refusal, RefusalCode, Vec3, intersection::validate_mesh};
+use ftx_core::{Refusal, RefusalCode, Vec3};
 
+use crate::collider::audit_surface;
 use crate::{Body, SolveReport, Solver};
 
 /// Work and temporal-resolution policy. These are numerical limits, not fitted fabric data.
@@ -16,7 +17,8 @@ pub struct MotionOptions {
     pub max_step_s: f64,
     /// Total candidate attempts, including rejected trials and subdivisions.
     pub max_trials: usize,
-    /// Candidate-pair cap per swept query. Overflow refuses the whole request, never truncates.
+    /// Candidate-pair cap per swept query or body-surface audit. Overflow refuses the whole
+    /// request, never truncates.
     pub max_pairs: usize,
     /// Maximum retained vertex positions across all output samples (body + cloth). When using
     /// `advance_body_with_dissipation`, each retained triangle-work scalar also consumes one
@@ -76,7 +78,7 @@ pub struct DissipationCapture {
 pub struct MotionReport {
     /// Attempt count; rejected attempts are included.
     pub trials: usize,
-    /// CCD candidates tested in successful queries, including rejected trajectories.
+    /// CCD and body-surface candidates tested in successful queries, including rejected trials.
     pub pairs_tested: u64,
     /// Accepted endpoint samples; the initial state is the caller's original solver state.
     pub samples: Vec<MotionSample>,
@@ -117,8 +119,9 @@ fn regular_path(start: &[Vec3], end: &[Vec3], tris: &[[usize; 3]]) -> bool {
 /// The existing frankensim-derived BVH, sparse LDLT/Newton, material, self-contact and friction
 /// kernels are reused. Body meshes are rebuilt at accepted candidates rather than refitted in place.
 /// Rejects motion it cannot complete within the stated budgets. Caller-visible state is unchanged
-/// on ANY error, including late errors after internally accepted steps. Does not certify the body
-/// against self-intersections; caller-supplied body motion must be physically valid.
+/// on ANY error, including late errors after internally accepted steps. The initial, target and
+/// trial body surfaces are audited for self-intersection with exact shared-feature predicates.
+/// These endpoint audits do not certify the continuous body path or anatomical validity.
 ///
 /// # Errors
 /// Invalid state/options/topology, non-finite arithmetic, invalid start contact, exhausted work or
@@ -253,8 +256,9 @@ pub(crate) fn advance_body_coupled<S: Clone>(
             "body motion requires a finite state and positive Newton policy",
         ));
     }
-    validate_mesh(target, &original.body.triangles)?;
-    original.motion_bound(
+    let start_audit = original.body.audit_self_intersections(options.max_pairs)?;
+    let target_audit = audit_surface(target, &original.body.triangles, options.max_pairs)?;
+    let initial_bound = original.motion_bound(
         &solver.x,
         &solver.x,
         &original.body.vertices,
@@ -302,7 +306,9 @@ pub(crate) fn advance_body_coupled<S: Clone>(
     let mut coupled = state.clone();
     let mut report = MotionReport {
         trials: 0,
-        pairs_tested: 0,
+        pairs_tested: start_audit.pairs_tested as u64
+            + target_audit.pairs_tested as u64
+            + initial_bound.pairs_tested as u64,
         samples: Vec::new(),
     };
     let mut time = 0.0;
@@ -354,6 +360,10 @@ pub(crate) fn advance_body_coupled<S: Clone>(
             step = h * 0.5;
             continue;
         }
+        // Subdivision cannot repair an invalid point on the prescribed body trajectory. Refuse
+        // the entire request, including any prior internally accepted cloth or thermal steps.
+        let endpoint_audit = audit_surface(&end, &triangles, options.max_pairs)?;
+        report.pairs_tested += endpoint_audit.pairs_tested as u64;
         let safe = c.motion_bound(&work.x, &work.x, &end, options.max_pairs)?;
         report.pairs_tested += safe.pairs_tested as u64;
         if safe.fraction < 1.0 {
