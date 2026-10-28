@@ -333,6 +333,15 @@ gate every candidate before manufacturing.</p>
 refines the steps when progress stops, and sends passing patterns to the existing consumers.
 Every trial retains its exact alterations, body identity and fit result. A work limit or minimum-step stop
 leaves unvisited alteration values unknown; the downstream comparison remains conditional on the designs found.</p>
+<p class="note">To guide that adaptive search with actual manufacturing or simulation results, set
+<code>design_adaptive.objective: "consumer_comparison"</code> and <code>design_adaptive.material_key</code> to
+one exact authored material alternative key. The study's <code>comparison</code> must declare nominal comparison
+and one objective with an explicit minimize/maximize direction. Its constraints, required consumers and source rules
+also gate every probe, after the ordinary flat geometry and selected-body fit checks. The search keeps better admitted
+geometries instead of stopping at the first passing designs; each retained geometry is then crossed with all material
+alternatives. A single body scenario can supply the objective; named-case matrices require a declared aggregation rule
+and currently refuse this mode. The trial report retains objective readings, exclusions and exact patterns. Search
+allowances do not override cumulative simulation budgets or establish a global optimum.</p>
 <details><summary>Build combinations of shell, lining, cuffs and other material choices</summary>
 <p>Inspect a material in section 1, select the source pieces that share a choice, and add it to a named group.
 Add more choices to that group, then create groups for other pieces. Every combination runs through the requested consumers.</p>
@@ -508,6 +517,15 @@ these differ from the final endpoint temperature and are not continuous-time bou
 Select minimize or maximize explicitly: signed energy can reverse with the environment. Internal sources and boundary exchange contribute separately to stored heat.
 The source-qualified liquid coupling below updates inertia without inferring wet material laws.
 Body self-intersection, seated/squat and empirical ride-up qualification remain separate requirements.</p>
+<p class="note">Optional <code>motion.transient_coverage.thermal_bridges</code> includes seam and closure
+excess exchange during motion. Use <code>schema: "ftx-motion-thermal-bridges/1"</code>,
+<code>model: "qualified_zero_storage_centerline_exchange/1"</code>, an existing steady bridge request as
+<code>reference</code>, and independent temporal <code>qualifications</code> for its exact paths and steady observations.
+Each qualification must explicitly support zero storage, elapsed time, the full accepted sample interval and live textile
+temperatures. Every endpoint rechecks actual centerline length, ownership, materials and films. Signed bridge energy
+is added equally to both boundary ledgers; the baseline textile temperature and storage are unchanged. Ordinary
+inside-energy comparison includes that excess. The result retains baseline and total energy separately, plus the
+complete source and geometry history. A steady observation alone does not qualify this moving law.</p>
 <p class="note">Optional <code>motion.transient_surface.surface_water</code> enables source-qualified initial free-liquid
 evaporation and temperature feedback on the textile. The <code>ftx-textile-surface-water/1</code> request declares exact
 instance/material bindings and initial loadings, liquid heat capacity and latent heat, a bounded pressure–temperature table,

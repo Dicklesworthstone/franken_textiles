@@ -6147,6 +6147,43 @@ test('transient heat displays signed energy and remap separately, preserving ref
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
+test('moving seam bridges display signed boundary excess separately from textile storage and withdraw a refused history', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const report=scenarioReport();
+  report.scenario={scenario:{motion:{transient_coverage:{thermal_bridges:{
+    schema:'ftx-motion-thermal-bridges/1',model:'qualified_zero_storage_centerline_exchange/1'}}}}};
+  const bridges={baseline_inside_energy_j:8,baseline_outside_energy_j:3,bridge_energy_j:-2,
+    total_inside_energy_j:6,total_outside_energy_j:1,
+    qualifications:[{source:'<independent time and temperature source>',zero_storage:true}],
+    trace:[{time_s:1,dt_s:1,bridge_energy_j:-2,source:'<exact centerline ownership>'}]};
+  const motion={duration_s:1,samples:[{}],trials:1,keyframes:[],metrics:{},
+    transient_coverage:outcome({duration_s:1,thermal_steps:2,trace:[{temperature_range_c:[20,25]}],
+      inside_energy_j:6,outside_energy_j:1,net_boundary_energy_j:5,physical_stored_change_j:5,
+      balance_error_j:0,signed_remap_residual_j:0,thermal_bridges:bridges})};
+  report.simulations=[{key:'A',evaluation:outcome({drape:{settled:true},motion:outcome(motion)})}];
+  await p.e.scenario.onclick(); p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+  assert.deepEqual(plain(table('A: seam and closure heat during motion').children[2].children.map(n=>n.textContent)),
+    ['8','-2','6','3','1']);
+  assert.deepEqual(plain(table('A: transient heat — complete time history or refusal').children[2].children.slice(5,8).map(n=>n.textContent)),
+    ['5','5','0']);
+  assert.match(visibleText(s),/same signed excess energy is added to the inside and outside boundary ledgers/);
+  assert.match(visibleText(s),/does not infer seam heat capacity/);
+  assert.match(visibleText(s),/ordinary inside-energy comparison objective uses the total/);
+  const details=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===
+    'A: moving bridge qualifications, geometry and signed energy history (display only)');
+  details.open=true; details.handlers.toggle();
+  assert.match(visibleText(details),/<independent time and temperature source>/);
+  assert.match(visibleText(details),/<exact centerline ownership>/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  motion.transient_coverage=refused('Bridge temporal qualification does not cover the final interval');
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.equal(table('A: seam and closure heat during motion'),undefined);
+  assert.match(visibleText(s),/Bridge temporal qualification does not cover the final interval/);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
 test('material-direction strain preserves signed axes, regional witnesses and independent motion refusal', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const report=scenarioReport();
@@ -7233,6 +7270,60 @@ test('adaptive design search displays raw violations and exact trials without de
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
+test('consumer-guided adaptive search shows authoritative readings, displaced trials and exclusions without browser ranking', async () => {
+  const p=await pageModule(); await p.load(); p.select('studyRequest','{}');
+  const report=designReport(), source=' {"schema":"fabric-pattern/1","value":-0.0,"label":"<retained trial>"}\n';
+  const trial=(key,value,selected,candidate,refusal)=>({selected,max_fit_band_violation_mm:0,
+    total_fit_band_violation_mm:0,design:{key,variables_mm:{'<length>':value},altered_pattern_json:source,
+      validation:{passed:true},fit:outcome({passed:true,body_identity:{provenance:'MODEL_FIT'}})},
+    consumer_comparison:candidate,refusal});
+  const candidate=(key,value,eligible=true)=>({key,eligible,dominated_by:[],
+    readings:{assembly_mass_kg:{value,unit:'kg',consumer:'assembly_mass'}},
+    exclusions:eligible?[]:[{message:'<required consumer>: source qualification missing'}],
+    input_protocol_sha256:'<retained protocol>'});
+  report.design_search={schema:'ftx-design-adaptive-search/1',evaluations:4,qualified_designs:4,selected_designs:1,
+    stop_reason:'evaluation_budget',budget_exhausted:true,complete_search:false,global_optimum_claim:false,
+    consumer_guidance:{material_key:'<linen>',objective:{metric:'assembly_mass_kg',direction:'minimize'},
+      evaluations:3,reserved_evaluations:10,best_trial_key:'adaptive:0002',
+      best_reading:{value:0.08,unit:'kg',consumer:'assembly_mass'},input_protocol_sha256:'<retained protocol>'},
+    rows:[trial('adaptive:0000',10,false,candidate('adaptive:0000',0.1)),
+      trial('adaptive:0001',0,false,candidate('adaptive:0001',0.01,false)),
+      trial('adaptive:0002',8,true,candidate('adaptive:0002',0.08)),
+      trial('adaptive:0003',9,false,undefined,{message:'Cumulative motion budget exhausted'})]};
+  report.design_search.rows[3].consumer_refusal={message:'<retained callback>: triangle-sample allowance exhausted'};
+  await p.e.study.onclick(); p.emit(report);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+  assert.deepEqual(plain(table('Consumer-guided adaptive alteration search').children[2].children.map(n=>n.textContent)),
+    ['4','3','10','1','evaluation budget','adaptive:0002','0.08 kg']);
+  assert.equal(table('Fit-directed adaptive alteration search'),undefined);
+  const rows=table('Adaptive alteration trials').children.slice(2);
+  assert.deepEqual(plain(rows[1].children.map(n=>n.textContent)),
+    ['adaptive:0001','<length>: 0','0','0','Passed declared flat gates','Excluded','0.01 kg','Not selected',
+      '<required consumer>: source qualification missing']);
+  assert.equal(rows[0].children[7].textContent,'Not selected');
+  assert.equal(rows[2].children[7].textContent,'Selected');
+  assert.equal(rows[3].children[5].textContent,'Not attempted');
+  assert.equal(rows[3].children[6].textContent,'Unknown');
+  assert.match(visibleText(s),/Guidance material: <linen>/);
+  assert.match(visibleText(s),/assembly_mass_kg \(minimize\)/);
+  assert.match(visibleText(s),/upper bound on attempted work, not a preapproved simulation allowance/);
+  assert.match(visibleText(s),/displaced candidates and failed probes/);
+  assert.match(visibleText(s),/Cumulative motion budget exhausted/);
+  assert.match(visibleText(s),/<retained callback>: triangle-sample allowance exhausted/);
+  const details=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('adaptive:0002: adaptive trial'));
+  details.open=true; details.handlers.toggle(); assert.match(visibleText(details),/<retained protocol>/);
+  const replay=descendants(s).find(n=>n.download==='adaptive-design-3-pattern.json');
+  assert.equal(await p.blobs.get(replay.href).text(),source);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  report.design_search.consumer_guidance.best_trial_key=null;
+  report.design_search.consumer_guidance.best_reading=null;
+  await p.e.study.onclick(); p.emit(report);
+  assert.deepEqual(plain(table('Consumer-guided adaptive alteration search').children[2].children.slice(-2).map(n=>n.textContent)),
+    ['Unknown','Unknown']);
+  p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
 test('design search retains incomplete domains and failed fit status even when residual rounds to zero', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   const report = designReport();
@@ -7631,6 +7722,84 @@ test('compiled WASM adaptive synthesis replays both native selected-body scenari
         assert.equal(selected.max_fit_band_violation_mm,0);
         assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
         assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
+      }
+    } finally {globalThis.ftxProgress=previousProgress;}
+  });
+
+test('compiled WASM consumer-guided alterations optimize real cloth mass and preserve the native budget-limited incumbent',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_CONSUMER_ADAPTIVE_REPLAY},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const input=name=>fs.readFileSync(path.join(process.env.FTX_CONSUMER_ADAPTIVE_REPLAY,name),'utf8');
+    const bytes=fs.readFileSync(path.join(process.env.FTX_CONSUMER_ADAPTIVE_REPLAY,'model.ftxbody'));
+    const w=await workerModule({bindings:ftx}),previousProgress=globalThis.ftxProgress;globalThis.ftxProgress=()=>{};
+    try {
+      for(const [index,name] of ['complete','budget'].entries()) {
+        const studyRequest=input('study.json'),scenarioRequest=input(`${name}-scenario.json`);
+        const result=await w.send({type:'scenario',request:220+index,pattern:input('pattern.json'),studyRequest,
+          scenarioRequest,measurements:input('body-input.json'),
+          bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+        assert.equal(result.type,'result',result.message);
+        assert.deepEqual(result.result,JSON.parse(input(`${name}-report.json`)));
+        const search=result.result.manufacturing.design_search,selected=search.rows.find(row=>row.selected);
+        assert.equal(search.selected_designs,1);assert.equal(search.global_optimum_claim,false);
+        assert.equal(selected.design.variables_mm.length,name==='complete'?-30:0);
+        assert.equal(search.consumer_guidance.objective.metric,'simulated_cloth_mass_kg');
+        assert.deepEqual(search.consumer_guidance.best_reading,selected.consumer_comparison.readings.simulated_cloth_mass_kg);
+        const key=JSON.stringify([selected.design.key,'light']);
+        assert.deepEqual(result.result.comparison.frontier,[key]);
+        assert.equal(result.result.simulations.find(row=>row.key===key).evaluation.result.drape.settled,true);
+        if(name==='complete') assert.equal(search.rows[0].selected,false);
+        else assert.ok(search.rows.some(row=>row.consumer_refusal?.code==='budget_exceeded'&&row.consumer_comparison?.eligible===false));
+        assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
+        assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
+        assert.equal(result.files.find(file=>file.name==='body-input.json').text,input('body-input.json'));
+      }
+    } finally {globalThis.ftxProgress=previousProgress;}
+  });
+
+test('compiled WASM moving seam bridges change qualified heat decisions and preserve native late-refusal histories',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_MOVING_BRIDGES_REPLAY},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const input=name=>fs.readFileSync(path.join(process.env.FTX_MOVING_BRIDGES_REPLAY,name),'utf8');
+    const bytes=fs.readFileSync(path.join(process.env.FTX_MOVING_BRIDGES_REPLAY,'model.ftxbody'));
+    const w=await workerModule({bindings:ftx}),previousProgress=globalThis.ftxProgress;globalThis.ftxProgress=()=>{};
+    try {
+      for(const [index,name] of ['single','matrix'].entries()) {
+        const studyRequest=input('study.json'),scenarioRequest=input(`${name}-scenario.json`);
+        const result=await w.send({type:'scenario',request:222+index,pattern:input('pattern.json'),studyRequest,
+          scenarioRequest,measurements:input('body-input.json'),
+          bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+        assert.equal(result.type,'result',result.message);
+        assert.deepEqual(result.result,JSON.parse(input(`${name}-report.json`)));
+        assert.deepEqual(result.result.comparison.frontier,['b']);
+        const qualified=name==='single'?result.result:result.result.cases.find(row=>row.key==='qualified');
+        for(const key of ['a','b']) {
+          const heat=qualified.simulations.find(row=>row.key===key).evaluation.result.motion.result.transient_coverage.result;
+          assert.equal(heat.thermal_bridges.storage_modeled,false);
+          assert.equal(heat.thermal_bridges.bridge_stored_change_j,0);
+          assert.equal(heat.thermal_bridges.excess_balance_residual_j,0);
+          assert.equal(heat.inside_energy_j,heat.thermal_bridges.total_inside_energy_j);
+          assert.equal(heat.outside_energy_j,heat.thermal_bridges.total_outside_energy_j);
+          assert.equal(qualified.comparison.alternatives.find(row=>row.key===key)
+            .readings.transient_coverage_inside_energy_j.value,heat.inside_energy_j);
+          if(key==='a') assert.ok(heat.thermal_bridges.bridge_energy_j>0);
+          else assert.equal(heat.thermal_bridges.bridge_energy_j,0);
+        }
+        if(name==='matrix') {
+          const late=result.result.cases.find(row=>row.key==='late-domain-refusal');
+          const motion=late.simulations.find(row=>row.key==='a').evaluation.result.motion;
+          assert.equal(motion.status,'available');
+          assert.equal(motion.result.transient_coverage.status,'refused');
+          assert.equal(motion.result.transient_coverage.result,undefined);
+          assert.equal(result.result.manufacturing.alternatives.find(row=>row.key==='a').cutting.status,'available');
+        }
+        assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
+        assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
+        assert.equal(result.files.find(file=>file.name==='body-input.json').text,input('body-input.json'));
       }
     } finally {globalThis.ftxProgress=previousProgress;}
   });

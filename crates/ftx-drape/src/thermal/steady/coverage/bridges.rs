@@ -79,16 +79,16 @@ pub struct Request {
     pub paths: Vec<Path>,
 }
 
-fn text(value: &str) -> bool {
+pub(crate) fn text(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 4096
 }
-fn hash(value: &str) -> bool {
+pub(crate) fn hash(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|c| c.is_ascii_hexdigit())
 }
-fn range([lo, hi]: [f64; 2], floor: f64) -> bool {
+pub(crate) fn range([lo, hi]: [f64; 2], floor: f64) -> bool {
     lo.is_finite() && hi.is_finite() && lo >= floor && hi >= lo
 }
-fn contains(domain: [f64; 2], value: f64) -> bool {
+pub(crate) fn contains(domain: [f64; 2], value: f64) -> bool {
     value.is_finite() && value >= domain[0] && value <= domain[1]
 }
 
@@ -220,7 +220,7 @@ fn interval(
     Ok(Some(result))
 }
 
-fn product(a: f64, b: f64) -> Result<f64, Refusal> {
+pub(crate) fn product(a: f64, b: f64) -> Result<f64, Refusal> {
     let value = a * b;
     if !value.is_finite() || (a != 0. && b != 0. && value == 0.) {
         Err(invalid(
@@ -231,7 +231,7 @@ fn product(a: f64, b: f64) -> Result<f64, Refusal> {
     }
 }
 
-fn add(a: f64, b: f64) -> Result<f64, Refusal> {
+pub(crate) fn add(a: f64, b: f64) -> Result<f64, Refusal> {
     let sum = a + b;
     if !sum.is_finite()
         || (a != 0.
@@ -253,17 +253,41 @@ struct Portion {
     region: usize,
 }
 
-/// Private call context: all geometry, source selections and baseline fields have already passed
-/// the canonical steady coverage authority. Public callers enter through `coverage::request`.
-pub(super) struct Context<'a> {
+/// Actual source-path domain. Steady callers supply solved faces; transient callers supply the
+/// envelope of all stored and preloaded cell temperatures through the held-geometry interval.
+/// Reservoirs are checked independently. Positive conductances keep reconstructed faces within
+/// these bounds; no steady solve is used to stand in for live transient temperatures.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Domain {
+    pub layer_area_ratios: Vec<f64>,
+    pub temperature_range_c: [f64; 2],
+}
+
+impl Domain {
+    pub(crate) fn include(&mut self, range: [f64; 2]) {
+        self.temperature_range_c[0] = self.temperature_range_c[0].min(range[0]);
+        self.temperature_range_c[1] = self.temperature_range_c[1].max(range[1]);
+    }
+}
+
+type AdditionalQualification<'a> =
+    &'a dyn Fn(&Path, &Qualification, usize) -> Result<String, Refusal>;
+
+/// Shared geometric/source authority. Callers supply admitted current geometry and actual thermal
+/// domains, not an inferred bridge footprint or a second overlap implementation.
+pub(crate) struct Context<'a> {
     pub source: &'a SteadySurface,
     pub cloth: &'a [Vec3],
     pub projection: &'a Projection,
-    pub baseline: &'a CoverageSolution,
+    pub domains: &'a [Domain],
     pub boundaries: &'a [Boundary],
     pub instances: &'a [String],
     pub owners: &'a [usize],
     pub model_sha256: &'a str,
+    /// Optional separately sourced applicability law. Its identity must also agree when a
+    /// physical centerline lies on multiple region boundaries.
+    pub additional_qualification: Option<AdditionalQualification<'a>>,
 }
 
 impl Context<'_> {
@@ -274,7 +298,7 @@ impl Context<'_> {
         length: f64,
     ) -> Result<&'a Qualification, Refusal> {
         let topology = &self.projection.layout.regions[region];
-        let solution = &self.baseline.regions[region];
+        let domain = &self.domains[region];
         let boundary = self.boundaries[topology.body_triangle];
         let materials: Vec<_> = topology
             .layers
@@ -298,17 +322,15 @@ impl Context<'_> {
                     && q.outside_resistance_m2_k_w == boundary.outside_resistance
                     && contains(q.temperature_range_c, boundary.inside_c)
                     && contains(q.temperature_range_c, boundary.outside_c)
-                    && solution
-                        .conduction
-                        .layer_faces_c
+                    && domain
+                        .temperature_range_c
                         .iter()
-                        .flatten()
                         .all(|&t| contains(q.temperature_range_c, t))
                     && contains(q.length_range_m, length)
                     && q.layer_area_ratio_ranges
                         .iter()
-                        .zip(&solution.layer_area_m2)
-                        .all(|(&domain, &area)| contains(domain, area / solution.body_area_m2))
+                        .zip(&domain.layer_area_ratios)
+                        .all(|(&domain, &ratio)| contains(domain, ratio))
             })
             .collect();
         if matches.len() != 1 {
@@ -325,6 +347,14 @@ impl Context<'_> {
         }
         Ok(matches[0])
     }
+}
+
+pub(crate) struct Excess {
+    pub power_w: f64,
+    pub body_power_w: Vec<f64>,
+    pub paths: Vec<Value>,
+    pub geometry_operations: usize,
+    pub ownership_roundoff_length_bound_m: f64,
 }
 
 impl Request {
@@ -375,8 +405,25 @@ impl Request {
         Ok(())
     }
 
-    pub(super) fn evaluate(&self, context: Context<'_>) -> Result<Value, Refusal> {
+    pub(crate) fn evaluate_excess(&self, context: Context<'_>) -> Result<Excess, Refusal> {
         self.validate()?;
+        if context.domains.len() != context.projection.layout.regions.len()
+            || context
+                .domains
+                .iter()
+                .zip(&context.projection.layout.regions)
+                .any(|(d, r)| {
+                    d.layer_area_ratios.len() != r.layers.len()
+                        || d.layer_area_ratios
+                            .iter()
+                            .any(|v| !v.is_finite() || *v <= 0.)
+                        || !range(d.temperature_range_c, -273.15)
+                })
+        {
+            return Err(invalid(
+                "thermal bridge needs the actual complete thermal path domains",
+            ));
+        }
         let mut work = Work::default();
         work.add(context.source.patches.len() * 3)?;
         let mut hits: Vec<Vec<(usize, &Hit)>> = vec![Vec::new(); context.source.patches.len()];
@@ -407,7 +454,7 @@ impl Request {
         }
         let mut used = BTreeSet::new();
         let mut physical_segments: Vec<[Vec3; 2]> = Vec::new();
-        let mut body_power = vec![0_f64; context.baseline.body.len()];
+        let mut body_power = vec![0_f64; context.projection.layout.body_triangles.len()];
         let mut path_reports = Vec::new();
         let mut roundoff_length_bound = 0_f64;
         for path in &self.paths {
@@ -456,7 +503,7 @@ impl Request {
             }
             let mut contributions = Vec::new();
             let mut power = 0_f64;
-            let mut qualified = BTreeMap::new();
+            let mut qualified: BTreeMap<usize, (&Qualification, Option<String>)> = BTreeMap::new();
             let identities: BTreeMap<_, _> = path
                 .qualifications
                 .iter()
@@ -499,8 +546,10 @@ impl Request {
                         if cut[0] >= portion.interval[0] - ROUND
                             && cut[1] <= portion.interval[1] + ROUND
                         {
-                            let q = if let Some(&q) = qualified.get(&portion.region) {
-                                q
+                            let (q, additional) = if let Some(value) =
+                                qualified.get(&portion.region)
+                            {
+                                value.clone()
                             } else {
                                 work.add(
                                     path.qualifications.len()
@@ -510,10 +559,14 @@ impl Request {
                                             + 1),
                                 )?;
                                 let q = context.qualification(path, portion.region, path_length)?;
-                                qualified.insert(portion.region, q);
-                                q
+                                let additional = context
+                                    .additional_qualification
+                                    .map(|qualify| qualify(path, q, portion.region))
+                                    .transpose()?;
+                                qualified.insert(portion.region, (q, additional.clone()));
+                                (q, additional)
                             };
-                            candidates.push((portion, q));
+                            candidates.push((portion, q, additional));
                         }
                     }
                     if candidates.is_empty() {
@@ -525,10 +578,11 @@ impl Request {
                     let first_body =
                         context.projection.layout.regions[candidates[0].0.region].body_triangle;
                     let first_boundary = context.boundaries[first_body];
-                    for (portion, q) in &candidates[1..] {
+                    for (portion, q, additional) in &candidates[1..] {
                         let body = context.projection.layout.regions[portion.region].body_triangle;
                         let boundary = context.boundaries[body];
                         if &identities[q.id.as_str()] != identity
+                            || additional != &candidates[0].2
                             || boundary.inside_c != first_boundary.inside_c
                             || boundary.outside_c != first_boundary.outside_c
                             || boundary.inside_resistance != first_boundary.inside_resistance
@@ -539,14 +593,14 @@ impl Request {
                             ));
                         }
                     }
-                    candidates.sort_by_key(|(p, _)| {
+                    candidates.sort_by_key(|(p, _, _)| {
                         (
                             context.projection.layout.regions[p.region].body_triangle,
                             p.region,
                             p.triangle,
                         )
                     });
-                    let (portion, q) = candidates[0];
+                    let (portion, q, additional) = &candidates[0];
                     let region = &context.projection.layout.regions[portion.region];
                     let b = context.boundaries[region.body_triangle];
                     let part_length = product(length, cut[1] - cut[0])?;
@@ -555,13 +609,15 @@ impl Request {
                     power = add(power, part_power)?;
                     body_power[region.body_triangle] =
                         add(body_power[region.body_triangle], part_power)?;
-                    contributions.push(
-                        json!({"edge":edge,"edge_fraction":cut,"source_triangle":portion.triangle,
+                    let mut contribution = json!({"edge":edge,"edge_fraction":cut,"source_triangle":portion.triangle,
                         "body_triangle":region.body_triangle,"region":region.id,
                         "qualification_id":q.id,"qualification_sha256":identity,
                         "length_m":part_length,"conductance_w_k":conductance,
-                        "inside_c":b.inside_c,"outside_c":b.outside_c,"power_w":part_power}),
-                    );
+                        "inside_c":b.inside_c,"outside_c":b.outside_c,"power_w":part_power});
+                    if let Some(identity) = additional {
+                        contribution["temporal_qualification_sha256"] = json!(identity);
+                    }
+                    contributions.push(contribution);
                 }
             }
             if !power.is_finite() {
@@ -575,21 +631,38 @@ impl Request {
         let bridge_power = body_power
             .iter()
             .try_fold(0., |sum, &value| add(sum, value))?;
-        let total = add(context.baseline.power_w, bridge_power)?;
-        if !bridge_power.is_finite() || !total.is_finite() || !roundoff_length_bound.is_finite() {
+        if !bridge_power.is_finite() || !roundoff_length_bound.is_finite() {
             return Err(invalid("thermal bridge total power is not representable"));
         }
-        let body: Vec<_> = body_power.iter().zip(&context.baseline.body).enumerate().map(|(i, (&q, b))|
+        Ok(Excess {
+            power_w: bridge_power,
+            body_power_w: body_power,
+            paths: path_reports,
+            geometry_operations: work.0,
+            ownership_roundoff_length_bound_m: roundoff_length_bound,
+        })
+    }
+
+    pub(super) fn evaluate(
+        &self,
+        context: Context<'_>,
+        baseline: &CoverageSolution,
+    ) -> Result<Value, Refusal> {
+        let model_sha256 = context.model_sha256;
+        let excess = self.evaluate_excess(context)?;
+        let bridge_power = excess.power_w;
+        let total = add(baseline.power_w, bridge_power)?;
+        let body: Vec<_> = excess.body_power_w.iter().zip(&baseline.body).enumerate().map(|(i, (&q, b))|
             Ok(json!({"body_triangle":i,"baseline_power_w":b.power_w,"bridge_power_w":q,"total_power_w":add(b.power_w,q)?})))
             .collect::<Result<_, Refusal>>()?;
         Ok(
             json!({"schema":"ftx-steady-thermal-bridge-result/1","model":MODEL,
-            "surface_model_sha256":context.model_sha256,"baseline_power_w":context.baseline.power_w,
+            "surface_model_sha256":model_sha256,"baseline_power_w":baseline.power_w,
             "bridge_power_w":bridge_power,"total_power_w":total,"inside_excess_power_w":bridge_power,
             "outside_excess_power_w":bridge_power,"excess_balance_residual_w":0.,
-            "summation_residual_w":total-context.baseline.power_w-bridge_power,
-            "body":body,"paths":path_reports,"geometry_operations":work.0,
-            "ownership_roundoff_length_bound_m":roundoff_length_bound,
+            "summation_residual_w":total-baseline.power_w-bridge_power,
+            "body":body,"paths":excess.paths,"geometry_operations":excess.geometry_operations,
+            "ownership_roundoff_length_bound_m":excess.ownership_roundoff_length_bound_m,
             "ownership_policy":"partition each current mesh-edge length once using its local prescribed reservoirs; shared boundaries choose lowest body/region/source-triangle only when exact physical qualification and reservoir conditions agree",
             "reference_basis":BASIS,"storage_modeled":false,"uncertainty_propagated":false,
             "empirical_validation_claim":false,

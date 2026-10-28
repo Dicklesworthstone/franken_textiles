@@ -524,6 +524,22 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       metric(h?.physical_stored_change_j ?? h?.stored_change_j), metric(h?.balance_error_j),
       name === "transient_surface" ? "Not applicable" : metric(h?.signed_remap_residual_j)]);
     detail(parent, `${key}: ${label} temperature history, source and energy accounting (display only)`, h || { refusal: output?.refusal || dependency?.refusal });
+    if (h?.thermal_bridges) {
+      const bridges = h.thermal_bridges;
+      const energy = table(parent, `${key}: seam and closure heat during motion`,
+        ["Baseline inside energy (J)", "Signed bridge excess (J)", "Total inside energy (J)",
+          "Baseline outside energy (J)", "Total outside energy (J)"]);
+      cells(energy, [metric(bridges.baseline_inside_energy_j), metric(bridges.bridge_energy_j),
+        metric(bridges.total_inside_energy_j), metric(bridges.baseline_outside_energy_j), metric(bridges.total_outside_energy_j)]);
+      const scope = document.createElement("p");
+      scope.textContent = "These seam and closure paths use an independently qualified zero-storage exchange law. " +
+        "Their actual length and body ownership are checked at each accepted motion endpoint, with live textile temperatures and the full interval inside the source domain. " +
+        "The same signed excess energy is added to the inside and outside boundary ledgers; baseline textile temperature, sensible storage and net boundary energy remain unchanged. " +
+        "The ordinary inside-energy comparison objective uses the total. This model does not infer seam heat capacity or a time-dependent law from a steady measurement. " +
+        "A later source or geometry failure refuses the complete affected heat history.";
+      parent.append(scope);
+      detail(parent, `${key}: moving bridge qualifications, geometry and signed energy history (display only)`, bridges);
+    }
     if (h?.surface_water) {
       const water = h.surface_water;
       const condensing = water.schema === "ftx-textile-surface-water-result/3";
@@ -1040,27 +1056,55 @@ function designComparison(op, parent, study) {
   const grid = study.design_search;
   if (grid) {
     if (grid.schema === "ftx-design-adaptive-search/1") {
-      const search = table(parent, "Fit-directed adaptive alteration search", ["Fit evaluations", "Passed flat gates",
-        "Selected for consumers", "Stop reason", "Best maximum violation (mm)", "Best total violation (mm)"]);
-      cells(search, [metric(grid.evaluations), metric(grid.qualified_designs), metric(grid.selected_designs),
-        grid.stop_reason?.replaceAll("_", " ") ?? "Unknown", metric(grid.best_max_fit_band_violation_mm),
-        metric(grid.best_total_fit_band_violation_mm)]);
+      const guidance = grid.consumer_guidance;
+      if (guidance) {
+        const search = table(parent, "Consumer-guided adaptive alteration search", ["Fit evaluations", "Consumer probes",
+          "Planned callback slots (upper bound)", "Selected geometries", "Stop reason", "Best trial", "Best objective"]);
+        const reading = guidance.best_reading;
+        cells(search, [metric(grid.evaluations), metric(guidance.evaluations), metric(guidance.reserved_evaluations),
+          metric(grid.selected_designs), grid.stop_reason?.replaceAll("_", " ") ?? "Unknown",
+          guidance.best_trial_key ?? "Unknown", reading ? `${metric(reading.value)} ${reading.unit}` : "Unknown"]);
+        const objective = document.createElement("p");
+        objective.textContent = `Guidance material: ${guidance.material_key ?? "Unknown"}. ` +
+          `Declared objective: ${guidance.objective?.metric ?? "Unknown"} (${guidance.objective?.direction ?? "Unknown"}). ` +
+          "Rust evaluates the nominated material with the ordinary manufacturing and requested scenario consumers. " +
+          "Existing source admission, required consumers, protocol rules and inclusive constraints govern each probe. " +
+          "Callback slots are an upper bound on attempted work, not a preapproved simulation allowance; cumulative consumer budgets still apply.";
+        parent.append(objective);
+      } else {
+        const search = table(parent, "Fit-directed adaptive alteration search", ["Fit evaluations", "Passed flat gates",
+          "Selected for consumers", "Stop reason", "Best maximum violation (mm)", "Best total violation (mm)"]);
+        cells(search, [metric(grid.evaluations), metric(grid.qualified_designs), metric(grid.selected_designs),
+          grid.stop_reason?.replaceAll("_", " ") ?? "Unknown", metric(grid.best_max_fit_band_violation_mm),
+          metric(grid.best_total_fit_band_violation_mm)]);
+      }
       const scope = document.createElement("p");
-      scope.textContent = "The adaptive search uses unrounded distances outside your declared fit bands to choose the next alteration values. " +
+      scope.textContent = (guidance ?
+        "Flat geometry and selected-body fit gates precede every consumer probe. The search keeps better admitted geometries while polling the declared domain; " +
+        "all trials remain inspectable, including displaced candidates and failed probes. Selected geometries are then crossed with the authored material choices. " :
+        "The adaptive search uses unrounded distances outside your declared fit bands to choose the next alteration values. ") +
         "Its bounds and step sizes define where it can search; the stopping reason does not prove that unvisited values are infeasible " +
         "or that a global optimum was found. Selected designs use the ordinary manufacturing and scenario consumers, and the original baseline remains visible. " +
         "Computed target compliance does not establish physical garment fit.";
       parent.append(scope);
       const trials = table(parent, "Adaptive alteration trials", ["Pattern design", "Variables (mm)",
-        "Maximum violation (mm)", "Total violation (mm)", "Flat admission", "Downstream selection", "Reason"]);
+        "Maximum violation (mm)", "Total violation (mm)", "Flat admission",
+        ...(guidance ? ["Consumer admission", "Declared objective"] : []), "Downstream selection", "Reason"]);
       for (const [i, row] of (grid.rows || []).entries()) {
         const design = row.design || {}, fit = available(design.fit);
         const passed = design.validation?.passed === true && fit?.passed === true;
+        const candidate = row.consumer_comparison, reading = candidate?.readings?.[guidance?.objective?.metric];
+        const reasons = [row.refusal?.message, row.consumer_refusal?.message,
+          ...(candidate?.exclusions || []).map(e => e.message)]
+          .filter((message, index, all) => message && all.indexOf(message) === index).join("; ");
         cells(trials, [design.key ?? "Unknown",
           design.variables_mm ? Object.entries(design.variables_mm).map(([key, value]) => `${key}: ${metric(value)}`).join("; ") : "Unknown",
           metric(row.max_fit_band_violation_mm), metric(row.total_fit_band_violation_mm),
-          passed ? "Passed declared flat gates" : "Refused", row.selected === true ? "Selected" : "Not selected",
-          row.refusal?.message || (passed ? "Passed declared targets" : "Inspect retained validation")]);
+          passed ? "Passed declared flat gates" : "Refused",
+          ...(guidance ? [candidate ? (candidate.eligible ? "Eligible" : "Excluded") : "Not attempted",
+            reading ? `${metric(reading.value)} ${reading.unit}` : "Unknown"] : []),
+          row.selected === true ? "Selected" : "Not selected",
+          reasons || (passed ? "Passed declared targets" : "Inspect retained validation")]);
         if (typeof design.altered_pattern_json === "string") {
           const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
           link(op, actions, {name: `adaptive-design-${i + 1}-pattern.json`, text: design.altered_pattern_json, mime: "application/json"});

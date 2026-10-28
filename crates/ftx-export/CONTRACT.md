@@ -76,6 +76,21 @@ continuous/global optimality claim. Tests: real mass/constraint/source/reservati
 `design_study/adaptive` and real selected-body sewn-scenario guidance/cache replay through both CLIs
 and the portable authority in `accepted_body_workflow/consumer_adaptive`.
 
+**Moving zero-storage bridge decisions** (`motion.transient_coverage.thermal_bridges`). Existing
+incoming-coverage energy objectives consume the complete signed baseline-plus-excess result. A
+separate temporal qualification binds the exact steady excess observation, actual elapsed/sample
+time, reservoir films and live material-temperature domain. Admission retains the export crate's
+independence from drape solvers: it reconciles production source hashes, accepted edge lengths and
+complete edge partitions, selected stack/temporal qualifications, per-body powers and every signed
+interval/cumulative energy. Late, absent, injected or changed bridge data excludes that heat
+consumer, without discarding independent manufacturing or mechanics. Equal bridge boundary terms
+never enter physical storage; source/storage balance uses the retained baseline sides so rounding
+of large cancelling totals cannot invent or erase stored heat. Consumed source protocols enter the
+existing mixed-protocol gate. Core ownership/projection remains in ftx-drape; no second physical
+solver, bridge heat capacity or empirical seam/garment performance is inferred. Tests: direct live
+temperature/length/time/conservation/budget regressions and actual selected-body single/matrix
+native/portable replay with thermal-frontier change and tampered-receipt exclusions.
+
 **Finite-water scenario decisions.** The optional `motion_wet_film` comparison consumer reads
 evaporated, remaining, unmet-demand and supplied mass plus prescribed-body latent energy from a
 complete admitted moving-coverage history. It verifies exact authored body-bound liquid/supply,

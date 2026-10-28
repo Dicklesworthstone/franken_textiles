@@ -134,7 +134,12 @@ mod tests {
     #[test]
     fn legal_shared_features_complete_at_the_exact_budget() {
         let (vertices, triangles) = tetrahedron();
-        assert_eq!(audit_surface(&vertices, &triangles, 6).unwrap().pairs_tested, 6);
+        assert_eq!(
+            audit_surface(&vertices, &triangles, 6)
+                .unwrap()
+                .pairs_tested,
+            6
+        );
         assert_eq!(
             audit_surface(&vertices, &triangles, 5).unwrap_err().code,
             RefusalCode::BudgetExceeded

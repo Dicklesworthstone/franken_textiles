@@ -169,9 +169,11 @@ contributions before summing them. A centerline lying exactly on a shared bounda
 identical incident qualifications and reservoir conditions, because the geometry alone cannot
 choose between conflicting physical environments.
 
-This version rejects exterior convection/radiation replacement and accepts no transient bridge
-request. Independent transient
-sheet models retain their own scope and acquire no seam storage or dynamics from this steady policy.
+This steady policy rejects exterior convection/radiation replacement. Moving coverage can now
+consume the same reference observations only through a separate, explicitly sourced
+[zero-storage exchange qualification](moving-thermal-bridges.md). A steady observation by itself
+never becomes a temporal law. Independent transient sheet models retain their own scope and acquire
+no seam storage or dynamics from this policy.
 The model supplies no generic heterogeneous seam microgeometry, finite replacement-area closure,
 bridge interaction law, fitted fabric property, physical seam validation or wearer comfort rating.
 Omitting the policy preserves the ordinary coverage result and its serialization.

@@ -218,18 +218,41 @@ impl Request {
             .thermal_bridges
             .as_ref()
             .map(|policy| {
-                policy.evaluate(super::bridges::Context {
-                    source: &assembly.source,
-                    cloth: &cloth,
-                    projection: &projection,
-                    baseline: &solution,
-                    boundaries: &boundaries,
-                    instances: &instances,
-                    owners: &owners,
-                    model_sha256: frame["model"]["sha256"].as_str().ok_or_else(|| {
-                        invalid("thermal bridge needs the retained source model identity")
-                    })?,
-                })
+                let domains: Vec<_> = solution
+                    .regions
+                    .iter()
+                    .map(|region| {
+                        let mut temperatures = [f64::INFINITY, f64::NEG_INFINITY];
+                        for &t in region.conduction.layer_faces_c.iter().flatten() {
+                            temperatures[0] = temperatures[0].min(t);
+                            temperatures[1] = temperatures[1].max(t);
+                        }
+                        super::bridges::Domain {
+                            layer_area_ratios: region
+                                .layer_area_m2
+                                .iter()
+                                .map(|a| a / region.body_area_m2)
+                                .collect(),
+                            temperature_range_c: temperatures,
+                        }
+                    })
+                    .collect();
+                policy.evaluate(
+                    super::bridges::Context {
+                        source: &assembly.source,
+                        cloth: &cloth,
+                        projection: &projection,
+                        domains: &domains,
+                        boundaries: &boundaries,
+                        instances: &instances,
+                        owners: &owners,
+                        model_sha256: frame["model"]["sha256"].as_str().ok_or_else(|| {
+                            invalid("thermal bridge needs the retained source model identity")
+                        })?,
+                        additional_qualification: None,
+                    },
+                    &solution,
+                )
             })
             .transpose()?;
         if let Some(bridges) = &bridges {
