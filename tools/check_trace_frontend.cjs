@@ -74,7 +74,9 @@ test('initialization rejection is visible without any user request', async () =>
 });
 
 class Element {
-  constructor() { this.value = ''; this.files = []; this.children = []; this.handlers = {}; this.checked = false; }
+  constructor() { this._value = ''; this.files = []; this.children = []; this.handlers = {}; this.checked = false; }
+  get value() { return this._value; }
+  set value(v) { this._value=this.type==='textarea'?v.replace(/\r\n?/g,'\n'):v; if(this.type==='file' && v==='')this.files=[]; }
   addEventListener(name, fn) { this.handlers[name] = fn; }
   append(...items) { this.children.push(...items); }
   replaceChildren(...items) { this.children = items; }
@@ -83,10 +85,11 @@ async function pageModule() {
   const elements = Object.fromEntries([...read('trace.html').matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
   const source = ['image', 'channel', 'threshold', 'invert', 'stroke', 'area', 'crop', 'dashes'].map(k => elements[k]);
   const edits = ['names', 'targets', 'labels'].map(k => elements[k]);
+  edits.forEach(e=>{e.type='textarea';});if(elements.draftFile)elements.draftFile.type='file';
   Object.assign(elements.channel, { value: 'auto' });
   elements.threshold.value = 'otsu'; elements.invert.value = 'auto'; elements.area.value = '0.01';
   elements.names.value = '{}'; elements.targets.value = elements.labels.value = '[]';
-  const workers = [], live = new Set(); let next = 0;
+  const workers = [], live = new Set(), blobs = new Map(); let next = 0;
   class Worker {
     constructor() { this.messages = []; this.dead = false; workers.push(this); }
     postMessage(message) { assert.equal(this.dead, false); this.messages.push(message); }
@@ -94,9 +97,9 @@ async function pageModule() {
     emit(message) { this.onmessage({ data: message }); }
   }
   class LocalURL extends URL {}
-  LocalURL.createObjectURL = () => { const id = `blob:${++next}`; live.add(id); return id; };
-  LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true); };
-  const context = vm.createContext({ Worker, URL: LocalURL, Blob, TextEncoder, Uint8Array, JSON, Number,
+  LocalURL.createObjectURL = blob => { const id = `blob:${++next}`; live.add(id);blobs.set(id,blob);return id; };
+  LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true);blobs.delete(id); };
+  const context = vm.createContext({ Worker, URL: LocalURL, Blob, TextEncoder, TextDecoder, Uint8Array, JSON, Number,
     document: {
       getElementById: id => { assert.ok(elements[id], `missing HTML id ${id}`); return elements[id]; },
       querySelectorAll: q => q.startsWith('#source') ? source : edits,
@@ -113,12 +116,57 @@ async function pageModule() {
     elements.image.handlers.change(); current().emit({ type: 'ready' });
   };
   const result = request => ({ type: 'result', request,
-    report: { scale_status: 'UNSCALED', audit: { summary: { ok: false } },
+    report: { source_sha256:'a'.repeat(64),scale_status: 'UNSCALED', audit: { summary: { ok: false } },
       pieces: [{ id: '<tag>', edges: ['e1'], vertices: ['c1'] }], no_claim: 'review only' },
     files: [{ name: 'pattern.json', bytes: new Uint8Array([1, 2]) }]
   });
-  return { e: elements, workers, current, select, result, live };
+  const trace=async()=>{await elements.trace.onclick();current().emit(result(current().messages.at(-1).request));};
+  return { e: elements, workers, current, select, result, live,blobs,trace };
 }
+
+test('tracing edit drafts retain exact text before applying and after native refusal',async()=>{
+  const p=await pageModule();assert.ok(p.e.saveDraft,'Save unfinished tracing edits');p.select();await p.trace();
+  p.e.names.value='{';p.e.names.handlers.input();p.e.saveDraft.onclick();
+  const a=p.e.draftDownloads.children[0];assert.ok(a);const text=await p.blobs.get(a.href).text(),draft=JSON.parse(text);
+  assert.equal(draft.schema,'ftx-trace-edits/1');assert.equal(draft.source_sha256,'a'.repeat(64));assert.equal(draft.names,'{');
+  assert.equal(p.e.results.hidden,true);p.e.names.value='{}';p.e.names.handlers.input();assert.equal(p.e.draftDownloads.children.length,0);
+  const raw=' {\r\n"pieces":{}\r\n}\r\n';draft.names=raw;
+  const input=s=>({size:Buffer.byteLength(s),arrayBuffer:async()=>new TextEncoder().encode(s).buffer});
+  p.e.draftFile.files=[input(JSON.stringify(draft))];await p.e.draftFile.handlers.change();
+  assert.equal(p.e.names.value,raw.replace(/\r\n/g,'\n'));assert.equal(p.e.draftFile.files.length,0);
+  p.e.labels.value='[ ]';p.e.labels.handlers.input();p.e.apply.onclick();
+  assert.equal(p.current().messages.at(-1).names,raw,'Editing another field preserves original source');
+  p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'bad edit'});
+  p.e.saveDraft.onclick();assert.equal(JSON.parse(await p.blobs.get(p.e.draftDownloads.children[0].href).text()).names,raw);
+  p.e.names.handlers.input();p.e.apply.onclick();assert.equal(p.current().messages.at(-1).names,p.e.names.value);
+});
+
+test('tracing edit draft reads are atomic, bounded and discard late completions',async()=>{
+  const p=await pageModule();assert.ok(p.e.draftFile,'Restore tracing edits');p.select();await p.trace();
+  p.e.saveDraft.onclick();const draft=JSON.parse(await p.blobs.get(p.e.draftDownloads.children[0].href).text());
+  const input=s=>({size:Buffer.byteLength(s),arrayBuffer:async()=>new TextEncoder().encode(s).buffer});
+  for(const bad of [null,[],{}, {...draft,source_sha256:'b'.repeat(64)},{...draft,options:'{}'},
+    {...draft,names:7},{...draft,extra:true},{...draft,names:'x'.repeat(256*1024+1)}]){
+    p.e.draftFile.files=[input(JSON.stringify(bad))];await p.e.draftFile.handlers.change();
+    assert.equal(p.e.names.value,'{}');assert.equal(p.e.targets.value,'[]');assert.equal(p.e.labels.value,'[]');assert.equal(p.e.error.hidden,false);
+  }
+  let reads=0;p.e.draftFile.files=[{size:8*1024*1024+1,arrayBuffer:async()=>{reads++;return new ArrayBuffer(0);}}];await p.e.draftFile.handlers.change();assert.equal(reads,0);
+  for(const bytes of [new Uint8Array([255]),new TextEncoder().encode('\ufeff{}'),new TextEncoder().encode('{')]){
+    p.e.draftFile.files=[{size:bytes.length,arrayBuffer:async()=>bytes.buffer}];await p.e.draftFile.handlers.change();assert.equal(p.e.error.hidden,false);
+  }
+  for(const reject of [false,true])for(const change of ['source','cancel','edit','replacement']){
+    const q=await pageModule();q.select();await q.trace();let finish;
+    const read=new Promise((resolve,fail)=>{finish=()=>reject?fail(Error('late read')):resolve(new TextEncoder().encode(JSON.stringify({...draft,names:'{"old":true}'})).buffer);});
+    q.e.draftFile.files=[{size:200,arrayBuffer:()=>read}];const old=q.e.draftFile.handlers.change();
+    if(change==='source'){q.e.channel.handlers.change();q.current().emit({type:'ready'});await q.trace();}
+    if(change==='cancel'){q.e.cancel.onclick();q.current().emit({type:'ready'});await q.trace();}
+    if(change==='edit'){q.e.names.value='{"new":true}';q.e.names.handlers.input();}
+    if(change==='replacement'){q.e.draftFile.files=[input(JSON.stringify({...draft,names:'{"new":true}'}))];await q.e.draftFile.handlers.change();}
+    q.e.apply.onclick();const worker=q.current(),before=q.e.names.value,id=worker.messages.at(-1).request;
+    finish();await old;assert.equal(q.e.names.value,before,change);assert.equal(q.e.cancel.disabled,false,change);
+    worker.emit(q.result(id));assert.equal(q.e.results.hidden,false,change);
+  }
+});
 
 test('page invalidates edited downloads and ignores wrong request identities', async () => {
   const p = await pageModule(); p.select();

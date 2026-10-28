@@ -68,8 +68,24 @@ them (`ftx_trace::raster::{jpeg, webp}`, ports of libjpeg-turbo's and libwebp's 
 budget is checked before any raster is allocated). A WebP's transparency is composited on white, as
 `load_image` does; an animated WebP gives its first frame, as `Image.open` shows it. Like the reference,
 the trace ignores EXIF rotation. The review's `pattern.json` is byte for byte the file `vectorize.py
-annotate` and then `scale-fit` write (`ftx_trace::py_order`). Inferred labels, interactive curve editing
-and restoring a saved session are not implemented here.
+annotate` and then `scale-fit` write (`ftx_trace::py_order`). Inferred labels and interactive curve
+editing are not implemented here.
+
+**Save edits draft** downloads unfinished names, scale targets and audit labels before or
+after applying them. To reopen it, select the original image, choose the original tracing
+settings and **Trace sheet**, then **Load edits draft**. Loading checks the encoded image's
+SHA-256 and exact tracing-options text before replacing all three editors. It does not apply
+the edits; use **Apply edits and audit** and review all ordinary scale/audit findings. Invalid
+JSON inside an editor can be saved for repair; it remains invalid when the Rust review runs.
+Drafts contain no source image, cutting approval or body-fit evidence. Keep them privately.
+
+The browser draft object has exactly six fields: `schema: "ftx-trace-edits/1"`,
+`source_sha256`, and the original `options`, `names`, `targets`, `labels` JSON texts as strings.
+The whole file is at most 8 MiB, each editor text at most 256 KiB. Restored editor text is
+passed unchanged to Rust until that editor is changed. Wrong-source/settings or malformed
+drafts preserve current edits; cancellation/source changes discard late reads. Editing
+withdraws a prepared draft link, so prepare a fresh download after editing. A hand-edited
+draft is not an authenticity certificate or an oracle fixture.
 
 The APIs are `tracing::Sheet::{new,review}` (native-testable, no I/O) and
 `WebTrace`/`WebTraceReview` (the wasm-bindgen boundary). Five native workflow tests

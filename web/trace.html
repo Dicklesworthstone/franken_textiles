@@ -48,6 +48,13 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; max-hei
 <label>Scale targets JSON<textarea id="targets" spellcheck="false">[]</textarea></label>
 <details><summary>Optional printed-label evidence for the audit</summary><p>Use the native audit's <code>labels.json</code> list. Keep <code>[]</code> when no printed dimension evidence has been transcribed.</p><label>Audit labels JSON<textarea id="labels" spellcheck="false">[]</textarea></label></details>
 <p>Each application starts from the original trace: repeating a scale or mirror operation does not accumulate it.</p>
+<p><button id="saveDraft" type="button" disabled>Save edits draft</button>
+<label>Load edits draft<input id="draftFile" type="file" accept=".json,application/json" disabled></label></p>
+<p>Save unfinished editor text, including JSON that still needs repair. To reopen it, trace the original
+image with the same tracing settings first. Loading replaces all three editors together without applying
+them; the existing audit and scale checks still run when you apply. Drafts contain no source image or
+cutting approval. Limit: 8 MiB overall, 256 KiB per editor. Keep drafts privately.</p>
+<div id="draftDownloads"></div>
 <button id="apply" class="primary" type="button" disabled>Apply edits and audit</button></section>
 <p class="row"><button id="cancel" type="button" disabled>Cancel and reset engine</button><span id="status" role="status" aria-live="polite"></span></p>
 <p id="error" role="alert" hidden></p>

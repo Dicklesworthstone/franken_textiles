@@ -5,16 +5,25 @@ const sourceControls = [...document.querySelectorAll("#source input, #source sel
 const editControls = [...document.querySelectorAll("#edits textarea")];
 let worker, epoch = 0, request = 0, pending = null;
 let ready = false, busy = false, hasSheet = false;
-const urls = [];
+let sheetSource = null, traceOptions = null, restoredEdits = null, draftLoading = false;
+const urls = [], draftUrls = [], editFields = ["names", "targets", "labels"];
+const editText = id => restoredEdits?.[id]?.displayed === $(id).value ? restoredEdits[id].text : $(id).value;
 
 function controls() {
   for (const element of [...sourceControls, ...editControls]) element.disabled = busy;
   $("trace").disabled = busy || !ready || !$("image").files.length;
   $("apply").disabled = busy || !ready || !hasSheet;
   $("cancel").disabled = !busy;
+  $("saveDraft").disabled = busy || !hasSheet || !sheetSource?.source_sha256;
+  $("draftFile").disabled = !hasSheet || !sheetSource?.source_sha256 || (busy && !draftLoading);
 }
 
+function clearDraft() {
+  $("draftDownloads").replaceChildren();
+  for(const url of draftUrls.splice(0)) URL.revokeObjectURL(url);
+}
 function clearResults() {
+  clearDraft();
   $("results").hidden = true;
   $("files").replaceChildren();
   $("pictures").replaceChildren();
@@ -28,6 +37,7 @@ function error(message) {
   $("error").hidden = false;
   $("status").textContent = "No current review was published.";
   busy = false;
+  draftLoading = false;
   pending = null;
   controls();
 }
@@ -36,6 +46,7 @@ function startWorker() {
   if (worker) worker.terminate();
   const generation = ++epoch;
   hasSheet = ready = busy = false;
+  sheetSource = traceOptions = restoredEdits = null; draftLoading = false;
   pending = null;
   clearResults();
   $("error").hidden = true;
@@ -65,6 +76,7 @@ function startWorker() {
     if (msg.type === "result") {
       busy = false;
       pending = null;
+      if(!hasSheet) sheetSource = { source_sha256: msg.report.source_sha256, options: traceOptions };
       hasSheet = true;
       show(msg);
       controls();
@@ -78,6 +90,7 @@ function startWorker() {
 }
 
 function begin() {
+  draftLoading = false;
   clearResults();
   $("error").hidden = true;
   busy = true;
@@ -115,11 +128,13 @@ function imageOptions() {
 $("trace").onclick = async () => {
   const id = begin(), generation = epoch;
   hasSheet = false;
+  sheetSource = restoredEdits = null;
   $("names").value = "{}"; $("targets").value = "[]"; $("labels").value = "[]";
   try {
     const file = $("image").files[0];
     if (!file || file.size > 16 * 1024 * 1024) throw new Error("Select a PNG, JPEG or WebP no larger than 16 MiB.");
     const options = imageOptions();
+    traceOptions = options;
     const bytes = await file.arrayBuffer();
     if (generation !== epoch || pending !== id) return;
     worker.postMessage({ type: "trace", request: id, bytes, options }, [bytes]);
@@ -130,7 +145,7 @@ $("trace").onclick = async () => {
 
 $("apply").onclick = () => {
   const id = begin();
-  const names = $("names").value, targets = $("targets").value, labels = $("labels").value;
+  const names = editText("names"), targets = editText("targets"), labels = editText("labels");
   if ([names, targets, labels].some((s) => new TextEncoder().encode(s).length > 256 * 1024)) {
     error("Each JSON input must be at most 256 KiB.");
     return;
@@ -144,9 +159,52 @@ for (const input of sourceControls) input.addEventListener("change", () => {
   $("names").value = "{}"; $("targets").value = "[]"; $("labels").value = "[]";
   startWorker();
 });
-for (const input of editControls) input.addEventListener("input", () => {
+for (const id of editFields) $(id).addEventListener("input", () => {
+  if(restoredEdits) delete restoredEdits[id];
+  if(draftLoading) { pending = null; busy = draftLoading = false; controls(); }
   clearResults();
   $("status").textContent = "Edits have changed. Apply them to produce a new review.";
+});
+
+function checkDraftEdits(draft) {
+  for(const id of editFields) if(typeof draft[id]!=="string" || new Blob([draft[id]]).size>256*1024) {
+    throw Error("Each draft editor must be UTF-8 text of at most 256 KiB.");
+  }
+}
+$("saveDraft").onclick = () => {
+  if(busy || !hasSheet || !sheetSource?.source_sha256) return;
+  clearDraft();
+  try {
+    const draft={schema:"ftx-trace-edits/1",...sheetSource,...Object.fromEntries(editFields.map(id=>[id,editText(id)]))};
+    checkDraftEdits(draft);
+    const text=JSON.stringify(draft,null,2);
+    if(new Blob([text]).size>8*1024*1024) throw Error("Tracing draft exceeds 8 MiB.");
+    const url=URL.createObjectURL(new Blob([text],{type:"application/json"})),a=document.createElement("a");
+    draftUrls.push(url);a.href=url;a.download="trace-edits.json";a.textContent="trace-edits.json";$("draftDownloads").append(a);
+    $("status").textContent="Edits draft ready to download; apply edits separately for a current review.";
+  } catch(e) {error(String(e.message || e));}
+};
+$("draftFile").addEventListener("change",async()=>{
+  const file=$("draftFile").files[0];
+  if(!file || !hasSheet || !sheetSource?.source_sha256 || (busy && !draftLoading)) return;
+  const id=begin(),generation=epoch;draftLoading=true;$("draftFile").value="";controls();
+  try {
+    if(file.size>8*1024*1024) throw Error("Tracing draft exceeds 8 MiB; no source was read.");
+    const bytes=await file.arrayBuffer();
+    if(generation!==epoch || pending!==id) return;
+    const draft=JSON.parse(new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(bytes));
+    if(!draft || draft.schema!=="ftx-trace-edits/1" || Object.keys(draft).length!==6 ||
+      draft.source_sha256!==sheetSource.source_sha256 || draft.options!==sheetSource.options) {
+      throw Error("Draft must match the original traced image and tracing settings.");
+    }
+    checkDraftEdits(draft);restoredEdits={};
+    for(const key of editFields) {$(key).value=draft[key];restoredEdits[key]={text:draft[key],displayed:$(key).value};}
+    busy=draftLoading=false;pending=null;controls();
+    $("status").textContent="Edits draft loaded. Apply edits and audit to produce a current review.";
+  } catch(e) {
+    if(generation!==epoch || pending!==id) return;
+    error(String(e.message || e));$("status").textContent="Draft not loaded; current edits are unchanged.";
+  }
 });
 
 function show({ report, files }) {
@@ -177,5 +235,5 @@ function show({ report, files }) {
   $("status").textContent = "Review ready. Inspect the scale residuals and every audit finding.";
 }
 
-window.addEventListener("beforeunload", () => { worker?.terminate(); for (const url of urls) URL.revokeObjectURL(url); });
+window.addEventListener("beforeunload", () => { worker?.terminate(); for (const url of [...urls,...draftUrls]) URL.revokeObjectURL(url); });
 startWorker();

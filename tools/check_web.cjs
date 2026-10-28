@@ -29,6 +29,7 @@ const calibrationSheets = arg("--calibration-sheets");
 const generatedSheets = arg("--generated-calibration-sheets");
 const evidenceReplay = arg("--measurement-evidence");
 const bodyCheckReplay = arg("--body-check");
+const traceEdits = process.argv.includes("--trace-edits");
 const timingArg = arg("--timings");
 const timingRuns = Number(timingArg || 0);
 if (process.argv.includes("--body-check") && (!bodyCheckReplay || model || evidenceReplay || standalone || timingArg)) {
@@ -51,6 +52,68 @@ const ftx = arg("--ftx") || path.join(root, "target/release/ftx");
 const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
 let failed = 0;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) failed++; };
+
+async function tracingEdits(browser, origin) {
+  const assert=require("node:assert/strict"),context=await browser.newContext({userAgent});
+  const errors=[],requests=[],work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-trace-drafts-"));
+  context.on("request",r=>requests.push({url:r.url(),method:r.method()}));
+  if(process.env.FTX_WASM_PKG) await context.route("**/pkg/*",async route=>{
+    const name=path.basename(new URL(route.request().url()).pathname);
+    assert.ok(["ftx_wasm.js","ftx_wasm_bg.wasm"].includes(name));
+    await route.fulfill({path:path.join(process.env.FTX_WASM_PKG,name),contentType:name.endsWith(".wasm")?"application/wasm":"text/javascript"});
+  });
+  const page=await context.newPage();page.on("pageerror",e=>errors.push(String(e)));
+  const cases=JSON.parse(fs.readFileSync(path.join(root,"tests/fixtures/oracle/trace/raster_trace.json"))).cases;
+  const image=Buffer.from(cases[0].input.png,"base64"),other=Buffer.from(cases.find(c=>c.input.png!==cases[0].input.png).input.png,"base64");
+  const download=async name=>{const event=page.waitForEvent("download");await page.click(`a[download="${name}"]`);const d=await event;assert.equal(await d.failure(),null);return fs.readFileSync(await d.path());};
+  const action=async id=>{await page.click("#"+id);await page.waitForFunction(()=>/^(Review ready|No current review)/.test(document.getElementById("status").textContent));};
+  const trace=async bytes=>{
+    await page.setInputFiles("#image",{name:"oracle.png",mimeType:"image/png",buffer:bytes});
+    await page.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Ready."));
+    await action("trace");assert.equal(await page.isVisible("#error"),false);
+  };
+  const load=async bytes=>{
+    await page.setInputFiles("#draftFile",{name:"trace-edits.json",mimeType:"application/json",buffer:bytes});
+    await page.waitForFunction(()=>/^(Edits draft loaded|Draft not loaded)/.test(document.getElementById("status").textContent));
+  };
+  try {
+    await page.goto(origin+"/trace.html");await trace(image);
+    assert.equal(await page.locator("#saveDraft").count(),1,"Reopen saved tracing edits");
+    assert.equal(JSON.parse(await page.textContent("#details")).source_sha256,sha(image));
+    await page.fill("#names",'{"pieces":{"p1":{"id":"front","name":"Front"}}}');
+    await page.fill("#targets",'[{"reference":"front/e1","target_mm":200}]');await action("apply");
+    assert.equal(await page.isVisible("#error"),false);
+    assert.equal(JSON.parse(await page.textContent("#details")).scale_status,"FITTED");
+    const pattern=await download("pattern.json");
+    await page.click("#saveDraft");const draft=JSON.parse(await download("trace-edits.json"));
+    assert.equal(draft.source_sha256,sha(image));draft.names=' \r\n'+draft.names+'\r\n';const bytes=Buffer.from(JSON.stringify(draft));
+    await page.reload();await trace(image);await load(bytes);
+    assert.match(await page.textContent("#status"),/^Edits draft loaded/);assert.equal(await page.isVisible("#results"),false);
+    assert.equal(await page.inputValue("#names"),draft.names.replace(/\r\n/g,"\n"));
+    await action("apply");assert.equal(await page.isVisible("#error"),false);
+    assert.ok((await download("pattern.json")).equals(pattern),"Fresh-page restore reproduces complete scaled pattern bytes");
+    await page.click("#saveDraft");assert.equal(JSON.parse(await download("trace-edits.json")).names,draft.names);
+    await page.screenshot({path:path.join(work,"trace-draft.png"),fullPage:true});
+    await trace(other);await load(bytes);assert.match(await page.textContent("#status"),/^Draft not loaded/);
+    assert.equal(await page.inputValue("#names"),"{}");assert.equal(await page.inputValue("#targets"),"[]");
+    await trace(image);await page.uncheck("#dashes");
+    await page.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Ready."));await action("trace");await load(bytes);
+    assert.match(await page.textContent("#status"),/^Draft not loaded/);assert.equal(await page.inputValue("#names"),"{}");
+    await page.check("#dashes");await page.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Ready."));await action("trace");
+    await page.fill("#names","{");await action("apply");assert.equal(await page.isVisible("#error"),true);
+    await page.click("#saveDraft");assert.equal(JSON.parse(await download("trace-edits.json")).names,"{");
+    await page.evaluate(()=>{const original=File.prototype.arrayBuffer;File.prototype.arrayBuffer=function(){return original.call(this).then(bytes=>new Promise(resolve=>{window.releaseDraft=()=>resolve(bytes);}));};});
+    await page.setInputFiles("#draftFile",{name:"delayed.json",mimeType:"application/json",buffer:bytes});
+    await page.waitForFunction(()=>typeof window.releaseDraft==="function");await page.click("#cancel");
+    await page.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Ready."));
+    await page.evaluate(async()=>{window.releaseDraft();await new Promise(resolve=>setTimeout(resolve,0));});
+    assert.equal(await page.inputValue("#names"),"{");assert.equal(await page.isVisible("#results"),false);
+    assert.equal(await page.isDisabled("#apply"),true);assert.deepEqual(errors,[]);
+    assert.ok(requests.every(r=>r.url.startsWith(origin+"/")&&r.method==="GET"));
+    assert.equal(await page.evaluate(()=>localStorage.length),0);
+    console.log("PASS tracing drafts: actual compiled-WASM scaled-pattern replay, exact editor source, wrong image/settings, native JSON refusal, save-after-refusal, cancellation and local-only controls. Artifacts:",work);
+  } finally {await context.close();}
+}
 
 async function measurementEvidence(page, settle, work, nativeDir) {
   const assert = require("node:assert/strict");
@@ -411,6 +474,11 @@ async function offlineViewer(browser, file) {
   const srv = spawn("python3", ["-m", "http.server", String(port), "-d", webDir], { stdio: ["ignore", "ignore", "inherit"] });
   await new Promise((r) => setTimeout(r, 1200));
   const browser = await chromium.launch();
+  if(traceEdits) {
+    try {await tracingEdits(browser,`http://localhost:${port}`);}
+    finally {await browser.close();srv.kill();}
+    return;
+  }
   if (calibrationSheets || generatedSheets) {
     try {
       if (generatedSheets) await generatedReferences(browser, `http://localhost:${port}`, path.resolve(generatedSheets));
