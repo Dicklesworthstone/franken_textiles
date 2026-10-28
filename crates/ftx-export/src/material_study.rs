@@ -266,9 +266,9 @@ pub struct Metrics {
     /// Complete declared serial feed, setup and handling time; excludes undeclared machine work.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sewing_modeled_production_seconds: Option<f64>,
-    /// Completion of the selected whole-garment parallel-cell allocation, in seconds from the
-    /// declared common origin. Includes cell availability and explicitly rounded cell feed time.
-    /// This is elapsed modeled makespan, not the sum of machine or handling work.
+    /// Completion of the selected whole-garment allocation or fixed specialist-cell route, in
+    /// seconds from the declared common origin. Includes the admitted availability, feed rounding
+    /// and resource model. This is elapsed modeled makespan, not summed machine or handling work.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sewing_parallel_makespan_seconds: Option<f64>,
     /// Complete source-qualified thread demand across every channel and production copy.

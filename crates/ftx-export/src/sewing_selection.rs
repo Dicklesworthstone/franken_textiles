@@ -9,7 +9,7 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_pattern::Pattern;
 use serde::{Deserialize, Serialize};
 
-use crate::sewing::{SewOptions, SewPlan, SewingPass, consumables, ordering};
+use crate::sewing::{SewOptions, SewPlan, SewingPass, consumables, ordering, production::routing};
 
 mod thread_cost;
 
@@ -68,8 +68,8 @@ pub enum Objective {
     MinimizeFeedAndSetupSeconds,
     /// Minimize serial feed, setup and source-qualified copy/operation handling, including endpoints.
     MinimizeModeledProductionSeconds,
-    /// Minimize elapsed whole-garment parallel-cell completion under the explicitly qualified
-    /// availability, independence and conservative millisecond planning policy.
+    /// Minimize elapsed whole-garment allocation or fixed-route specialist-cell completion under
+    /// the explicitly qualified availability, resource and millisecond planning policy.
     MinimizeParallelMakespan,
     /// Minimize complete source-locked thread orders from the shared consumables price result.
     /// Unknown consumption or incomplete eligible offer coverage cannot supply a score.
@@ -205,6 +205,12 @@ fn check_timing_choices(
         .chain(
             groups
                 .iter()
+                .filter(|group| {
+                    options
+                        .passes
+                        .iter()
+                        .any(|pass| pass.operation_id() == group.operation)
+                })
                 .filter(|group| fixed.is_none_or(|recipes| !recipes.contains_key(group.operation)))
                 .flat_map(|group| {
                     group.recipes.iter().map(|recipe| ordering::Setup {
@@ -341,6 +347,11 @@ impl Request {
             .production
             .as_ref()
             .and_then(|production| production.parallel.as_ref());
+        let routing = self
+            .options
+            .production
+            .as_ref()
+            .and_then(|production| production.routing.as_ref());
         if parallel.is_some_and(|policy| policy.model == "independent_whole_garment_cells/2")
             && matches!(
                 self.objective,
@@ -351,14 +362,17 @@ impl Request {
                 "heterogeneous cells allocate garments for minimum makespan; feed and thread cost depend on that allocation and cannot claim their own minimum; use minimize_parallel_makespan and inspect the actual feed and thread orders",
             ));
         }
-        if (timed || handled) && parallel.is_some() {
+        if (timed || handled) && (parallel.is_some() || routing.is_some()) {
             return Err(invalid(
-                "serial time objectives cannot score a parallel-cell plan; use minimize_parallel_makespan",
+                "serial time objectives cannot score a parallel-cell or routed plan; use minimize_parallel_makespan",
             ));
         }
-        if self.objective == Objective::MinimizeParallelMakespan && parallel.is_none() {
+        if self.objective == Objective::MinimizeParallelMakespan
+            && parallel.is_none()
+            && routing.is_none()
+        {
             return Err(invalid(
-                "parallel makespan selection requires a qualified production.parallel policy",
+                "parallel makespan selection requires a qualified production.parallel or production.routing policy",
             ));
         }
         if timed
@@ -384,7 +398,9 @@ impl Request {
                 "modeled production selection requires qualified handling, minimize_production_time ordering, explicit initial setup and setup times",
             ));
         }
-        if let Some(policy) = self.options.ordering_policy() {
+        if let Some(policy) = self.options.ordering_policy()
+            && routing.is_none()
+        {
             check_timing_choices(policy, &self.options, &groups, None)?;
         }
         if let Some(parallel) = parallel {
@@ -393,6 +409,17 @@ impl Request {
                 check_timing_choices(
                     &cell.ordering,
                     configured.as_ref().unwrap_or(&self.options),
+                    &groups,
+                    cell.configuration.as_ref().map(|source| &source.recipes),
+                )?;
+            }
+        }
+        if let Some(routing) = routing {
+            for cell in &routing.cells {
+                let configured = routing::source_options(cell, &self.options, &routing.route)?;
+                check_timing_choices(
+                    &cell.ordering,
+                    &configured,
                     &groups,
                     cell.configuration.as_ref().map(|source| &source.recipes),
                 )?;
@@ -422,6 +449,11 @@ impl Request {
         let mut selected_choices = None;
         let handled = self.objective == Objective::MinimizeModeledProductionSeconds;
         let parallel = self.objective == Objective::MinimizeParallelMakespan;
+        let routed = self
+            .options
+            .production
+            .as_ref()
+            .is_some_and(|production| production.routing.is_some());
         let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds || handled || parallel;
         let cost = self.objective == Objective::MinimizeThreadObservedOrderCost;
         let objective_currency = if cost {
@@ -476,7 +508,9 @@ impl Request {
                         }
                     } else if parallel {
                         let seconds = plan.parallel_makespan_seconds().ok_or_else(|| {
-                            invalid("admitted parallel recipe lost its complete cell allocation")
+                            invalid(
+                                "admitted multi-cell recipe lost its complete production schedule",
+                            )
                         })?;
                         trial.objective_seconds = Some(seconds);
                         trial.ordering_optimality_proven = plan.parallel_optimality_proven();
@@ -567,6 +601,8 @@ impl Request {
             no_feasible_listed_recipe: search_complete && !has_plan && unresolved_trials == 0,
             tie_break: if cost {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal complete thread order cost"
+            } else if parallel && routed {
+                "template first, then operation ID / recipe ID lexicographic; retain first equal declared fixed-route dispatch makespan"
             } else if parallel {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal declared parallel-cell makespan"
             } else if handled {

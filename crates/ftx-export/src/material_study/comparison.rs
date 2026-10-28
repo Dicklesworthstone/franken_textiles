@@ -131,8 +131,8 @@ pub enum Metric {
     SewingHandlingSeconds,
     /// Declared serial feed, setup and handling on the selected complete schedule, in seconds.
     SewingModeledProductionSeconds,
-    /// Elapsed completion of a source-qualified independent-cell allocation under its explicit
-    /// millisecond planning convention; distinct from total serial or machine work.
+    /// Elapsed completion of a source-qualified whole-garment allocation or fixed specialist-cell
+    /// route under its explicit millisecond convention; distinct from serial or machine work.
     SewingParallelMakespanSeconds,
     /// Complete thread length across the selected job's channels, including operation allowances.
     ThreadRequiredLengthM,
@@ -1118,7 +1118,7 @@ impl Policy {
             .metrics()
             .contains(&Metric::SewingParallelMakespanSeconds)
         {
-            report.notes.push("Parallel sewing makespan is the completion time of the selected whole-garment allocation from the declared common origin. Each independently qualified cell retains its own availability, initial setup, serial handling and finite fixtures. Cell feed is scheduled under the explicit conservative millisecond convention, with raw feed and padding retained. This is distinct from summed machine work. A complete incumbent remains comparable without an optimality proof; no unqualified resource independence, inter-cell transfer, measured throughput or hardware execution is inferred.");
+            report.notes.push("Parallel sewing makespan is the completion time of the selected whole-garment allocation or fixed specialist-cell route from the declared common origin. The chosen model retains its qualified cell availability, setup, handling, resource independence and conservative feed rounding. A routed model additionally requires its exact transfer-resource and staging policy. This is distinct from summed machine work. A complete incumbent remains comparable without an optimality proof; a fixed-route dispatch proof is conditional on that search scope. No unqualified resource independence, inter-cell transfer, measured throughput or hardware execution is inferred.");
         }
         if self.consumers().contains(&Consumer::CuttingJob)
             || self.consumers().contains(&Consumer::CuttingJobPurchasing)
@@ -1684,7 +1684,23 @@ impl Policy {
                         }));
             let mut mass_protocols = BTreeMap::new();
             let mut sources = Vec::new();
-            if let Some(parallel) = plan
+            if let Some(routing) = plan
+                .production
+                .as_ref()
+                .and_then(|production| production.routing.as_ref())
+            {
+                let used: BTreeSet<_> = routing
+                    .selected
+                    .operations
+                    .iter()
+                    .map(|operation| operation.cell.as_str())
+                    .collect();
+                for cell in &routing.cell_plans {
+                    if used.contains(cell.cell.as_str()) {
+                        sources.push((Some(cell.cell.as_str()), cell.plan.as_ref()));
+                    }
+                }
+            } else if let Some(parallel) = plan
                 .production
                 .as_ref()
                 .and_then(|production| production.parallel.as_ref())
@@ -1814,15 +1830,26 @@ impl Policy {
             .metrics()
             .contains(&Metric::SewingParallelMakespanSeconds)
         {
-            let parallel = row
+            let production = row
                 .sewing
                 .value()
                 .and_then(|plan| plan.options.production.as_ref())
-                .and_then(|production| production.parallel.as_ref())
-                .ok_or_else(|| invalid("source-qualified parallel sewing cells unavailable"))?;
+                .ok_or_else(|| {
+                    invalid("source-qualified multi-cell sewing production unavailable")
+                })?;
             // Resource independence, availability, time resolution and every cell's source-bound
             // timing/fixture policy define this experiment, independent of textile protocol consent.
-            base = hash(&(base, parallel))?;
+            if let Some(routing) = &production.routing {
+                // Fixed routing additionally qualifies loaded garment movement and staging. Its
+                // source protocol cannot be exchanged for independent whole-garment allocation.
+                base = hash(&(base, ("routed", routing)))?;
+            } else {
+                let parallel = production
+                    .parallel
+                    .as_ref()
+                    .ok_or_else(|| invalid("source-qualified parallel sewing cells unavailable"))?;
+                base = hash(&(base, parallel))?;
+            }
         }
         if consumers.contains(&Consumer::VaporCoverage) {
             let vapor = admitted

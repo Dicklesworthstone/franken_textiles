@@ -473,7 +473,7 @@ impl Policy {
     }
 }
 
-fn qualification_refs(
+pub(super) fn qualification_refs(
     plan: &SewPlan,
     references: &BTreeMap<String, Vec<workholding::QualificationRef>>,
 ) -> Result<BTreeMap<String, workholding::QualificationRef>, Refusal> {
@@ -596,6 +596,7 @@ fn trial(
         workholding: cell.workholding.clone(),
         handling: Some(cell.handling.clone()),
         parallel: None,
+        routing: None,
     };
     let schedule = super::evaluate(plan, &policy, pattern)?;
     let feed = schedule.feed_seconds * 1000.0;

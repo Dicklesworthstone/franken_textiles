@@ -725,6 +725,123 @@ feasibility. A restricted search with no complete result remains unresolved unle
 bound proves impossibility. Pool accounting does not establish physical access, safe unattended
 operation, garment transfers between cells or hardware permission.
 
+## Route one garment through specialist cells
+
+Optional `production.routing` lets each garment visit several qualified machines: for example,
+join at one cell, reinforce at another, then return to the first for finishing. Every copy follows
+the same explicitly supplied total route. Each original operation appears exactly once and every
+authored predecessor must occur earlier. The scheduler can interleave copies and reuse installed
+setups, while each specialist needs process qualification only for the operations it actually owns.
+
+The following structural excerpt shows the routing fields inside `production`. Its durations are
+illustrative. A runnable request must also provide the source-bearing `cells`, `cell_locks`, routing
+source and transfer source described below; this excerpt supplies no factory qualification or hashes.
+
+```json
+{
+  "production_copies": 2,
+  "ordering": {"objective": "minimize_setup_changes", "max_search_nodes": 1},
+  "routing": {
+    "model": "fixed_operation_route/1",
+    "objective": "minimize_makespan",
+    "time_basis": "ceil_operation_feed_milliseconds/1",
+    "protocol": "unloaded_between_operations/1",
+    "independence": "independent_attended_cells_and_transfer_resource/1",
+    "max_search_nodes": 10000,
+    "staging_capacity": 2,
+    "route": [
+      {"operation": "join", "cell": "cell-a"},
+      {"operation": "reinforce", "cell": "cell-b"},
+      {"operation": "finish", "cell": "cell-a"}
+    ],
+    "transfer": {
+      "id": "handoff-worker",
+      "model": "serialized_unloaded_handoffs/1",
+      "available_at_milliseconds": 0,
+      "transfers": [
+        {"from": "cell-a", "to": "cell-b", "milliseconds": 700},
+        {"from": "cell-b", "to": "cell-a", "milliseconds": 700}
+      ]
+    }
+  }
+}
+```
+
+`cells` uses the existing configured-cell shape: unique `id`, availability, required
+`configuration`, timed `ordering`, and `handling`. Each configuration supplies its complete
+machine and `machine_sha256`, process qualifications, `qualification_refs`, and optional fixed
+recipe/access overrides. Overrides and qualification locks may name only operations assigned to
+that cell. Each cell's setup table must admit all of its actual directed setup transitions and its
+initial setup. The existing handling model `serial_operation_transitions/1` supplies explicit
+`initial_milliseconds` and `final_milliseconds` for **every owned operation**, with an empty
+`transitions` list: routing applies a complete load and unload each time, including same-cell
+successors. Source locks and estimate consent retain their ordinary independent admission rules.
+
+Populate `cell_locks` as a map from each physical cell ID to
+`ftx_export::sewing::production::parallel::operator::cell_sha256(cell, &options)`. This hashes the
+complete typed cell and effective template, including recipes and timing. Recompute it from actual
+inputs; neither a configuration name nor a reused qualification ID protects changed source content.
+Both routing and transfer policies additionally require their own `source`, `method`, optional
+`conditions`, and `evidence`; estimated applicability needs that policy's own `allow_estimates`.
+
+The outer `machine` and qualification fields are retained template metadata in routing mode.
+No all-capable serial reference machine is required. The legacy required `production.ordering`
+field must be untimed count metadata, as in the excerpt, without initial setup or timing tables;
+it does not control routed dispatch. Routing refuses an outer one-garment ordering, production
+handling/workholding, or parallel allocation. Source geometry is built separately for each
+specialist on the unchanged original pattern. All passes together must still cover both full
+seam sides, including partial operations split across cells, and preserve all original dependencies.
+
+Every cell has its own independently qualified attending worker. Loading, setup, feed and unloading
+occupy that cell and worker consecutively; **feed does not release the worker**. Unloading releases
+the cell while the garment waits in staging or moves elsewhere. Needle/thread setup persists until
+the cell's next operation. All copies start in the first cell's unloaded staging, and the declared
+`staging_capacity` applies at **every used cell** and must be at least the complete copy count.
+
+One separately qualified resource performs all inter-cell handoffs without overlap. Each directed
+row includes the complete positioning, pickup, movement and deposit work and return to its qualified
+ready state before another handoff. Its duration is additional to source unloading and destination
+loading; neither empty travel nor carrying time is inferred from a cell name. Supply exactly the
+directed edges actually used by the route. Same-cell successors need no handoff. Cell and transfer
+availability may have `available_until_milliseconds`; these inclusive limits cover complete
+unloading and complete handoffs. A cell can finish one garment while another waits for the mover.
+
+Version 1 refuses cell `workholding` policies, retained fixtures across operations, and shared
+operator/pool composition. Existing per-operation planar access checks still apply. Moving an
+occupied fixture, sharing a cell worker, autonomous feed, insufficient staging and flexible machine
+eligibility require separately qualified extensions.
+
+The bounded search appends a copy's next handoff and cell operation at their earliest admitted
+times. It considers copy dispatch permutations for the fixed route; it does not enumerate arbitrary
+prestaging and later cell reordering. The baseline executes each copy's route in copy order, while
+independent cell clocks still permit overlap. A source-window failure of that seed allows a complete
+feasible searched replacement. A work limit retains a complete incumbent; if none has been found,
+the result is `not_converged`, not proof that the factory job is impossible.
+
+`search_complete` concerns `coupled_handoff_cell_append_dispatch/1`. `optimality_proven` is stronger:
+the selected completion must equal an independent lower bound from mandatory cell work, relaxed
+directed setup entries, garment paths and transfer-resource work. Restricted search exhaustion alone
+does not prove an unrestricted optimum. Up to 63 expanded operations and eight used cells are
+admitted. `max_search_nodes` reserves at least a complete seed; two full baseline/selected replays
+are reserved separately, and search plus replay cannot exceed 200000 work units.
+
+Plan `/18`, production `/6`, routing `/1`, and stitch program `/7` retain the actual specialist
+geometry, exact global garment IDs, per-operation phase boundaries and serialized handoffs. The
+outer ordering report carries only dispatch identities and summed per-cell setup changes; it has
+no serial timing or optimization proof. `ordering_report()` and `ordering_policy()` therefore
+return no serial authority. Existing `parallel_makespan_seconds()` and
+`sewing_parallel_makespan_seconds` consumers use actual routed completion. Thread requirements
+repeat only each specialist's assigned operations, then combine exact yarn demands before one
+ordinary whole-order purchasing evaluation. Explicit-cell previews use that cell's actual passes.
+
+Both native command families, portable interfaces, recipe/material studies and the workbench use
+these ordinary sewing inputs. Browser views show the route, actual cell recipes, complete operation
+and transfer times, sources and exact reports. Synthetic `sewing_routing` regressions specify
+specialist-only qualification, reentry, source changes, seam coverage, shared handoffs, inclusive
+windows, bounded incumbents, actual stitches, purchasing, selection and study replay. The focused
+Rust test target typechecks; executable verification is pending recovery of the full build
+filesystem. No measured factory timing, physical seam quality or hardware permission is established.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **63 copy/operation pairs** and 1–200000 examined search nodes.
@@ -736,9 +853,10 @@ under the declared predecessor graph and source table.
 
 Serial mode covers a single declared machine/configuration; qualified parallel mode assigns whole
 garments to explicitly independent instances, with separately admitted configurations in version 2.
-Both retain needle/thread
+Those modes retain needle/thread
 transitions, optional source-qualified finite workholding and explicit serial operation/copy handling
-inside each used cell. Neither infers additional machines, undeclared inventory, grip adequacy, three-dimensional machine approach,
+inside each used cell. Fixed routing instead admits the specialist operation, staging and handoff
+protocol above. None infers additional machines, undeclared inventory, grip adequacy, three-dimensional machine approach,
 acceleration or measured seam quality. Planar seam access requires its own independently qualified
 policy. These other physical constraints remain open under `ftx-pb2`/`ftx-sp2`; hardware
 authorization remains false.

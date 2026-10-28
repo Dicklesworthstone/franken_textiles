@@ -4129,6 +4129,28 @@ properly handed symmetric left start frame with right-derived heights and radii.
 tests cover sewn imported panels and independent side-specific frame providers; no asymmetric
 anatomical, drape-convergence or physical-fit claim follows. See spec 01 §2.8 and spec 04 §3.4.
 
+### 25.113 Route complete garments through independently qualified specialist cells
+
+An explicit fixed operation route now lets one garment use several machines, including returning
+to an earlier cell for finishing. Every original operation appears once per copy in dependency order.
+Each specialist admits only its assigned passes against the unchanged pattern, while the complete
+union still covers both seam sides. Actual assigned recipes determine stitch geometry, feed and
+combined yarn purchasing through the existing sewing, preview and material-study consumers.
+
+The first routing model uses dedicated attending labor at each cell, complete loading and unloading
+around every operation, sufficient unloaded staging at every cell, and one independently qualified
+serialized handoff resource. Complete source-bearing transfer intervals include their return to a
+qualified ready state. Cell and transfer availability windows remain inclusive. No fictitious
+all-capable serial reference machine, occupied-fixture transfer or autonomous feed is introduced.
+
+Bounded dispatch retains a complete feasible batch, including a searched replacement when the
+copy-order seed misses a window. Restricted search completion stays distinct from a proved minimum;
+the latter requires matching an independent mandatory-work lower bound. Baseline and selected
+timelines preserve exact garment/operation/cell identities and actual phase boundaries for replay.
+This extends `ftx-pb2.2`; flexible machine routes, retained/shared fixture composition, measured
+factory access/timing, seam quality and hardware execution remain separate work. See
+[sewing-production.md](docs/sewing-production.md#route-one-garment-through-specialist-cells).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
