@@ -9,7 +9,7 @@ use super::{
     Scenario, budget, coverage_at, hash, heat, invalid, omitted, outcome, vapor_coverage_request,
 };
 use crate::{
-    motion::{DissipationCapture, MotionOptions, advance_body_with_work},
+    motion::{DissipationCapture, MotionOptions, advance_body_coupled, advance_body_with_work},
     run::{DrapeBody, DrapeRun},
     start::{edge_strain, face_edges},
 };
@@ -265,12 +265,24 @@ fn evaluate_path(
             .clone()?;
         crate::vapor::coverage::history::History::new(initial, policy.clone())
     });
-    // The thermal state is private to this material run. Its failure never aborts mechanics;
-    // conversely a mechanical failure publishes neither a partial path nor its partial heat.
+    // One-way thermal failures remain independent. Opted-in liquid mass feedback makes the
+    // surface history mandatory: no later mechanical state exists without its accepted mass.
+    let coupled = request
+        .transient_surface
+        .as_ref()
+        .is_some_and(|policy| policy.mechanical_coupling.is_some());
     let mut surface_heat = request
         .transient_surface
         .as_ref()
         .map(|policy| policy.start(run, &request.keyframes, heat_budget));
+    if coupled {
+        let history = surface_heat
+            .as_mut()
+            .expect("coupling requires a surface request")
+            .as_mut()
+            .map_err(|e| e.clone())?;
+        initial_sample["liquid_mechanics"] = history.bind_mechanics(run)?;
+    }
     let mut coverage_heat = request
         .transient_coverage
         .as_ref()
@@ -359,18 +371,46 @@ fn evaluate_path(
             i + 1,
             request.keyframes.len()
         ));
-        let report = advance_body_with_work(
-            &mut run.scene.solver,
-            &path.vertices[i],
-            frame.time_s - previous_time,
-            MotionOptions {
-                max_step_s: request.max_step_s,
-                max_trials: remaining_trials,
-                max_pairs: request.max_pairs,
-                max_sample_vertices: remaining_vertices,
-            },
-            capture,
-        )?;
+        let options = MotionOptions {
+            max_step_s: request.max_step_s,
+            max_trials: remaining_trials,
+            max_pairs: request.max_pairs,
+            max_sample_vertices: remaining_vertices,
+        };
+        let report = if coupled {
+            let history = surface_heat
+                .as_mut()
+                .expect("requested coupled history")
+                .as_mut()
+                .map_err(|e| e.clone())?;
+            let mut index = samples.len();
+            advance_body_coupled(
+                &mut run.scene.solver,
+                &path.vertices[i],
+                frame.time_s - previous_time,
+                options,
+                capture,
+                history,
+                |solver, sample, history| {
+                    let time = if sample.time_s == frame.time_s - previous_time {
+                        frame.time_s
+                    } else {
+                        previous_time + sample.time_s
+                    };
+                    history.advance_coupled(solver, sample, time, i, index)?;
+                    index += 1;
+                    Ok(())
+                },
+            )?
+        } else {
+            advance_body_with_work(
+                &mut run.scene.solver,
+                &path.vertices[i],
+                frame.time_s - previous_time,
+                options,
+                capture,
+            )?
+        };
         remaining_trials -= report.trials;
         remaining_vertices -= report.samples.len() * count;
         pairs_tested += report.pairs_tested;
@@ -406,7 +446,8 @@ fn evaluate_path(
             {
                 vapor_history = Some(Err(refusal));
             }
-            if let Some(Ok(history)) = &mut surface_heat
+            if !coupled
+                && let Some(Ok(history)) = &mut surface_heat
                 && let Err(refusal) = history.advance(
                     &sample.cloth,
                     time,
@@ -528,10 +569,17 @@ fn evaluate_path(
     if let Some(history) = run.scene.solver.membrane_plasticity_report()? {
         result["membrane_plasticity_history"] = history;
     }
+    if coupled {
+        result["liquid_mechanics"] = json!(run.scene.solver.liquid_mass_report()?);
+    }
     if let Some(history) = surface_heat {
-        result["transient_surface"] = outcome(
-            history.and_then(|h| h.finish(&path.sha256, &initial_positions_sha256, previous_time)),
-        );
+        let finished =
+            history.and_then(|h| h.finish(&path.sha256, &initial_positions_sha256, previous_time));
+        result["transient_surface"] = if coupled {
+            outcome(Ok(finished?))
+        } else {
+            outcome(finished)
+        };
         result["thermal_basis"] = json!(
             "Steady endpoint snapshots and a separate requested independent-sheet transient history. These heat bases are not interchangeable."
         );
@@ -542,6 +590,11 @@ fn evaluate_path(
         );
         result["thermal_basis"] = json!(
             "Steady endpoint snapshots and separately requested transient sheet/coverage histories. Their domains and energy totals are not interchangeable."
+        );
+    }
+    if coupled {
+        result["thermal_basis"] = json!(
+            "Accepted-step sheet heat and free-liquid evaporation update the next mechanical interval's inertia and gravity under an independent source qualification. Steady snapshots and optional coverage heat remain separate domains; exported bulk mechanical energy is separate from thermal latent/sensible enthalpy."
         );
     }
     if let Some(history) = vapor_history {
@@ -691,3 +744,6 @@ mod tests {
         assert_eq!(format!("{replay:?}"), format!("{first:?}"));
     }
 }
+#[cfg(test)]
+#[path = "motion_liquid_tests.rs"]
+mod liquid_rollback_tests;

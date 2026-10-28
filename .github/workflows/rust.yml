@@ -48,6 +48,7 @@ jobs:
           FTX_SUPPLIED_WATER_REPLAY: ${{ runner.temp }}/ftx-supplied-water-replay
           FTX_CONDENSED_WATER_REPLAY: ${{ runner.temp }}/ftx-condensed-water-replay
           FTX_VARIABLE_WATER_REPLAY: ${{ runner.temp }}/ftx-variable-water-replay
+          FTX_EVAPORATING_MECHANICS_REPLAY: ${{ runner.temp }}/ftx-evaporating-mechanics-replay
         run: cargo test --workspace --locked
       - name: Test supplier source adapters
         if: ${{ !cancelled() }}
@@ -66,6 +67,7 @@ jobs:
           FTX_SUPPLIED_WATER_REPLAY: ${{ runner.temp }}/ftx-supplied-water-replay
           FTX_CONDENSED_WATER_REPLAY: ${{ runner.temp }}/ftx-condensed-water-replay
           FTX_VARIABLE_WATER_REPLAY: ${{ runner.temp }}/ftx-variable-water-replay
+          FTX_EVAPORATING_MECHANICS_REPLAY: ${{ runner.temp }}/ftx-evaporating-mechanics-replay
         run: |
           cargo install wasm-bindgen-cli --version 0.2.128 --locked
           sh tools/build_web.sh

@@ -191,6 +191,83 @@ fn replay(
 }
 
 #[test]
+fn evaporating_mechanical_water_replays_in_native_portable_and_named_case_decisions() {
+    use ftx_wasm::materials::scenario::on_model;
+
+    let (pattern, study, mut single) = inputs();
+    let bytes = model_bytes_with_rig(true);
+    let digest = sha256_hex(&bytes);
+    let model =
+        ftx_body::AnnyModel::from_data(ftx_body::AnnyData::from_bytes(&bytes, true).unwrap())
+            .unwrap();
+    let body = json!({"schema":"ftx-scenario-body/1","accepted_body_fit":receipt(&digest),
+        "arm_abduction_deg":35.});
+    let baseline: Value = serde_json::from_str(
+        &on_model(
+            &model,
+            &digest,
+            &pattern,
+            &study.to_string(),
+            &single.to_string(),
+            &body.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let selected = &keyed(&baseline["simulations"], "qualified")["evaluation"]["result"];
+    let material = &selected["drape"]["material"];
+    assert!(material.is_object());
+    let heat = &mut single["motion"]["transient_surface"];
+    heat["mechanical_coupling"] = json!({
+        "schema":"ftx-evaporating-liquid-mechanics/1",
+        "model":"co_moving_evaporation_frozen_mechanics/1",
+        "material_report_sha256":sha256_hex(&serde_json::to_vec(material).unwrap()),
+        "bindings":{"band":{"material_sha256":heat["surface_water"]["bindings"]["band"]["material_sha256"],
+            "maximum_liquid_loading_kg_m2":1e-5,"temperature_range_c":[-20.,80.]}},
+        "source":{"reference":"test:selected-body-wet-mechanics","accessed_on":"2026-10-28",
+            "note":"Synthetic invariant material and interface behavior, no empirical claim"},
+        "evidence":"estimate","allow_estimates":true,"method":"Native/portable coupled replay",
+        "qualification":"Exact artificial mechanical laws retained over the complete declared wet thermal domain with co-moving vapor loss"
+    });
+    replay(
+        &pattern,
+        &study,
+        single,
+        "FTX_EVAPORATING_MECHANICS_REPLAY",
+        |report| {
+            let simulated = &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
+            let motion = &simulated["motion"]["result"];
+            let heat = &motion["transient_surface"]["result"];
+            let mechanics = &motion["liquid_mechanics"];
+            assert_eq!(mechanics, &heat["mechanical_coupling"]);
+            assert_eq!(mechanics["remaining_liquid_mass_kg"], 0.);
+            assert!(mechanics["initial_liquid_mass_kg"].as_f64().unwrap() > 0.);
+            assert!(mechanics["exported_kinetic_energy_j"].as_f64().unwrap() > 0.);
+            assert!(
+                mechanics["mass_balance_residual_kg"]
+                    .as_f64()
+                    .unwrap()
+                    .abs()
+                    < 1e-14
+            );
+            assert_eq!(
+                mechanics["qualification"],
+                heat["request"]["mechanical_coupling"]
+            );
+            assert_eq!(
+                motion["initial_sample"]["liquid_mechanics"]["remaining_liquid_mass_kg"],
+                mechanics["initial_liquid_mass_kg"]
+            );
+            assert_eq!(
+                keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"]["status"],
+                "refused"
+            );
+        },
+    );
+}
+
+#[test]
 fn variable_textile_water_replays_native_portable_and_named_case_enthalpy_decisions() {
     let (pattern, mut study, mut single) = inputs();
     for variant in study["variants"].as_array_mut().unwrap() {

@@ -2998,8 +2998,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
       if(source==='refused')throw Error('import refused');return '{"cloth_simulated":false,"raw":-0.0}';},
     fold_up:()=>{calls.push('fold');return {report:()=>'{"gating":[]}',viewer:()=>'<html/>',free:()=>freed.push('fold')};},
     fold_up_with_body_fit:(_body,_pattern,_measurements,_fit,mm,twoStart,source,angle)=>{
-      assert.equal(twoStart,false);
-      calls.push({source,mm,angle});if(source==='refused')throw Error('import refused');
+      calls.push({source,mm,twoStart,angle});if(source==='refused')throw Error('import refused');
       return {report:()=>'{"body":{"provenance":"MODEL_FIT"}}',viewer:()=>'<html/>',free:()=>freed.push('import')};}};
   const context=vm.createContext({JSON,Date,TextDecoder,Uint8Array,WebAssembly,Error,self:{},onmessage:null,postMessage:m=>sent.push(m)});
   const imports=new vm.SyntheticModule(Object.keys(values),function(){for(const[n,v]of Object.entries(values))this.setExport(n,v);},{context});
@@ -3028,7 +3027,9 @@ test('drafting worker discards refused replacements, frees failed rounds and che
   assert.match((await fold({bodyFit:exact})).message,/associate/);
   const imported=await fold({bodyFit:exact,bodyFitConsent:true,armDeg:50,selfContactMm:2});
   assert.equal(imported.type,'folded');assert.equal(imported.bodyFitText,exact);
-  assert.deepEqual(calls.at(-1),{source:exact,mm:2,angle:50});
+  assert.deepEqual(calls.at(-1),{source:exact,mm:2,twoStart:false,angle:50});
+  assert.equal((await fold({bodyFit:exact,bodyFitConsent:true,armDeg:50,selfContactMm:2,twoStart:true})).type,'folded');
+  assert.deepEqual(calls.at(-1),{source:exact,mm:2,twoStart:true,angle:50});
   const tapeCalls=calls.filter(x=>x==='fold').length;
   assert.match((await fold({bodyFit:'refused',bodyFitConsent:true,armDeg:50})).message,/import refused/);
   assert.equal(calls.filter(x=>x==='fold').length,tapeCalls); // never fall back on import failure
@@ -4010,6 +4011,32 @@ test('material study sewing choices retain bounded search status separately from
   const receipt = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('bounded: sewing recipe choices'));
   receipt.open = true; receipt.handlers.toggle(); assert.match(visibleText(receipt), /"unresolved_trials": 1/);
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
+});
+
+test('authored sewing routes remain visible with their bounded search and refused trial evidence', async () => {
+  const p = await pageModule(); await p.load(); p.select('studyRequest', '{}');
+  const selected = studyRow('route choice'), missing = studyRow('unresolved');
+  selected.sewing_selection = outcome({request:{schema:'ftx-sewing-selection/6'},
+    selected_route:'available <specialists>',selected_choices:{},
+    trials:[{route_choice:'template'},{route_choice:'available <specialists>'},
+      {route_choice:'stale',refusal:{message:'Changed cell source lock'}}],
+    search_complete:false,budget_exhausted:true,optimality_proven:false,unresolved_trials:1});
+  missing.sewing_selection = outcome({request:{schema:'ftx-sewing-selection/6'},selected_choices:null,
+    trials:[{route_choice:'template',refusal:{message:'No complete route in admitted windows'}}],
+    search_complete:false,budget_exhausted:true,optimality_proven:false,unresolved_trials:1});
+  missing.sewing = refused('No complete routed incumbent');
+  await p.e.study.onclick(); p.emit(studyReport([selected,missing]));
+  const s = section(p, 'Fixed-pattern manufacturing alternatives');
+  const choices = descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Material-specific sewing recipe and route search');
+  assert.deepEqual(plain(choices.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+    ['route choice','Available','available <specialists>','Original recipes','3','false','true','false','1'],
+    ['unresolved','Available','No route selected','No listed recipe selected','1','false','true','false','1']]);
+  const evidence = descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('route choice: sewing recipe choices'));
+  evidence.open=true; evidence.handlers.toggle();
+  assert.match(visibleText(evidence),/"route_choice": "stale"/);
+  assert.match(visibleText(evidence),/Changed cell source lock/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
 test('thread-cost recipe selection displays only the canonical complete incumbent and its proof scope', async () => {
@@ -6059,6 +6086,38 @@ test('textile water cooling exposes separate conserved mass and the full ledger 
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
+test('evaporation mechanics exposes moving mass and exported bulk energy and withdraws refused results', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const report=scenarioReport();
+  report.scenario.scenario={motion:{transient_surface:{surface_water:{schema:'ftx-textile-surface-water/1'},mechanical_coupling:{schema:'ftx-evaporating-liquid-mechanics/1'}}}};
+  const mechanics={substrate_and_attached_mass_kg:0.2,initial_liquid_mass_kg:0.05,
+    remaining_liquid_mass_kg:0.02,total_inertial_mass_kg:0.22,mass_balance_residual_kg:0,
+    exported_momentum_kg_m_s:[0.01,0,-0.02],exported_kinetic_energy_j:0.003,
+    exported_gravitational_energy_j:-0.004,transfer_kinetic_residual_j:0,
+    qualification:{source:{reference:'<qualified frozen wet mechanics>'}}};
+  const heat={duration_s:1,thermal_steps:4,trace:[{temperature_range_c:[18,20]}],
+    surface_water:{initial_liquid_kg:0.05,remaining_liquid_kg:0.02,evaporated_liquid_kg:0.03},
+    mechanical_coupling:mechanics};
+  const evaluation=report.simulations.find(row=>row.key==='A').evaluation.result;
+  evaluation.motion=outcome({samples:[{}],keyframes:[],transient_surface:outcome(heat),liquid_mechanics:mechanics});
+  await p.e.scenario.onclick(); p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+  assert.deepEqual(plain(table('A: evaporation changes moving cloth mass').children[2].children.map(n=>n.textContent)),
+    ['0.2','0.05','0.02','0.22','0']);
+  assert.deepEqual(plain(table('A: mechanical energy carried away by vapor').children[2].children.map(n=>n.textContent)),
+    ['0.01, 0, -0.02','0.003','-0.004','0']);
+  assert.match(visibleText(s),/not a wet equilibrium/);
+  assert.doesNotMatch(visibleText(s),/liquid adds no mechanical water mass/);
+  const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='A: evaporation mechanics qualification and complete transfer ledger (display only)');
+  source.open=true; source.handlers.toggle(); assert.match(visibleText(source),/<qualified frozen wet mechanics>/);
+  evaluation.motion=refused('coupled liquid mechanics left its source domain');
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.equal(table('A: evaporation changes moving cloth mass'),undefined);
+  assert.match(visibleText(s),/coupled liquid mechanics left its source domain/);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
 test('supplied textile water displays delivery and incoming enthalpy separately through rewetting and refusals', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const report=scenarioReport(); report.scenario.scenario={motion:{transient_surface:{surface_water:{schema:'ftx-textile-surface-water/2'}}}};
@@ -7376,8 +7435,8 @@ test('compiled WASM adaptive synthesis replays both native selected-body scenari
     } finally {globalThis.ftxProgress=previousProgress;}
   });
 
-test('compiled WASM evaporating, supplied and condensing textile-water objectives replay native commands and named scenarios',
-  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY)}, async()=>{
+test('compiled WASM evaporating, supplied and condensing textile-water objectives and moving mass replay native commands and named scenarios',
+  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY)}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
@@ -7385,7 +7444,8 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
     const previousProgress=globalThis.ftxProgress;globalThis.ftxProgress=()=>{};
     try {
       for(const [dir,kind] of [[process.env.FTX_COUPLED_WATER_REPLAY,'initial'],[process.env.FTX_SUPPLIED_WATER_REPLAY,'supplied'],
-        [process.env.FTX_CONDENSED_WATER_REPLAY,'condensed'],[process.env.FTX_VARIABLE_WATER_REPLAY,'variable']].filter(([dir])=>dir)) {
+        [process.env.FTX_CONDENSED_WATER_REPLAY,'condensed'],[process.env.FTX_VARIABLE_WATER_REPLAY,'variable'],
+        [process.env.FTX_EVAPORATING_MECHANICS_REPLAY,'mechanics']].filter(([dir])=>dir)) {
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8');
         const bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
         for(const name of ['single','matrix']) {
@@ -7395,8 +7455,10 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
         assert.equal(result.type,'result',result.message);
         assert.deepEqual(result.result,JSON.parse(input(`${name}-report.json`)));
         assert.deepEqual(result.result.comparison.frontier,['qualified']);
-        if(name==='single') {
-          const readings=result.result.comparison.alternatives.find(row=>row.key==='qualified').readings;
+        if(name==='matrix') assert.deepEqual(result.result.comparison.case_order,['equal-reservoirs','warm-outside']);
+        for(const report of name==='single'?[result.result]:result.result.cases) {
+          assert.deepEqual(report.comparison.frontier,['qualified']);
+          const readings=report.comparison.alternatives.find(row=>row.key==='qualified').readings;
           if(kind==='supplied') assert.ok(readings.textile_water_supplied_mass_kg.value>0);
           else if(kind==='condensed') {
             assert.ok(readings.textile_water_condensed_mass_kg.value>0);
@@ -7407,8 +7469,9 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
             assert.equal(readings.textile_water_remaining_mass_kg.value,0);
           }
           assert.ok(readings.textile_water_evaporated_mass_kg.value>0);
+          const motion=report.simulations.find(row=>row.key==='qualified').evaluation.result.motion.result;
+          const heat=motion.transient_surface.result;
           if(kind==='variable') {
-            const heat=result.result.simulations.find(row=>row.key==='qualified').evaluation.result.motion.result.transient_surface.result;
             assert.ok(heat.model.columns.length>0);
             for(const column of heat.model.columns) {
               assert.equal(column.schema,'ftx-dry-thermal-model/2');
@@ -7416,6 +7479,18 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
               assert.equal(column.cell_capacity_j_m2_k,undefined);
             }
           }
+          const missing=report.simulations.find(row=>row.key==='missing-ret').evaluation.result.motion;
+          if(kind==='mechanics') {
+            const mechanics=motion.liquid_mechanics;
+            assert.deepEqual(mechanics,heat.mechanical_coupling);
+            assert.deepEqual(mechanics.qualification,heat.request.mechanical_coupling);
+            assert.equal(mechanics.remaining_liquid_mass_kg,0);
+            assert.ok(mechanics.initial_liquid_mass_kg>0);
+            assert.ok(mechanics.exported_kinetic_energy_j>0);
+            assert.ok(Math.abs(mechanics.mass_balance_residual_kg)<1e-14);
+            assert.equal(motion.initial_sample.liquid_mechanics.remaining_liquid_mass_kg,mechanics.initial_liquid_mass_kg);
+            assert.equal(missing.status,'refused');
+          } else assert.equal(missing.result.transient_surface.status,'refused');
         }
         assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
         assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);

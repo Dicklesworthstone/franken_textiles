@@ -190,6 +190,29 @@ fn advance_body_impl(
     options: MotionOptions,
     capture: DissipationCapture,
 ) -> Result<MotionReport, Refusal> {
+    advance_body_coupled(
+        solver,
+        target,
+        duration_s,
+        options,
+        capture,
+        &mut (),
+        |_, _, _| Ok(()),
+    )
+}
+
+// A coupled consumer runs only after the geometric/contact checks have accepted a trial. Its
+// private state and the solver commit together at the end of the entire segment. The consumer
+// may update mass/history, never the already checked geometry or its co-moving velocity.
+pub(crate) fn advance_body_coupled<S: Clone>(
+    solver: &mut Solver,
+    target: &[Vec3],
+    duration_s: f64,
+    options: MotionOptions,
+    capture: DissipationCapture,
+    state: &mut S,
+    mut accept: impl FnMut(&mut Solver, &MotionSample, &mut S) -> Result<(), Refusal>,
+) -> Result<MotionReport, Refusal> {
     solver.model.check_attached_mass()?;
     if !duration_s.is_finite()
         || !(1e-9..=60.0).contains(&duration_s)
@@ -276,6 +299,7 @@ fn advance_body_impl(
         .and_then(|n| n.checked_add(bending_count))
         .ok_or_else(|| invalid("sample size overflow"))?;
     let mut work = solver.clone();
+    let mut coupled = state.clone();
     let mut report = MotionReport {
         trials: 0,
         pairs_tested: 0,
@@ -392,7 +416,7 @@ fn advance_body_impl(
             continue;
         }
         time = end_time;
-        report.samples.push(MotionSample {
+        let sample = MotionSample {
             time_s: time,
             cloth: trial.x.clone(),
             body: new_c.body.vertices.clone(),
@@ -412,10 +436,13 @@ fn advance_body_impl(
             } else {
                 None
             },
-        });
+        };
+        accept(&mut trial, &sample, &mut coupled)?;
+        report.samples.push(sample);
         work = trial;
         step = (h * 2.0).min(options.max_step_s);
     }
     *solver = work;
+    *state = coupled;
     Ok(report)
 }

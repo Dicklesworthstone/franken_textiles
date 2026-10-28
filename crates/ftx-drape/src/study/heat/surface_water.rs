@@ -333,6 +333,10 @@ fn positive_sum(values: &[f64]) -> Result<f64, Refusal> {
 }
 
 impl Water {
+    pub(super) fn remaining_liquid_kg(&self) -> &[f64] {
+        &self.remaining
+    }
+
     pub(super) fn new(
         request: Request,
         model: &Surface,

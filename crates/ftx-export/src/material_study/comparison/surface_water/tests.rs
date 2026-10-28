@@ -267,6 +267,179 @@ fn textile_water_and_maxwell_heat_share_one_conserved_decision_ledger() {
     );
 }
 
+fn coupled_case() -> (Alternative, Value, Value, Value) {
+    let (a, mut d, mut s, mut m) = case();
+    let h = &mut m["transient_surface"]["result"];
+    let mut bindings = serde_json::Map::new();
+    for (id, binding) in h["request"]["surface_water"]["bindings"]
+        .as_object()
+        .unwrap()
+    {
+        bindings.insert(
+            id.clone(),
+            json!({"material_sha256":binding["material_sha256"],
+            "maximum_liquid_loading_kg_m2":1e-5,"temperature_range_c":[-20.,80.]}),
+        );
+    }
+    let q = json!({"schema":"ftx-evaporating-liquid-mechanics/1",
+        "model":"co_moving_evaporation_frozen_mechanics/1",
+        "material_report_sha256":hash(&s["drape"]["material"]).unwrap(),"bindings":bindings,
+        "source":{"reference":"test:coupled-mass-admission","accessed_on":"2026-10-28",
+            "note":"Synthetic accounting only; no physical textile qualification"},
+        "evidence":"estimate","allow_estimates":true,"method":"Synthetic co-moving outflow",
+        "qualification":"Explicit synthetic frozen mechanics over the full declared liquid domain"});
+    let initial = h["surface_water"]["initial_liquid_kg"].as_f64().unwrap();
+    let substrate = 0.0004;
+    s["drape"]["mass_kg"] = json!(substrate);
+    let mut final_report = json!({"schema":"ftx-evaporating-liquid-mechanics-result/1",
+        "qualification":q,"scope":"Synthetic accounting fixture",
+        "substrate_and_attached_mass_kg":substrate,"initial_liquid_mass_kg":initial,
+        "remaining_liquid_mass_kg":initial,"evaporated_liquid_mass_kg":0.,
+        "total_inertial_mass_kg":substrate+initial,"mass_balance_residual_kg":0.,
+        "exported_momentum_kg_m_s":[0.,0.,0.],"exported_kinetic_energy_j":0.,
+        "exported_gravitational_energy_j":0.,"transfer_momentum_residual_kg_m_s":[0.,0.,0.],
+        "transfer_kinetic_residual_j":0.,"transfer_gravitational_residual_j":0.});
+    let initial_report = final_report.clone();
+    final_report["remaining_liquid_mass_kg"] = json!(0.);
+    final_report["evaporated_liquid_mass_kg"] = json!(initial);
+    final_report["total_inertial_mass_kg"] = json!(substrate);
+    final_report["exported_momentum_kg_m_s"] = json!([initial, 0., 0.]);
+    final_report["exported_kinetic_energy_j"] = json!(0.5 * initial);
+    final_report["exported_gravitational_energy_j"] = json!(3. * initial);
+    h["request"]["mechanical_coupling"] = q;
+    h["mechanical_coupling"] = final_report.clone();
+    h["trace"][0]["mechanical_coupling"] = json!({
+        "substrate_and_attached_mass_kg":substrate,"initial_liquid_kg":initial,
+        "remaining_liquid_kg":0.,"evaporated_liquid_kg":initial,
+        "total_inertial_mass_kg":substrate,"mass_balance_residual_kg":0.,
+        "exported_momentum_kg_m_s":[initial,0.,0.],"exported_kinetic_energy_j":0.5*initial,
+        "exported_gravitational_energy_j":3.*initial,"transfer_momentum_residual_kg_m_s":[0.,0.,0.],
+        "transfer_kinetic_residual_j":0.,"transfer_gravitational_residual_j":0.});
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    m["initial_sample"]["liquid_mechanics"] = initial_report;
+    m["liquid_mechanics"] = final_report;
+    (a, d, s, m)
+}
+
+#[test]
+fn coupled_mass_admission_preserves_the_independent_thermal_energy_objective() {
+    let (a, d, s, m) = coupled_case();
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+    let h = &m["transient_surface"]["result"];
+    let correction = admit(&a, &s, &m, h, &h["request"], false, &[3., 3.])
+        .unwrap()
+        .unwrap();
+    // Exported bulk kinetic/gravitational energy belongs to the mechanical transfer ledger.
+    assert!(near(correction[0], 1e-8 * 2500000., 0.025));
+    assert_eq!(correction[0], correction[1]);
+}
+
+#[test]
+fn refused_liquid_mechanics_leaves_source_assembly_mass_comparable() {
+    let (mut a, d, mut s, mut m) = coupled_case();
+    let inventory: crate::assembly_mass::Request = serde_json::from_value(json!({
+        "schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[]
+    }))
+    .unwrap();
+    let pattern = ftx_pattern::Pattern::new(a.binding.value().unwrap()["pattern"].clone());
+    a.assembly_mass = super::super::super::Outcome::Available {
+        result: inventory.evaluate(&pattern).unwrap(),
+    };
+    let policy: Policy = serde_json::from_value(json!({"basis":"nominal",
+        "objectives":[{"metric":"assembly_mass_kg","direction":"minimize"}]}))
+    .unwrap();
+    s["motion"] = json!({"status":"available","result":m});
+    let before = policy.candidate(&a, None, &d, &s);
+    assert!(before.eligible, "{:?}", before.exclusions);
+    m["liquid_mechanics"]["qualification"]["material_report_sha256"] = json!("f".repeat(64));
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err());
+    s["motion"]["result"] = m;
+    let after = policy.candidate(&a, None, &d, &s);
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(after).unwrap()
+    );
+}
+
+#[test]
+fn stale_or_unqualified_coupling_never_enters_thermal_decisions() {
+    for fault in 0..7 {
+        let (a, mut d, s, mut m) = coupled_case();
+        let mut q = m["liquid_mechanics"]["qualification"].clone();
+        match fault {
+            0 => q["allow_estimates"] = json!(false),
+            1 => q["material_report_sha256"] = json!("f".repeat(64)),
+            2 => q["bindings"]["front"]["material_sha256"] = json!("e".repeat(64)),
+            3 => q["bindings"]["front"]["temperature_range_c"] = json!([0., 80.]),
+            4 => q["bindings"]["front"]["maximum_liquid_loading_kg_m2"] = json!(1e-6),
+            5 => q["source"]["note"] = json!(""),
+            _ => {
+                q["bindings"].as_object_mut().unwrap().remove("back");
+            }
+        }
+        m["initial_sample"]["liquid_mechanics"]["qualification"] = q.clone();
+        m["liquid_mechanics"]["qualification"] = q.clone();
+        let h = &mut m["transient_surface"]["result"];
+        h["request"]["mechanical_coupling"] = q.clone();
+        h["mechanical_coupling"]["qualification"] = q;
+        d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
+#[test]
+fn coupled_reports_require_complete_initial_final_and_sampled_inventory() {
+    for fault in 0..11 {
+        let (a, d, s, mut m) = coupled_case();
+        match fault {
+            0 => m["initial_sample"]["liquid_mechanics"] = Value::Null,
+            1 => m["liquid_mechanics"] = Value::Null,
+            2 => m["transient_surface"]["result"]["mechanical_coupling"] = Value::Null,
+            3 => m["transient_surface"]["result"]["trace"][0]["mechanical_coupling"] = Value::Null,
+            4 => {
+                m["initial_sample"]["liquid_mechanics"]["exported_momentum_kg_m_s"] =
+                    json!([1., 0., 0.])
+            }
+            _ => {
+                let (key, value) = match fault {
+                    5 => ("total_inertial_mass_kg", json!(0.001)),
+                    6 => ("exported_kinetic_energy_j", json!(-1.)),
+                    7 => ("exported_gravitational_energy_j", Value::Null),
+                    8 => ("transfer_momentum_residual_kg_m_s", json!([0., 0.])),
+                    9 => ("mass_balance_residual_kg", json!(0.001)),
+                    _ => ("remaining_liquid_kg", json!(1e-9)),
+                };
+                let full = if key == "remaining_liquid_kg" {
+                    "remaining_liquid_mass_kg"
+                } else {
+                    key
+                };
+                m["liquid_mechanics"][full] = value.clone();
+                let h = &mut m["transient_surface"]["result"];
+                h["mechanical_coupling"][full] = value.clone();
+                h["trace"][0]["mechanical_coupling"][key] = value;
+            }
+        }
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "fault {fault}"
+        );
+    }
+    let (a, mut d, s, mut m) = coupled_case();
+    let h = &mut m["transient_surface"]["result"];
+    h["request"]
+        .as_object_mut()
+        .unwrap()
+        .remove("mechanical_coupling");
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err());
+    let (a, d, s, m) = case();
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+}
+
 #[test]
 fn incomplete_or_changed_water_cannot_become_a_feasible_objective() {
     for fault in 0..19 {

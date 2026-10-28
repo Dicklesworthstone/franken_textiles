@@ -1,6 +1,6 @@
-//! One-way thermal evolution on accepted mechanical samples, using the existing source-locked
-//! thermal solvers. Physical time and reference mass are retained; temperature never feeds back
-//! into mechanics. A refused history is not a partially successful or zero-heat result.
+//! Thermal evolution on accepted mechanical samples, using the existing source-locked solvers.
+//! The default is one-way. Explicit evaporation coupling updates mechanical liquid mass only
+//! after a complete heat/water interval succeeds; temperature does not invent material laws.
 
 use ftx_core::{Refusal, Vec3};
 use serde::{Deserialize, Serialize};
@@ -65,6 +65,11 @@ pub struct SurfaceRequest {
     /// and latent temperature feedback. Independent of the prescribed body's wet-film consumer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_water: Option<surface_water::Request>,
+    /// Optional source-qualified evaporation-only mass feedback into the next mechanical step.
+    /// Requires surface-water /1 and frozen mechanical laws over its entire loading/temperature
+    /// domain. Initial co-moving liquid is added after the dry drape, not equilibrated silently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanical_coupling: Option<crate::liquid_mass::Qualification>,
     /// Maximum thermal substep in seconds, in 1e-9..=1. Geometry stays at the accepted mechanical
     /// sample's right endpoint during these thermal substeps; no unseen cloth motion is invented.
     pub max_step_s: f64,
@@ -217,6 +222,17 @@ impl SurfaceRequest {
         if let Some(water) = &self.surface_water {
             water.validate(intervals)?;
         }
+        if let Some(coupling) = &self.mechanical_coupling {
+            coupling.validate()?;
+            let water = self.surface_water.as_ref().ok_or_else(|| {
+                invalid("evaporating mechanical coupling requires surface-water /1")
+            })?;
+            if water.schema != "ftx-textile-surface-water/1" {
+                return Err(invalid(
+                    "mechanical liquid coupling currently supports initial-liquid evaporation only; supply and condensation require independently modeled momentum",
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -242,6 +258,7 @@ pub(super) struct SurfaceHistory {
     relaxation: Option<plastic::Heating>,
     bending: Option<plastic::Heating>,
     water: Option<surface_water::Water>,
+    mechanical_coupling: Option<Value>,
 }
 
 #[derive(Clone)]
@@ -283,6 +300,7 @@ impl SurfaceHistory {
             relaxation: None,
             bending: None,
             water: None,
+            mechanical_coupling: None,
         })
     }
 
@@ -292,6 +310,99 @@ impl SurfaceHistory {
             relaxation: self.relaxation.is_some(),
             bending: self.bending.is_some(),
         }
+    }
+
+    pub(super) fn bind_mechanics(&mut self, run: &mut DrapeRun) -> Result<Value, Refusal> {
+        let qualification = self
+            .request
+            .mechanical_coupling
+            .as_ref()
+            .ok_or_else(|| invalid("missing evaporation mechanics qualification"))?;
+        let policy = self
+            .request
+            .surface_water
+            .as_ref()
+            .ok_or_else(|| invalid("evaporation mechanics requires textile-owned water"))?;
+        // Water checks this complete domain at every thermal substep, including event splits.
+        // Requiring containment avoids admitting an out-of-domain intermediate temperature that
+        // happens to return inside the mechanical domain by the next sampled endpoint.
+        let temperatures = [
+            policy.wet_vapor_pressure_pa[0][0],
+            policy.wet_vapor_pressure_pa[policy.wet_vapor_pressure_pa.len() - 1][0],
+        ];
+        for (instance, water) in &policy.bindings {
+            let bound = qualification.bindings.get(instance).ok_or_else(|| {
+                invalid("evaporation mechanics must qualify every thermal material instance")
+            })?;
+            if bound.material_sha256 != water.material_sha256
+                || bound.maximum_liquid_loading_kg_m2 < policy.maximum_liquid_loading_kg_m2
+                || bound.temperature_range_c[0] > temperatures[0]
+                || bound.temperature_range_c[1] < temperatures[1]
+            {
+                return Err(invalid(
+                    "evaporation mechanics must qualify the complete thermal material, loading and temperature domain",
+                ));
+            }
+        }
+        if self.model.patches().len() != run.scene.solver.model.membranes.len()
+            || self
+                .model
+                .patches()
+                .iter()
+                .zip(&run.scene.solver.model.membranes)
+                .any(|(patch, element)| {
+                    patch.vertices != element.v || patch.reference_area_m2 != element.area
+                })
+        {
+            return Err(invalid(
+                "evaporating mechanical and thermal histories must share the exact retained triangles",
+            ));
+        }
+        let water = self
+            .water
+            .as_ref()
+            .ok_or_else(|| invalid("missing admitted textile-water history"))?;
+        let report = crate::liquid_mass::bind(
+            run,
+            qualification,
+            water.remaining_liquid_kg(),
+            self.state.temperature_c(),
+        )?;
+        let value = serde_json::to_value(report).map_err(|e| invalid(e.to_string()))?;
+        self.mechanical_coupling = Some(value.clone());
+        Ok(value)
+    }
+
+    pub(super) fn advance_coupled(
+        &mut self,
+        solver: &mut crate::Solver,
+        sample: &crate::motion::MotionSample,
+        time_s: f64,
+        interval: usize,
+        sample_index: usize,
+    ) -> Result<(), Refusal> {
+        self.advance(
+            &sample.cloth,
+            time_s,
+            interval,
+            sample_index,
+            sample.membrane_plastic_dissipation_j.as_deref(),
+            sample.membrane_relaxation_dissipation_j.as_deref(),
+            sample.bending_plastic_dissipation_j.as_deref(),
+        )?;
+        let water = self
+            .water
+            .as_ref()
+            .ok_or_else(|| invalid("missing coupled textile-water history"))?;
+        let report =
+            solver.evaporate_liquid(water.remaining_liquid_kg(), self.state.temperature_c())?;
+        self.trace
+            .last_mut()
+            .ok_or_else(|| invalid("missing accepted coupled heat sample"))?["mechanical_coupling"] =
+            report.summary();
+        self.mechanical_coupling =
+            Some(serde_json::to_value(report).map_err(|e| invalid(e.to_string()))?);
+        Ok(())
     }
 
     fn supplied_heat_j(&self) -> f64 {
@@ -736,6 +847,15 @@ impl SurfaceHistory {
                     "Independent-sheet heat on accepted mechanical geometry with source-qualified textile free liquid and separately sourced delivery rates and liquid temperatures. Reference area owns liquid and supply; current area conducts vapor. Latent removal and incoming sensible enthalpy enter the same conservative thermal balance, including independently requested mechanical heat. Exact net-depletion events handle dryout; dry supply can sustain evaporation or rewet the textile. Qualified loading-domain overflow refuses without drainage. No condensation, sorption, wet-property inference, body-water transfer, temperature feedback to mechanics, added mechanical water mass, comfort or empirical garment claim."
                 );
             }
+        }
+        if let Some(coupling) = self.mechanical_coupling {
+            result["mechanical_coupling"] = coupling;
+            result["scope"] = json!(
+                "First-order accepted-step evaporation coupling: cloth and contact use interval-start liquid mass, then the qualified thermal/water solver uses accepted geometry and removes co-moving vapor for the next mechanical interval. Initial liquid is a post-drape co-moving condition, not a wet equilibrium. Frozen mechanical laws are source-qualified over the complete loading and temperature domain. Thermal latent/sensible enthalpy and mechanical exported momentum/bulk energy have separate ledgers. Mechanical step refinement remains necessary. No supply, condensation, drainage, inferred wet laws, body-water transfer or empirical garment/comfort claim."
+            );
+            result["surface_water"]["scope"] = json!(
+                "The enclosing history's mechanical_coupling binds this exact remaining liquid to cloth inertia and gravity. These water fields retain only the independent conservative sensible/latent thermal ledger; exported bulk kinetic and gravitational energy appear in the mechanical ledger. No liquid slip, vapor thrust, supply, condensation or drainage is modeled."
+            );
         }
         Ok(result)
     }
