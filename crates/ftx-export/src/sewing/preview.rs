@@ -34,14 +34,15 @@ fn path(points: &[Vec2], closed: bool) -> String {
 /// configured-cell job without an explicit cell. Use [`svg_cell`] for its actual source geometry.
 pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<String, Refusal> {
     let plan = SewPlan::build(pattern, options)?;
-    if plan
-        .production
-        .as_ref()
-        .and_then(|production| production.parallel.as_ref())
-        .is_some_and(|parallel| !parallel.cell_plans.is_empty())
-    {
+    if plan.production.as_ref().is_some_and(|production| {
+        production.routing.is_some()
+            || production
+                .parallel
+                .as_ref()
+                .is_some_and(|parallel| !parallel.cell_plans.is_empty())
+    }) {
         return Err(bad(
-            "configured-machine sewing preview requires an explicit parallel cell",
+            "configured-machine sewing preview requires an explicit cell",
         ));
     }
     render(pattern, &plan, operation, None)
@@ -60,6 +61,37 @@ pub fn svg_cell(
     operation: &str,
 ) -> Result<String, Refusal> {
     let plan = SewPlan::build(pattern, options)?;
+    if let Some(routing) = plan
+        .production
+        .as_ref()
+        .and_then(|production| production.routing.as_ref())
+    {
+        let source = routing
+            .cell_plans
+            .iter()
+            .find(|candidate| candidate.cell == cell)
+            .ok_or_else(|| bad("unknown routed sewing preview cell"))?;
+        let copies: Vec<_> = routing
+            .selected
+            .operations
+            .iter()
+            .filter(|step| step.cell == cell && step.operation_id == operation)
+            .map(|step| step.copy)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        return render(
+            pattern,
+            &source.plan,
+            operation,
+            Some(CellPreview {
+                id: cell,
+                copies: &copies,
+                machine_sha256: &source.machine_sha256,
+                qualifications: &source.qualifications,
+            }),
+        );
+    }
     let parallel = plan
         .production
         .as_ref()

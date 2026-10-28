@@ -227,6 +227,25 @@ No physical pool access, inter-cell garment transport, factory timing or machine
 Tests: capacity, spanning holds, source invalidation, windows and bounded replay in `sewing_parallel`;
 actual native/portable geometry, inventory, study and replay in `sewing_production_workflow`.
 
+**Specialist garment routing** (`production.routing`). `fixed_operation_route/1` assigns every
+original operation once per copy to a declared cell, preserving the global dependency order and
+full source seam coverage. Private subset admission reuses ordinary geometry/process gates against
+the unchanged pattern; only assigned passes must qualify on each specialist, and actual cell
+geometry drives stitches, previews, combined yarn purchases and study results. Every cell has
+independent attending labor through load/setup/feed/unload, with sufficient unloaded staging at
+every cell. One separately sourced transfer resource serializes complete ready-state-to-ready-state
+handoffs; cell and transfer finish windows are inclusive. Outer serial timing, parallel allocation,
+cell workholding and implicit fixture transfer refuse. Plan `/18`, production `/6`, routing `/1`
+and stitch `/7` retain exact operation/copy/cell identities, source plans and complete timelines.
+Bounded fixed-route append dispatch retains a complete incumbent or reports unresolved failure;
+only matching an independent mandatory-work lower bound establishes `optimality_proven`.
+Two complete replays share the 200000-work cap, and all retained source tables share the 250000
+station bound. Serial ordering accessors withhold unrelated timing; the existing elapsed-completion
+consumer uses routing. Tests: `sewing_routing` (eleven direct regressions typechecked; executable
+verification pending build-space recovery). Measured factory qualification, flexible routing,
+retained/shared fixture composition and hardware authorization remain open. See
+`docs/sewing-production.md`.
+
 **Planar sewing access** (`passes[].access`). Optional `planar_disk_sweep/1` requires an explicit
 flat assembly and an admitted source process qualification. Full machine and qualification hashes
 bind the independent tool/fixture acquisition to the current configuration and material stack.

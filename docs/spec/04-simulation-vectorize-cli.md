@@ -221,6 +221,21 @@ The wrap preserves arclength along x at radius R and along y exactly. The tested
   sagittal plane, where the crotch seam lies. Without this the right and left panels start crossed. This rule applies
   to the start wrap and to the roll at k ≥ 1, not to partial rolls.
 
+**Native extension: physical limb panels.** A quantity-one panel with explicit
+`placement.side: "R" | "L"` uses the selected physical limb frame directly, including its
+landmark and section-radius queries. The supplied 2D coordinates and public side are unchanged;
+neither generated-instance reflection is applied. The frame must remain properly handed
+(`lat = up × front`), so selecting a left limb cannot turn the cloth inside out. The same frame,
+anchor and radius drive the partial roll. For physical leg panels the own-side start rule is
+`min(x, −1 mm)` on the right and `max(x, +1 mm)` on the left, applied only at the completed wrap.
+Torso sides, mirror-pair quantities and folded panels with an explicit physical side refuse.
+
+`PartFrames` providers may supply independent left and right frames. The existing Anny
+`BodyFrames` drape adapter supplies the left start frame by reflecting the right origin, up and
+front about x = 0 and recomputing `lat = up × front`; it retains the right-derived landmark
+heights and section radii. This is the existing symmetric initial-placement convention, not
+qualification of asymmetric anatomy, a different solver, or a physical-fit claim.
+
 ### 3.5 Inferred placement (pieces without one; traced sheets)
 
 The round step (§11.5) runs this for every piece without a placement whose `sim` is not false, unless the pattern is

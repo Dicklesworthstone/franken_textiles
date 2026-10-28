@@ -51,7 +51,7 @@ pub struct StitchStep {
 #[derive(Clone, Debug, Serialize)]
 pub struct SewProgram {
     /// `/1` centerline, `/2` offset, `/3` assembly, `/4` copies, `/5` shared parallel cells,
-    /// `/6` separately admitted cell geometry, recipes and rates.
+    /// `/6` separately admitted cell geometry, recipes and rates; `/7` routed garment operations.
     pub schema: &'static str,
     /// Original inputs, frozen source materials, paired station tables and directed operation order.
     pub plan: SewPlan,
@@ -92,7 +92,24 @@ impl SewProgram {
                 )?;
             }
         }
-        let sequence: Vec<_> = if let Some(parallel) = plan
+        let sequence: Vec<_> = if let Some(routing) = plan
+            .production
+            .as_ref()
+            .and_then(|production| production.routing.as_ref())
+        {
+            routing
+                .selected
+                .operations
+                .iter()
+                .map(|operation| {
+                    (
+                        Some(operation.cell.clone()),
+                        Some(operation.copy),
+                        operation.seam_index,
+                    )
+                })
+                .collect()
+        } else if let Some(parallel) = plan
             .production
             .as_ref()
             .and_then(|production| production.parallel.as_ref())
@@ -177,6 +194,12 @@ impl SewProgram {
         }
         Ok(Self {
             schema: if plan
+                .production
+                .as_ref()
+                .is_some_and(|production| production.routing.is_some())
+            {
+                "ftx-sewing-program/7"
+            } else if plan
                 .production
                 .as_ref()
                 .and_then(|production| production.parallel.as_ref())

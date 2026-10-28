@@ -105,7 +105,8 @@ pub struct SewingPass {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SewOptions {
-    /// Declared machine configuration.
+    /// Declared machine configuration. In explicit routing this is retained template metadata;
+    /// every executed operation instead uses its assigned specialist's configured machine.
     pub machine: SewingMachine,
     /// Explicit passes covering every seam, including seams omitted from a simulation.
     pub passes: Vec<SewingPass>,
@@ -134,11 +135,18 @@ pub struct SewOptions {
 }
 
 impl SewOptions {
-    /// Source geometry builds described by one complete job: the outer reference plus every
-    /// explicitly configured cell, including idle cells. Shared-configuration cells reuse the
-    /// reference. This conservative work reservation does not admit a malformed cell policy.
+    /// Retained source geometry tables: the outer plan plus every explicitly configured cell,
+    /// including idle whole-garment cells. Routing retains a merged outer table and each specialist
+    /// subset. This conservative work reservation does not admit a malformed cell policy.
     #[must_use]
     pub fn source_plan_count(&self) -> usize {
+        if let Some(routing) = self
+            .production
+            .as_ref()
+            .and_then(|production| production.routing.as_ref())
+        {
+            return 1usize.saturating_add(routing.cells.len());
+        }
         1usize.saturating_add(
             self.production
                 .as_ref()
@@ -162,6 +170,12 @@ impl SewOptions {
     pub fn scheduling_work_bound(&self) -> Result<usize, Refusal> {
         let resolved = production::resolve_options(self)?;
         if let Some(production) = &resolved.production {
+            if let Some(routing) = &production.routing {
+                return routing.work_bound(
+                    production.production_copies.unwrap_or(1),
+                    resolved.passes.len(),
+                );
+            }
             return production.parallel.as_ref().map_or_else(
                 || Ok(production.ordering.max_search_nodes),
                 |parallel| {
@@ -181,6 +195,13 @@ impl SewOptions {
     /// Active scheduling policy. Production and one-garment ordering are exclusive at admission.
     #[must_use]
     pub fn ordering_policy(&self) -> Option<&ordering::Policy> {
+        if self
+            .production
+            .as_ref()
+            .is_some_and(|production| production.routing.is_some())
+        {
+            return None;
+        }
         self.production
             .as_ref()
             .map(|production| &production.ordering)
@@ -448,7 +469,7 @@ impl SewPlan {
         if self
             .production
             .as_ref()
-            .is_some_and(|production| production.parallel.is_some())
+            .is_some_and(|production| production.parallel.is_some() || production.routing.is_some())
         {
             return None;
         }
@@ -481,28 +502,47 @@ impl SewPlan {
     /// Aggregate feed/setup/handling work remains separately scoped in the parallel report.
     #[must_use]
     pub fn parallel_makespan_seconds(&self) -> Option<f64> {
-        self.production
-            .as_ref()?
-            .parallel
-            .as_ref()
-            .map(|parallel| parallel.selected.makespan_milliseconds as f64 / 1000.0)
+        let production = self.production.as_ref()?;
+        production.routing.as_ref().map_or_else(
+            || {
+                production
+                    .parallel
+                    .as_ref()
+                    .map(|parallel| parallel.selected.makespan_milliseconds as f64 / 1000.0)
+            },
+            |routing| Some(routing.selected.makespan_milliseconds as f64 / 1000.0),
+        )
     }
 
     /// Proof status for the qualified parallel-cell assignment and its declared time resolution.
     #[must_use]
     pub fn parallel_optimality_proven(&self) -> Option<bool> {
-        self.production
-            .as_ref()?
-            .parallel
-            .as_ref()
-            .map(|parallel| parallel.optimality_proven)
+        let production = self.production.as_ref()?;
+        production.routing.as_ref().map_or_else(
+            || {
+                production
+                    .parallel
+                    .as_ref()
+                    .map(|parallel| parallel.optimality_proven)
+            },
+            |routing| Some(routing.optimality_proven),
+        )
     }
 
-    /// Source geometry and qualifications actually used by this physical parallel cell. Version 1
-    /// shares the parent source plan; version 2 retains a separately admitted ordinary cell plan.
+    /// Source geometry and qualifications actually used by this physical cell. Whole-garment
+    /// version 1 shares the parent; configured cells retain their own plan, and routed specialists
+    /// retain only their assigned operations on the unchanged source pattern.
     #[must_use]
     pub fn parallel_cell_plan(&self, cell: &str) -> Option<&Self> {
-        let parallel = self.production.as_ref()?.parallel.as_ref()?;
+        let production = self.production.as_ref()?;
+        if let Some(routing) = &production.routing {
+            return routing
+                .cell_plans
+                .iter()
+                .find(|candidate| candidate.cell == cell)
+                .map(|candidate| candidate.plan.as_ref());
+        }
+        let parallel = production.parallel.as_ref()?;
         if parallel.cell_plans.is_empty() {
             parallel
                 .selected
@@ -529,6 +569,15 @@ impl SewPlan {
             })
         };
         let outer = source_count(self);
+        if let Some(routing) = self
+            .production
+            .as_ref()
+            .and_then(|production| production.routing.as_ref())
+        {
+            return routing.cell_plans.iter().fold(outer, |total, cell| {
+                total.saturating_add(source_count(&cell.plan))
+            });
+        }
         self.production
             .as_ref()
             .and_then(|production| production.parallel.as_ref())
@@ -558,6 +607,32 @@ impl SewPlan {
     /// passes; failed flat seam checks; machine/allowance limits; more than 4096 passes or 250000
     /// conservative station slots. Refusal publishes no partial plan.
     pub fn build(pattern: &Pattern, options: &SewOptions) -> Result<Self, Refusal> {
+        if options
+            .production
+            .as_ref()
+            .is_some_and(|production| production.routing.is_some())
+        {
+            let resolved = production::resolve_options(options)?;
+            return production::routing::build(pattern, resolved.as_ref());
+        }
+        Self::build_inner(pattern, options, None)
+    }
+
+    /// Route admission has checked the complete union of operations and dependencies. This private
+    /// geometry build admits only one specialist cell's passes against the unchanged source pattern.
+    pub(super) fn build_routing_subset(
+        pattern: &Pattern,
+        options: &SewOptions,
+        global_operations: &BTreeSet<String>,
+    ) -> Result<Self, Refusal> {
+        Self::build_inner(pattern, options, Some(global_operations))
+    }
+
+    fn build_inner(
+        pattern: &Pattern,
+        options: &SewOptions,
+        global_operations: Option<&BTreeSet<String>>,
+    ) -> Result<Self, Refusal> {
         // Reserve finite quote/alias work before generating any geometry or pricing a prefix.
         consumables::purchasing_work_bound(options)?;
         let errors = pattern.structure_errors();
@@ -682,14 +757,14 @@ impl SewPlan {
             }
         }
         let covered: BTreeSet<_> = remaining.values().map(|p| p.seam.as_str()).collect();
-        if covered.len() != source_seams.len()
+        if (global_operations.is_none() && covered.len() != source_seams.len())
             || covered.iter().any(|id| !source_seams.contains_key(id))
         {
             return Err(bad(
                 "provide at least one sewing pass for every pattern seam, and no unknown seams",
             ));
         }
-        for id in source_seams.keys() {
+        for id in source_seams.keys().filter(|_| global_operations.is_none()) {
             span::require_coverage(
                 id,
                 "a",
@@ -702,7 +777,11 @@ impl SewPlan {
         }
         for pass in remaining.values() {
             let deps: BTreeSet<_> = pass.after.iter().collect();
-            if deps.len() != pass.after.len() || deps.iter().any(|id| !remaining.contains_key(*id))
+            if deps.len() != pass.after.len()
+                || deps.iter().any(|id| {
+                    !remaining.contains_key(*id)
+                        && global_operations.is_none_or(|global| !global.contains(*id))
+                })
             {
                 return Err(bad(format!(
                     "{}: duplicate or unknown predecessor",
@@ -811,7 +890,13 @@ impl SewPlan {
             hardware_execution_authorized: false,
             physical_seam_quality_validated: false,
         };
-        let mut done = BTreeSet::new();
+        let mut done: BTreeSet<String> = global_operations.map_or_else(BTreeSet::new, |global| {
+            global
+                .iter()
+                .filter(|id| !remaining.contains_key(*id))
+                .cloned()
+                .collect()
+        });
         let mut budget = 0usize;
         let mut geometry_work = 0usize;
         let mut assembly_slots = 0usize;
@@ -1069,7 +1154,7 @@ impl SewPlan {
         }
         // Different offset recipes can pair the same A split with different B source positions.
         // Coverage must therefore hold in both original source frames, with no gap tolerance.
-        for id in source_seams.keys() {
+        for id in source_seams.keys().filter(|_| global_operations.is_none()) {
             span::require_coverage(
                 id,
                 "b",

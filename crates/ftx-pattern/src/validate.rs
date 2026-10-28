@@ -577,10 +577,18 @@ fn level_y(
         .and_then(|p| p.placement.clone())
         .unwrap_or_default();
     let part = pl.part.as_deref().unwrap_or("torso");
+    let side = crate::instance::physical_side(&pat.raw()["pieces"][inst.piece_index])?;
     let part_key = if part == "torso" {
         "torso".to_string()
     } else {
-        format!("{part}_R")
+        format!(
+            "{part}_{}",
+            if side == Some(crate::Side::L) {
+                "L"
+            } else {
+                "R"
+            }
+        )
     };
     let h = body.landmark_h(&part_key, landmark)?;
     let h0 = body.landmark_h(&part_key, pl.y0_landmark.as_deref().unwrap_or("waist"))?;
@@ -1105,6 +1113,45 @@ pub fn default_fit_spec(pat: &Pattern, garment: &str) -> Value {
 #[cfg(test)]
 mod raw_point_tests {
     use super::*;
+
+    #[test]
+    fn physical_side_uses_its_own_landmark_for_finished_width() {
+        struct UnequalArms;
+        impl BodyMeasure for UnequalArms {
+            fn value(&self, _: &str) -> Result<f64, PyError> {
+                Ok(70.0)
+            }
+            fn sigma(&self, _: &str) -> Option<f64> {
+                None
+            }
+            fn landmark_h(&self, part: &str, name: &str) -> Result<f64, PyError> {
+                match (part, name) {
+                    ("arm_R" | "arm_L", "shoulder_tip") => Ok(0.0),
+                    ("arm_R", "elbow") => Ok(-50.0),
+                    ("arm_L", "elbow") => Ok(-25.0),
+                    _ => Err(PyError::Key(format!("{part}/{name}"))),
+                }
+            }
+        }
+        let mut raw = json!({"schema":"fabric-pattern/1","units":"mm","pieces":[{"id":"p","cut":{"qty":1},
+            "vertices":{"a":[-20,0],"b":[20,0],"c":[40,100],"d":[-40,100]},
+            "edges":[{"id":"a","from":"a","to":"b"},{"id":"b","from":"b","to":"c"},
+                {"id":"c","from":"c","to":"d"},{"id":"d","from":"d","to":"a"}],
+            "placement":{"part":"arm","y0_landmark":"shoulder_tip","y0":100}}]});
+        let point = json!({"id":"elbow_width","kind":"width","instance":"p","landmark":"elbow",
+            "body":"upper_arm","target_mm":[0,0,0]});
+        // The trapezoid is 40 mm wide at y=0 and 80 mm at y=100: widths at 50/75 are 60/70.
+        for (side, expected) in [(None, 60.0), (Some("R"), 60.0), (Some("L"), 70.0)] {
+            if let Some(side) = side {
+                raw["pieces"][0]["placement"]["side"] = json!(side);
+            }
+            let pattern = Pattern::new(raw.clone());
+            assert!(pattern.structure_errors().is_empty());
+            let measured = measure_point(&pattern, &point, &UnequalArms);
+            assert_eq!(measured.finished_mm, Some(expected));
+            assert_eq!(measured.ease_mm, Some(expected - 70.0));
+        }
+    }
 
     fn fixture() -> (Pattern, Value) {
         let pattern = Pattern::from_json(include_str!(

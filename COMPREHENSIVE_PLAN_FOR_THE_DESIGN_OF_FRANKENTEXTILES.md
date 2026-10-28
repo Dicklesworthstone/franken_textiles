@@ -4115,8 +4115,41 @@ late reads and obsolete worker replies cannot publish an old conversion over cur
 uses the existing original-pattern reset for assignments, interfaces, outfit ownership and results.
 
 This extends `ftx-a9dm` into a user-facing browser workflow without adding another geometry converter.
-Unsupported source semantics, physical limb placement and garment-completeness/fit qualification
+Unsupported source semantics and garment-completeness/fit qualification
 remain with the canonical import and downstream consumers. See the [README](README.md#import-an-evaluated-garmentcode-pattern).
+
+### 25.112 Physical limb panels retain their own geometry through placement
+
+Already expanded arm and leg panels can declare an explicit physical side through the ordinary
+pattern placement record. The same selection drives fit landmarks, body-frame placement and wrap/
+roll without generating another cut piece or reflecting its flat geometry. Contradictory side,
+quantity and fold declarations refuse; unplaced imported limb roles cannot infer a side. Existing
+generated mirror pairs retain their reference behavior. The current Anny adapter supplies a
+properly handed symmetric left start frame with right-derived heights and radii. Direct synthetic
+tests cover sewn imported panels and independent side-specific frame providers; no asymmetric
+anatomical, drape-convergence or physical-fit claim follows. See spec 01 §2.8 and spec 04 §3.4.
+
+### 25.113 Route complete garments through independently qualified specialist cells
+
+An explicit fixed operation route now lets one garment use several machines, including returning
+to an earlier cell for finishing. Every original operation appears once per copy in dependency order.
+Each specialist admits only its assigned passes against the unchanged pattern, while the complete
+union still covers both seam sides. Actual assigned recipes determine stitch geometry, feed and
+combined yarn purchasing through the existing sewing, preview and material-study consumers.
+
+The first routing model uses dedicated attending labor at each cell, complete loading and unloading
+around every operation, sufficient unloaded staging at every cell, and one independently qualified
+serialized handoff resource. Complete source-bearing transfer intervals include their return to a
+qualified ready state. Cell and transfer availability windows remain inclusive. No fictitious
+all-capable serial reference machine, occupied-fixture transfer or autonomous feed is introduced.
+
+Bounded dispatch retains a complete feasible batch, including a searched replacement when the
+copy-order seed misses a window. Restricted search completion stays distinct from a proved minimum;
+the latter requires matching an independent mandatory-work lower bound. Baseline and selected
+timelines preserve exact garment/operation/cell identities and actual phase boundaries for replay.
+This extends `ftx-pb2.2`; flexible machine routes, retained/shared fixture composition, measured
+factory access/timing, seam quality and hardware execution remain separate work. See
+[sewing-production.md](docs/sewing-production.md#route-one-garment-through-specialist-cells).
 
 ## Appendix A. Sources
 

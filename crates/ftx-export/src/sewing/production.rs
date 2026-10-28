@@ -11,9 +11,11 @@ use super::{SewOptions, SewPlan, bad, ordering};
 
 pub mod handling;
 pub mod parallel;
+pub mod routing;
 pub mod workholding;
 
-/// Optional production schedule. The expanded graph has at most 63 operations and one machine.
+/// Optional production schedule. The expanded graph has at most 63 operations; explicit parallel
+/// assignment or specialist routing supplies separately qualified physical machines and resources.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
@@ -32,6 +34,10 @@ pub struct Policy {
     /// Optional assignment of whole garments to explicitly independent qualified machine cells.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel: Option<parallel::Policy>,
+    /// Optional fixed operation route through specialist cells. Exclusive with parallel allocation
+    /// and outer serial timing/resources; every cell supplies its own complete qualified phases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<routing::Policy>,
 }
 
 /// One physical garment operation, referencing the single retained geometry and qualified recipe.
@@ -64,7 +70,8 @@ pub struct Report {
     pub schema: &'static str,
     /// Actual garment quantity shared with any requested thread inventory.
     pub production_copies: usize,
-    /// Exact single machine/configuration from the owning qualified sewing plan.
+    /// Single-machine identity, or retained template header in routing mode. Actual routed machines
+    /// and process qualifications live in `routing.cell_plans`, never in this header.
     pub machine: String,
     /// Complete repeated operation graph, initially ordered by copy then original topological order.
     pub operations: Vec<Operation>,
@@ -86,6 +93,10 @@ pub struct Report {
     /// their single-machine reference meaning; selected physical work lives in these cell reports.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel: Option<parallel::Report>,
+    /// Actual routed operation/transfer execution. When present the outer ordering retains only
+    /// dispatch identities and per-cell change counts, never a fictitious serial machine timeline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing: Option<routing::Report>,
 }
 
 fn count(value: usize) -> Result<usize, Refusal> {
@@ -106,8 +117,9 @@ pub(super) fn resolve_options(options: &SewOptions) -> Result<Cow<'_, SewOptions
             "choose one-garment ordering or production scheduling, not both",
         ));
     }
-    if (production.ordering.objective == ordering::Objective::MinimizeProductionTime)
-        != production.handling.is_some()
+    if production.routing.is_none()
+        && (production.ordering.objective == ordering::Objective::MinimizeProductionTime)
+            != production.handling.is_some()
     {
         return Err(bad(
             "qualified handling requires minimize_production_time ordering, and that objective requires handling",
@@ -131,9 +143,27 @@ pub(super) fn resolve_options(options: &SewOptions) -> Result<Cow<'_, SewOptions
             "production operation count overflows",
         )
     })?;
-    production
-        .ordering
-        .validate_production(expanded, &options.machine.id)?;
+    if let Some(routing) = &production.routing {
+        if production.parallel.is_some()
+            || production.workholding.is_some()
+            || production.handling.is_some()
+            || production.ordering.objective != ordering::Objective::MinimizeSetupChanges
+            || production.ordering.initial_setup.is_some()
+            || production.ordering.setup_times.is_some()
+        {
+            return Err(bad(
+                "routing is exclusive with outer serial timing/resources and parallel allocation; leave the legacy production ordering as untimed count metadata",
+            ));
+        }
+        production
+            .ordering
+            .validate_production(expanded, &options.machine.id)?;
+        routing.work_bound(copies, options.passes.len())?;
+    } else {
+        production
+            .ordering
+            .validate_production(expanded, &options.machine.id)?;
+    }
     if let Some(parallel) = &production.parallel {
         parallel.work_bound(copies, production.ordering.max_search_nodes)?;
         if production.handling.is_none() {
@@ -295,5 +325,6 @@ pub(super) fn evaluate(
         workholding,
         handling,
         parallel,
+        routing: None,
     })
 }

@@ -1562,6 +1562,76 @@ test('parallel cells display elapsed completion, local-to-global copies and exac
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
+test('routed specialist cells show actual operations, serialized garment transfers and scoped proof in every result view', async () => {
+  const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
+  const source=(cell,operation,needle,pitch)=>({cell,machine_sha256:`${cell}-lock`,qualifications:{},
+    plan:{options:{machine:{id:`${cell}-machine`},qualifications:[]},
+      seams:[{pass:{id:operation,seam:'side',needle,thread:'Y',max_stitch_mm:pitch,stitches_per_minute:600,after:[]}}]}});
+  const a=source('straight','join','N-A',5), b=source('finish','reinforce','N-B',10);
+  const step=(copy,operation_id,cell,start,feed,finish)=>({id:`${copy}/${operation_id}`,copy,operation_id,cell,seam_index:0,
+    loading_start_milliseconds:start,setup_start_milliseconds:start+100,feed_start_milliseconds:feed,
+    feed_finish_milliseconds:finish-200,finish_milliseconds:finish});
+  const selected={makespan_milliseconds:12600,feed_seconds:12,scheduled_feed_milliseconds:12000,
+    setup_milliseconds:1500,handling_milliseconds:1200,transfer_milliseconds:1400,
+    operations:[step(0,'join','straight',0,1100,5300),step(0,'reinforce','finish',6000,6600,8800),
+      step(1,'join','straight',5300,5400,9600),step(1,'reinforce','finish',10300,10400,12600)],
+    transfers:[{copy:0,from_operation:'join',to_operation:'reinforce',from:'straight',to:'finish',start_milliseconds:5300,finish_milliseconds:6000},
+      {copy:1,from_operation:'join',to_operation:'reinforce',from:'straight',to:'finish',start_milliseconds:9600,finish_milliseconds:10300}]};
+  const routing={schema:'ftx-sewing-routing/1',route:[{operation:'join',cell:'straight'},{operation:'reinforce',cell:'finish'}],
+    cell_plans:[a,b],baseline:{...selected,makespan_milliseconds:16100},selected,
+    lower_bound_makespan_milliseconds:12600,search_nodes:12,search_complete:true,optimality_proven:true,budget_exhausted:false};
+  const plan={schema:'ftx-sewing-plan/18',hardware_execution_authorized:false,seams:[...a.plan.seams,...b.plan.seams],
+    options:{production:{routing:{source:{note:'<source-qualified route>'},staging_capacity:2,
+      cells:[{id:'straight',available_at_milliseconds:0,available_until_milliseconds:9600},
+        {id:'finish',available_at_milliseconds:0,available_until_milliseconds:12600}],
+      transfer:{id:'one-mover',available_at_milliseconds:0,available_until_milliseconds:10300}}}},
+    production:{production_copies:2,feed_seconds:12,ordering:{optimality_proven:true},routing}};
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('routed'); row.sewing=outcome(plan); row.metrics.sewing_parallel_makespan_seconds=12.6;
+    const study=studyReport([row]);
+    const report=op==='sew'?{schema:'ftx-sewing-program/7',stitches:[],plan}:
+      op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=JSON.stringify(report);
+    await p.e[op].onclick(); p.emit(report,[{name:'routed-report.json',text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    assert.deepEqual(plain(table('routed completion and aggregate work').children[3].children.map(n=>n.textContent)),
+      ['Selected route dispatch','12.6','12','12','1.5','1.2','1.4']);
+    assert.deepEqual(plain(table('fixed garment route').children.at(-1).children.map(n=>n.textContent)),
+      ['2','reinforce','finish','finish-machine','N-B','Y','10','600']);
+    assert.deepEqual(plain(table('selected garment transfers').children.at(-1).children.map(n=>n.textContent)),
+      ['1','join','reinforce','straight','finish','9.6','10.3']);
+    assert.deepEqual(plain(table('selected routed operation timeline').children.at(-1).children.map(n=>n.textContent)),
+      ['1','reinforce','finish','10.3','10.4','10.4','12.4','12.6']);
+    assert.deepEqual(plain(table('qualified routing availability').children.at(-1).children.map(n=>n.textContent)),
+      ['one-mover','0','10.3']);
+    assert.match(visibleText(s),/Minimum completion time proved within the declared fixed-route dispatch search/);
+    assert.match(visibleText(s),/Each specialist cell qualifies only its assigned operations/);
+    assert.doesNotMatch(visibleText(s),/Every garment stays in one physical cell|Minimum declared setup|Selected cross-garment sewing order/);
+    const detail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('route sources, cell locks and complete baseline/selected timelines'));
+    detail.open=true; detail.handlers.toggle(); assert.match(visibleText(detail),/<source-qualified route>/);
+    const download=descendants(s).find(n=>n.download==='routed-report.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    if(op==='sew') {
+      const summary=JSON.parse(s.children[1].textContent);
+      assert.equal(summary.routed_makespan_seconds,12.6); assert.equal(summary.routed_optimality_proven,true);
+      assert.equal(summary.garment_transfers,2); assert.equal(summary.transfer_seconds,1.4);
+      assert.equal(Object.hasOwn(summary,'ordering_optimality_proven'),false);
+      assert.equal(Object.hasOwn(summary,'modeled_production_seconds'),false);
+      routing.optimality_proven=false; routing.budget_exhausted=true; routing.baseline_replaced=true;
+      await p.e.sew.onclick(); p.emit(report);
+      assert.match(visibleText(s),/minimum completion time is not proved/);
+      assert.match(visibleText(s),/dispatch search reached its work limit/);
+      assert.match(visibleText(s),/Feasible replacement baseline/);
+      routing.optimality_proven=true; routing.budget_exhausted=false; routing.baseline_replaced=false;
+    }
+  }
+  p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
 test('shared operator timelines preserve resource waits, restricted proof and cell-only window scope in every result view', async () => {
   const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
   const schedule={feed_seconds:4,operations:[{id:'0/join',copy:0,operation_id:'join',seam_index:0,after:[]}],

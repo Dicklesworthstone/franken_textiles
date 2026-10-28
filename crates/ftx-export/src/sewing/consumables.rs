@@ -365,6 +365,15 @@ pub fn purchasing_work_bound(options: &SewOptions) -> Result<usize, Refusal> {
                 .flat_map(|cell| cell.configuration.iter())
                 .flat_map(|configuration| &configuration.qualifications),
         )
+        .chain(
+            options
+                .production
+                .iter()
+                .flat_map(|production| production.routing.iter())
+                .flat_map(|routing| &routing.cells)
+                .flat_map(|cell| cell.configuration.iter())
+                .flat_map(|configuration| &configuration.qualifications),
+        )
         .filter_map(|q| q.thread_consumption.as_ref())
     {
         if model.channels.is_empty() || model.channels.len() > MAX_CHANNELS {
@@ -421,8 +430,12 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
         .as_ref()
         .and_then(|production| production.parallel.as_ref())
         .filter(|parallel| !parallel.cell_plans.is_empty());
+    let routed = plan
+        .production
+        .as_ref()
+        .and_then(|production| production.routing.as_ref());
     let mut report = Report {
-        schema: if configured.is_some() {
+        schema: if configured.is_some() || routed.is_some() {
             "ftx-sewing-consumables/3"
         } else if request.production_copies.is_some() {
             "ftx-sewing-consumables/2"
@@ -442,7 +455,15 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
         purchasing: None,
         purchasing_work_bound: purchasing_work_bound(&plan.options)?,
     };
-    let batches: Vec<_> = if let Some(parallel) = configured {
+    let batches: Vec<_> = if let Some(routing) = routed {
+        // A fixed route executes each cell's admitted subset exactly once per physical copy.
+        // Multiplying the outer merged geometry at every cell would invent stitches and yarn.
+        routing
+            .cell_plans
+            .iter()
+            .map(|source| (Some(source.cell.as_str()), source.plan.as_ref(), copies))
+            .collect()
+    } else if let Some(parallel) = configured {
         parallel
             .selected
             .cells

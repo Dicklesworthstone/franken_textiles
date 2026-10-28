@@ -425,10 +425,16 @@ impl<'a, 'body> Session<'a, 'body> {
             .map(|conditions| outcome(conditions.evaluate(&run.report)));
         let positions_sha256 = hash(&run.scene.solver.x)?;
         // Exact resolved placement data disambiguates callers with equal skins but different frames.
-        let placements: Vec<_> = run.scene.placements.iter().map(|p| json!({
-            "frame":{"origin":p.frame.origin,"up":p.frame.up,"front":p.frame.front,"lat":p.frame.lat},
-            "h0":p.h0,"radius":p.radius,"theta_deg":p.theta_deg,"x0":p.x0,
-            "mirrored":p.mirrored,"own_side":p.own_side})).collect();
+        let placements: Vec<_> = run.scene.placements.iter().map(|p| {
+            let mut placement = json!({
+                "frame":{"origin":p.frame.origin,"up":p.frame.up,"front":p.frame.front,"lat":p.frame.lat},
+                "h0":p.h0,"radius":p.radius,"theta_deg":p.theta_deg,"x0":p.x0,
+                "mirrored":p.mirrored,"own_side":p.own_side});
+            if p.own_side_left {
+                placement["own_side_left"] = json!(true);
+            }
+            placement
+        }).collect();
         let mut result = json!({"schema":"ftx-drape-scenario-result/1", "pattern_sha256":hash(pattern.raw())?,
             "scenario_sha256":self.scenario_sha256,"body_geometry_sha256":self.body_sha256,
             "placements_sha256":hash(&placements)?,"placements":placements,

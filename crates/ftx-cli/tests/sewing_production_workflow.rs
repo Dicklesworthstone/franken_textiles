@@ -110,6 +110,190 @@ fn shared_operator_options(windowed: bool) -> Value {
     options
 }
 
+fn routed_specialist_options() -> Value {
+    let mut options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
+    let mut cells = options["production"]["parallel"]["cells"].clone();
+    for (cell, operation) in cells
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(["join", "reinforce"])
+    {
+        for key in ["recipes", "qualification_refs"] {
+            cell["configuration"][key]
+                .as_object_mut()
+                .unwrap()
+                .retain(|id, _| id == operation);
+        }
+        let admitted: Vec<_> = cell["configuration"]["qualification_refs"][operation]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|q| q["id"].clone())
+            .collect();
+        cell["configuration"]["qualifications"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|q| admitted.contains(&q["id"]));
+        for key in [
+            "qualifications",
+            "initial_milliseconds",
+            "final_milliseconds",
+        ] {
+            cell["handling"][key]
+                .as_object_mut()
+                .unwrap()
+                .retain(|id, _| id == operation);
+        }
+        cell["handling"]["transitions"] = json!([]);
+        cell["handling"]["method"] = json!(
+            "Load and unload every separate routed operation; no retained garment or fixture"
+        );
+        cell.as_object_mut().unwrap().remove("workholding");
+    }
+    let source = json!({"reference":"test:native-specialist-route","accessed_on":"2026-10-27",
+        "note":"Synthetic complete handoffs and independent attended cells; no physical process validation"});
+    options["qualifications"] = json!([]);
+    options["consumables"]["production_copies"] = json!(2);
+    options["production"] = json!({"production_copies":2,
+        "ordering":{"objective":"minimize_setup_changes","max_search_nodes":1},
+        "routing":{"model":"fixed_operation_route/1","objective":"minimize_makespan",
+            "time_basis":"ceil_operation_feed_milliseconds/1","protocol":"unloaded_between_operations/1",
+            "independence":"independent_attended_cells_and_transfer_resource/1",
+            "max_search_nodes":10000,"staging_capacity":2,"cells":cells,"cell_locks":{},
+            "route":[{"operation":"join","cell":"cell-a"},{"operation":"reinforce","cell":"cell-b"}],
+            "transfer":{"id":"transfer-worker","model":"serialized_unloaded_handoffs/1",
+                "available_at_milliseconds":0,"transfers":[{"from":"cell-a","to":"cell-b","milliseconds":700}],
+                "source":source,"method":"Position, pick up, move, deposit and return ready; outside cell loading and unloading",
+                "evidence":"estimate","allow_estimates":true},
+            "source":source,"method":"Dedicated attending worker per machine; sufficient staging at every cell; separate handoff worker",
+            "evidence":"estimate","allow_estimates":true}});
+    let typed: ftx_export::sewing::SewOptions = serde_json::from_value(options.clone()).unwrap();
+    let locks: std::collections::BTreeMap<_, _> = typed
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap()
+        .cells
+        .iter()
+        .map(|cell| {
+            (
+                cell.id.clone(),
+                ftx_export::sewing::production::parallel::operator::cell_sha256(cell, &typed)
+                    .unwrap(),
+            )
+        })
+        .collect();
+    options["production"]["routing"]["cell_locks"] = json!(locks);
+    options
+}
+
+#[test]
+fn routed_specialists_replay_actual_native_stitches_inventory_previews_and_material_studies() {
+    let options = routed_specialist_options();
+    let options_text = options.to_string();
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &options_text).unwrap());
+    let plan = &program["plan"];
+    let route = &plan["production"]["routing"];
+    assert_eq!(program["schema"], "ftx-sewing-program/7");
+    assert_eq!(route["selected"]["makespan_milliseconds"], 11934);
+    assert_eq!(route["selected"]["scheduled_feed_milliseconds"], 10668);
+    assert_eq!(route["selected"]["transfers"].as_array().unwrap().len(), 2);
+    assert_eq!(program["stitches"].as_array().unwrap().len(), 120);
+    assert!(
+        (plan["consumables"]["total_required_length_m"]
+            .as_f64()
+            .unwrap()
+            - 2.2)
+            .abs()
+            < 1e-12
+    );
+    assert_eq!(
+        plan["consumables"]["purchasing"]["material_orders"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        plan["consumables"]["purchasing"]["least_observed_independent_order_total"],
+        14.0
+    );
+    for source in route["cell_plans"].as_array().unwrap() {
+        assert_eq!(source["plan"]["pattern_sha256"], plan["pattern_sha256"]);
+        assert_eq!(source["plan"]["seams"].as_array().unwrap().len(), 1);
+    }
+    let replay = portable(
+        ftx_wasm::manufacturing::sew_stitches(PATTERN, &plan["options"].to_string()).unwrap(),
+    );
+    assert_eq!(program, replay);
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"specialists","changes":{"schema":"ftx-material-bindings/1","default":pattern["fabric"]["material"]}}],
+        "sewing":options,"comparison":{"basis":"nominal","required_consumers":["sewing","sewing_consumables","sewing_purchasing"],
+            "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"},
+                {"metric":"thread_required_length_m","direction":"minimize"}]}});
+    let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    assert_eq!(report["comparison"]["frontier"], json!(["specialists"]));
+    let bound_plan = portable(
+        ftx_wasm::manufacturing::sew_plan(
+            report["alternatives"][0]["binding"]["result"]["pattern_json"]
+                .as_str()
+                .unwrap(),
+            &options.to_string(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        report["alternatives"][0]["sewing"]["result"]["production"]["routing"],
+        bound_plan["production"]["routing"]
+    );
+    assert_eq!(
+        bound_plan["production"]["routing"]["selected"],
+        route["selected"]
+    );
+    let directory = workspace();
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    fs::write(directory.join("options.json"), options_text).unwrap();
+    fs::write(directory.join("study.json"), study.to_string()).unwrap();
+    for main in [false, true] {
+        assert_eq!(
+            run(main, &directory, "sew-plan", "pattern.json", "options.json"),
+            *plan
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "options.json"
+            ),
+            program
+        );
+        assert_eq!(
+            run(main, &directory, "study", "pattern.json", "study.json"),
+            report
+        );
+    }
+    for (cell, operation) in [("cell-a", "join"), ("cell-b", "reinforce")] {
+        let svg =
+            ftx_wasm::manufacturing::sew_cell_svg(PATTERN, &options.to_string(), cell, operation)
+                .unwrap();
+        assert!(svg.contains(cell) && svg.contains(operation));
+    }
+    assert!(
+        ftx_wasm::manufacturing::sew_cell_svg(PATTERN, &options.to_string(), "cell-a", "reinforce")
+            .is_err()
+    );
+    let mut stale = options;
+    stale["production"]["routing"]["cells"][1]["configuration"]["machine"]["max_stitches_per_minute"] =
+        json!(1.0);
+    assert!(ftx_wasm::manufacturing::sew_plan(PATTERN, &stale.to_string()).is_err());
+}
+
 #[test]
 fn shared_operator_replays_actual_heterogeneous_geometry_inventory_and_bound_material_study() {
     for windowed in [false, true] {

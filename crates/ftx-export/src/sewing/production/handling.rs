@@ -112,7 +112,7 @@ fn budget() -> Refusal {
 }
 
 impl Policy {
-    fn validate(
+    pub(super) fn validate(
         &self,
         plan: &SewPlan,
     ) -> Result<BTreeMap<String, workholding::QualificationRef>, Refusal> {

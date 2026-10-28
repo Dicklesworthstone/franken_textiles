@@ -665,6 +665,7 @@ mod tests {
                 x0,
                 mirrored: false,
                 own_side: false,
+                own_side_left: false,
             })
             .collect();
         let board = board_layout(&mesh);
