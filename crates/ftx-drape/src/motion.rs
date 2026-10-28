@@ -121,7 +121,8 @@ fn regular_path(start: &[Vec3], end: &[Vec3], tris: &[[usize; 3]]) -> bool {
 /// Rejects motion it cannot complete within the stated budgets. Caller-visible state is unchanged
 /// on ANY error, including late errors after internally accepted steps. The initial, target and
 /// trial body surfaces are audited for self-intersection with exact shared-feature predicates.
-/// These endpoint audits do not certify the continuous body path or anatomical validity.
+/// Nonincident body features additionally pass additive CCD on every accepted linear chord,
+/// separately from face noncollapse. Anatomical validity and curved paths are not certified.
 ///
 /// # Errors
 /// Invalid state/options/topology, non-finite arithmetic, invalid start contact, exhausted work or
@@ -364,6 +365,12 @@ pub(crate) fn advance_body_coupled<S: Clone>(
         // the entire request, including any prior internally accepted cloth or thermal steps.
         let endpoint_audit = audit_surface(&end, &triangles, options.max_pairs)?;
         report.pairs_tested += endpoint_audit.pairs_tested as u64;
+        let body_safe = c.body.self_motion_bound(&end, options.max_pairs)?;
+        report.pairs_tested += body_safe.pairs_tested as u64;
+        if body_safe.fraction < 1.0 {
+            step = h * (0.8 * body_safe.fraction).min(0.5);
+            continue;
+        }
         let safe = c.motion_bound(&work.x, &work.x, &end, options.max_pairs)?;
         report.pairs_tested += safe.pairs_tested as u64;
         if safe.fraction < 1.0 {
