@@ -36,6 +36,13 @@ covariance from an evidence string. The original image, sidecar and calibration 
 capture assertions and checked calibration document remain in the downloaded reports.
 
 Give a measurement name and click its two points, or edit the named-pair JSON directly.
+To replay a saved annotation file, choose **Load saved point pairs** after analyzing the
+same oriented photo, using its full-resolution pixel coordinates. Loading replaces the current
+set; review the overlay before measuring.
+Unedited downloads retain the original UTF-8 point file, including its line endings.
+Point files do not verify which photo they belong to. Invalid JSON/UTF-8, non-pair documents
+and files over 256 KiB leave current pairs unchanged; source changes, edits and cancellation
+discard late reads. Measuring still applies the ordinary coordinate and calibration checks.
 **Cancel first click** abandons an unfinished pair and keeps the saved point JSON unchanged.
 To remove one completed measurement, enter its name and choose **Remove named pair**;
 other pairs and their annotations remain available, and that name can be added again.

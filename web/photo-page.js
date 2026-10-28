@@ -1,11 +1,16 @@
 const $ = id => document.getElementById(id);
 let worker = null, ticket = 0, busy = false, scale = null, bitmap = null, pending = [];
 let sourceUrls = [], resultUrls = [];
+let pointSource = null;
 let cameraWorker = null, cameraTicket = 0, cameraBusy = false, cameraResult = null, generatedCalibration = null;
 const cameraUrls = [];
 const status = text => {$("status").textContent=text;};
-function pointPairs() {
-  const pairs=JSON.parse($("points").value);
+function pointText() {
+  const displayed=$("points").value;
+  return pointSource?.displayed===displayed?pointSource.text:displayed;
+}
+function pointPairs(text=pointText()) {
+  const pairs=JSON.parse(text);
   if(!pairs || typeof pairs!=="object" || Array.isArray(pairs)) throw Error("Points must be a JSON object of named pairs.");
   return pairs;
 }
@@ -16,6 +21,7 @@ function controls() {
   $("clearCalibration").disabled=!calibrated;
   $("analyze").disabled=busy || cameraBusy || !$("photo").files.length || (charuco && !$("sheet").files.length);
   $("measure").disabled=busy || cameraBusy || scale?.ok !== true || pending.length>0;
+  $("pointFile").disabled=!bitmap || scale?.ok!==true;
   let namedPair=false;
   try {namedPair=!!$("name").value.trim() && Object.hasOwn(pointPairs(),$("name").value.trim());} catch {}
   $("removePair").disabled=!namedPair; $("cancelPoint").disabled=pending.length===0;
@@ -33,10 +39,10 @@ function controls() {
 function kill() { worker?.terminate(); worker=null; busy=false; controls(); }
 function revoke(urls) { urls.forEach(u=>URL.revokeObjectURL(u)); urls.length=0; }
 function withdraw(source=false) {
-  ++ticket; kill(); revoke(resultUrls); $("downloads").replaceChildren();
+  ++ticket; kill(); $("pointFile").value=""; revoke(resultUrls); $("downloads").replaceChildren();
   $("result").hidden=true; $("report").textContent=""; $("values").replaceChildren(); $("error").textContent="";
   if(source) {
-    scale=null; bitmap?.close(); bitmap=null; pending=[]; revoke(sourceUrls);
+    scale=null; bitmap?.close(); bitmap=null; pending=[]; pointSource=null; revoke(sourceUrls);
     $("sourceDownloads").replaceChildren(); $("preview").hidden=true; $("scale").textContent="";
     $("points").value="{}"; $("clickStatus").textContent="";
   }
@@ -75,6 +81,34 @@ async function readJsonFile(file) {
   // Preserve the exact UTF-8 source, including a BOM (which the Rust JSON parser will reject).
   // Replacing invalid bytes or stripping a BOM would change the source identity before hashing.
   return new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(await file.arrayBuffer());
+}
+async function loadPoints() {
+  const file=$("pointFile").files[0];
+  if(!file || !bitmap || scale?.ok!==true) return;
+  pending=[]; withdraw(); const id=ticket; $("clickStatus").textContent="";
+  if(file.size>256*1024) {
+    $("error").textContent="Point JSON exceeds 256 KiB; no source was read.";
+    status("Points file not loaded; existing pairs are unchanged."); return;
+  }
+  busy=true; controls(); status("Reading local point pairs…");
+  try {
+    const text=await readJsonFile(file);
+    if(id!==ticket) return;
+    for(const spec of Object.values(pointPairs(text))) {
+      const pair=Array.isArray(spec)?spec:spec?.points;
+      if(!Array.isArray(pair) || pair.length!==2 || pair.some(p=>!Array.isArray(p) || p.length!==2 || !p.every(Number.isFinite))) {
+        throw Error("Point file must contain named pairs of finite [x, y] coordinates.");
+      }
+    }
+    $("points").value=text;
+    // Textareas normalize line endings; retain the original source until an actual point edit.
+    pointSource={text,displayed:$("points").value};
+    kill(); draw(); status("Points loaded; review them on this photo, then measure again.");
+  } catch(error) {
+    if(id!==ticket) return;
+    kill(); $("error").textContent=String(error.message || error);
+    status("Points file not loaded; existing pairs are unchanged.");
+  }
 }
 function stopCamera() { cameraWorker?.terminate(); cameraWorker=null; cameraBusy=false; controls(); }
 function withdrawCamera() {
@@ -168,7 +202,7 @@ async function runCamera() {
 }
 async function run(op) {
   if(cameraBusy || (op==="measure" && pending.length>0)) return;
-  const file=$("photo").files[0], points=$("points").value, opts=options(), paper=$("paper").value;
+  const file=$("photo").files[0], points=pointText(), opts=options(), paper=$("paper").value;
   const referenceMode=$("referenceMode").value, charuco=referenceMode==="charuco";
   const sheetFile=charuco?$("sheet").files[0]:null, calibrationFile=charuco?$("calibration").files[0]:null;
   const generated=charuco?generatedCalibration:null;
@@ -238,6 +272,7 @@ async function run(op) {
   } catch(e) {if(id!==ticket)return; withdraw(); $("error").textContent=String(e.message||e); status("No measurements published.");}
 }
 $("analyze").onclick=()=>run("analyze"); $("measure").onclick=()=>run("measure");
+$("pointFile").addEventListener("change",loadPoints);
 $("cancel").onclick=()=>{withdraw(); status("Cancelled; no measurements published.");};
 for(const id of ["photo","paper","referenceMode","sheet","calibration","rotation"]) $(id).addEventListener("change",()=>{if(id==="calibration")generatedCalibration=null; withdraw(true); status("Source changed; analyze the current photo.");});
 for(const id of ["lensId","independence"]) $(id).addEventListener("input",()=>{withdraw(true); status("Capture evidence changed; analyze the current photo.");});
@@ -258,11 +293,11 @@ for(const id of ["cameraMode","cameraInput","cameraSheet","cameraImages","camera
   });
 }
 for(const id of ["distance","depth","click","level","bootstrap","points"]) $(id).addEventListener("input",()=>{
-  if(id==="points") {pending=[]; $("clickStatus").textContent="";}
+  if(id==="points") {pointSource=null; pending=[]; $("clickStatus").textContent="";}
   withdraw(); draw(); status("Inputs changed; measure again.");
 });
 $("name").addEventListener("input",()=>{pending=[]; $("clickStatus").textContent=""; withdraw(); draw(); status("Review the named pair, then measure again.");});
-$("clearPoints").onclick=()=>{$("points").value="{}"; pending=[]; withdraw(); draw(); $("clickStatus").textContent="All points cleared."; status("All points cleared; choose landmarks for a new pair.");};
+$("clearPoints").onclick=()=>{pointSource=null; $("points").value="{}"; pending=[]; withdraw(); draw(); $("clickStatus").textContent="All points cleared."; status("All points cleared; choose landmarks for a new pair.");};
 $("cancelPoint").onclick=()=>{
   if(!pending.length) return;
   pending=[]; withdraw(); draw(); $("clickStatus").textContent="First click cancelled. Saved pairs are unchanged.";
@@ -274,7 +309,7 @@ $("removePair").onclick=()=>{
   try {
     const pairs=pointPairs();
     if(!Object.hasOwn(pairs,name)) return;
-    delete pairs[name]; $("points").value=JSON.stringify(pairs,null,2); pending=[];
+    delete pairs[name]; pointSource=null; $("points").value=JSON.stringify(pairs,null,2); pending=[];
     withdraw(); draw(); $("clickStatus").textContent=`Removed ${name}. Other point pairs are unchanged.`;
     status("Point pair removed; review the remaining pairs and measure again.");
   } catch(error) {$("error").textContent=error.message;}
@@ -289,6 +324,7 @@ $("image").onclick=e=>{
   if(pending.length===2) {
     try {
       const pairs=pointPairs();
+      pointSource=null;
       $("points").value=JSON.stringify(Object.fromEntries([...Object.entries(pairs),[name,pending]]),null,2); pending=[];
     } catch(error) {pending=[]; $("error").textContent=error.message;}
   }

@@ -70,7 +70,7 @@ test('photo worker never falls back after a calibrated refusal and frees failed 
 class Element {
   constructor(){this._value='';this.files=[];this.children=[];this.handlers={};this.hidden=false;this.disabled=false;this.textContent='';}
   get value(){return this._value;}
-  set value(v){this._value=v;if(this.type==='file' && v==='')this.files=[];}
+  set value(v){this._value=this.type==='textarea'?v.replace(/\r\n?/g,'\n'):v;if(this.type==='file' && v==='')this.files=[];}
   addEventListener(event,fn){this.handlers[event]=fn;}
   append(...items){this.children.push(...items);}
   replaceChildren(...items){this.children=items;}
@@ -80,6 +80,7 @@ const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text
 async function photoPage({decode}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
+  if(e.pointFile)e.pointFile.type='file';e.points.type='textarea';
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images'}))e[id].value=value;
   const workers=[],urls=new Map(),closed=[]; let serial=0;
   class Worker {
@@ -195,6 +196,66 @@ test('pending photo click cancellation preserves exact saved pairs and permits r
   assert.match(p.e.status.textContent,/cleared/);
   p.e.image.onclick({clientX:60.25,clientY:70.25});p.e.name.value='shoulder_length';p.e.name.handlers.input();
   assert.equal(p.e.clickStatus.textContent,'');assert.equal(p.e.cancelPoint.disabled,true);
+});
+
+test('saved photo points reload exact source while display and edits retain their own text',async()=>{
+  const p=await photoPage();assert.ok(p.e.pointFile,'Load saved point annotations directly');
+  assert.equal(p.e.pointFile.disabled,true);p.select();await p.analyze();
+  const raw=' {\r\n"across_back":[[30,40],[80,40]],"arm_length":{"points":[[5,6],[9,10]],"view":"front"}\r\n}\r\n';
+  const load=async()=>{p.e.pointFile.files=[file(raw,'saved-points.json')];await p.e.pointFile.handlers.change();};
+  const sent=async()=>{await p.e.measure.onclick();return p.current().messages[0].points;};
+  await load();assert.equal(p.e.points.value,raw.replace(/\r\n/g,'\n'));assert.equal(p.e.pointFile.files.length,0);
+  p.e.image.getBoundingClientRect=()=>({left:0,top:0,width:800,height:600});
+  p.e.image.onclick({clientX:50.25,clientY:60.25});p.e.cancelPoint.onclick();
+  p.e.distance.handlers.input();assert.equal(await sent(),raw);
+  const w=p.current();await w.emit({type:'result',request:w.messages[0].request,report:'{"records":[]}'});
+  const download=p.e.downloads.children.find(a=>a.download==='photo-points.json');
+  assert.equal(await p.urls.get(download.href).text(),raw);
+  for(const edit of ['input','remove','canvas','clear']){
+    await load();
+    if(edit==='input')p.e.points.handlers.input();
+    if(edit==='remove')p.e.removePair.onclick();
+    if(edit==='canvas'){p.e.image.onclick({clientX:30.25,clientY:40.25});p.e.image.onclick({clientX:70.25,clientY:80.25});}
+    if(edit==='clear')p.e.clearPoints.onclick();
+    assert.equal(await sent(),p.e.points.value,edit);assert.notEqual(p.current().messages[0].points,raw,edit);
+  }
+});
+
+test('saved photo point reads are bounded, atomic and cannot replace newer edits or sources',async()=>{
+  const p=await photoPage();assert.ok(p.e.pointFile,'Bounded saved-point reader');p.select();await p.analyze();
+  const saved=' {"across_back":[[30,40],[80,40]]}\n';p.e.points.value=saved;p.e.points.handlers.input();
+  for(const text of ['{','[]','null','\ufeff{}','{"schema":"fabric-measurements/1","records":[]}',
+    '{"bad":null}','{"bad":[[1,2]]}','{"bad":[[1,2],[3,"four"]]}']){
+    p.e.pointFile.files=[file(text)];await p.e.pointFile.handlers.change();
+    assert.equal(p.e.points.value,saved);assert.ok(p.e.error.textContent);assert.equal(p.e.cancel.disabled,true);
+  }
+  let oversizedReads=0;
+  for(const invalid of [
+    {size:1,arrayBuffer:async()=>new Uint8Array([255]).buffer},
+    {size:256*1024+1,arrayBuffer:async()=>{++oversizedReads;return new TextEncoder().encode(saved).buffer;}},
+  ]){
+    p.e.pointFile.files=[invalid];await p.e.pointFile.handlers.change();
+    assert.equal(p.e.points.value,saved);assert.ok(p.e.error.textContent);
+  }
+  assert.equal(oversizedReads,0,'Oversized point JSON must be rejected before reading');
+  for(const change of ['source','input','clear','cancel','remove','replace'])for(const fails of [false,true]){
+    const q=await photoPage();q.select();await q.analyze();q.e.points.value=saved;q.e.points.handlers.input();
+    let resolve,reject;q.e.pointFile.files=[{size:32,arrayBuffer:()=>new Promise((yes,no)=>{resolve=yes;reject=no;})}];
+    const old=q.e.pointFile.handlers.change();assert.equal(q.e.cancel.disabled,false);let newest;
+    if(change==='source')q.e.photo.handlers.change();
+    if(change==='input'){q.e.points.value='{"arm_length":[[4,5],[6,7]]}';q.e.points.handlers.input();}
+    if(change==='clear')q.e.clearPoints.onclick();
+    if(change==='cancel')q.e.cancel.onclick();
+    if(change==='remove')q.e.removePair.onclick();
+    if(change==='replace'){
+      q.e.pointFile.files=[file('{"arm_length":[[4,5],[6,7]]}')];await q.e.pointFile.handlers.change();
+      await q.e.measure.onclick();newest=q.current();
+    }
+    const before=q.e.points.value,message=q.e.status.textContent;
+    if(fails)reject(Error('Old source read failed'));else resolve(new TextEncoder().encode('{"old":[[1,2],[3,4]]}').buffer);
+    await old;assert.equal(q.e.points.value,before,change);assert.equal(q.e.status.textContent,message,change);
+    if(newest)assert.equal(newest.dead,undefined,'An old read cannot terminate a newer measurement');
+  }
 });
 
 test('every reference or capture edit cancels pending measurement and withdraws old scale and downloads',async()=>{
