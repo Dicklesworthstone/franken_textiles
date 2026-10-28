@@ -133,8 +133,10 @@ pub fn fold_up(
         pattern,
         measurements,
         fit_spec,
-        self_contact_mm,
-        two_start,
+        FoldOptions {
+            self_contact_mm,
+            two_start,
+        },
         None,
         progress,
     )
@@ -150,6 +152,15 @@ pub struct BodyFitSource<'a> {
     pub arm_deg: f64,
 }
 
+/// Cloth controls shared by tape-fitted and explicitly accepted body sources.
+#[derive(Clone, Copy, Debug)]
+pub struct FoldOptions {
+    /// Cloth self-contact thickness in millimetres; zero disables self-contact.
+    pub self_contact_mm: f64,
+    /// Compare the default second sewing duration at the same placement.
+    pub two_start: bool,
+}
+
 /// Drape the exact accepted shape without tape fitting. The model must be array-verified.
 ///
 /// # Errors
@@ -160,8 +171,7 @@ pub fn fold_up_with_body_fit(
     pattern: &Value,
     measurements: &Value,
     fit_spec: &Value,
-    self_contact_mm: f64,
-    two_start: bool,
+    options: FoldOptions,
     source: &BodyFitSource<'_>,
     progress: impl FnMut(&str),
 ) -> Result<Fold, String> {
@@ -170,8 +180,7 @@ pub fn fold_up_with_body_fit(
         pattern,
         measurements,
         fit_spec,
-        self_contact_mm,
-        two_start,
+        options,
         Some(source),
         progress,
     )
@@ -183,11 +192,14 @@ fn fold_on_source(
     pattern: &Value,
     measurements: &Value,
     fit_spec: &Value,
-    self_contact_mm: f64,
-    two_start: bool,
+    options: FoldOptions,
     source: Option<&BodyFitSource<'_>>,
     mut progress: impl FnMut(&str),
 ) -> Result<Fold, String> {
+    let FoldOptions {
+        self_contact_mm,
+        two_start,
+    } = options;
     let m = |r: ftx_core::Refusal| r.message;
     let pat = Pattern::new(pattern.clone());
     ftx_drape::garment::simulation_scope(&pat).map_err(m)?;

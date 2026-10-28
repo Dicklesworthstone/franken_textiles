@@ -80,7 +80,7 @@ remain local and never enter browser storage. The numerical fusion and readiness
 
 **The fold-up.** `fold` is `ftx drape` without files: `load_body(bytes)` reads a converted model the page
 was given (`.ftxbody`, with array hashes checked, at most 512 MiB), and `fold_up(model, pattern,
-measurements, fit_spec, self_contact_mm, progress)` fits Anny to the tape in the drape pose, trims the
+measurements, fit_spec, self_contact_mm, two_start, progress)` fits Anny to the tape in the drape pose, trims the
 collision skin, sews and drapes (self-contact at `self_contact_mm` when positive, the skill's 2 mm), and
 returns the fit report (`sim_report.json` without the CLI's `pattern` and `wall_s`) and the viewer page.
 Its `body` diagnostics retain unrounded target/body/signed residual mm, supplied-weight residual kg,
@@ -94,6 +94,9 @@ MIT notice; downloaded HTML and blob previews need no network for rendering. `we
 mm)` → `WebFold {report(), viewer()}`, and calls the worker's `self.ftxProgress(line)` with the drape's
 progress lines.
 
+The accepted-fit Rust entry groups self-contact thickness (mm) and the paired-sewing choice in
+`fold::FoldOptions`; JavaScript keeps its existing arguments. These controls reach the same fold
+implementation for both body sources, with no added defaults or changed numerical settings.
 The opt-in accepted-fit fold uses `ftx_body::accepted_shape::prepare`, retaining the
 original report bytes and exact parameters without tape refitting or image-pose
 reuse. It checks the same model/wearer identity and exposes the existing native

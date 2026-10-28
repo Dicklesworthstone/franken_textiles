@@ -423,8 +423,10 @@ pub fn fold_up_with_body_fit(
         &parse(pattern)?,
         &parse(measurements)?,
         &parse(fit_spec)?,
-        self_contact_mm,
-        two_start,
+        fold::FoldOptions {
+            self_contact_mm,
+            two_start,
+        },
         &fold::BodyFitSource {
             model_sha256: &body.source_sha256,
             report: body_fit,

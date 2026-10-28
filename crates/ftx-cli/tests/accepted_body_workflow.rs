@@ -1430,8 +1430,10 @@ fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
         &pattern,
         &measurements,
         &json!({}),
-        2.0,
-        false,
+        ftx_wasm::fold::FoldOptions {
+            self_contact_mm: 2.0,
+            two_start: false,
+        },
         &source,
         |_| {},
     )
@@ -1502,8 +1504,10 @@ fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
                 &pattern,
                 &m,
                 &json!({}),
-                2.0,
-                false,
+                ftx_wasm::fold::FoldOptions {
+                    self_contact_mm: 2.0,
+                    two_start: false,
+                },
                 &ftx_wasm::fold::BodyFitSource {
                     model_sha256: &digest,
                     report: &report,
