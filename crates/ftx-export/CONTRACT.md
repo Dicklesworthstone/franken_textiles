@@ -55,6 +55,27 @@ minimum-step limits retain feasible incumbents without claiming continuous-domai
 global optimality, empirical fit, or unavailable uncertainty. Tests: `design_study/adaptive`,
 canonical `validate::raw_point_tests`, and native/portable accepted-body adaptive workflow.
 
+**Consumer-guided adaptive design** (`design_adaptive.objective: consumer_comparison`, `ftx-ds2`).
+One exact nominated `material_key` and one existing nominal comparison objective guide production
+polling after the same canonical geometry/body-fit admission. Ordinary comparison constraints,
+required consumers, source/protocol checks and dominance remain the only numerical authority;
+missing or failed consumers cannot become zero scores. Polling continues after the retention
+allowance fills, replaces worse incumbents, and retains every trial's comparison/exclusions plus
+original binding/callback refusals. The first admitted protocol anchors ordering unless explicit
+mixed-protocol permission applies. Only the best bounded set of full production outputs is cached;
+final retained geometry crosses all material alternatives and reuses the nominated material's exact
+manufacturing/scenario output. Probe-plus-final slots, repeated source documents and ordinary
+manufacturing aggregate counts are reserved up front; mass/outline/station counters and the caller's
+scenario Session remain shared. A slot count is not a promise that each physical simulation fits
+its per-callback work reservation. Search/step limits and later callback refusals preserve successful
+incumbents; structural/global manufacturing hard-budget errors still refuse the complete request.
+Manufacturing and single scenarios are supported; matrices, multiple objectives, reported-bounds
+guidance and unavailable nominees refuse before production callbacks. Optional receipt fields keep
+fit-only serialization unchanged. No new surrogate score, physical law, empirical validation or
+continuous/global optimality claim. Tests: real mass/constraint/source/reservation checks in
+`design_study/adaptive` and real selected-body sewn-scenario guidance/cache replay through both CLIs
+and the portable authority in `accepted_body_workflow/consumer_adaptive`.
+
 **Finite-water scenario decisions.** The optional `motion_wet_film` comparison consumer reads
 evaporated, remaining, unmet-demand and supplied mass plus prescribed-body latent energy from a
 complete admitted moving-coverage history. It verifies exact authored body-bound liquid/supply,

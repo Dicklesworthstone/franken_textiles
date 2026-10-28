@@ -37,6 +37,217 @@ fn run(request: &Request, body: &Measurements) -> Value {
     .unwrap()
 }
 
+fn consumer_request(evaluations: usize) -> Request {
+    let mut value = serde_json::to_value(adaptive_request(evaluations, 1)).unwrap();
+    value["design_adaptive"]["objective"] = json!("consumer_comparison");
+    value["design_adaptive"]["material_key"] = json!("light-sheet");
+    value["design_adaptive"]["variables"][0]["initial_mm"] = json!(40);
+    value["design_adaptive"]["variables"][0]["minimum_step_mm"] = json!(5);
+    value["design_fit"]["fit_spec"]["points"][0]["target_mm"] = json!([0, 20, 40]);
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn consumer_polling_replaces_flat_fit_incumbents_with_lighter_real_assemblies() {
+    let body = Measurements(json!({"desired_length":120}));
+    let request = consumer_request(32);
+    let report = run(&request, &body);
+    assert_eq!(report, run(&request, &body));
+    let search = &report["design_search"];
+    let guidance = &search["consumer_guidance"];
+    assert_eq!(search["selected_designs"], 1);
+    assert_eq!(search["stop_reason"], "minimum_steps");
+    assert!(search["qualified_designs"].as_u64().unwrap() > 1);
+    assert_eq!(guidance["material_key"], "light-sheet");
+    assert_eq!(guidance["reserved_evaluations"], 36);
+    assert_eq!(guidance["objective"]["metric"], "assembly_mass_kg");
+    assert_eq!(guidance["best_reading"]["unit"], "kg");
+    let trials = search["rows"].as_array().unwrap();
+    assert_eq!(trials[0]["max_fit_band_violation_mm"], 0.0);
+    assert_eq!(trials[0]["consumer_comparison"]["eligible"], true);
+    assert_eq!(trials[0]["selected"], false);
+    let selected = trials
+        .iter()
+        .find(|trial| trial["selected"] == true)
+        .unwrap();
+    assert_eq!(selected["design"]["variables_mm"]["length"], 20.0);
+    assert_eq!(guidance["best_trial_key"], selected["design"]["key"]);
+    let design = selected["design"]["key"].as_str().unwrap();
+    // Two 20 x 120 mm rectangles plus the source's 10 mm allowance on each side.
+    // Areal densities are explicitly synthetic; this is an independent dimensional oracle.
+    let area = 2.0 * 40.0 * 140.0 * 1e-6;
+    for (material, density) in [("light-sheet", 0.18), ("heavy-sheet", 0.36)] {
+        let candidate = row(&report, design, material);
+        assert!(
+            (candidate["metrics"]["assembly_mass_kg"].as_f64().unwrap() - area * density).abs()
+                < 1e-12
+        );
+        let altered = Pattern::from_json(
+            candidate["design"]["altered_pattern_json"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let frozen: Changes = serde_json::from_value(candidate["frozen_changes"].clone()).unwrap();
+        assert_eq!(
+            frozen.apply(&altered).unwrap()["pattern"],
+            candidate["binding"]["result"]["pattern"]
+        );
+        let bound = Pattern::new(candidate["binding"]["result"]["pattern"].clone());
+        assert_eq!(
+            candidate["cutting"]["result"],
+            serde_json::to_value(
+                CutPlan::build(&bound, request.cutting.as_ref().unwrap()).unwrap()
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            candidate["assembly_mass"]["result"],
+            serde_json::to_value(
+                request
+                    .assembly_mass
+                    .as_ref()
+                    .unwrap()
+                    .evaluate(&bound)
+                    .unwrap()
+            )
+            .unwrap()
+        );
+    }
+    assert_eq!(
+        report["comparison"]["frontier"],
+        json!([key(design, "light-sheet")])
+    );
+    let mut fit_only = request;
+    let adaptive = fit_only.design_adaptive.as_mut().unwrap();
+    adaptive.objective =
+        ftx_export::material_study::design::adaptive::Objective::FitBandViolationMm;
+    adaptive.material_key = None;
+    let original = run(&fit_only, &body);
+    assert_eq!(original["design_search"]["evaluations"], 1);
+    assert_eq!(
+        original["design_search"]["rows"][0]["design"]["variables_mm"]["length"],
+        40.0
+    );
+    assert!(original["design_search"].get("consumer_guidance").is_none());
+}
+
+#[test]
+fn consumer_constraints_admit_only_real_feasible_metrics_and_unknown_mass_is_not_zero() {
+    let body = Measurements(json!({"desired_length":120}));
+    let mut request = consumer_request(32);
+    request.comparison.as_mut().unwrap().constraints.push(
+        serde_json::from_value(json!({
+            "metric":"assembly_mass_kg", "minimum":0.0022
+        }))
+        .unwrap(),
+    );
+    let report = run(&request, &body);
+    let trials = report["design_search"]["rows"].as_array().unwrap();
+    let too_light = trials
+        .iter()
+        .find(|trial| trial["design"]["variables_mm"]["length"] == 20.0)
+        .unwrap();
+    assert_eq!(too_light["consumer_comparison"]["eligible"], false);
+    assert!(too_light["consumer_comparison"]["readings"]["assembly_mass_kg"]["value"].is_number());
+    assert_eq!(too_light["selected"], false);
+    let selected = trials
+        .iter()
+        .find(|trial| trial["selected"] == true)
+        .unwrap();
+    assert!(
+        selected["consumer_comparison"]["readings"]["assembly_mass_kg"]["value"]
+            .as_f64()
+            .unwrap()
+            >= 0.0022
+    );
+
+    let mut missing = serde_json::to_value(consumer_request(8)).unwrap();
+    missing["variants"][0]["changes"]["default"]["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("areal_density");
+    let report = run(&serde_json::from_value(missing).unwrap(), &body);
+    let search = &report["design_search"];
+    assert_eq!(search["selected_designs"], 0);
+    assert!(search["qualified_designs"].as_u64().unwrap() > 0);
+    assert!(search["consumer_guidance"]["best_reading"].is_null());
+    for trial in search["rows"].as_array().unwrap() {
+        assert_eq!(trial["selected"], false);
+        if let Some(comparison) = trial.get("consumer_comparison") {
+            assert_eq!(comparison["eligible"], false);
+            assert!(comparison["readings"].get("assembly_mass_kg").is_none());
+        }
+    }
+}
+
+#[test]
+fn consumer_search_preflights_all_probe_work_and_requires_explicit_single_case_policy() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":120}));
+    let identity = json!({"source":"test:consumer-reservation"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let mut excessive = consumer_request(32);
+    excessive.cutting.as_mut().unwrap().copies = 256;
+    let mut calls = 0;
+    let error = excessive
+        .evaluate_with_fit(&pattern, &json!({}), Some(&fit), |_, _| {
+            calls += 1;
+            Ok(json!({}))
+        })
+        .unwrap_err();
+    assert_eq!(error.code, RefusalCode::BudgetExceeded);
+    assert_eq!(calls, 0);
+    let mut invalids = Vec::new();
+    let mut missing_policy = consumer_request(8);
+    missing_policy.comparison = None;
+    invalids.push(missing_policy);
+    let mut unknown = consumer_request(8);
+    unknown.design_adaptive.as_mut().unwrap().material_key = Some("absent".into());
+    invalids.push(unknown);
+    let mut multiple = consumer_request(8);
+    let objective = multiple.comparison.as_ref().unwrap().objectives[0].clone();
+    multiple
+        .comparison
+        .as_mut()
+        .unwrap()
+        .objectives
+        .push(objective);
+    invalids.push(multiple);
+    let mut bounds = consumer_request(8);
+    bounds.comparison.as_mut().unwrap().basis =
+        ftx_export::material_study::comparison::Basis::ReportedBounds;
+    invalids.push(bounds);
+    for request in invalids {
+        assert!(
+            request
+                .evaluate_with_fit_body(&pattern, Some(&fit))
+                .is_err()
+        );
+    }
+    let error = consumer_request(8)
+        .evaluate_matrix_with_fit(
+            &pattern,
+            &[Case {
+                key: "single-named-case".into(),
+                scenario: json!({}),
+                comparison: None,
+            }],
+            32,
+            Some(&fit),
+            |_, _, _| {
+                calls += 1;
+                Ok(json!({}))
+            },
+        )
+        .unwrap_err();
+    assert!(error.message.contains("one scenario"));
+    assert_eq!(calls, 0);
+}
+
 #[test]
 fn adaptive_finds_between_grid_values_and_replays_actual_cutting_sewing_and_mass() {
     let body = Measurements(json!({"desired_length":133.7}));

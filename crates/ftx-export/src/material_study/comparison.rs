@@ -1397,6 +1397,14 @@ impl Policy {
         self.relation(a, b) == Some(true)
     }
 
+    /// Reuse the same admitted, protocol-qualified dominance rule for adaptive consumer polling.
+    pub(super) fn prefers(&self, a: &Candidate, b: &Candidate) -> bool {
+        a.eligible
+            && b.eligible
+            && (self.allow_mixed_protocols || a.input_protocol_sha256 == b.input_protocol_sha256)
+            && self.dominates(a, b)
+    }
+
     // Some(false) is no worse with no strict improvement; None is not no-worse. Keeping that
     // distinction lets named-case matrices combine ties and improvements using this same rule.
     fn relation(&self, a: &Candidate, b: &Candidate) -> Option<bool> {

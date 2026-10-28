@@ -1053,6 +1053,99 @@ operations, 256 MiB of document-processing reservation, and 40 million measureme
 work units each. Missing selected-body context refuses the request. Failed trials remain
 inspectable without invoking their production or simulation callbacks.
 
+### Guide adaptive designs with actual manufacturing or scenario outcomes
+
+Use `objective: "consumer_comparison"` when a passing flat target is only the admission gate and
+the next alteration should improve a real production result. Nominate exactly one existing
+material alternative with `material_key`, and supply an ordinary `comparison` with exactly one
+nominal objective. Its existing constraints, required consumers, source qualifications and
+protocol rules also govern every search probe. For example, a broad declared length band can
+admit several designs while the production assembly-mass consumer guides the search toward a
+lighter complete assembly:
+
+```json
+{
+  "design_adaptive": {
+    "objective": "consumer_comparison",
+    "material_key": "light-sheet",
+    "variables": [{
+      "key": "length", "bounds_mm": [0, 60], "initial_mm": 40,
+      "initial_step_mm": 20, "minimum_step_mm": 5,
+      "sites": [
+        {"piece": "front", "axis": "y", "at_mm": 50, "multiplier": 1},
+        {"piece": "back", "axis": "y", "at_mm": 50, "multiplier": 1}
+      ]
+    }],
+    "max_evaluations": 32, "max_designs": 1
+  },
+  "assembly_mass": {
+    "schema": "ftx-assembly-mass/1", "inventory_complete": true, "extras": []
+  },
+  "comparison": {
+    "basis": "nominal",
+    "objectives": [{"metric": "assembly_mass_kg", "direction": "minimize"}],
+    "required_consumers": ["cutting", "sewing"]
+  }
+}
+```
+
+This fragment still needs the source pattern, material alternatives, cutting/sewing requests and
+explicit `design_fit` body bands. The numbers demonstrate software behavior, not wearer ease or
+manufacturing recommendations. With the synthetic two-panel fixture, a 120–160 mm finished-length
+band admits the initial 140 mm design. The ordinary fit-only mode stops there when `max_designs`
+is one; consumer guidance continues and retains the 120 mm design with its smaller actual cut
+inventory and source-qualified mass. Sewing and cutting must still pass because this policy
+explicitly requires them.
+
+The same request works through the model-backed `study-on-body` manufacturing command. Through a
+single `scenario-study`, the sole objective can instead be an existing scenario metric such as
+`simulated_cloth_mass_kg`, `max_warp_green_strain` or `transient_coverage_inside_energy_j`. The
+ordinary production scenario must request and admit that consumer. A drape must meet the same
+settledness, gating, source and descriptor checks as a normal comparison; an unfinished frame,
+missing modulus, unknown mass, failed constraint or refused callback cannot supply a zero or
+usable search value. No new physics, weighted score or inferred comfort/failure limit is added.
+
+Every coordinate starts from the original pattern and passes complete canonical geometry and
+selected-body fit checks before binding the nominated material or calling production consumers.
+Outside the declared fit bands, the original raw residuals can guide the search toward admission.
+Once a production-admitted incumbent exists, flat-only or consumer-excluded candidates cannot
+replace it. Inside the admissible region the existing comparator's nominal dominance rule chooses
+strict improvements. The first admitted probe fixes the relevant input protocol; a different
+protocol remains visible but cannot guide replacement unless `allow_mixed_protocols` was explicitly
+enabled. The search never silently combines material models or scenario environments.
+
+`max_designs` limits the retained geometries; reaching it does **not** stop consumer-guided
+polling. Better admitted trials replace earlier incumbents until the unique-evaluation allowance
+or minimum steps stop discovery. Ties retain earlier trials. The original baseline and each
+retained geometry then cross all authored material alternatives. The nominated material's
+retained production outputs are reused exactly, including its bound pattern, source evidence and
+scenario result; other material alternatives receive fresh ordinary evaluations. The final
+comparison still determines the conditional frontier over those evaluated design/material pairs.
+
+The optional `consumer_guidance` object in the existing `ftx-design-adaptive-search/1` receipt
+identifies the material, sole objective, best trial, existing reading with units and input protocol.
+Its `evaluations` counts actual nominated-material probes after flat qualification;
+`reserved_evaluations` is the conservative probe-plus-final consumer-slot upper bound. Each probe
+retains the unchanged `consumer_comparison` candidate, including all readings and exclusions, and
+any original binding/callback `consumer_refusal`. Displaced and failed trials remain inspectable.
+`qualified_designs` counts flat-qualified trials independently of final `selected_designs`.
+
+All aggregate manufacturing count limits and document reservations include the entire possible
+probe allowance plus the final material cross-product before work starts. Geometry, mass and
+sewing-station work counters are shared across probes and final evaluations. The caller's same
+scenario session reserves each callback's actual mesh/motion/heat work; the slot count does not
+guarantee that all requested scenarios will fit its numerical budget. Evaluation/step stops and
+later per-callback refusals preserve an already retained successful nominee. Structural errors
+and global manufacturing hard-budget failures still refuse the whole request. Only up to
+`max_designs` full probe outputs are retained; rejected probes keep bounded decision evidence.
+
+Consumer guidance currently requires one scenario or manufacturing-only evaluation. Named scenario
+matrices refuse it before callbacks because they have no declared scalar aggregation rule for
+adaptive polling. Multiple objectives, reported-bounds search and an unknown material key also
+refuse. Original `fit_band_violation_mm` requests and their serialization remain unchanged.
+Both modes retain `complete_search: false` and `global_optimum_claim: false`; neither an empty
+result nor a local improvement establishes empirical garment fit or a global optimum.
+
 ## Constrain material-direction strain on selected garment regions
 
 Add `material_strain` to the scenario to retain the production membrane's raw, dimensionless

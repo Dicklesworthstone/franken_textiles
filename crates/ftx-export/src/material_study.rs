@@ -56,6 +56,27 @@ struct PreparedStudy {
     design_search: Option<design::SearchReceipt>,
 }
 
+struct ManufacturingWork {
+    mass: Work,
+    design: Work,
+    stations: usize,
+}
+
+impl ManufacturingWork {
+    fn new() -> Self {
+        Self {
+            mass: Work::new(40_000_000),
+            design: Work::new(40_000_000),
+            stations: 0,
+        }
+    }
+}
+
+struct ConsumerProbe<T> {
+    manufacturing: Alternative,
+    simulation: Option<ScenarioAlternative<T>>,
+}
+
 impl From<Variant> for PreparedVariant {
     fn from(variant: Variant) -> Self {
         Self {
@@ -498,6 +519,20 @@ impl Request {
         additional_consumer: bool,
         fit: Option<&design::fit::Context<'_>>,
     ) -> Result<PreparedStudy, Refusal> {
+        let materials = self.material_variants(pattern, additional_consumer)?;
+        let (variants, design_search) = design::expand(self, pattern, materials.variants, fit)?;
+        Ok(PreparedStudy {
+            variants,
+            screening: materials.screening,
+            design_search,
+        })
+    }
+
+    fn material_variants(
+        &self,
+        pattern: &Pattern,
+        additional_consumer: bool,
+    ) -> Result<PreparedStudy, Refusal> {
         if let Some(policy) = &self.comparison {
             policy.validate(self, additional_consumer)?;
         }
@@ -533,25 +568,17 @@ impl Request {
             return Err(budget("material study exceeds 32 alternatives"));
         }
         if let Some(combinations) = &self.combinations {
-            let (variants, design_search) =
-                design::expand(self, pattern, combinations.variants(pattern)?, fit)?;
             return Ok(PreparedStudy {
-                variants,
+                variants: combinations.variants(pattern)?,
                 screening: None,
-                design_search,
+                design_search: None,
             });
         }
         let Some(screened) = &self.screened else {
-            let (variants, design_search) = design::expand(
-                self,
-                pattern,
-                self.variants.iter().cloned().map(Into::into).collect(),
-                fit,
-            )?;
             return Ok(PreparedStudy {
-                variants,
+                variants: self.variants.iter().cloned().map(Into::into).collect(),
                 screening: None,
-                design_search,
+                design_search: None,
             });
         };
         if let Target::Pieces { ids } = &screened.target {
@@ -601,11 +628,10 @@ impl Request {
                 .into()
             })
             .collect();
-        let (variants, design_search) = design::expand(self, pattern, variants, fit)?;
         Ok(PreparedStudy {
             variants,
             screening: Some(report),
-            design_search,
+            design_search: None,
         })
     }
 
@@ -661,30 +687,19 @@ impl Request {
         fit: Option<&design::fit::Context<'_>>,
         mut evaluate: impl FnMut(&str, &Pattern) -> Result<T, Refusal>,
     ) -> Result<ScenarioStudy<T>, Refusal> {
-        let manufacturing = self.evaluate_manufacturing(pattern, true, fit)?;
         let scenario = serde_json::to_value(scenario).map_err(|e| invalid(e.to_string()))?;
         let request_sha256 = self.scenario_identity(pattern, &scenario, fit)?;
-        let mut simulations = Vec::with_capacity(manufacturing.alternatives.len());
-        for row in &manufacturing.alternatives {
-            let evaluation = match &row.binding {
-                Outcome::Available { result } => {
-                    // Keep Rust's parsed number representation. A JavaScript round-trip through
-                    // stringify would alter source identities such as 1.0 or negative zero.
-                    let bound = Pattern::new(result["pattern"].clone());
-                    Outcome::from_result(evaluate(&row.key, &bound))
-                }
-                Outcome::Refused { refusal } => Outcome::Refused {
-                    refusal: refusal.clone(),
-                },
-                Outcome::NotRequested => Outcome::Refused {
-                    refusal: invalid("additional evaluation requires a successful binding"),
-                },
-            };
-            simulations.push(ScenarioAlternative {
-                key: row.key.clone(),
-                evaluation,
-            });
-        }
+        let (manufacturing, simulations) = if self.consumer_guided() {
+            self.evaluate_consumer_adaptive(pattern, Some(&scenario), fit, &mut evaluate)?
+        } else {
+            let manufacturing = self.evaluate_manufacturing(pattern, true, fit)?;
+            let simulations = manufacturing
+                .alternatives
+                .iter()
+                .map(|row| scenario_alternative(row, &mut evaluate))
+                .collect();
+            (manufacturing, simulations)
+        };
         let comparison = self
             .comparison
             .as_ref()
@@ -719,12 +734,232 @@ impl Request {
         additional_consumer: bool,
         fit: Option<&design::fit::Context<'_>>,
     ) -> Result<Report, Refusal> {
+        if self.consumer_guided() {
+            let (report, _) =
+                self.evaluate_consumer_adaptive(pattern, None, fit, &mut |_, _| Ok(()))?;
+            return Ok(report);
+        }
         let errors = pattern.structure_errors();
         if !errors.is_empty() {
             return Err(invalid(errors.join("; ")));
         }
         let prepared = self.variants(pattern, additional_consumer, fit)?;
         self.evaluate_prepared(pattern, additional_consumer, prepared, fit)
+    }
+
+    fn consumer_guided(&self) -> bool {
+        self.design_adaptive
+            .as_ref()
+            .is_some_and(design::adaptive::Request::consumer_guided)
+    }
+
+    fn evaluate_consumer_adaptive<T: Serialize>(
+        &self,
+        pattern: &Pattern,
+        scenario: Option<&Value>,
+        fit: Option<&design::fit::Context<'_>>,
+        evaluate: &mut impl FnMut(&str, &Pattern) -> Result<T, Refusal>,
+    ) -> Result<(Report, Vec<ScenarioAlternative<T>>), Refusal> {
+        let errors = pattern.structure_errors();
+        if !errors.is_empty() {
+            return Err(invalid(errors.join("; ")));
+        }
+        let additional_consumer = scenario.is_some();
+        let materials = self.material_variants(pattern, additional_consumer)?;
+        let adaptive = self
+            .design_adaptive
+            .as_ref()
+            .expect("consumer-guided request");
+        // Reserve the entire probe allowance plus every possible final pair before any geometry,
+        // manufacturing or callback. Cache reuse can reduce work, never increase this allowance.
+        let slots = adaptive
+            .max_evaluations
+            .saturating_add((adaptive.max_designs + 1).saturating_mul(materials.variants.len()));
+        self.reserve_consumers(pattern, slots)?;
+        let policy = self.comparison.as_ref().expect("validated comparison");
+        let source = hash(pattern.raw())?;
+        let context = match scenario {
+            Some(scenario) => self.scenario_identity(pattern, scenario, fit)?,
+            None => self.manufacturing_identity(fit)?,
+        };
+        let mut work = ManufacturingWork::new();
+        let (mut variants, receipt, mut retained) = adaptive.expand_with(
+            self,
+            pattern,
+            materials.variants,
+            fit,
+            Some(&mut |variant| {
+                let row = self.evaluate_charged(pattern, variant, fit, &mut work)?;
+                let simulation = scenario.map(|_| scenario_alternative(&row, evaluate));
+                let mut comparison =
+                    if let (Some(scenario), Some(simulation)) = (scenario, &simulation) {
+                        policy.evaluate_scenarios(
+                            std::slice::from_ref(&row),
+                            std::slice::from_ref(simulation),
+                            scenario,
+                            &source,
+                            &context,
+                            self.purchasing_currency(),
+                        )?
+                    } else {
+                        policy.evaluate(
+                            std::slice::from_ref(&row),
+                            &source,
+                            &context,
+                            self.purchasing_currency(),
+                        )
+                    };
+                let refusal = match simulation.as_ref().map(|simulation| &simulation.evaluation) {
+                    Some(Outcome::Refused { refusal }) => Some(refusal.clone()),
+                    _ => match &row.binding {
+                        Outcome::Refused { refusal } => Some(refusal.clone()),
+                        _ => None,
+                    },
+                };
+                Ok((
+                    comparison.alternatives.remove(0),
+                    refusal,
+                    ConsumerProbe {
+                        manufacturing: row,
+                        simulation,
+                    },
+                ))
+            }),
+        )?;
+        variants.sort_by(|a, b| a.variant.key.cmp(&b.variant.key));
+        let mut alternatives = Vec::with_capacity(variants.len());
+        let mut simulations = Vec::with_capacity(variants.len());
+        for variant in variants {
+            let probe = if let Some(probe) = retained.remove(&variant.variant.key) {
+                probe
+            } else {
+                let row = self.evaluate_charged(pattern, variant, fit, &mut work)?;
+                let simulation = scenario.map(|_| scenario_alternative(&row, evaluate));
+                ConsumerProbe {
+                    manufacturing: row,
+                    simulation,
+                }
+            };
+            alternatives.push(probe.manufacturing);
+            if let Some(simulation) = probe.simulation {
+                simulations.push(simulation);
+            }
+        }
+        let report = self.finish_manufacturing(
+            pattern,
+            additional_consumer,
+            materials.screening,
+            Some(design::SearchReceipt::Adaptive(receipt)),
+            alternatives,
+            fit,
+        )?;
+        Ok((report, simulations))
+    }
+
+    fn reserve_consumers(&self, pattern: &Pattern, alternatives: usize) -> Result<(), Refusal> {
+        // A malformed zero-copy cutting request must not bypass admission of other consumers.
+        let copies = self
+            .cutting
+            .as_ref()
+            .map_or(0, |c| c.copies)
+            .saturating_add(self.finite_stock.as_ref().map_or(0, |s| s.options.copies))
+            .saturating_add(self.cutting_job.as_ref().map_or(0, job::Request::copies))
+            .max(1);
+        if pattern
+            .instances
+            .len()
+            .checked_mul(copies)
+            .and_then(|n| n.checked_mul(alternatives))
+            .is_none_or(|n| n > 16_384)
+            || self.sewing.as_ref().is_some_and(|s| {
+                s.passes
+                    .len()
+                    .saturating_mul(s.source_plan_count())
+                    .saturating_mul(alternatives)
+                    > 4096
+            })
+            || self.assembly_mass.as_ref().is_some_and(|m| {
+                // Invalid attachment inventories remain independent per-row mass refusals.
+                // Retain the existing explicit-extra budget when no merged work can run.
+                m.merged_inventory_count(pattern)
+                    .unwrap_or(m.extras.len())
+                    .saturating_mul(alternatives)
+                    > 4096
+            })
+        {
+            return Err(budget(
+                "material study exceeds aggregate instance/pass/extra inventory budget",
+            ));
+        }
+        if self
+            .finite_stock
+            .as_ref()
+            .is_some_and(|stock| stock.options.work_limit.saturating_mul(alternatives) > 20_000_000)
+            || self
+                .cutting_job
+                .as_ref()
+                .and_then(|j| j.finite_stock.as_ref())
+                .is_some_and(|stock| {
+                    stock.options.work_limit.saturating_mul(alternatives) > 20_000_000
+                })
+        {
+            return Err(budget(
+                "material study exceeds 20000000 aggregate finite-stock work units; reduce alternatives or the per-plan work limit",
+            ));
+        }
+        if let Some(selection) = &self.sewing_selection {
+            recipes::check_budget(selection, alternatives, self.sewing_copies())?;
+        }
+        if let Some(options) = self.sewing_options() {
+            let scheduling_work = match options.scheduling_work_bound() {
+                Ok(work) => work,
+                Err(refusal) if refusal.code == RefusalCode::BudgetExceeded => return Err(refusal),
+                // Invalid cell/source policies remain independent sewing refusals, before search.
+                Err(_) => 0,
+            };
+            if self.sewing_selection.is_none()
+                && scheduling_work.saturating_mul(alternatives) > 200_000
+            {
+                return Err(budget(
+                    "material study exceeds 200000 aggregate sewing ordering nodes",
+                ));
+            }
+            let configured_work = self.sewing_selection.as_ref().map_or_else(
+                || crate::sewing::consumables::purchasing_work_bound(options),
+                sewing_selection::Request::purchasing_work_bound,
+            );
+            let work = match configured_work {
+                Ok(work) => work,
+                Err(refusal) if refusal.code == RefusalCode::BudgetExceeded => return Err(refusal),
+                // Invalid source/market options remain the independent sewing consumer's refusal;
+                // its admission fails before the purchasing evaluator can perform quote work.
+                Err(_) => 0,
+            };
+            if work.saturating_mul(alternatives) > 200_000 {
+                return Err(budget(
+                    "material/design study exceeds 200000 aggregate thread-purchasing work units; reduce variants, recipe trials or quote observations",
+                ));
+            }
+        }
+        let allocation_work = [
+            self.purchasing.as_ref().map(|p| &p.market),
+            self.cutting_job
+                .as_ref()
+                .and_then(|j| j.purchasing.as_ref())
+                .map(|p| &p.market),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|market| market.split_orders.as_ref())
+        .fold(0usize, |sum, policy| {
+            sum.saturating_add(policy.max_search_nodes.saturating_mul(alternatives))
+        });
+        if allocation_work > 200_000 {
+            return Err(budget(
+                "material study exceeds 200000 aggregate supplier-allocation work units; reduce alternatives or each split_orders limit",
+            ));
+        }
+        Ok(())
     }
 
     fn evaluate_prepared(
@@ -751,134 +986,63 @@ impl Request {
         {
             return Err(invalid("material variant keys must be unique and nonempty"));
         }
-        // A malformed zero-copy cutting request must not bypass admission of other consumers.
-        let copies = self
-            .cutting
-            .as_ref()
-            .map_or(0, |c| c.copies)
-            .saturating_add(self.finite_stock.as_ref().map_or(0, |s| s.options.copies))
-            .saturating_add(self.cutting_job.as_ref().map_or(0, job::Request::copies))
-            .max(1);
-        if pattern
-            .instances
-            .len()
-            .checked_mul(copies)
-            .and_then(|n| n.checked_mul(variants.len()))
-            .is_none_or(|n| n > 16_384)
-            || self.sewing.as_ref().is_some_and(|s| {
-                s.passes
-                    .len()
-                    .saturating_mul(s.source_plan_count())
-                    .saturating_mul(variants.len())
-                    > 4096
-            })
-            || self.assembly_mass.as_ref().is_some_and(|m| {
-                // Invalid attachment inventories remain independent per-row mass refusals.
-                // Retain the existing explicit-extra budget when no merged work can run.
-                m.merged_inventory_count(pattern)
-                    .unwrap_or(m.extras.len())
-                    .saturating_mul(variants.len())
-                    > 4096
-            })
-        {
-            return Err(budget(
-                "material study exceeds aggregate instance/pass/extra inventory budget",
-            ));
-        }
-        if self.finite_stock.as_ref().is_some_and(|stock| {
-            stock.options.work_limit.saturating_mul(variants.len()) > 20_000_000
-        }) || self
-            .cutting_job
-            .as_ref()
-            .and_then(|j| j.finite_stock.as_ref())
-            .is_some_and(|stock| {
-                stock.options.work_limit.saturating_mul(variants.len()) > 20_000_000
-            })
-        {
-            return Err(budget(
-                "material study exceeds 20000000 aggregate finite-stock work units; reduce alternatives or the per-plan work limit",
-            ));
-        }
-        if let Some(selection) = &self.sewing_selection {
-            recipes::check_budget(selection, variants.len(), self.sewing_copies())?;
-        }
-        if let Some(options) = self.sewing_options() {
-            let scheduling_work = match options.scheduling_work_bound() {
-                Ok(work) => work,
-                Err(refusal) if refusal.code == RefusalCode::BudgetExceeded => return Err(refusal),
-                // Invalid cell/source policies remain independent sewing refusals, before search.
-                Err(_) => 0,
-            };
-            if self.sewing_selection.is_none()
-                && scheduling_work.saturating_mul(variants.len()) > 200_000
-            {
-                return Err(budget(
-                    "material study exceeds 200000 aggregate sewing ordering nodes",
-                ));
-            }
-            let configured_work = self.sewing_selection.as_ref().map_or_else(
-                || crate::sewing::consumables::purchasing_work_bound(options),
-                sewing_selection::Request::purchasing_work_bound,
-            );
-            let work = match configured_work {
-                Ok(work) => work,
-                Err(refusal) if refusal.code == RefusalCode::BudgetExceeded => return Err(refusal),
-                // Invalid source/market options remain the independent sewing consumer's refusal;
-                // its admission fails before the purchasing evaluator can perform quote work.
-                Err(_) => 0,
-            };
-            if work.saturating_mul(variants.len()) > 200_000 {
-                return Err(budget(
-                    "material/design study exceeds 200000 aggregate thread-purchasing work units; reduce variants, recipe trials or quote observations",
-                ));
-            }
-        }
-        let allocation_work = [
-            self.purchasing.as_ref().map(|p| &p.market),
-            self.cutting_job
-                .as_ref()
-                .and_then(|j| j.purchasing.as_ref())
-                .map(|p| &p.market),
-        ]
-        .into_iter()
-        .flatten()
-        .filter_map(|market| market.split_orders.as_ref())
-        .fold(0usize, |sum, policy| {
-            sum.saturating_add(policy.max_search_nodes.saturating_mul(variants.len()))
-        });
-        if allocation_work > 200_000 {
-            return Err(budget(
-                "material study exceeds 200000 aggregate supplier-allocation work units; reduce alternatives or each split_orders limit",
-            ));
-        }
+        self.reserve_consumers(pattern, variants.len())?;
         variants.sort_by(|a, b| a.variant.key.cmp(&b.variant.key));
         let mut alternatives = Vec::new();
-        let mut stations = 0usize;
-        let mut mass_work = Work::new(40_000_000);
-        let mut design_work = Work::new(40_000_000);
+        let mut work = ManufacturingWork::new();
         for variant in variants {
-            let row =
-                self.evaluate_variant(pattern, variant, &mut mass_work, &mut design_work, fit)?;
-            if design_work.exhausted {
-                return Err(budget(
-                    "design study exceeds 40000000 aggregate outline-validation work units",
-                ));
-            }
-            if mass_work.exhausted {
-                return Err(budget(
-                    "material study exceeds aggregate mass geometry budget",
-                ));
-            }
-            if let Some(sewing) = row.sewing.value() {
-                stations = stations.saturating_add(sewing.retained_source_station_count());
-                if stations > 250_000 {
-                    return Err(budget(
-                        "material study exceeds 250000 aggregate sewing stations",
-                    ));
-                }
-            }
-            alternatives.push(row);
+            alternatives.push(self.evaluate_charged(pattern, variant, fit, &mut work)?);
         }
+        self.finish_manufacturing(
+            pattern,
+            additional_consumer,
+            screening,
+            design_search,
+            alternatives,
+            fit,
+        )
+    }
+
+    fn evaluate_charged(
+        &self,
+        pattern: &Pattern,
+        variant: PreparedVariant,
+        fit: Option<&design::fit::Context<'_>>,
+        work: &mut ManufacturingWork,
+    ) -> Result<Alternative, Refusal> {
+        let row = self.evaluate_variant(pattern, variant, &mut work.mass, &mut work.design, fit)?;
+        if work.design.exhausted {
+            return Err(budget(
+                "design study exceeds 40000000 aggregate outline-validation work units",
+            ));
+        }
+        if work.mass.exhausted {
+            return Err(budget(
+                "material study exceeds aggregate mass geometry budget",
+            ));
+        }
+        if let Some(sewing) = row.sewing.value() {
+            work.stations = work
+                .stations
+                .saturating_add(sewing.retained_source_station_count());
+            if work.stations > 250_000 {
+                return Err(budget(
+                    "material study exceeds 250000 aggregate sewing stations",
+                ));
+            }
+        }
+        Ok(row)
+    }
+
+    fn finish_manufacturing(
+        &self,
+        pattern: &Pattern,
+        additional_consumer: bool,
+        screening: Option<material_screen::Report>,
+        design_search: Option<design::SearchReceipt>,
+        alternatives: Vec<Alternative>,
+        fit: Option<&design::fit::Context<'_>>,
+    ) -> Result<Report, Refusal> {
         let request_sha256 = self.manufacturing_identity(fit)?;
         let source_pattern_sha256 = hash(pattern.raw())?;
         let comparison = self
@@ -941,7 +1105,11 @@ impl Request {
             notes.push("Explicit fit targets use the fixed caller-supplied body authority through canonical flat validation before binding or any production consumer. Model-derived measurements retain MODEL_FIT provenance; missing points or out-of-band raw values refuse the design even when a rounded residual is zero. Passing a declared ease band is not empirical garment fit or a safe-fit certification.");
         }
         if self.design_adaptive.is_some() {
-            notes.push("Adaptive linked alterations use explicitly bounded coordinate polling and step refinement. Their declared fit-band objective compares unrounded canonical maximum violation, then total violation, solely to discover candidates. Every selected design still requires complete flat admission and independently reruns the requested material and production consumers. Stopping at the candidate allowance, evaluation budget or minimum steps leaves the continuous domain unresolved; no global optimum, infeasibility or empirical fit is inferred.");
+            notes.push(if self.consumer_guided() {
+                "Consumer-guided adaptive alterations use one nominated material and one existing nominal comparison objective after canonical flat/body-fit admission. Ordinary constraints, required consumers and protocol compatibility govern every probe. Polling continues within its declared evaluation/step limits, retaining its best admitted designs and reusing their exact production results in the final material cross-product. Other material alternatives do not steer discovery. Callback slots are reserved conservatively; the caller's shared scenario session still admits each probe's actual numerical work. Neither the continuous domain nor other material/design optima are proven."
+            } else {
+                "Adaptive linked alterations use explicitly bounded coordinate polling and step refinement. Their declared fit-band objective compares unrounded canonical maximum violation, then total violation, solely to discover candidates. Every selected design still requires complete flat admission and independently reruns the requested material and production consumers. Stopping at the candidate allowance, evaluation budget or minimum steps leaves the continuous domain unresolved; no global optimum, infeasibility or empirical fit is inferred."
+            });
         }
         let geometry_changed = alternatives.iter().any(|row| {
             row.design
@@ -1252,6 +1420,29 @@ impl Request {
         }
         row.binding = Outcome::Available { result: bound };
         Ok(row)
+    }
+}
+
+fn scenario_alternative<T>(
+    row: &Alternative,
+    evaluate: &mut impl FnMut(&str, &Pattern) -> Result<T, Refusal>,
+) -> ScenarioAlternative<T> {
+    let evaluation = match &row.binding {
+        Outcome::Available { result } => {
+            // Preserve Rust's exact parsed numeric representation and the retained binding lock.
+            let bound = Pattern::new(result["pattern"].clone());
+            Outcome::from_result(evaluate(&row.key, &bound))
+        }
+        Outcome::Refused { refusal } => Outcome::Refused {
+            refusal: refusal.clone(),
+        },
+        Outcome::NotRequested => Outcome::Refused {
+            refusal: invalid("additional evaluation requires a successful binding"),
+        },
+    };
+    ScenarioAlternative {
+        key: row.key.clone(),
+        evaluation,
     }
 }
 

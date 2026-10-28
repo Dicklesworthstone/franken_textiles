@@ -145,6 +145,15 @@ impl Request {
         fit: Option<&super::design::fit::Context<'_>>,
         mut evaluate: impl FnMut(usize, &str, &Pattern) -> Result<T, Refusal>,
     ) -> Result<Report<T>, Refusal> {
+        if self
+            .design_adaptive
+            .as_ref()
+            .is_some_and(super::design::adaptive::Request::consumer_guided)
+        {
+            return Err(invalid(
+                "consumer-guided adaptive design needs one scenario; named cases have no declared scalar aggregation for adaptive polling",
+            ));
+        }
         if cases.is_empty() || cases.len() > 8 || !(1..=64).contains(&max_evaluations) {
             return Err(invalid(
                 "scenario matrix needs 1..8 cases and 1..64 maximum evaluations",

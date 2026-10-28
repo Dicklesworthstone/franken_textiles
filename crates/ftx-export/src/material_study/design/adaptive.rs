@@ -1,5 +1,5 @@
 //! Bounded coordinate polling over explicit linked alterations and canonical raw fit readings.
-//! Discovery does not rank manufacturing performance or certify the unvisited continuous domain.
+//! Optional consumer guidance reuses the study comparator; no mode certifies the unvisited domain.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -7,7 +7,7 @@ use ftx_core::{Refusal, curve::OUTLINE_DENSE};
 use ftx_pattern::Pattern;
 use serde::{Deserialize, Serialize};
 
-use super::super::{Outcome, PreparedVariant, Request as StudyRequest};
+use super::super::{Outcome, PreparedVariant, Request as StudyRequest, comparison};
 use super::{
     MAX_DESIGNS, MAX_DOCUMENT_WORK_BYTES, MAX_OPERATIONS, Operation, Prepared, Variant, budget,
     fit, grid::Site, invalid,
@@ -20,6 +20,8 @@ use crate::cutting::geometry::Work;
 pub enum Objective {
     /// Minimize maximum absolute raw out-of-band residual, then their sum, both in millimetres.
     FitBandViolationMm,
+    /// Use one admitted nominal production comparison objective after complete flat qualification.
+    ConsumerComparison,
 }
 
 /// One bounded scalar, applied to its authored linked alteration sites in order.
@@ -44,8 +46,12 @@ pub struct Variable {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// Explicit raw fit-band discovery criterion, never a physical fit or comfort score.
+    /// Raw fit-band discovery or one existing production comparison; never an inferred fit score.
     pub objective: Objective,
+    /// Exact material variant used to guide consumer polling. Required only for consumer guidance;
+    /// selected geometries still cross every authored material alternative after discovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_key: Option<String>,
     /// One to three variables, polled in authored order and negative then positive direction.
     pub variables: Vec<Variable>,
     /// Explicit canonical operations after each trial's linked alterations, such as seam truing.
@@ -74,15 +80,22 @@ pub enum StopReason {
 pub struct Trial {
     /// Exact original/altered identity, operations, scalar coordinates and canonical validation.
     pub design: super::Receipt,
-    /// Selected for material binding and production consumers, not yet downstream-feasible.
+    /// Retained for the final material cross-product; removed consumer incumbents remain visible.
     pub selected: bool,
+    /// Unmodified production comparator decision for the nominated material, after flat admission.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumer_comparison: Option<comparison::Candidate>,
+    /// Original binding or additional-consumer refusal, kept even when comparison admission
+    /// reports a more general missing metric. Only the explicit comparison controls selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumer_refusal: Option<Refusal>,
     /// Unrounded shared point readings, or the concrete reason they could not be admitted.
     pub raw_fit: Outcome<Vec<fit::RawReading>>,
     /// Maximum absolute distance outside the declared bands; unknown for inadmissible geometry.
     pub max_fit_band_violation_mm: Option<f64>,
     /// Sum of absolute band distances, used only to break maximum-violation ties.
     pub total_fit_band_violation_mm: Option<f64>,
-    /// Canonical alteration, structure, seam, outline, body or fit refusal, if any.
+    /// Canonical geometry/fit refusal or consumer-admission/protocol exclusion, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Refusal>,
 }
@@ -116,12 +129,49 @@ pub struct Receipt {
     pub best_total_fit_band_violation_mm: Option<f64>,
     /// Polling steps at termination, indexed by the original variable identities.
     pub final_steps_mm: BTreeMap<String, f64>,
+    /// Actual production guidance and its bounded callback-slot reservation, when requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumer_guidance: Option<Box<ConsumerGuidance>>,
     /// Every unique executed trial in deterministic evaluation order.
     pub rows: Vec<Trial>,
 }
 
+/// One nominated material and the existing comparison authority used for local polling.
+#[derive(Clone, Debug, Serialize)]
+pub struct ConsumerGuidance {
+    /// Exact authored material key; other material alternatives do not silently steer discovery.
+    pub material_key: String,
+    /// The sole objective from the ordinary nominal comparison policy.
+    pub objective: comparison::Objective,
+    /// Conservative upper bound on probe plus final consumer slots. Scenario work is still
+    /// admitted per callback by the caller's shared production-session budgets.
+    pub reserved_evaluations: usize,
+    /// Actual nominated-material probes, after full canonical geometry and fit admission.
+    pub evaluations: usize,
+    /// Best admitted retained discovery trial, excluding the separately retained baseline.
+    pub best_trial_key: Option<String>,
+    /// Existing comparator reading, never a separately computed or normalized score.
+    pub best_reading: Option<comparison::Reading>,
+    /// First admitted input protocol; differing protocols cannot steer unless explicitly allowed.
+    pub input_protocol_sha256: Option<String>,
+}
+
 impl Request {
+    pub(in crate::material_study) fn consumer_guided(&self) -> bool {
+        matches!(self.objective, Objective::ConsumerComparison)
+    }
+
     pub(super) fn validate(&self) -> Result<(), Refusal> {
+        if self.consumer_guided() != self.material_key.is_some()
+            || self
+                .material_key
+                .as_ref()
+                .is_some_and(|key| key.trim().is_empty())
+        {
+            return Err(invalid(
+                "consumer_comparison needs one nonempty material_key; fit_band_violation_mm does not accept material_key",
+            ));
+        }
         if serde_json::to_vec(self)
             .map_err(|e| invalid(e.to_string()))?
             .len()
@@ -309,14 +359,31 @@ impl Request {
                 ),
             )
         })?;
+        let probe_material_bytes = if self.consumer_guided() {
+            materials
+                .iter()
+                .find(|material| Some(&material.variant.key) == self.material_key.as_ref())
+                .map(|material| serde_json::to_vec(&material.variant))
+                .transpose()
+                .map_err(|e| invalid(e.to_string()))?
+                .map_or(0, |bytes| bytes.len().saturating_mul(self.max_evaluations))
+        } else {
+            0
+        };
         if source_bytes
             .saturating_add(request_bytes)
             .saturating_mul(
                 passes
                     .saturating_add(trials.saturating_mul(4))
-                    .saturating_add(rows.saturating_mul(3)),
+                    .saturating_add(rows.saturating_mul(3))
+                    .saturating_add(if self.consumer_guided() {
+                        self.max_evaluations.saturating_mul(3)
+                    } else {
+                        0
+                    }),
             )
             .saturating_add(material_bytes.saturating_mul(self.max_designs + 1))
+            .saturating_add(probe_material_bytes)
             .saturating_add(treatment_work.bytes)
             > MAX_DOCUMENT_WORK_BYTES
         {
@@ -334,6 +401,24 @@ impl Request {
         materials: Vec<PreparedVariant>,
         context: Option<&fit::Context<'_>>,
     ) -> Result<(Vec<PreparedVariant>, Receipt), Refusal> {
+        if self.consumer_guided() {
+            return Err(invalid(
+                "consumer-guided adaptive discovery requires the production consumer entry point",
+            ));
+        }
+        let (variants, receipt, _) =
+            self.expand_with::<()>(study, pattern, materials, context, None)?;
+        Ok((variants, receipt))
+    }
+
+    pub(in crate::material_study) fn expand_with<T>(
+        &self,
+        study: &StudyRequest,
+        pattern: &Pattern,
+        materials: Vec<PreparedVariant>,
+        context: Option<&fit::Context<'_>>,
+        evaluate: Option<&mut ConsumerEvaluator<'_, T>>,
+    ) -> Result<Expansion<T>, Refusal> {
         self.validate()?;
         let context = context.ok_or_else(|| {
             invalid("design_adaptive needs the selected scenario's fitted-body measurement context")
@@ -350,6 +435,33 @@ impl Request {
             return Err(invalid("material variant keys must be unique and nonempty"));
         }
         self.reserve(study, pattern, &materials, context)?;
+        let guidance = if self.consumer_guided() {
+            let material_key = self.material_key.as_ref().expect("validated material key");
+            let material = materials
+                .iter()
+                .find(|material| material.variant.key == *material_key)
+                .ok_or_else(|| {
+                    invalid("adaptive material_key must identify an admitted material alternative")
+                })?;
+            let policy = study
+                .comparison
+                .as_ref()
+                .expect("validated consumer comparison");
+            Some(Guidance {
+                material,
+                policy,
+                evaluate: evaluate.ok_or_else(|| {
+                    invalid("consumer-guided adaptive discovery needs its production evaluator")
+                })?,
+                protocol: None,
+                evaluations: 0,
+                reserved_evaluations: self
+                    .max_evaluations
+                    .saturating_add((self.max_designs + 1).saturating_mul(materials.len())),
+            })
+        } else {
+            None
+        };
         let mut evaluator = Evaluator {
             source: pattern,
             fit,
@@ -367,11 +479,14 @@ impl Request {
         let mut discovery = Discovery {
             request: self,
             evaluator,
+            guidance,
             rows: Vec::new(),
             chosen: vec![Chosen {
                 variant: baseline,
                 values: None,
                 evaluated,
+                index: None,
+                consumer: None,
             }],
             seen: BTreeMap::new(),
             coordinates: Vec::new(),
@@ -390,7 +505,7 @@ impl Request {
             .map(|variable| variable.initial_step_mm)
             .collect();
         let stop_reason = 'search: loop {
-            if discovery.chosen.len() > self.max_designs {
+            if !self.consumer_guided() && discovery.chosen.len() > self.max_designs {
                 break StopReason::QualifiedDesignLimit;
             }
             if discovery.rows.len() >= self.max_evaluations {
@@ -418,10 +533,10 @@ impl Request {
                     let Some(index) = discovery.inspect(point)? else {
                         break 'search StopReason::EvaluationBudget;
                     };
-                    if improves(&discovery.rows[index], &discovery.rows[best]) {
+                    if discovery.improves(&discovery.rows[index], &discovery.rows[best]) {
                         best = index;
                     }
-                    if discovery.chosen.len() > self.max_designs {
+                    if !self.consumer_guided() && discovery.chosen.len() > self.max_designs {
                         break 'search StopReason::QualifiedDesignLimit;
                     }
                 }
@@ -443,8 +558,13 @@ impl Request {
         };
         let mut best: Option<usize> = None;
         for (index, row) in discovery.rows.iter().enumerate() {
-            if row.score().is_some()
-                && best.is_none_or(|previous| improves(row, &discovery.rows[previous]))
+            let admitted = if self.consumer_guided() {
+                row.consumer_admitted()
+            } else {
+                row.score().is_some()
+            };
+            if admitted
+                && best.is_none_or(|previous| discovery.improves(row, &discovery.rows[previous]))
             {
                 best = Some(index);
             }
@@ -453,7 +573,11 @@ impl Request {
             schema: "ftx-design-adaptive-search/1",
             request: self.clone(),
             evaluations: discovery.rows.len(),
-            qualified_designs: discovery.rows.iter().filter(|row| row.selected).count(),
+            qualified_designs: discovery
+                .rows
+                .iter()
+                .filter(|row| row.flat_qualified())
+                .count(),
             selected_designs: discovery.chosen.len() - 1,
             stop_reason,
             budget_exhausted: matches!(stop_reason, StopReason::EvaluationBudget),
@@ -470,10 +594,37 @@ impl Request {
                 .zip(steps)
                 .map(|(variable, step)| (variable.key.clone(), step))
                 .collect(),
+            consumer_guidance: discovery.guidance.as_ref().map(|guidance| {
+                Box::new(ConsumerGuidance {
+                    material_key: guidance.material.variant.key.clone(),
+                    objective: guidance.policy.objectives[0].clone(),
+                    reserved_evaluations: guidance.reserved_evaluations,
+                    evaluations: guidance.evaluations,
+                    best_trial_key: best.map(|index| discovery.rows[index].design.key.clone()),
+                    best_reading: best
+                        .and_then(|index| discovery.rows[index].consumer_comparison.as_ref())
+                        .and_then(|candidate| {
+                            candidate
+                                .readings
+                                .get(&guidance.policy.objectives[0].metric)
+                        })
+                        .cloned(),
+                    input_protocol_sha256: guidance.protocol.clone().flatten(),
+                })
+            }),
             rows: discovery.rows,
         };
         let mut expanded = Vec::new();
+        let mut retained = BTreeMap::new();
         for chosen in discovery.chosen {
+            if let Some(consumer) = chosen.consumer {
+                let key = serde_json::to_string(&(
+                    &chosen.variant.key,
+                    self.material_key.as_ref().expect("consumer material"),
+                ))
+                .map_err(|e| invalid(e.to_string()))?;
+                retained.insert(key, consumer);
+            }
             for material in &materials {
                 let mut variant = material.variant.clone();
                 variant.key = serde_json::to_string(&(&chosen.variant.key, &material.variant.key))
@@ -490,14 +641,29 @@ impl Request {
                 });
             }
         }
-        Ok((expanded, receipt))
+        Ok((expanded, receipt, retained))
     }
 }
 
-struct Chosen {
+type ConsumerEvaluator<'a, T> =
+    dyn FnMut(PreparedVariant) -> Result<(comparison::Candidate, Option<Refusal>, T), Refusal> + 'a;
+type Expansion<T> = (Vec<PreparedVariant>, Receipt, BTreeMap<String, T>);
+
+struct Guidance<'a, T> {
+    material: &'a PreparedVariant,
+    policy: &'a comparison::Policy,
+    evaluate: &'a mut ConsumerEvaluator<'a, T>,
+    protocol: Option<Option<String>>,
+    evaluations: usize,
+    reserved_evaluations: usize,
+}
+
+struct Chosen<T> {
     variant: Variant,
     values: Option<BTreeMap<String, f64>>,
     evaluated: (super::Receipt, Result<Pattern, Refusal>),
+    index: Option<usize>,
+    consumer: Option<T>,
 }
 
 struct Evaluator<'request, 'body> {
@@ -591,6 +757,8 @@ impl Evaluator<'_, '_> {
             Trial {
                 design,
                 selected: result.is_ok(),
+                consumer_comparison: None,
+                consumer_refusal: None,
                 raw_fit,
                 max_fit_band_violation_mm: score.map(|score| score.0),
                 total_fit_band_violation_mm: score.map(|score| score.1),
@@ -601,16 +769,40 @@ impl Evaluator<'_, '_> {
     }
 }
 
-struct Discovery<'request, 'body> {
+struct Discovery<'request, 'body, 'consumer, T> {
     request: &'request Request,
     evaluator: Evaluator<'request, 'body>,
     rows: Vec<Trial>,
-    chosen: Vec<Chosen>,
+    guidance: Option<Guidance<'consumer, T>>,
+    chosen: Vec<Chosen<T>>,
     seen: BTreeMap<Vec<u64>, usize>,
     coordinates: Vec<Vec<f64>>,
 }
 
-impl Discovery<'_, '_> {
+impl<T> Discovery<'_, '_, '_, T> {
+    fn improves(&self, candidate: &Trial, current: &Trial) -> bool {
+        let Some(guidance) = &self.guidance else {
+            return improves(candidate, current);
+        };
+        match (candidate.consumer_admitted(), current.consumer_admitted()) {
+            (true, false) => true,
+            (true, true) => guidance.policy.prefers(
+                candidate
+                    .consumer_comparison
+                    .as_ref()
+                    .expect("admitted candidate"),
+                current
+                    .consumer_comparison
+                    .as_ref()
+                    .expect("admitted incumbent"),
+            ),
+            // Raw fit only approaches the declared admissible region; it never replaces an
+            // admitted production incumbent or substitutes a failed consumer reading.
+            (false, false) => improves(candidate, current),
+            (false, true) => false,
+        }
+    }
+
     fn inspect(&mut self, point: Vec<f64>) -> Result<Option<usize>, Refusal> {
         let identity: Vec<_> = point
             .iter()
@@ -624,12 +816,72 @@ impl Discovery<'_, '_> {
         }
         let index = self.rows.len();
         let (variant, values) = self.request.design(index, &point)?;
-        let (row, result) = self.evaluator.trial(&variant, &values)?;
+        let (mut row, result) = self.evaluator.trial(&variant, &values)?;
+        let mut consumer = None;
+        if let Some(guidance) = &mut self.guidance {
+            row.selected = false;
+            if result.is_ok() {
+                let mut material = guidance.material.variant.clone();
+                material.key = serde_json::to_string(&(&variant.key, &material.key))
+                    .map_err(|e| invalid(e.to_string()))?;
+                guidance.evaluations += 1;
+                let (candidate, consumer_refusal, output) = (guidance.evaluate)(PreparedVariant {
+                    variant: material,
+                    choices: guidance.material.choices.clone(),
+                    design: Some(Prepared {
+                        variant: variant.clone(),
+                        material_key: Some(guidance.material.variant.key.clone()),
+                        variables_mm: Some(values.clone()),
+                        evaluated: Some((row.design.clone(), result.clone())),
+                    }),
+                })?;
+                row.consumer_refusal = consumer_refusal;
+                if candidate.eligible {
+                    if guidance.protocol.as_ref().is_some_and(|protocol| {
+                        !guidance.policy.allow_mixed_protocols
+                            && *protocol != candidate.input_protocol_sha256
+                    }) {
+                        row.refusal = Some(invalid(
+                            "adaptive consumer protocols differ from the first admitted incumbent; no ordering inferred",
+                        ));
+                    } else {
+                        guidance
+                            .protocol
+                            .get_or_insert_with(|| candidate.input_protocol_sha256.clone());
+                        row.selected = true;
+                        consumer = Some(output);
+                    }
+                } else {
+                    row.refusal = candidate.exclusions.first().cloned();
+                }
+                row.consumer_comparison = Some(candidate);
+            }
+        }
+        if row.selected && self.guidance.is_some() && self.chosen.len() > self.request.max_designs {
+            let mut worst = 1;
+            for position in 2..self.chosen.len() {
+                let previous = &self.rows[self.chosen[worst].index.expect("trial index")];
+                let next = &self.rows[self.chosen[position].index.expect("trial index")];
+                // Evict the latest of equally bad retained trials, preserving earlier ties.
+                if !self.improves(next, previous) {
+                    worst = position;
+                }
+            }
+            let previous = self.chosen[worst].index.expect("trial index");
+            if self.improves(&row, &self.rows[previous]) {
+                self.rows[previous].selected = false;
+                self.chosen.remove(worst);
+            } else {
+                row.selected = false;
+            }
+        }
         if row.selected {
             self.chosen.push(Chosen {
                 variant,
                 values: Some(values),
                 evaluated: (row.design.clone(), result),
+                index: Some(index),
+                consumer,
             });
         }
         self.seen.insert(identity, index);
@@ -640,6 +892,23 @@ impl Discovery<'_, '_> {
 }
 
 impl Trial {
+    fn flat_qualified(&self) -> bool {
+        self.score() == Some((0.0, 0.0))
+            && self
+                .design
+                .validation
+                .as_ref()
+                .is_some_and(|validation| validation.passed)
+    }
+
+    fn consumer_admitted(&self) -> bool {
+        self.refusal.is_none()
+            && self
+                .consumer_comparison
+                .as_ref()
+                .is_some_and(|candidate| candidate.eligible)
+    }
+
     fn score(&self) -> Option<(f64, f64)> {
         self.max_fit_band_violation_mm
             .zip(self.total_fit_band_violation_mm)

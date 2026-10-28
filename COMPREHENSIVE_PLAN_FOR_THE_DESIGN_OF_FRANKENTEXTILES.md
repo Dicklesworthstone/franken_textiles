@@ -4338,6 +4338,29 @@ co-moving after a dry drape. The first-order endpoint model requires mechanical 
 relative flow impact, drainage, inferred wet constitutive changes, pinned-coordinate exchange impulses
 and empirical wet-garment qualification remain outside this model and under the open parent work.
 
+### 25.122 Guide adaptive alterations with actual material-bound consumer results
+
+Adaptive design studies can now nominate one authored material alternative and one existing nominal
+comparison objective to guide bounded alteration search. Canonical geometry and selected-body flat-fit
+gates run before actual manufacturing and optional single-scenario probes. The ordinary comparison
+authority supplies readings, source admission, required consumers, constraints and protocol compatibility;
+no surrogate fit score or browser ranking replaces those quantities. The original fit-only search remains
+available with its original behavior.
+
+Consumer-guided polling continues after the first flat-passing designs and replaces inferior retained
+geometries. Each selected geometry still crosses every authored material alternative. A bounded cache
+reuses the nominated material's exact successful manufacturing and scenario outputs, so final assembly
+does not rerun that incumbent against an exhausted scenario allowance. Every trial retains raw fit
+results, exact altered geometry, consumer readings and refusals. Probe and final manufacturing work
+share aggregate reservations and counters; scenario callbacks use their existing cumulative session.
+
+Evaluation/step stops and individual callback refusals preserve admitted cached candidates. Structural
+or global manufacturing hard-budget failures still refuse the whole request. The guidance material does
+not optimize the other material alternatives, and named-case matrices refuse this mode until an explicit
+case aggregation rule exists. Unvisited values, global optimality and empirical garment fit remain
+unqualified. This bounded extension is tracked by `ftx-ds2.1`; the broader `ftx-ds2` remains open.
+See [material-screening-and-studies.md](docs/material-screening-and-studies.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
