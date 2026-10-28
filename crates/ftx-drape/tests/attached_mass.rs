@@ -292,6 +292,107 @@ fn both_static_strip_consumers_require_the_selected_wet_response_but_not_dry_mas
     assert!(a.is_ok() && b.is_ok());
 }
 
+#[test]
+fn evaporating_liquid_preserves_the_actual_attached_source_and_welded_inventory() {
+    use ftx_core::receipt::sha256_hex;
+    use ftx_drape::liquid_mass::{Qualification, bind};
+    let mut result = run(loaded()).unwrap();
+    let original = result
+        .scene
+        .solver
+        .model
+        .attached_mass_report()
+        .unwrap()
+        .unwrap()
+        .clone();
+    let dry = result.scene.solver.model.mass.clone();
+    let material = &result.report["material"];
+    let bindings: serde_json::Map<String, Value> = result
+        .scene
+        .mesh
+        .instances
+        .iter()
+        .map(|id| {
+            (
+                id.clone(),
+                json!({"material_sha256":material["record_sha256"],
+            "maximum_liquid_loading_kg_m2":0.2,"temperature_range_c":[0.,50.]}),
+            )
+        })
+        .collect();
+    let q: Qualification = serde_json::from_value(json!({
+        "schema":"ftx-evaporating-liquid-mechanics/1",
+        "model":"co_moving_evaporation_frozen_mechanics/1",
+        "material_report_sha256":sha256_hex(&serde_json::to_vec(material).unwrap()),
+        "bindings":bindings,"source":{"reference":"test:attached-liquid",
+            "accessed_on":"2026-10-27","note":"Synthetic mass and frozen-law qualification"},
+        "evidence":"estimate","allow_estimates":true,"method":"Synthetic invariant-law control",
+        "qualification":"The artificial source laws and interfaces remain invariant over the declared domain"
+    })).unwrap();
+    let liquid: Vec<_> = result
+        .scene
+        .solver
+        .model
+        .membranes
+        .iter()
+        .enumerate()
+        .map(|(i, e)| e.area * if i % 2 == 0 { 0.1 } else { 0.05 })
+        .collect();
+    let temperatures = vec![vec![20.]; liquid.len()];
+    let original_state = format!("{:?}", result.scene.solver);
+    let mut stale = q.clone();
+    stale.material_report_sha256 = "f".repeat(64);
+    assert!(bind(&mut result, &stale, &liquid, &temperatures).is_err());
+    assert_eq!(format!("{:?}", result.scene.solver), original_state);
+    let initial = bind(&mut result, &q, &liquid, &temperatures).unwrap();
+    let attached = result
+        .scene
+        .solver
+        .model
+        .attached_mass_report()
+        .unwrap()
+        .unwrap();
+    assert_eq!(attached.input, original.input);
+    assert_eq!(attached.input_sha256, original.input_sha256);
+    assert_eq!(
+        serde_json::to_value(&attached.groups).unwrap(),
+        serde_json::to_value(&original.groups).unwrap()
+    );
+    assert_eq!(attached.cloth_mass_kg, original.cloth_mass_kg);
+    assert_eq!(attached.attached_mass_kg, original.attached_mass_kg);
+    assert_eq!(
+        attached.evaporating_liquid_mass_kg,
+        Some(initial.remaining_liquid_mass_kg)
+    );
+    assert_eq!(
+        attached.total_inertial_mass_kg,
+        initial.total_inertial_mass_kg
+    );
+    result.scene.solver.step(0.001).unwrap();
+    result
+        .scene
+        .solver
+        .evaporate_liquid(&vec![0.; liquid.len()], &temperatures)
+        .unwrap();
+    assert_eq!(result.scene.solver.model.mass, dry);
+    let attached = result
+        .scene
+        .solver
+        .model
+        .attached_mass_report()
+        .unwrap()
+        .unwrap();
+    assert_eq!(attached.input, original.input);
+    assert_eq!(attached.evaporating_liquid_mass_kg, Some(0.));
+    assert_eq!(
+        attached.total_inertial_mass_kg,
+        original.total_inertial_mass_kg
+    );
+    result.scene.solver.model.mass[0] += 0.001;
+    assert!(result.scene.solver.liquid_mass_report().is_err());
+    assert!(result.scene.solver.model.attached_mass_report().is_err());
+}
+
 struct Form;
 impl PartFrames for Form {
     fn frame(&self, _: &str) -> Option<PartFrame> {

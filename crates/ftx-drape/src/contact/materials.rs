@@ -15,7 +15,7 @@ pub struct SurfaceMaterial {
     pub friction_body: f64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct MaterialField {
     triangles: Vec<[usize; 3]>,
     edges: Vec<[usize; 2]>,
@@ -164,6 +164,50 @@ impl MaterialField {
 }
 
 impl Contact {
+    // Compare the complete source field, including inactive interfaces. Rebinding at the current
+    // positions would recompute start creases and discard accepted Coulomb history unnecessarily.
+    pub(crate) fn check_source_materials(
+        &self,
+        vertex_count: usize,
+        triangle_ids: &[usize],
+        surfaces: &[SurfaceMaterial],
+        self_friction: Option<&[Vec<f64>]>,
+    ) -> Result<(), Refusal> {
+        let reference = MaterialField::build(
+            &self.cloth,
+            vertex_count,
+            triangle_ids,
+            surfaces,
+            self_friction,
+        )?;
+        let field_matches = if surfaces.len() == 1 {
+            self.surface_materials.is_none()
+        } else {
+            self.surface_materials.as_ref() == Some(&reference)
+        };
+        if !field_matches
+            || self.params.thickness != reference.max_half()
+            || self.params.mu != surfaces.iter().map(|s| s.friction_body).fold(0., f64::max)
+            || match (self.self_params, self_friction) {
+                (None, None) => false,
+                (Some(p), Some(matrix)) => {
+                    p.thickness != 2. * reference.max_half()
+                        || p.mu != matrix.iter().flatten().copied().fold(0., f64::max)
+                }
+                _ => true,
+            }
+        {
+            return Err(invalid(
+                "liquid contact differs from its qualified source materials/interfaces",
+            ));
+        }
+        self.params.validate()?;
+        if let Some(p) = self.self_params {
+            p.validate()?;
+        }
+        Ok(())
+    }
+
     /// Reconstructing a collider must not discard the cloth's source-bound physical assignment.
     /// Install it before the new body's offset audit, so thin panels are not checked against a
     /// different panel's broad-phase envelope. Friction history is intentionally not transferred.

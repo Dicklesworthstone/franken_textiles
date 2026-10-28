@@ -46,7 +46,7 @@ is no precomputed lookup that can miss an actual notch-local advance, a changed 
 unsupported reverse movement or an unqualified material substitution. A failed template does not
 prevent the search from finding an admitted combination of changes across multiple passes.
 
-Candidates can change only those four process settings. This is not continuous optimization of all
+Recipe candidates change only those four process settings. This is not continuous optimization of all
 machine variables, automatic seam topology, tension/workholding identification, pressure selection,
 or a physical seam-quality model. The supplied process qualifications must already support the
 intended specimen, conditions and settings. Reducing stitch count is only an admissible choice when
@@ -205,6 +205,40 @@ It does not combine thread with fabric cutting costs, value worker time, or opti
 shipping bundle or cross-garment execution schedule. Production quality and hardware permission retain their
 independent gates. Material-study comparisons continue applying their explicit source-protocol
 policy to each actual selected plan.
+
+## Compare independently qualified specialist routes
+
+`ftx-sewing-selection/6` with `minimize_parallel_makespan` can compare an authored finite set of
+complete specialist-cell routes. The original `options.production.routing` remains the first
+candidate. Supply `route_candidates: [{"id": "another-route", "routing": ...}]`, where `routing`
+is a complete existing `fixed_operation_route/1` policy, including its exact cell configurations,
+process and timing qualifications, content locks, availability, staging and transfer resource.
+There are one to fifteen alternatives; IDs must be unique and `template` is reserved.
+
+Only the routing policy is replaced. The original pattern, operation set, construction, garment
+quantity, thread market and qualification requirement remain unchanged. Each complete candidate is
+admitted by the ordinary sewing planner and retains its actual stitches, feed, handling, transfers,
+yarn demand and purchasing. Missing or stale source evidence cannot be borrowed from another route.
+This is selection among explicitly supplied routes, not automatic machine eligibility or arbitrary
+per-copy routing.
+
+Recipe `alternatives` may be empty in version 6. When supplied, their Cartesian product is searched
+within each route: the template route first, then route IDs in lexical order, with the existing
+operation/recipe ordering inside each route. The **same** `max_plan_evaluations` cap of at most 64
+includes every complete route/recipe attempt and refusal. Scheduling, source-plan and purchasing
+reservations use the largest complete candidate before multiplying by that shared cap or by study
+alternatives. No candidate may increase a hidden inner work allowance.
+
+Version-6 reports retain `route_choice` on each trial and `selected_route` for the complete
+incumbent; material studies keep the same identities beside their ordinary selected sewing plan.
+`selected_options_json` freezes the winning route for ordinary plan, stitch and cell-preview replay.
+Exact makespan ties retain the first admitted candidate. An incomplete inner schedule or unresolved
+route remains visible and prevents an optimum claim even after all listed combinations are visited.
+Route-specific timing admission runs on each actual attempt. Missing timing retains the original
+refusal plus `objective_unavailable`, so another qualified route remains usable without claiming
+the unscored route is slower or infeasible. Existing recipe-only timing preflight is unchanged.
+Any proof is conditional on the listed choices and their qualified dispatch models, never all
+possible manufacturing routes, measured throughput, seam quality or hardware authorization.
 
 ## Replay and browser boundary
 

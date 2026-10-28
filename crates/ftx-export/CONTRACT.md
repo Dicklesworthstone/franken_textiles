@@ -15,7 +15,12 @@ through `material_treatment_workflow`. Free coupon treatment does not establish 
 
 **Selected-body design synthesis** (`material_study::design`, plan §25.70 / `ftx-ds2`).
 Optional finite variable grids generate linked canonical alterations and retain baseline, exact
-coordinates/operations and incomplete-domain receipts. Explicit flat fit bands use a borrowed live
+coordinates/operations and incomplete-domain receipts. Both grids and adaptive searches accept original
+slash sites and explicitly tagged vertex-move sites with signed x/y scalar multipliers. Mixed sites
+produce ordinary operations in authored order; canonical rounding, curve/mark behavior and all flat
+gates remain authoritative. Complete domains and actual adaptive displacements reject invalid or
+overflowed/underflowed changes before consumers; failed candidates admit no partial altered document.
+Explicit flat fit bands use a borrowed live
 `BodyMeasure` context from the production adapter; the export crate never fits a body or guesses
 landmarks. Canonical raw status gates binding and every consumer before comparison. Context identity
 is part of manufacturing/scenario/matrix hashes. A missing body, point or landmark cannot become a
@@ -39,7 +44,7 @@ Absent screening preserves the earlier prefix request/output semantics and budge
 matrix evaluation, missing context, budget exhaustion and retained failures.
 
 **Adaptive selected-body design discovery** (`design_adaptive`). Explicit finite bounds, initial
-coordinates, polling/minimum steps and a 1–256 unique-trial allowance refine linked slash-spread
+coordinates, polling/minimum steps and a 1–256 unique-trial allowance refine linked slash-spread and move
 variables between authored grid values. Canonical unrounded point measurements minimize the
 declared maximum out-of-band distance, then its sum; this discovery objective is separate from
 production ranking. Full geometry, seam, truing, completeness, outline and selected-body gates
@@ -275,6 +280,19 @@ No geometry, machine limits, qualification policy, pressure setting or unlisted 
 Missing/stale source qualification preserves independent manufacturing and simulation outcomes.
 Omitted selection retains legacy serialization. Tests: `material_study`, native and file-free WASM
 `material_study_consumers`; source admission is not physical seam validation or hardware permission.
+
+**Authored specialist-route selection** (`sewing_selection`, `ftx-pb2.2`). Opt-in selection `/6`
+compares the template fixed route with one to fifteen independently qualified complete route policies,
+optionally crossed with the existing recipe groups. Pattern, passes, production quantity, construction
+and thread market stay fixed; ordinary `SewPlan::build` remains the sole feasibility and timing
+authority. At most 64 full route/recipe attempts share one budget; source-plan, scheduling and
+purchasing bounds cover the largest candidate before expansion. Template route then lexical route
+IDs define traversal and equal-score ties. Trial `route_choice` and incumbent `selected_route` survive
+the compact material-study receipt, and selected options preserve the exact winning route for all
+existing manufacturing consumers. Complete incumbents survive bounded search; unresolved inner
+routes prohibit optimum claims. Omitted candidates preserve prior schemas and serialization.
+This is finite declared-route selection, not inferred machine eligibility, unrestricted routing
+optimality, measured factory performance or hardware authorization. See `docs/sewing-selection.md`.
 
 **Complete thread-cost recipe selection** (`sewing_selection`, plan §25.4 / `ftx-tm7`). The explicit
 `ftx-sewing-selection/3` objective `minimize_thread_observed_order_cost` requires dated thread

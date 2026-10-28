@@ -4240,6 +4240,24 @@ identifying real loading/unloading/recovery behavior, and validating measured la
 remain open under `ftx-cp2`, `ftx-tm2.4` and the empirical garment gates. A fiber name, a branded
 garment or one compression percentage cannot supply those missing constitutive observations.
 
+### 25.118 Search local pattern shape through linked vertex alterations
+
+Finite-grid and adaptive fit discovery now generate canonical vertex moves alongside existing linked
+slash sites. One authored scalar can move several named source vertices horizontally, vertically or
+diagonally, including paired front/back changes. This enables bounded local shoulder, neckline,
+armhole-endpoint and taper searches without adding a second geometry or fit authority. Every trial
+retains exact scalar coordinates and operations, canonical rounded geometry and the selected body
+identity; ordinary seam, free-edge truing, outline and fit gates still precede all real consumers.
+
+Complete domain admission rejects malformed sites, zero multiplier pairs and nonfinite or underflowed
+displacements, including points outside a visited grid prefix. Actual adaptive coordinates are checked
+again. Original slash inputs retain their representation and behavior; mixed site order, document-work
+limits, failed-candidate reporting and exact frozen replay remain shared across native and portable
+paths. Independent synthetic regressions cover local dimensions, matching seam lengths, cutting area,
+assembly mass, relative curves, unchanged marks and refusal of unbalanced seams. This extends
+`ftx-ds2`; authored geometric targets and bounded search do not establish empirical fit, safe ease,
+continuous-domain completeness or a global optimum. See [material-screening-and-studies.md](docs/material-screening-and-studies.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

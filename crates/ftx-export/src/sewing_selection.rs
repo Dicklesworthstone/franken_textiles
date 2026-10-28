@@ -1,6 +1,6 @@
 //! Bounded recipe selection using the production sewing planner, not a second feasibility model.
-//! Only explicitly supplied needle/thread/pitch/rate choices vary. Geometry, assembly, pressure,
-//! material evidence, backtacks and prerequisites stay in the original job.
+//! Explicit needle/thread/pitch/rate choices and opt-in complete specialist routes may vary.
+//! Pattern geometry, assembly, pressure, material evidence, backtacks and prerequisites stay fixed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -57,6 +57,16 @@ pub struct Alternatives {
     pub recipes: Vec<Recipe>,
 }
 
+/// One independently qualified complete specialist route, never inferred from machine capabilities.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteCandidate {
+    /// Stable candidate identity; `template` is reserved for the original route.
+    pub id: String,
+    /// Complete ordinary fixed-route policy, including actual cell configurations and source locks.
+    pub routing: routing::Policy,
+}
+
 /// Explicit objective with no hidden seam-quality or setup-duration weight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,16 +86,21 @@ pub enum Objective {
     MinimizeThreadObservedOrderCost,
 }
 
-/// Search a finite Cartesian product of recipes, retaining the original complete job as a candidate.
+/// Search a finite product of recipes and optional routes, retaining the original complete job.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// `/1` feed; `/2` feed plus setup; `/3` thread cost; `/4` serial time; `/5` parallel makespan.
+    /// `/1` feed; `/2` feed plus setup; `/3` thread cost; `/4` serial time; `/5` parallel makespan;
+    /// `/6` makespan across complete authored specialist routes.
     pub schema: String,
     /// Complete template job. `require_qualification` must be true; it is never silently enabled.
     pub options: SewOptions,
-    /// One to twelve operations with explicit alternatives; unlisted operations remain unchanged.
+    /// One to twelve operations with explicit alternatives; may be empty for route selection `/6`.
+    #[serde(default)]
     pub alternatives: Vec<Alternatives>,
+    /// One to fifteen complete alternative routes in `/6`; omission preserves existing selection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub route_candidates: Vec<RouteCandidate>,
     /// Explicit feed, feed-plus-setup or complete observed thread-order objective.
     pub objective: Objective,
     /// Maximum complete-plan evaluations, including refused trials and the original template, 1..64.
@@ -97,6 +112,9 @@ pub struct Request {
 pub struct Trial {
     /// Operation ID to candidate ID, with `template` denoting an unchanged recipe.
     pub choices: BTreeMap<String, String>,
+    /// Complete route identity in `/6`, including `template`; absent for existing recipe searches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_choice: Option<String>,
     /// Actual generated feed time when the entire job was admitted.
     pub feed_seconds: Option<f64>,
     /// Total traversed intervals, including backtacks, when admitted.
@@ -112,8 +130,8 @@ pub struct Trial {
     /// Canonical complete thread-order score, in the request's one unchanged market currency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_order_cost: Option<f64>,
-    /// Production succeeded but complete consumption or eligible source prices are unavailable.
-    /// This is unresolved objective evidence, never a production infeasibility or a zero score.
+    /// Complete source timing, consumption or eligible prices are unavailable. Timing admission may
+    /// fail before production; this is unresolved objective evidence, never a zero or infeasibility.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub objective_unavailable: Option<Refusal>,
 }
@@ -121,7 +139,8 @@ pub struct Trial {
 /// Complete incumbent plus explicit finite-search status. A refused template does not stop repair.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` for feed only, `/2` for joint time, `/3` for complete thread order cost.
+    /// `/1` feed; `/2` feed/setup time; `/3` thread cost; `/4` serial time; `/5` parallel time;
+    /// `/6` complete authored route and recipe selection.
     pub schema: &'static str,
     /// Original request, including all candidate settings and independent qualification evidence.
     pub request: Request,
@@ -133,6 +152,9 @@ pub struct Report {
     pub trials: Vec<Trial>,
     /// Choices producing the complete incumbent; absent when nothing examined was admissible.
     pub selected_choices: Option<BTreeMap<String, String>>,
+    /// Complete incumbent route identity in `/6`; absent without an incumbent or route search.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_route: Option<String>,
     /// Exact production plan, retaining material/qualification/pressure/ordering receipts.
     pub selected_plan: Option<SewPlan>,
     /// Joint feed-and-setup score for the incumbent; omitted in feed-only mode or with no incumbent.
@@ -223,7 +245,99 @@ fn check_timing_choices(
     times.check_choices(&options.machine.id, &choices, initial)
 }
 
+fn check_route_timing(options: &SewOptions, groups: &[Group<'_>]) -> Result<(), Refusal> {
+    if let Some(route) = options
+        .production
+        .as_ref()
+        .and_then(|production| production.routing.as_ref())
+    {
+        for cell in &route.cells {
+            let configured = routing::source_options(cell, options, &route.route)?;
+            check_timing_choices(
+                &cell.ordering,
+                &configured,
+                groups,
+                cell.configuration.as_ref().map(|source| &source.recipes),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn check_candidate_timing(options: &SewOptions) -> Result<(), Refusal> {
+    let route = options
+        .production
+        .as_ref()
+        .and_then(|production| production.routing.as_ref())
+        .ok_or_else(|| invalid("route candidate has no complete routing policy"))?;
+    if route
+        .cells
+        .iter()
+        .any(|cell| cell.ordering.initial_setup.is_none() || cell.ordering.setup_times.is_none())
+    {
+        return Err(invalid(
+            "route candidate lacks explicit initial setup or source-qualified setup times",
+        ));
+    }
+    check_route_timing(options, &[])
+}
+
 impl Request {
+    fn options_for_route(&self, candidate: &RouteCandidate) -> Result<SewOptions, Refusal> {
+        let mut options = self.options.clone();
+        let production = options.production.as_mut().ok_or_else(|| {
+            invalid("route selection requires an explicit production.routing template")
+        })?;
+        if production.routing.is_none() || production.parallel.is_some() {
+            return Err(invalid(
+                "route selection replaces a fixed routing policy, not a serial or parallel policy",
+            ));
+        }
+        production.routing = Some(candidate.routing.clone());
+        Ok(options)
+    }
+
+    fn check_route_count(&self) -> Result<(), Refusal> {
+        if self.route_candidates.len() > MAX_ALTERNATIVES {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "sewing selection supports at most fifteen alternative complete routes",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Largest retained source-plan count among the template and all complete route candidates.
+    #[must_use]
+    pub fn source_plan_count(&self) -> usize {
+        self.route_candidates
+            .iter()
+            .map(|candidate| 1usize.saturating_add(candidate.routing.cells.len()))
+            .fold(self.options.source_plan_count(), usize::max)
+    }
+
+    /// Reserve every configured complete-plan evaluation at the largest candidate scheduling cap.
+    /// Studies multiply this entire bound by their expanded material/design alternatives.
+    ///
+    /// # Errors
+    /// Invalid candidate bounds, conflicting quantities or more than 200000 total work units.
+    pub fn scheduling_work_bound(&self) -> Result<usize, Refusal> {
+        self.check_route_count()?;
+        let mut per_plan = self.options.scheduling_work_bound()?;
+        for candidate in &self.route_candidates {
+            per_plan = per_plan.max(self.options_for_route(candidate)?.scheduling_work_bound()?);
+        }
+        self.max_plan_evaluations
+            .checked_mul(per_plan)
+            .filter(|work| *work <= MAX_ORDERING_NODES)
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "combined recipe/route/ordering search exceeds 200000 configured ordering nodes",
+                )
+            })
+    }
+
     /// Reserve the complete configured recipe search's thread-purchasing work before evaluation.
     /// Cost mode additionally validates the common canonical market once, visiting every quote.
     /// Studies must multiply this reservation by all expanded material/design rows.
@@ -231,7 +345,13 @@ impl Request {
     /// # Errors
     /// Unsupported thread inputs, arithmetic overflow or more than 200000 total work units.
     pub fn purchasing_work_bound(&self) -> Result<usize, Refusal> {
-        let per_plan = consumables::purchasing_work_bound(&self.options)?;
+        self.check_route_count()?;
+        let mut per_plan = consumables::purchasing_work_bound(&self.options)?;
+        for candidate in &self.route_candidates {
+            per_plan = per_plan.max(consumables::purchasing_work_bound(
+                &self.options_for_route(candidate)?,
+            )?);
+        }
         let preflight = if self.objective == Objective::MinimizeThreadObservedOrderCost {
             thread_cost::purchasing(&self.options)?
                 .quote_book
@@ -253,22 +373,39 @@ impl Request {
     }
 
     fn groups(&self) -> Result<Vec<Group<'_>>, Refusal> {
+        let route_search = self.schema == "ftx-sewing-selection/6";
         let schema = match self.objective {
             Objective::MinimizeFeedSeconds => "ftx-sewing-selection/1",
             Objective::MinimizeFeedAndSetupSeconds => "ftx-sewing-selection/2",
             Objective::MinimizeModeledProductionSeconds => "ftx-sewing-selection/4",
+            Objective::MinimizeParallelMakespan if route_search => "ftx-sewing-selection/6",
             Objective::MinimizeParallelMakespan => "ftx-sewing-selection/5",
             Objective::MinimizeThreadObservedOrderCost => "ftx-sewing-selection/3",
         };
         if self.schema != schema || !self.options.require_qualification {
             return Err(invalid(
-                "sewing selection needs schema /1 for feed, /2 for feed plus setup, /3 for thread cost, /4 for serial production time or /5 for parallel makespan, and explicit require_qualification=true",
+                "sewing selection needs schema /1 for feed, /2 for feed plus setup, /3 for thread cost, /4 for serial production time, /5 for parallel makespan or /6 for authored routes, and explicit require_qualification=true",
             ));
+        }
+        if route_search == self.route_candidates.is_empty() {
+            return Err(invalid(
+                "route_candidates are required exclusively with sewing selection /6",
+            ));
+        }
+        self.check_route_count()?;
+        let mut route_ids = BTreeSet::new();
+        for candidate in &self.route_candidates {
+            if !text(&candidate.id) || candidate.id == TEMPLATE || !route_ids.insert(&candidate.id)
+            {
+                return Err(invalid(
+                    "route candidates need unique nonreserved identities",
+                ));
+            }
         }
         if !(1..=MAX_TRIALS).contains(&self.max_plan_evaluations)
             || self.options.passes.is_empty()
             || self.options.passes.len() > MAX_OPERATIONS
-            || self.alternatives.is_empty()
+            || (!route_search && self.alternatives.is_empty())
             || self.alternatives.len() > MAX_GROUPS
             || self
                 .alternatives
@@ -277,21 +414,12 @@ impl Request {
         {
             return Err(Refusal::new(
                 RefusalCode::BudgetExceeded,
-                "sewing selection supports 1..64 plans, at most 64 operations, 1..12 groups and 1..15 alternatives per group",
+                "sewing selection supports 1..64 plans, at most 64 operations, up to 12 recipe groups and 1..15 alternatives per group; recipe-only searches need at least one group",
             ));
         }
         // Ordering is separate from recipe selection. Bound its aggregate configured work without
         // reducing the caller's per-job budget or confusing ordering exhaustion with recipe proof.
-        if self
-            .max_plan_evaluations
-            .checked_mul(self.options.scheduling_work_bound()?)
-            .is_none_or(|n| n > MAX_ORDERING_NODES)
-        {
-            return Err(Refusal::new(
-                RefusalCode::BudgetExceeded,
-                "combined recipe/ordering search exceeds 200000 configured ordering nodes",
-            ));
-        }
+        self.scheduling_work_bound()?;
         self.purchasing_work_bound()?;
         if self.objective == Objective::MinimizeThreadObservedOrderCost {
             thread_cost::validate(&self.options)?;
@@ -414,16 +542,8 @@ impl Request {
                 )?;
             }
         }
-        if let Some(routing) = routing {
-            for cell in &routing.cells {
-                let configured = routing::source_options(cell, &self.options, &routing.route)?;
-                check_timing_choices(
-                    &cell.ordering,
-                    &configured,
-                    &groups,
-                    cell.configuration.as_ref().map(|source| &source.recipes),
-                )?;
-            }
+        if !route_search {
+            check_route_timing(&self.options, &groups)?;
         }
         Ok(groups)
     }
@@ -438,15 +558,21 @@ impl Request {
     /// after interrupted search is not a proof that all listed choices fail.
     pub fn select(&self, pattern: &Pattern) -> Result<Report, Refusal> {
         let groups = self.groups()?;
+        let mut routes: Vec<_> = self.route_candidates.iter().collect();
+        routes.sort_by(|a, b| a.id.cmp(&b.id));
+        let route_search = !routes.is_empty();
         let combinations = groups
             .iter()
-            .try_fold(1_u64, |n, g| n.checked_mul((g.recipes.len() + 1) as u64))
+            .try_fold((routes.len() + 1) as u64, |n, g| {
+                n.checked_mul((g.recipes.len() + 1) as u64)
+            })
             .ok_or_else(|| invalid("sewing candidate count overflow"))?;
         let pattern_sha256 =
             sha256_hex(&serde_json::to_vec(pattern.raw()).map_err(|e| invalid(e.to_string()))?);
         let mut trials = Vec::new();
         let mut selected_plan: Option<SewPlan> = None;
         let mut selected_choices = None;
+        let mut selected_route = None;
         let handled = self.objective == Objective::MinimizeModeledProductionSeconds;
         let parallel = self.objective == Objective::MinimizeParallelMakespan;
         let routed = self
@@ -468,8 +594,13 @@ impl Request {
         };
         let mut selected_score = None;
         let mut indices = vec![0; groups.len()];
+        let mut route_index = 0;
         loop {
-            let mut options = self.options.clone();
+            let mut options = if route_index == 0 {
+                self.options.clone()
+            } else {
+                self.options_for_route(routes[route_index - 1])?
+            };
             let mut choices = BTreeMap::new();
             for (group, &index) in groups.iter().zip(&indices) {
                 let id = if index == 0 {
@@ -483,6 +614,13 @@ impl Request {
             }
             let mut trial = Trial {
                 choices,
+                route_choice: route_search.then(|| {
+                    if route_index == 0 {
+                        TEMPLATE.to_owned()
+                    } else {
+                        routes[route_index - 1].id.clone()
+                    }
+                }),
                 feed_seconds: None,
                 stitch_intervals: None,
                 refusal: None,
@@ -491,7 +629,16 @@ impl Request {
                 thread_order_cost: None,
                 objective_unavailable: None,
             };
-            match SewPlan::build(pattern, &options) {
+            // A route owns its timing evidence. An unavailable alternative cannot suppress an
+            // independently qualified incumbent or be treated as a proved inferior schedule.
+            let timing = if route_search {
+                check_candidate_timing(&options).inspect_err(|refusal| {
+                    trial.objective_unavailable = Some(refusal.clone());
+                })
+            } else {
+                Ok(())
+            };
+            match timing.and_then(|()| SewPlan::build(pattern, &options)) {
                 Ok(plan) => {
                     trial.feed_seconds = Some(plan.total_feed_seconds());
                     trial.stitch_intervals = Some(plan.total_stitch_intervals());
@@ -541,6 +688,7 @@ impl Request {
                     {
                         selected_score = Some(score);
                         selected_choices = Some(trial.choices.clone());
+                        selected_route.clone_from(&trial.route_choice);
                         selected_plan = Some(plan);
                     }
                 }
@@ -551,12 +699,17 @@ impl Request {
                 break;
             }
             // Last operation ID varies fastest. Input array order cannot change traversal or ties.
+            let mut next_route = true;
             for (index, group) in indices.iter_mut().zip(&groups).rev() {
                 if *index < group.recipes.len() {
                     *index += 1;
+                    next_route = false;
                     break;
                 }
                 *index = 0;
+            }
+            if next_route {
+                route_index += 1;
             }
         }
         let search_complete = trials.len() as u64 == combinations;
@@ -574,7 +727,9 @@ impl Request {
             })
             .count();
         Ok(Report {
-            schema: if cost {
+            schema: if route_search {
+                "ftx-sewing-selection-report/6"
+            } else if cost {
                 "ftx-sewing-selection-report/3"
             } else if parallel {
                 "ftx-sewing-selection-report/5"
@@ -590,6 +745,7 @@ impl Request {
             candidate_combinations: combinations,
             trials,
             selected_choices,
+            selected_route,
             selected_plan,
             selected_objective_seconds: if timed { selected_score } else { None },
             selected_thread_order_cost: if cost { selected_score } else { None },
@@ -599,7 +755,9 @@ impl Request {
             budget_exhausted: !search_complete,
             optimality_proven: search_complete && has_plan && unresolved_trials == 0,
             no_feasible_listed_recipe: search_complete && !has_plan && unresolved_trials == 0,
-            tie_break: if cost {
+            tie_break: if route_search {
+                "template route first, then route ID, operation ID and recipe ID lexicographic; retain first equal declared fixed-route dispatch makespan"
+            } else if cost {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal complete thread order cost"
             } else if parallel && routed {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal declared fixed-route dispatch makespan"

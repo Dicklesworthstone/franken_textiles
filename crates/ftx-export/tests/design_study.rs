@@ -62,6 +62,204 @@ fn grid_request(max_designs: usize) -> Request {
     serde_json::from_value(input).unwrap()
 }
 
+fn taper_request(values: &[f64]) -> Request {
+    let mut input = serde_json::to_value(grid_request(values.len())).unwrap();
+    input["design_grid"]["variables"] = json!([{"key":"taper","values_mm":values,
+    "sites":[
+        {"op":"move","piece":"front","vertex":"c","dx_multiplier":1,"dy_multiplier":0},
+        {"op":"move","piece":"back","vertex":"d","dx_multiplier":-1,"dy_multiplier":0}
+    ]}]);
+    input["design_fit"]["fit_spec"]["points"][0]["target_mm"] = json!([2.9, 3, 3.1]);
+    input["sewing"]["passes"][0]["minimum_allowance_mm"] = json!(0);
+    serde_json::from_value(input).unwrap()
+}
+
+#[test]
+fn linked_vertex_taper_changes_local_fit_and_actual_sewing_cutting_and_mass() {
+    use ftx_export::material_study::design::fit::Context;
+    let mut original: Value = serde_json::from_str(PATTERN).unwrap();
+    // Zero allowance gives an independent trapezoid-area answer, not a cutting recommendation.
+    original["meta"]["sa_mm"] = json!(0);
+    original["pieces"][0]["internal"] = json!([{"pts":[[5,50],[15,50]]}]);
+    let pattern = Pattern::new(original.clone());
+    let body = ftx_pattern::validate::Measurements(json!({"declared_width":20}));
+    let identity = json!({"source":"test:linked-vertex-taper"});
+    let request = taper_request(&[0.0, 6.0, 12.0]);
+    let report = serde_json::to_value(
+        request
+            .evaluate_with_fit_body(
+                &pattern,
+                Some(&Context {
+                    body: &body,
+                    identity: &identity,
+                }),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["design_search"]["complete_grid_enumeration"], true);
+    assert_eq!(
+        report["comparison"]["frontier"],
+        json!([key("grid:0001", "light-sheet")])
+    );
+    let canonical = alter::move_vertex(&original, "front", "c", 6.0, 0.0).unwrap();
+    let canonical = alter::move_vertex(&canonical, "back", "d", -6.0, 0.0).unwrap();
+    for (material, density) in [("light-sheet", 0.18), ("heavy-sheet", 0.36)] {
+        let candidate = row(&report, "grid:0001", material);
+        assert_eq!(
+            candidate["design"]["fit"]["result"]["validation"]["points"][0]["finished_mm"],
+            23.0
+        );
+        let altered = Pattern::from_json(
+            candidate["design"]["altered_pattern_json"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(altered.raw(), &canonical);
+        for (index, vertex, x) in [(0, "c", 26.0), (1, "d", -6.0)] {
+            let piece = &altered.raw()["pieces"][index];
+            assert_eq!(piece["vertices"][vertex], json!([x, 100.0]));
+            for unchanged in ["a", "b"] {
+                assert_eq!(
+                    piece["vertices"][unchanged],
+                    original["pieces"][index]["vertices"][unchanged]
+                );
+            }
+            assert_eq!(piece["grain"], original["pieces"][index]["grain"]);
+        }
+        assert_eq!(
+            altered.raw()["pieces"][0]["internal"],
+            original["pieces"][0]["internal"]
+        );
+        let bound = Pattern::new(candidate["binding"]["result"]["pattern"].clone());
+        let frozen: Changes = serde_json::from_value(candidate["frozen_changes"].clone()).unwrap();
+        assert_eq!(frozen.apply(&altered).unwrap()["pattern"], *bound.raw());
+        let cutting = CutPlan::build(&bound, request.cutting.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            candidate["cutting"]["result"],
+            serde_json::to_value(cutting).unwrap()
+        );
+        let sewing = SewPlan::build(&bound, request.sewing.as_ref().unwrap()).unwrap();
+        // Each matching side is a straight segment with a 6 mm horizontal, 100 mm vertical run.
+        let length = 100.0_f64.hypot(6.0);
+        assert!((sewing.seams[0].stations.len_a - length).abs() < 1e-10);
+        assert!((sewing.seams[0].stations.len_b - length).abs() < 1e-10);
+        assert_eq!(sewing.stitch_intervals, 41);
+        assert!((sewing.feed_seconds - 4.1).abs() < 1e-12);
+        assert_eq!(
+            candidate["sewing"]["result"],
+            serde_json::to_value(sewing).unwrap()
+        );
+        // Two trapezoids, each 100 mm high with widths 20 and 26 mm. The resulting joined
+        // corners also remain inside the unchanged canonical 8 degree truing tolerance.
+        let area = 2.0 * 100.0 * (20.0 + 26.0) / 2.0 * 1e-6;
+        assert!(
+            (candidate["metrics"]["external_cut_area_m2"]
+                .as_f64()
+                .unwrap()
+                - area)
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            (candidate["metrics"]["assembly_mass_kg"].as_f64().unwrap() - area * density).abs()
+                < 1e-12
+        );
+        let mass = request
+            .assembly_mass
+            .as_ref()
+            .unwrap()
+            .evaluate(&bound)
+            .unwrap();
+        assert_eq!(
+            candidate["assembly_mass"]["result"],
+            serde_json::to_value(mass).unwrap()
+        );
+        for refused in ["baseline", "grid:0000", "grid:0002"] {
+            assert_eq!(
+                row(&report, refused, material)["binding"]["status"],
+                "refused"
+            );
+        }
+    }
+    assert_eq!(pattern.raw(), &original);
+}
+
+#[test]
+fn linked_vertex_moves_retain_relative_curves_marks_and_canonical_rounding() {
+    let mut original: Value = serde_json::from_str(PATTERN).unwrap();
+    for piece in original["pieces"].as_array_mut().unwrap() {
+        piece["edges"][2]["curve"] = json!({"type":"quad","c":[[0.5,-0.01]]});
+    }
+    let mut request = taper_request(&[3.69873046875]);
+    request.design_fit = None;
+    let report =
+        serde_json::to_value(request.evaluate(&Pattern::new(original.clone())).unwrap()).unwrap();
+    let selected = row(&report, "grid:0000", "light-sheet");
+    assert_eq!(selected["binding"]["status"], "available", "{selected}");
+    let altered: Value =
+        serde_json::from_str(selected["design"]["altered_pattern_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        altered["pieces"][0]["vertices"]["c"],
+        json!([23.699, 100.0])
+    );
+    assert_eq!(
+        altered["pieces"][1]["vertices"]["d"],
+        json!([-3.699, 100.0])
+    );
+    assert_eq!(selected["design"]["operations"][0]["dx_mm"], 3.69873046875);
+    for i in 0..2 {
+        assert_eq!(
+            altered["pieces"][i]["edges"],
+            original["pieces"][i]["edges"]
+        );
+        assert_eq!(
+            altered["pieces"][i]["grain"],
+            original["pieces"][i]["grain"]
+        );
+    }
+    let canonical = alter::move_vertex(&original, "front", "c", 3.69873046875, 0.0).unwrap();
+    assert_eq!(
+        altered,
+        alter::move_vertex(&canonical, "back", "d", -3.69873046875, 0.0).unwrap()
+    );
+}
+
+#[test]
+fn unbalanced_linked_vertex_candidates_cannot_reach_manufacturing_or_scenarios() {
+    use ftx_export::material_study::design::fit::Context;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let mut request = taper_request(&[40.0]);
+    request.design_grid.as_mut().unwrap().variables[0]
+        .sites
+        .pop();
+    let body = ftx_pattern::validate::Measurements(json!({"declared_width":20}));
+    let identity = json!({"source":"test:unbalanced-linked-move"});
+    let mut calls = 0;
+    let report = request
+        .evaluate_with_fit(
+            &pattern,
+            &json!({}),
+            Some(&Context {
+                body: &body,
+                identity: &identity,
+            }),
+            |_, _| {
+                calls += 1;
+                Ok(json!({}))
+            },
+        )
+        .unwrap();
+    assert_eq!(calls, 0);
+    let report = serde_json::to_value(report.manufacturing).unwrap();
+    let candidate = row(&report, "grid:0000", "light-sheet");
+    assert_eq!(candidate["design"]["validation"]["passed"], false);
+    for consumer in ["binding", "cutting", "sewing", "assembly_mass"] {
+        assert_eq!(candidate[consumer]["status"], "refused");
+    }
+}
+
 #[test]
 fn grid_synthesis_meets_explicit_ease_then_compares_real_material_and_manufacturing_outputs() {
     use ftx_export::material_study::design::fit::Context;

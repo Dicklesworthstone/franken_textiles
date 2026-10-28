@@ -76,6 +76,9 @@ pub struct Selection {
     pub trials: Vec<sewing_selection::Trial>,
     /// Selected operation-to-recipe identities; absent when no qualified plan was found.
     pub selected_choices: Option<BTreeMap<String, String>>,
+    /// Selected complete specialist route identity for opt-in route selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_route: Option<String>,
     /// Selected objective, including qualified setup time when requested by the selector.
     pub selected_objective_seconds: Option<f64>,
     /// Complete canonical thread order cost for a cost-directed search; never a partial total.
@@ -101,26 +104,38 @@ pub struct Selection {
 pub(super) fn check_budget(
     request: &sewing_selection::Request,
     variants: usize,
+    cutting_copies: Result<Option<usize>, Refusal>,
 ) -> Result<(), Refusal> {
     // Reject the whole configured search before binding any alternative. The selector still
     // enforces its per-job geometry, station, pass, candidate and source-qualification limits.
     let plans = request.max_plan_evaluations.saturating_mul(variants);
     let passes = plans
         .saturating_mul(request.options.passes.len())
-        .saturating_mul(request.options.source_plan_count());
+        .saturating_mul(request.source_plan_count());
     if plans > 256 || passes > 4096 {
         return Err(budget(
             "material study exceeds 256 aggregate sewing recipe plan evaluations or 4096 operation evaluations; reduce alternatives or recipe search limits",
         ));
     }
-    let scheduling_work = match request.options.scheduling_work_bound() {
+    let scheduling_work = match (|| {
+        // Reserve the same authored or inherited quantity that each row actually schedules.
+        let options = production_options(&request.options, cutting_copies?)?;
+        match options {
+            Cow::Borrowed(_) => request.scheduling_work_bound(),
+            Cow::Owned(options) => {
+                let mut resolved = request.clone();
+                resolved.options = options;
+                resolved.scheduling_work_bound()
+            }
+        }
+    })() {
         Ok(work) => work,
         Err(refusal) if refusal.code == RefusalCode::BudgetExceeded => return Err(refusal),
         // Malformed or contradictory sewing inputs remain independent per-row refusals.
         // They fail before scheduling and must not suppress a valid cutting or mass result.
         Err(_) => 0,
     };
-    if plans.saturating_mul(scheduling_work) > 200_000 {
+    if variants.saturating_mul(scheduling_work) > 200_000 {
         return Err(budget(
             "material study exceeds 200000 aggregate recipe/ordering search nodes",
         ));
@@ -163,6 +178,7 @@ pub(super) fn evaluate(
         candidate_combinations,
         trials,
         selected_choices,
+        selected_route,
         selected_objective_seconds,
         selected_thread_order_cost,
         objective_currency,
@@ -203,6 +219,7 @@ pub(super) fn evaluate(
                 candidate_combinations,
                 trials,
                 selected_choices,
+                selected_route,
                 selected_objective_seconds,
                 selected_thread_order_cost,
                 objective_currency,

@@ -319,6 +319,12 @@ the selected body before sending up to <code>max_designs</code> passing alterati
 The report retains rejected designs, passing designs outside that allowance, and unvisited points separately.
 The unchanged baseline is additional to the allowance. The selected model supplies the body measurements;
 computed target compliance does not establish fit on a real wearer.</p>
+<p class="note">Both search modes can vary local shape with linked vertex sites:
+<code>{"op":"move","piece":"front","vertex":"shoulder","dx_multiplier":0,"dy_multiplier":1}</code>.
+Each scalar variable moves the named source vertex by its value times these x/y multipliers; at least one
+multiplier must be nonzero. Combine move and slash sites in authored order to link front/back shaping.
+Relative curves follow their endpoints; marks stay fixed. The ordinary seam, outline and fit checks still
+gate every candidate before manufacturing.</p>
 <p class="note">To find alteration amounts between listed grid values, replace <code>design_grid</code> with
 <code>design_adaptive</code> and retain the same <code>design_fit</code> targets. Set
 <code>objective: "fit_band_violation_mm"</code>, explicit <code>bounds_mm</code>, <code>initial_mm</code>,

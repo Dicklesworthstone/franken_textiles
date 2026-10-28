@@ -800,7 +800,7 @@ impl Request {
             ));
         }
         if let Some(selection) = &self.sewing_selection {
-            recipes::check_budget(selection, variants.len())?;
+            recipes::check_budget(selection, variants.len(), self.sewing_copies())?;
         }
         if let Some(options) = self.sewing_options() {
             let scheduling_work = match options.scheduling_work_bound() {

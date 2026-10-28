@@ -430,6 +430,23 @@ impl ClothModel {
         let t: f64 = self.elastics.iter().map(|e| e.energy(x)).sum();
         m + b + t
     }
+
+    // Liquid changes inertia only. Material histories continue under exactly the admitted laws.
+    pub(crate) fn same_liquid_mechanics(&self, original: &Self) -> bool {
+        self.rest == original.rest
+            && self.membranes == original.membranes
+            && self.hinges == original.hinges
+            && self.membrane == original.membrane
+            && self.compression == original.compression
+            && self.bending == original.bending
+            && self.elastics == original.elastics
+            && self.element_materials == original.element_materials
+            && self.element_responses == original.element_responses
+            && self.element_domains == original.element_domains
+            && self.hinge_bending == original.hinge_bending
+            && self.hinge_support == original.hinge_support
+            && self.panel_bending == original.panel_bending
+    }
 }
 
 /// What one minimisation did.
@@ -553,6 +570,7 @@ pub struct Solver {
     plasticity: Option<plasticity::Field>,
     // Permanent raw Green strain; replaces selected membrane energies and derivatives.
     membrane_plasticity: Option<membrane_plasticity::Field>,
+    pub(crate) liquid_mass: Option<crate::liquid_mass::Binding>,
 }
 
 /// The relative residual an inexact Newton direction is solved to.
@@ -582,6 +600,18 @@ impl Sink {
 }
 
 impl Solver {
+    pub(crate) fn liquid_history_kinds(&self) -> [bool; 3] {
+        [
+            self.relaxation.is_some(),
+            self.plasticity.is_some(),
+            self.membrane_plasticity.is_some(),
+        ]
+    }
+
+    pub(crate) fn invalidate_mass_preconditioner(&mut self) {
+        self.precond = None;
+    }
+
     /// A solver at positions `x` (at rest velocity) with per-DOF constraints `fixed[i][k]` (a fixed
     /// component keeps its current value).
     ///
@@ -625,6 +655,7 @@ impl Solver {
             relaxation: None,
             plasticity: None,
             membrane_plasticity: None,
+            liquid_mass: None,
         }
     }
 
@@ -1270,6 +1301,7 @@ impl Solver {
         h: f64,
         body_start: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
+        self.check_liquid_mass()?;
         self.model.check_attached_mass()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()
@@ -1443,6 +1475,7 @@ impl Solver {
     /// # Errors
     /// As [`Solver::step`].
     pub fn static_solve(&mut self) -> Result<SolveReport, Refusal> {
+        self.check_liquid_mass()?;
         self.model.check_attached_mass()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()

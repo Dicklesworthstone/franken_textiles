@@ -8,6 +8,11 @@ mod outfit;
 #[path = "accepted_body_workflow/surface_water.rs"]
 mod surface_water;
 
+#[test]
+fn finite_grid_linked_vertex_moves_reach_native_and_portable_selected_body_workflows() {
+    adaptive::linked_vertex_workflow(false);
+}
+
 use ftx_core::receipt::sha256_hex;
 use serde_json::{Value, json};
 use std::{
@@ -1426,6 +1431,7 @@ fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
         &measurements,
         &json!({}),
         2.0,
+        false,
         &source,
         |_| {},
     )
@@ -1497,6 +1503,7 @@ fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
                 &m,
                 &json!({}),
                 2.0,
+                false,
                 &ftx_wasm::fold::BodyFitSource {
                     model_sha256: &digest,
                     report: &report,

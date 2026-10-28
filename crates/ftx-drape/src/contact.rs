@@ -486,7 +486,7 @@ impl Pair {
 }
 
 /// The cloth side of contact: its triangles and edges (with rest lengths for the mollifier).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClothTopology {
     /// Triangles.
     pub triangles: Vec<[usize; 3]>,
@@ -686,6 +686,27 @@ pub struct Contact {
     lag_h: f64,
 }
 
+// A liquid-domain qualification freezes physical interfaces and contact policy, not body motion
+// or evolving Coulomb lag. Keep the private material field in this module's authority.
+#[derive(Clone, Debug)]
+pub(crate) struct FrozenPolicy {
+    params: ContactParams,
+    cloth: ClothTopology,
+    self_params: Option<ContactParams>,
+    surface_materials: Option<materials::MaterialField>,
+    creases: Vec<(Pair, f64)>,
+}
+
+impl FrozenPolicy {
+    pub(crate) fn matches(&self, contact: &Contact) -> bool {
+        self.params == contact.params
+            && self.cloth == contact.cloth
+            && self.self_params == contact.self_params
+            && self.surface_materials == contact.surface_materials
+            && self.creases == contact.creases
+    }
+}
+
 /// One domain at an accepted endpoint. Counts are energy primitive pairs, not physical patches.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ContactDomainSample {
@@ -782,6 +803,16 @@ fn tangent_basis(n: Vec3) -> [Vec3; 2] {
 }
 
 impl Contact {
+    pub(crate) fn frozen_policy(&self) -> FrozenPolicy {
+        FrozenPolicy {
+            params: self.params,
+            cloth: self.cloth.clone(),
+            self_params: self.self_params,
+            surface_materials: self.surface_materials.clone(),
+            creases: self.creases.clone(),
+        }
+    }
+
     /// Endpoint diagnostics for solver-accepted geometry with this contact topology.
     /// The minimum is sampled within barrier activation, not a continuous-time clearance bound.
     #[must_use]
