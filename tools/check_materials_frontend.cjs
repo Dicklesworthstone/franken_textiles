@@ -1712,6 +1712,41 @@ test('routed specialist cells show actual operations, serialized garment transfe
       assert.match(visibleText(s),/Feasible replacement baseline/);
       routing.optimality_proven=true; routing.budget_exhausted=false; routing.baseline_replaced=false;
     }
+    const localPeak={straight:{fixture:1},finish:{fixture:1}}, localFinal={straight:{fixture:0},finish:{fixture:0}};
+    routing.workholding={schema:'ftx-sewing-routed-workholding/1',
+      release_protocol:'available_after_unload_with_access_in_cell_handling/1',
+      cells:['straight','finish'].map(cell=>({cell,machine_sha256:`${cell}-lock`,qualifications:{},
+        resources:[{id:'fixture',capacity:1}],holds:[]})),
+      shared_workholding:{resources:[{id:'<shared jig>',capacity:2}],source:{note:'<source-qualified fixture pool>'}},
+      baseline:{holds:[],local_peak_occupancy:localPeak,shared_peak_occupancy:{'<shared jig>':1},
+        local_final_occupancy:localFinal,shared_final_occupancy:{'<shared jig>':0}},
+      selected:{local_peak_occupancy:localPeak,shared_peak_occupancy:{'<shared jig>':2},
+        local_final_occupancy:localFinal,shared_final_occupancy:{'<shared jig>':0},
+        holds:selected.operations.map(step=>({cell:step.cell,copy:step.copy,operation:step.id,
+          hold:`${step.copy}/${step.operation_id}-fixture`,resource:'fixture',pool:'<shared jig>',units:1,
+          acquired_at_milliseconds:step.loading_start_milliseconds,released_at_milliseconds:step.finish_milliseconds}))},
+      fixture_geometry_and_access_validated:false,physical_pool_access_validated:false};
+    routing.schema='ftx-sewing-routing/2';plan.schema='ftx-sewing-plan/19';
+    const fixtureRaw=' '+JSON.stringify(report)+'\n';
+    await p.e[op].onclick();p.emit(report,[{name:'routed-report.json',text:fixtureRaw,mime:'application/json'}]);
+    assert.deepEqual(plain(table('routed cell fixture inventory').children[2].children.map(n=>n.textContent)),
+      ['straight','fixture','1','1','1']);
+    assert.deepEqual(plain(table('routed shared fixture pools').children[2].children.map(n=>n.textContent)),
+      ['<shared jig>','2','1','2']);
+    assert.deepEqual(plain(table('selected routed fixture reservations').children[3].children.map(n=>n.textContent)),
+      ['finish','0','0/reinforce','0/reinforce-fixture','fixture','<shared jig>','1','6','8.8']);
+    assert.match(visibleText(s),/remain occupied through setup, feed and unloading/);
+    assert.match(visibleText(s),/occupied fixtures are not transferred with garments/);
+    const fixtureDetail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('routed fixture sources, cell locks and complete reservation histories'));
+    fixtureDetail.open=true;fixtureDetail.handlers.toggle();assert.match(visibleText(fixtureDetail),/<source-qualified fixture pool>/);
+    const fixtureDownload=descendants(s).find(n=>n.download==='routed-report.json');
+    assert.equal(await p.blobs.get(fixtureDownload.href).text(),fixtureRaw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    if(op==='sew') {
+      const summary=JSON.parse(s.children[1].textContent);
+      assert.equal(summary.finite_workholding_enforced,true);assert.equal(summary.shared_fixture_pools_enforced,true);
+    }
+    delete routing.workholding;routing.schema='ftx-sewing-routing/1';plan.schema='ftx-sewing-plan/18';
   }
   p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
   assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
@@ -7634,3 +7669,4 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
       }
     } finally {globalThis.ftxProgress=previousProgress;}
   });
+

@@ -8,20 +8,25 @@ use ftx_pattern::materials::{Evidence, Source};
 use serde::{Deserialize, Serialize};
 
 use super::{Assignment, Cell, operator};
-use crate::sewing::{SewPlan, bad, production::workholding, qualified_text, sha256_text};
+use crate::sewing::{
+    SewOptions, SewPlan, bad, production::workholding, qualified_text, sha256_text,
+};
 
 const MAX_POOLS: usize = 16;
 const MAX_BINDINGS: usize = 128;
 const RELEASE_PROTOCOL: &str = "available_at_feed_completion_with_access_in_cell_handling/1";
+pub(in crate::sewing::production) const ROUTED_RELEASE_PROTOCOL: &str =
+    "available_after_unload_with_access_in_cell_handling/1";
 
 /// Separately qualified common inventory. This declaration replaces independence only for the
 /// explicitly bound cell resources; every other cell-local resource remains independent.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
-    /// `shared_workholding_pools/1`; garments themselves remain in their assigned sewing cell.
+    /// `shared_workholding_pools/1`; bindings never authorize transfer of an occupied fixture.
     pub model: String,
-    /// Exact protocol qualifying availability at feed completion and access in existing handling.
+    /// Exact protocol qualifying release at feed completion in parallel mode or after complete
+    /// unloading in routed mode, with access included in the independently qualified cell handling.
     /// No unobserved physical fixture transfer or return duration is inferred.
     pub release_protocol: String,
     /// Complete effective cell locks, including local fixture lifecycles and finally idle cells.
@@ -118,6 +123,23 @@ pub struct Report {
 
 impl Policy {
     pub(super) fn validate(&self, plan: &SewPlan, cells: &[&Cell]) -> Result<(), Refusal> {
+        self.validate_for(&plan.options, cells, RELEASE_PROTOCOL)
+    }
+
+    pub(in crate::sewing::production) fn validate_routed(
+        &self,
+        options: &SewOptions,
+        cells: &[&Cell],
+    ) -> Result<(), Refusal> {
+        self.validate_for(options, cells, ROUTED_RELEASE_PROTOCOL)
+    }
+
+    fn validate_for(
+        &self,
+        options: &SewOptions,
+        cells: &[&Cell],
+        release_protocol: &str,
+    ) -> Result<(), Refusal> {
         if !(1..=MAX_POOLS).contains(&self.resources.len())
             || !(1..=MAX_BINDINGS).contains(&self.bindings.len())
         {
@@ -127,7 +149,7 @@ impl Policy {
             ));
         }
         if self.model != "shared_workholding_pools/1"
-            || self.release_protocol != RELEASE_PROTOCOL
+            || self.release_protocol != release_protocol
             || !qualified_text(&self.source.reference)
             || !qualified_text(&self.source.accessed_on)
             || !qualified_text(&self.source.note)
@@ -157,7 +179,7 @@ impl Policy {
                 .cells
                 .get(&cell.id)
                 .ok_or_else(|| bad("shared workholding omits a physical cell lock"))?;
-            if !sha256_text(lock) || *lock != operator::cell_sha256(cell, &plan.options)? {
+            if !sha256_text(lock) || *lock != operator::cell_sha256(cell, options)? {
                 return Err(bad(
                     "shared workholding cell/recipe/timing content lock mismatch",
                 ));

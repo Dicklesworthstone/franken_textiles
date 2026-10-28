@@ -4278,7 +4278,36 @@ relaxed work bounds remain separate from completion of the restricted append-dis
 This extends `ftx-pb2.2` through the existing native and portable consumers. Synthetic exhaustive small
 schedules, actual recipe geometry, quantity accounting and source/window/budget refusals verify the
 bounded software model. Retained/shared fixture composition, measured factory timing and seam quality,
-and hardware execution remain independent open requirements. See [sewing-production.md](docs/sewing-production.md).
+and hardware execution remain independent requirements; the finite single-operation fixture
+composition is delivered in section 25.120 below. See [sewing-production.md](docs/sewing-production.md).
+
+### 25.120 Share finite qualified fixtures across routed specialist cells
+
+Fixed and eligible-cell sewing routes now reserve finite cell-local fixtures and shared pools for each
+complete loading, setup, feed and unloading operation. The existing bounded dispatch search accounts
+for simultaneous demand across machines, including reservations inserted out of physical-time order.
+Independent full-timeline replay checks local and shared capacities, releases before equal-time
+acquisitions, and zero final held inventory. Equal resource names do not imply shared inventory.
+Eligible choices retain every source qualification, while occupied holds follow the selected cell
+for each actual operation. Unused eligible plans do not consume fixtures.
+
+The original machine and material/process qualifications remain authoritative. Common-pool access
+and return require independent source evidence and exact cell locks; their time must be covered by
+the qualified handling observations. A material substitution must still satisfy those qualifications.
+The selected constrained completion and exact stitches flow through ordinary material studies and
+the existing browser workbench, including complete fixture reservations and downloadable replay.
+
+The synthetic two-copy route completes in 14.7 seconds with one shared fixture, against a complete
+16.1-second copy-order baseline; two fixtures recover the unconstrained 12.6-second result without
+changing stitch count or feed. Source/domain refusals, future reservations, multiple pools, finite
+windows, recovered seeds and capped incumbents have direct regressions. This bounded software
+delivery is tracked by `ftx-pb2.2.10`; see [sewing-production.md](docs/sewing-production.md).
+
+Every hold must begin and end on one operation. Occupied-fixture transport, cross-operation retention
+and shared attending labor need distinct qualifications and remain outside this protocol. Exhausting
+the restricted dispatch search proves neither an unrestricted optimum nor physical infeasibility;
+only equality with the independent lower bound establishes the reported optimum. Physical grip,
+access, seam quality and hardware authorization remain separate requirements under `ftx-pb2.2`.
 
 ## Appendix A. Sources
 

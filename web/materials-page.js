@@ -1749,6 +1749,35 @@ function sewingSharedWorkholding(parent, plan, label) {
   detail(parent, `${label}: shared pool source, exact cell locks and both reservation histories`, {
     policy: plan.options?.production?.parallel?.shared_workholding, report });
 }
+function sewingRoutedWorkholding(parent, routing, label) {
+  const report = routing.workholding;
+  if (!report) return;
+  const seconds = value => typeof value === "number" ? value / 1000 : null;
+  const local = table(parent, `${label}: routed cell fixture inventory`,
+    ["Cell", "Resource", "Available units", "Baseline peak", "Selected peak"]);
+  for (const cell of report.cells || []) for (const resource of cell.resources || []) cells(local, [
+    cell.cell, resource.id, metric(resource.capacity),
+    metric(report.baseline?.local_peak_occupancy?.[cell.cell]?.[resource.id]),
+    metric(report.selected?.local_peak_occupancy?.[cell.cell]?.[resource.id]),
+  ]);
+  if (report.shared_workholding) {
+    const pools = table(parent, `${label}: routed shared fixture pools`,
+      ["Pool", "Available units", "Baseline peak", "Selected peak"]);
+    for (const pool of report.shared_workholding.resources || []) cells(pools, [pool.id, metric(pool.capacity),
+      metric(report.baseline?.shared_peak_occupancy?.[pool.id]), metric(report.selected?.shared_peak_occupancy?.[pool.id])]);
+  }
+  const holds = table(parent, `${label}: selected routed fixture reservations`,
+    ["Cell", "Garment copy", "Operation", "Hold", "Cell resource", "Shared pool", "Units", "Acquired (s)", "Released after unloading (s)"]);
+  for (const hold of report.selected?.holds || []) cells(holds, [hold.cell, metric(hold.copy), hold.operation,
+    hold.hold, hold.resource, hold.pool || "Cell local", metric(hold.units),
+    metric(seconds(hold.acquired_at_milliseconds)), metric(seconds(hold.released_at_milliseconds))]);
+  const note = document.createElement("p");
+  note.textContent = "Routed fixtures are reserved before loading and remain occupied through setup, feed and unloading. " +
+    "A release can supply an acquisition at the same instant. Shared pools constrain overlapping operations across specialist cells, including reservations already placed later in time. " +
+    "These holds end at their operation; occupied fixtures are not transferred with garments. Physical fixture access, pool access and machine execution require separate qualification.";
+  parent.append(note);
+  detail(parent, `${label}: routed fixture sources, cell locks and complete reservation histories`, report);
+}
 function sewingRouting(parent, plan, label = "Selected sewing plan") {
   const report = plan?.production?.routing;
   if (!report) return;
@@ -1794,6 +1823,7 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended"]);
   if (policy?.transfer) cells(resources, [policy.transfer.id, metric(seconds(policy.transfer.available_at_milliseconds)),
     typeof policy.transfer.available_until_milliseconds === "number" ? metric(seconds(policy.transfer.available_until_milliseconds)) : "Open ended"]);
+  sewingRoutedWorkholding(parent, report, label);
   for (const source of report.cell_plans || []) {
     sewingAccess(parent, source.plan, `${label}: routed cell ${source.cell}`);
     detail(parent, `${label}: routed cell ${source.cell} admitted operations and exact geometry`, source);
@@ -1805,7 +1835,7 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     "Complete feasible routed schedule retained; minimum completion time is not proved. ") +
     `Lower bound: ${metric(seconds(report.lower_bound_makespan_milliseconds))} s; search work: ${metric(report.search_nodes)}. ` +
     (report.budget_exhausted ? "The dispatch search reached its work limit. " : "") +
-    (report.baseline_replaced ? "The copy-order seed did not fit the qualified windows; a complete feasible replacement is shown. " : "") +
+    (report.baseline_replaced ? "The copy-order seed could not satisfy the qualified routing constraints; a complete feasible replacement is shown. " : "") +
     (eligible ?
       "Each garment follows the same explicit operation sequence and can choose a different qualified cell at each step. " +
       "Every eligible operation/cell pair is qualified; selected copy counts distinguish used recipes from unused alternatives. " +
@@ -2030,8 +2060,8 @@ function sewingResult(parent, r) {
     ordering_objective: order ? (order.handling_timing ? "minimize_production_time" :
       order.timing ? "minimize_setup_time" : "minimize_setup_changes") : undefined,
     ordering_optimality_proven: order?.optimality_proven,
-    finite_workholding_enforced: (parallel ? parallel.selected.cells.some(cell => cell.schedule?.workholding) : production?.workholding) ? true : undefined,
-    shared_fixture_pools_enforced: parallel?.shared_workholding ? true : undefined,
+    finite_workholding_enforced: (routing ? routing.workholding : parallel ? parallel.selected.cells.some(cell => cell.schedule?.workholding) : production?.workholding) ? true : undefined,
+    shared_fixture_pools_enforced: (routing?.workholding?.shared_workholding || parallel?.shared_workholding) ? true : undefined,
     planar_access_checked_operations: (routing ? new Set(routing.selected.operations
       .filter(operation => routing.cell_plans.find(source => source.cell === operation.cell)?.plan.seams[operation.seam_index]?.access)
       .map(operation => JSON.stringify([operation.cell, operation.seam_index]))).size : parallel?.cell_plans?.length ? parallel.selected.cells
@@ -3094,3 +3124,4 @@ $("clearCoverageBridges").onclick = () => { $("coverageBridges").value = ""; inv
 $("coverageBridges").addEventListener("change", () => invalidate(["coverage"]));
 window.addEventListener("pagehide", () => { ++epoch; worker?.terminate(); clear(["bind", ...operations]); });
 start();
+

@@ -15,6 +15,8 @@ use crate::sewing::{
     span,
 };
 
+pub mod fixtures;
+
 const MAX_CELLS: usize = 8;
 const MAX_OPERATIONS: usize = 63;
 const MAX_WORK: usize = 200_000;
@@ -42,6 +44,10 @@ pub struct Policy {
     pub cells: Vec<parallel::Cell>,
     /// Full cell/effective-template locks, using [`parallel::operator::cell_sha256`].
     pub cell_locks: BTreeMap<String, String>,
+    /// Optional explicitly shared finite fixture inventory. Access/return must be qualified inside
+    /// cell loading/unloading; occupied fixtures never travel with a routed garment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_workholding: Option<parallel::shared_workholding::Policy>,
     /// Every original operation exactly once, in an order respecting every original predecessor.
     pub route: Vec<RouteStep>,
     /// One independent resource for all unloaded inter-cell handoffs.
@@ -198,7 +204,7 @@ pub struct Timeline {
 /// Source-qualified fixed routing with an exact complete incumbent and bounded dispatch search.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` fixed route; `/2` explicit eligible-cell choices for every physical operation.
+    /// `/1` fixed route; `/2` eligible cells; `/3` qualified local/shared fixture reservations.
     pub schema: &'static str,
     /// Source-qualified fixed operation route.
     pub route: Vec<RouteStep>,
@@ -208,7 +214,10 @@ pub struct Report {
     pub reference_scope: Option<&'static str>,
     /// Actual specialist source plans on the unchanged original pattern; each owns only its passes.
     pub cell_plans: Vec<parallel::CellPlan>,
-    /// Complete copy-major seed, or selected replacement if source windows excluded that seed.
+    /// Optional complete local/shared fixture capacities and independently swept physical holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workholding: Option<fixtures::Report>,
+    /// Complete copy-major seed, or selected replacement if resources/windows excluded that seed.
     pub baseline: Timeline,
     /// Best complete feasible dispatch found within the admitted budget.
     pub selected: Timeline,
@@ -295,13 +304,18 @@ impl Policy {
 
     fn validate(&self, options: &SewOptions, copies: usize) -> Result<BTreeSet<String>, Refusal> {
         self.work_bound(copies, options.passes.len())?;
+        let independence = if self.shared_workholding.is_some() {
+            "independent_attended_cells_shared_workholding_and_transfer_resource/1"
+        } else {
+            "independent_attended_cells_and_transfer_resource/1"
+        };
         if !matches!(
             self.model.as_str(),
             "fixed_operation_route/1" | "eligible_operation_route/1"
         ) || self.objective != "minimize_makespan"
             || self.time_basis != "ceil_operation_feed_milliseconds/1"
             || self.protocol != "unloaded_between_operations/1"
-            || self.independence != "independent_attended_cells_and_transfer_resource/1"
+            || self.independence != independence
             || self.staging_capacity < copies
             || self.staging_capacity > 4096
             || !source_valid(&self.source, &self.method, &self.conditions)
@@ -324,12 +338,11 @@ impl Policy {
                     cell.available_until_milliseconds,
                 )
                 || cell.configuration.is_none()
-                || cell.workholding.is_some()
                 || cell.ordering.objective != ordering::Objective::MinimizeProductionTime
                 || !cell.handling.transitions.is_empty()
             {
                 return Err(bad(
-                    "routing needs unique configured attended cells, valid windows, and per-operation loading/unloading without retained fixture holds or serial handling transitions",
+                    "routing needs unique configured attended cells, valid windows, and per-operation loading/unloading without serial handling transitions",
                 ));
             }
             let lock = self
@@ -501,6 +514,7 @@ struct Prepared<'a> {
     setup: Vec<Vec<u64>>,
     handoffs: Vec<Vec<Option<u64>>>,
     copies: usize,
+    fixtures: Option<fixtures::Compiled>,
 }
 
 #[derive(Clone)]
@@ -512,6 +526,7 @@ struct State {
     last: Vec<Option<usize>>,
     transfer_ready: u64,
     makespan: u64,
+    reservations: Vec<fixtures::Reservation>,
 }
 
 #[derive(Clone, Copy)]
@@ -546,6 +561,7 @@ impl Prepared<'_> {
             last: vec![None; self.policy.cells.len()],
             transfer_ready: u64::from(self.policy.transfer.available_at_milliseconds),
             makespan: 0,
+            reservations: Vec::new(),
         }
     }
 
@@ -577,9 +593,24 @@ impl Prepared<'_> {
         } else {
             None
         };
-        let load_start = ready.max(state.cell_ready[task.cell]);
-        let setup_start = add(load_start, task.load)?;
         let from = state.last[task.cell].unwrap_or(self.tasks.len());
+        let duration = add(
+            add(add(task.load, self.setup[from][index])?, task.feed)?,
+            task.unload,
+        )?;
+        let earliest = ready.max(state.cell_ready[task.cell]);
+        let load_start = if let Some(fixtures) = &self.fixtures {
+            fixtures.earliest_start(
+                &state.reservations,
+                task.route,
+                task.cell,
+                earliest,
+                duration,
+            )?
+        } else {
+            earliest
+        };
+        let setup_start = add(load_start, task.load)?;
         let feed_start = add(setup_start, self.setup[from][index])?;
         let feed_finish = add(feed_start, task.feed)?;
         let finish = add(feed_finish, task.unload)?;
@@ -599,6 +630,15 @@ impl Prepared<'_> {
             next.transfer_ready = finish;
         }
         next.makespan = next.makespan.max(finish);
+        if let Some(fixtures) = &self.fixtures {
+            fixtures.reserve(
+                &mut next.reservations,
+                task.route,
+                task.cell,
+                load_start,
+                finish,
+            );
+        }
         Ok(Some((
             next,
             Event {
@@ -1011,8 +1051,12 @@ pub(in crate::sewing) fn build(
             plan: Box::new(plan),
         });
     }
+    let fixtures = fixtures::Compiled::compile(policy, options, &cell_plans, copies)?;
+    let uses_fixtures = fixtures.is_some();
     let mut out = SewPlan {
-        schema: if policy.eligible() {
+        schema: if uses_fixtures {
+            "ftx-sewing-plan/20"
+        } else if policy.eligible() {
             "ftx-sewing-plan/19"
         } else {
             "ftx-sewing-plan/18"
@@ -1156,6 +1200,7 @@ pub(in crate::sewing) fn build(
         setup,
         handoffs,
         copies,
+        fixtures,
     };
     let lower = prepared.lower_bound()?;
     let mut seed = prepared.initial();
@@ -1267,8 +1312,15 @@ pub(in crate::sewing) fn build(
     }
     let proven = selected.makespan_milliseconds == lower;
     let search_complete = search.complete || proven;
+    let workholding = prepared
+        .fixtures
+        .as_ref()
+        .map(|fixtures| fixtures.report(&baseline, &selected))
+        .transpose()?;
     let report = Report {
-        schema: if policy.eligible() {
+        schema: if uses_fixtures {
+            "ftx-sewing-routing/3"
+        } else if policy.eligible() {
             "ftx-sewing-routing/2"
         } else {
             "ftx-sewing-routing/1"
@@ -1276,6 +1328,7 @@ pub(in crate::sewing) fn build(
         route: policy.route.clone(),
         reference_scope: policy.eligible().then_some("seed_route_one_garment/1"),
         cell_plans,
+        workholding,
         baseline,
         selected,
         baseline_replaced: !seed_complete,
@@ -1294,7 +1347,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if policy.eligible() {
+        schema: if uses_fixtures {
+            "ftx-sewing-production/8"
+        } else if policy.eligible() {
             "ftx-sewing-production/7"
         } else {
             "ftx-sewing-production/6"

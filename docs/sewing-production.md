@@ -811,10 +811,11 @@ directed edges actually used by the route. Same-cell successors need no handoff.
 availability may have `available_until_milliseconds`; these inclusive limits cover complete
 unloading and complete handoffs. A cell can finish one garment while another waits for the mover.
 
-Version 1 refuses cell `workholding` policies, retained fixtures across operations, and shared
-operator/pool composition. Existing per-operation planar access checks still apply. Moving an
-occupied fixture, sharing a cell worker, autonomous feed and insufficient staging require separately
-qualified extensions. Explicit eligible-machine domains use the separate model below.
+Optional cell `workholding` policies now admit fixtures confined to one complete operation, with
+separately qualified common pools as described below. Existing per-operation planar access checks
+still apply. Retained fixtures across operations, moving an occupied fixture, sharing a cell worker,
+autonomous feed and insufficient staging require separately qualified extensions. Explicit
+eligible-machine domains use the model below and retain the selected cell's fixture obligations.
 
 The bounded search appends a copy's next handoff and cell operation at their earliest admitted
 times. It considers copy dispatch permutations for the fixed route; it does not enumerate arbitrary
@@ -843,10 +844,82 @@ Both native command families, portable interfaces, recipe/material studies and t
 these ordinary sewing inputs. Browser views show the route, actual cell recipes, complete operation
 and transfer times, sources and exact reports. Synthetic `sewing_routing` regressions specify
 specialist-only qualification, reentry, source changes, seam coverage, shared handoffs, inclusive
-windows, bounded incumbents, actual stitches, purchasing, selection and study replay. All eleven
-focused Rust regressions pass. The separate real-command workflow and current compiled-WASM
+windows, bounded incumbents, actual stitches, purchasing, selection and study replay. The focused
+Rust regressions pass. The separate real-command workflow and current compiled-WASM
 acceptance remain distinct checks. No measured factory timing, physical seam quality or hardware
 permission is established.
+
+### Finite fixtures during routed operations
+
+Each routed cell may supply the existing `workholding` policy with its full machine content lock,
+actual process/material qualification references, finite `resources`, per-copy `holds`, source,
+method, conditions, evidence and separate estimate consent. Qualification coverage names exactly
+that specialist's owned operations. Every hold must have the same `acquire` and `release` operation:
+the unloaded routing protocol does not carry an occupied fixture to another operation or cell.
+All holds on one operation accumulate; their combined demand must fit the declared local capacity.
+The cell's exclusive execution then prevents those local reservations from overlapping between copies.
+Matching resource names at different cells remain independent inventories.
+
+To share an actual finite pool, add `routing.shared_workholding` using the existing
+`shared_workholding_pools/1` shape and change routing `independence` to
+`independent_attended_cells_shared_workholding_and_transfer_resource/1`. For example, this
+structural excerpt binds two independently qualified local resources to one explicitly observed pool:
+
+```json
+{
+  "model": "shared_workholding_pools/1",
+  "release_protocol": "available_after_unload_with_access_in_cell_handling/1",
+  "cells": {"cell-a": "FULL_CELL_LOCK", "cell-b": "FULL_CELL_LOCK"},
+  "resources": [{"id": "common-jigs", "capacity": 1}],
+  "bindings": [
+    {"cell": "cell-a", "resource": "jig", "pool": "common-jigs"},
+    {"cell": "cell-b", "resource": "jig", "pool": "common-jigs"}
+  ]
+}
+```
+
+The complete request must also provide the pool policy's independent `source`, `method`,
+`conditions`, `evidence` and, for estimated applicability, `allow_estimates: true`. Its `cells` map
+must cover every exact cell lock, including machine, recipe, process qualification, fixture policy,
+handling and availability. Each binding names an existing cell-local resource and one declared
+pool; a resource can draw from only one pool. Unbound local resources remain independent. Multiple
+resources bound to the same pool contribute their full summed demand. A material/process or cell
+change cannot reuse an old pool lock merely because its IDs are unchanged.
+
+The release protocol explicitly qualifies access/acquisition inside the existing loading phase,
+and complete return/release inside unloading. A reservation covers **loading, setup, feed and the
+entire unloading phase**. It cannot release at feed completion or borrow from a hold that has not
+finished unloading. Equal-time release may supply the next acquisition. No fixture travel duration
+is guessed: its access and return must already be covered by the independent source qualification
+and the locked cell handling observations. Garment handoffs keep their own separately qualified
+resource and durations.
+
+The actual dispatch search checks complete time intervals against all retained reservations.
+This matters because dispatch construction order is not chronological: a later-dispatched cell
+operation can start before an earlier-dispatched operation on another cell. A clear start instant
+is insufficient if the operation would collide with a future reservation. Search finds the earliest
+complete admissible interval, retains complete feasible incumbents under its existing shared work
+cap, and replaces a copy-order seed when resource delays cause it to miss a window. Failure to find
+an incumbent stays `not_converged`, scoped to the bounded fixed-route dispatch model.
+
+Requested local or shared fixtures produce plan `/20`, production `/8`, routing `/3`, and nested
+`ftx-sewing-routed-workholding/1`; the stitch payload remains `/7`. The nested report retains local
+source qualifications/capacities/lifecycles, the exact optional pool policy and both complete hold
+timelines. Separate event sweeps verify local and shared capacities, simultaneous release ordering,
+peaks and zero final occupancy. Every hold identifies its actual cell, global garment copy, source
+resource, optional pool and exact operation. Existing consumers use constrained routed completion,
+while emitted stitches, source geometry and thread demand keep their ordinary authorities. Omitted
+fixture policies preserve previous schemas and output.
+
+In the synthetic two-copy specialist regression, one common jig changes selected completion from
+12,600 to 14,700 milliseconds and the copy-order baseline becomes 16,100 milliseconds. Two supplied
+units recover 12,600 milliseconds. These are exact software examples, not measured factory timing.
+Direct regressions also cover full unloading, future reservations, accumulated/multiple pool demands,
+independent local names, source invalidation, deadlines, bounded incumbents, stitch replay and material
+study substitution. Total routed fixture inputs are bounded at 64 source holds, 1024 expanded holds
+and 256 qualification references; each existing cell policy retains its own resource limits and
+common pools retain the existing 16-pool/128-binding bound. Grip adequacy, physical pool access,
+seam quality and machine execution authorization remain separate requirements.
 
 ## Choose eligible cells separately for each garment operation
 
@@ -893,7 +966,8 @@ can be replaced by a complete feasible mixed assignment. The existing search-and
 reservation, and the largest eligible stitch count at each stage bounds the complete output before
 search. A work limit never publishes a partially manufactured garment.
 
-Eligible reports use plan `/19`, production `/7`, routing `/2` and the existing stitch `/7`.
+Eligible reports without fixtures use plan `/19`, production `/7`, routing `/2` and the existing
+stitch `/7`. Adding local or shared fixtures uses plan `/20`, production `/8` and routing `/3`.
 `routing.reference_scope: "seed_route_one_garment/1"` explicitly identifies the outer `seams`, feed
 and stitch totals as one seed-route reference garment. **Actual batch totals and stitches come from
 the selected timeline.** Each eligible `production.operations[]` row includes its actual `cell`;
@@ -925,7 +999,8 @@ zero-use alternatives, alongside the complete selected operation and transfer ti
 Independent synthetic regressions enumerate small assignment/dispatch combinations and check mixed
 window feasibility, actual geometry, yarn demand, complete-incumbent limits, source invalidation and
 protocol identity. They establish this bounded software model, not measured factory throughput,
-physical seam quality, retained/shared fixture composition or hardware authorization.
+physical seam quality, cross-operation retained fixtures or hardware authorization. Optional local
+and shared inventories follow the selected cell for every actual operation as described above.
 
 ## Bounds and remaining scope
 

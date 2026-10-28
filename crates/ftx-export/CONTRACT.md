@@ -242,16 +242,37 @@ geometry drives stitches, previews, combined yarn purchases and study results. E
 independent attending labor through load/setup/feed/unload, with sufficient unloaded staging at
 every cell. One separately sourced transfer resource serializes complete ready-state-to-ready-state
 handoffs; cell and transfer finish windows are inclusive. Outer serial timing, parallel allocation,
-cell workholding and implicit fixture transfer refuse. Plan `/18`, production `/6`, routing `/1`
+retained/transported occupied fixtures and implicit fixture transfer refuse. Plan `/18`, production `/6`, routing `/1`
 and stitch `/7` retain exact operation/copy/cell identities, source plans and complete timelines.
 Bounded fixed-route append dispatch retains a complete incumbent or reports unresolved failure;
 only matching an independent mandatory-work lower bound establishes `optimality_proven`.
 Two complete replays share the 200000-work cap, and all retained source tables share the 250000
 station bound. Serial ordering accessors withhold unrelated timing; the existing elapsed-completion
-consumer uses routing. Tests: `sewing_routing` (all eleven direct executable regressions pass).
+consumer uses routing. Tests: `sewing_routing`.
 Measured factory qualification,
-retained/shared fixture composition and hardware authorization remain open. See
+retained-fixture composition and hardware authorization remain open. See
 `docs/sewing-production.md`.
+
+**Routed finite fixtures** (`production.routing.workholding` report). Optional existing
+cell-local workholding policies qualify each specialist's exact machine/material/process and
+single-operation holds. Optional `routing.shared_workholding` reuses the existing pool authority
+under the explicit `available_after_unload_with_access_in_cell_handling/1` protocol and pooled
+independence declaration. Every hold covers loading/setup/feed/unloading, with no inferred fixture
+transport or free access. Local demand remains bounded by its own capacity; bound local resources
+add their full demand to the named common pool. Dispatch checks every complete interval against
+retained reservations, including future intervals from nonchronological construction order. The
+existing seed/improvement work cap and complete-incumbent semantics remain authoritative. Independent
+baseline/selected event sweeps verify both local and pool capacities, release-before-acquire ties,
+peaks and zero final inventory, retaining exact global copy/operation/cell identities. Plan `/20`,
+production `/8`, routing `/3` and nested routed-workholding `/1` preserve exact source replay;
+omission retains old output and actual stitches/purchasing retain the existing authorities.
+For eligible routes, admission covers every qualified operation/cell pair; reservations follow
+the actual selected cell for each copy. Unused eligible plans contribute zero occupied holds.
+Bounds: 64 total source holds, 1024 expanded holds, 256 qualification references, existing per-cell
+limits and at most 16 shared pools/128 bindings. Tests: `sewing_routing` known capacities, future
+reservations, complete unloading, summed/multiple pools, source/material invalidation, windows,
+bounded complete incumbents, exact stitch and material-study replay; `sewing_parallel` guards the
+shared source validator. Integer inventory does not establish physical grip/access or hardware permission.
 
 **Eligible specialist cells** (`production.routing`, `ftx-pb2.2`). Explicit
 `eligible_operation_route/1` retains one authored operation sequence and a seed cell per step, while
@@ -420,6 +441,12 @@ liquid evidence and integrates each instance's reference-area delivery and incom
 over every authored interval. `textile_water_supplied_mass_kg` reads that admitted cumulative delivery;
 rewetting may increase remaining liquid. Mixed schemas, missing feed evidence, altered schedules and
 unsupported loading cannot qualify. Incoming enthalpy is subtracted once in the full energy balance.
+When `mechanical_coupling` opts into bidirectional co-moving transfer, admission also reconciles
+every accepted mechanical inventory against supplied plus condensed water, outgoing evaporation,
+the unchanged source substrate, and the initial/final/trace exchange ledgers. Independent incoming
+and outgoing bulk momentum/energy never enter thermal latent/sensible objectives. Missing or
+invented transfer/source fields refuse the dependent comparison; exact source assembly and cutting
+remain independently comparable.
 
 **Scoped material-direction requirements.** `material_strain` and `motion_material_strain` admit raw
 dimensionless `[E11, E22, 2E12]` from the production membrane frame. Six static signed min/max metrics

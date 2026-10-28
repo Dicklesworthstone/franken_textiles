@@ -181,7 +181,10 @@ fn budget() -> Refusal {
 }
 
 impl Policy {
-    fn validate(&self, plan: &SewPlan) -> Result<BTreeMap<String, QualificationRef>, Refusal> {
+    pub(super) fn validate(
+        &self,
+        plan: &SewPlan,
+    ) -> Result<BTreeMap<String, QualificationRef>, Refusal> {
         let reference_count: usize = self.qualifications.values().map(Vec::len).sum();
         if self.resources.is_empty()
             || self.resources.len() > MAX_RESOURCES

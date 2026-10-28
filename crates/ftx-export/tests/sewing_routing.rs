@@ -48,7 +48,15 @@ fn refresh_locks(options: &mut Value) {
         cell["configuration"]["qualification_refs"] = json!(refs);
         cell["handling"]["machine_sha256"] = json!(hash);
         cell["handling"]["qualifications"] = json!(refs);
+        if let Some(holding) = cell.get_mut("workholding") {
+            holding["machine_sha256"] = json!(hash);
+            holding["qualifications"] = json!(refs);
+        }
     }
+    refresh_cell_locks(options);
+}
+
+fn refresh_cell_locks(options: &mut Value) {
     let typed: SewOptions = serde_json::from_value(options.clone()).unwrap();
     let locks: BTreeMap<_, _> = typed
         .production
@@ -142,6 +150,70 @@ fn build(pattern: &Pattern, options: Value) -> Result<SewPlan, Refusal> {
     SewPlan::build(pattern, &serde_json::from_value(options).unwrap())
 }
 
+fn shared_fixtures(mut options: Value, capacity: u32) -> Value {
+    for cell in options["production"]["routing"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        let holds: Vec<_> = cell["configuration"]["recipes"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|operation| {
+                json!({"id":format!("jig-{operation}"),"resource":"jig","units":1,
+                "acquire":operation,"release":operation})
+            })
+            .collect();
+        cell["workholding"] = json!({
+            "machine_sha256":"","qualifications":{},
+            "resources":[{"id":"jig","capacity":1}],"holds":holds,
+            "source":source("fixture-local"),
+            "method":"Synthetic local fixture applies through complete loading, setup, feed and unloading",
+            "conditions":{},"evidence":"estimate","allow_estimates":true
+        });
+    }
+    refresh_locks(&mut options);
+    let route = &mut options["production"]["routing"];
+    let bindings: Vec<_> = route["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|cell| json!({"cell":cell["id"],"resource":"jig","pool":"common-jigs"}))
+        .collect();
+    route["independence"] =
+        json!("independent_attended_cells_shared_workholding_and_transfer_resource/1");
+    route["shared_workholding"] = json!({
+        "model":"shared_workholding_pools/1",
+        "release_protocol":"available_after_unload_with_access_in_cell_handling/1",
+        "cells":route["cell_locks"],"resources":[{"id":"common-jigs","capacity":capacity}],
+        "bindings":bindings,"source":source("fixture-pool"),
+        "method":"Synthetic interchangeable pool: acquisition/access is included in qualified loading and complete return/release in unloading, independent of unloaded garment handoffs",
+        "conditions":{},"evidence":"estimate","allow_estimates":true
+    });
+    options
+}
+
+fn refresh_pool_locks(options: &mut Value) {
+    refresh_locks(options);
+    let route = &mut options["production"]["routing"];
+    route["shared_workholding"]["cells"] = route["cell_locks"].clone();
+}
+
+fn capture_routed_fixture(name: &str, value: &impl serde::Serialize) {
+    let Some(directory) = std::env::var_os("FTX_ROUTED_FIXTURE_REPLAY") else {
+        return;
+    };
+    use std::io::Write;
+    let directory = std::path::PathBuf::from(directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(directory.join(name))
+        .unwrap();
+    file.write_all(&serde_json::to_vec(value).unwrap()).unwrap();
+}
+
 #[test]
 fn specialist_cells_jointly_sew_copies_with_exact_geometry_and_independent_timing() {
     let (pattern, raw) = fixture(2);
@@ -162,6 +234,13 @@ fn specialist_cells_jointly_sew_copies_with_exact_geometry_and_independent_timin
     let program = SewProgram::build(&pattern, &options).unwrap();
     let plan = &program.plan;
     let routed = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert!(routed.workholding.is_none());
+    assert!(
+        serde_json::to_value(routed)
+            .unwrap()
+            .get("workholding")
+            .is_none()
+    );
     assert_eq!(routed.cell_plans.len(), 2);
     assert_eq!(
         plan.pattern_sha256,
@@ -1003,6 +1082,337 @@ fn routed_study_compares_actual_specialist_sources_and_preserves_independent_ref
     assert_eq!(refused["comparison"]["frontier"], json!([]));
 }
 
+#[test]
+fn shared_fixture_capacity_controls_routed_completion_and_exact_stitches() {
+    let (pattern, raw) = fixture(2);
+    for (capacity, finish, peak) in [(1, 14700, 1), (2, 12600, 2)] {
+        let options: SewOptions =
+            serde_json::from_value(shared_fixtures(raw.clone(), capacity)).unwrap();
+        let program = SewProgram::build(&pattern, &options).unwrap();
+        let production = program.plan.production.as_ref().unwrap();
+        let route = production.routing.as_ref().unwrap();
+        let holding = route.workholding.as_ref().unwrap();
+        assert_eq!(program.plan.schema, "ftx-sewing-plan/20");
+        assert_eq!(production.schema, "ftx-sewing-production/8");
+        assert_eq!(route.schema, "ftx-sewing-routing/3");
+        assert_eq!(route.selected.makespan_milliseconds, finish);
+        assert_eq!(program.stitches.len(), 120);
+        assert_eq!(program.plan.total_feed_seconds(), 12.0);
+        assert_eq!(holding.selected.holds.len(), 4);
+        assert_eq!(holding.selected.shared_peak_occupancy["common-jigs"], peak);
+        assert_eq!(holding.selected.shared_final_occupancy["common-jigs"], 0);
+        assert!(
+            !holding.physical_pool_access_validated
+                && !holding.fixture_geometry_and_access_validated
+        );
+        for cell in ["cell-a", "cell-b"] {
+            assert_eq!(holding.selected.local_peak_occupancy[cell]["jig"], 1);
+            assert_eq!(holding.selected.local_final_occupancy[cell]["jig"], 0);
+        }
+        for hold in &holding.selected.holds {
+            let operation = route
+                .selected
+                .operations
+                .iter()
+                .find(|operation| operation.id == hold.operation)
+                .unwrap();
+            assert_eq!(
+                hold.acquired_at_milliseconds,
+                operation.loading_start_milliseconds
+            );
+            assert_eq!(hold.released_at_milliseconds, operation.finish_milliseconds);
+            assert_eq!(hold.copy, operation.copy);
+            assert_eq!(hold.cell, operation.cell);
+        }
+        if capacity == 1 {
+            // Independent capacity-one verification, not the scheduler's reservation sweep.
+            let mut intervals: Vec<_> = holding
+                .selected
+                .holds
+                .iter()
+                .map(|hold| (hold.acquired_at_milliseconds, hold.released_at_milliseconds))
+                .collect();
+            intervals.sort_unstable();
+            assert!(intervals.windows(2).all(|pair| pair[0].1 <= pair[1].0));
+            assert_eq!(route.baseline.makespan_milliseconds, 16100);
+            assert!(route.search_complete && !route.optimality_proven);
+        }
+        assert_eq!(
+            serde_json::to_value(&program).unwrap(),
+            serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap())
+                .unwrap()
+        );
+        if capacity == 1 {
+            capture_routed_fixture("sewing-pattern.json", pattern.raw());
+            capture_routed_fixture("sewing-options.json", &options);
+            capture_routed_fixture("sewing-program.json", &program);
+        }
+    }
+}
+
+#[test]
+fn routed_fixtures_cover_future_reservations_and_complete_unloading() {
+    let (pattern, raw) = fixture(2);
+    let mut options = shared_fixtures(raw, 1);
+    options["production"]["routing"]["max_search_nodes"] = json!(4);
+    let plan = build(&pattern, options).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let rows: BTreeMap<_, _> = route
+        .selected
+        .operations
+        .iter()
+        .map(|row| (row.id.as_str(), row))
+        .collect();
+    // Dispatch constructs B0 before A1 even though A1's unpooled earliest start is only 5300ms.
+    // The future B0 reservation [6000,8800) excludes that full 4300ms A1 interval.
+    assert_eq!(rows["0/reinforce"].loading_start_milliseconds, 6000);
+    assert_eq!(rows["0/reinforce"].feed_finish_milliseconds, 8600);
+    assert_eq!(rows["0/reinforce"].finish_milliseconds, 8800);
+    assert_eq!(rows["1/join"].loading_start_milliseconds, 8800);
+    assert_eq!(rows["1/join"].finish_milliseconds, 13100);
+    assert_eq!(route.selected.makespan_milliseconds, 16100);
+    assert!(route.budget_exhausted && !route.optimality_proven);
+    assert_eq!(route.search_nodes, 4);
+    assert_eq!(route.work_used, 12);
+    assert_eq!(route.selected.operations.len(), 4);
+    assert_eq!(route.workholding.as_ref().unwrap().selected.holds.len(), 4);
+}
+
+#[test]
+fn routed_local_resource_names_do_not_create_shared_inventory() {
+    let (pattern, raw) = fixture(2);
+    let mut options = shared_fixtures(raw, 1);
+    let route = &mut options["production"]["routing"];
+    route.as_object_mut().unwrap().remove("shared_workholding");
+    route["independence"] = json!("independent_attended_cells_and_transfer_resource/1");
+    let plan = build(&pattern, options.clone()).unwrap();
+    let routed = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let holding = routed.workholding.as_ref().unwrap();
+    assert_eq!(routed.selected.makespan_milliseconds, 12600);
+    assert!(holding.shared_workholding.is_none());
+    assert!(holding.selected.shared_peak_occupancy.is_empty());
+    assert!(
+        holding
+            .selected
+            .holds
+            .iter()
+            .all(|hold| hold.pool.is_none())
+    );
+    options["production"]["routing"]["cells"][0]["workholding"]["holds"][0]["units"] = json!(2);
+    refresh_locks(&mut options);
+    let error = build(&pattern, options).unwrap_err();
+    assert_eq!(error.code, RefusalCode::InvalidDocument);
+    assert!(error.message.contains("exceeds local resource"));
+}
+
+#[test]
+fn routed_pool_demands_sum_all_bound_resources_and_require_every_pool() {
+    let (pattern, raw) = fixture(2);
+    let mut options = shared_fixtures(raw, 2);
+    for cell in options["production"]["routing"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["workholding"]["resources"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":"guide","capacity":1}));
+        let mut guide = cell["workholding"]["holds"][0].clone();
+        guide["id"] = json!("guide-hold");
+        guide["resource"] = json!("guide");
+        cell["workholding"]["holds"]
+            .as_array_mut()
+            .unwrap()
+            .push(guide);
+    }
+    for cell in ["cell-a", "cell-b"] {
+        options["production"]["routing"]["shared_workholding"]["bindings"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"cell":cell,"resource":"guide","pool":"common-jigs"}));
+    }
+    refresh_pool_locks(&mut options);
+    let plan = build(&pattern, options.clone()).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert_eq!(route.selected.makespan_milliseconds, 14700);
+    assert_eq!(
+        route
+            .workholding
+            .as_ref()
+            .unwrap()
+            .selected
+            .shared_peak_occupancy["common-jigs"],
+        2
+    );
+    options["production"]["routing"]["shared_workholding"]["resources"][0]["capacity"] = json!(1);
+    let error = build(&pattern, options.clone()).unwrap_err();
+    assert_eq!(error.code, RefusalCode::InvalidDocument);
+    assert!(error.message.contains("exceeds shared pool"));
+    // Two separately qualified pools must be available together, even when one has spare units.
+    options["production"]["routing"]["shared_workholding"]["resources"] = json!([
+        {"id":"common-jigs","capacity":2},{"id":"common-guides","capacity":1}]);
+    for binding in options["production"]["routing"]["shared_workholding"]["bindings"]
+        .as_array_mut()
+        .unwrap()
+    {
+        if binding["resource"] == "guide" {
+            binding["pool"] = json!("common-guides");
+        }
+    }
+    let plan = build(&pattern, options).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert_eq!(route.selected.makespan_milliseconds, 14700);
+    let peaks = &route
+        .workholding
+        .as_ref()
+        .unwrap()
+        .selected
+        .shared_peak_occupancy;
+    assert_eq!(peaks["common-jigs"], 1);
+    assert_eq!(peaks["common-guides"], 1);
+}
+
+#[test]
+fn routed_fixture_protocol_sources_and_retained_lifecycles_are_independently_admitted() {
+    let (pattern, raw) = fixture(2);
+    let options = shared_fixtures(raw, 1);
+    let mut cases = Vec::new();
+    let mut bad = options.clone();
+    bad["production"]["routing"]["shared_workholding"]["allow_estimates"] = json!(false);
+    cases.push(bad);
+    let mut bad = options.clone();
+    bad["production"]["routing"]["shared_workholding"]["release_protocol"] =
+        json!("available_at_feed_completion_with_access_in_cell_handling/1");
+    cases.push(bad);
+    let mut bad = options.clone();
+    bad["production"]["routing"]["independence"] =
+        json!("independent_attended_cells_and_transfer_resource/1");
+    cases.push(bad);
+    let mut bad = options.clone();
+    bad["production"]["routing"]["shared_workholding"]["bindings"][0]["resource"] =
+        json!("undeclared");
+    cases.push(bad);
+    let mut bad = options.clone();
+    bad["production"]["routing"]["cells"][0]["handling"]["initial_milliseconds"]["join"] =
+        json!(101);
+    refresh_locks(&mut bad); // Re-admitting the cell does not silently re-admit old shared-pool access.
+    cases.push(bad);
+    let mut bad = options.clone();
+    bad["production"]["routing"]["cells"][0]["workholding"]["allow_estimates"] = json!(false);
+    refresh_pool_locks(&mut bad);
+    cases.push(bad);
+    let mut bad = options;
+    bad["production"]["routing"]["cells"][0]["workholding"]["qualifications"]["join"][0]["sha256"] =
+        json!("00".repeat(32));
+    refresh_cell_locks(&mut bad);
+    bad["production"]["routing"]["shared_workholding"]["cells"] =
+        bad["production"]["routing"]["cell_locks"].clone();
+    cases.push(bad);
+    for (index, options) in cases.into_iter().enumerate() {
+        assert!(
+            build(&pattern, options).is_err(),
+            "invalid routed fixture source case {index}"
+        );
+    }
+    let (pattern, options) = reentrant();
+    let mut options = shared_fixtures(options, 1);
+    options["production"]["routing"]["cells"][0]["workholding"]["holds"][0]["acquire"] =
+        json!("join");
+    options["production"]["routing"]["cells"][0]["workholding"]["holds"][0]["release"] =
+        json!("finish");
+    refresh_pool_locks(&mut options);
+    let error = build(&pattern, options).unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("retained or transported occupied fixtures")
+    );
+}
+
+#[test]
+fn routed_fixture_windows_recover_complete_seeds_and_keep_unknown_search_unresolved() {
+    let (pattern, raw) = fixture(2);
+    let mut options = shared_fixtures(raw, 1);
+    options["production"]["routing"]["cells"][1]["available_until_milliseconds"] = json!(14700);
+    refresh_pool_locks(&mut options);
+    let mut capped = options.clone();
+    capped["production"]["routing"]["max_search_nodes"] = json!(4);
+    assert_eq!(
+        build(&pattern, capped).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+    let plan = build(&pattern, options.clone()).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert!(route.baseline_replaced && route.search_complete);
+    assert!(!route.optimality_proven);
+    assert_eq!(route.selected.makespan_milliseconds, 14700);
+    assert_eq!(route.selected.operations.len(), 4);
+    assert_eq!(route.workholding.as_ref().unwrap().baseline.holds.len(), 4);
+    assert_eq!(
+        serde_json::to_value(&route.baseline).unwrap(),
+        serde_json::to_value(&route.selected).unwrap()
+    );
+    options["production"]["routing"]["cells"][1]["available_until_milliseconds"] = json!(14699);
+    refresh_pool_locks(&mut options);
+    let error = build(&pattern, options).unwrap_err();
+    assert_eq!(error.code, RefusalCode::NotConverged);
+    assert!(
+        error
+            .message
+            .contains("does not establish unrestricted production infeasibility")
+    );
+}
+
+#[test]
+fn routed_fixture_completion_reaches_material_studies_and_changed_materials_refuse() {
+    use ftx_export::material_study::Request;
+
+    let (pattern, raw) = fixture(2);
+    let options = shared_fixtures(raw, 1);
+    let material = pattern.raw()["fabric"]["material"].clone();
+    let mut changed = material.clone();
+    changed["record"]["properties"]["thickness"]["value"] = json!(0.45);
+    let request: Request = serde_json::from_value(json!({
+        "schema":"ftx-material-study/1",
+        "variants":[
+            {"key":"qualified","changes":{"schema":"ftx-material-bindings/1","default":material}},
+            {"key":"changed-stack","changes":{"schema":"ftx-material-bindings/1","default":changed}}],
+        "sewing":options,
+        "assembly_mass":{"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[]},
+        "comparison":{"basis":"nominal","required_consumers":["sewing"],
+            "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"}]}
+    })).unwrap();
+    let report = request.evaluate(&pattern).unwrap();
+    capture_routed_fixture("study-pattern.json", pattern.raw());
+    capture_routed_fixture("study-request.json", &request);
+    capture_routed_fixture("study-report.json", &report);
+    let result = serde_json::to_value(report).unwrap();
+    let alternatives = result["alternatives"].as_array().unwrap();
+    let qualified = alternatives
+        .iter()
+        .find(|row| row["key"] == "qualified")
+        .unwrap();
+    assert_eq!(qualified["sewing"]["status"], "available");
+    assert_eq!(
+        qualified["metrics"]["sewing_parallel_makespan_seconds"],
+        14.7
+    );
+    assert_eq!(qualified["metrics"]["stitch_intervals"], 120);
+    assert_eq!(
+        qualified["sewing"]["result"]["production"]["routing"]["workholding"]["selected"]["shared_peak_occupancy"]
+            ["common-jigs"],
+        1
+    );
+    let refused = alternatives
+        .iter()
+        .find(|row| row["key"] == "changed-stack")
+        .unwrap();
+    assert_eq!(refused["sewing"]["status"], "refused");
+    assert!(refused["metrics"]["sewing_parallel_makespan_seconds"].is_null());
+    assert_eq!(refused["assembly_mass"]["status"], "available");
+    assert_eq!(result["comparison"]["frontier"], json!(["qualified"]));
+}
+
 fn eligible_fixture(copies: usize) -> (Pattern, Value) {
     let (pattern, mut raw) = fixture(copies);
     let mut alternate = raw["production"]["routing"]["cells"][0].clone();
@@ -1095,6 +1505,104 @@ fn independently_enumerated_finish() -> u64 {
         }
     }
     best
+}
+
+#[test]
+fn eligible_fixture_demand_follows_selected_cells_and_only_executed_holds() {
+    let (pattern, raw) = eligible_fixture(2);
+    let refusal = build(&pattern, shared_fixtures(raw.clone(), 1)).unwrap_err();
+    // Both first-stage windows require the two machines to run concurrently; one common jig
+    // cannot support that assignment, even though every cell has its own declared capacity.
+    assert_eq!(refusal.code, RefusalCode::NotConverged);
+
+    let options: SewOptions = serde_json::from_value(shared_fixtures(raw, 2)).unwrap();
+    let program = SewProgram::build(&pattern, &options).unwrap();
+    let route = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        route.selected.makespan_milliseconds,
+        independently_enumerated_finish()
+    );
+    assert_eq!(program.stitches.len(), 100);
+    assert_eq!(program.plan.total_feed_seconds(), 10.0);
+    assert_eq!(route.schema, "ftx-sewing-routing/3");
+    assert_eq!(route.reference_scope, Some("seed_route_one_garment/1"));
+    let fixtures = route.workholding.as_ref().unwrap();
+    assert_eq!(fixtures.cells.len(), 3); // All eligible source qualifications are retained.
+    for timeline in [&fixtures.baseline, &fixtures.selected] {
+        assert_eq!(timeline.holds.len(), 4); // No duplicate hold from the unchosen join cell.
+        assert_eq!(timeline.shared_peak_occupancy["common-jigs"], 2);
+        assert_eq!(timeline.shared_final_occupancy["common-jigs"], 0);
+        let mut counts = BTreeMap::new();
+        for hold in &timeline.holds {
+            *counts.entry(hold.cell.as_str()).or_insert(0) += 1;
+        }
+        assert_eq!(
+            counts,
+            BTreeMap::from([("cell-a", 1), ("cell-b", 2), ("cell-c", 1)])
+        );
+    }
+    for operation in &route.selected.operations {
+        let hold = fixtures
+            .selected
+            .holds
+            .iter()
+            .find(|hold| hold.operation == operation.id)
+            .unwrap();
+        assert_eq!(hold.cell, operation.cell);
+        assert_eq!(
+            hold.acquired_at_milliseconds,
+            operation.loading_start_milliseconds
+        );
+        assert_eq!(hold.released_at_milliseconds, operation.finish_milliseconds);
+    }
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &options).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn eligible_unpooled_local_fixture_remains_independent_and_stale_source_refuses() {
+    let (pattern, raw) = eligible_fixture(2);
+    let mut raw = shared_fixtures(raw, 1);
+    raw["production"]["routing"]["shared_workholding"]["bindings"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|binding| binding["cell"] != "cell-c");
+    let plan = build(&pattern, raw.clone()).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    // The unpooled alternate finishes at3300. Shared cell-a holds until5300, so cell-b's
+    // 2800ms first operation starts at5300 and its2300ms second finishes at10400.
+    assert_eq!(route.selected.makespan_milliseconds, 10400);
+    let fixtures = route.workholding.as_ref().unwrap();
+    assert_eq!(fixtures.selected.holds.len(), 4);
+    assert_eq!(fixtures.selected.shared_peak_occupancy["common-jigs"], 1);
+    assert_eq!(fixtures.selected.local_peak_occupancy["cell-c"]["jig"], 1);
+    assert!(
+        fixtures
+            .selected
+            .holds
+            .iter()
+            .filter(|hold| hold.cell == "cell-c")
+            .all(|hold| hold.pool.is_none())
+    );
+
+    // Exact complete cell/pool locks cannot turn a stale local material/process qualification
+    // into source evidence, including for an alternate eligible machine.
+    raw["production"]["routing"]["cells"][2]["workholding"]["qualifications"]["join"][0]["sha256"] =
+        json!("00".repeat(32));
+    refresh_cell_locks(&mut raw);
+    raw["production"]["routing"]["shared_workholding"]["cells"] =
+        raw["production"]["routing"]["cell_locks"].clone();
+    let refusal = build(&pattern, raw).unwrap_err();
+    assert!(refusal.message.contains("qualification"), "{refusal}");
 }
 
 #[test]
