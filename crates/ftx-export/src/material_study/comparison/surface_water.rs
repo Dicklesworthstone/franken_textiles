@@ -117,11 +117,24 @@ fn admit_mechanics(
     let water = &request["surface_water"];
     let bindings = qualification["bindings"].as_object().ok_or_else(fail)?;
     let water_bindings = water["bindings"].as_object().ok_or_else(fail)?;
+    let exchange = qualification["schema"] == "ftx-coupled-liquid-mechanics/1";
+    let compatible_policy = if exchange {
+        matches!(
+            water["schema"].as_str(),
+            Some(
+                "ftx-textile-surface-water/1"
+                    | "ftx-textile-surface-water/2"
+                    | "ftx-textile-surface-water/3"
+            )
+        ) && qualification["model"] == "co_moving_mass_exchange_frozen_mechanics/1"
+    } else {
+        water["schema"] == "ftx-textile-surface-water/1"
+            && qualification["schema"] == "ftx-evaporating-liquid-mechanics/1"
+            && qualification["model"] == "co_moving_evaporation_frozen_mechanics/1"
+    };
     source(qualification)?;
     if coverage
-        || water["schema"] != "ftx-textile-surface-water/1"
-        || qualification["schema"] != "ftx-evaporating-liquid-mechanics/1"
-        || qualification["model"] != "co_moving_evaporation_frozen_mechanics/1"
+        || !compatible_policy
         || qualification["material_report_sha256"] != hash(&simulation["drape"]["material"])?
         || bindings.is_empty()
         || bindings.len() > 65_536
@@ -150,7 +163,12 @@ fn admit_mechanics(
         }
     }
     let summary = |report: &Value| -> Result<Value, Refusal> {
-        if report["schema"] != "ftx-evaporating-liquid-mechanics-result/1"
+        if report["schema"]
+            != if exchange {
+                "ftx-coupled-liquid-mechanics-result/1"
+            } else {
+                "ftx-evaporating-liquid-mechanics-result/1"
+            }
             || report["qualification"] != *qualification
             || !report["scope"]
                 .as_str()
@@ -187,6 +205,11 @@ fn admit_mechanics(
         return Err(fail());
     }
     let mut previous_energy = 0.;
+    let mut previous_incoming = 0.;
+    let mut previous_outgoing = 0.;
+    let mut previous_incoming_energy = 0.;
+    let mut previous_incoming_potential = 0.;
+    let mut previous_incoming_momentum = [0.; 3];
     for (index, row) in std::iter::once(&initial)
         .chain(trace.iter().map(|row| &row["mechanical_coupling"]))
         .enumerate()
@@ -201,14 +224,98 @@ fn admit_mechanics(
         let evaporated = nonnegative(row, "evaporated_liquid_kg")?;
         let total = nonnegative(row, "total_inertial_mass_kg")?;
         let energy = nonnegative(row, "exported_kinetic_energy_j")?;
+        let incoming = if exchange {
+            let flow = &row["exchange"];
+            let incoming = nonnegative(flow, "incoming_mass_kg")?;
+            let outgoing = nonnegative(flow, "outgoing_mass_kg")?;
+            let incoming_energy = nonnegative(flow, "incoming_kinetic_energy_j")?;
+            let thermal_incoming = if index == 0 {
+                0.
+            } else {
+                let supply = if request["surface_water"]["schema"] == "ftx-textile-surface-water/1"
+                {
+                    0.
+                } else {
+                    nonnegative(water, "supplied_liquid_kg")?
+                };
+                let condensation =
+                    if request["surface_water"]["schema"] == "ftx-textile-surface-water/3" {
+                        nonnegative(water, "condensed_liquid_kg")?
+                    } else {
+                        0.
+                    };
+                supply + condensation
+            };
+            if !near(incoming, thermal_incoming, thermal_incoming)
+                || !near(outgoing, evaporated, evaporated)
+                || incoming < previous_incoming
+                || outgoing < previous_outgoing
+                || incoming_energy < previous_incoming_energy
+                || (index == 0 && (incoming != 0. || outgoing != 0. || incoming_energy != 0.))
+            {
+                return Err(fail());
+            }
+            for key in ["initial_kinetic_energy_j", "initial_gravitational_energy_j"] {
+                let value = number(flow, key)?;
+                if flow[key] != initial["exchange"][key]
+                    || (key == "initial_kinetic_energy_j" && value < 0.)
+                    || (initial_mass == 0. && value != 0.)
+                {
+                    return Err(fail());
+                }
+            }
+            let incoming_potential = number(flow, "incoming_gravitational_energy_j")?;
+            if incoming == previous_incoming
+                && (incoming_energy != previous_incoming_energy
+                    || incoming_potential != previous_incoming_potential)
+            {
+                return Err(fail());
+            }
+            for key in ["initial_momentum_kg_m_s", "incoming_momentum_kg_m_s"] {
+                let vector = array(flow, key)?;
+                if vector.len() != 3
+                    || vector.iter().any(|v| {
+                        finite(v).is_none_or(|v| {
+                            (key == "initial_momentum_kg_m_s" && initial_mass == 0.
+                                || key == "incoming_momentum_kg_m_s" && index == 0)
+                                && v != 0.
+                        })
+                    })
+                    || (key == "initial_momentum_kg_m_s" && flow[key] != initial["exchange"][key])
+                {
+                    return Err(fail());
+                }
+                if key == "incoming_momentum_kg_m_s" {
+                    for (component, previous) in vector.iter().zip(&mut previous_incoming_momentum)
+                    {
+                        let current = finite(component).ok_or_else(fail)?;
+                        if incoming == previous_incoming && current != *previous {
+                            return Err(fail());
+                        }
+                        *previous = current;
+                    }
+                }
+            }
+            previous_incoming = incoming;
+            previous_outgoing = outgoing;
+            previous_incoming_energy = incoming_energy;
+            previous_incoming_potential = incoming_potential;
+            incoming
+        } else {
+            if !row["exchange"].is_null() {
+                return Err(fail());
+            }
+            0.
+        };
+        let available = initial_mass + incoming;
         if number(row, "substrate_and_attached_mass_kg")? != substrate
             || !near(
                 number(row, "initial_liquid_kg")?,
                 initial_mass,
                 initial_mass,
             )
-            || !near(remaining + evaporated, initial_mass, initial_mass)
-            || !near(total, substrate + remaining, substrate + initial_mass)
+            || !near(remaining + evaporated, available, available)
+            || !near(total, substrate + remaining, substrate + available)
             || !near(
                 number(row, "mass_balance_residual_kg")?,
                 total - substrate - remaining,
@@ -217,15 +324,12 @@ fn admit_mechanics(
             || energy < previous_energy
             || (index == 0 && (remaining != initial_mass || evaporated != 0. || energy != 0.))
             || (index != 0
-                && (!near(
-                    remaining,
-                    number(water, "remaining_liquid_kg")?,
-                    initial_mass,
-                ) || !near(
-                    evaporated,
-                    number(water, "evaporated_liquid_kg")?,
-                    initial_mass,
-                )))
+                && (!near(remaining, number(water, "remaining_liquid_kg")?, available)
+                    || !near(
+                        evaporated,
+                        number(water, "evaporated_liquid_kg")?,
+                        available,
+                    )))
         {
             return Err(fail());
         }

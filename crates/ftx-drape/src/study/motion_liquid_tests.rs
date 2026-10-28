@@ -24,6 +24,15 @@ impl PartFrames for Form {
 
 #[test]
 fn late_evaporation_budget_failure_restores_whole_solver_and_replays_identically() {
+    rollback_after_liquid_transfer(false);
+}
+
+#[test]
+fn late_supply_budget_failure_rolls_back_liquid_and_attached_mass_together() {
+    rollback_after_liquid_transfer(true);
+}
+
+fn rollback_after_liquid_transfer(exchange: bool) {
     let mut raw: Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
     ))
@@ -35,6 +44,15 @@ fn late_evaporation_budget_failure_restores_whole_solver_and_replays_identically
         raw["fabric"]["material"]["record"]["properties"][key] = json!({
             "value":value,"unit":unit,"source":"test","evidence":"estimate",
             "method":"Synthetic rollback case; not measured textile data"});
+    }
+    if exchange {
+        raw["attached_mass"] = json!({"schema":"ftx-attached-mass/1","groups":[{
+            "extra":{"id":"synthetic-closure","mass":{"value":0.0003,"unit":"kg",
+                "evidence":"estimate","source":"test","method":"Artificial retained accessory"},
+                "sources":{"test":{"reference":"test:incoming-water-trim","accessed_on":"2026-10-28",
+                    "note":"Synthetic mass only; no attachment strength claim"}},"allow_estimates":true},
+            "targets":[{"instance":"band","vertex":"a","fraction":0.25},
+                {"instance":"band","vertex":"b","fraction":0.75}]}]});
     }
     let selection: Selection = serde_json::from_value(raw["fabric"]["material"].clone()).unwrap();
     let material = Catalog::builtin().unwrap().resolve(&selection).unwrap();
@@ -73,7 +91,7 @@ fn late_evaporation_budget_failure_restores_whole_solver_and_replays_identically
     let original = run.scene.solver.clone();
     let original_debug = format!("{original:?}");
     let material_report_sha256 = sha256_hex(&serde_json::to_vec(&run.report["material"]).unwrap());
-    let request: Request = serde_json::from_value(json!({
+    let mut request: Request = serde_json::from_value(json!({
         "schema":"ftx-drape-motion/1",
         "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.},
             {"time_s":0.004,"arm_abduction_deg":36.}],
@@ -115,6 +133,27 @@ fn late_evaporation_budget_failure_restores_whole_solver_and_replays_identically
                 "method":"Whole-solver transactional replay",
                 "qualification":"Exact synthetic membrane, bending and contact laws retained over the complete thermal domain"}}}))
     .unwrap();
+    if exchange {
+        let heat = request.transient_surface.as_mut().unwrap();
+        let q = heat.mechanical_coupling.as_mut().unwrap();
+        q.schema = "ftx-coupled-liquid-mechanics/1".into();
+        q.model = "co_moving_mass_exchange_frozen_mechanics/1".into();
+        q.qualification = "Exact synthetic mechanics with co-moving incoming/outgoing flow over the declared domain".into();
+        let mut water = serde_json::to_value(heat.surface_water.as_ref().unwrap()).unwrap();
+        water["schema"] = json!("ftx-textile-surface-water/2");
+        water
+            .as_object_mut()
+            .unwrap()
+            .remove("replenishment_kg_m2_s");
+        water["bindings"]["band"]["initial_liquid_kg_m2"] = json!(0.);
+        water["latent_heat_j_kg"] = json!(2500000.);
+        water["supply"] = json!({"schema":"ftx-textile-liquid-supply/1",
+            "bindings":{"band":{"rate_kg_m2_s":[10.,10.],"temperature_c":[15.,15.]}},
+            "source":{"reference":"test:rollback-liquid-feed","accessed_on":"2026-10-28",
+                "note":"Synthetic numerical delivery, not a measured wearer flux"},
+            "evidence":"estimate","allow_estimates":true,"method":"Prescribed co-moving feed"});
+        heat.surface_water = Some(serde_json::from_value(water).unwrap());
+    }
     let endpoints: Vec<Vec<_>> = [0.0001, 0.0002]
         .into_iter()
         .map(|z| vertices.iter().map(|p| *p + Vec3::new(0., 0., z)).collect())
@@ -134,6 +173,28 @@ fn late_evaporation_budget_failure_restores_whole_solver_and_replays_identically
     .unwrap();
     let complete_debug = format!("{:?}", run.scene.solver);
     assert_ne!(run.scene.solver.x, original.x);
+    if exchange {
+        let old = original.model.attached_mass_report().unwrap().unwrap();
+        let current = run
+            .scene
+            .solver
+            .model
+            .attached_mass_report()
+            .unwrap()
+            .unwrap();
+        assert_eq!(old.input_sha256, current.input_sha256);
+        assert_eq!(old.cloth_mass_kg, current.cloth_mass_kg);
+        assert_eq!(old.attached_mass_kg, current.attached_mass_kg);
+        assert_eq!(current.evaporating_liquid_mass_kg, None);
+        let remaining = complete["liquid_mechanics"]["remaining_liquid_mass_kg"]
+            .as_f64()
+            .unwrap();
+        assert_eq!(current.exchanging_liquid_mass_kg, Some(remaining));
+        assert!(remaining > 0.);
+        assert!(
+            (current.total_inertial_mass_kg - old.total_inertial_mass_kg - remaining).abs() < 1e-15
+        );
+    }
     let thermal = &complete["transient_surface"]["result"];
     let trace = thermal["trace"].as_array().unwrap();
     let first_interval: Vec<_> = trace.iter().filter(|r| r["interval_index"] == 0).collect();

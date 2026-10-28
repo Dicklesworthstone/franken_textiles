@@ -506,19 +506,30 @@ Motion heat objectives use <code>transient_surface_</code> or <code>transient_co
 Use <code>min_sample_temperature_c</code> or <code>max_sample_temperature_c</code> for extrema across the initial state and retained sample endpoints;
 these differ from the final endpoint temperature and are not continuous-time bounds.
 Select minimize or maximize explicitly: signed energy can reverse with the environment. Internal sources and boundary exchange contribute separately to stored heat.
-No two-way thermomechanical, body self-intersection, seated/squat or empirical ride-up claim is made.</p>
+The source-qualified liquid coupling below updates inertia without inferring wet material laws.
+Body self-intersection, seated/squat and empirical ride-up qualification remain separate requirements.</p>
 <p class="note">Optional <code>motion.transient_surface.surface_water</code> enables source-qualified initial free-liquid
 evaporation and temperature feedback on the textile. The <code>ftx-textile-surface-water/1</code> request declares exact
 instance/material bindings and initial loadings, liquid heat capacity and latent heat, a bounded pressure–temperature table,
 ambient pressures and film resistances. Its independent source must qualify the fixed dry thermal and vapor observations
 throughout that domain. Replenishment is explicitly zero. The result separates remaining water, latent cooling, vapor sensible
-export and liquid storage; it preserves dryout events and refuses condensation or extrapolation. The liquid is thermal-only,
-with no added mechanical mass, inferred sorption or body sweat. Coupled histories can qualify existing nominal temperature
+export and liquid storage; it preserves dryout events and refuses condensation or extrapolation. Without an explicit
+mechanical qualification the liquid is thermal-only. No sorption or body sweat is inferred. Coupled histories can qualify existing nominal temperature
 and energy objectives after complete source, geometry, water and energy admission. Add
 <code>textile_water_evaporated_mass_kg</code>, <code>textile_water_remaining_mass_kg</code> or
 <code>textile_water_latent_energy_j</code> as nominal objectives or inclusive constraints to compare the textile's own water.
 These quantities are separate from body-reservoir water. Missing material qualification, inconsistent ledgers and incomplete
 motion exclude the affected alternative; source-reported uncertainty ranges are not inferred.</p>
+<p class="note">Optional <code>motion.transient_surface.mechanical_coupling</code> connects that exact liquid inventory
+to cloth inertia and gravity. The original <code>ftx-evaporating-liquid-mechanics/1</code> qualification supports initial-only
+evaporation. Use <code>ftx-coupled-liquid-mechanics/1</code> with
+<code>co_moving_mass_exchange_frozen_mechanics/1</code> to include independently qualified supply and condensation.
+Both require the complete material/interface report hash and every instance's source-qualified loading and temperature domains.
+Initial water is admitted co-moving after the dry drape. Each accepted heat/liquid interval updates the next mechanical step;
+refine the mechanical time step to assess this first-order model. Incoming and outgoing water share the local cloth velocity,
+with separate momentum, kinetic and signed gravitational transfers; those energies are not latent or sensible heat.
+Late source or thermal failure refuses the coupled motion. Drainage, relative flow impact, pinned cloth coordinates and
+inferred wet constitutive changes remain unsupported.</p>
 <p class="note">For serial production handling, provide <code>production.handling</code> with exact machine and
 process qualification locks, independent timing evidence, initial loading, final unloading and every directed
 operation transition for the same garment or a different garment. Select ordering objective

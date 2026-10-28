@@ -140,14 +140,29 @@ refuses coupled motion and restores the pre-admission solver; it cannot publish 
 Native/portable named-case studies and comparison admission preserve exact source, initial/final
 inventory and every accepted transfer, with bulk mechanical energy separate from thermal enthalpy.
 See `docs/textile-surface-water.md`, `tests/material_scenario/liquid_mass.rs`, the private
-late-failure rollback test and the CLI accepted-body surface-water workflow. Supply, condensation,
-drainage and measured wet-garment qualification keep the parent task open.
+late-failure rollback test and the CLI accepted-body surface-water workflow.
+
+The separate `ftx-coupled-liquid-mechanics/1` / `co_moving_mass_exchange_frozen_mechanics/1`
+qualification extends the SAME frozen binding and accepted-step seam to water `/1`, `/2` and `/3`.
+Exact thermal supplied/condensed/evaporated triangle increments update reference-owned lumped
+inertia and gravity for the next solve. Both incoming and outgoing mean velocity equal local
+accepted cloth velocity; no impulse from an unspecified jet, rain or vapor speed is inferred.
+Per-triangle balance, complete source/interface invariance, domain containment, unconstrained DOFs,
+attachment integrity and representable positive transfers are required before atomic acceptance.
+`exchange` receipts add initial and incoming momentum, bulk kinetic and signed gravitational
+energy to the existing outgoing ledger. Dry cloth and accessory receipts remain unchanged, with
+`exchanging_liquid_mass_kg` separately accounting for water. Full-path failures restore cloth,
+thermal/water state, material histories and numerical caches together. Tests cover growing-mass
+analytic convergence, simultaneous nonuniform flow, next-substep feedback, condensation/re-evaporation,
+late failure with attached trim, and actual native/portable named-case objective admission.
+Drainage, relative flow velocity, noninvariant wet laws and measured wet-garment qualification
+remain outside this bounded coupling.
 
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
 and conservative Frame/remap APIs. Time-zero temperatures and spatially uniform interval films are
 explicit. Heat storage follows reference mass; changing coverage preserves covered/exposed material
-enthalpy, with remap residual separated from physical heat. Without the explicit evaporation
+enthalpy, with remap residual separated from physical heat. Without the explicit liquid
 mechanical coupling above, thermal failures preserve complete mechanics and other consumers.
 Complete histories retain time/geometry/source identities and final
 fields; coverage includes a restorable checkpoint. Per-history/session work is bounded. Prescribed
@@ -595,7 +610,7 @@ receipts retain initial/remaining/evaporated water, dryout counts and signed mas
 Any late domain, arithmetic or work-budget failure rolls back the whole accepted heat interval.
 Replenishment must be explicitly zero. Raw temperature-domain departure and condensation refuse;
 there is no sorption, wicking, wet-property inference, body-water transfer or empirical validation.
-Added mechanical mass requires the separate evaporation coupling above. Explicit mass transfer needs time/space
+Added mechanical mass requires the separate liquid coupling above. Explicit mass transfer needs time/space
 refinement; numerical conservation alone does not establish accuracy. Nominal comparison admission
 independently checks this complete mass/energy ownership through canonical material and Ret replay;
 thermal and water uncertainty bounds remain unsupported. Native/portable scenario JSON carries the
@@ -620,8 +635,9 @@ Supply shares complete accepted-interval rollback with liquid, heat, source work
 Analytic tests cover hot/cold feed, interval changes, dryout/rewetting, source/domain refusal,
 reference invariance, time refinement and late overflow rollback; a moving sewn-garment regression
 checks actual reference-area delivery, Maxwell coexistence, unchanged mechanics and exact replay.
-No body transfer, absorption, capillary transport, inferred wet-property law, mechanical liquid mass
-or empirical fabric/comfort claim is supplied by this boundary condition.
+No body transfer, absorption, capillary transport, inferred wet-property law or empirical
+fabric/comfort claim is supplied by this boundary condition. Mechanical liquid mass requires the
+separately qualified incoming/outgoing coupling above.
 
 **Source-qualified condensation and re-evaporation** (`study::heat::surface_water`, `ftx-vc2`).
 Version 3 independently qualifies reverse use of the locked canonical Ret, wet/dry phase transfer,
@@ -631,7 +647,8 @@ pressure exceeds the film pressure. The same implicit solver adds latent release
 sensible mixing, then can re-evaporate that inventory after a boundary reversal. Condensed mass,
 incoming vapor sensible energy and released latent energy remain separate from liquid supply and
 evaporative removal. Maximum-loading/domain failure rolls back the complete accepted interval;
-there is no drainage, source default, sorption, wet mechanical mass or whole-layer/wearer claim.
+there is no drainage, source default, sorption or whole-layer/wearer claim. Mechanical mass uses
+only the separate qualified incoming/outgoing coupling above.
 Comparison admission checks the complete source/material/patch inventory and reconstructs incoming
 enthalpy from each interval's condensed mass and declared vapor temperature. Existing v1/v2
 positive-only semantics remain unchanged. Analytic warming, dry/wet reversals, reference-area

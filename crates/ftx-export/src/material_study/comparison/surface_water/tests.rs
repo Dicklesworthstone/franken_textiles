@@ -699,6 +699,158 @@ fn condensing_case() -> (Alternative, Value, Value, Value) {
     (a, d, s, m)
 }
 
+fn exchanging_case(condensation: bool) -> (Alternative, Value, Value, Value) {
+    let (a, mut d, mut s, mut m) = if condensation {
+        condensing_case()
+    } else {
+        supplied_case()
+    };
+    let (_, _, _, prototype) = coupled_case();
+    let h = &mut m["transient_surface"]["result"];
+    let mut q = prototype["liquid_mechanics"]["qualification"].clone();
+    q["schema"] = json!("ftx-coupled-liquid-mechanics/1");
+    q["model"] = json!("co_moving_mass_exchange_frozen_mechanics/1");
+    for binding in q["bindings"].as_object_mut().unwrap().values_mut() {
+        binding["maximum_liquid_loading_kg_m2"] =
+            h["request"]["surface_water"]["maximum_liquid_loading_kg_m2"].clone();
+    }
+    s["drape"]["mass_kg"] = json!(0.0004);
+    let initial_mass = h["surface_water"]["initial_liquid_kg"].as_f64().unwrap();
+    let remaining = h["surface_water"]["remaining_liquid_kg"].as_f64().unwrap();
+    let evaporated = h["surface_water"]["evaporated_liquid_kg"].as_f64().unwrap();
+    let incoming = h["surface_water"]["supplied_liquid_kg"].as_f64().unwrap()
+        + if condensation {
+            h["surface_water"]["condensed_liquid_kg"].as_f64().unwrap()
+        } else {
+            0.
+        };
+    let mut initial = prototype["initial_sample"]["liquid_mechanics"].clone();
+    initial["schema"] = json!("ftx-coupled-liquid-mechanics-result/1");
+    initial["qualification"] = q.clone();
+    initial["exchange"] = json!({"incoming_mass_kg":0.,"outgoing_mass_kg":0.,
+        "initial_momentum_kg_m_s":[initial_mass,0.,0.],"initial_kinetic_energy_j":0.5*initial_mass,
+        "initial_gravitational_energy_j":3.*initial_mass,"incoming_momentum_kg_m_s":[0.,0.,0.],
+        "incoming_kinetic_energy_j":0.,"incoming_gravitational_energy_j":0.});
+    let mut final_report = initial.clone();
+    final_report["remaining_liquid_mass_kg"] = json!(remaining);
+    final_report["evaporated_liquid_mass_kg"] = json!(evaporated);
+    final_report["total_inertial_mass_kg"] = json!(0.0004 + remaining);
+    final_report["exported_momentum_kg_m_s"] = json!([evaporated, 0., 0.]);
+    final_report["exported_kinetic_energy_j"] = json!(0.5 * evaporated);
+    final_report["exported_gravitational_energy_j"] = json!(3. * evaporated);
+    final_report["exchange"]["incoming_mass_kg"] = json!(incoming);
+    final_report["exchange"]["outgoing_mass_kg"] = json!(evaporated);
+    final_report["exchange"]["incoming_momentum_kg_m_s"] = json!([incoming, 0., 0.]);
+    final_report["exchange"]["incoming_kinetic_energy_j"] = json!(0.5 * incoming);
+    final_report["exchange"]["incoming_gravitational_energy_j"] = json!(3. * incoming);
+    let mut summary = final_report.as_object().unwrap().clone();
+    for key in ["schema", "qualification", "scope"] {
+        summary.remove(key);
+    }
+    for (full, short) in [
+        ("initial_liquid_mass_kg", "initial_liquid_kg"),
+        ("remaining_liquid_mass_kg", "remaining_liquid_kg"),
+        ("evaporated_liquid_mass_kg", "evaporated_liquid_kg"),
+    ] {
+        let value = summary.remove(full).unwrap();
+        summary.insert(short.into(), value);
+    }
+    h["request"]["mechanical_coupling"] = q;
+    h["mechanical_coupling"] = final_report.clone();
+    h["trace"][0]["mechanical_coupling"] = Value::Object(summary);
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    m["initial_sample"]["liquid_mechanics"] = initial;
+    m["liquid_mechanics"] = final_report;
+    (a, d, s, m)
+}
+
+#[test]
+fn supplied_and_condensed_mechanical_mass_admit_the_same_independent_thermal_objectives() {
+    for condensation in [false, true] {
+        let (a, d, s, m) = exchanging_case(condensation);
+        assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+        let h = &m["transient_surface"]["result"];
+        let actual = admit(&a, &s, &m, h, &h["request"], false, &[3., 3.]).unwrap();
+        let (a, _, s, m) = if condensation {
+            condensing_case()
+        } else {
+            supplied_case()
+        };
+        let h = &m["transient_surface"]["result"];
+        let expected = admit(&a, &s, &m, h, &h["request"], false, &[3., 3.]).unwrap();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn missing_or_invented_incoming_transfer_cannot_enter_coupled_decisions() {
+    for fault in 0..6 {
+        let (a, d, s, mut m) = exchanging_case(true);
+        let (key, value) = match fault {
+            0 => ("incoming_mass_kg", json!(0.)),
+            1 => ("outgoing_mass_kg", json!(0.)),
+            2 => ("incoming_momentum_kg_m_s", json!([0., 0.])),
+            3 => ("incoming_kinetic_energy_j", json!(-1.)),
+            4 => ("initial_gravitational_energy_j", json!(1.)),
+            _ => ("incoming_gravitational_energy_j", Value::Null),
+        };
+        m["liquid_mechanics"]["exchange"][key] = value.clone();
+        let h = &mut m["transient_surface"]["result"];
+        h["mechanical_coupling"]["exchange"][key] = value.clone();
+        h["trace"][0]["mechanical_coupling"]["exchange"][key] = value;
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
+#[test]
+fn no_incoming_mass_cannot_carry_invented_momentum_or_bulk_energy() {
+    let (a, mut d, s, mut m) = coupled_case();
+    let mut q = m["liquid_mechanics"]["qualification"].clone();
+    q["schema"] = json!("ftx-coupled-liquid-mechanics/1");
+    q["model"] = json!("co_moving_mass_exchange_frozen_mechanics/1");
+    for path in [
+        "/initial_sample/liquid_mechanics",
+        "/liquid_mechanics",
+        "/transient_surface/result/mechanical_coupling",
+    ] {
+        let report = m.pointer_mut(path).unwrap();
+        report["schema"] = json!("ftx-coupled-liquid-mechanics-result/1");
+        report["qualification"] = q.clone();
+        report["exchange"] = json!({"incoming_mass_kg":0.,
+            "outgoing_mass_kg":report["evaporated_liquid_mass_kg"],
+            "initial_momentum_kg_m_s":[0.,0.,0.],"initial_kinetic_energy_j":0.,
+            "initial_gravitational_energy_j":0.,"incoming_momentum_kg_m_s":[0.,0.,0.],
+            "incoming_kinetic_energy_j":0.,"incoming_gravitational_energy_j":0.});
+    }
+    let flow = m["liquid_mechanics"]["exchange"].clone();
+    let heat = &mut m["transient_surface"]["result"];
+    heat["request"]["mechanical_coupling"] = q;
+    heat["trace"][0]["mechanical_coupling"]["exchange"] = flow;
+    d["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+    for (key, value) in [
+        ("incoming_momentum_kg_m_s", json!([1., 0., 0.])),
+        ("incoming_kinetic_energy_j", json!(1.)),
+        ("incoming_gravitational_energy_j", json!(-1.)),
+    ] {
+        let mut changed = m.clone();
+        for path in [
+            "/liquid_mechanics/exchange",
+            "/transient_surface/result/mechanical_coupling/exchange",
+            "/transient_surface/result/trace/0/mechanical_coupling/exchange",
+        ] {
+            changed.pointer_mut(path).unwrap()[key] = value.clone();
+        }
+        assert!(
+            admit_heat(&a, &d, &s, &changed, Consumer::TransientSurface).is_err(),
+            "invented {key}"
+        );
+    }
+}
+
 #[test]
 fn condensation_admission_reconciles_each_mass_source_and_incoming_vapor_enthalpy() {
     let (a, d, s, m) = condensing_case();

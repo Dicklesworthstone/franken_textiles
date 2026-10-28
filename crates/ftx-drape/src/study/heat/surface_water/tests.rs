@@ -622,6 +622,33 @@ fn continuous_supply_survives_exact_dryout_and_rewets_an_empty_patch() {
 }
 
 #[test]
+fn mechanical_interval_flows_come_from_accepted_plans_after_prior_dryout() {
+    let mut history = supplied_fixture(0.015, 1., vec![0.01], vec![20.]);
+    history.water.as_mut().unwrap().begin_mechanical_interval();
+    advance(&mut history, 0.5, 1.).unwrap();
+    let water = history.water.as_ref().unwrap();
+    assert_eq!(water.remaining, vec![0.]);
+    let prior_evaporation = water.evaporated[0];
+    assert!(prior_evaporation > 0.);
+    let flow = water.mechanical_flow.as_ref().unwrap();
+    near(flow.incoming[0], 0.005);
+    near(flow.outgoing[0], 0.0125);
+
+    history.water.as_mut().unwrap().begin_mechanical_interval();
+    history
+        .advance(&geometry(0.5), 2., 0, 1, None, None, None)
+        .unwrap();
+    let water = history.water.as_ref().unwrap();
+    let flow = water.mechanical_flow.as_ref().unwrap();
+    assert_eq!(water.remaining, vec![0.]);
+    assert_eq!(flow.incoming, vec![0.005]);
+    assert_eq!(flow.outgoing, flow.incoming);
+    // Cumulative subtraction rounds differently; it must not invent a dry-mass loss.
+    assert_ne!(water.evaporated[0] - prior_evaporation, flow.outgoing[0]);
+    near(history.balance_error_j(), 0.);
+}
+
+#[test]
 fn interval_supply_uses_reference_area_and_preserves_sensible_reference_and_refinement() {
     let mut reference = supplied_fixture(0.05, 0.1, vec![0.01, 0.02], vec![40., 5.]);
     let mut shifted = reference.clone();

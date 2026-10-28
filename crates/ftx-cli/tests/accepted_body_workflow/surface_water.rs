@@ -190,11 +190,8 @@ fn replay(
     }
 }
 
-#[test]
-fn evaporating_mechanical_water_replays_in_native_portable_and_named_case_decisions() {
+fn qualify_mechanics(pattern: &str, study: &Value, single: &mut Value, exchange: bool) {
     use ftx_wasm::materials::scenario::on_model;
-
-    let (pattern, study, mut single) = inputs();
     let bytes = model_bytes_with_rig(true);
     let digest = sha256_hex(&bytes);
     let model =
@@ -206,7 +203,7 @@ fn evaporating_mechanical_water_replays_in_native_portable_and_named_case_decisi
         &on_model(
             &model,
             &digest,
-            &pattern,
+            pattern,
             &study.to_string(),
             &single.to_string(),
             &body.to_string(),
@@ -220,16 +217,22 @@ fn evaporating_mechanical_water_replays_in_native_portable_and_named_case_decisi
     assert!(material.is_object());
     let heat = &mut single["motion"]["transient_surface"];
     heat["mechanical_coupling"] = json!({
-        "schema":"ftx-evaporating-liquid-mechanics/1",
-        "model":"co_moving_evaporation_frozen_mechanics/1",
+        "schema":if exchange { "ftx-coupled-liquid-mechanics/1" } else { "ftx-evaporating-liquid-mechanics/1" },
+        "model":if exchange { "co_moving_mass_exchange_frozen_mechanics/1" } else { "co_moving_evaporation_frozen_mechanics/1" },
         "material_report_sha256":sha256_hex(&serde_json::to_vec(material).unwrap()),
         "bindings":{"band":{"material_sha256":heat["surface_water"]["bindings"]["band"]["material_sha256"],
-            "maximum_liquid_loading_kg_m2":1e-5,"temperature_range_c":[-20.,80.]}},
+            "maximum_liquid_loading_kg_m2":heat["surface_water"]["maximum_liquid_loading_kg_m2"],"temperature_range_c":[-20.,80.]}},
         "source":{"reference":"test:selected-body-wet-mechanics","accessed_on":"2026-10-28",
             "note":"Synthetic invariant material and interface behavior, no empirical claim"},
         "evidence":"estimate","allow_estimates":true,"method":"Native/portable coupled replay",
-        "qualification":"Exact artificial mechanical laws retained over the complete declared wet thermal domain with co-moving vapor loss"
+        "qualification":if exchange { "Exact artificial mechanical laws retained over the complete declared wet thermal domain with co-moving incoming and outgoing mass" } else { "Exact artificial mechanical laws retained over the complete declared wet thermal domain with co-moving vapor loss" }
     });
+}
+
+#[test]
+fn evaporating_mechanical_water_replays_in_native_portable_and_named_case_decisions() {
+    let (pattern, study, mut single) = inputs();
+    qualify_mechanics(&pattern, &study, &mut single, false);
     replay(
         &pattern,
         &study,
@@ -265,6 +268,111 @@ fn evaporating_mechanical_water_replays_in_native_portable_and_named_case_decisi
             );
         },
     );
+}
+
+#[test]
+fn incoming_mechanical_water_replays_actual_native_portable_and_named_case_decisions() {
+    for condensation in [false, true] {
+        let (pattern, mut study, mut single) = inputs();
+        single["motion"]["keyframes"] = json!([
+            {"time_s":0.0005,"arm_abduction_deg":35.},
+            {"time_s":0.001,"arm_abduction_deg":35.}]);
+        let heat = &mut single["motion"]["transient_surface"];
+        heat["boundaries"] = json!([heat["boundaries"][0], heat["boundaries"][0]]);
+        let water = &mut heat["surface_water"];
+        water["schema"] = json!(if condensation {
+            "ftx-textile-surface-water/3"
+        } else {
+            "ftx-textile-surface-water/2"
+        });
+        water
+            .as_object_mut()
+            .unwrap()
+            .remove("replenishment_kg_m2_s");
+        water["bindings"]["band"]["initial_liquid_kg_m2"] = json!(0.);
+        water["maximum_liquid_loading_kg_m2"] = json!(0.2);
+        water["qualification"] =
+            json!("Synthetic invariant thermal/vapor laws over [-20,80] C and [0,0.2] kg/m2");
+        water["outside_vapor_pressure_pa"] = json!(if condensation {
+            [6000., 1000.]
+        } else {
+            [1000., 1000.]
+        });
+        water["supply"] = json!({"schema":"ftx-textile-liquid-supply/1",
+            "bindings":{"band":{"rate_kg_m2_s":if condensation { [0.,0.] } else { [100.,100.] },
+                "temperature_c":[20.,20.]}},
+            "source":{"reference":"test:mechanical-water-delivery","accessed_on":"2026-10-28",
+                "note":"Artificial feed for numerical feedback; not measured weather or wearer data"},
+            "evidence":"estimate","allow_estimates":true,"method":"Prescribed co-moving supply"});
+        if condensation {
+            water["latent_heat_j_kg"] = json!(10.);
+            water["condensation"] = json!({"schema":"ftx-textile-condensation/1","vapor_temperature_c":[40.,10.],
+                "source":{"reference":"test:mechanical-condensation","accessed_on":"2026-10-28",
+                    "note":"Artificial reverse Ret and low latent heat; no empirical textile claim"},
+                "evidence":"estimate","allow_estimates":true,"method":"Two-interval phase transfer",
+                "qualification":"Synthetic reverse Ret and wet/dry phase closure with constant latent plus cp_liquid effective sensible enthalpy over the full declared domain"});
+        }
+        let mass_metric = if condensation {
+            "textile_water_condensed_mass_kg"
+        } else {
+            "textile_water_supplied_mass_kg"
+        };
+        study["comparison"]["objectives"] = json!([
+            {"metric":mass_metric,"direction":"minimize"},
+            {"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}]);
+        study["comparison"]["constraints"][0] =
+            json!({"metric":"textile_water_remaining_mass_kg","minimum":0.});
+        qualify_mechanics(&pattern, &study, &mut single, true);
+        replay(
+            &pattern,
+            &study,
+            single,
+            if condensation {
+                "FTX_CONDENSING_MECHANICS_REPLAY"
+            } else {
+                "FTX_MECHANICAL_WATER_REPLAY"
+            },
+            |report| {
+                let simulation =
+                    &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
+                let motion = &simulation["motion"]["result"];
+                let heat = &motion["transient_surface"]["result"];
+                let mechanics = &motion["liquid_mechanics"];
+                assert_eq!(mechanics["schema"], "ftx-coupled-liquid-mechanics-result/1");
+                assert_eq!(mechanics, &heat["mechanical_coupling"]);
+                let water = &heat["surface_water"];
+                let supplied = water["supplied_liquid_kg"].as_f64().unwrap();
+                let condensed = if condensation {
+                    water["condensed_liquid_kg"].as_f64().unwrap()
+                } else {
+                    0.
+                };
+                let incoming = mechanics["exchange"]["incoming_mass_kg"].as_f64().unwrap();
+                assert!(incoming > 0.);
+                assert!((incoming - supplied - condensed).abs() < 1e-14);
+                assert!(
+                    (mechanics["remaining_liquid_mass_kg"].as_f64().unwrap()
+                        - water["remaining_liquid_kg"].as_f64().unwrap())
+                    .abs()
+                        < 1e-14
+                );
+                assert!(
+                    mechanics["exchange"]["incoming_kinetic_energy_j"]
+                        .as_f64()
+                        .unwrap()
+                        > 0.
+                );
+                let readings =
+                    &keyed(&report["comparison"]["alternatives"], "qualified")["readings"];
+                assert!(readings[mass_metric]["value"].as_f64().unwrap() > 0.);
+                assert_eq!(
+                    keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"]
+                        ["status"],
+                    "refused"
+                );
+            },
+        );
+    }
 }
 
 #[test]

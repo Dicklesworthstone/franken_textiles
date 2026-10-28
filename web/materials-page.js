@@ -549,28 +549,47 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         "The combined balance includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, " +
         "against boundary energy plus qualified material heat" + (supplied ? " and incoming liquid sensible energy. Loading beyond the qualified cap refuses the interval. " : ". The initial-only model has zero replenishment. ") +
         (condensing ? "Independently qualified reverse vapor transfer can condense on dry or wet cloth and later re-evaporate. Condensation latent release and incoming vapor sensible enthalpy are separate energy inputs; the effective enthalpy convention remains explicit in the source policy. " : "") +
-        (h.mechanical_coupling ? "Qualified evaporation updates cloth inertia and gravity after every accepted interval; co-moving vapor removes its own momentum without accelerating the remaining cloth. " :
+        (h.mechanical_coupling?.exchange ? "Qualified supplied liquid, condensed vapor and evaporation update cloth inertia and gravity after every accepted interval. " :
+          h.mechanical_coupling ? "Qualified evaporation updates cloth inertia and gravity after every accepted interval; co-moving vapor removes its own momentum without accelerating the remaining cloth. " :
           "The liquid adds no mechanical water mass. ") +
         "It does not infer absorbed moisture, wicking, body sweat or wet material properties. Comparison admission checks the complete liquid and vapor ledger, " +
         "including exact material bindings and canonical vapor paths, before temperature, energy or textile-water objectives can qualify.";
       parent.append(scope);
       detail(parent, `${key}: textile liquid source, exact patches and canonical vapor paths (display only)`, water);
       if (h.mechanical_coupling) {
-        const m = h.mechanical_coupling;
-        const inertia = table(parent, `${key}: evaporation changes moving cloth mass`,
+        const m = h.mechanical_coupling, exchange = m.exchange;
+        const inertia = table(parent, `${key}: ${exchange ? "liquid exchange" : "evaporation"} changes moving cloth mass`,
           ["Dry cloth + accessories (kg)", "Initial water (kg)", "Remaining water (kg)", "Current inertial mass (kg)", "Mass residual (kg)"]);
         cells(inertia, [metric(m.substrate_and_attached_mass_kg), metric(m.initial_liquid_mass_kg),
           metric(m.remaining_liquid_mass_kg), metric(m.total_inertial_mass_kg), metric(m.mass_balance_residual_kg)]);
-        const transfer = table(parent, `${key}: mechanical energy carried away by vapor`,
-          ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)", "Kinetic transfer residual (J)"]);
-        cells(transfer, [Array.isArray(m.exported_momentum_kg_m_s) ? m.exported_momentum_kg_m_s.map(metric).join(", ") : "Unknown",
-          metric(m.exported_kinetic_energy_j), metric(m.exported_gravitational_energy_j), metric(m.transfer_kinetic_residual_j)]);
+        const vector = value => Array.isArray(value) ? value.map(metric).join(", ") : "Unknown";
+        if (exchange) {
+          const transfer = table(parent, `${key}: co-moving liquid transfer — separate from thermal energy`,
+            ["Transfer", "Mass (kg)", "Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)"]);
+          cells(transfer, ["Initial admission", metric(m.initial_liquid_mass_kg), vector(exchange.initial_momentum_kg_m_s),
+            metric(exchange.initial_kinetic_energy_j), metric(exchange.initial_gravitational_energy_j)]);
+          cells(transfer, ["Incoming liquid and condensed vapor", metric(exchange.incoming_mass_kg), vector(exchange.incoming_momentum_kg_m_s),
+            metric(exchange.incoming_kinetic_energy_j), metric(exchange.incoming_gravitational_energy_j)]);
+          cells(transfer, ["Outgoing vapor", metric(exchange.outgoing_mass_kg), vector(m.exported_momentum_kg_m_s),
+            metric(m.exported_kinetic_energy_j), metric(m.exported_gravitational_energy_j)]);
+          const residual = table(parent, `${key}: liquid exchange momentum and energy residuals`,
+            ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)"]);
+          cells(residual, [vector(m.transfer_momentum_residual_kg_m_s), metric(m.transfer_kinetic_residual_j),
+            metric(m.transfer_gravitational_residual_j)]);
+        } else {
+          const transfer = table(parent, `${key}: mechanical energy carried away by vapor`,
+            ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)", "Kinetic transfer residual (J)"]);
+          cells(transfer, [vector(m.exported_momentum_kg_m_s), metric(m.exported_kinetic_energy_j),
+            metric(m.exported_gravitational_energy_j), metric(m.transfer_kinetic_residual_j)]);
+        }
         const couplingScope = document.createElement("p");
-        couplingScope.textContent = "Initial liquid is added co-moving after the dry drape; it is not a wet equilibrium. Each mechanical step uses its initial water mass, then evaporation updates the next step. " +
-          "Refine the mechanical time step to assess this first-order coupling. The thermal latent/sensible ledger remains separate from the bulk mechanical energy carried away. " +
-          "A coupled heat or source-domain failure refuses the motion. Supply, condensation, drainage and inferred wet properties are unsupported in this mode.";
+        couplingScope.textContent = "Initial liquid is added co-moving after the dry drape; it is not a wet equilibrium. Each mechanical step uses its starting water mass, then accepted heat and liquid exchange update the next step. " +
+          "Refine the mechanical time step to assess this first-order coupling. The thermal latent/sensible ledger remains separate from transferred bulk mechanical energy. " +
+          (exchange ? "Incoming liquid, condensed vapor and outgoing vapor share the local endpoint cloth velocity under the independent source qualification. Equal incoming and outgoing mass retain both transfer ledgers. Signed gravitational energies keep the declared world frame. These residuals check mass transfer, not the complete motion energy balance. " :
+            "Supply and condensation are unsupported in this evaporation-only mode. ") +
+          "A coupled heat or source-domain failure refuses the motion. Drainage, relative flow impact and inferred wet material properties remain unsupported.";
         parent.append(couplingScope);
-        detail(parent, `${key}: evaporation mechanics qualification and complete transfer ledger (display only)`, m);
+        detail(parent, `${key}: ${exchange ? "liquid exchange" : "evaporation"} mechanics qualification and complete transfer ledger (display only)`, m);
       }
     }
     const channels = [
@@ -602,13 +621,15 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         (name === "transient_coverage" ? "Source heat follows covered and exposed reference material; bare body receives none. " : "") +
         (channels.some(([field]) => field === "bending_plastic_dissipation_heat") ?
           "Bending work uses each source triangle's reference area; overlapping reconstruction stencils do not multiply deposited heat. " : "") +
-        "Temperatures do not feed back into mechanics. " +
+        (h.mechanical_coupling ? "Temperature controls qualified vapor exchange, which updates mechanical mass; the material laws remain frozen within their qualified domains. " : "Temperatures do not feed back into mechanics. ") +
         "The temperature-history report retains the material fractions and their source evidence.";
       parent.append(scope);
     }
   }
   const note = document.createElement("p");
-  note.textContent = "These are separate one-way thermal models with declared initial temperatures and interval films. Do not add their energy totals. " +
+  note.textContent = (consumers.some(([name]) => available(result?.[name])?.mechanical_coupling) ?
+    "Only the explicitly qualified liquid domain feeds mechanical mass; the thermal domains retain separate initial temperatures, interval films and energy totals. Do not add their energy totals. " :
+    "These are separate one-way thermal models with declared initial temperatures and interval films. Do not add their energy totals. ") +
     "Remapping transfers stored heat without elapsed time; its numerical residual is not environmental heat. Bare body paths store no cloth energy. " +
     "Geometry uses accepted motion samples; smaller thermal substeps do not refine the body motion. Small energy residuals are not empirical accuracy.";
   parent.append(note);
@@ -3124,4 +3145,3 @@ $("clearCoverageBridges").onclick = () => { $("coverageBridges").value = ""; inv
 $("coverageBridges").addEventListener("change", () => invalidate(["coverage"]));
 window.addEventListener("pagehide", () => { ++epoch; worker?.terminate(); clear(["bind", ...operations]); });
 start();
-

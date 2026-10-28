@@ -1,6 +1,7 @@
-//! Evaporation-only reference-area liquid inertia with explicitly qualified frozen mechanics.
-//! Mass leaves at the accepted endpoint velocity: no rocket impulse, incoming liquid, drainage,
-//! wet-law extrapolation or inferred conversion of kinetic energy into heat is introduced.
+//! Reference-area liquid inertia with explicitly qualified frozen mechanics.
+//! Public evaporation-only binding remains strict. Accepted-step thermal histories may separately
+//! qualify incoming liquid and condensed vapor; both directions use the local endpoint velocity.
+//! No recoil, drainage, wet-law extrapolation or conversion of bulk kinetic energy to heat is inferred.
 
 use std::collections::BTreeMap;
 
@@ -32,13 +33,13 @@ pub struct MaterialDomain {
     pub temperature_range_c: [f64; 2],
 }
 
-/// Source permission to retain the exact material and interface laws throughout evaporation.
+/// Source permission to retain the exact material and interface laws throughout liquid exchange.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Qualification {
-    /// Must be `ftx-evaporating-liquid-mechanics/1`.
+    /// `ftx-evaporating-liquid-mechanics/1`, or `ftx-coupled-liquid-mechanics/1` for thermal exchange.
     pub schema: String,
-    /// Must be `co_moving_evaporation_frozen_mechanics/1`.
+    /// `co_moving_evaporation_frozen_mechanics/1`, or `co_moving_mass_exchange_frozen_mechanics/1`.
     pub model: String,
     /// SHA-256 of the complete ordinary material report, including unlike-sheet interfaces.
     pub material_report_sha256: String,
@@ -53,7 +54,7 @@ pub struct Qualification {
     pub allow_estimates: bool,
     /// Measurement or modeling method for this closure.
     pub method: String,
-    /// Basis for co-moving mass loss and invariant membrane, bending, contact and history laws.
+    /// Basis for co-moving mass transfer and invariant membrane, bending, contact and history laws.
     pub qualification: String,
 }
 
@@ -63,15 +64,35 @@ impl Qualification {
     /// # Errors
     /// Unsupported closure, incomplete source/domain, nonphysical bounds or missing estimate consent.
     pub fn validate(&self) -> Result<(), Refusal> {
+        if self.schema != "ftx-evaporating-liquid-mechanics/1"
+            || self.model != "co_moving_evaporation_frozen_mechanics/1"
+        {
+            return Err(invalid(
+                "unsupported evaporation-only mechanical qualification",
+            ));
+        }
+        self.validate_fields()
+    }
+
+    pub(crate) fn validate_exchange(&self) -> Result<(), Refusal> {
+        if self.schema != "ftx-coupled-liquid-mechanics/1"
+            || self.model != "co_moving_mass_exchange_frozen_mechanics/1"
+        {
+            return Err(invalid(
+                "unsupported co-moving exchange mechanical qualification",
+            ));
+        }
+        self.validate_fields()
+    }
+
+    fn validate_fields(&self) -> Result<(), Refusal> {
         let text = |s: &str| !s.trim().is_empty() && s.len() <= 4096;
         let hash = |s: &str| {
             s.len() == 64
                 && s.bytes()
                     .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
         };
-        if self.schema != "ftx-evaporating-liquid-mechanics/1"
-            || self.model != "co_moving_evaporation_frozen_mechanics/1"
-            || !hash(&self.material_report_sha256)
+        if !hash(&self.material_report_sha256)
             || self.bindings.is_empty()
             || self.bindings.len() > 65_536
             || !text(&self.source.reference)
@@ -103,7 +124,7 @@ impl Qualification {
 /// Accepted mechanical liquid ledger; thermal sensible and latent energies remain separate.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `ftx-evaporating-liquid-mechanics-result/1`.
+    /// `ftx-evaporating-liquid-mechanics-result/1` or `ftx-coupled-liquid-mechanics-result/1`.
     pub schema: &'static str,
     /// Exact independent qualification, retained for replay.
     pub qualification: Qualification,
@@ -113,7 +134,7 @@ pub struct Report {
     pub initial_liquid_mass_kg: f64,
     /// Current liquid in retained material triangles, kg.
     pub remaining_liquid_mass_kg: f64,
-    /// Sum of initial minus current liquid on the same triangles, kg.
+    /// Cumulative outgoing evaporated mass on the same triangles, kg.
     pub evaporated_liquid_mass_kg: f64,
     /// Sum of the actual current solver mass vector, kg.
     pub total_inertial_mass_kg: f64,
@@ -125,21 +146,46 @@ pub struct Report {
     pub exported_kinetic_energy_j: f64,
     /// Signed potential energy carried away, using -m g·x in the unchanged world frame, J.
     pub exported_gravitational_energy_j: f64,
-    /// Accumulated numerical residual of remaining-plus-exported transfer momentum, kg·m/s.
+    /// Accumulated numerical residual of new minus old minus incoming plus outgoing momentum.
     pub transfer_momentum_residual_kg_m_s: Vec3,
     /// Accumulated numerical residual of kinetic energy during mass transfer only, J.
     pub transfer_kinetic_residual_j: f64,
     /// Accumulated numerical residual of potential energy during mass transfer only, J.
     pub transfer_gravitational_residual_j: f64,
+    /// Additional incoming-flow ledger only for independently qualified bidirectional exchange.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exchange: Option<ExchangeReport>,
     /// Physical and numerical boundaries of this ledger.
     pub scope: &'static str,
+}
+
+/// Mechanical energy and momentum of co-moving admission and subsequent incoming liquid/vapor.
+/// The enclosing report retains outgoing transfer and the same reference-owned mass authority.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct ExchangeReport {
+    /// Cumulative incoming liquid plus condensed vapor mass after initialization, kg.
+    pub incoming_mass_kg: f64,
+    /// Cumulative evaporated mass after initialization, kg.
+    pub outgoing_mass_kg: f64,
+    /// Initial liquid momentum at post-drape admission, kg·m/s.
+    pub initial_momentum_kg_m_s: Vec3,
+    /// Initial admitted liquid kinetic energy, J.
+    pub initial_kinetic_energy_j: f64,
+    /// Initial admitted signed gravitational energy, J.
+    pub initial_gravitational_energy_j: f64,
+    /// Subsequent incoming momentum at accepted endpoints, kg·m/s.
+    pub incoming_momentum_kg_m_s: Vec3,
+    /// Subsequent incoming bulk kinetic energy, J, not heat.
+    pub incoming_kinetic_energy_j: f64,
+    /// Subsequent incoming signed gravitational energy, J.
+    pub incoming_gravitational_energy_j: f64,
 }
 
 impl Report {
     /// Compact accepted-step ledger without repeating the frozen source qualification.
     #[must_use]
     pub fn summary(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut value = serde_json::json!({
             "initial_liquid_kg": self.initial_liquid_mass_kg,
             "remaining_liquid_kg": self.remaining_liquid_mass_kg,
             "evaporated_liquid_kg": self.evaporated_liquid_mass_kg,
@@ -152,7 +198,11 @@ impl Report {
             "transfer_momentum_residual_kg_m_s": self.transfer_momentum_residual_kg_m_s,
             "transfer_kinetic_residual_j": self.transfer_kinetic_residual_j,
             "transfer_gravitational_residual_j": self.transfer_gravitational_residual_j,
-        })
+        });
+        if let Some(flow) = &self.exchange {
+            value["exchange"] = serde_json::json!(flow);
+        }
+        value
     }
 }
 
@@ -167,6 +217,7 @@ pub(crate) struct Binding {
     initial: Vec<f64>,
     remaining: Vec<f64>,
     report: Report,
+    exchange: bool,
 }
 
 impl Binding {
@@ -210,7 +261,7 @@ impl Binding {
             let [lo, hi] = domain.temperature_range_c;
             if !water.is_finite()
                 || water < 0.
-                || water > self.remaining[i]
+                || (!self.exchange && water > self.remaining[i])
                 || !maximum.is_finite()
                 || maximum <= 0.
                 || water > maximum
@@ -219,7 +270,7 @@ impl Binding {
                 || cells.iter().any(|t| !t.is_finite() || *t < lo || *t > hi)
             {
                 return Err(invalid(
-                    "liquid may only evaporate within its source-qualified loading and temperature domain",
+                    "liquid transfer must remain within its source-qualified loading and temperature domain",
                 ));
             }
             let share = water / 3.;
@@ -239,12 +290,16 @@ impl Binding {
     fn update_report(&mut self) -> Result<(), Refusal> {
         let r = &mut self.report;
         r.remaining_liquid_mass_kg = self.remaining.iter().sum();
-        r.evaporated_liquid_mass_kg = self
-            .initial
-            .iter()
-            .zip(&self.remaining)
-            .map(|(a, b)| a - b)
-            .sum();
+        r.evaporated_liquid_mass_kg = r.exchange.as_ref().map_or_else(
+            || {
+                self.initial
+                    .iter()
+                    .zip(&self.remaining)
+                    .map(|(a, b)| a - b)
+                    .sum()
+            },
+            |flow| flow.outgoing_mass_kg,
+        );
         r.total_inertial_mass_kg = self.expected_mass.iter().sum();
         r.mass_balance_residual_kg = r.total_inertial_mass_kg
             - r.substrate_and_attached_mass_kg
@@ -268,6 +323,24 @@ impl Binding {
                 "evaporating mechanical mass, momentum or energy ledger overflows",
             ));
         }
+        if let Some(flow) = &r.exchange
+            && (!flow.initial_momentum_kg_m_s.is_finite()
+                || !flow.incoming_momentum_kg_m_s.is_finite()
+                || [
+                    flow.incoming_mass_kg,
+                    flow.outgoing_mass_kg,
+                    flow.initial_kinetic_energy_j,
+                    flow.initial_gravitational_energy_j,
+                    flow.incoming_kinetic_energy_j,
+                    flow.incoming_gravitational_energy_j,
+                ]
+                .iter()
+                .any(|v| !v.is_finite()))
+        {
+            return Err(invalid(
+                "co-moving incoming mass, momentum or energy overflows",
+            ));
+        }
         Ok(())
     }
 }
@@ -285,6 +358,27 @@ pub fn bind(
     temperatures_c: &[Vec<f64>],
 ) -> Result<Report, Refusal> {
     qualification.validate()?;
+    bind_checked(run, qualification, initial_liquid_kg, temperatures_c, false)
+}
+
+/// Same complete source admission as evaporation, with separately authorized incoming flow.
+pub(crate) fn bind_exchange(
+    run: &mut DrapeRun,
+    qualification: &Qualification,
+    initial_liquid_kg: &[f64],
+    temperatures_c: &[Vec<f64>],
+) -> Result<Report, Refusal> {
+    qualification.validate_exchange()?;
+    bind_checked(run, qualification, initial_liquid_kg, temperatures_c, true)
+}
+
+fn bind_checked(
+    run: &mut DrapeRun,
+    qualification: &Qualification,
+    initial_liquid_kg: &[f64],
+    temperatures_c: &[Vec<f64>],
+    exchange: bool,
+) -> Result<Report, Refusal> {
     let material = &run.report["material"];
     if sha256_hex(&serde_json::to_vec(material).map_err(|e| invalid(e.to_string()))?)
         != qualification.material_report_sha256
@@ -369,12 +463,13 @@ pub fn bind(
             "original mechanical mass differs from source dry sheets and retained accessories",
         ));
     }
-    start(
+    start_with_exchange(
         solver,
         qualification.clone(),
         domains,
         initial_liquid_kg,
         temperatures_c,
+        exchange,
     )
 }
 
@@ -487,12 +582,24 @@ fn check_source_contact(
     )
 }
 
+#[cfg(test)]
 fn start(
     solver: &mut Solver,
     qualification: Qualification,
     domains: Vec<MaterialDomain>,
     initial: &[f64],
     temperatures: &[Vec<f64>],
+) -> Result<Report, Refusal> {
+    start_with_exchange(solver, qualification, domains, initial, temperatures, false)
+}
+
+fn start_with_exchange(
+    solver: &mut Solver,
+    qualification: Qualification,
+    domains: Vec<MaterialDomain>,
+    initial: &[f64],
+    temperatures: &[Vec<f64>],
+    exchange: bool,
 ) -> Result<Report, Refusal> {
     solver.model.check_attached_mass()?;
     if solver.liquid_mass.is_some()
@@ -513,6 +620,7 @@ fn start(
         return Err(invalid("initial liquid or substrate mass overflows"));
     }
     let mut binding = Binding {
+        exchange,
         original: solver.model.clone(),
         contact: solver.contact.as_ref().map(|c| c.frozen_policy()),
         gravity: solver.gravity,
@@ -522,7 +630,11 @@ fn start(
         initial: initial.to_vec(),
         remaining: initial.to_vec(),
         report: Report {
-            schema: "ftx-evaporating-liquid-mechanics-result/1",
+            schema: if exchange {
+                "ftx-coupled-liquid-mechanics-result/1"
+            } else {
+                "ftx-evaporating-liquid-mechanics-result/1"
+            },
             qualification,
             substrate_and_attached_mass_kg: substrate,
             initial_liquid_mass_kg: initial_total,
@@ -536,11 +648,23 @@ fn start(
             transfer_momentum_residual_kg_m_s: Vec3::ZERO,
             transfer_kinetic_residual_j: 0.,
             transfer_gravitational_residual_j: 0.,
+            exchange: exchange.then(ExchangeReport::default),
             scope: "Source-qualified frozen mechanics with co-moving evaporation only. Initial liquid is an authored post-drape state, not wet equilibrium. Endpoint mass removal preserves velocity and exports its momentum, kinetic and signed gravitational energy. No incoming flow, drainage, recoil, damage, mixing heat, constrained-DOF impulse, full time-integration energy conservation or empirical wet-garment claim.",
         },
     };
     binding.check(solver)?;
     binding.expected_mass = binding.admit(initial, temperatures)?;
+    if let Some(flow) = &mut binding.report.exchange {
+        for (element, &water) in binding.original.membranes.iter().zip(initial) {
+            for &v in &element.v {
+                let share = water / 3.;
+                flow.initial_momentum_kg_m_s += solver.v[v] * share;
+                flow.initial_kinetic_energy_j += share * 0.5 * solver.v[v].norm2();
+                flow.initial_gravitational_energy_j -= share * solver.gravity.dot(solver.x[v]);
+            }
+        }
+        binding.report.scope = "Source-qualified frozen mechanical/interface laws with co-moving endpoint mass exchange. Initial liquid is admitted after a dry drape. Incoming and outgoing mass preserve velocity, carry their own momentum, kinetic and signed gravitational energy, and update reference-owned inertia. Thermal sensible/latent energies remain separate. No relative recoil, mixing heat, constrained-DOF impulse, inferred wet law or empirical garment claim.";
+    }
     binding.update_report()?;
     solver.accept_liquid_binding(binding);
     solver
@@ -556,6 +680,7 @@ impl Solver {
         self.model.accept_liquid_mass(
             binding.expected_mass.clone(),
             binding.report.remaining_liquid_mass_kg,
+            binding.exchange,
         );
         self.liquid_mass = Some(binding);
     }
@@ -571,6 +696,128 @@ impl Solver {
     pub fn liquid_mass_report(&self) -> Result<Option<Report>, Refusal> {
         self.check_liquid_mass()?;
         Ok(self.liquid_mass.as_ref().map(|b| b.report.clone()))
+    }
+
+    /// Accept the same thermal kernel's incoming/outgoing triangle masses. This private broader
+    /// path requires its own complete source qualification; the public evaporation API stays strict.
+    pub(crate) fn exchange_liquid(
+        &mut self,
+        remaining: &[f64],
+        incoming: &[f64],
+        outgoing: &[f64],
+        temperatures: &[Vec<f64>],
+    ) -> Result<Report, Refusal> {
+        self.check_liquid_mass()?;
+        let mut binding = self
+            .liquid_mass
+            .clone()
+            .ok_or_else(|| invalid("liquid mechanics is not initialized"))?;
+        if !binding.exchange
+            || incoming.len() != binding.remaining.len()
+            || outgoing.len() != incoming.len()
+            || remaining.len() != incoming.len()
+        {
+            return Err(invalid(
+                "incoming liquid needs its independent complete exchange qualification and triangle ledger",
+            ));
+        }
+        let next = binding.admit(remaining, temperatures)?;
+        let mut entering = vec![0.; next.len()];
+        let mut leaving = vec![0.; next.len()];
+        let mut inventory_change = vec![0.; next.len()];
+        let mut incoming_total = 0.;
+        let mut outgoing_total = 0.;
+        for i in 0..incoming.len() {
+            let (a, b, old, new) = (incoming[i], outgoing[i], binding.remaining[i], remaining[i]);
+            let scale = old + a + b;
+            let tolerance = 1024. * f64::EPSILON * scale;
+            if !a.is_finite()
+                || !b.is_finite()
+                || a < 0.
+                || b < 0.
+                || !scale.is_finite()
+                || (b > old + a && b - (old + a) > tolerance)
+                || (new - old - a + b).abs() > tolerance
+            {
+                return Err(invalid(
+                    "incoming, outgoing and remaining liquid fail per-triangle mass conservation",
+                ));
+            }
+            let change = (new - old) / 3.;
+            if old != new && change == 0. {
+                return Err(invalid(
+                    "liquid inventory change underflows at welded vertices",
+                ));
+            }
+            for &vertex in &binding.original.membranes[i].v {
+                inventory_change[vertex] += change;
+                if !inventory_change[vertex].is_finite() {
+                    return Err(invalid("welded liquid inventory change overflows"));
+                }
+            }
+            for (amount, total, nodal) in [
+                (a, &mut incoming_total, &mut entering),
+                (b, &mut outgoing_total, &mut leaving),
+            ] {
+                let sum = *total + amount;
+                if !sum.is_finite() || (amount > 0. && sum <= *total) {
+                    return Err(invalid("positive liquid exchange is lost in accumulation"));
+                }
+                *total = sum;
+                let share = amount / 3.;
+                for &vertex in &binding.original.membranes[i].v {
+                    let next = nodal[vertex] + share;
+                    if !next.is_finite() || (amount > 0. && (share <= 0. || next <= nodal[vertex]))
+                    {
+                        return Err(invalid(
+                            "liquid exchange is unrepresentable at welded vertices",
+                        ));
+                    }
+                    nodal[vertex] = next;
+                }
+            }
+        }
+        let r = &mut binding.report;
+        let flow = r.exchange.as_mut().expect("qualified exchange ledger");
+        for i in 0..next.len() {
+            // Inventory owns inertia. Equal throughflow can have a tiny counter/assembly residual;
+            // it must not invent a required change of dry mass. Residuals remain in the ledger.
+            let net = inventory_change[i];
+            let old = self.model.mass[i];
+            if (net > 0. && next[i] <= old) || (net < 0. && next[i] >= old) {
+                return Err(invalid(
+                    "net liquid exchange is lost by welded inertia arithmetic",
+                ));
+            }
+            let residual = next[i] - old - entering[i] + leaving[i];
+            let velocity = self.v[i];
+            let kinetic = 0.5 * velocity.norm2();
+            let potential = -self.gravity.dot(self.x[i]);
+            flow.incoming_momentum_kg_m_s += velocity * entering[i];
+            flow.incoming_kinetic_energy_j += kinetic * entering[i];
+            flow.incoming_gravitational_energy_j += potential * entering[i];
+            r.exported_momentum_kg_m_s += velocity * leaving[i];
+            r.exported_kinetic_energy_j += kinetic * leaving[i];
+            r.exported_gravitational_energy_j += potential * leaving[i];
+            r.transfer_momentum_residual_kg_m_s += velocity * residual;
+            r.transfer_kinetic_residual_j += kinetic * residual;
+            r.transfer_gravitational_residual_j += potential * residual;
+        }
+        let incoming_sum = flow.incoming_mass_kg + incoming_total;
+        let outgoing_sum = flow.outgoing_mass_kg + outgoing_total;
+        if (incoming_total > 0. && incoming_sum <= flow.incoming_mass_kg)
+            || (outgoing_total > 0. && outgoing_sum <= flow.outgoing_mass_kg)
+        {
+            return Err(invalid("positive cumulative exchange mass is lost"));
+        }
+        flow.incoming_mass_kg = incoming_sum;
+        flow.outgoing_mass_kg = outgoing_sum;
+        binding.expected_mass = next;
+        binding.remaining = remaining.to_vec();
+        binding.update_report()?;
+        let report = binding.report.clone();
+        self.accept_liquid_binding(binding);
+        Ok(report)
     }
 
     /// Remove the exact thermal kernel's evaporated liquid after an accepted mechanical substep.
@@ -590,6 +837,11 @@ impl Solver {
             .liquid_mass
             .clone()
             .ok_or_else(|| invalid("liquid mechanics is not initialized"))?;
+        if binding.exchange {
+            return Err(invalid(
+                "bidirectional liquid binding requires its complete exchange ledger",
+            ));
+        }
         let next = binding.admit(remaining_liquid_kg, temperatures_c)?;
         let mut exported = vec![0.; next.len()];
         for (i, (&old, &new)) in binding
@@ -684,6 +936,182 @@ mod tests {
         let q = qualification();
         let domains = vec![q.bindings["sheet"].clone(); masses.len()];
         start(solver, q, domains, masses, &vec![vec![20.]; masses.len()]).unwrap()
+    }
+
+    fn exchange_qualification() -> Qualification {
+        let mut q = qualification();
+        q.schema = "ftx-coupled-liquid-mechanics/1".into();
+        q.model = "co_moving_mass_exchange_frozen_mechanics/1".into();
+        q.qualification =
+            "Artificial invariant mechanics and co-moving incoming/outgoing mass".into();
+        q
+    }
+
+    fn initialize_exchange(solver: &mut Solver, masses: &[f64]) -> Report {
+        let q = exchange_qualification();
+        q.validate_exchange().unwrap();
+        let domains = vec![q.bindings["sheet"].clone(); masses.len()];
+        start_with_exchange(
+            solver,
+            q,
+            domains,
+            masses,
+            &vec![vec![20.]; masses.len()],
+            true,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn simultaneous_nonuniform_exchange_closes_welded_momentum_and_bulk_energy() {
+        let mut s = solver();
+        s.v = vec![
+            Vec3::new(1., 2., -3.),
+            Vec3::new(-2., 1., 0.),
+            Vec3::new(0., 0., 4.),
+            Vec3::new(2., -3., 1.),
+        ];
+        let dry = s.model.mass.clone();
+        let initial = initialize_exchange(&mut s, &[0.12, 0.3]);
+        let initial_flow = initial.exchange.as_ref().unwrap();
+        assert!((initial_flow.initial_gravitational_energy_j - 0.42 * 9.81 * 2.).abs() < 1e-14);
+        let before = s.model.mass.clone();
+        let velocity = s.v.clone();
+        let report = s
+            .exchange_liquid(
+                &[0.15, 0.24],
+                &[0.06, 0.12],
+                &[0.03, 0.18],
+                &[vec![25.], vec![30., 35.]],
+            )
+            .unwrap();
+        assert_eq!(s.v, velocity);
+        let flow = report.exchange.as_ref().unwrap();
+        let mut expected_in = Vec3::ZERO;
+        let mut expected_out = Vec3::ZERO;
+        let mut initial_p = Vec3::ZERO;
+        let mut final_p = Vec3::ZERO;
+        let mut initial_k = 0.;
+        let mut final_k = 0.;
+        for (i, (incoming, outgoing)) in [(0.06, 0.07), (0.06, 0.07), (0.02, 0.01), (0.04, 0.06)]
+            .into_iter()
+            .enumerate()
+        {
+            assert!((s.model.mass[i] - before[i] - incoming + outgoing).abs() < 1e-15);
+            expected_in += velocity[i] * incoming;
+            expected_out += velocity[i] * outgoing;
+            initial_p += velocity[i] * before[i];
+            final_p += velocity[i] * s.model.mass[i];
+            initial_k += 0.5 * before[i] * velocity[i].norm2();
+            final_k += 0.5 * s.model.mass[i] * velocity[i].norm2();
+        }
+        assert!((flow.incoming_mass_kg - 0.18).abs() < 1e-15);
+        assert!((flow.outgoing_mass_kg - 0.21).abs() < 1e-15);
+        assert!((flow.incoming_momentum_kg_m_s - expected_in).norm() < 1e-15);
+        assert!((report.exported_momentum_kg_m_s - expected_out).norm() < 1e-15);
+        assert!(
+            (final_p - initial_p - flow.incoming_momentum_kg_m_s + report.exported_momentum_kg_m_s)
+                .norm()
+                < 1e-15
+        );
+        assert!(
+            (final_k - initial_k - flow.incoming_kinetic_energy_j
+                + report.exported_kinetic_energy_j)
+                .abs()
+                < 1e-15
+        );
+        assert!((flow.incoming_gravitational_energy_j - 0.18 * 9.81 * 2.).abs() < 1e-14);
+        assert!((report.exported_gravitational_energy_j - 0.21 * 9.81 * 2.).abs() < 1e-14);
+        assert!(report.transfer_momentum_residual_kg_m_s.norm() < 1e-15);
+        assert!(report.mass_balance_residual_kg.abs() < 1e-15);
+        let before = format!("{s:?}");
+        assert!(
+            s.evaporate_liquid(&[0., 0.], &[vec![20.], vec![20.]])
+                .is_err()
+        );
+        assert_eq!(format!("{s:?}"), before);
+        s.exchange_liquid(&[0., 0.], &[0., 0.], &[0.15, 0.24], &[vec![20.], vec![20.]])
+            .unwrap();
+        assert_eq!(s.model.mass, dry);
+    }
+
+    #[test]
+    fn exchange_refuses_unqualified_sources_or_unbalanced_transfer_atomically() {
+        let (mut run, mut q) = source_run();
+        let before = format!("{:?}", run.scene.solver);
+        assert!(bind_exchange(&mut run, &q, &[0., 0.], &[vec![20.], vec![20.]]).is_err());
+        assert_eq!(format!("{:?}", run.scene.solver), before);
+        q.schema = "ftx-coupled-liquid-mechanics/1".into();
+        q.model = "co_moving_mass_exchange_frozen_mechanics/1".into();
+        assert!(bind(&mut run, &q, &[0., 0.], &[vec![20.], vec![20.]]).is_err());
+        let mut changed = q.clone();
+        changed.material_report_sha256 = "0".repeat(64);
+        assert!(bind_exchange(&mut run, &changed, &[0., 0.], &[vec![20.], vec![20.]]).is_err());
+        bind_exchange(&mut run, &q, &[0.12, 0.3], &[vec![20.], vec![20.]]).unwrap();
+        let s = &mut run.scene.solver;
+        for (remaining, incoming, outgoing, temperature) in [
+            ([0.2, 0.3], [0., 0.], [0., 0.], 20.),
+            ([0.1, 0.3], [-0.02, 0.], [0., 0.], 20.),
+            ([0., 0.3], [0., 0.], [0.13, 0.], 20.),
+            ([0.1, 0.3], [0., 0.], [0.02, 0.], 51.),
+        ] {
+            let before = format!("{s:?}");
+            assert!(
+                s.exchange_liquid(
+                    &remaining,
+                    &incoming,
+                    &outgoing,
+                    &[vec![temperature], vec![20.]]
+                )
+                .is_err()
+            );
+            assert_eq!(format!("{s:?}"), before);
+        }
+        s.model.mass[0] *= 2.;
+        let before = format!("{s:?}");
+        assert!(
+            s.exchange_liquid(&[0.12, 0.3], &[0., 0.], &[0., 0.], &[vec![20.], vec![20.]])
+                .is_err()
+        );
+        assert_eq!(format!("{s:?}"), before);
+    }
+
+    #[test]
+    fn rounded_flow_ledgers_do_not_invent_inertia_at_dryout_or_dry_throughflow() {
+        let mut s = solver();
+        let dry = s.model.mass.clone();
+        initialize_exchange(&mut s, &[0.12, 0.]);
+        s.exchange_liquid(&[0.02, 0.], &[0., 0.], &[0.1, 0.], &[vec![20.], vec![20.]])
+            .unwrap();
+        let rounded = (0.1_f64 + 0.02) - 0.1;
+        assert!(rounded > 0.02);
+        s.exchange_liquid(
+            &[0., 0.],
+            &[0., 0.],
+            &[rounded, 0.],
+            &[vec![20.], vec![20.]],
+        )
+        .unwrap();
+        assert_eq!(s.model.mass, dry);
+        s.exchange_liquid(
+            &[0., 0.],
+            &[0.02, 0.],
+            &[rounded, 0.],
+            &[vec![20.], vec![20.]],
+        )
+        .unwrap();
+        assert_eq!(s.model.mass, dry);
+        let before = format!("{s:?}");
+        assert!(
+            s.exchange_liquid(
+                &[0., 0.],
+                &[0.02, 0.],
+                &[0.021, 0.],
+                &[vec![20.], vec![20.]]
+            )
+            .is_err()
+        );
+        assert_eq!(format!("{s:?}"), before);
     }
 
     fn source_run() -> (DrapeRun, Qualification) {
@@ -933,11 +1361,19 @@ mod tests {
 
     #[test]
     fn evaporation_driven_inertia_converges_to_independent_variable_mass_oscillator() {
+        variable_mass_oscillator(0.5, false);
+    }
+
+    #[test]
+    fn incoming_mass_inertia_converges_to_independent_variable_mass_oscillator() {
+        variable_mass_oscillator(-0.5, true);
+    }
+
+    fn variable_mass_oscillator(alpha: f64, exchange: bool) {
         // Isolate the production axial elastic and inertial integrator on a free triangle.
         // Zero membrane coefficients are a reduced numerical system, not a source material.
         // Two equal endpoint masses m(t)=m0*(1-alpha*t)^2 obey q''+2k/m(t)*q=0.
         let q0 = 0.2;
-        let alpha = 0.5;
         let m0 = 0.5;
         let k = 0.1;
         let beta = f64::sqrt(2. * k / (m0 * alpha * alpha) - 0.25);
@@ -977,12 +1413,23 @@ mod tests {
                 Vec3::ZERO,
             );
             s.tol = 1e-11;
-            initialize(&mut s, &[3. * (m0 - 0.1)]);
+            let mut previous = 3. * (m0 - 0.1);
+            if exchange {
+                initialize_exchange(&mut s, &[previous]);
+            } else {
+                initialize(&mut s, &[previous]);
+            }
             for i in 1..=steps {
                 s.step(1. / steps as f64).unwrap();
                 let factor = 1. - alpha * i as f64 / steps as f64;
-                s.evaporate_liquid(&[3. * (m0 * factor * factor - 0.1)], &[vec![20.]])
-                    .unwrap();
+                let next = 3. * (m0 * factor * factor - 0.1);
+                if exchange {
+                    s.exchange_liquid(&[next], &[next - previous], &[0.], &[vec![20.]])
+                        .unwrap();
+                } else {
+                    s.evaporate_liquid(&[next], &[vec![20.]]).unwrap();
+                }
+                previous = next;
             }
             let q = (s.x[1] - s.x[0]).norm() - 1. + 0.5 * ELASTIC_ONSET;
             assert!(q > 0.1);

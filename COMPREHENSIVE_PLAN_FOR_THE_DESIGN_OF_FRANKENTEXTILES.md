@@ -4309,6 +4309,35 @@ the restricted dispatch search proves neither an unrestricted optimum nor physic
 only equality with the independent lower bound establishes the reported optimum. Physical grip,
 access, seam quality and hardware authorization remain separate requirements under `ftx-pb2.2`.
 
+### 25.121 Supplied and condensed liquid changes the actual moving garment
+
+The existing accepted-step liquid authority now admits independently qualified incoming liquid and
+condensed vapor alongside evaporation. One source-owned reference-triangle inventory supplies both
+the thermal ledger and the welded cloth's inertia and gravitational load. Dry fabric and attached
+accessory observations remain separate. Material substitutions retain the full material/interface
+report lock and per-instance loading/temperature domains; no fiber label or dry measurement implies
+wet mechanical qualification.
+
+Every accepted thermal interval records incoming and outgoing mass separately, including equal-net
+throughflow. The same mechanical authority applies co-moving endpoint exchange and records momentum,
+kinetic energy and signed gravitational energy independently of latent and sensible heat. It preserves
+source-law, contact, topology, gravity, history and constraint checks and invalidates the mass-dependent
+solver cache. Any later thermal/source failure restores the whole pre-admission motion state.
+
+The ordinary native, portable and browser scenario consumers carry the exact same qualification and
+transfer ledgers into nominal thermal/water comparison admission. Zero or unchanged incoming mass
+cannot acquire additional cumulative incoming momentum or bulk energy. The workbench exposes initial,
+incoming and outgoing transfers, exact source reports and refusal withdrawal. Existing evaporation-only
+requests keep their original restrictions; no second mass or scoring authority is introduced.
+
+This bounded software delivery is tracked by `ftx-vc2.3.1`. Known-answer conservation and independent
+variable-mass oscillator refinement, sewn heterogeneous/accessory ownership, whole-motion rollback,
+comparison tampering and both native commands cover supplied and condensing single/named-case studies.
+See [textile-surface-water.md](docs/textile-surface-water.md). Initial water is explicitly admitted
+co-moving after a dry drape. The first-order endpoint model requires mechanical time-step refinement;
+relative flow impact, drainage, inferred wet constitutive changes, pinned-coordinate exchange impulses
+and empirical wet-garment qualification remain outside this model and under the open parent work.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

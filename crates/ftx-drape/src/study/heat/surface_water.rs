@@ -19,6 +19,8 @@ use crate::{
     thermal::surface::{Surface, SurfaceState, SurfaceStep, io::retained_materials},
 };
 
+mod mechanics;
+
 /// Source-locked initial loading on every retained instance, including explicitly dry instances.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -289,6 +291,7 @@ pub(super) struct Water {
     exported_sensible_j: f64,
     liquid_stored_j: f64,
     dryout_events: usize,
+    mechanical_flow: Option<mechanics::IntervalFlow>,
 }
 
 pub(super) struct Plan {
@@ -445,6 +448,7 @@ impl Water {
             exported_sensible_j: 0.,
             liquid_stored_j: 0.,
             dryout_events: 0,
+            mechanical_flow: None,
         })
     }
 
@@ -710,6 +714,9 @@ impl Water {
             return Err(invalid(
                 "surface-water sensible/latent energy balance failed",
             ));
+        }
+        if let Some(flow) = &mut self.mechanical_flow {
+            flow.accept(&plan)?;
         }
         add_positive(&mut self.latent_j, latent_step)?;
         add_positive(&mut self.condensation_latent_j, condensation_latent_step)?;

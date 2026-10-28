@@ -1,26 +1,31 @@
 # Textile-owned free liquid, evaporation and condensation
 
-## Evaporation coupled to cloth motion
+## Liquid exchange coupled to cloth motion
 
-An optional `motion.transient_surface.mechanical_coupling` qualification connects the
-initial-liquid `/1` model to the ordinary accepted mechanical steps. Its
-`ftx-evaporating-liquid-mechanics/1` source binds every retained material instance and
-explicitly qualifies the frozen membrane, bending and contact behavior over the stated
-temperature and liquid-loading domains. No dry constitutive law is silently promoted to a
-wet law. Supply, condensation, drainage, pinned cloth coordinates and a material that already
-contains fixed retained-liquid inertia are outside this first coupling model.
+An optional `motion.transient_surface.mechanical_coupling` qualification connects textile
+water to ordinary accepted mechanical steps. The original `ftx-evaporating-liquid-mechanics/1`
+qualification remains limited to initial-liquid water `/1` and evaporation. A separate
+`ftx-coupled-liquid-mechanics/1` qualification also admits supplied liquid and condensed vapor,
+using water `/1`, `/2` or `/3`. Both bind every retained material instance and the complete
+material/interface report, and explicitly qualify frozen membrane, bending and contact behavior
+over the entire thermal temperature and liquid-loading domains. No dry constitutive law is
+silently promoted to a wet law. Drainage, pinned cloth coordinates and material that already
+contains fixed retained-liquid inertia remain outside these models.
 
 The existing dry drape supplies the initial geometry and velocity. At motion time zero,
 the declared liquid is an initial co-moving inventory; this is not a wet equilibrium or an
 inferred deposition process. Each accepted interval first solves cloth and contact with its
-current liquid mass, then evolves the existing thermal/evaporation model on the accepted
-geometry, and finally removes that interval's co-moving vapor mass. The next mechanical
-interval uses the reduced inertia and gravitational load. Source-triangle reference areas
+current liquid mass, then evolves the existing thermal/water model on the accepted
+geometry, and finally applies its independently qualified incoming and outgoing mass. The next
+mechanical interval uses the resulting inertia and gravitational load. Source-triangle reference areas
 own water, and the real seam weld map distributes its lumped mass exactly once. Attached
 accessory mass remains separate and unchanged.
 
-Co-moving outflow leaves the remaining cloth velocity unchanged. Its exported momentum,
-bulk kinetic energy and gravitational potential energy are mechanical boundary terms,
+The admitted mean velocity of both incoming and outgoing mass equals the local accepted cloth
+velocity. This explicit co-moving boundary condition leaves cloth velocity unchanged during
+mass transfer; a liquid jet, falling rain or vapor with a different mean velocity needs a different
+qualified momentum model. Incoming and exported momentum, bulk kinetic energy and signed
+gravitational potential energy are mechanical boundary terms,
 separate from the thermal model's latent and sensible enthalpy. This is a first-order
 sequential coupling: mechanical step refinement is required, especially near dryout, even
 if the thermal substeps are already small. A failed thermal or mechanical interval refuses
@@ -37,8 +42,8 @@ authorize frozen wet mechanics.
 
 | Field | Required value or meaning |
 | --- | --- |
-| `schema` | `ftx-evaporating-liquid-mechanics/1` |
-| `model` | `co_moving_evaporation_frozen_mechanics/1` |
+| `schema` | `ftx-evaporating-liquid-mechanics/1` for evaporation only; `ftx-coupled-liquid-mechanics/1` for qualified incoming/outgoing flow |
+| `model` | Corresponding `co_moving_evaporation_frozen_mechanics/1` or `co_moving_mass_exchange_frozen_mechanics/1` |
 | `material_report_sha256` | SHA-256 of `serde_json::to_vec(&run.report["material"])` from the ordinary selected-source drape, including all material assignments and unlike-sheet interfaces |
 | `bindings` | Every retained instance exactly once, including dry instances and separate mirrored instances |
 | `bindings.<instance>.material_sha256` | Exact normalized material hash used by that instance's water binding |
@@ -46,7 +51,7 @@ authorize frozen wet mechanics.
 | `bindings.<instance>.temperature_range_c` | Inclusive `[minimum, maximum]` covering the entire authored Water pressure-table domain |
 | `source` | `{reference, accessed_on, note}` identifying the independent mechanical qualification |
 | `evidence`, `allow_estimates` | Existing evidence class and explicit estimate consent, separate from the material and water consent |
-| `method`, `qualification` | Nonempty method and basis for co-moving evaporation with the exact frozen membrane, bending, contact and material-history laws |
+| `method`, `qualification` | Nonempty method and basis for the chosen co-moving transfer model with the exact frozen membrane, bending, contact and material-history laws |
 
 Obtain the material report from the same ordinary drape before opting into this coupling;
 hash its canonical parsed JSON using the Rust serialization above, not pretty-printed file
@@ -58,6 +63,26 @@ The native/portable integration example is
 `evaporating_mechanical_water_replays_in_native_portable_and_named_case_decisions` in
 `crates/ftx-cli/tests/accepted_body_workflow/surface_water.rs`; its numbers are deliberately
 synthetic, with no implied textile qualification.
+
+Bidirectional results use `ftx-coupled-liquid-mechanics-result/1`. The existing outgoing
+`exported_momentum_kg_m_s`, `exported_kinetic_energy_j` and
+`exported_gravitational_energy_j` fields remain separate from thermal enthalpy. The additional
+`exchange` object records cumulative `incoming_mass_kg`, `outgoing_mass_kg`, initial admitted
+liquid momentum/kinetic/gravitational energy, and the corresponding cumulative incoming quantities.
+Each retained thermal trace row includes the same compact mechanical ledger. Its incoming mass
+must equal supplied plus condensed water; its outgoing mass must equal evaporation. Every source
+triangle independently satisfies `remaining = previous + incoming - outgoing` before any solver
+mass changes. Small floating-point transfer residuals stay visible; unrepresentable positive
+transfers refuse. Existing attached-mass receipts keep dry `cloth_mass_kg` and accessory sources,
+with changing liquid separately reported as `exchanging_liquid_mass_kg`.
+
+The real consumer regression
+`incoming_mechanical_water_replays_actual_native_portable_and_named_case_decisions` exercises
+supply and condensation in both native commands, the portable API, named-case comparisons and
+manufacturing coexistence. A sewn-motion regression confirms that liquid acquired after one
+accepted solve changes the next solve. Kernel tests independently check shared-vertex mass,
+momentum and bulk energy, and growing-mass oscillator convergence. None qualifies an actual wet
+fabric or an unspecified incoming-flow velocity.
 
 ## Thermal water model
 
@@ -237,7 +262,8 @@ below ambient or a post-step crossing into condensation. Every version refuses u
 mass/time/capacity or a budget failure. A smaller `max_step_s` can resolve numerical overshoot;
 it does not create missing evidence.
 The whole accepted mechanical interval stages its temperature, liquid and source counters together
-and publishes no partial heat state on failure. The mechanical result and other consumers survive.
+and publishes no partial heat state on failure. Without mechanical coupling, independent mechanical
+results and other consumers survive. With coupling, the entire dependent motion rolls back as above.
 
 ## Condensation and subsequent re-evaporation
 
@@ -304,7 +330,8 @@ Nominal comparison metrics `textile_water_condensed_mass_kg` and
 exact sources, per-patch inventory, mass/energy totals and interval-temperature-weighted incoming
 enthalpy. No statistical bounds, unsampled-time guarantees or empirical condensation rates are
 inferred. Maximum liquid loading still refuses transactionally; there is no invented runoff,
-drainage, absorbed-water law or mechanical water mass. Refinement remains necessary when pressure
+drainage or absorbed-water law. Mechanical water mass requires the separate incoming/outgoing
+qualification above. Refinement remains necessary when pressure
 reverses within a thermal step.
 
 ## Reports and scope
@@ -338,7 +365,7 @@ The separate `vapor_coverage_history.wet_film` belongs to a prescribed **body** 
 energy is never deducted from this textile film. A request that enables both specifies two separate
 water owners; this feature does not transfer water between them or assert that their experiments
 are physically compatible. There is no inferred water delivery, absorption/sorption, in-plane transport,
-wet-dependent material law, mechanical mass change, thermoregulation or comfort/fit claim.
+wet-dependent material law, unqualified mechanical mass change, thermoregulation or comfort/fit claim.
 
 Analytic tests check sampled-temperature sensible export, reference invariance, rate feedback,
 time refinement, exact dryout, dry remainders, incoming sensible heat, supply-limited evaporation,
