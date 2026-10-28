@@ -22,7 +22,7 @@ pub enum Objective {
     FitBandViolationMm,
 }
 
-/// One bounded scalar, applied to its authored linked slash sites in order.
+/// One bounded scalar, applied to its authored linked alteration sites in order.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Variable {
@@ -48,7 +48,7 @@ pub struct Request {
     pub objective: Objective,
     /// One to three variables, polled in authored order and negative then positive direction.
     pub variables: Vec<Variable>,
-    /// Explicit canonical operations after each trial's linked slashes, such as seam truing.
+    /// Explicit canonical operations after each trial's linked alterations, such as seam truing.
     #[serde(default)]
     pub after: Vec<Operation>,
     /// One to 256 unique parameter trials, excluding the separately retained original baseline.
@@ -172,20 +172,7 @@ impl Request {
                 ));
             }
             for site in &variable.sites {
-                if site.piece.trim().is_empty()
-                    || !matches!(site.axis.as_str(), "x" | "y")
-                    || !site.at_mm.is_finite()
-                    || !site.multiplier.is_finite()
-                    || site.multiplier == 0.0
-                    || [lo, hi, variable.initial_mm].into_iter().any(|v| {
-                        let spread = v * site.multiplier;
-                        !spread.is_finite() || (v != 0.0 && spread == 0.0)
-                    })
-                {
-                    return Err(invalid(
-                        "adaptive sites need a piece, x/y axis, finite cut and nonzero finite multiplier with finite non-underflowing declared spreads",
-                    ));
-                }
+                site.validate(&[lo, hi, variable.initial_mm])?;
             }
         }
         Ok(())
@@ -201,18 +188,7 @@ impl Request {
         for (variable, &value) in self.variables.iter().zip(coordinates) {
             values.insert(variable.key.clone(), value);
             for site in &variable.sites {
-                let add_mm = value * site.multiplier;
-                if !add_mm.is_finite() || (value != 0.0 && add_mm == 0.0) {
-                    return Err(invalid(
-                        "adaptive trial spread overflowed or underflowed; no alteration was silently dropped",
-                    ));
-                }
-                operations.push(Operation::SlashSpread {
-                    piece: site.piece.clone(),
-                    axis: site.axis.clone(),
-                    at_mm: site.at_mm,
-                    add_mm,
-                });
+                operations.push(site.operation(value)?);
             }
         }
         operations.extend(self.after.iter().cloned());

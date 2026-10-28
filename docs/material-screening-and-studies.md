@@ -748,12 +748,16 @@ refuses the study instead of silently dropping candidates or returning a partial
 ## Search declared alterations against the selected body
 
 An opt-in `design_grid` replaces `designs` within `ftx-design-study/1`. It generates linked canonical
-slash-and-spread operations from one to three scalar variables. Each variable declares a unique key,
-1–64 strictly increasing finite `values_mm`, and one or more `sites` containing `piece`, `axis`,
-`at_mm` and a nonzero signed `multiplier`. The variable value times each site's multiplier is that
-site's `add_mm`. Sites and variables run in authored order; optional `after` operations run last.
-This expresses a shared ease or length change across front/back pieces without independently
-inventing alterations or silently repairing seams.
+slash-and-spread or vertex-move operations from one to three scalar variables. Each variable declares
+a unique key, 1–64 strictly increasing finite `values_mm`, and one or more `sites`. A slash site
+contains `piece`, `axis`, `at_mm` and a nonzero signed `multiplier`; its `add_mm` is the variable value
+times that multiplier. A move site explicitly names `op: "move"`, `piece`, `vertex`, `dx_multiplier`
+and `dy_multiplier`; its horizontal and vertical displacements are the same scalar value times
+those dimensionless multipliers. At least one move multiplier must be nonzero.
+
+Sites of either kind can be mixed and run in authored order; optional `after` operations run last.
+This expresses shared ease, length and local shaping across front/back pieces. Every candidate
+still passes the ordinary seam and outline gates; linked edits do not silently repair a seam.
 
 ```json
 {
@@ -788,7 +792,39 @@ inventing alterations or silently repairing seams.
 ```
 
 These coordinates and targets are a synthetic software example, not pattern-making advice.
-[The complete request](../examples/design-fit-search.json) uses the existing synthetic sewing
+
+Local shaping uses the same variable structure in both `design_grid` and `design_adaptive`. For
+example, the following linked sites widen only the upper endpoints of the synthetic front/right
+and back/left seam while leaving both hems fixed:
+
+```json
+{
+  "key": "upper-width",
+  "values_mm": [-4, 0, 4, 6],
+  "sites": [
+    {"op": "move", "piece": "front", "vertex": "c", "dx_multiplier": 1, "dy_multiplier": 0},
+    {"op": "move", "piece": "back", "vertex": "d", "dx_multiplier": -1, "dy_multiplier": 0}
+  ]
+}
+```
+
+At `+6 mm`, each 100 mm high panel becomes a trapezoid with 20 mm and 26 mm widths, its halfway
+width is 23 mm, and both declared sides have length `sqrt(100² + 6²) mm`. These are geometric
+consequences of this synthetic pattern, not body-fit measurements. Vertical or diagonal move sites
+can similarly vary shoulder, neckline or armhole endpoints when the author supplies the relevant
+vertices and explicit targets. For adaptive search, replace `values_mm` with the existing bounds,
+initial coordinate and step fields; the site syntax stays the same.
+
+Generated operations retain exact requested `dx_mm` and `dy_mm`; canonical moves round edited
+vertices to 0.001 mm. Relative curve controls follow their endpoints, but grain, notches, drills,
+internal marks and placement anchors are not moved by this operation. Every trial starts from the
+unchanged original document. Unknown vertices, broken seams and invalid outlines remain failed
+candidates, with no partially altered pattern admitted downstream. Mixed slash/move fields,
+unknown operation tags, no-op multiplier pairs and displacement overflow or underflow refuse.
+Complete authored grid values or adaptive endpoints are checked before any truncated search, and
+each actual adaptive coordinate is checked again. Existing operation and document-work limits apply.
+
+[The complete length-search request](../examples/design-fit-search.json) uses the existing synthetic sewing
 pattern and an explicitly artificial sheet. For an independently selected 1300 mm model, its
 100 mm original panel and +20/+30/+40 mm length choices yield 120/130/140 mm; only +30 is in the
 declared ±1 mm band around one tenth of that model stature. A different selected body can yield a
@@ -981,14 +1017,14 @@ the ordinary `ftx materials scenario-study` command shown above, or load it in t
 workbench study. These dimensions and bands exercise software; they do not prescribe wearer ease.
 
 All bounds, initial coordinates and steps are explicit. One to three variables are supported,
-using the existing linked slash sites and optional canonical `after` operations. The search polls
+using the same linked slash or vertex-move sites and optional canonical `after` operations. The search polls
 variables in authored order, first negative then positive, within their declared bounds. Its
 explicit discovery objective minimizes the largest absolute distance outside a fit band, then the
 sum of those distances to resolve ties between multiple points. Both use canonical **unrounded**
 millimetre readings; an out-of-band residual displayed as `0.0` still cannot qualify. If a poll has
 no strict improvement, steps halve down to the declared minimum. Geometry, seam, truing,
 completeness, outline and missing-body failures cannot supply a numerical search score.
-The canonical slash-spread operator rounds edited points to 0.001 mm. Retained variable values
+The canonical slash-spread and vertex-move operators round edited points to 0.001 mm. Retained variable values
 are the exact requested spreads; `raw_fit` measures the resulting geometry. A smaller polling
 step helps find that operator's accepted coordinates without increasing its geometric precision.
 

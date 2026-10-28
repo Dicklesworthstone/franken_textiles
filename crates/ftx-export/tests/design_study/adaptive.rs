@@ -222,8 +222,12 @@ fn simultaneous_fit_points_use_the_explicit_secondary_residual_to_cross_a_maximu
     let mut width = adaptive.variables[0].clone();
     width.key = "width".into();
     for site in &mut width.sites {
-        site.axis = "x".into();
-        site.at_mm = 10.0;
+        if let ftx_export::material_study::design::grid::Site::SlashSpread { axis, at_mm, .. } =
+            site
+        {
+            *axis = "x".into();
+            *at_mm = 10.0;
+        }
     }
     adaptive.variables.push(width);
     request.design_fit.as_mut().unwrap().fit_spec["points"]

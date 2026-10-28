@@ -404,6 +404,7 @@ pub fn fold_up(
 /// # Errors
 /// Rejected/inconsistent fit, wrong model/wearer, bad pose or a refused cloth solve.
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 pub fn fold_up_with_body_fit(
     body: &WebBody,
     pattern: &str,

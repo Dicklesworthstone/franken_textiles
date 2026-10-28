@@ -407,7 +407,7 @@ self.onmessage = async ({ data: msg }) => {
       case "fold": {
         const model = new ftx.WebBody(new Uint8Array(msg.bytes));
         try {
-          const fold = ftx.fold_up(model, msg.pattern, msg.measurements, msg.fit, msg.selfContactMm);
+          const fold = ftx.fold_up(model, msg.pattern, msg.measurements, msg.fit, msg.selfContactMm, false);
           try { reportText = fold.report(); result = json(reportText); viewer = fold.viewer(); }
           finally { fold.free(); }
         } finally { model.free(); }

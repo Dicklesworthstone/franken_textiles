@@ -15,7 +15,12 @@ through `material_treatment_workflow`. Free coupon treatment does not establish 
 
 **Selected-body design synthesis** (`material_study::design`, plan §25.70 / `ftx-ds2`).
 Optional finite variable grids generate linked canonical alterations and retain baseline, exact
-coordinates/operations and incomplete-domain receipts. Explicit flat fit bands use a borrowed live
+coordinates/operations and incomplete-domain receipts. Both grids and adaptive searches accept original
+slash sites and explicitly tagged vertex-move sites with signed x/y scalar multipliers. Mixed sites
+produce ordinary operations in authored order; canonical rounding, curve/mark behavior and all flat
+gates remain authoritative. Complete domains and actual adaptive displacements reject invalid or
+overflowed/underflowed changes before consumers; failed candidates admit no partial altered document.
+Explicit flat fit bands use a borrowed live
 `BodyMeasure` context from the production adapter; the export crate never fits a body or guesses
 landmarks. Canonical raw status gates binding and every consumer before comparison. Context identity
 is part of manufacturing/scenario/matrix hashes. A missing body, point or landmark cannot become a
@@ -39,7 +44,7 @@ Absent screening preserves the earlier prefix request/output semantics and budge
 matrix evaluation, missing context, budget exhaustion and retained failures.
 
 **Adaptive selected-body design discovery** (`design_adaptive`). Explicit finite bounds, initial
-coordinates, polling/minimum steps and a 1–256 unique-trial allowance refine linked slash-spread
+coordinates, polling/minimum steps and a 1–256 unique-trial allowance refine linked slash-spread and move
 variables between authored grid values. Canonical unrounded point measurements minimize the
 declared maximum out-of-band distance, then its sum; this discovery objective is separate from
 production ranking. Full geometry, seam, truing, completeness, outline and selected-body gates

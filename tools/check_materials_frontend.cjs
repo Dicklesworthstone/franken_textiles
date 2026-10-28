@@ -292,7 +292,8 @@ async function workerModule({ failFold = false, failExport = false, trap = false
     },
     material_bind: (p, c) => { called.push(['bind', p, c]); return JSON.stringify({ pattern: JSON.parse(p), pattern_json:p }); },
     WebBody: class { constructor() { called.push(['body']); } free() { freed.push('body'); } },
-    fold_up: (_b, p, m, f, contact) => {
+    fold_up: (_b, p, m, f, contact, twoStart) => {
+      assert.equal(twoStart, false);
       called.push(['fold', p, m, f, contact]);
       if (trap) throw new WebAssembly.RuntimeError('synthetic trap');
       return { report: () => { if (failFold) throw Error('report refused'); return '{"material":"new","coordinate":-0.0,"coefficient":1.0}'; },
@@ -2996,7 +2997,8 @@ test('drafting worker discards refused replacements, frees failed rounds and che
     inspect_body:(_body,measurements,source)=>{calls.push({inspect:measurements,source});
       if(source==='refused')throw Error('import refused');return '{"cloth_simulated":false,"raw":-0.0}';},
     fold_up:()=>{calls.push('fold');return {report:()=>'{"gating":[]}',viewer:()=>'<html/>',free:()=>freed.push('fold')};},
-    fold_up_with_body_fit:(_body,_pattern,_measurements,_fit,mm,source,angle)=>{
+    fold_up_with_body_fit:(_body,_pattern,_measurements,_fit,mm,twoStart,source,angle)=>{
+      assert.equal(twoStart,false);
       calls.push({source,mm,angle});if(source==='refused')throw Error('import refused');
       return {report:()=>'{"body":{"provenance":"MODEL_FIT"}}',viewer:()=>'<html/>',free:()=>freed.push('import')};}};
   const context=vm.createContext({JSON,Date,TextDecoder,Uint8Array,WebAssembly,Error,self:{},onmessage:null,postMessage:m=>sent.push(m)});

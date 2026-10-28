@@ -9,18 +9,133 @@ use super::{MAX_DESIGNS, MAX_OPERATIONS, Operation, Variant, budget, invalid};
 
 type GeneratedDesign = (Variant, BTreeMap<String, f64>);
 
-/// One linked slash site. All sites of a variable receive the same declared scalar value.
+/// One linked canonical alteration. Every site receives the same scalar millimetre value.
+/// The original slash-site representation remains unchanged; vertex moves require `op: "move"`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Site {
-    /// Drafted source-piece ID, not a mirrored instance ID.
-    pub piece: String,
-    /// Canonical `x` width/ease or `y` length direction.
-    pub axis: String,
-    /// Cut coordinate in the original millimetre drafting frame.
-    pub at_mm: f64,
-    /// Explicit signed distribution of this variable across its sites; never inferred from a body.
-    pub multiplier: f64,
+#[serde(untagged, deny_unknown_fields)]
+pub enum Site {
+    /// Existing whole-piece slash semantics, including canonical movement of marks.
+    SlashSpread {
+        /// Drafted source-piece ID, not a mirrored instance ID.
+        piece: String,
+        /// Canonical `x` width/ease or `y` length direction.
+        axis: String,
+        /// Cut coordinate in the original millimetre drafting frame.
+        at_mm: f64,
+        /// Explicit signed dimensionless distribution of the scalar across this site.
+        multiplier: f64,
+    },
+    /// Move one existing vertex; relative curves follow its endpoints, while marks stay fixed.
+    Move {
+        /// Required literal `move`, keeping malformed or mixed site shapes unambiguous.
+        op: MoveSiteKind,
+        /// Drafted source-piece ID, not a mirrored instance ID.
+        piece: String,
+        /// Existing drafted vertex ID.
+        vertex: String,
+        /// Signed dimensionless horizontal displacement per millimetre of the scalar.
+        dx_multiplier: f64,
+        /// Signed dimensionless vertical displacement per millimetre of the scalar.
+        dy_multiplier: f64,
+    },
+}
+
+/// Explicit discriminator for a linked vertex-move site.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveSiteKind {
+    /// The canonical drafted-vertex move operation.
+    Move,
+}
+
+fn displacement(value: f64, multiplier: f64) -> Result<f64, Refusal> {
+    let result = value * multiplier;
+    if !result.is_finite() || (value != 0.0 && multiplier != 0.0 && result == 0.0) {
+        return Err(invalid(
+            "linked design displacement overflowed or underflowed; no alteration was silently dropped",
+        ));
+    }
+    Ok(result)
+}
+
+impl Site {
+    /// Check all authored domain endpoints/values before a truncated search can hide a bad site.
+    pub(super) fn validate(&self, values: &[f64]) -> Result<(), Refusal> {
+        let multipliers = match self {
+            Self::SlashSpread {
+                piece,
+                axis,
+                at_mm,
+                multiplier,
+            } => {
+                if piece.trim().is_empty()
+                    || !matches!(axis.as_str(), "x" | "y")
+                    || !at_mm.is_finite()
+                    || !multiplier.is_finite()
+                    || *multiplier == 0.0
+                {
+                    return Err(invalid(
+                        "slash sites need a piece, x/y axis, finite cut and nonzero finite multiplier",
+                    ));
+                }
+                [*multiplier, 0.0]
+            }
+            Self::Move {
+                piece,
+                vertex,
+                dx_multiplier,
+                dy_multiplier,
+                ..
+            } => {
+                if piece.trim().is_empty()
+                    || vertex.trim().is_empty()
+                    || !dx_multiplier.is_finite()
+                    || !dy_multiplier.is_finite()
+                    || (*dx_multiplier == 0.0 && *dy_multiplier == 0.0)
+                {
+                    return Err(invalid(
+                        "move sites need a piece, vertex and finite x/y multipliers, at least one nonzero",
+                    ));
+                }
+                [*dx_multiplier, *dy_multiplier]
+            }
+        };
+        for &value in values {
+            for multiplier in multipliers {
+                displacement(value, multiplier)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Both search modes produce ordinary operations with identical units and rounding semantics.
+    pub(super) fn operation(&self, value: f64) -> Result<Operation, Refusal> {
+        Ok(match self {
+            Self::SlashSpread {
+                piece,
+                axis,
+                at_mm,
+                multiplier,
+            } => Operation::SlashSpread {
+                piece: piece.clone(),
+                axis: axis.clone(),
+                at_mm: *at_mm,
+                add_mm: displacement(value, *multiplier)?,
+            },
+            Self::Move {
+                piece,
+                vertex,
+                dx_multiplier,
+                dy_multiplier,
+                ..
+            } => Operation::Move {
+                piece: piece.clone(),
+                vertex: vertex.clone(),
+                dx_mm: displacement(value, *dx_multiplier)?,
+                dy_mm: displacement(value, *dy_multiplier)?,
+            },
+        })
+    }
 }
 
 /// One scalar design variable with a finite, explicitly ordered domain.
@@ -182,20 +297,7 @@ impl Request {
                 ));
             }
             for site in &variable.sites {
-                if site.piece.trim().is_empty()
-                    || !matches!(site.axis.as_str(), "x" | "y")
-                    || !site.at_mm.is_finite()
-                    || !site.multiplier.is_finite()
-                    || site.multiplier == 0.0
-                    || variable.values_mm.iter().any(|v| {
-                        let spread = v * site.multiplier;
-                        !spread.is_finite() || (*v != 0.0 && spread == 0.0)
-                    })
-                {
-                    return Err(invalid(
-                        "grid sites need a piece, x/y axis, finite cut and nonzero finite multiplier with finite spreads over the complete domain",
-                    ));
-                }
+                site.validate(&variable.values_mm)?;
             }
         }
         Ok(())
@@ -243,12 +345,9 @@ impl Request {
             for (variable, choice) in self.variables.iter().zip(indices) {
                 let value = variable.values_mm[choice];
                 values.insert(variable.key.clone(), value);
-                operations.extend(variable.sites.iter().map(|site| Operation::SlashSpread {
-                    piece: site.piece.clone(),
-                    axis: site.axis.clone(),
-                    at_mm: site.at_mm,
-                    add_mm: value * site.multiplier,
-                }));
+                for site in &variable.sites {
+                    operations.push(site.operation(value)?);
+                }
             }
             operations.extend(self.after.iter().cloned());
             designs.push((
@@ -311,7 +410,9 @@ mod tests {
     fn invalid_unvisited_domain_values_cannot_hide_behind_a_small_allowance() {
         let mut input = request(1);
         input.variables[0].values_mm[2] = f64::MAX;
-        input.variables[0].sites[0].multiplier = 2.0;
+        if let Site::SlashSpread { multiplier, .. } = &mut input.variables[0].sites[0] {
+            *multiplier = 2.0;
+        }
         assert!(input.generate().is_err());
         let mut input = request(1);
         input.variables[0].values_mm = vec![0.0, 0.0];
@@ -321,10 +422,85 @@ mod tests {
         assert!(input.generate().is_err());
         let mut input = request(1);
         input.variables[0].values_mm = vec![1e-300];
-        input.variables[0].sites[0].multiplier = 1e-300;
+        if let Site::SlashSpread { multiplier, .. } = &mut input.variables[0].sites[0] {
+            *multiplier = 1e-300;
+        }
         assert!(input.generate().is_err());
         let mut input = request(1);
         input.variables[0].key = "x".repeat(256 * 1024);
         assert!(input.generate().is_err());
+    }
+
+    #[test]
+    fn linked_move_and_slash_sites_preserve_authored_order_and_exact_commands() {
+        let input = json!({"variables":[{"key":"shape","values_mm":[0,4],"sites":[
+            {"op":"move","piece":"front","vertex":"c","dx_multiplier":0.5,"dy_multiplier":-0.25},
+            {"piece":"back","axis":"x","at_mm":10.0,"multiplier":1.0},
+            {"op":"move","piece":"back","vertex":"d","dx_multiplier":-0.5,"dy_multiplier":0.0}
+        ]}],"after":[{"op":"true_seam","seam":"side","end":"end"}],"max_designs":2});
+        let request: Request = serde_json::from_value(input.clone()).unwrap();
+        let generated = request.generate().unwrap();
+        assert_eq!(generated[1].1["shape"], 4.0);
+        assert_eq!(
+            serde_json::to_value(&generated[1].0.operations).unwrap(),
+            json!([
+                {"op":"move","piece":"front","vertex":"c","dx_mm":2.0,"dy_mm":-1.0},
+                {"op":"slash_spread","piece":"back","axis":"x","at_mm":10.0,"add_mm":4.0},
+                {"op":"move","piece":"back","vertex":"d","dx_mm":-2.0,"dy_mm":0.0},
+                {"op":"true_seam","seam":"side","end":"end"}
+            ])
+        );
+        // Original slash-only sites retain their serialized representation.
+        assert_eq!(
+            serde_json::to_value(&request).unwrap()["variables"][0]["sites"],
+            input["variables"][0]["sites"]
+        );
+        assert!(matches!(
+            generated[0].0.operations[0],
+            Operation::Move {
+                dx_mm: 0.0,
+                dy_mm: 0.0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn move_sites_refuse_ambiguous_shapes_and_bad_displacements_in_unvisited_values() {
+        let site = json!({"op":"move","piece":"front","vertex":"c",
+            "dx_multiplier":1.0,"dy_multiplier":0.0});
+        for (key, value) in [
+            ("axis", json!("x")),
+            ("at_mm", json!(10)),
+            ("multiplier", json!(1)),
+            ("op", json!("rotate")),
+            ("unexpected", json!(true)),
+        ] {
+            let mut invalid = site.clone();
+            invalid[key] = value;
+            assert!(serde_json::from_value::<Site>(invalid).is_err(), "{key}");
+        }
+        for (values, dx, dy, vertex) in [
+            (vec![0.0, f64::MAX], 2.0, 0.0, "c"),
+            (vec![0.0, 1e-300], 1e-300, 1.0, "c"),
+            (vec![0.0, 4.0], 0.0, 0.0, "c"),
+            (vec![0.0, 4.0], 1.0, 0.0, " "),
+        ] {
+            let input = json!({"variables":[{"key":"shape","values_mm":values,
+                "sites":[{"op":"move","piece":"front","vertex":vertex,
+                    "dx_multiplier":dx,"dy_multiplier":dy}]}],"max_designs":1});
+            assert!(
+                serde_json::from_value::<Request>(input)
+                    .unwrap()
+                    .generate()
+                    .is_err()
+            );
+        }
+        let site: Site = serde_json::from_value(json!({"op":"move","piece":"front",
+            "vertex":"c","dx_multiplier":1e-300,"dy_multiplier":0.0}))
+        .unwrap();
+        assert!(site.validate(&[-1.0, 0.0, 1.0]).is_ok());
+        // Adaptive coordinates can approach zero between otherwise admissible endpoints.
+        assert!(site.operation(1e-300).is_err());
     }
 }
