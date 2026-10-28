@@ -4168,6 +4168,22 @@ allowance offsets, stitch sampling and cloth meshing retain their existing numer
 extends `ftx-a9dm`; conversion remains `REVIEW_REQUIRED`, with no exact-circle or physical-fit claim.
 See the [pattern contract](crates/ftx-pattern/CONTRACT.md) for source semantics and limits.
 
+### 25.115 Find feasible production orders before optimizing scarce fixture use
+
+Finite workholding now participates in finding the first complete sewing schedule, rather than
+requiring the original copy-order seed to fit every fixture and acquisition/release prerequisite.
+The same bounded optimizer backtracks out of fixture deadlocks, retains the first complete feasible
+replacement, then improves its declared setup or setup-plus-handling objective. Source-qualified
+capacities, machine/material/process locks and actual operation dependencies remain unchanged.
+
+Feasibility and improvement share one work cap. A budget limit before any complete schedule remains
+unresolved; exhaustive failure is scoped to the declared finite scheduling model. Once found, a
+complete incumbent survives later budget exhaustion. Replacement baselines are explicitly marked,
+and their fixture, handling and stitch histories replay the actual retained order. Existing feasible
+source orders preserve their prior representation. Native serial, parallel and specialist-route
+regressions cover this integration under `ftx-pb2.2.9`; measured fixture adequacy, factory timing and
+hardware execution remain separate acceptance gates under `ftx-pb2.2` and `ftx-sp2`.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

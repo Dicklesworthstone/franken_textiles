@@ -125,8 +125,13 @@ pub struct Changes {
 pub struct Report {
     /// Same declared objective as the retained input policy.
     pub objective: Objective,
-    /// Admitted baseline: normal lexicographic topology, or complete garments in copy order.
+    /// Admitted baseline: normal topology/copy order when feasible, otherwise the first complete
+    /// resource-feasible schedule found within the same bounded search.
     pub baseline_order: Vec<String>,
+    /// The original topology/copy-order seed violated qualified resource or lifecycle constraints.
+    /// Omitted for existing feasible seeds. Replacement never means relaxed source constraints.
+    #[serde(skip_serializing_if = "super::is_false")]
+    pub baseline_replaced: bool,
     /// Every admitted operation exactly once, in the returned plan's order.
     pub selected_order: Vec<String>,
     /// Setup changes in the original admitted order, under the same initial-setup policy.
@@ -231,6 +236,23 @@ struct Frame {
 }
 
 impl Search<'_> {
+    fn feasible(&self, order: &[usize]) -> bool {
+        let mut mask = 0_u64;
+        for &next in order {
+            let task = &self.tasks[next];
+            if mask & (1_u64 << next) != 0
+                || task.predecessors & mask != task.predecessors
+                || self
+                    .resources
+                    .is_some_and(|resources| !resources.admits(&resources.occupied(mask), next))
+            {
+                return false;
+            }
+            mask |= 1_u64 << next;
+        }
+        mask == self.all
+    }
+
     fn setup(&self, last: Option<usize>) -> Option<(u64, u64)> {
         last.map(|i| (self.tasks[i].needle, self.tasks[i].thread))
             .or(self.initial)
@@ -389,7 +411,8 @@ pub(super) fn optimize_operations(
     optimize_operations_with_resources(policy, baseline_passes, feed_seconds, None, None)
 }
 
-// Resource-qualified callers first admit the complete baseline, including added lifecycle edges.
+// Resource-qualified callers admit the graph and source evidence. A source-order seed can violate
+// finite resources or added lifecycle edges: find a complete feasible replacement before pruning.
 // Relaxing resource capacity only weakens existing lower bounds; pruning/proof remain sound.
 pub(super) fn optimize_operations_with_resources(
     policy: &Policy,
@@ -499,19 +522,21 @@ pub(super) fn optimize_operations_with_resources(
             )
         }),
     };
-    let baseline: Vec<_> = baseline_passes.iter().map(|pass| ids[pass.id]).collect();
-    let baseline_changes = search.count(&baseline);
+    let original: Vec<_> = baseline_passes.iter().map(|pass| ids[pass.id]).collect();
+    let baseline_replaced = !search.feasible(&original);
+    let mut baseline = (!baseline_replaced).then_some(original);
     let mut best = baseline.clone();
-    let baseline_cost = search.total_cost(&baseline);
-    let mut best_cost = baseline_cost;
+    let mut best_cost = best.as_deref().map(|order| search.total_cost(order));
     let root_bound = search.lower_bound(0, None);
     let mut search_nodes = 0;
     let mut budget_exhausted = false;
     let mut stack = vec![search.frame(0, None, 0)];
     let mut path = Vec::with_capacity(baseline_passes.len());
     // Iterative depth-first branch-and-bound: at most 63 frames, each with at most 63 candidates.
+    // Feasibility discovery and objective improvement share one prefix budget. An invalid original
+    // seed supplies no cost upper bound, even when all operations have identical zero-change setups.
     // A budget stop cannot replace the incumbent with an unfinished prefix.
-    while best_cost > root_bound && !stack.is_empty() {
+    while best_cost.is_none_or(|cost| cost > root_bound) && !stack.is_empty() {
         let frame = stack.last_mut().expect("nonempty search stack");
         if frame.next == frame.candidates.len() {
             stack.pop();
@@ -527,18 +552,40 @@ pub(super) fn optimize_operations_with_resources(
         search_nodes += 1;
         let mask = frame.mask | (1 << next);
         let cost = frame.cost + search.cost(frame.last, next);
-        if cost + search.lower_bound(mask, Some(next)) >= best_cost {
+        if best_cost.is_some_and(|best| cost + search.lower_bound(mask, Some(next)) >= best) {
             continue;
         }
         if mask == search.all {
-            best.clone_from(&path);
-            best.push(next);
-            best_cost = cost + search.final_cost(Some(next));
+            let mut complete = path.clone();
+            complete.push(next);
+            if baseline.is_none() {
+                baseline = Some(complete.clone());
+            }
+            best = Some(complete);
+            best_cost = Some(cost + search.final_cost(Some(next)));
         } else {
             path.push(next);
             stack.push(search.frame(mask, Some(next), cost));
         }
     }
+    let Some(best) = best else {
+        return Err(if budget_exhausted {
+            Refusal::new(
+                RefusalCode::NotConverged,
+                format!(
+                    "no complete resource-feasible sewing schedule found within {search_nodes} search nodes; unvisited schedules remain unresolved"
+                ),
+            )
+        } else {
+            bad(format!(
+                "no complete resource-feasible sewing schedule exists under the declared prerequisites and acquire-before-start/release-after-completion capacities; exhaustive search visited {search_nodes} nodes"
+            ))
+        });
+    };
+    let baseline = baseline.expect("a complete incumbent supplies a feasible baseline");
+    let baseline_changes = search.count(&baseline);
+    let baseline_cost = search.total_cost(&baseline);
+    let best_cost = best_cost.expect("a complete incumbent supplies its objective");
     let names = |order: &[usize]| {
         order
             .iter()
@@ -565,6 +612,7 @@ pub(super) fn optimize_operations_with_resources(
     Ok(Report {
         objective: policy.objective,
         baseline_order: names(&baseline),
+        baseline_replaced,
         selected_order: names(&best),
         baseline_changes,
         selected_changes: search.count(&best),

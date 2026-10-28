@@ -262,7 +262,9 @@ pub(super) fn evaluate(
         workholding.as_ref().map(|compiled| &compiled.limits),
         handling.as_ref().map(|compiled| &compiled.costs),
     )?;
-    ordering.tie_break = if handling.is_some() {
+    ordering.tie_break = if ordering.baseline_replaced {
+        "The original copy-order seed violates qualified resources or lifecycle prerequisites; retain the first complete feasible replacement, then improve only on strictly lower objective. Feasibility and optimization share the same node cap; explore by immediate objective cost and scoped operation ID."
+    } else if handling.is_some() {
         "Retain the incumbent on equal integer setup-plus-handling milliseconds; start with complete garments in ascending copy order, then explore by immediate duration and scoped operation ID."
     } else if ordering.timing.is_some() {
         "Retain the incumbent on equal integer setup milliseconds; start with complete garments in ascending copy order, then explore by immediate duration and scoped operation ID."
@@ -270,7 +272,7 @@ pub(super) fn evaluate(
         "Retain the incumbent on equal total changes; start with complete garments in ascending copy order, then explore by immediate total changes and scoped operation ID."
     };
     let workholding = workholding
-        .map(|compiled| compiled.report(&ordering.selected_order))
+        .map(|compiled| compiled.report(&ordering.baseline_order, &ordering.selected_order))
         .transpose()?;
     let handling = handling
         .map(|compiled| compiled.report(&ordering.baseline_order, &ordering.selected_order))

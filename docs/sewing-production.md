@@ -184,15 +184,20 @@ copy graph. Cycles refuse. If both anchors are the same operation, its resources
 available before start; they cannot be reused until that operation completes. Likewise, an operation
 cannot borrow resources from a different hold that it will release only at completion.
 
-The existing baseline finishes each copy in the source plan's topological order. This complete
-baseline must satisfy every augmented predecessor and resource capacity **before** search, pruning
-or a zero-cost optimality shortcut. If it does not, the current slice returns an explicit
-unsupported-baseline refusal with the unresolved `not_converged` code. Recipe selection consequently
-retains an unresolved trial rather than claiming no feasible listed recipe or a proved optimum.
-The refusal does not prove that all possible source orders are infeasible.
-Declare a resource-feasible source order through the ordinary `after` dependencies when needed.
-An admitted search always retains a complete resource-feasible incumbent, including at its work
-limit. Existing lower bounds remain valid because ignoring resources only relaxes the problem.
+The preferred baseline finishes each copy in the source plan's topological order. When that order
+violates an augmented predecessor or finite resource capacity, the same bounded optimizer searches
+for a complete feasible replacement before pruning against an incumbent or taking a zero-cost
+optimality shortcut. It backtracks out of fixture deadlocks without changing the qualified resource
+capacities or adding invented dependencies. Feasibility discovery and objective improvement share
+the existing node cap. The first complete replacement becomes the reported baseline and sets
+`production.ordering.baseline_replaced: true`; the field is omitted for an already feasible seed.
+
+Exhausting the budget before finding a complete schedule returns `not_converged`, leaving recipe
+selection unresolved. Only exhaustive search without a complete schedule establishes infeasibility
+under the declared prerequisite and acquire-before-start/release-after-completion model. Once a
+complete incumbent is found, a work limit retains it. Baseline and selected fixture, handling and
+stitch histories replay their actual respective orders. Existing lower bounds remain valid because
+ignoring resources only relaxes the problem; none of these results establish physical fixture adequacy.
 
 Requested workholding produces `ftx-sewing-plan/13`, `ftx-sewing-production/2` and the nested
 `ftx-sewing-workholding/1` report. The report retains each expanded hold, actual qualified operation

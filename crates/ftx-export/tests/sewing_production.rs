@@ -765,8 +765,9 @@ fn single_operation_holds_are_available_before_start_and_released_after_completi
     // An existing hold cannot be borrowed by another hold merely because this operation releases it.
     options["production"]["workholding"]["holds"][0]["release"] = json!("b");
     let refusal = build(pattern, options).unwrap_err();
-    assert!(refusal.message.contains("before start"));
-    assert!(refusal.message.contains("baseline is unsupported"));
+    assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+    assert!(refusal.message.contains("acquire-before-start"));
+    assert!(refusal.message.contains("exhaustive search"));
 }
 
 #[test]
@@ -802,7 +803,7 @@ fn lifecycles_add_real_precedence_and_refuse_cycles_or_unknown_anchors() {
 }
 
 #[test]
-fn infeasible_serial_seed_never_becomes_a_zero_cost_incumbent_or_global_infeasibility_claim() {
+fn infeasible_serial_seed_is_replaced_before_zero_cost_pruning_and_recipe_selection() {
     let (pattern, mut options) = fixture();
     let pass = options["passes"][0].clone();
     options["passes"] = json!(["a", "b", "c", "d"].map(|id| {
@@ -824,10 +825,53 @@ fn infeasible_serial_seed_never_becomes_a_zero_cost_incumbent_or_global_infeasib
             {"id":"second","resource":"jig","units":1,"acquire":"b","release":"d"}
         ]),
     );
-    let refusal = build(pattern.clone(), options.clone()).unwrap_err();
-    assert_eq!(refusal.code, RefusalCode::NotConverged);
-    assert!(refusal.message.contains("baseline is unsupported"));
-    assert!(refusal.message.contains("no global infeasibility"));
+    let plan = build(pattern.clone(), options.clone()).unwrap();
+    complete(&plan);
+    let ordering = plan.ordering_report().unwrap();
+    assert!(ordering.baseline_replaced && ordering.optimality_proven);
+    assert_eq!(ordering.search_nodes, 8);
+    assert_eq!(ordering.selected_changes.total_changes, 0);
+    assert_eq!(
+        ordering.baseline_order,
+        ["0/a", "0/c", "0/b", "0/d", "1/a", "1/c", "1/b", "1/d"]
+    );
+    assert_eq!(ordering.selected_order, ordering.baseline_order);
+    let resources = plan
+        .production
+        .as_ref()
+        .unwrap()
+        .workholding
+        .as_ref()
+        .unwrap();
+    for timeline in [&resources.baseline, &resources.selected] {
+        assert_eq!(timeline.peak_occupancy["jig"], 1);
+        assert_eq!(timeline.operations.len(), 8);
+        assert_eq!(timeline.operations.last().unwrap().occupied_after["jig"], 0);
+    }
+    let program = SewProgram::build(&Pattern::new(pattern.clone()), &plan.options).unwrap();
+    let actual: Vec<_> = program
+        .stitches
+        .iter()
+        .filter(|step| step.begins_run)
+        .map(|step| {
+            format!(
+                "{}/{}",
+                step.copy.unwrap(),
+                program.plan.seams[step.operation].pass.operation_id()
+            )
+        })
+        .collect();
+    assert_eq!(actual, ordering.selected_order);
+    let replay = build(
+        pattern.clone(),
+        serde_json::to_value(&plan.options).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(plan).unwrap(),
+        serde_json::to_value(replay).unwrap()
+    );
+
     let selection: ftx_export::sewing_selection::Request = serde_json::from_value(json!({
         "schema":"ftx-sewing-selection/1","options":options,
         "alternatives":[{"operation":"a","recipes":[{"id":"slower",
@@ -836,11 +880,39 @@ fn infeasible_serial_seed_never_becomes_a_zero_cost_incumbent_or_global_infeasib
         "objective":"minimize_feed_seconds","max_plan_evaluations":2
     }))
     .unwrap();
-    let unresolved = selection.select(&Pattern::new(pattern.clone())).unwrap();
-    assert_eq!(unresolved.unresolved_trials, 2);
-    assert!(unresolved.search_complete && unresolved.selected_plan.is_none());
-    assert!(!unresolved.no_feasible_listed_recipe && !unresolved.optimality_proven);
-    // A compatible explicit source order really is feasible; the earlier refusal did not prove otherwise.
+    let selected = selection.select(&Pattern::new(pattern.clone())).unwrap();
+    assert_eq!(selected.unresolved_trials, 0);
+    assert!(selected.search_complete && selected.selected_plan.is_some());
+    assert!(!selected.no_feasible_listed_recipe && selected.optimality_proven);
+    assert_eq!(selected.selected_choices.unwrap()["a"], "template");
+
+    // Feasibility discovery uses the existing cap and never publishes an unfinished seed.
+    for limit in [1, 7] {
+        options["production"]["ordering"]["max_search_nodes"] = json!(limit);
+        let refusal = build(pattern.clone(), options.clone()).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::NotConverged);
+        assert!(
+            refusal
+                .message
+                .contains("unvisited schedules remain unresolved")
+        );
+        let mut bounded = selection.clone();
+        bounded.options = serde_json::from_value(options.clone()).unwrap();
+        let unresolved = bounded.select(&Pattern::new(pattern.clone())).unwrap();
+        assert_eq!(unresolved.unresolved_trials, 2);
+        assert!(unresolved.search_complete && unresolved.selected_plan.is_none());
+        assert!(!unresolved.no_feasible_listed_recipe && !unresolved.optimality_proven);
+    }
+    options["production"]["ordering"]["max_search_nodes"] = json!(8);
+    assert!(
+        build(pattern.clone(), options.clone())
+            .unwrap()
+            .ordering_report()
+            .unwrap()
+            .optimality_proven
+    );
+
+    // An already feasible source order retains the zero-work shortcut and its prior wire shape.
     options["passes"][1]["after"] = json!(["c"]);
     options["passes"][2]["after"] = json!(["a"]);
     let plan = build(pattern, options).unwrap();
@@ -853,6 +925,107 @@ fn infeasible_serial_seed_never_becomes_a_zero_cost_incumbent_or_global_infeasib
         0
     );
     assert!(plan.ordering_report().unwrap().optimality_proven);
+    assert_eq!(plan.ordering_report().unwrap().search_nodes, 0);
+    assert!(!plan.ordering_report().unwrap().baseline_replaced);
+    assert!(
+        serde_json::to_value(plan).unwrap()["production"]["ordering"]
+            .get("baseline_replaced")
+            .is_none()
+    );
+}
+
+#[test]
+fn feasible_seed_search_backtracks_out_of_a_fixture_deadlock() {
+    let (pattern, mut options) = fixture();
+    let pass = options["passes"][0].clone();
+    options["passes"] = json!(["a", "b", "c", "d"].map(|id| {
+        let mut pass = pass.clone();
+        pass["id"] = json!(id);
+        pass
+    }));
+    options["passes"][3]["after"] = json!(["c"]);
+    options["qualifications"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    batch(&mut options, 1);
+    fixtures(
+        &pattern,
+        &mut options,
+        1,
+        json!([
+            {"id":"first","resource":"jig","units":1,"acquire":"a","release":"d"},
+            {"id":"second","resource":"jig","units":1,"acquire":"b","release":"c"}
+        ]),
+    );
+    // Starting `a` is legal but retains the only jig until `d`; `d` needs `c`, which needs `b`.
+    // The independent feasible order is b,c,a,d. A greedy topological pass cannot discover it.
+    options["production"]["ordering"]["max_search_nodes"] = json!(4);
+    assert_eq!(
+        build(pattern.clone(), options.clone()).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+    options["production"]["ordering"]["max_search_nodes"] = json!(5);
+    let plan = build(pattern, options).unwrap();
+    complete(&plan);
+    let order = plan.ordering_report().unwrap();
+    assert_eq!(order.selected_order, ["0/b", "0/c", "0/a", "0/d"]);
+    assert_eq!(order.search_nodes, 5);
+    assert!(order.baseline_replaced && order.optimality_proven && !order.budget_exhausted);
+}
+
+#[test]
+fn lifecycle_seed_replacement_preserves_setup_handling_and_full_stitch_replay() {
+    let (pattern, mut options) = fixture();
+    options["passes"][1]["after"] = json!([]);
+    batch(&mut options, 1);
+    timed(&mut options);
+    handling(&pattern, &mut options, 5000);
+    fixtures(
+        &pattern,
+        &mut options,
+        1,
+        json!([
+            {"id":"reverse-lifecycle","resource":"jig","units":1,"acquire":"b","release":"a"}
+        ]),
+    );
+    let plan = build(pattern.clone(), options).unwrap();
+    complete(&plan);
+    let production = plan.production.as_ref().unwrap();
+    let order = &production.ordering;
+    assert!(order.baseline_replaced && order.optimality_proven);
+    assert_eq!(order.baseline_order, ["0/b", "0/a"]);
+    assert_eq!(order.selected_order, order.baseline_order);
+    let timing = order.timing.as_ref().unwrap();
+    assert_eq!(timing.baseline_setup_milliseconds, 5000);
+    assert_eq!(timing.selected_setup_milliseconds, 5000);
+    let handled = order.handling_timing.as_ref().unwrap();
+    assert_eq!(handled.baseline_handling_milliseconds, 400);
+    assert_eq!(handled.selected_handling_milliseconds, 400);
+    assert_eq!(
+        handled.selected_modeled_production_seconds,
+        plan.total_feed_seconds() + 5.4
+    );
+    for timeline in [
+        &production.handling.as_ref().unwrap().baseline,
+        &production.handling.as_ref().unwrap().selected,
+    ] {
+        assert_eq!(timeline.steps[0].to.as_deref(), Some("0/b"));
+        assert_eq!(timeline.steps[1].from.as_deref(), Some("0/b"));
+        assert_eq!(timeline.steps[1].to.as_deref(), Some("0/a"));
+        assert_eq!(timeline.steps[2].from.as_deref(), Some("0/a"));
+        assert_eq!(timeline.total_milliseconds, 400);
+    }
+    let program = SewProgram::build(&Pattern::new(pattern), &plan.options).unwrap();
+    assert_eq!(program.stitches.len(), plan.total_stitch_intervals());
+    assert_eq!(
+        program.plan.seams[program.stitches[0].operation]
+            .pass
+            .operation_id(),
+        "b"
+    );
+    let end = program.stitches.last().unwrap();
+    assert_eq!(program.plan.seams[end.operation].pass.operation_id(), "a");
 }
 
 #[test]

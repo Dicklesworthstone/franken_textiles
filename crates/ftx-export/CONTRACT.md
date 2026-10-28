@@ -110,8 +110,10 @@ holds constrain the same batch optimizer. Full typed machine and admitted qualif
 bind resource applicability to the exact configuration, material stack and process; estimate consent
 is independent. Acquisition precedes operation start, release follows completion, and same-operation
 holds contribute to during/peak occupancy. Distinct anchors add real prerequisites; cycles refuse.
-The serial baseline must be admitted before pruning or objective shortcuts. An unsupported baseline
-is `NotConverged`, preserving unresolved recipe trials rather than claiming global infeasibility.
+An infeasible source-order seed triggers bounded discovery of a complete resource-feasible baseline
+before pruning or objective shortcuts. Discovery and optimization share one node cap; the first
+complete replacement is retained with optional `baseline_replaced: true`. Budget exhaustion without
+a complete schedule is `NotConverged`; only exhaustive search establishes declared-model infeasibility.
 The selected stitch program uses the constrained order. Plan `/13`, production `/2` and workholding
 `/1` retain expanded holds, exact source locks, full baseline/selected timelines and finite peaks.
 Bounds are 16 resources, 64 source holds, 1024 expanded holds and 256 qualification references, with

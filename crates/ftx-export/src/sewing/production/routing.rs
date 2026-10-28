@@ -1021,6 +1021,7 @@ pub(in crate::sewing) fn build(
     }
     let identity_order = ordering::Report {
         objective: ordering::Objective::MinimizeSetupChanges,
+        baseline_replaced: false,
         baseline_order: baseline
             .operations
             .iter()

@@ -139,7 +139,7 @@ pub struct Report {
     pub resources: Vec<Resource>,
     /// Every repeated physical hold and its scoped start/completion boundaries.
     pub holds: Vec<ExpandedHold>,
-    /// Admitted serial-copy baseline, established before any objective shortcut or pruning.
+    /// Complete feasible baseline, including a bounded replacement when the serial-copy seed fails.
     pub baseline: Timeline,
     /// Complete selected schedule using the same resource authority as search admission.
     pub selected: Timeline,
@@ -295,11 +295,10 @@ pub(super) struct Compiled {
     policy: Policy,
     qualifications: BTreeMap<String, QualificationRef>,
     holds: Vec<ExpandedHold>,
-    baseline: Timeline,
 }
 
 impl Compiled {
-    fn timeline(&self, order: &[String], baseline: bool) -> Result<Timeline, Refusal> {
+    fn timeline(&self, order: &[String]) -> Result<Timeline, Refusal> {
         let ids: BTreeMap<_, _> = self
             .limits
             .ids
@@ -327,18 +326,9 @@ impl Compiled {
             }
             let before = self.limits.occupied(mask);
             if !self.limits.admits(&before, next) {
-                return Err(if baseline {
-                    Refusal::new(
-                        RefusalCode::NotConverged,
-                        format!(
-                            "workholding serial-copy baseline is unsupported: {operation} cannot acquire its complete resources before start; declare a resource-feasible source order or qualified capacity; no global infeasibility is proved"
-                        ),
-                    )
-                } else {
-                    bad(format!(
-                        "selected workholding schedule exceeds qualified resources before {operation}"
-                    ))
-                });
+                return Err(bad(format!(
+                    "workholding replay exceeds qualified resources before {operation}"
+                )));
             }
             let during: Vec<_> = before
                 .iter()
@@ -381,15 +371,20 @@ impl Compiled {
         })
     }
 
-    pub(super) fn report(self, selected: &[String]) -> Result<Report, Refusal> {
-        let selected = self.timeline(selected, false)?;
+    pub(super) fn report(
+        self,
+        baseline: &[String],
+        selected: &[String],
+    ) -> Result<Report, Refusal> {
+        let baseline = self.timeline(baseline)?;
+        let selected = self.timeline(selected)?;
         Ok(Report {
             schema: "ftx-sewing-workholding/1",
             machine_sha256: self.policy.machine_sha256,
             qualifications: self.qualifications,
             resources: self.policy.resources,
             holds: self.holds,
-            baseline: self.baseline,
+            baseline,
             selected,
             fixture_geometry_and_access_validated: false,
         })
@@ -479,19 +474,9 @@ pub(super) fn compile(
             ));
         }
     }
-    // Preserve the existing serial-copy seed. An unsupported seed is an explicit admission limit,
-    // not proof that no other resource-feasible source order exists.
-    done.clear();
-    for operation in operations.iter() {
-        if !operation.after.iter().all(|id| done.contains(id)) {
-            return Err(Refusal::new(
-                RefusalCode::NotConverged,
-                "workholding serial-copy baseline is unsupported by release-after-acquire prerequisites; declare a compatible source order; no global infeasibility is proved",
-            ));
-        }
-        done.insert(operation.id.clone());
-    }
-    let mut compiled = Compiled {
+    // The ordinary optimizer discovers a resource-feasible baseline if source order is incompatible
+    // with these added edges/capacities. Discovery shares its existing bounded prefix work.
+    Ok(Compiled {
         limits: ordering::ResourceLimits {
             ids,
             capacity: policy.resources.iter().map(|r| r.capacity).collect(),
@@ -501,17 +486,5 @@ pub(super) fn compile(
         policy: policy.clone(),
         qualifications,
         holds,
-        baseline: Timeline {
-            operations: Vec::new(),
-            peak_occupancy: BTreeMap::new(),
-        },
-    };
-    compiled.baseline = compiled.timeline(
-        &operations
-            .iter()
-            .map(|op| op.id.clone())
-            .collect::<Vec<_>>(),
-        true,
-    )?;
-    Ok(compiled)
+    })
 }
