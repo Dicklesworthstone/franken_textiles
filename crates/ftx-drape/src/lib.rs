@@ -19,6 +19,7 @@ pub mod attached_mass;
 pub mod bending;
 mod bvh;
 pub mod cloth;
+pub mod collider;
 pub mod contact;
 pub mod distance;
 pub mod eigen;
