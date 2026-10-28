@@ -453,7 +453,7 @@ pub fn tape_readings(
     let mut prev: Option<(f64, f64)> = None;
     let mut h = waist_h;
     loop {
-        let y = torso.back_point(frames.floor_z + h, axis[0])?;
+        let y = torso.back_point(frames.floor_z + h, axis)?;
         if let Some((ph, py)) = prev {
             back += ftx_core::det::hypot(h - ph, y - py);
         }

@@ -21,7 +21,13 @@ independent qualification of the chosen anatomical axis. `Slicer` buckets triang
 by height (5 mm slabs) so a search over levels visits only nearby triangles (same loops, same order).
 `tape_readings` reads 21 measurements on the posed body (`TAPE_FIELDS`, definitions in the `fit.rs`
 table and the `tape.rs` functions): stature, chest, waist, hip, waist and crotch heights, thigh, knee,
-calf, ankle, upper arm, wrist, arm length, knee height, back neck to waist (along the back's median line),
+calf, ankle, upper arm, wrist, arm length, knee height, back neck to waist (along the back's median line
+on the outermost section containing the declared torso axis). Disconnected posterior limbs and nested
+sections cannot replace that torso surface; a missing axis-containing section yields no reading.
+The direct and height-bucketed back-point functions take the full (x, y) torso axis, in mesh units.
+An independent slanted-prism control checks both the back points and the resulting straight spine path
+under detached/nested sections, translation and triangle order; this qualifies section geometry only.
+The remaining tape definitions are
 neck base (the section across the neck axis at the `neck01` head: below it the section turns into the
 trunk), head (the fullest horizontal section round the head bone's axis, 15–50 % of the way from crown to
 C7), shoulder length (along the top of the shoulder in the coronal section through the shoulder joint,

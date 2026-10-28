@@ -115,8 +115,8 @@ impl<'a> Slicer<'a> {
 
     /// [`back_point`] at height `z`.
     #[must_use]
-    pub fn back_point(&self, z: f64, x0: f64) -> Option<f64> {
-        back_of(&self.loops(z), x0)
+    pub fn back_point(&self, z: f64, around: [f64; 2]) -> Option<f64> {
+        back_of(&self.loops(z), around)
     }
 }
 
@@ -523,24 +523,23 @@ pub fn in_frame(vertices: &[Vec3], origin: Vec3, lat: Vec3, front: Vec3, up: Vec
         .collect()
 }
 
-/// The largest y at which the section at height `z` crosses the plane x = `x0` (the back-most point
-/// of the body's median line when +y is the back), or `None` when nothing crosses it.
+/// The largest y where the outermost section containing the torso axis `around` crosses x =
+/// `around[0]` at height `z` (+y is the back). Missing torso sections yield `None`.
 #[must_use]
-pub fn back_point(vertices: &[Vec3], triangles: &[[usize; 3]], z: f64, x0: f64) -> Option<f64> {
-    back_of(&section_loops(vertices, triangles, z), x0)
+pub fn back_point(
+    vertices: &[Vec3],
+    triangles: &[[usize; 3]],
+    z: f64,
+    around: [f64; 2],
+) -> Option<f64> {
+    back_of(&section_loops(vertices, triangles, z), around)
 }
 
-fn back_of(loops: &[Vec<[f64; 2]>], x0: f64) -> Option<f64> {
-    loops
-        .iter()
-        .flat_map(|l| {
-            let n = l.len();
-            (0..n).filter_map(move |i| {
-                let (a, b) = (l[i], l[(i + 1) % n]);
-                ((a[0] >= x0) != (b[0] >= x0))
-                    .then(|| a[1] + (x0 - a[0]) / (b[0] - a[0]) * (b[1] - a[1]))
-            })
-        })
+fn back_of(loops: &[Vec<[f64; 2]>], around: [f64; 2]) -> Option<f64> {
+    let torso = outermost_around(loops, around)?;
+    crossings(torso, 0, around[0])
+        .into_iter()
+        .map(|p| p[1])
         .fold(None, |m: Option<f64>, y| Some(m.map_or(y, |m| m.max(y))))
 }
 
@@ -972,6 +971,64 @@ mod tests {
     }
 
     #[test]
+    fn qualification_spine_path_excludes_disconnected_sections() {
+        let heights = [0.125, 0.375, 0.625, 0.875];
+        for extras in 0..8 {
+            let (mut vertices, mut faces) =
+                prism(&[[-2.0, -1.0], [2.0, -1.0], [2.0, 1.0], [-2.0, 1.0]]);
+            for (bit, y0, y1, z0, z1) in [
+                (1, 4.0, 5.0, 0.25, 0.75),
+                (2, -5.0, -4.0, 0.0, 1.0),
+                (4, -0.4, 0.4, 0.0, 1.0),
+            ] {
+                if extras & bit == 0 {
+                    continue;
+                }
+                let (mut v, t) = prism(&[[-0.5, y0], [0.5, y0], [0.5, y1], [-0.5, y1]]);
+                for p in &mut v {
+                    p.z = z0 + (z1 - z0) * p.z;
+                }
+                let offset = vertices.len();
+                vertices.extend(v);
+                faces.extend(t.into_iter().map(|f| f.map(|i| i + offset)));
+            }
+            for shift in [Vec3::ZERO, Vec3::new(13.0, -17.0, 4.0)] {
+                let v: Vec<_> = vertices
+                    .iter()
+                    .map(|p| Vec3::new(p.x, p.y + 0.5 * p.z, p.z) + shift)
+                    .collect();
+                for _ in 0..2 {
+                    let slicer = Slicer::new(&v, &faces, 0.125);
+                    let mut path = Vec::new();
+                    for h in heights {
+                        let z = shift.z + h;
+                        let expected = shift.y + 1.0 + 0.5 * h;
+                        let axis = [shift.x, shift.y];
+                        let direct = back_point(&v, &faces, z, axis);
+                        let cached = slicer.back_point(z, axis);
+                        assert_eq!(direct, Some(expected), "extras={extras}, shift={shift:?}");
+                        assert_eq!(cached, direct);
+                        path.push([z, cached.unwrap()]);
+                    }
+                    // Independently: 0.75 high and 0.375 back, along one straight spine.
+                    let expected = (0.75_f64 * 0.75 + 0.375 * 0.375).sqrt();
+                    assert!((path_length(&path) - expected).abs() < 1e-12);
+                    for axis in [
+                        [shift.x, shift.y + 2.0],
+                        [shift.x, shift.y - 2.0],
+                        [f64::NAN, shift.y],
+                        [shift.x, f64::INFINITY],
+                    ] {
+                        assert_eq!(back_point(&v, &faces, shift.z + 0.375, axis), None);
+                        assert_eq!(slicer.back_point(shift.z + 0.375, axis), None);
+                    }
+                    faces.reverse();
+                }
+            }
+        }
+    }
+
+    #[test]
     fn qualification_out_of_domain_slices_have_no_reading() {
         let (v, t) = prism(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
         let s = Slicer::new(&v, &t, 0.125);
@@ -980,7 +1037,7 @@ mod tests {
             assert!(s.loops(z).is_empty(), "z={z}");
             assert_eq!(s.girth(z, [0.5, 0.5]), None);
             assert_eq!(s.girth_near(z, [0.5, 0.5]), None);
-            assert_eq!(s.back_point(z, 0.5), None);
+            assert_eq!(s.back_point(z, [0.5, 0.5]), None);
         }
     }
 
@@ -1012,8 +1069,8 @@ mod tests {
         );
         assert!((girth(&f, &t, 0.5, [0.0, 0.0]).unwrap() - 4.0).abs() < 1e-12);
         // its back (+y in the original frame is the square's far side at y = 1)
-        assert!((back_point(&v, &t, 0.5, 0.5).unwrap() - 1.0).abs() < 1e-12);
-        assert_eq!(back_point(&v, &t, 0.5, 3.0), None);
+        assert!((back_point(&v, &t, 0.5, [0.5, 0.5]).unwrap() - 1.0).abs() < 1e-12);
+        assert_eq!(back_point(&v, &t, 0.5, [3.0, 0.5]), None);
     }
 
     #[test]
