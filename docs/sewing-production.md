@@ -838,9 +838,10 @@ Both native command families, portable interfaces, recipe/material studies and t
 these ordinary sewing inputs. Browser views show the route, actual cell recipes, complete operation
 and transfer times, sources and exact reports. Synthetic `sewing_routing` regressions specify
 specialist-only qualification, reentry, source changes, seam coverage, shared handoffs, inclusive
-windows, bounded incumbents, actual stitches, purchasing, selection and study replay. The focused
-Rust test target typechecks; executable verification is pending recovery of the full build
-filesystem. No measured factory timing, physical seam quality or hardware permission is established.
+windows, bounded incumbents, actual stitches, purchasing, selection and study replay. All eleven
+focused Rust regressions pass. The separate real-command workflow and current compiled-WASM
+acceptance remain distinct checks. No measured factory timing, physical seam quality or hardware
+permission is established.
 
 ## Bounds and remaining scope
 

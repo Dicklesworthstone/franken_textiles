@@ -317,3 +317,213 @@ fn portable_import_budgets_cover_original_inputs_and_all_download_strings() {
     assert_eq!(refused.code, ftx_core::RefusalCode::BudgetExceeded);
     assert!(refused.message.contains("output exceeds 16 MiB"));
 }
+
+fn circular_inputs() -> (String, String) {
+    // Two quarter-discs, radius 10 cm; the second source loop runs clockwise.
+    let source = json!({"properties":{"units_in_meter":100,"curvature_coords":"relative"},
+        "pattern":{"panel_order":["outer","under"],"panels":{
+            "outer":{"vertices":[[10,0],[0,10],[0,0]],"edges":[
+                {"endpoints":[0,1],"curvature":{"type":"circle","params":[10,0,1]}},
+                {"endpoints":[1,2]},{"endpoints":[2,0]}]},
+            "under":{"vertices":[[10,0],[0,0],[0,10]],"edges":[
+                {"endpoints":[0,1]},{"endpoints":[1,2]},
+                {"endpoints":[2,0],"curvature":{"type":"circle","params":[10,0,0]}}]}},
+            "stitches":[[{"panel":"outer","edge":0},{"panel":"under","edge":2}]]}});
+    let annotations = json!({"schema":"fabric-garmentcode-annotations/1",
+        "circular_arcs":{"model":"bounded_chord_polylines/1",
+            "max_sagitta_mm":0.01,"max_length_error_mm":0.01},
+        "panels":{
+            "outer":{"grain":[[10,10],[10,80]],"sa":10,"notches":[{"edge":0,"s":0.25}]},
+            "under":{"grain":[[10,10],[10,80]],"sa":10,"notches":[{"edge":2,"s":0.75}]}},
+        "stitches":{"0":{"ratio":1,"tol_mm":0.01,"kind":"plain"}},
+        "fit":{"schema":"fabric-fit/1","garment":"synthetic_quarter_disc",
+            "seam_tol_mm":0.01,"points":[{"id":"radii","kind":"path",
+                "refs":["p0000/e0001+e0002"],"body":"radius_sum","target_mm":[0,0,0],
+                "label":"Synthetic 200 mm sum of two straight radii"}]}});
+    (source.to_string(), annotations.to_string())
+}
+
+#[test]
+fn circular_panels_replay_native_bytes_and_preserve_curved_seams_through_exports() {
+    let dir = workspace();
+    let (source, annotations) = circular_inputs();
+    std::fs::write(dir.join("arcs.json"), &source).unwrap();
+    std::fs::write(dir.join("arc-annotations.json"), &annotations).unwrap();
+    run(
+        &dir,
+        &[
+            "import",
+            "garmentcode",
+            "arcs.json",
+            "--annotations",
+            "arc-annotations.json",
+            "--out",
+            "arcs",
+        ],
+        0,
+    );
+    let portable: Value =
+        serde_json::from_str(&ftx_wasm::import_garmentcode(&source, Some(&annotations)).unwrap())
+            .unwrap();
+    for (field, file) in [
+        ("pattern_json", "pattern.json"),
+        ("report_json", "import.json"),
+        ("fit_spec_json", "fit_spec.json"),
+    ] {
+        assert_eq!(
+            portable[field].as_str().unwrap().as_bytes(),
+            std::fs::read(dir.join("arcs").join(file)).unwrap()
+        );
+    }
+    assert_eq!(
+        std::fs::read(dir.join("arcs/source.garmentcode.json")).unwrap(),
+        source.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(dir.join("arcs/annotations.json")).unwrap(),
+        annotations.as_bytes()
+    );
+    let raw = read(&dir.join("arcs/pattern.json"));
+    let report = read(&dir.join("arcs/import.json"));
+    assert_eq!(report["status"], "REVIEW_REQUIRED");
+    assert_eq!(report["source_sha256"], sha256_hex(source.as_bytes()));
+    assert_eq!(
+        report["annotations_sha256"],
+        sha256_hex(annotations.as_bytes())
+    );
+    assert_eq!(
+        raw["meta"]["import"]["circular_arcs"],
+        report["circular_arcs"]
+    );
+    assert_eq!(raw["seams"][0]["reverse"], false);
+    assert_eq!(raw["pieces"][0]["edges"].as_array().unwrap().len(), 3);
+    assert_eq!(raw["pieces"][1]["edges"].as_array().unwrap().len(), 3);
+    let exact_length = 100.0 * std::f64::consts::FRAC_PI_2;
+    let curves = report["circular_arcs"]["curves"].as_array().unwrap();
+    assert_eq!(curves.len(), 2);
+    for curve in curves {
+        assert_eq!(curve["radius_mm"], 100.0);
+        assert!((curve["arc_length_mm"].as_f64().unwrap() - exact_length).abs() < 1e-10);
+        assert!(curve["max_deviation_bound_mm"].as_f64().unwrap() <= 0.01);
+        assert!(curve["length_error_bound_mm"].as_f64().unwrap() <= 0.01);
+    }
+    let pattern = ftx_pattern::Pattern::new(raw);
+    let pairs = pattern.seam_pairs(&pattern.seams()[0], 2.5).unwrap();
+    for length in [pairs.len_a, pairs.len_b] {
+        assert!(length <= exact_length + 1e-10);
+        assert!(exact_length - length < 0.01);
+    }
+    assert_eq!(pairs.notch_match, "piecewise");
+    let notch = pairs.fa.iter().position(|&f| f == 0.25).unwrap();
+    let expected = ftx_core::Vec2::new(
+        100.0 * std::f64::consts::FRAC_PI_8.cos(),
+        100.0 * std::f64::consts::FRAC_PI_8.sin(),
+    );
+    assert!((pairs.a[notch] - expected).norm() < 1e-8);
+    for (a, b) in pairs.a.iter().zip(&pairs.b) {
+        assert!((*a - *b).norm() < 1e-9);
+        assert!((a.norm() - 100.0).abs() <= 0.01);
+    }
+    std::fs::write(dir.join("arc-measurements.json"), br#"{"radius_sum":200}"#).unwrap();
+    let flat = run(
+        &dir,
+        &[
+            "validate",
+            "arcs/pattern.json",
+            "--measurements",
+            "arc-measurements.json",
+            "--fit",
+            "arcs/fit_spec.json",
+        ],
+        0,
+    );
+    assert_eq!(flat["result"]["status"], "CONVERGED");
+    for target in ["svg", "dxf", "garmentcode"] {
+        let out = format!("arc-export-{target}");
+        run(
+            &dir,
+            &[
+                "export",
+                target,
+                "arcs/pattern.json",
+                "--out",
+                &out,
+                "--created",
+                "2026-10-27T00:00",
+            ],
+            0,
+        );
+        let checked = run(
+            &dir,
+            &["check", &out, "--pattern-ref", "arcs/pattern.json"],
+            0,
+        );
+        assert_eq!(checked["result"]["status"], "PASS");
+        assert!(checked["result"]["total"].as_u64().unwrap() > 0);
+    }
+    let exported = std::fs::read_dir(dir.join("arc-export-garmentcode"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().ends_with(".garmentcode.json"))
+        .unwrap();
+    run(
+        &dir,
+        &[
+            "import",
+            "garmentcode",
+            exported.to_str().unwrap(),
+            "--out",
+            "arc-reimport",
+        ],
+        0,
+    );
+    let again = ftx_pattern::Pattern::new(read(&dir.join("arc-reimport/pattern.json")));
+    assert!(again.seams().len() > 1);
+    let stitched_length: f64 = again
+        .seams()
+        .iter()
+        .map(|seam| again.seam_pairs(seam, 2.5).unwrap().len_a)
+        .sum();
+    assert!((stitched_length - pairs.len_a).abs() < 0.001);
+}
+
+#[test]
+fn circular_import_refuses_implicit_approximation_and_unattainable_bounds_without_output() {
+    let dir = workspace();
+    let (source, annotations) = circular_inputs();
+    std::fs::write(dir.join("arcs.json"), &source).unwrap();
+    let refusal = ftx_wasm::import_garmentcode(&source, None).unwrap_err();
+    assert_eq!(refusal.code, ftx_core::RefusalCode::InvalidDocument);
+    run(
+        &dir,
+        &[
+            "import",
+            "garmentcode",
+            "arcs.json",
+            "--out",
+            "implicit-arcs",
+        ],
+        3,
+    );
+    assert!(!dir.join("implicit-arcs").exists());
+    let mut tight: Value = serde_json::from_str(&annotations).unwrap();
+    tight["circular_arcs"]["max_sagitta_mm"] = json!(1e-12);
+    let tight = tight.to_string();
+    std::fs::write(dir.join("tight-arcs.json"), &tight).unwrap();
+    let refusal = ftx_wasm::import_garmentcode(&source, Some(&tight)).unwrap_err();
+    assert_eq!(refusal.code, ftx_core::RefusalCode::BudgetExceeded);
+    run(
+        &dir,
+        &[
+            "import",
+            "garmentcode",
+            "arcs.json",
+            "--annotations",
+            "tight-arcs.json",
+            "--out",
+            "unattainable-arcs",
+        ],
+        3,
+    );
+    assert!(!dir.join("unattainable-arcs").exists());
+}

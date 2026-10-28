@@ -4151,6 +4151,23 @@ This extends `ftx-pb2.2`; flexible machine routes, retained/shared fixture compo
 factory access/timing, seam quality and hardware execution remain separate work. See
 [sewing-production.md](docs/sewing-production.md#route-one-garment-through-specialist-cells).
 
+### 25.114 Circular source panels enter the ordinary garment workflow
+
+Evaluated GarmentCode circular edges can now enter the shared native importer under explicit
+author-chosen distance and whole-edge length limits. Source panel-unit radii and direction/major-arc
+flags produce bounded polylines while preserving one original edge identity, physical panel,
+stitch correspondence and source-direction notch fractions. The native pattern and import report
+retain the policy, geometric and numerical allowances, source circle and actual stored lengths.
+Unresolved precision, invalid geometry and excessive subdivision refuse without relaxing limits.
+
+The materials workbench can author this policy when no annotations file is supplied, review each
+admitted bound against its requested limit and adopt the exact native result. An annotations file
+retains sole authority when supplied. Input or tolerance changes withdraw obsolete reviews and
+dependent adopted results. Bounds describe frozen imported sewing-edge polylines; later alterations,
+allowance offsets, stitch sampling and cloth meshing retain their existing numerical rules. This
+extends `ftx-a9dm`; conversion remains `REVIEW_REQUIRED`, with no exact-circle or physical-fit claim.
+See the [pattern contract](crates/ftx-pattern/CONTRACT.md) for source semantics and limits.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

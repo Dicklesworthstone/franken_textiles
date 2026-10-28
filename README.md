@@ -287,6 +287,22 @@ flat validation, draping and export checks. Conversion does not establish fit or
 from a simulation shell. See the [pattern contract](crates/ftx-pattern/CONTRACT.md)
 for the supported subset, annotation coordinates and refusal boundaries.
 
+Circular edges can enter the same workflow with explicit approximation limits in the annotations:
+
+```json
+{"schema":"fabric-garmentcode-annotations/1","circular_arcs":{"model":"bounded_chord_polylines/1","max_sagitta_mm":0.01,"max_length_error_mm":0.01}}
+```
+
+These example limits are authoring choices, not measured manufacturing accuracy. The importer converts
+each source circle to one native polyline edge, retaining its source identity, stitch references and
+notch fractions. It checks both the maximum geometric deviation and the complete edge's length error,
+including a separately reported numerical allowance. The report and native pattern retain the requested
+limits, radius, sweep, segment count, lengths and admitted bounds. Missing consent, impossible radii,
+unattainable limits and excessive subdivision refuse. Bounds apply to the frozen imported sewing edges;
+later alterations, stitch spacing, allowance offsets and drape meshing retain their own numerical behavior.
+Minor and major arcs use the source's absolute panel-unit radius and explicit direction flags; no radius
+correction or exact-circle claim is introduced.
+
 For an arm or leg panel, annotations must name its physical side explicitly. For example, an
 already expanded source panel named `sleeve_left` can carry:
 
@@ -310,6 +326,12 @@ does not replace the current pattern. The exact original inputs, converted nativ
 report remain downloadable. If annotations supply a fit contract, download it and select it under
 **Fit specification** before using consumers that require one; it does not establish measurement
 readiness or physical fit.
+
+Without an annotations file, the workbench can create the circular-arc policy from the opt-in checkbox
+and two positive millimetre limits. With a file selected, that file alone supplies the policy and the
+controls are disabled. The review compares each admitted distance and length bound with the requested
+limits; generated annotations are downloadable for native replay. Changing a limit withdraws the old
+review and any adopted pattern, just like changing a source file.
 
 The browser uses the same portable importer and Rust-generated JSON strings as the CLI. It preserves
 numeric details in downloads and downstream pattern input. Editing either import file withdraws its

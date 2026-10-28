@@ -84,10 +84,50 @@ panel names and edge indices remain traceable. A two-sided stitch means native `
 
 Each panel must have one consecutive closed edge loop with no unused vertices or zero-length chords.
 Sampled outlines reject intersections, self-touching and overlaps; this does not prove analytic
-Bézier simplicity. Circular arcs, active parameters, normalized panel translation, unsupported fields
+Bézier simplicity. Active parameters, normalized panel translation, unsupported fields
 and invalid or reused stitch references refuse. Input depth, panel/edge counts, sampled points and
 intersection work have deterministic budgets. Supported curves are retained, not replaced by the
 sampled audit outline.
+
+Circular arcs require an explicit sidecar `circular_arcs` policy; without it they still refuse:
+
+```json
+{"schema":"fabric-garmentcode-annotations/1","circular_arcs":{"model":"bounded_chord_polylines/1","max_sagitta_mm":0.01,"max_length_error_mm":0.01}}
+```
+
+The source convention is pinned to GarmentCode
+[`CircleEdge::assembly`](https://github.com/maria-korosteleva/GarmentCode/blob/d449629979028123a5c4dc9e732a2ec19b7fce31/pygarment/garmentcode/edge.py)
+and [`CircleEdgeFactory::from_points_radius`](https://github.com/maria-korosteleva/GarmentCode/blob/d449629979028123a5c4dc9e732a2ec19b7fce31/pygarment/garmentcode/edge_factory.py):
+`{"type":"circle","params":[radius,large_arc,right]}`. Radius uses **panel units**, including when
+`curvature_coords` is `relative`; both flags must be JSON integers 0 or 1. `right: 1` puts the arc
+midpoint on the chord's negative perpendicular; `large_arc: 1` selects the major arc. Native coordinates
+are y up; the upstream display adapter's y reflection and reversed sweep do not apply. Full circles,
+nonpositive or above-1,000,000-mm radii and chords longer than the diameter refuse without radius repair.
+Circle existence and center offset use the exact squared diameter-minus-chord margin in the original
+source units, before cancellation or independent normalization rounding. Nonzero source coordinates
+and radii must lie in `[2^-300,2^300]`, and the final native chord's squared length must be normal.
+Source arc points are scaled before their conversion into the native chord frame; exact source
+semicircles remain valid when independently rounded native endpoints would suggest another radius.
+
+Positive finite tolerances up to 1,000,000 mm govern deterministic uniform-angle chord subdivision.
+At most 4096 segments per arc and 65,536 total outline samples are admitted before allocation. The
+ideal sagitta is `2 R sin²(angle / (4 n))`; `R angle³ / (24 n²)` bounds the whole edge's ideal length
+deficit. Separate numerical position/length allowances cover the coordinate round trips, including
+winding reversal. Requested tolerances smaller than the available budget or numerical allowance refuse;
+they are never relaxed. The final stored polyline's actual length error is checked again. These are
+floating-point geometric bounds with an explicit numerical allowance, not interval-arithmetic proofs.
+
+Each arc remains one ordinary native `poly` edge with its original edge identity. Every poly control
+survives native dense sampling; stitches and source-direction notch fractions retain the existing
+winding rules. The importer records the policy, source arc flags/radius, segment count, geometric and
+numerical bounds, source arc length and actual polyline length in `report.circular_arcs` and
+`pattern.meta.import.circular_arcs`. A supplied policy with no arcs retains an empty curve list. Bounds
+describe frozen imported sew-edge geometry; later alterations, tangent fitting, allowance offsets,
+sewing stations and cloth remeshing use their own ordinary numerical rules. Notches follow the native
+polyline's arclength, not an exact analytic circle. No exact-circle, physical-fit or seam-quality claim
+is inferred. Importer tests independently exercise minor/major/semicircle geometry, both directions,
+rotation, units, reversed stitches/notches, refinement, shallow arcs, near-diameter conditioning,
+source-radius existence across normalization and unsupported precision/inputs.
 
 Each panel is already a physical instance, so its native cut quantity is one. Neither names nor the
 sidecar infer mirror pairs or fold geometry. The import cannot restore allowances, grain, construction

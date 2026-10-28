@@ -19,6 +19,10 @@ Body and drape geometry: metres, 3D, z up. Nothing here converts between them.
   then expansion arithmetic), lifted from frankensim `e76c9421` (`fs-ivl` predicates and expansions,
   `fs-math` error-free transformations). Exact while coordinate differences and their cubes stay in the
   normal f64 range; checked against an i128 oracle on 4,000 lattice quadruples (many exactly coplanar).
+- `exact::circle_diameter_margin` reuses those expansions for the exact sign and rounded magnitude of
+  `(2R)^2 - |b-a|^2` before near-diameter cancellation. Nonzero source inputs outside `[2^-300,2^300]`
+  refuse the helper's certified normal-arithmetic domain. Direct integer-numerator, impossible-radius
+  and exact-semicircle controls cover the circular-arc import boundary.
 
 **Determinism class.** Bit-identical across targets. The elementary functions use only correctly rounded
 IEEE operations (lifted from frankensim `fs-math/src/det.rs` at `f58c1acb`, unchanged bodies; trig refuses

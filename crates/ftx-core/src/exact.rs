@@ -164,6 +164,33 @@ pub fn orient2d(pa: [f64; 2], pb: [f64; 2], pc: [f64; 2]) -> Sign {
     Sign::of_i32(expansion_sign(&det_e))
 }
 
+/// Exact sign and rounded magnitude of `(2 radius)^2 - |b - a|^2` for circle admission.
+/// Subtractions and squares use expansions before cancellation, so a nearly diametric chord
+/// does not lose its small positive center offset or admit a radius below the true half chord.
+/// The magnitude sums a nonoverlapping expansion; its sign is returned independently.
+///
+/// Returns `None` for nonpositive radii, nonfinite input or nonzero input components outside
+/// `[2^-300, 2^300]`. This deliberately broad domain keeps every difference and degree-two
+/// product/residual within the normal f64 range required by the exact arithmetic.
+#[must_use]
+pub fn circle_diameter_margin(a: [f64; 2], b: [f64; 2], radius: f64) -> Option<(Sign, f64)> {
+    let minimum = f64::from_bits(723_u64 << 52); // 2^-300
+    let maximum = f64::from_bits(1323_u64 << 52); // 2^300
+    if radius <= 0.0
+        || [a[0], a[1], b[0], b[1], radius]
+            .iter()
+            .any(|x| !x.is_finite() || (*x != 0.0 && !(minimum..=maximum).contains(&x.abs())))
+    {
+        return None;
+    }
+    let x = diff_expansion(b[0], a[0]);
+    let y = diff_expansion(b[1], a[1]);
+    let chord = fast_expansion_sum_zeroelim(&expansion_product(&x, &x), &expansion_product(&y, &y));
+    let diameter = [2.0 * radius];
+    let margin = expansion_diff(&expansion_product(&diameter, &diameter), &chord);
+    Some((Sign::of_i32(expansion_sign(&margin)), margin.iter().sum()))
+}
+
 #[track_caller]
 fn assert_finite(values: &[f64]) {
     assert!(
@@ -343,6 +370,30 @@ fn diff_expansion(a: f64, b: f64) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn circle_margin_keeps_exact_semicircles_and_resolves_rounded_half_chords() {
+        for (end, radius) in [([100.0, 0.0], 50.0), ([3.0, 4.0], 2.5)] {
+            assert_eq!(
+                circle_diameter_margin([0.0; 2], end, radius),
+                Some((Sign::Zero, 0.0))
+            );
+        }
+        let radius = f64::from_bits(0x3fe6_a09e_667f_3bcd);
+        let (sign, margin) = circle_diameter_margin([0.0; 2], [1.0; 2], radius).unwrap();
+        // Exact integer numerator over 2^106 for this binary64 radius (not a floating norm).
+        let numerator = 4_i128 * 6_369_051_672_525_773_i128.pow(2) - 2_i128 * (1_i128 << 106);
+        assert_eq!(sign, Sign::Positive);
+        assert_eq!(margin, numerator as f64 / (1_u128 << 106) as f64);
+        assert_eq!(
+            circle_diameter_margin([0.0; 2], [1.0, 5.0], 2.549_509_756_796_392_2)
+                .unwrap()
+                .0,
+            Sign::Negative
+        );
+        assert!(circle_diameter_margin([0.0; 2], [1e-200, 0.0], 1.0).is_none());
+        assert!(circle_diameter_margin([0.0; 2], [1.0; 2], f64::INFINITY).is_none());
+    }
 
     fn o3d_i128(a: [i64; 3], b: [i64; 3], c: [i64; 3], d: [i64; 3]) -> i128 {
         let v = |p: [i64; 3]| {

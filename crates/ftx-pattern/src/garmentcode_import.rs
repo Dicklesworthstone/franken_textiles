@@ -6,11 +6,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::curve::{EDGE_DENSE, curve_points, rel_to_abs, reverse_curve};
-use ftx_core::exact::{Sign, orient2d};
-use ftx_core::polyline::signed_area;
+use ftx_core::curve::{EDGE_DENSE, abs_to_rel, curve_points, rel_to_abs, reverse_curve};
+use ftx_core::exact::{Sign, circle_diameter_margin, orient2d};
+use ftx_core::polyline::{polyline_length, signed_area};
 use ftx_core::receipt::sha256_hex;
-use ftx_core::{Curve, Refusal, RefusalCode, Vec2};
+use ftx_core::{Curve, Refusal, RefusalCode, Vec2, det};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
@@ -24,6 +24,7 @@ const MAX_EDGES: usize = 16_384;
 const MAX_SAMPLES: usize = 65_536;
 const MAX_PAIRS: usize = 4_000_000;
 const MAX_MM: f64 = 1_000_000.0;
+const MAX_ARC_SEGMENTS: usize = 4096;
 
 /// Converted native geometry and an explicit review report; neither establishes garment fit.
 #[derive(Clone, Debug, Serialize)]
@@ -168,6 +169,191 @@ fn curve(v: Option<&Value>, relative: bool, at: &str) -> Result<Option<Curve>, R
     }))
 }
 
+#[derive(Clone, Copy, Serialize)]
+struct CircularArcs {
+    model: &'static str,
+    max_sagitta_mm: f64,
+    max_length_error_mm: f64,
+}
+
+impl CircularArcs {
+    fn read(v: &Value) -> Result<Self, Refusal> {
+        keys(
+            v,
+            &["model", "max_sagitta_mm", "max_length_error_mm"],
+            "circular_arcs",
+        )?;
+        let sagitta = number(&v["max_sagitta_mm"], "max_sagitta_mm")?;
+        let length = number(&v["max_length_error_mm"], "max_length_error_mm")?;
+        if v["model"] != "bounded_chord_polylines/1"
+            || [sagitta, length].iter().any(|&x| x <= 0.0 || x > MAX_MM)
+        {
+            return Err(invalid(
+                "circular_arcs needs bounded_chord_polylines/1 and positive tolerances at most 1000000 mm",
+            ));
+        }
+        Ok(Self {
+            model: "bounded_chord_polylines/1",
+            max_sagitta_mm: sagitta,
+            max_length_error_mm: length,
+        })
+    }
+}
+
+// GarmentCode d449629979028123a5c4dc9e732a2ec19b7fce31, CircleEdge::assembly and
+// CircleEdgeFactory::from_points_radius: radius is absolute in panel units even when Bezier
+// controls are relative; right=1 puts the arc midpoint on the chord's negative perpendicular.
+// The display adapter flips y and its sweep flag; that display convention is not imported here.
+fn circular_curve(
+    v: &Value,
+    a: Vec2,
+    b: Vec2,
+    scale: f64,
+    policy: &CircularArcs,
+    remaining_samples: usize,
+    at: &str,
+) -> Result<(Curve, Value), Refusal> {
+    keys(v, &["type", "params"], at)?;
+    let params = array(&v["params"], at)?;
+    if params.len() != 3 {
+        return Err(invalid(format!(
+            "{at}: circle params must be [radius, integer large_arc, integer right]"
+        )));
+    }
+    let flag = |v: &Value| {
+        v.as_u64()
+            .filter(|&x| x <= 1)
+            .map(|x| x == 1)
+            .ok_or_else(|| invalid(format!("{at}: circle flags must be integer 0 or 1")))
+    };
+    let large = flag(&params[1])?;
+    let right = flag(&params[2])?;
+    let source_radius = number(&params[0], "circle radius")?;
+    // Resolve cancellation in the ORIGINAL source units. A rounded norm or independently
+    // scaled endpoints can turn an impossible arc into an apparent exact semicircle.
+    let (domain, margin) = circle_diameter_margin([a.x, a.y], [b.x, b.y], source_radius)
+        .ok_or_else(|| {
+            geometry(format!(
+                "{at}: circle source coordinates/radius leave the certified arithmetic domain"
+            ))
+        })?;
+    let radius = source_radius * scale;
+    let chord = (b - a).norm();
+    let half = 0.5 * chord;
+    let (native_a, native_b) = (a * scale, b * scale);
+    let native_delta = native_b - native_a;
+    let native_squared = native_delta.dot(native_delta);
+    if !radius.is_finite()
+        || radius <= 0.0
+        || radius > MAX_MM
+        || !chord.is_finite()
+        || half <= 0.0
+        || domain == Sign::Negative
+        || !native_squared.is_normal()
+    {
+        return Err(geometry(format!(
+            "{at}: circle needs a positive radius at most 1000000 mm and a nonzero chord no longer than its diameter; radius is never enlarged"
+        )));
+    }
+    let center = 0.5 * det::sqrt(margin);
+    let minor = 2.0 * det::atan2(half, center);
+    let angle = if large {
+        std::f64::consts::TAU - minor
+    } else {
+        minor
+    };
+    if !(0.0..std::f64::consts::TAU).contains(&angle) || angle == 0.0 {
+        return Err(geometry(format!(
+            "{at}: circle sweep is not distinguishable from zero or a full circle"
+        )));
+    }
+    // The small-arc sagitta uses a factored expression rather than subtracting similar radii.
+    let sagitta = if large {
+        source_radius + center
+    } else {
+        half * (half / (source_radius + center))
+    };
+    // Cover deterministic trig and both original/reversed chord-relative coordinate round trips.
+    // This is a numerical allowance, not an interval-arithmetic certificate.
+    let coordinate_scale = [
+        1.0,
+        radius,
+        native_delta.norm(),
+        native_a.x.abs(),
+        native_a.y.abs(),
+        native_b.x.abs(),
+        native_b.y.abs(),
+    ]
+    .into_iter()
+    .fold(0.0_f64, f64::max);
+    let position_allowance = 512.0 * f64::EPSILON * coordinate_scale;
+    let mut segments = 1usize;
+    let (geometric_sagitta, geometric_length, length_allowance) = loop {
+        let n = segments as f64;
+        let sine = det::sin(angle / (4.0 * n));
+        let deviation = 2.0 * radius * sine * sine;
+        // x - sin(x) <= x^3/6 bounds the complete arc's inscribed-polygon deficit.
+        let deficit = radius * angle * angle * angle / (24.0 * n * n);
+        let rounding = 2.0 * (n + 1.0) * position_allowance;
+        if angle / n <= std::f64::consts::FRAC_PI_2
+            && deviation + position_allowance <= policy.max_sagitta_mm
+            && deficit + rounding <= policy.max_length_error_mm
+        {
+            break (deviation, deficit, rounding);
+        }
+        if segments == MAX_ARC_SEGMENTS {
+            return Err(budget(format!(
+                "{at}: circular-arc tolerances cannot be met within 4096 segments and the numerical allowance"
+            ))
+            .repair("Choose explicitly larger approximation tolerances or supply supported source geometry."));
+        }
+        segments *= 2;
+    };
+    if segments > remaining_samples {
+        return Err(budget(
+            "circular arcs exceed the 65536-point outline budget",
+        ));
+    }
+    let sign = if right { -1.0 } else { 1.0 };
+    let mut controls = Vec::with_capacity(segments - 1);
+    for i in 1..segments {
+        let phi = angle * (i as f64 / segments as f64 - 0.5);
+        let half_sine = det::sin(0.5 * phi);
+        let source_point = rel_to_abs(
+            a,
+            b,
+            [
+                0.5 + (source_radius / chord) * det::sin(phi),
+                sign * (sagitta - 2.0 * source_radius * half_sine * half_sine) / chord,
+            ],
+        );
+        let relative = abs_to_rel(native_a, native_b, source_point * scale)
+            .map_err(|e| geometry(format!("{at}: {e}")))?;
+        if relative.iter().any(|x| !x.is_finite()) {
+            return Err(geometry(format!(
+                "{at}: circle controls are not representable in the native chord frame"
+            )));
+        }
+        controls.push(relative);
+    }
+    let report = json!({"radius_mm":radius,"large_arc":large,"right":right,
+        "signed_sweep_radians":if right { angle } else { -angle },"segments":segments,
+        "arc_length_mm":radius*angle,"geometric_sagitta_bound_mm":geometric_sagitta,
+        "numerical_position_allowance_mm":position_allowance,
+        "max_deviation_bound_mm":geometric_sagitta+position_allowance,
+        "geometric_length_deficit_bound_mm":geometric_length,
+        "numerical_length_allowance_mm":length_allowance,
+        "length_error_bound_mm":geometric_length+length_allowance});
+    Ok((
+        Curve {
+            kind: Some("poly".into()),
+            c: Some(controls),
+            extra: Map::new(),
+        },
+        report,
+    ))
+}
+
 #[derive(Default)]
 struct Work {
     vertices: usize,
@@ -251,6 +437,7 @@ struct Panel {
     flipped: bool,
     edge_count: usize,
     piece: Value,
+    circular_arcs: Vec<Value>,
 }
 
 fn panel(
@@ -259,6 +446,7 @@ fn panel(
     id: String,
     scale: f64,
     relative: bool,
+    circular_arcs: Option<&CircularArcs>,
     work: &mut Work,
 ) -> Result<Panel, Refusal> {
     keys(
@@ -294,6 +482,7 @@ fn panel(
     let mut edges = Vec::new();
     let mut outline = Vec::new();
     let mut used = BTreeSet::new();
+    let mut approximations = Vec::new();
     for (i, e) in ee.iter().enumerate() {
         keys(e, &["endpoints", "curvature", "label"], name)?;
         let ends = array(&e["endpoints"], name)?;
@@ -309,7 +498,41 @@ fn panel(
         }
         used.insert(a);
         used.insert(b);
-        let c = curve(e.get("curvature"), relative, name)?;
+        let c = if e["curvature"]["type"] == "circle" {
+            let policy = circular_arcs.ok_or_else(|| {
+                invalid(format!(
+                    "{name}: circular arcs require an explicit circular_arcs approximation policy in annotations"
+                ))
+            })?;
+            if !relative {
+                return Err(invalid(format!(
+                    "{name}: curved input requires properties.curvature_coords = relative"
+                )));
+            }
+            let (c, mut report) = circular_curve(
+                &e["curvature"],
+                Vec2::new(
+                    vv[a][0].as_f64().expect("source x"),
+                    vv[a][1].as_f64().expect("source y"),
+                ),
+                Vec2::new(
+                    vv[b][0].as_f64().expect("source x"),
+                    vv[b][1].as_f64().expect("source y"),
+                ),
+                scale,
+                policy,
+                MAX_SAMPLES.saturating_sub(work.samples),
+                name,
+            )?;
+            report["source_panel"] = json!(name);
+            report["source_edge"] = json!(i);
+            report["piece"] = json!(id);
+            report["edge"] = json!(format!("e{i:04}"));
+            approximations.push(report);
+            Some(c)
+        } else {
+            curve(e.get("curvature"), relative, name)?
+        };
         if let Some(c) = &c {
             for &th in c.controls() {
                 let q = rel_to_abs(verts[a], verts[b], th);
@@ -362,6 +585,39 @@ fn panel(
             }
         }
     }
+    for approximation in &mut approximations {
+        let source = approximation["source_edge"].as_u64().expect("source edge") as usize;
+        let edge = &edges[if flipped {
+            edges.len() - 1 - source
+        } else {
+            source
+        }];
+        let vertex = |key: &str| {
+            let id = edge[key].as_str().expect("native vertex ID");
+            verts[id[1..].parse::<usize>().expect("native vertex index")]
+        };
+        let c: Curve =
+            serde_json::from_value(edge["curve"].clone()).map_err(|e| invalid(e.to_string()))?;
+        let length = polyline_length(
+            &curve_points(vertex("from"), vertex("to"), Some(&c), EDGE_DENSE)
+                .map_err(|e| geometry(e.to_string()))?,
+        );
+        let error = (approximation["arc_length_mm"].as_f64().expect("arc length") - length).abs();
+        if !length.is_finite()
+            || length <= 0.0
+            || error > circular_arcs.expect("arc policy").max_length_error_mm
+            || error
+                > approximation["length_error_bound_mm"]
+                    .as_f64()
+                    .expect("arc bound")
+        {
+            return Err(geometry(format!(
+                "{name}: stored circular-arc polyline does not satisfy its length bound"
+            )));
+        }
+        approximation["polyline_length_mm"] = json!(length);
+        approximation["absolute_length_error_mm"] = json!(error);
+    }
     let vertices: Map<String, Value> = verts
         .iter()
         .enumerate()
@@ -374,6 +630,7 @@ fn panel(
         flipped,
         edge_count: ee.len(),
         piece,
+        circular_arcs: approximations,
     })
 }
 
@@ -775,12 +1032,19 @@ pub fn import_garmentcode(
         ));
     }
     let empty = json!({});
-    let (pa, sa) = if let Some(a) = annotations {
+    let (pa, sa, circular_arcs) = if let Some(a) = annotations {
         let mut annotation_budget = MAX_JSON_BYTES;
         inspect_json(a, 0, &mut annotation_budget)?;
         keys(
             a,
-            &["schema", "panels", "stitches", "fit", "provenance"],
+            &[
+                "schema",
+                "panels",
+                "stitches",
+                "fit",
+                "provenance",
+                "circular_arcs",
+            ],
             "annotations",
         )?;
         if a["schema"] != "fabric-garmentcode-annotations/1" {
@@ -794,9 +1058,10 @@ pub fn import_garmentcode(
         (
             a.get("panels").unwrap_or(&empty),
             a.get("stitches").unwrap_or(&empty),
+            a.get("circular_arcs").map(CircularArcs::read).transpose()?,
         )
     } else {
-        (&empty, &empty)
+        (&empty, &empty, None)
     };
     for name in object(pa, "panel annotations")?.keys() {
         if !sources.contains_key(name) {
@@ -814,6 +1079,7 @@ pub fn import_garmentcode(
             format!("p{i:04}"),
             scale,
             props["curvature_coords"] == "relative",
+            circular_arcs.as_ref(),
             &mut work,
         )?;
         if let Some(a) = pa.get(name) {
@@ -914,6 +1180,16 @@ pub fn import_garmentcode(
             "Original 3D transforms are metadata, not native body placement.",
             "Winding normalization does not certify the public/fabric face.",
             "Sampled outline checks do not prove analytic Bezier simplicity or garment fit."]});
+    if let Some(policy) = circular_arcs {
+        let curves: Vec<_> = names
+            .iter()
+            .flat_map(|name| panels[name].circular_arcs.iter().cloned())
+            .collect();
+        let approximation = json!({"policy":policy,"curves":curves,
+            "scope":"Bounds describe each frozen imported sew-edge polyline against its source circle, including a separate numerical allowance; they are not interval-arithmetic certificates. Source arclength fractions use the native polyline, not exact analytic circle points. Later alteration, truing tangents, offsetting, sewing stations and cloth remeshing use their ordinary native tolerances; these import bounds do not certify those results or garment fit."});
+        pattern["meta"]["import"]["circular_arcs"] = approximation.clone();
+        report["circular_arcs"] = approximation;
+    }
     if let Some(fit) = annotations.and_then(|a| a.get("fit")) {
         fit_spec(fit, &native)?;
         report["fit_spec"] = fit.clone();
@@ -982,6 +1258,310 @@ mod tests {
         for e in edges {
             e["endpoints"].as_array_mut().unwrap().reverse();
         }
+    }
+
+    fn arc_policy(tolerance: f64) -> Value {
+        json!({"schema":"fabric-garmentcode-annotations/1","circular_arcs":{
+            "model":"bounded_chord_polylines/1","max_sagitta_mm":tolerance,
+            "max_length_error_mm":tolerance}})
+    }
+
+    #[test]
+    fn circular_arc_flags_follow_independent_minor_major_and_semicircle_geometry() {
+        let policy = CircularArcs::read(&arc_policy(0.01)["circular_arcs"]).unwrap();
+        for (radius, large, angle, sagitta) in [
+            (
+                100.0,
+                0,
+                std::f64::consts::PI / 3.0,
+                100.0 - 7500.0_f64.sqrt(),
+            ),
+            (
+                100.0,
+                1,
+                5.0 * std::f64::consts::PI / 3.0,
+                100.0 + 7500.0_f64.sqrt(),
+            ),
+            (50.0, 0, std::f64::consts::PI, 50.0),
+            (50.0, 1, std::f64::consts::PI, 50.0),
+        ] {
+            for right in [0, 1] {
+                for (a, b) in [
+                    (Vec2::ZERO, Vec2::new(100.0, 0.0)),
+                    (Vec2::new(1000.0, -2000.0), Vec2::new(1060.0, -1920.0)),
+                ] {
+                    let (curve, report) = circular_curve(
+                        &json!({"type":"circle","params":[radius/10.0,large,right]}),
+                        a / 10.0,
+                        b / 10.0,
+                        10.0,
+                        &policy,
+                        MAX_SAMPLES,
+                        "analytic arc",
+                    )
+                    .unwrap();
+                    let points = curve_points(a, b, Some(&curve), 2).unwrap();
+                    let n = report["segments"].as_u64().unwrap() as usize;
+                    assert_eq!(points.len(), n + 1); // Native sampling never coarsens a poly edge.
+                    let sign = if right == 1 { -1.0 } else { 1.0 };
+                    let midpoint = (a + b) * 0.5 + (b - a).perp() * (sign * sagitta / 100.0);
+                    assert!((points[n / 2] - midpoint).norm() < 1e-10);
+                    assert!(
+                        (report["arc_length_mm"].as_f64().unwrap() - radius * angle).abs() < 1e-10
+                    );
+                    let center =
+                        (a + b) * 0.5 + (b - a).perp() * (sign * (sagitta - radius) / 100.0);
+                    for p in &points {
+                        assert!(((*p - center).norm() - radius).abs() < 1e-10);
+                    }
+                    for pair in points.windows(2) {
+                        let deficit = radius - ((pair[0] + pair[1]) * 0.5 - center).norm();
+                        assert!(deficit <= report["max_deviation_bound_mm"].as_f64().unwrap());
+                    }
+                    let error = (radius * angle - polyline_length(&points)).abs();
+                    assert!(error <= report["length_error_bound_mm"].as_f64().unwrap());
+                    assert!(error < 0.01);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arc_import_retains_winding_stitches_nonmidpoint_notches_and_unit_scale() {
+        let mut v = source();
+        for name in ["front.R", "back on fold"] {
+            v["pattern"]["panels"][name]["edges"][0]["curvature"] =
+                json!({"type":"circle","params":[5,0,1]});
+        }
+        clockwise(&mut v, "front.R");
+        v["pattern"]["panels"]["front.R"]["edges"][3]["curvature"]["params"][2] = json!(0);
+        v["pattern"]["stitches"][0] = json!([
+            {"panel":"front.R","edge":3},{"panel":"back on fold","edge":0},"right_wrong"]);
+        let mut a = arc_policy(0.01);
+        a["panels"] = json!({"front.R":{"notches":[{"edge":3,"s":0.25}]}});
+        let out = import_garmentcode(&v, Some(&a)).unwrap();
+        assert_eq!(out.pattern["seams"][0]["reverse"], true);
+        assert_eq!(out.pattern["pieces"][0]["notches"][0]["s"], 0.75);
+        assert_eq!(
+            out.report["circular_arcs"],
+            out.pattern["meta"]["import"]["circular_arcs"]
+        );
+        let pattern = Pattern::new(out.pattern.clone());
+        let points = pattern.instances[0].edge_dense("e0003", 2).unwrap();
+        let notch = ftx_core::polyline::at_fractions(&points, &[0.75])[0];
+        let diagonal = 50.0 / std::f64::consts::SQRT_2;
+        assert!((notch - Vec2::new(50.0 + diagonal, -diagonal)).norm() < 1e-10);
+        let report = &out.report["circular_arcs"]["curves"][0];
+        assert_eq!(report["source_edge"], 3);
+        assert_eq!(report["edge"], "e0003");
+        assert_eq!(
+            report["polyline_length_mm"].as_f64().unwrap(),
+            pattern.instances[0].edge_length("e0003").unwrap()
+        );
+        v["properties"]["units_in_meter"] = json!(1000);
+        for name in ["front.R", "back on fold"] {
+            v["pattern"]["panels"][name]["vertices"] =
+                json!([[0, 0], [100, 0], [100, 100], [0, 100]]);
+            let edge = if name == "front.R" { 3 } else { 0 };
+            v["pattern"]["panels"][name]["edges"][edge]["curvature"]["params"][0] = json!(50);
+        }
+        let scaled = import_garmentcode(&v, Some(&a)).unwrap();
+        assert_eq!(scaled.report["panels"], out.report["panels"]);
+        assert_eq!(scaled.pattern["seams"], out.pattern["seams"]);
+        let scaled_pattern = Pattern::new(scaled.pattern);
+        for (old, new) in pattern.instances.iter().zip(&scaled_pattern.instances) {
+            for edge in &old.edges {
+                let before = old.edge_dense(&edge.id, 2).unwrap();
+                let after = new.edge_dense(&edge.id, 2).unwrap();
+                assert_eq!(before.len(), after.len());
+                assert!(
+                    before
+                        .iter()
+                        .zip(after)
+                        .all(|(a, b)| (*a - b).norm() < 1e-10)
+                );
+            }
+        }
+        // Unit normalization can round source points differently; same-input replay stays exact.
+        for row in scaled.report["circular_arcs"]["curves"].as_array().unwrap() {
+            assert!(row["max_deviation_bound_mm"].as_f64().unwrap() <= 0.01);
+            assert!(row["absolute_length_error_mm"].as_f64().unwrap() <= 0.01);
+        }
+    }
+
+    #[test]
+    fn near_diameter_arcs_keep_source_existence_and_precision_through_unit_conversion() {
+        // The exact binary64 radius is above sqrt(2)/2. Rounding the chord norm first hides
+        // this 8.26789493018744e-9 source-unit center offset and violates the requested bound.
+        let radius = f64::from_bits(0x3fe6_a09e_667f_3bcd);
+        let center_offset = 8.267_894_930_187_44e-9;
+        for scale in [0.1, 1.0, 10.0] {
+            let policy = CircularArcs {
+                model: "bounded_chord_polylines/1",
+                max_sagitta_mm: 5.3e-8 * scale,
+                max_length_error_mm: 1e-6 * scale,
+            };
+            let (curve, report) = circular_curve(
+                &json!({"type":"circle","params":[radius,1,1]}),
+                Vec2::ZERO,
+                Vec2::new(1.0, 1.0),
+                scale,
+                &policy,
+                MAX_SAMPLES,
+                "near diameter",
+            )
+            .unwrap();
+            let points =
+                curve_points(Vec2::ZERO, Vec2::new(scale, scale), Some(&curve), 2).unwrap();
+            assert_eq!(points.len(), 4097);
+            let perpendicular = Vec2::new(-1.0, 1.0) / std::f64::consts::SQRT_2;
+            let center = (Vec2::new(0.5, 0.5) - perpendicular * center_offset) * scale;
+            let expected_midpoint =
+                (Vec2::new(0.5, 0.5) - perpendicular * (radius + center_offset)) * scale;
+            assert!(
+                (points[2048] - expected_midpoint).norm()
+                    <= report["numerical_position_allowance_mm"].as_f64().unwrap()
+            );
+            for pair in points.windows(2) {
+                let deviation =
+                    (radius * scale - ((pair[0] + pair[1]) * 0.5 - center).norm()).abs();
+                assert!(deviation <= report["max_deviation_bound_mm"].as_f64().unwrap());
+            }
+            let actual_error =
+                (polyline_length(&points) - report["arc_length_mm"].as_f64().unwrap()).abs();
+            assert!(actual_error <= report["length_error_bound_mm"].as_f64().unwrap());
+            // This radius rounds to the ordinary norm's half, but is below the exact source half.
+            assert!(
+                circular_curve(
+                    &json!({"type":"circle","params":[2.5495097567963922,0,1]}),
+                    Vec2::ZERO,
+                    Vec2::new(1.0, 5.0),
+                    scale,
+                    &policy,
+                    MAX_SAMPLES,
+                    "impossible"
+                )
+                .is_err()
+            );
+            // Conversely, an exact source 3-4-5 semicircle stays valid at scale 0.1 even though
+            // independent endpoint scaling can make the native chord longer than its diameter.
+            let ordinary = CircularArcs::read(&arc_policy(0.01)["circular_arcs"]).unwrap();
+            let (circle, report) = circular_curve(
+                &json!({"type":"circle","params":[2.5,0,1]}),
+                Vec2::ZERO,
+                Vec2::new(3.0, 4.0),
+                scale,
+                &ordinary,
+                MAX_SAMPLES,
+                "exact source",
+            )
+            .unwrap();
+            let points =
+                curve_points(Vec2::ZERO, Vec2::new(3.0, 4.0) * scale, Some(&circle), 2).unwrap();
+            assert!(
+                (points[points.len() / 2] - Vec2::new(3.5, 0.5) * scale).norm()
+                    <= report["numerical_position_allowance_mm"].as_f64().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn circular_arc_precision_refines_and_shallow_arcs_keep_their_declared_error() {
+        let source = json!({"type":"circle","params":[50,0,1]});
+        let mut previous = (0, f64::INFINITY);
+        for tolerance in [0.1, 0.01, 0.001] {
+            let policy = CircularArcs::read(&arc_policy(tolerance)["circular_arcs"]).unwrap();
+            let (c, report) = circular_curve(
+                &source,
+                Vec2::ZERO,
+                Vec2::new(100.0, 0.0),
+                1.0,
+                &policy,
+                MAX_SAMPLES,
+                "arc",
+            )
+            .unwrap();
+            let n = report["segments"].as_u64().unwrap();
+            let error = 50.0 * std::f64::consts::PI
+                - polyline_length(
+                    &curve_points(Vec2::ZERO, Vec2::new(100.0, 0.0), Some(&c), 2).unwrap(),
+                );
+            assert!(n > previous.0 && error < previous.1);
+            assert!(report["max_deviation_bound_mm"].as_f64().unwrap() <= tolerance);
+            assert!(report["length_error_bound_mm"].as_f64().unwrap() <= tolerance);
+            previous = (n, error);
+        }
+        let policy = CircularArcs::read(&arc_policy(0.001)["circular_arcs"]).unwrap();
+        let (c, report) = circular_curve(
+            &json!({"type":"circle","params":[1000000,0,1]}),
+            Vec2::ZERO,
+            Vec2::new(1.0, 0.0),
+            1.0,
+            &policy,
+            MAX_SAMPLES,
+            "shallow",
+        )
+        .unwrap();
+        assert_eq!(report["segments"], 1);
+        assert!(c.controls().is_empty());
+        assert!(report["geometric_sagitta_bound_mm"].as_f64().unwrap() > 0.0);
+    }
+
+    #[test]
+    fn circular_arcs_refuse_missing_consent_impossible_radii_flags_and_excess_precision() {
+        let mut v = source();
+        let a = arc_policy(0.01);
+        let circle = |params| json!({"type":"circle","params":params});
+        v["pattern"]["panels"]["front.R"]["edges"][0]["curvature"] = circle(json!([5, 0, 1]));
+        assert!(
+            import_garmentcode(&v, None)
+                .unwrap_err()
+                .message
+                .contains("explicit circular_arcs")
+        );
+        for params in [
+            json!([4.9999, 0, 1]),
+            json!([0, 0, 1]),
+            json!([-5, 0, 1]),
+            json!([5, 2, 1]),
+            json!([5, 0, true]),
+            json!([5, 0, 1.0]),
+            json!([5, 0]),
+            json!([100001, 0, 1]),
+        ] {
+            v["pattern"]["panels"]["front.R"]["edges"][0]["curvature"] = circle(params.clone());
+            assert!(import_garmentcode(&v, Some(&a)).is_err(), "{params}");
+        }
+        v["pattern"]["panels"]["front.R"]["edges"][0]["curvature"] = circle(json!([5, 0, 1]));
+        assert_eq!(
+            import_garmentcode(&v, Some(&arc_policy(1e-12)))
+                .unwrap_err()
+                .code,
+            RefusalCode::BudgetExceeded
+        );
+        let policy = CircularArcs::read(&a["circular_arcs"]).unwrap();
+        assert_eq!(
+            circular_curve(
+                &circle(json!([50, 0, 1])),
+                Vec2::ZERO,
+                Vec2::new(100.0, 0.0),
+                1.0,
+                &policy,
+                2,
+                "arc"
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::BudgetExceeded
+        );
+        for bad in [json!(0), json!(-1), json!(1000001), json!(null)] {
+            let mut invalid_policy = a.clone();
+            invalid_policy["circular_arcs"]["max_sagitta_mm"] = bad;
+            assert!(import_garmentcode(&v, Some(&invalid_policy)).is_err());
+        }
+        let mut typo = a;
+        typo["circular_arcs"]["guessed_precision"] = json!(1);
+        assert!(import_garmentcode(&v, Some(&typo)).is_err());
     }
 
     #[test]

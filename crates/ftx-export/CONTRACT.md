@@ -241,8 +241,8 @@ Bounded fixed-route append dispatch retains a complete incumbent or reports unre
 only matching an independent mandatory-work lower bound establishes `optimality_proven`.
 Two complete replays share the 200000-work cap, and all retained source tables share the 250000
 station bound. Serial ordering accessors withhold unrelated timing; the existing elapsed-completion
-consumer uses routing. Tests: `sewing_routing` (eleven direct regressions typechecked; executable
-verification pending build-space recovery). Measured factory qualification, flexible routing,
+consumer uses routing. Tests: `sewing_routing` (all eleven direct executable regressions pass).
+Measured factory qualification, flexible routing,
 retained/shared fixture composition and hardware authorization remain open. See
 `docs/sewing-production.md`.
 
