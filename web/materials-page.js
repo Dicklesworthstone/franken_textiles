@@ -51,6 +51,10 @@ function controls() {
   $("garmentcode").disabled ||= !has("garmentcodeSource");
   $("useGarmentcode").disabled = !!pending || !preparedImport;
   $("clearGarmentcodeAnnotations").disabled = !has("garmentcodeAnnotations");
+  $("garmentcodeArcs").disabled = has("garmentcodeAnnotations");
+  for (const id of ["garmentcodeArcSagitta", "garmentcodeArcLength"]) {
+    $(id).disabled = has("garmentcodeAnnotations") || !$("garmentcodeArcs").checked;
+  }
   $("vapor").disabled ||= !has("vaporRequest");
   $("thermalPoint").disabled ||= !$("selection").value.trim() || !$("thermalPointTemperature").value.trim() ||
     !Number.isFinite(Number($("thermalPointTemperature").value));
@@ -2549,6 +2553,7 @@ function show(op, msg) {
     s.summary.textContent = text({ status: report.status, scope: report.scope,
       source_units_per_meter: report.source_units_per_meter, counts: report.counts,
       source_sha256: report.source_sha256, annotations_sha256: report.annotations_sha256,
+      circular_arc_approximations: report.circular_arcs?.curves.length,
       missing_semantics: report.missing_semantics, limitations: report.limitations });
     const note = document.createElement("p");
     note.textContent = "REVIEW_REQUIRED: conversion preserves supported evaluated geometry; it does not establish garment completeness or fit. " +
@@ -2557,6 +2562,22 @@ function show(op, msg) {
     s.comparison.append(note);
     const panels = table(s.comparison, "Original panels and native physical pieces", ["Source panel", "Native piece", "Winding reversed"]);
     for (const panel of report.panels) cells(panels, [panel.source_panel, panel.piece, panel.winding_reversed ? "Yes" : "No"]);
+    if (report.circular_arcs) {
+      const arcs = report.circular_arcs, explanation = document.createElement("p");
+      explanation.textContent = "Circular edges are imported as polylines under your explicit limits. " + arcs.scope;
+      s.comparison.append(explanation);
+      const t = table(s.comparison, "Circular-arc approximation: admitted bound / requested limit", [
+        "Source panel / edge", "Native edge", "Radius (mm)", "Source arc", "Segments",
+        "Distance bound / limit (mm)", "Length error bound / limit (mm)", "Polyline / circular length (mm)",
+      ]);
+      for (const arc of arcs.curves) cells(t, [
+        `${arc.source_panel} / ${arc.source_edge}`, `${arc.piece}/${arc.edge}`, metric(arc.radius_mm),
+        `${arc.large_arc ? "Major" : "Minor"}; ${arc.right ? "right" : "left"}`, metric(arc.segments),
+        `${metric(arc.max_deviation_bound_mm)} / ${metric(arcs.policy.max_sagitta_mm)}`,
+        `${metric(arc.length_error_bound_mm)} / ${metric(arcs.policy.max_length_error_mm)}`,
+        `${metric(arc.polyline_length_mm)} / ${metric(arc.arc_length_mm)}`,
+      ]);
+    }
     detail(s.comparison, "Complete panel, edge, stitch, geometry and source review", report);
     for (const f of msg.files) link(op, s.links, f);
   } else if (op === "outfit") {
@@ -2673,6 +2694,19 @@ async function readGarmentcode(id) {
   JSON.parse(raw);
   return raw;
 }
+function circularArcAnnotations() {
+  if (!$("garmentcodeArcs").checked) return undefined;
+  const positive = (id, label) => {
+    const raw = $(id).value.trim(), value = Number(raw);
+    if (!raw || !Number.isFinite(value) || value <= 0) throw Error(`Supply a positive finite ${label} in millimetres.`);
+    return value;
+  };
+  return text({ schema: "fabric-garmentcode-annotations/1", circular_arcs: {
+    model: "bounded_chord_polylines/1",
+    max_sagitta_mm: positive("garmentcodeArcSagitta", "circular-arc distance tolerance"),
+    max_length_error_mm: positive("garmentcodeArcLength", "circular-edge length tolerance"),
+  } }) + "\n";
+}
 function changes() {
   const pieces = [...pieceChanges].map(([id, selection]) => `${JSON.stringify(id)}:${selection}`).join(",");
   const interfaces = interfaceChange === null ? "" : `,"interfaces":${interfaceChange}`;
@@ -2752,6 +2786,7 @@ async function execute(op) {
     else if (op === "garmentcode") {
       msg.source = await readGarmentcode("garmentcodeSource");
       if (has("garmentcodeAnnotations")) msg.annotations = await readGarmentcode("garmentcodeAnnotations");
+      else msg.annotations = circularArcAnnotations();
     }
     else if (op === "bind") {
       if (!interfaceReady) throw Error("Load a valid replacement interface list or choose Keep original interfaces.");
@@ -2926,6 +2961,8 @@ function invalidateGarmentcode() {
   } else invalidate(["garmentcode"]);
 }
 for (const id of ["garmentcodeSource", "garmentcodeAnnotations"]) $(id).addEventListener("change", invalidateGarmentcode);
+$("garmentcodeArcs").addEventListener("change", invalidateGarmentcode);
+for (const id of ["garmentcodeArcSagitta", "garmentcodeArcLength"]) $(id).addEventListener("input", invalidateGarmentcode);
 $("clearGarmentcodeAnnotations").onclick = () => { $("garmentcodeAnnotations").value = ""; invalidateGarmentcode(); };
 $("addCombination").onclick = () => {
   if (!inspected || !source || pending) return;
