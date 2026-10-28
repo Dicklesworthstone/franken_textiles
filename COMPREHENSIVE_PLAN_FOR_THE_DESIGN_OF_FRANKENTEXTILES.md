@@ -4258,6 +4258,28 @@ assembly mass, relative curves, unchanged marks and refusal of unbalanced seams.
 `ftx-ds2`; authored geometric targets and bounded search do not establish empirical fit, safe ease,
 continuous-domain completeness or a global optimum. See [material-screening-and-studies.md](docs/material-screening-and-studies.md).
 
+### 25.119 Distribute each sewing operation across independently eligible cells
+
+An explicit eligible-cell routing model now lets different physical copies choose different qualified
+machines at each authored operation. Each declared operation/cell pair passes the ordinary source,
+geometry, recipe and access authorities; every possible adjacent directed handoff needs evidence.
+Bounded dispatch uses actual previous cells, dedicated attending workers, full load/setup/feed/unload
+phases, staging and inclusive resource windows. It retains complete feasible incumbents and can replace
+an infeasible seed assignment. Actual choices determine stitches, feed, thread allowances, combined
+orders, previews and material-study results; unused alternatives contribute no invented consumption.
+
+The outer seed garment is explicitly marked as reference geometry. Complete production rows identify
+the actual cell and its source operation, and the workbench displays every eligible recipe with its
+selected copy count. Full eligible domains remain part of comparison protocol identity even when only
+feed or yarn is compared. Authored-route and recipe selection can use the same makespan authority;
+cost or feed optimum claims require an objective that actually searches those quantities. Independent
+relaxed work bounds remain separate from completion of the restricted append-dispatch search.
+
+This extends `ftx-pb2.2` through the existing native and portable consumers. Synthetic exhaustive small
+schedules, actual recipe geometry, quantity accounting and source/window/budget refusals verify the
+bounded software model. Retained/shared fixture composition, measured factory timing and seam quality,
+and hardware execution remain independent open requirements. See [sewing-production.md](docs/sewing-production.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

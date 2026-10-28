@@ -249,9 +249,24 @@ only matching an independent mandatory-work lower bound establishes `optimality_
 Two complete replays share the 200000-work cap, and all retained source tables share the 250000
 station bound. Serial ordering accessors withhold unrelated timing; the existing elapsed-completion
 consumer uses routing. Tests: `sewing_routing` (all eleven direct executable regressions pass).
-Measured factory qualification, flexible routing,
+Measured factory qualification,
 retained/shared fixture composition and hardware authorization remain open. See
 `docs/sewing-production.md`.
+
+**Eligible specialist cells** (`production.routing`, `ftx-pb2.2`). Explicit
+`eligible_operation_route/1` retains one authored operation sequence and a seed cell per step, while
+bounded search chooses an independently qualified cell for each physical copy/operation. All eligible
+source subsets and adjacent directed handoffs are admitted before search; actual preceding cells,
+per-operation phases, source windows and cell-specific geometry govern complete timelines. Source
+station/stitch reservations cover the entire choice domain. Plan `/19`, production `/7` and routing
+`/2` mark the outer one-garment seed reference; actual production operations identify their cell and
+cell-local seam index. Selected execution counts alone drive yarn channels and one aggregated order.
+Comparisons retain executed recipes and the complete routing decision protocol. Makespan selection
+does not claim feed- or cost-optimal assignments. The relaxed mandatory-work bound excludes optional
+cell/setup assumptions; restricted search completion alone is not a minimum-time proof. Fixed inputs
+retain prior serialization. Tests: independent assignment/dispatch enumeration, changed pitches and
+yarn counts, source/window/budget refusals, actual native/portable replay cases and browser lifecycle
+coverage in `sewing_routing`, `sewing_production_workflow` and `check_materials_frontend.cjs`.
 
 **Planar sewing access** (`passes[].access`). Optional `planar_disk_sweep/1` requires an explicit
 flat assembly and an admitted source process qualification. Full machine and qualification hashes

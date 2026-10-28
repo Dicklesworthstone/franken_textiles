@@ -194,6 +194,274 @@ fn refresh_routed_locks(options: &mut Value) {
     options["production"]["routing"]["cell_locks"] = json!(locks);
 }
 
+fn eligible_route_options(windowed: bool) -> Value {
+    let mut options = routed_specialist_options();
+    let original: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
+    let route = &mut options["production"]["routing"];
+    route["model"] = json!("eligible_operation_route/1");
+    route["route"][0]["eligible_cells"] = json!(["cell-a", "cell-b"]);
+    route["route"][1]["eligible_cells"] = json!(["cell-b"]);
+    // Cell A still qualifies only join. Cell B independently qualifies either original pass.
+    route["cells"][1] = original["production"]["parallel"]["cells"][1].clone();
+    route["cells"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("workholding");
+    route["cells"][1]["handling"]["transitions"] = json!([]);
+    route["cells"][1]["handling"]["method"] =
+        json!("Load and unload every separate routed operation; no retained garment or fixture");
+    if windowed {
+        // A can complete one join. B can complete exactly three operations after its 5000 ms
+        // release: 500 ms initial setup + 3 * (100 load + 1334 feed + 200 unload).
+        route["cells"][0]["available_until_milliseconds"] = json!(5300);
+        route["cells"][1]["available_at_milliseconds"] = json!(5000);
+        route["cells"][1]["available_until_milliseconds"] = json!(10402);
+    }
+    refresh_routed_locks(&mut options);
+    options
+}
+
+#[test]
+fn eligible_routes_replay_actual_cell_choices_yarn_and_studies_through_both_native_commands() {
+    for windowed in [false, true] {
+        let options = eligible_route_options(windowed);
+        let program =
+            portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &options.to_string()).unwrap());
+        let plan = &program["plan"];
+        let batch = &plan["production"];
+        let route = &batch["routing"];
+        let expected_intervals = if windowed { 100 } else { 80 };
+        let expected_length = if windowed { 1.9 } else { 1.6 };
+        let expected_completion = if windowed { 10402 } else { 7036 };
+        assert_eq!(plan["schema"], "ftx-sewing-plan/19");
+        assert_eq!(batch["schema"], "ftx-sewing-production/7");
+        assert_eq!(route["schema"], "ftx-sewing-routing/2");
+        assert_eq!(route["reference_scope"], "seed_route_one_garment/1");
+        assert_eq!(route["baseline_replaced"], windowed);
+        assert_eq!(
+            route["selected"]["makespan_milliseconds"],
+            expected_completion
+        );
+        assert_eq!(
+            route["selected"]["scheduled_feed_milliseconds"],
+            if windowed { 8002 } else { 5336 }
+        );
+        assert_eq!(batch["stitch_intervals"], expected_intervals);
+        let steps = program["stitches"].as_array().unwrap();
+        assert_eq!(steps.len(), expected_intervals);
+        let operations = route["selected"]["operations"].as_array().unwrap();
+        assert_eq!(operations.len(), 4);
+        assert_eq!(
+            operations
+                .iter()
+                .filter(|step| step["cell"] == "cell-a")
+                .count(),
+            usize::from(windowed)
+        );
+        assert_eq!(
+            route["selected"]["transfers"].as_array().unwrap().len(),
+            usize::from(windowed)
+        );
+        for operation in operations {
+            let source = route["cell_plans"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|source| source["cell"] == operation["cell"])
+                .unwrap();
+            let seam_index = operation["seam_index"].as_u64().unwrap() as usize;
+            let seam = &source["plan"]["seams"][seam_index];
+            assert_eq!(seam["pass"]["id"], operation["operation_id"]);
+            let actual: Vec<_> = steps
+                .iter()
+                .filter(|step| {
+                    step["cell"] == operation["cell"]
+                        && step["copy"] == operation["copy"]
+                        && step["operation"] == operation["seam_index"]
+                })
+                .collect();
+            assert_eq!(
+                actual.len(),
+                if operation["cell"] == "cell-a" {
+                    40
+                } else {
+                    20
+                }
+            );
+            for step in actual {
+                let station = step["to_station"].as_u64().unwrap() as usize;
+                assert_eq!(step["a_mm"], seam["stations"]["a"][station]);
+                assert_eq!(step["b_mm"], seam["stations"]["b"][station]);
+            }
+            let expanded = batch["operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|step| step["id"] == operation["id"])
+                .unwrap();
+            assert_eq!(expanded["cell"], operation["cell"]);
+            assert_eq!(expanded["seam_index"], operation["seam_index"]);
+            assert_eq!(expanded["stitch_intervals"], seam["stitch_intervals"]);
+            assert_eq!(expanded["qualification_id"], seam["qualification_id"]);
+        }
+        let consumption = &plan["consumables"];
+        assert!(
+            (consumption["total_required_length_m"].as_f64().unwrap() - expected_length).abs()
+                < 1e-12
+        );
+        let channels = consumption["operation_channels"].as_array().unwrap();
+        for (cell, operation, count, length) in [
+            (
+                "cell-a",
+                "join",
+                if windowed { 40 } else { 0 },
+                if windowed { 0.7 } else { 0.0 },
+            ),
+            (
+                "cell-b",
+                "join",
+                if windowed { 20 } else { 40 },
+                if windowed { 0.4 } else { 0.8 },
+            ),
+            ("cell-b", "reinforce", 40, 0.8),
+        ] {
+            let actual: Vec<_> = channels
+                .iter()
+                .filter(|row| row["cell"] == cell && row["operation_id"] == operation)
+                .collect();
+            assert_eq!(
+                actual
+                    .iter()
+                    .map(|row| row["stitch_intervals"].as_u64().unwrap())
+                    .sum::<u64>(),
+                count
+            );
+            assert!(
+                (actual
+                    .iter()
+                    .map(|row| row["required_length_m"].as_f64().unwrap())
+                    .sum::<f64>()
+                    - length)
+                    .abs()
+                    < 1e-12
+            );
+        }
+        assert_eq!(
+            consumption["purchasing"]["material_orders"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            consumption["purchasing"]["least_observed_independent_order_total"],
+            10.0
+        );
+        assert_eq!(
+            portable(
+                ftx_wasm::manufacturing::sew_stitches(PATTERN, &plan["options"].to_string())
+                    .unwrap()
+            ),
+            program
+        );
+        let mut selection = json!({"schema":"ftx-sewing-selection/5","options":options,
+            "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+            "alternatives":[{"operation":"join","recipes":[{"id":"same-qualified-recipe",
+                "needle":"example-needle","thread":"example-thread-a","max_stitch_mm":2.5,"stitches_per_minute":600.0}]}]});
+        let selected = portable(ftx_wasm::sew_select(PATTERN, &selection.to_string()).unwrap());
+        assert_eq!(selected["report"]["selected_plan"], *plan);
+        assert_eq!(
+            portable(
+                ftx_wasm::manufacturing::sew_stitches(
+                    PATTERN,
+                    selected["selected_options_json"].as_str().unwrap()
+                )
+                .unwrap()
+            ),
+            program
+        );
+        let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+        let study = json!({"schema":"ftx-material-study/1",
+            "variants":[{"key":"eligible","changes":{"schema":"ftx-material-bindings/1","default":pattern["fabric"]["material"]}}],
+            "sewing":options,"comparison":{"basis":"nominal","required_consumers":["sewing","sewing_consumables","sewing_purchasing"],
+                "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"},
+                    {"metric":"thread_required_length_m","direction":"minimize"}]}});
+        let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+        let row = &report["alternatives"][0];
+        assert_eq!(report["comparison"]["frontier"], json!(["eligible"]));
+        assert_eq!(row["metrics"]["stitch_intervals"], expected_intervals);
+        assert!(
+            (row["metrics"]["thread_required_length_m"].as_f64().unwrap() - expected_length).abs()
+                < 1e-12
+        );
+        let bound_plan = portable(
+            ftx_wasm::manufacturing::sew_plan(
+                row["binding"]["result"]["pattern_json"].as_str().unwrap(),
+                &row["sewing"]["result"]["options"].to_string(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(row["sewing"]["result"], bound_plan);
+        assert_eq!(
+            bound_plan["production"]["routing"]["selected"],
+            route["selected"]
+        );
+        let directory = workspace();
+        for (name, text) in [
+            ("pattern.json", PATTERN.to_owned()),
+            ("options.json", options.to_string()),
+            ("program.json", program.to_string()),
+            ("selection.json", selection.to_string()),
+            ("selection-report.json", selected.to_string()),
+            ("study.json", study.to_string()),
+            ("study-report.json", report.to_string()),
+        ] {
+            fs::write(directory.join(name), text).unwrap();
+        }
+        for main in [false, true] {
+            assert_eq!(
+                run(
+                    main,
+                    &directory,
+                    "sew-stitches",
+                    "pattern.json",
+                    "options.json"
+                ),
+                program
+            );
+            assert_eq!(
+                run(
+                    main,
+                    &directory,
+                    "sew-select",
+                    "pattern.json",
+                    "selection.json"
+                ),
+                selected
+            );
+            assert_eq!(
+                run(main, &directory, "study", "pattern.json", "study.json"),
+                report
+            );
+        }
+        eprintln!(
+            "eligible routing replay (windowed={windowed}): {}",
+            directory.display()
+        );
+        for (schema, objective) in [
+            ("ftx-sewing-selection/1", "minimize_feed_seconds"),
+            (
+                "ftx-sewing-selection/3",
+                "minimize_thread_observed_order_cost",
+            ),
+        ] {
+            selection["schema"] = json!(schema);
+            selection["objective"] = json!(objective);
+            assert!(ftx_wasm::sew_select(PATTERN, &selection.to_string()).is_err());
+        }
+    }
+}
+
 #[test]
 fn routed_specialists_replay_actual_native_stitches_inventory_previews_and_material_studies() {
     let options = routed_specialist_options();

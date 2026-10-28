@@ -434,6 +434,14 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
         .production
         .as_ref()
         .and_then(|production| production.routing.as_ref());
+    let mut routed_counts = BTreeMap::new();
+    if let Some(routing) = routed {
+        for operation in &routing.selected.operations {
+            *routed_counts
+                .entry((operation.cell.as_str(), operation.operation_id.as_str()))
+                .or_insert(0usize) += 1;
+        }
+    }
     let mut report = Report {
         schema: if configured.is_some() || routed.is_some() {
             "ftx-sewing-consumables/3"
@@ -456,8 +464,8 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
         purchasing_work_bound: purchasing_work_bound(&plan.options)?,
     };
     let batches: Vec<_> = if let Some(routing) = routed {
-        // A fixed route executes each cell's admitted subset exactly once per physical copy.
-        // Multiplying the outer merged geometry at every cell would invent stitches and yarn.
+        // These are admitted source alternatives. Only selected (cell, operation) executions
+        // contribute below; an unused eligible recipe must not invent stitches or missing yarn.
         routing
             .cell_plans
             .iter()
@@ -494,6 +502,17 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
         operations.sort_by_key(|seam| seam.pass.operation_id());
         for seam in operations {
             let id = seam.pass.operation_id();
+            let copies = if routed.is_some() {
+                routed_counts
+                    .get(&(cell.expect("routed source cell"), id))
+                    .copied()
+                    .unwrap_or(0)
+            } else {
+                copies
+            };
+            if copies == 0 {
+                continue;
+            }
             let qualification = seam
                 .qualification_id
                 .as_deref()

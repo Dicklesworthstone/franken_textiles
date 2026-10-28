@@ -1718,6 +1718,71 @@ test('routed specialist cells show actual operations, serialized garment transfe
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
+test('eligible routed cells show idle choices, actual copy counts and bounded proof in every result view', async () => {
+  const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);p.select('sewOptions');
+  const source=(cell,operations,needle,pitch,rate)=>({cell,machine_sha256:`${cell}-lock`,qualifications:{},
+    plan:{options:{machine:{id:`${cell}-machine`},qualifications:[]},seams:operations.map(id=>({
+      pass:{id,seam:'side',needle,thread:'Y',max_stitch_mm:pitch,stitches_per_minute:rate,after:[]}}))}});
+  const a=source('cell-a',['join'],'N-A',2.5,600),b=source('cell-b',['join','reinforce'],'N-B',5,900);
+  const step=(copy,operation_id,start,feed,finish)=>({id:`${copy}/${operation_id}`,copy,operation_id,cell:'cell-b',
+    seam_index:operation_id==='join'?0:1,loading_start_milliseconds:start,setup_start_milliseconds:start+100,
+    feed_start_milliseconds:feed,feed_finish_milliseconds:finish-200,finish_milliseconds:finish});
+  const selected={makespan_milliseconds:7036,feed_seconds:16/3,scheduled_feed_milliseconds:5336,
+    setup_milliseconds:500,handling_milliseconds:1200,transfer_milliseconds:0,transfers:[],operations:[
+      step(0,'join',0,600,2134),step(0,'reinforce',2134,2234,3768),
+      step(1,'join',3768,3868,5402),step(1,'reinforce',5402,5502,7036)]};
+  const routing={schema:'ftx-sewing-routing/2',reference_scope:'seed_route_one_garment/1',
+    route:[{operation:'join',cell:'cell-a',eligible_cells:['cell-a','cell-b']},
+      {operation:'reinforce',cell:'cell-b',eligible_cells:['cell-b']}],cell_plans:[a,b],baseline:selected,selected,
+    baseline_replaced:true,lower_bound_makespan_milliseconds:6000,search_nodes:20,search_complete:false,
+    optimality_proven:false,budget_exhausted:true,search_scope:'coupled_eligible_handoff_cell_append_dispatch/1'};
+  const plan={schema:'ftx-sewing-plan/19',hardware_execution_authorized:false,seams:[...a.plan.seams,b.plan.seams[1]],
+    options:{production:{routing:{model:'eligible_operation_route/1',source:{note:'<eligible source lock>'},staging_capacity:2,
+      cells:[{id:'cell-a',available_at_milliseconds:0,available_until_milliseconds:5300},
+        {id:'cell-b',available_at_milliseconds:0}],transfer:{id:'one-mover',available_at_milliseconds:0}}}},
+    production:{production_copies:2,feed_seconds:16/3,stitch_intervals:80,ordering:{optimality_proven:true},routing}};
+  const downloads=[];
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('eligible');row.sewing=outcome(plan);row.metrics.sewing_parallel_makespan_seconds=7.036;
+    const study=studyReport([row]);
+    const report=op==='sew'?{schema:'ftx-sewing-program/7',stitches:[],plan}:
+      op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=` ${JSON.stringify(report)}\n`;
+    await p.e[op].onclick();p.emit(report,[{name:'eligible-route.json',text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    const choices=table('eligible cells by garment operation');
+    assert.deepEqual(plain(choices.children[1].children.map(n=>n.textContent)),
+      ['Step','Operation','Physical cell','Authored seed','Selected copies','Qualified machine','Needle','Thread','Maximum stitch (mm)','Stitches/min']);
+    assert.deepEqual(plain(choices.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+      ['1','join','cell-a','Yes','0','cell-a-machine','N-A','Y','2.5','600'],
+      ['1','join','cell-b','No','2','cell-b-machine','N-B','Y','5','900'],
+      ['2','reinforce','cell-b','Yes','2','cell-b-machine','N-B','Y','5','900']]);
+    assert.equal(table('fixed garment route'),undefined);
+    assert.deepEqual(plain(table('routed completion and aggregate work').children[3].children.map(n=>n.textContent)),
+      ['Selected route and cell dispatch','7.036',String(16/3),'5.336','0.5','1.2','0']);
+    assert.deepEqual(plain(table('selected routed operation timeline').children.at(-1).children.map(n=>n.textContent)),
+      ['1','reinforce','cell-b','5.402','5.502','5.502','6.836','7.036']);
+    assert.equal(table('selected garment transfers').children.length,2);
+    assert.match(visibleText(s),/selected copy counts distinguish used recipes from unused alternatives/);
+    assert.match(visibleText(s),/outer one-garment seam table is the authored seed reference/);
+    assert.match(visibleText(s),/selected timeline, stitch stream and batch totals use actual cell assignments/);
+    assert.match(visibleText(s),/minimum completion time is not proved/);
+    assert.match(visibleText(s),/dispatch search reached its work limit/);
+    assert.match(visibleText(s),/Feasible replacement baseline/);
+    assert.doesNotMatch(visibleText(s),/Minimum completion time proved|Each specialist cell qualifies only its assigned operations|Minimum declared setup/);
+    const detail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('route sources, cell locks and complete baseline/selected timelines'));
+    detail.open=true;detail.handlers.toggle();assert.match(visibleText(detail),/<eligible source lock>/);
+    const download=descendants(s).find(n=>n.download==='eligible-route.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);downloads.push(download.href);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  p.e.sewOptions.handlers.change();p.e.studyRequest.handlers.change();
+  for(const name of ['sew','Fixed-pattern manufacturing alternatives','Fresh drape and heat alternatives'])
+    assert.equal(section(p,name).hidden,true);
+  for(const url of downloads) assert.equal(p.live.has(url),false);
+});
+
 test('shared operator timelines preserve resource waits, restricted proof and cell-only window scope in every result view', async () => {
   const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
   const schedule={feed_seconds:4,operations:[{id:'0/join',copy:0,operation_id:'join',seam_index:0,after:[]}],
@@ -4010,6 +4075,15 @@ test('material study sewing choices retain bounded search status separately from
   assert.match(visibleText(choices), /Listed optimum proved/);
   const receipt = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('bounded: sewing recipe choices'));
   receipt.open = true; receipt.handlers.toggle(); assert.match(visibleText(receipt), /"unresolved_trials": 1/);
+  bounded.sewing_selection.result.request={schema:'ftx-sewing-selection/6'};
+  bounded.sewing_selection.result.selected_route='eligible-specialists';
+  bounded.sewing_selection.result.selected_choices={};
+  missing.sewing_selection.result.request={schema:'ftx-sewing-selection/6'};
+  await p.e.study.onclick();p.emit(studyReport([bounded,missing]));
+  const routed=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Material-specific sewing recipe and route search');
+  assert.deepEqual(plain(routed.children[2].children.map(n=>n.textContent)),
+    ['bounded','Available','eligible-specialists','Original recipes','2','false','true','false','1']);
+  assert.equal(routed.children[3].children[2].textContent,'No route selected');
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
 });
 
@@ -5009,6 +5083,68 @@ test('compiled WASM heterogeneous cells replay native geometry, thread orders an
     const refused=await w.send({type:'sew',request:223,pattern,options:JSON.stringify(changed)});
     assert.equal(refused.type,'error');
     assert.equal(w.sent.some(message=>message.type==='result'&&message.request===223),false);
+  });
+
+test('compiled WASM eligible routes replay exact native assignments, selected recipes and yarn through workers',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_ELIGIBLE_ROUTING_REPLAY}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const directory=path.resolve(process.env.FTX_ELIGIBLE_ROUTING_REPLAY);
+    const input=name=>fs.readFileSync(path.join(directory,name),'utf8');
+    const pattern=input('pattern.json'),options=input('options.json'),policy=JSON.parse(options).production.routing;
+    assert.equal(policy.model,'eligible_operation_route/1');
+    const windowed=policy.cells[0].available_until_milliseconds===5300;
+    const w=await workerModule({bindings:ftx});
+    const result=await w.send({type:'sew',request:241,pattern,options});
+    assert.equal(result.type,'result',result.message);
+    assert.deepEqual(result.result,JSON.parse(input('program.json')));
+    assert.equal(result.files.find(file=>file.name==='sewing-program.json').text,ftx.sew_stitches(pattern,options));
+    const plan=result.result.plan,route=plan.production.routing;
+    assert.equal(plan.schema,'ftx-sewing-plan/19');assert.equal(route.schema,'ftx-sewing-routing/2');
+    assert.equal(route.reference_scope,'seed_route_one_garment/1');
+    assert.equal(route.baseline_replaced,windowed);
+    assert.equal(route.selected.makespan_milliseconds,windowed?10402:7036);
+    assert.equal(result.result.stitches.length,windowed?100:80);
+    assert.equal(plan.production.stitch_intervals,result.result.stitches.length);
+    assert.equal(route.selected.transfers.length,windowed?1:0);
+    assert.ok(Math.abs(plan.consumables.total_required_length_m-(windowed?1.9:1.6))<1e-12);
+    assert.equal(plan.consumables.purchasing.least_observed_independent_order_total,10);
+    for(const operation of route.selected.operations) {
+      const source=route.cell_plans.find(source=>source.cell===operation.cell).plan;
+      const seam=source.seams[operation.seam_index];
+      assert.equal(seam.pass.id,operation.operation_id);
+      const steps=result.result.stitches.filter(step=>step.cell===operation.cell&&step.copy===operation.copy&&step.operation===operation.seam_index);
+      assert.equal(steps.length,operation.cell==='cell-a'?40:20);
+      for(const step of steps) {
+        assert.deepEqual(step.a_mm,seam.stations.a[step.to_station]);
+        assert.deepEqual(step.b_mm,seam.stations.b[step.to_station]);
+      }
+    }
+    const selection=JSON.parse(ftx.sew_select(pattern,input('selection.json')));
+    assert.deepEqual(selection,JSON.parse(input('selection-report.json')));
+    const selected=await w.send({type:'sew',request:242,pattern,options:selection.selected_options_json});
+    assert.equal(selected.type,'result',selected.message);assert.deepEqual(selected.result,result.result);
+    const studyRequest=input('study.json');
+    const study=await w.send({type:'study',request:243,pattern,studyRequest});
+    assert.equal(study.type,'result',study.message);
+    assert.deepEqual(study.result,JSON.parse(input('study-report.json')));
+    assert.deepEqual(study.result.comparison.frontier,['eligible']);
+    assert.equal(study.result.alternatives[0].metrics.stitch_intervals,windowed?100:80);
+    assert.equal(study.files.find(file=>file.name==='study-request.json').text,studyRequest);
+    const row=study.result.alternatives[0];
+    assert.deepEqual(row.sewing.result,JSON.parse(ftx.sew_stitches(row.binding.result.pattern_json,
+      JSON.stringify(row.sewing.result.options))).plan);
+    const stale=JSON.parse(options);stale.production.routing.cells[1].configuration.machine.max_stitches_per_minute=1;
+    const refused=await w.send({type:'sew',request:244,pattern,options:JSON.stringify(stale)});
+    assert.equal(refused.type,'error');
+    assert.equal(w.sent.some(message=>message.type==='result'&&message.request===244),false);
+    if(windowed) {
+      const restricted=JSON.parse(options);restricted.production.routing.route[0].eligible_cells=['cell-a'];
+      const impossible=await w.send({type:'sew',request:245,pattern,options:JSON.stringify(restricted)});
+      assert.equal(impossible.type,'error');
+      assert.equal(w.sent.some(message=>message.type==='result'&&message.request===245),false);
+    }
   });
 
 test('compiled WASM purchases exact catalog yarn by mass and exposes complete consumed-mass objectives',

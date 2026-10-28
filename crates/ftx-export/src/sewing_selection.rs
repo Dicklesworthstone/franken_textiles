@@ -63,7 +63,7 @@ pub struct Alternatives {
 pub struct RouteCandidate {
     /// Stable candidate identity; `template` is reserved for the original route.
     pub id: String,
-    /// Complete ordinary fixed-route policy, including actual cell configurations and source locks.
+    /// Complete ordinary routing policy, including actual cell configurations and source locks.
     pub routing: routing::Policy,
 }
 
@@ -290,7 +290,7 @@ impl Request {
         })?;
         if production.routing.is_none() || production.parallel.is_some() {
             return Err(invalid(
-                "route selection replaces a fixed routing policy, not a serial or parallel policy",
+                "route selection requires a specialist routing policy without a parallel policy",
             ));
         }
         production.routing = Some(candidate.routing.clone());
@@ -401,6 +401,26 @@ impl Request {
                     "route candidates need unique nonreserved identities",
                 ));
             }
+        }
+        let has_eligible_route = self
+            .options
+            .production
+            .as_ref()
+            .and_then(|production| production.routing.as_ref())
+            .is_some_and(routing::Policy::eligible)
+            || self
+                .route_candidates
+                .iter()
+                .any(|candidate| candidate.routing.eligible());
+        if has_eligible_route
+            && matches!(
+                self.objective,
+                Objective::MinimizeFeedSeconds | Objective::MinimizeThreadObservedOrderCost
+            )
+        {
+            return Err(invalid(
+                "eligible-route cells assign operations for minimum makespan; feed and thread cost depend on those choices and cannot claim their own minimum; use minimize_parallel_makespan and inspect actual feed and thread orders",
+            ));
         }
         if !(1..=MAX_TRIALS).contains(&self.max_plan_evaluations)
             || self.options.passes.is_empty()
@@ -756,9 +776,18 @@ impl Request {
             optimality_proven: search_complete && has_plan && unresolved_trials == 0,
             no_feasible_listed_recipe: search_complete && !has_plan && unresolved_trials == 0,
             tie_break: if route_search {
-                "template route first, then route ID, operation ID and recipe ID lexicographic; retain first equal declared fixed-route dispatch makespan"
+                "template route first, then route ID, operation ID and recipe ID lexicographic; retain first equal declared routed dispatch makespan"
             } else if cost {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal complete thread order cost"
+            } else if parallel
+                && self
+                    .options
+                    .production
+                    .as_ref()
+                    .and_then(|production| production.routing.as_ref())
+                    .is_some_and(routing::Policy::eligible)
+            {
+                "template first, then operation ID / recipe ID lexicographic; retain first equal declared eligible-route dispatch makespan"
             } else if parallel && routed {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal declared fixed-route dispatch makespan"
             } else if parallel {

@@ -1684,6 +1684,7 @@ impl Policy {
                         }));
             let mut mass_protocols = BTreeMap::new();
             let mut sources = Vec::new();
+            let mut routed_operations = None;
             if let Some(routing) = plan
                 .production
                 .as_ref()
@@ -1695,6 +1696,14 @@ impl Policy {
                     .iter()
                     .map(|operation| operation.cell.as_str())
                     .collect();
+                routed_operations = Some(
+                    routing
+                        .selected
+                        .operations
+                        .iter()
+                        .map(|operation| (operation.cell.as_str(), operation.operation_id.as_str()))
+                        .collect::<BTreeSet<_>>(),
+                );
                 for cell in &routing.cell_plans {
                     if used.contains(cell.cell.as_str()) {
                         sources.push((Some(cell.cell.as_str()), cell.plan.as_ref()));
@@ -1721,6 +1730,14 @@ impl Policy {
             }
             for (cell, source_plan) in sources {
                 for seam in &source_plan.seams {
+                    if routed_operations.as_ref().is_some_and(|used| {
+                        !used.contains(&(
+                            cell.expect("routed source cell"),
+                            seam.pass.operation_id(),
+                        ))
+                    }) {
+                        continue;
+                    }
                     let q = source_plan
                         .options
                         .qualifications
@@ -1826,9 +1843,36 @@ impl Policy {
             // do not silently compare different transition tables or source qualifications.
             base = hash(&(base, handling))?;
         }
+        if (consumers.contains(&Consumer::Sewing) || thread)
+            && let Some(selection) = row.sewing_selection.value()
+            && selection.request.schema == "ftx-sewing-selection/6"
+            && (selection
+                .request
+                .options
+                .production
+                .as_ref()
+                .and_then(|production| production.routing.as_ref())
+                .is_some_and(crate::sewing::production::routing::Policy::eligible)
+                || selection
+                    .request
+                    .route_candidates
+                    .iter()
+                    .any(|candidate| candidate.routing.eligible()))
+        {
+            // The winner may be fixed even though an eligible route participated in its search.
+            // Preserve every outer candidate, recipe and work cap that determined that decision.
+            base = hash(&(base, ("eligible_route_selection", &selection.request)))?;
+        }
         if self
             .metrics()
             .contains(&Metric::SewingParallelMakespanSeconds)
+            || ((consumers.contains(&Consumer::Sewing) || thread)
+                && row
+                    .sewing
+                    .value()
+                    .and_then(|plan| plan.options.production.as_ref())
+                    .and_then(|production| production.routing.as_ref())
+                    .is_some_and(crate::sewing::production::routing::Policy::eligible))
         {
             let production = row
                 .sewing
@@ -1839,9 +1883,11 @@ impl Policy {
                 })?;
             // Resource independence, availability, time resolution and every cell's source-bound
             // timing/fixture policy define this experiment, independent of textile protocol consent.
+            // Eligible routes optimize makespan before reporting feed/yarn. Their complete search
+            // domain therefore remains relevant even when no makespan metric was requested.
             if let Some(routing) = &production.routing {
-                // Fixed routing additionally qualifies loaded garment movement and staging. Its
-                // source protocol cannot be exchanged for independent whole-garment allocation.
+                // The complete routing domain, including unused eligible cells, qualifies unloaded
+                // movement, staging and the assignment search. Never hash only selected resources.
                 base = hash(&(base, ("routed", routing)))?;
             } else {
                 let parallel = production

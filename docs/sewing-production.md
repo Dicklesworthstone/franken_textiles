@@ -813,8 +813,8 @@ unloading and complete handoffs. A cell can finish one garment while another wai
 
 Version 1 refuses cell `workholding` policies, retained fixtures across operations, and shared
 operator/pool composition. Existing per-operation planar access checks still apply. Moving an
-occupied fixture, sharing a cell worker, autonomous feed, insufficient staging and flexible machine
-eligibility require separately qualified extensions.
+occupied fixture, sharing a cell worker, autonomous feed and insufficient staging require separately
+qualified extensions. Explicit eligible-machine domains use the separate model below.
 
 The bounded search appends a copy's next handoff and cell operation at their earliest admitted
 times. It considers copy dispatch permutations for the fixed route; it does not enumerate arbitrary
@@ -848,6 +848,85 @@ focused Rust regressions pass. The separate real-command workflow and current co
 acceptance remain distinct checks. No measured factory timing, physical seam quality or hardware
 permission is established.
 
+## Choose eligible cells separately for each garment operation
+
+`eligible_operation_route/1` retains the authored operation sequence but lets each physical copy
+choose among independently qualified cells at each step. A bottleneck operation can therefore be
+split between machines without requiring either cell to make the complete garment. This differs
+from comparing several fully authored routes: eligible assignment is performed inside each admitted
+policy, and the existing route-selection search can compare those complete policies separately.
+
+Within an otherwise complete source-qualified routing request, replace the model and route fields:
+
+```json
+{
+  "model": "eligible_operation_route/1",
+  "route": [
+    {"operation": "join", "cell": "cell-a", "eligible_cells": ["cell-a", "cell-b"]},
+    {"operation": "reinforce", "cell": "cell-b", "eligible_cells": ["cell-b"]}
+  ]
+}
+```
+
+`cell` is the explicit seed assignment, not a preferred-machine cost or inferred eligibility.
+Every nonempty `eligible_cells` list must contain that seed, contain no duplicates and name only
+configured cells. Every configured cell must occur in at least one domain, although the selected
+schedule may leave it idle. The fixed model rejects eligible lists and retains its prior reports.
+The complete policy source must qualify the eligible domain, independently attending workers and
+staging protocol. The modeled job begins with each garment already in its chosen first cell's
+unloaded staging; transport into that initial distribution is outside this schedule. Subsequent
+inter-cell moves always occupy the separately qualified handoff resource.
+
+Each cell admits every operation for which it is eligible against the original pattern and its
+own machine, recipe, material/process and access evidence. Loading/unloading observations and
+setup transitions cover that cell's complete eligible subset. Recompute the ordinary full cell
+locks after any configuration, recipe, timing or availability change. Merely leaving an alternative
+unused cannot admit a stale source. Supply exactly every directed cross-cell pair between adjacent
+eligible domains; staying at the same cell requires no transfer. Missing transfer evidence refuses
+the complete declared domain rather than silently removing an inconvenient choice.
+
+The search visits the seed cell first and other eligible cells in authored order for each next
+copy operation. Its actual preceding cell determines the handoff, and each selected cell supplies
+its own feed duration, setup, loading, unloading and inclusive operating window. An infeasible seed
+can be replaced by a complete feasible mixed assignment. The existing search-and-replay budget,
+63 expanded-operation limit and eight-cell limit apply. All eligible source plans share the station
+reservation, and the largest eligible stitch count at each stage bounds the complete output before
+search. A work limit never publishes a partially manufactured garment.
+
+Eligible reports use plan `/19`, production `/7`, routing `/2` and the existing stitch `/7`.
+`routing.reference_scope: "seed_route_one_garment/1"` explicitly identifies the outer `seams`, feed
+and stitch totals as one seed-route reference garment. **Actual batch totals and stitches come from
+the selected timeline.** Each eligible `production.operations[]` row includes its actual `cell`;
+its `seam_index`, qualification, stitch count and feed describe that cell's source operation.
+The ordinary `total_*` methods and elapsed-completion consumer use the selected batch. Explicit-cell
+previews identify precisely which global copies use that operation at that cell.
+
+Thread channels and their start/end allowances are multiplied by the actual selected
+`(cell, operation)` execution count. An admitted but unused recipe contributes no demand and does
+not require consumption evidence for that unexecuted operation. Exact yarn totals aggregate across
+all selected cells before one ordinary supplier order; the largest single operation/channel still
+sets the continuous-length requirement. Comparisons retain only executed recipe qualifications,
+while their protocol identity also locks the entire eligible routing policy: changing an unused
+alternative or search cap must not silently preserve the same decision protocol.
+
+Because cell assignment minimizes makespan, recipe/route selection with an eligible policy requires
+`minimize_parallel_makespan`. Feed and yarn cost remain actual consequences of the selected schedule;
+this inner search does not optimize them. The policy cannot establish a feed-minimum or thread-cost-
+minimum result merely because one retained assignment has attractive values.
+
+The relaxed lower bound combines minimum eligible operation work, unavoidable transfers, total cell
+capacity and work forced onto a single cell. Optional setups and unused late-opening cells do not
+become fictitious mandatory work. `search_complete` refers only to
+`coupled_eligible_handoff_cell_append_dispatch/1`; `optimality_proven` additionally requires equality
+with the independent lower bound. Arbitrary prestaging and later cell reordering are not enumerated.
+The workbench shows every eligible recipe, its seed flag and actual selected copy count, including
+zero-use alternatives, alongside the complete selected operation and transfer timeline.
+
+Independent synthetic regressions enumerate small assignment/dispatch combinations and check mixed
+window feasibility, actual geometry, yarn demand, complete-incumbent limits, source invalidation and
+protocol identity. They establish this bounded software model, not measured factory throughput,
+physical seam quality, retained/shared fixture composition or hardware authorization.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **63 copy/operation pairs** and 1–200000 examined search nodes.
@@ -861,8 +940,9 @@ Serial mode covers a single declared machine/configuration; qualified parallel m
 garments to explicitly independent instances, with separately admitted configurations in version 2.
 Those modes retain needle/thread
 transitions, optional source-qualified finite workholding and explicit serial operation/copy handling
-inside each used cell. Fixed routing instead admits the specialist operation, staging and handoff
-protocol above. None infers additional machines, undeclared inventory, grip adequacy, three-dimensional machine approach,
+inside each used cell. Routing instead admits the specialist operation, staging and handoff
+protocol above, with fixed assignments or explicit eligible-cell domains. None infers additional
+machines, undeclared inventory, grip adequacy, three-dimensional machine approach,
 acceleration or measured seam quality. Planar seam access requires its own independently qualified
 policy. These other physical constraints remain open under `ftx-pb2`/`ftx-sp2`; hardware
 authorization remains false.

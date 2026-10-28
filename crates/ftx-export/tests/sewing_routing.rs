@@ -1002,3 +1002,646 @@ fn routed_study_compares_actual_specialist_sources_and_preserves_independent_ref
     assert!(failed["metrics"]["sewing_parallel_makespan_seconds"].is_null());
     assert_eq!(refused["comparison"]["frontier"], json!([]));
 }
+
+fn eligible_fixture(copies: usize) -> (Pattern, Value) {
+    let (pattern, mut raw) = fixture(copies);
+    let mut alternate = raw["production"]["routing"]["cells"][0].clone();
+    alternate["id"] = json!("cell-c");
+    alternate["available_until_milliseconds"] = json!(3300);
+    alternate["configuration"]["machine"]["id"] = json!("synthetic-alternate-c");
+    alternate["configuration"]["machine"]["stitch_mm"] = json!([4, 6]);
+    let q = &mut alternate["configuration"]["qualifications"][0];
+    q["id"] = json!("qualified-alternate-join");
+    q["machine"] = json!("synthetic-alternate-c");
+    q["needle"] = json!("needle-c");
+    q["thread"] = json!("thread-c");
+    q["stitch_mm"] = json!([4, 6]);
+    let recipe = &mut alternate["configuration"]["recipes"]["join"];
+    recipe["id"] = json!("alternate-join");
+    recipe["needle"] = json!("needle-c");
+    recipe["thread"] = json!("thread-c");
+    recipe["max_stitch_mm"] = json!(5);
+    alternate["ordering"]["initial_setup"]["needle"] = json!("needle-c");
+    alternate["ordering"]["setup_times"]["machine"] = json!("synthetic-alternate-c");
+    let change = &mut alternate["ordering"]["setup_times"]["transitions"][0];
+    change["from"]["needle"] = json!("needle-c");
+    change["to"] = json!({"needle":"needle-c","thread":"thread-c"});
+    let routing = &mut raw["production"]["routing"];
+    routing["model"] = json!("eligible_operation_route/1");
+    routing["cells"][0]["available_until_milliseconds"] = json!(5300);
+    routing["cells"].as_array_mut().unwrap().push(alternate);
+    routing["route"][0]["eligible_cells"] = json!(["cell-a", "cell-c"]);
+    routing["route"][1]["eligible_cells"] = json!(["cell-b"]);
+    routing["transfer"]["transfers"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"from":"cell-c","to":"cell-b","milliseconds":900}));
+    refresh_locks(&mut raw);
+    (pattern, raw)
+}
+
+/// Exhaust all four first-stage assignments and all six precedence-respecting dispatch orders.
+/// This small integer oracle uses the independent synthetic phase inputs, no planner or receipt.
+fn independently_enumerated_finish() -> u64 {
+    let orders = [
+        [0, 0, 1, 1],
+        [0, 1, 0, 1],
+        [0, 1, 1, 0],
+        [1, 0, 0, 1],
+        [1, 0, 1, 0],
+        [1, 1, 0, 0],
+    ];
+    let mut best = u64::MAX;
+    for assignment in [[0, 0], [0, 2], [2, 0], [2, 2]] {
+        for order in orders {
+            let mut stage = [0; 2];
+            let mut garment = [0u64; 2];
+            let mut machines = [0u64; 3];
+            let mut set_up = [false; 3];
+            let mut mover = 0;
+            let mut feasible = true;
+            for copy in order {
+                let cell = if stage[copy] == 0 {
+                    assignment[copy]
+                } else {
+                    1
+                };
+                let arrived = if stage[copy] == 0 {
+                    0
+                } else {
+                    mover =
+                        mover.max(garment[copy]) + if assignment[copy] == 0 { 700 } else { 900 };
+                    mover
+                };
+                let setup = if set_up[cell] {
+                    0
+                } else {
+                    [1000, 500, 1000][cell]
+                };
+                let finish =
+                    machines[cell].max(arrived) + 100 + setup + [4000, 2000, 2000][cell] + 200;
+                if finish > [5300, u64::MAX, 3300][cell] {
+                    feasible = false;
+                    break;
+                }
+                machines[cell] = finish;
+                garment[copy] = finish;
+                set_up[cell] = true;
+                stage[copy] += 1;
+            }
+            if feasible {
+                best = best.min(*garment.iter().max().unwrap());
+            }
+        }
+    }
+    best
+}
+
+#[test]
+fn eligible_cells_find_a_mixed_complete_batch_and_replay_actual_recipe_geometry() {
+    let (pattern, raw) = eligible_fixture(2);
+    let options: SewOptions = serde_json::from_value(raw).unwrap();
+    let program = SewProgram::build(&pattern, &options).unwrap();
+    let plan = &program.plan;
+    let production = plan.production.as_ref().unwrap();
+    let route = production.routing.as_ref().unwrap();
+    assert_eq!(independently_enumerated_finish(), 9300);
+    assert_eq!(
+        route.selected.makespan_milliseconds,
+        independently_enumerated_finish()
+    );
+    assert!(route.baseline_replaced && route.search_complete && !route.budget_exhausted);
+    assert!(route.lower_bound_makespan_milliseconds <= route.selected.makespan_milliseconds);
+    assert!(!route.optimality_proven); // Exhaustive append dispatch is not unrestricted timing proof.
+    assert_eq!(route.schema, "ftx-sewing-routing/2");
+    assert_eq!(route.reference_scope, Some("seed_route_one_garment/1"));
+    assert_eq!(plan.schema, "ftx-sewing-plan/19");
+    assert_eq!(production.schema, "ftx-sewing-production/7");
+    assert_eq!((plan.stitch_intervals, plan.feed_seconds), (60, 6.0));
+    assert_eq!(
+        (plan.total_stitch_intervals(), plan.total_feed_seconds()),
+        (100, 10.0)
+    );
+    assert_eq!(program.stitches.len(), 100);
+    assert_eq!(route.selected.transfer_milliseconds, 1600);
+    let mut counts = BTreeMap::new();
+    for operation in &production.operations {
+        let cell = operation.cell.as_deref().unwrap();
+        let source = plan.parallel_cell_plan(cell).unwrap();
+        let seam = &source.seams[operation.seam_index];
+        assert_eq!(seam.pass.operation_id(), operation.operation_id);
+        assert_eq!(seam.qualification_id, operation.qualification_id);
+        assert_eq!(seam.stitch_intervals, operation.stitch_intervals);
+        assert_eq!(seam.feed_seconds, operation.feed_seconds);
+        *counts.entry(cell).or_insert(0) += operation.stitch_intervals;
+    }
+    assert_eq!(
+        counts,
+        BTreeMap::from([("cell-a", 40), ("cell-b", 40), ("cell-c", 20)])
+    );
+    for stitch in &program.stitches {
+        let cell = stitch.cell.as_deref().unwrap();
+        let seam = &plan.parallel_cell_plan(cell).unwrap().seams[stitch.operation];
+        assert_eq!(stitch.a_mm, seam.stations.a[stitch.to_station]);
+        assert_eq!(stitch.b_mm, seam.stations.b[stitch.to_station]);
+    }
+    for transfer in &route.selected.transfers {
+        let before = route
+            .selected
+            .operations
+            .iter()
+            .find(|row| row.copy == transfer.copy && row.operation_id == transfer.from_operation)
+            .unwrap();
+        let after = route
+            .selected
+            .operations
+            .iter()
+            .find(|row| row.copy == transfer.copy && row.operation_id == transfer.to_operation)
+            .unwrap();
+        assert_eq!(transfer.from, before.cell);
+        assert_eq!(transfer.to, after.cell);
+        assert!(transfer.start_milliseconds >= before.finish_milliseconds);
+        assert!(after.loading_start_milliseconds >= transfer.finish_milliseconds);
+    }
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &plan.options).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn eligible_search_bounds_keep_only_complete_incumbents_and_ignore_unused_late_cells() {
+    let (pattern, mut raw) = eligible_fixture(2);
+    raw["production"]["routing"]["max_search_nodes"] = json!(4);
+    assert_eq!(
+        build(&pattern, raw.clone()).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+    raw["production"]["routing"]["cells"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("available_until_milliseconds");
+    refresh_locks(&mut raw);
+    let plan = build(&pattern, raw).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert!(!route.baseline_replaced && route.budget_exhausted && !route.optimality_proven);
+    assert_eq!((route.search_nodes, route.work_used), (4, 12));
+    assert_eq!(route.selected.operations.len(), 4);
+    assert_eq!(plan.total_stitch_intervals(), 120);
+    let (pattern, mut raw) = eligible_fixture(1);
+    raw["production"]["routing"]["cells"][0]["available_at_milliseconds"] = json!(1_000_000);
+    raw["production"]["routing"]["cells"][0]["available_until_milliseconds"] = json!(1_005_300);
+    refresh_locks(&mut raw);
+    let plan = build(&pattern, raw).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert_eq!(route.selected.makespan_milliseconds, 7000);
+    assert!(
+        route
+            .selected
+            .operations
+            .iter()
+            .all(|row| row.cell != "cell-a")
+    );
+    assert!(route.lower_bound_makespan_milliseconds <= 7000);
+}
+
+#[test]
+fn eligible_domains_require_every_declared_alternative_and_directed_handoff() {
+    let (pattern, raw) = eligible_fixture(2);
+    let mut cases = Vec::new();
+    for (field, value) in [
+        ("model", json!("fixed_operation_route/1")),
+        ("max_search_nodes", json!(3)),
+    ] {
+        let mut bad = raw.clone();
+        bad["production"]["routing"][field] = value;
+        cases.push(bad);
+    }
+    for cells in [
+        json!([]),
+        json!(["cell-a", "cell-a"]),
+        json!(["cell-c"]),
+        json!(["cell-a", "absent"]),
+    ] {
+        let mut bad = raw.clone();
+        bad["production"]["routing"]["route"][0]["eligible_cells"] = cells;
+        cases.push(bad);
+    }
+    let mut bad = raw.clone();
+    bad["production"]["routing"]["transfer"]["transfers"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    cases.push(bad);
+    let mut bad = raw;
+    bad["production"]["routing"]["cells"][2]["configuration"]["recipes"]["join"]["max_stitch_mm"] =
+        json!(2.5);
+    refresh_locks(&mut bad);
+    cases.push(bad);
+    for (index, bad) in cases.into_iter().enumerate() {
+        assert!(
+            build(&pattern, bad).is_err(),
+            "invalid eligible domain {index} admitted"
+        );
+    }
+}
+
+#[test]
+fn eligible_yarn_and_study_protocols_include_only_selected_operations_even_on_used_cells() {
+    use ftx_export::material_study::Request;
+
+    let (pattern, mut options) = eligible_fixture(2);
+    let yarn = Catalog::builtin()
+        .unwrap()
+        .resolve(&Selection {
+            id: "coats/epic-2994120-2026".into(),
+            ..Selection::default()
+        })
+        .unwrap()
+        .frozen_selection();
+    for (index, cell) in options["production"]["routing"]["cells"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        cell["configuration"]["qualifications"][0]["thread_consumption"] = json!({
+            "channels_complete":true,"evidence":"estimate","allow_estimates":true,
+            "source":source("eligible-thread"),"method":"Synthetic complete consumption per actual operation",
+            "channels":[{"id":"complete","material":yarn,
+                "metres_per_traversal":([0.01,0.02,0.03][index]),
+                "start_allowance_m":([0.1,0.05,0.2][index]),
+                "end_allowance_m":([0.2,0.05,0.1][index])}]});
+    }
+    // C is used for one join. It also qualifies reinforcement, but its closed window makes that
+    // alternative unused. That unexecuted operation deliberately has no consumption evidence.
+    let c = &mut options["production"]["routing"]["cells"][2];
+    let mut q = c["configuration"]["qualifications"][0].clone();
+    q["id"] = json!("unused-c-reinforcement");
+    q["thread"] = json!("unused-thread");
+    q.as_object_mut().unwrap().remove("thread_consumption");
+    c["configuration"]["qualifications"]
+        .as_array_mut()
+        .unwrap()
+        .push(q);
+    let mut recipe = c["configuration"]["recipes"]["join"].clone();
+    recipe["id"] = json!("unused-reinforcement");
+    recipe["thread"] = json!("unused-thread");
+    c["configuration"]["recipes"]["reinforce"] = recipe;
+    c["handling"]["initial_milliseconds"]["reinforce"] = json!(100);
+    c["handling"]["final_milliseconds"]["reinforce"] = json!(200);
+    for (from, to) in [
+        ("idle", "unused-thread"),
+        ("thread-c", "unused-thread"),
+        ("unused-thread", "thread-c"),
+    ] {
+        c["ordering"]["setup_times"]["transitions"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+            "from":{"needle":"needle-c","thread":from},
+            "to":{"needle":"needle-c","thread":to},"milliseconds":1000}));
+    }
+    options["production"]["routing"]["route"][1]["eligible_cells"] = json!(["cell-b", "cell-c"]);
+    options["production"]["routing"]["transfer"]["transfers"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"from":"cell-a","to":"cell-c","milliseconds":600}));
+    options["consumables"] = json!({});
+    refresh_locks(&mut options);
+    let plan = build(&pattern, options.clone()).unwrap();
+    assert_eq!(plan.parallel_cell_plan("cell-c").unwrap().seams.len(), 2);
+    let consumption = plan.consumables.as_ref().unwrap();
+    assert!(consumption.complete_consumption_coverage && consumption.complete_mass_coverage);
+    assert!(consumption.missing_operations.is_empty());
+    assert_eq!(consumption.operation_channels.len(), 3);
+    assert!((consumption.total_required_length_m.unwrap() - 2.6).abs() < 1e-12);
+    let counts: BTreeMap<_, _> = consumption
+        .operation_channels
+        .iter()
+        .map(|row| {
+            (
+                (row.cell.as_deref().unwrap(), row.operation_id.as_str()),
+                row.stitch_intervals,
+            )
+        })
+        .collect();
+    assert_eq!(
+        counts,
+        BTreeMap::from([
+            (("cell-a", "join"), 40),
+            (("cell-b", "reinforce"), 40),
+            (("cell-c", "join"), 20)
+        ])
+    );
+    let request: Request = serde_json::from_value(json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"eligible","changes":{"schema":"ftx-material-bindings/1",
+            "default":pattern.raw()["fabric"]["material"]}}],"sewing":options,
+        "comparison":{"basis":"nominal","required_consumers":["sewing","sewing_consumables"],
+            "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"},
+                {"metric":"thread_required_length_m","direction":"minimize"}]}}))
+    .unwrap();
+    let report = serde_json::to_value(request.evaluate(&pattern).unwrap()).unwrap();
+    assert_eq!(report["comparison"]["frontier"], json!(["eligible"]));
+    assert_eq!(
+        report["alternatives"][0]["metrics"]["stitch_intervals"],
+        100
+    );
+    assert!(
+        (report["alternatives"][0]["metrics"]["thread_required_length_m"]
+            .as_f64()
+            .unwrap()
+            - 2.6)
+            .abs()
+            < 1e-12
+    );
+}
+
+#[test]
+fn eligible_recipe_selection_scores_makespan_and_refuses_unoptimized_feed_or_cost_claims() {
+    use ftx_export::sewing_selection::Request;
+
+    let (pattern, options) = eligible_fixture(2);
+    let authored = &options["passes"][1];
+    let mut request = json!({"schema":"ftx-sewing-selection/5","options":options,
+        "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+        "alternatives":[{"operation":"reinforce","recipes":[{"id":"same-authored-pass",
+            "needle":authored["needle"],"thread":authored["thread"],
+            "max_stitch_mm":authored["max_stitch_mm"],
+            "stitches_per_minute":authored["stitches_per_minute"]}]}]});
+    let selected = serde_json::from_value::<Request>(request.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(selected.selected_objective_seconds, Some(9.3));
+    assert_eq!(
+        selected
+            .selected_plan
+            .as_ref()
+            .unwrap()
+            .total_stitch_intervals(),
+        100
+    );
+    assert!(!selected.optimality_proven);
+    for (schema, objective) in [
+        ("ftx-sewing-selection/1", "minimize_feed_seconds"),
+        (
+            "ftx-sewing-selection/3",
+            "minimize_thread_observed_order_cost",
+        ),
+    ] {
+        request["schema"] = json!(schema);
+        request["objective"] = json!(objective);
+        let error = serde_json::from_value::<Request>(request.clone())
+            .unwrap()
+            .select(&pattern)
+            .unwrap_err();
+        assert!(
+            error.message.contains("cannot claim their own minimum"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn feed_and_thread_only_comparisons_retain_the_entire_eligible_routing_protocol() {
+    use ftx_export::material_study::Request;
+
+    let (pattern, mut options) = eligible_fixture(1);
+    options["production"]["routing"]["cells"][0]["available_at_milliseconds"] = json!(1_000_000);
+    options["production"]["routing"]["cells"][0]["available_until_milliseconds"] = json!(1_005_300);
+    let yarn = Catalog::builtin()
+        .unwrap()
+        .resolve(&Selection {
+            id: "coats/epic-2994120-2026".into(),
+            ..Selection::default()
+        })
+        .unwrap()
+        .frozen_selection();
+    for cell in options["production"]["routing"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["configuration"]["qualifications"][0]["thread_consumption"] = json!({
+            "channels_complete":true,"evidence":"estimate","allow_estimates":true,
+            "source":source("protocol-thread"),"method":"Synthetic complete thread per selected interval",
+            "channels":[{"id":"complete","material":yarn,"metres_per_traversal":0.01,
+                "start_allowance_m":0.0,"end_allowance_m":0.0}]});
+    }
+    options["consumables"] = json!({});
+    refresh_locks(&mut options);
+    let study = |options: Value, metric: &str| {
+        let request: Request = serde_json::from_value(json!({"schema":"ftx-material-study/1",
+            "variants":[{"key":"eligible","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern.raw()["fabric"]["material"]}}],"sewing":options,
+            "comparison":{"basis":"nominal","objectives":[{"metric":metric,"direction":"minimize"}]}})).unwrap();
+        serde_json::to_value(request.evaluate(&pattern).unwrap()).unwrap()
+    };
+    for metric in ["feed_seconds", "thread_required_length_m"] {
+        let original = study(options.clone(), metric);
+        assert_eq!(original, study(options.clone(), metric));
+        assert_eq!(original["comparison"]["frontier"], json!(["eligible"]));
+        let selected =
+            &original["alternatives"][0]["sewing"]["result"]["production"]["routing"]["selected"];
+        assert!(
+            selected["operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["cell"] != "cell-a")
+        );
+        let mut changed = options.clone();
+        changed["production"]["routing"]["cells"][0]["available_until_milliseconds"] =
+            json!(1_005_301);
+        // An idle alternative still needs its exact content lock before the job can be admitted.
+        let stale = study(changed.clone(), metric);
+        assert_eq!(stale["alternatives"][0]["sewing"]["status"], "refused");
+        assert_eq!(stale["comparison"]["frontier"], json!([]));
+        refresh_locks(&mut changed);
+        let changed = study(changed, metric);
+        assert_eq!(
+            *selected,
+            changed["alternatives"][0]["sewing"]["result"]["production"]["routing"]["selected"]
+        );
+        assert_eq!(
+            original["comparison"]["alternatives"][0]["readings"],
+            changed["comparison"]["alternatives"][0]["readings"]
+        );
+        let identity = &original["comparison"]["alternatives"][0]["input_protocol_sha256"];
+        assert!(identity.is_string());
+        assert_ne!(
+            *identity,
+            changed["comparison"]["alternatives"][0]["input_protocol_sha256"]
+        );
+    }
+}
+
+#[test]
+fn authored_routes_and_eligible_assignments_share_exact_winners_and_full_search_identity() {
+    use ftx_export::{material_study, sewing_selection};
+
+    let (pattern, mut fixed) = fixture(2);
+    let (_, mut eligible) = eligible_fixture(2);
+    let yarn = Catalog::builtin()
+        .unwrap()
+        .resolve(&Selection {
+            id: "coats/epic-2994120-2026".into(),
+            ..Selection::default()
+        })
+        .unwrap()
+        .frozen_selection();
+    for options in [&mut fixed, &mut eligible] {
+        for cell in options["production"]["routing"]["cells"]
+            .as_array_mut()
+            .unwrap()
+        {
+            cell["configuration"]["qualifications"][0]["thread_consumption"] = json!({
+                "channels_complete":true,"evidence":"estimate","allow_estimates":true,
+                "source":source("joint-route-thread"),"method":"Synthetic complete thread per actual interval",
+                "channels":[{"id":"complete","material":yarn,"metres_per_traversal":0.01,
+                    "start_allowance_m":0.0,"end_allowance_m":0.0}]});
+        }
+        options["consumables"] = json!({});
+        refresh_locks(options);
+    }
+    let pass = fixed["passes"][1].clone();
+    let mut input = json!({"schema":"ftx-sewing-selection/6","options":fixed,
+        "objective":"minimize_parallel_makespan","max_plan_evaluations":4,
+        "route_candidates":[{"id":"eligible-specialists","routing":eligible["production"]["routing"]}],
+        "alternatives":[{"operation":"reinforce","recipes":[{"id":"same-authored-pass",
+            "needle":pass["needle"],"thread":pass["thread"],"max_stitch_mm":pass["max_stitch_mm"],
+            "stitches_per_minute":pass["stitches_per_minute"]}]}]});
+    let result = serde_json::from_value::<sewing_selection::Request>(input.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(result.candidate_combinations, 4);
+    assert_eq!(
+        result
+            .trials
+            .iter()
+            .map(|row| row.route_choice.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "template",
+            "template",
+            "eligible-specialists",
+            "eligible-specialists"
+        ]
+    );
+    assert_eq!(
+        result.selected_route.as_deref(),
+        Some("eligible-specialists")
+    );
+    assert_eq!(result.selected_objective_seconds, Some(9.3));
+    assert_eq!(
+        result.selected_choices.as_ref().unwrap()["reinforce"],
+        "template"
+    );
+    assert!(result.search_complete && !result.optimality_proven);
+    let winner = result.selected_plan.as_ref().unwrap();
+    assert_eq!(winner.total_stitch_intervals(), 100);
+    assert_eq!(
+        winner
+            .options
+            .production
+            .as_ref()
+            .unwrap()
+            .routing
+            .as_ref()
+            .unwrap()
+            .model,
+        "eligible_operation_route/1"
+    );
+    let program = SewProgram::build(&pattern, &winner.options).unwrap();
+    assert_eq!(program.stitches.len(), 100);
+    assert_eq!(
+        serde_json::to_value(&program.plan).unwrap(),
+        serde_json::to_value(winner).unwrap()
+    );
+    let mut bounded = input.clone();
+    bounded["max_plan_evaluations"] = json!(1);
+    let bounded = serde_json::from_value::<sewing_selection::Request>(bounded)
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(bounded.selected_route.as_deref(), Some("template"));
+    assert_eq!(bounded.selected_plan.unwrap().total_stitch_intervals(), 120);
+    assert!(bounded.budget_exhausted && !bounded.optimality_proven);
+    for (schema, objective) in [
+        ("ftx-sewing-selection/1", "minimize_feed_seconds"),
+        (
+            "ftx-sewing-selection/3",
+            "minimize_thread_observed_order_cost",
+        ),
+    ] {
+        let mut invalid = input.clone();
+        invalid["schema"] = json!(schema);
+        invalid["objective"] = json!(objective);
+        assert!(
+            serde_json::from_value::<sewing_selection::Request>(invalid)
+                .unwrap()
+                .select(&pattern)
+                .is_err()
+        );
+    }
+    let mut excessive = input.clone();
+    excessive["route_candidates"][0]["routing"]["max_search_nodes"] = json!(50_000);
+    assert_eq!(
+        serde_json::from_value::<sewing_selection::Request>(excessive)
+            .unwrap()
+            .scheduling_work_bound()
+            .unwrap_err()
+            .code,
+        RefusalCode::BudgetExceeded
+    );
+
+    // With a late transfer resource the fixed template wins. An unselected eligible candidate
+    // and the outer work allowance still define which other production routes were searched.
+    input["route_candidates"][0]["routing"]["transfer"]["available_at_milliseconds"] =
+        json!(20_000);
+    let study = |selection: Value, metric: &str| {
+        let request: material_study::Request = serde_json::from_value(json!({
+            "schema":"ftx-material-study/1","sewing_selection":selection,
+            "variants":[{"key":"joint","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern.raw()["fabric"]["material"]}}],
+            "comparison":{"basis":"nominal","objectives":[{"metric":metric,"direction":"minimize"}]}})).unwrap();
+        serde_json::to_value(request.evaluate(&pattern).unwrap()).unwrap()
+    };
+    for metric in ["feed_seconds", "thread_required_length_m"] {
+        let original = study(input.clone(), metric);
+        assert_eq!(original, study(input.clone(), metric));
+        assert_eq!(original["comparison"]["frontier"], json!(["joint"]));
+        assert_eq!(
+            original["alternatives"][0]["sewing_selection"]["result"]["selected_route"],
+            "template"
+        );
+        let plan = &original["alternatives"][0]["sewing"]["result"];
+        assert_eq!(
+            plan["production"]["routing"]["schema"],
+            "ftx-sewing-routing/1"
+        );
+        let mut other = input.clone();
+        let mut offered = other["options"].clone();
+        offered["production"]["routing"] = other["route_candidates"][0]["routing"].clone();
+        offered["production"]["routing"]["cells"][2]["available_until_milliseconds"] = json!(3301);
+        refresh_locks(&mut offered);
+        other["route_candidates"][0]["routing"] = offered["production"]["routing"].clone();
+        let mut capped = input.clone();
+        capped["max_plan_evaluations"] = json!(3);
+        for changed in [other, capped] {
+            let changed = study(changed, metric);
+            assert_eq!(*plan, changed["alternatives"][0]["sewing"]["result"]);
+            assert_eq!(
+                original["comparison"]["alternatives"][0]["readings"],
+                changed["comparison"]["alternatives"][0]["readings"]
+            );
+            let protocol = &original["comparison"]["alternatives"][0]["input_protocol_sha256"];
+            assert!(protocol.is_string());
+            assert_ne!(
+                *protocol,
+                changed["comparison"]["alternatives"][0]["input_protocol_sha256"]
+            );
+        }
+    }
+}

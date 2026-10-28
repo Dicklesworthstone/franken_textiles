@@ -49,7 +49,11 @@ pub struct Operation {
     pub copy: usize,
     /// Original sewing pass identity, preserved even when it contains slashes or other punctuation.
     pub operation_id: String,
-    /// Index into the owning plan's `seams`; station geometry is retained once per source operation.
+    /// Actual cell for eligible routing; omission preserves existing single-source representations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell: Option<String>,
+    /// Index into `cell`'s retained source plan when present, otherwise the owning plan's `seams`.
+    /// Station geometry is retained once per qualified source operation.
     pub seam_index: usize,
     /// Expanded predecessor IDs within this same garment copy.
     pub after: Vec<String>,
@@ -225,6 +229,7 @@ pub(super) fn evaluate(
                 id: scoped(copy, seam.pass.operation_id()),
                 copy,
                 operation_id: seam.pass.operation_id().to_string(),
+                cell: None,
                 seam_index,
                 after: seam.pass.after.iter().map(|id| scoped(copy, id)).collect(),
                 qualification_id: seam.qualification_id.clone(),

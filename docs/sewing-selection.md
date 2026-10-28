@@ -211,7 +211,7 @@ policy to each actual selected plan.
 `ftx-sewing-selection/6` with `minimize_parallel_makespan` can compare an authored finite set of
 complete specialist-cell routes. The original `options.production.routing` remains the first
 candidate. Supply `route_candidates: [{"id": "another-route", "routing": ...}]`, where `routing`
-is a complete existing `fixed_operation_route/1` policy, including its exact cell configurations,
+is a complete `fixed_operation_route/1` or `eligible_operation_route/1` policy, including its exact cell configurations,
 process and timing qualifications, content locks, availability, staging and transfer resource.
 There are one to fifteen alternatives; IDs must be unique and `template` is reserved.
 
@@ -219,8 +219,16 @@ Only the routing policy is replaced. The original pattern, operation set, constr
 quantity, thread market and qualification requirement remain unchanged. Each complete candidate is
 admitted by the ordinary sewing planner and retains its actual stitches, feed, handling, transfers,
 yarn demand and purchasing. Missing or stale source evidence cannot be borrowed from another route.
-This is selection among explicitly supplied routes, not automatic machine eligibility or arbitrary
-per-copy routing.
+An eligible policy additionally searches the explicitly qualified cell choices for each physical
+copy and operation. Machine eligibility must be authored and independently qualified; it is never
+inferred from a machine name or from another candidate's evidence.
+
+The outer selector compares makespan for both routing models. Eligible assignment also changes the
+actual recipe, stitch intervals and yarn demand, so feed-only or thread-cost selection cannot claim
+to optimize that inner makespan-driven assignment. Such objectives are refused whenever the template
+or any route candidate uses eligible cells. Material comparisons may still report the selected
+batch's feed and thread quantities, retaining the complete eligible policy and outer route-search
+request, including its evaluation cap, in their protocol identity.
 
 Recipe `alternatives` may be empty in version 6. When supplied, their Cartesian product is searched
 within each route: the template route first, then route IDs in lexical order, with the existing

@@ -327,6 +327,8 @@ pub struct SewPlan {
     /// Portable selections, indexed by resolved digest; no dependence on a future live catalog.
     pub materials: BTreeMap<String, Selection>,
     /// Admitted operation order; optional optimization preserves every declared predecessor.
+    /// Eligible routing retains its declared seed-route one-garment reference here; actual cells,
+    /// recipes and batch work are in `production.routing` and `production.operations`.
     pub seams: Vec<PlannedSeam>,
     /// Setup counts, optional times and bounded-search result; absent without an ordering policy.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -337,7 +339,8 @@ pub struct SewPlan {
     /// Optional complete thread BOM; missing consumption never becomes a zero requirement.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumables: Option<consumables::Report>,
-    /// Total traversed stitch intervals, including locks; not thread consumption.
+    /// One reference garment's traversed intervals, including locks; use `total_stitch_intervals`
+    /// for selected physical production, whose eligible-cell recipes may vary by copy.
     pub stitch_intervals: usize,
     /// Sum of the continuous feed times, never a complete manufacturing cycle-time estimate.
     pub feed_seconds: f64,
