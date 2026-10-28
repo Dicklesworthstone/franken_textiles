@@ -19,7 +19,9 @@ examples). They must differ. Explicit zero is accepted when the remaining schedu
 frames for metrics. The body is fitted once and shared. Body geometry, placement, pattern,
 material, gravity schedule, friction, thickness and numerical settings are unchanged between runs.
 The feature is opt-in because it executes two full solves; omitting it preserves single-run
-simulation. Direct drapes require a fresh output directory. Rounds allocate their own new directory.
+simulation. The local browser fold-up exposes the same default 12-vs-18 policy as **compare a second
+sewing path** and states the extra cost before the run. Direct drapes require a fresh output directory.
+Rounds allocate their own new directory.
 
 The comparison reuses the existing frankensim-derived Newton, sparse factorization, contact and
 exact-audit path. It introduces no second solver, stochastic perturbation or sibling dependency.
@@ -64,8 +66,9 @@ and writes the completion report last. Existing successful or failed output dire
 This samples **two sewing durations at the same initial placement**, not two independently perturbed
 placements. Agreement is not a statistical confidence interval, proof of a unique equilibrium, or
 proof of fit. Both paths can share a wrong minimum. A muslin or dressed photo is still the fit evidence.
-The ordinary drape is not silently upgraded to a two-path qualification, and browser controls do not
-yet expose this opt-in study.
+The ordinary drape is not silently upgraded to a two-path qualification. Native CLI and browser
+fold-up both require an explicit opt-in; the browser uses the same default comparison policy and
+retains the resulting `ftx-two-start/1` report.
 
 `DrapeBody` now accepts the existing thread-safe `PartFrames` interface. Anny uses the same adapter
 as before; synthetic or application-supplied frames can exercise the complete garment pipeline without

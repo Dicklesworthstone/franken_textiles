@@ -64,7 +64,9 @@ proves that a garment fits a person.
 Native `drape` and `round --sim` use body contact by default; add `--self-contact-mm 2` to simulate
 cloth layers against each other. The browser fold form enables that option initially. Ordinary runs
 execute one sewing schedule. `--two-start-sew 18` optionally compares a second sewing duration at the
-same placement; it reports path sensitivity, not a statistical error bar or proof of a unique equilibrium.
+same placement; the browser fold-up exposes the same 12-vs-18 comparison behind an explicit checkbox
+because it runs a second full solve. It reports path sensitivity, not a statistical error bar or proof
+of a unique equilibrium.
 Accepted reports retain body/self contact counts, sampled active gaps and final barrier reactions in N.
 `--elastic-hold-steps N` selects the final N gravity intervals for a casing-displacement report without
 adding simulation steps. Pressure remains unavailable without a justified physical contact area; a quiet

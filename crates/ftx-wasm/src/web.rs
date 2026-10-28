@@ -376,6 +376,7 @@ pub fn fold_up(
     measurements: &str,
     fit_spec: &str,
     self_contact_mm: f64,
+    two_start: bool,
 ) -> Result<WebFold, JsError> {
     let parse = |s: &str| -> Result<serde_json::Value, JsError> {
         serde_json::from_str(s).map_err(|e| JsError::new(&e.to_string()))
@@ -386,6 +387,7 @@ pub fn fold_up(
         &parse(measurements)?,
         &parse(fit_spec)?,
         self_contact_mm,
+        two_start,
         ftx_progress,
     )
     .map(|mut inner| {
@@ -408,6 +410,7 @@ pub fn fold_up_with_body_fit(
     measurements: &str,
     fit_spec: &str,
     self_contact_mm: f64,
+    two_start: bool,
     body_fit: &str,
     arm_deg: f64,
 ) -> Result<WebFold, JsError> {
@@ -420,6 +423,7 @@ pub fn fold_up_with_body_fit(
         &parse(measurements)?,
         &parse(fit_spec)?,
         self_contact_mm,
+        two_start,
         &fold::BodyFitSource {
             model_sha256: &body.source_sha256,
             report: body_fit,

@@ -213,7 +213,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       <p class="mut">Sews and drapes this pattern as <code>ftx drape</code> does. Cloth self-contact
         uses Blender's 2 mm separation. Numerical settling does not establish physical fit.</p>
       <p class="row"><label><input type="checkbox" id="selfContact" checked> cloth self-contact</label>
+        <label><input type="checkbox" id="twoStart"> compare a second sewing path</label>
         <button id="foldGo" disabled>Fold it up</button></p>
+      <p class="mut">The optional comparison runs a second full solve at 18 sewing steps versus the
+        ordinary 12-step path. It can roughly double fold time. Agreement is sensitivity evidence,
+        not a confidence interval, unique-equilibrium proof or physical-fit claim.</p>
       <pre id="foldLog" class="mut" style="white-space:pre-wrap;max-height:9em;overflow:auto"></pre>
       <div id="foldSummary"></div>
       <iframe id="foldView" class="hidden" title="the fold-up" style="width:100%;height:560px;border:1px solid var(--line);border-radius:8px"></iframe>
@@ -510,10 +514,13 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       }
       $("errorBox").classList.add("hidden");
       const r = msg.report, gating = r.gating || [], advisory = (r.flags || []).filter((f) => !gating.includes(f));
+      const path = r.two_start
+        ? `<br><span class="mut">Two sewing paths: ${esc(r.two_start.status || "UNKNOWN")} (${esc(r.two_start.primary?.sew_steps)} vs ${esc(r.two_start.alternate?.sew_steps)} steps)</span>`
+        : '<br><span class="mut">One sewing path: path sensitivity was not checked.</span>';
       $("foldSummary").innerHTML = `<b>${gating.length ? "Gating flags" : r.settled ? "Settled, no gating flag" : "Not settled"}</b>`
         + (gating.length ? "<br>" + gating.map(esc).join("<br>") : "")
         + (advisory.length ? `<br><span class="mut">${advisory.map(esc).join("<br>")}</span>` : "")
-        + bodyFitSummary(r.body);
+        + path + bodyFitSummary(r.body);
       const u = URL.createObjectURL(new Blob([msg.viewer], { type: "text/html" }));
       const ru = URL.createObjectURL(new Blob([msg.reportText], { type: "application/json" }));
       foldUrls.push(u, ru);
@@ -570,6 +577,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("supplementalConsent").addEventListener("change", invalidateRound);
   $("clearSupplemental").addEventListener("click", () => { $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change", invalidateFold);
+  $("twoStart").addEventListener("change", invalidateFold);
   $("resetStyle").addEventListener("click", () => {
     $("style").value = JSON.stringify(info[program].style, null, 1); store.set("style-" + program, null); invalidateRound();
   });
@@ -646,8 +654,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("errorBox").classList.add("hidden");
     status(bodyFitText === null ? "Fitting the body, sewing and draping…" : "Checking the accepted shape, sewing and draping…");
     worker.postMessage({ type: "fold", request: foldRequest, round: roundRequest, body: bodyRequest,
-      selfContactMm: $("selfContact").checked ? 2 : 0, bodyFit: bodyFitText,
-      bodyFitConsent: $("bodyFitConsent").checked, armDeg: Number($("bodyArmDeg").value) });
+      selfContactMm: $("selfContact").checked ? 2 : 0, twoStart: $("twoStart").checked,
+      bodyFit: bodyFitText, bodyFitConsent: $("bodyFitConsent").checked,
+      armDeg: Number($("bodyArmDeg").value) });
   });
   worker.postMessage({ type: "init", pkg: PKG });
 })();

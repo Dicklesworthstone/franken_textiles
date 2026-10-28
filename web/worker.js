@@ -98,8 +98,8 @@ onmessage = async (ev) => {
       const imported = msg.bodyFit != null;
       if (imported && msg.bodyFitConsent !== true) throw new Error("associate the accepted fit with this wearer before folding");
       const fold = imported
-        ? ftx.fold_up_with_body_fit(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm, msg.bodyFit, msg.armDeg)
-        : ftx.fold_up(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm);
+        ? ftx.fold_up_with_body_fit(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm, !!msg.twoStart, msg.bodyFit, msg.armDeg)
+        : ftx.fold_up(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm, !!msg.twoStart);
       try {
         const reportText = fold.report(); // preserve numerical JSON for source-locked thermal replay
         const report = JSON.parse(reportText);

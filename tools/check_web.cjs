@@ -635,6 +635,30 @@ async function offlineViewer(browser, file) {
           && Math.round(r.body_mm * 10) / 10 === nativeBody.fit.tape[name].body_mm),
           `${program} fitted targets/readings agree with native at its documented 0.1mm report rounding`);
         check(sha(viewer) === sha(native), `${program} fold-up equals ftx drape's, byte for byte (${sha(native).slice(0, 12)})`);
+        if (program === "zouave_bolero") {
+          await page.locator("#twoStart").check();
+          check((await page.textContent("#foldSummary")) === "" && (await page.locator("#foldSummary a").count()) === 0,
+            "two-path policy edits withdraw the prior single-path evidence");
+          const pairErr = await settle("#foldGo", 900000);
+          check(!pairErr, "browser two-path sensitivity completes");
+          if (!pairErr) {
+            const pairedReport = JSON.parse(await bytes("a[download='sim_report.json']"));
+            check(pairedReport.two_start?.schema === "ftx-two-start/1"
+              && pairedReport.two_start.sampled_paths === 2
+              && pairedReport.two_start.primary.sew_steps === 12
+              && pairedReport.two_start.alternate.sew_steps === 18,
+              "browser two-path report retains the shared 12-vs-18 policy");
+            const pairedViewer = await bytes("a[download='fold_viewer.html']");
+            execFileSync(ftx, ["drape", "pattern.json", "--measurements", "measurements.json", "--fit", "fit_spec.json",
+              "--self-contact-mm", "2", "--two-start-sew", "18", "--model", model, "--out", "native-paired"],
+              { cwd: dir, stdio: ["ignore", "pipe", "inherit"] });
+            check(sha(pairedViewer) === sha(fs.readFileSync(path.join(dir, "native-paired/fold_viewer.html"))),
+              "browser two-path fold equals native paired drape byte for byte");
+            check(/Two sewing paths:/.test(await page.textContent("#foldSummary")),
+              "browser reports paired-path status beside ordinary drape gates");
+          }
+          await page.locator("#twoStart").uncheck();
+        }
         await page.locator("#selfContact").uncheck();
         check((await page.textContent("#foldSummary")) === "" && (await page.locator("#foldSummary a").count()) === 0,
           `${program} edits withdraw residuals and downloads`);

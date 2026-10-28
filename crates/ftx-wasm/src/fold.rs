@@ -6,7 +6,10 @@ use ftx_body::{
     AnnyData, AnnyModel, BodyFrames, Pose, TAPE_FIELDS, TapeFit, Wearer, fit_tape, pose_deltas,
     skin_mesh, tape_targets, trimmed_skin,
 };
-use ftx_drape::run::{DrapeBody, DrapeOptions, drape, viewer};
+use ftx_drape::{
+    run::{DrapeBody, DrapeOptions, drape, viewer},
+    two_start::TwoStartOptions,
+};
 use ftx_pattern::Pattern;
 use serde_json::{Map, Value, json};
 
@@ -122,6 +125,7 @@ pub fn fold_up(
     measurements: &Value,
     fit_spec: &Value,
     self_contact_mm: f64,
+    two_start: bool,
     progress: impl FnMut(&str),
 ) -> Result<Fold, String> {
     fold_on_source(
@@ -130,6 +134,7 @@ pub fn fold_up(
         measurements,
         fit_spec,
         self_contact_mm,
+        two_start,
         None,
         progress,
     )
@@ -155,6 +160,7 @@ pub fn fold_up_with_body_fit(
     measurements: &Value,
     fit_spec: &Value,
     self_contact_mm: f64,
+    two_start: bool,
     source: &BodyFitSource<'_>,
     progress: impl FnMut(&str),
 ) -> Result<Fold, String> {
@@ -164,6 +170,7 @@ pub fn fold_up_with_body_fit(
         measurements,
         fit_spec,
         self_contact_mm,
+        two_start,
         Some(source),
         progress,
     )
@@ -175,6 +182,7 @@ fn fold_on_source(
     measurements: &Value,
     fit_spec: &Value,
     self_contact_mm: f64,
+    two_start: bool,
     source: Option<&BodyFitSource<'_>>,
     mut progress: impl FnMut(&str),
 ) -> Result<Fold, String> {
@@ -250,7 +258,19 @@ fn fold_on_source(
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
-    let mut run = drape(&pat, fit_spec, &body, &opts, &mut progress).map_err(m)?;
+    let mut run = if two_start {
+        ftx_drape::two_start::drape(
+            &pat,
+            fit_spec,
+            &body,
+            &opts,
+            &TwoStartOptions::default(),
+            &mut progress,
+        )
+    } else {
+        drape(&pat, fit_spec, &body, &opts, &mut progress)
+    }
+    .map_err(m)?;
     run.report["body"] = description;
     let html = viewer(&run, &pat, &body, TEMPLATE)?;
     Ok(Fold {

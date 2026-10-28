@@ -402,7 +402,10 @@ The design follows research file 07 (a survey of frankensim for this purpose).
 | Needs a Blender install; not in a browser | Std-only Rust core: a CLI and a wasm build |
 
 What it does not fix: cloth energy is non-convex, so different starts can settle in different local minima.
-Every drape reports a **two-start spread** as its error bar.
+Production routes therefore expose an explicit **two-path sewing-duration sensitivity** check: native
+`--two-start-sew` and the browser fold-up checkbox run the same bounded 12-vs-18 policy. It executes a
+second full solve, so ordinary runs remain one-path and must say that path sensitivity was not checked.
+The resulting spread is review evidence, not an error bar, confidence interval or uniqueness proof.
 
 ### 11.2 Energy and step
 
@@ -461,7 +464,7 @@ kept, with the same gating/advisory split and flag text (tightness demotion matc
 closure, per-seam strain, landmark ring strain and contact, penetration, corner slip, hem heights, rise and
 balance, band positions (casing, cuffs), settledness, form crotch excess. New quantities are added, not
 substituted: exact minimum gap ever, contact pressure maps, the elastic's slip over the hold window, the
-two-start spread.
+two-start spread when that explicit sensitivity check is requested.
 
 ### 11.7 Performance targets (not measurements)
 
