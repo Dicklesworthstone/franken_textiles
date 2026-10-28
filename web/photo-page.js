@@ -10,7 +10,7 @@ function controls() {
   $("paper").disabled=charuco; $("sheet").disabled=!charuco; $("calibration").disabled=!charuco;
   $("clearCalibration").disabled=!calibrated;
   $("analyze").disabled=busy || cameraBusy || !$("photo").files.length || (charuco && !$("sheet").files.length);
-  $("measure").disabled=busy || cameraBusy || scale?.ok !== true;
+  $("measure").disabled=busy || cameraBusy || scale?.ok !== true || pending.length>0;
   $("cancel").disabled=!busy;
   const images=$("cameraMode").value==="images";
   $("cameraImageControls").hidden=!images;
@@ -159,7 +159,7 @@ async function runCamera() {
   }
 }
 async function run(op) {
-  if(cameraBusy) return;
+  if(cameraBusy || (op==="measure" && pending.length>0)) return;
   const file=$("photo").files[0], points=$("points").value, opts=options(), paper=$("paper").value;
   const referenceMode=$("referenceMode").value, charuco=referenceMode==="charuco";
   const sheetFile=charuco?$("sheet").files[0]:null, calibrationFile=charuco?$("calibration").files[0]:null;
@@ -249,7 +249,10 @@ for(const id of ["cameraMode","cameraInput","cameraSheet","cameraImages","camera
     withdrawCamera(); $("cameraStatus").textContent="Acquisition changed; calibrate from the current declarations and images.";
   });
 }
-for(const id of ["distance","depth","click","level","bootstrap","points"]) $(id).addEventListener("input",()=>{withdraw(); draw(); status("Inputs changed; measure again.");});
+for(const id of ["distance","depth","click","level","bootstrap","points"]) $(id).addEventListener("input",()=>{
+  if(id==="points") {pending=[]; $("clickStatus").textContent="";}
+  withdraw(); draw(); status("Inputs changed; measure again.");
+});
 $("name").addEventListener("input",()=>{pending=[]; withdraw(); draw();});
 $("clearPoints").onclick=()=>{$("points").value="{}"; pending=[]; withdraw(); draw();};
 $("image").onclick=e=>{
@@ -266,7 +269,7 @@ $("image").onclick=e=>{
       $("points").value=JSON.stringify(Object.fromEntries([...Object.entries(pairs),[name,pending]]),null,2); pending=[];
     } catch(error) {pending=[]; $("error").textContent=error.message;}
   }
-  $("clickStatus").textContent=pending.length?"First point selected; click the second.":"Pair added. Review its name and coordinates."; draw();
+  $("clickStatus").textContent=pending.length?"First point selected; click the second.":"Pair added. Review its name and coordinates."; draw(); controls();
 };
 window.addEventListener("pagehide",()=>{withdrawCamera(); withdraw(true);});
 controls();

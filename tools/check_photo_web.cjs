@@ -4,12 +4,17 @@ const {chromium}=require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
 const assert=require("node:assert/strict"), fs=require("node:fs"), path=require("node:path"), http=require("node:http"), os=require("node:os");
 const sha256=bytes=>require("node:crypto").createHash("sha256").update(bytes).digest("hex");
 const root=path.resolve(__dirname,".."), web=path.join(root,"web"), native=process.argv[2];
+const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(web,"pkg");
 if(!native) throw Error("Supply the directory containing native photo scale and measurement captures");
 const work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-photo-browser-"));
 const server=http.createServer((req,res)=>{
-  let file;
-  try {file=path.resolve(web,"."+decodeURIComponent(new URL(req.url,"http://localhost").pathname));} catch {res.writeHead(400).end();return;}
-  if(req.method!=="GET" || !file.startsWith(web+path.sep)) {res.writeHead(403).end();return;}
+  let file,base=web;
+  try {
+    let pathname=decodeURIComponent(new URL(req.url,"http://localhost").pathname);
+    if(pathname.startsWith("/pkg/")) {base=pkg;pathname=pathname.slice(4);}
+    file=path.resolve(base,"."+pathname);
+  } catch {res.writeHead(400).end();return;}
+  if(req.method!=="GET" || !file.startsWith(base+path.sep)) {res.writeHead(403).end();return;}
   fs.readFile(file,(error,data)=>{
     if(error) {res.writeHead(404).end();return;}
     const mime={".html":"text/html",".js":"text/javascript",".wasm":"application/wasm",".png":"image/png"}[path.extname(file)] || "application/octet-stream";
@@ -50,6 +55,13 @@ const server=http.createServer((req,res)=>{
       assert.deepEqual(scale,expected(`native-scale-${tag}.json`,false));
       assert.equal(scale.ok,true); if(tag==="jpeg")assert.equal(scale.image_input.exif_orientation,6);
       const box=await page.locator("#image").boundingBox();
+      const click=async x=>page.locator("#image").click({position:{x:(x+.5)*box.width/width,y:400.5*box.height/height}});
+      await click(30);assert.equal(await page.isDisabled("#measure"),true);
+      const typed=fs.readFileSync(path.join(native,`points-${tag}.json`),"utf8");
+      await page.fill("#points",typed);assert.equal(await page.isDisabled("#measure"),false);
+      await click(40);assert.equal(await page.inputValue("#points"),typed);
+      assert.equal(await page.isDisabled("#measure"),true);
+      await page.click("#clearPoints");assert.equal(await page.isDisabled("#measure"),false);
       for(const x of [30,end]) await page.locator("#image").click({position:{x:(x+.5)*box.width/width,y:400.5*box.height/height}});
       const clicked=JSON.parse(await page.inputValue("#points")).across_back;
       assert.ok(clicked,`Canvas pair missing: ${await page.textContent("#clickStatus")} ${await page.textContent("#error")}`);

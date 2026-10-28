@@ -188,6 +188,32 @@ test('ordinary point edits and cancellation preserve current scale but remove pr
   assert.equal(w.dead,true);assert.equal(p.e.cancel.disabled,true);assert.equal(p.urls.size,sourceCount);
 });
 
+test('manual point JSON edits abandon the previous unfinished canvas pair',async()=>{
+  const p=await photoPage();p.select(false);await p.analyze();
+  p.e.image.getBoundingClientRect=()=>({left:0,top:0,width:800,height:600});
+  const click=(x,y)=>p.e.image.onclick({clientX:(x+.5)/2,clientY:(y+.5)/2});
+  click(100,120);
+  const typed='{"across_back":[[30,40],[80,40]]}';
+  p.e.points.value=typed;p.e.points.handlers.input();
+  click(200,240);
+  assert.equal(p.e.points.value,typed,'the next click starts a new pair, not a pair with the old first click');
+  click(500,540);
+  assert.deepEqual(JSON.parse(p.e.points.value).across_back,[[200,240],[500,540]]);
+});
+
+test('an unfinished canvas pair withdraws results and cannot launch measurement',async()=>{
+  const p=await photoPage();p.select(false);await p.analyze();await p.measure();
+  p.e.image.getBoundingClientRect=()=>({left:0,top:0,width:800,height:600});
+  const click=x=>p.e.image.onclick({clientX:(x+.5)/2,clientY:20.25});
+  click(100);assert.equal(p.e.measure.disabled,true);assert.equal(p.e.downloads.children.length,0);
+  const workers=p.workers.length;await p.e.measure.onclick();assert.equal(p.workers.length,workers);
+  click(200);assert.equal(p.e.measure.disabled,false);
+  assert.deepEqual(JSON.parse(p.e.points.value).across_back,[[100,40],[200,40]]);
+  click(300);assert.equal(p.e.measure.disabled,true);
+  p.e.clearPoints.onclick();assert.equal(p.e.measure.disabled,false);
+  assert.equal(p.e.points.value,'{}');
+});
+
 test('camera worker acquires each exact declared image sequentially and retains the ordinary report',async()=>{
   const w=await photoWorker(),reads=[],input=' {"views":[{"image":"a.png"},{"image":"nested/b.jpg"}]}\n';
   let releaseFirst,notifyRead;const firstRead=new Promise(resolve=>{notifyRead=resolve;});
