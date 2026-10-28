@@ -550,8 +550,9 @@ fn elastic_ring(
 /// contact over the skin (no gravity yet).
 ///
 /// # Errors
-/// Any refusal from placement, the start state, the cloth model or the contact set-up
-/// (`intersecting_start` when the relaxed start still touches the body).
+/// Any refusal from body-surface admission, placement, the start state, the cloth model or contact
+/// set-up. Before placement, the body must pass an exact self-intersection audit within 1,000,000
+/// overlapping triangle pairs. This admits valid open surfaces but does not certify anatomy.
 #[allow(clippy::too_many_arguments)]
 pub fn build_scene(
     pattern: &Pattern,
@@ -708,6 +709,11 @@ fn build_scene_inner(
 ) -> Result<Scene, Refusal> {
     fabric.validate()?;
     fabric.membrane(compression).validate()?;
+    crate::collider::audit_surface(
+        skin_vertices,
+        skin_triangles,
+        crate::collider::STATIC_SURFACE_PAIR_BUDGET,
+    )?;
     let rest = grain_rest(pattern, &mesh, fabric.requires_grain())?;
     let instance_fabrics: Option<Vec<Fabric>> = piece_fabrics
         .map(|materials| {

@@ -11,6 +11,9 @@ use ftx_core::{Refusal, RefusalCode, Vec3};
 use crate::bvh::{QueryBvh, overlaps};
 use crate::contact::Body;
 
+// Static scene admission is bounded independently of the number of subsequent cloth steps.
+pub(crate) const STATIC_SURFACE_PAIR_BUDGET: usize = 1_000_000;
+
 /// Work performed by a completed body-surface intersection audit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SurfaceAudit {

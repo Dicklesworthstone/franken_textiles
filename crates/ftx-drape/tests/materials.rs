@@ -83,6 +83,99 @@ fn body() -> Body {
 }
 
 #[test]
+fn static_drape_refuses_invalid_colliders_before_placement_or_solver_work() {
+    struct NoPlacement;
+    impl PartFrames for NoPlacement {
+        fn frame(&self, _: &str) -> Option<PartFrame> {
+            panic!("invalid collider must be refused before placement")
+        }
+        fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+            panic!("invalid collider must be refused before landmarks")
+        }
+        fn section_radius(&self, _: &str, _: f64) -> f64 {
+            panic!("invalid collider must be refused before section queries")
+        }
+    }
+    let valid = body();
+    let options = DrapeOptions {
+        spacing: 24.0,
+        sew_steps: 3,
+        drape_steps: 3,
+        step: 1e-3,
+        ..DrapeOptions::default()
+    };
+    // These patches are far from the band. Neither cloth/body intersection checks nor a
+    // plausible display mesh can substitute for admission of the actual collision surface.
+    let first = [
+        Vec3::new(2.0, 0.0, 0.0),
+        Vec3::new(4.0, 0.0, 0.0),
+        Vec3::new(2.0, 2.0, 0.0),
+    ];
+    for second in [
+        first,
+        [
+            Vec3::new(2.5, 0.5, -1.0),
+            Vec3::new(2.5, 0.5, 1.0),
+            Vec3::new(2.5, 1.0, 0.0),
+        ],
+    ] {
+        let mut vertices = valid.vertices.clone();
+        let mut triangles = valid.triangles.clone();
+        let base = vertices.len();
+        vertices.extend(first);
+        vertices.extend(second);
+        triangles.extend([[base, base + 1, base + 2], [base + 3, base + 4, base + 5]]);
+        let original = (vertices.clone(), triangles.clone());
+        let subject = DrapeBody {
+            frames: &NoPlacement,
+            collision: (&vertices, &triangles),
+            display: (&valid.vertices, &valid.triangles),
+            arm_deg: 35.0,
+        };
+        for fabric in [json!({}), json!({"material":record(1.0)})] {
+            let pattern = band(fabric);
+            let source = pattern.raw().clone();
+            let mut progress = Vec::new();
+            let refusal = drape(&pattern, &json!({}), &subject, &options, |s| {
+                progress.push(s.to_string());
+            })
+            .err()
+            .expect("static drape must refuse a self-intersecting collider");
+            assert_eq!(refusal.code, ftx_core::RefusalCode::IntersectingStart);
+            assert!(refusal.message.contains("body triangles 32 and 33"));
+            assert!(progress.is_empty());
+            assert_eq!(pattern.raw(), &source);
+        }
+        assert_eq!((vertices, triangles), original);
+    }
+}
+
+#[test]
+fn uniform_scene_keeps_valid_open_body_geometry_without_repair() {
+    let surface = body();
+    assert!(!surface.closed);
+    let pattern = band(json!({}));
+    let options = DrapeOptions::default();
+    let mesh = ftx_drape::garment::build_garment(&pattern, 24.0).unwrap();
+    let scene = ftx_drape::scene::build_scene(
+        &pattern,
+        mesh,
+        &Form,
+        &surface.vertices,
+        &surface.triangles,
+        Fabric::default(),
+        options.compression,
+        options.contact,
+        None,
+    )
+    .unwrap();
+    let admitted = &scene.solver.contact.as_ref().unwrap().body;
+    assert_eq!(admitted.vertices, surface.vertices);
+    assert_eq!(admitted.triangles, surface.triangles);
+    assert!(!admitted.closed);
+}
+
+#[test]
 fn material_controls_membrane_mass_bending_and_both_contacts() {
     let p = band(json!({"material":record(1.0)}));
     let opts = DrapeOptions {

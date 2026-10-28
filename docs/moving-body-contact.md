@@ -39,6 +39,21 @@ their physical timestamps and uses one fixed metric scale across the trajectory.
 See `docs/material-scenario-studies.md` for source-model endpoint requests and the
 independent motion, steady-heat and transient-heat consumers.
 
+## Static scene admission
+
+Both the uniform-fabric and resolved-material scene builders audit the supplied
+collision surface before placement, nearest-surface relaxation or sewing. The
+same exact shared-feature predicates used by motion reject crossing, coincident
+and folded-over faces, including defects far from the current garment. Static
+admission allows at most 1,000,000 overlapping triangle pairs and refuses an
+exhausted audit instead of silently admitting the unchecked remainder.
+
+This checks the collision mesh, not a separate display mesh. Valid open surfaces
+and legal shared edges remain supported; the low-level `Body::new` and general
+nearest-point API are unchanged. Surface separation does not establish closure,
+outward winding, anatomical plausibility, thickness or real fit. Production Anny
+pose qualification remains a separate requirement.
+
 ## What runs
 
 The swept query enumerates cloth-vertex/body-triangle, body-vertex/cloth-triangle,
