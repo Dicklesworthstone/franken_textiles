@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 let worker = null, ticket = 0, busy = false, scale = null, bitmap = null, pending = [];
-let sourceUrls = [], resultUrls = [];
+let sourceUrls = [], resultUrls = [], draftUrls = [];
 let pointSource = null;
 let importedOptions = null;
 let cameraWorker = null, cameraTicket = 0, cameraBusy = false, cameraResult = null, generatedCalibration = null;
@@ -15,6 +15,24 @@ function pointPairs(text=pointText()) {
   if(!pairs || typeof pairs!=="object" || Array.isArray(pairs)) throw Error("Points must be a JSON object of named pairs.");
   return pairs;
 }
+function checkedPointPairs(text) {
+  if(typeof text!=="string" || new Blob([text]).size>256*1024) throw Error("Point JSON must be at most 256 KiB.");
+  const pairs=pointPairs(text);
+  for(const spec of Object.values(pairs)) {
+    const pair=Array.isArray(spec)?spec:spec?.points;
+    if(!Array.isArray(pair) || pair.length!==2 || pair.some(p=>!Array.isArray(p) || p.length!==2 || !p.every(Number.isFinite))) {
+      throw Error("Point file must contain named pairs of finite [x, y] coordinates.");
+    }
+  }
+  return pairs;
+}
+function checkedOptions(text) {
+  if(typeof text!=="string" || new Blob([text]).size>256*1024) throw Error("Options JSON must be at most 256 KiB.");
+  const value=JSON.parse(text), keys=["depth_offset_mm","camera_distance_mm","click_px","sheet_level_sigma_deg","bootstrap","seed"];
+  if(!value || typeof value!=="object" || Array.isArray(value) || Object.keys(value).some(key=>!keys.includes(key))) {
+    throw Error("Choose a photo-options.json object containing only measurement settings.");
+  }
+}
 function controls() {
   const charuco=$("referenceMode").value==="charuco", calibrated=charuco && ($("calibration").files.length>0 || generatedCalibration!==null);
   $("plainControls").hidden=charuco; $("charucoControls").hidden=!charuco; $("lensControls").hidden=!calibrated;
@@ -23,6 +41,8 @@ function controls() {
   $("analyze").disabled=busy || cameraBusy || !$("photo").files.length || (charuco && !$("sheet").files.length);
   $("measure").disabled=busy || cameraBusy || scale?.ok !== true || pending.length>0;
   $("pointFile").disabled=!bitmap || scale?.ok!==true;
+  $("draftFile").disabled=cameraBusy || !bitmap || scale?.ok!==true;
+  $("saveDraft").disabled=busy || cameraBusy || !bitmap || scale?.ok!==true || pending.length>0;
   $("optionsFile").disabled=cameraBusy;
   $("useFormOptions").disabled=importedOptions===null;
   for(const id of ["distance","depth","click","level","bootstrap"]) $(id).disabled=importedOptions!==null;
@@ -48,6 +68,7 @@ function kill() { worker?.terminate(); worker=null; busy=false; controls(); }
 function revoke(urls) { urls.forEach(u=>URL.revokeObjectURL(u)); urls.length=0; }
 function withdraw(source=false) {
   ++ticket; kill(); $("pointFile").value=""; $("optionsFile").value=""; revoke(resultUrls); $("downloads").replaceChildren();
+  $("draftFile").value=""; revoke(draftUrls); $("draftDownloads").replaceChildren();
   $("result").hidden=true; $("report").textContent=""; $("values").replaceChildren(); $("error").textContent="";
   if(source) {
     scale=null; bitmap?.close(); bitmap=null; pending=[]; pointSource=null; revoke(sourceUrls);
@@ -103,10 +124,7 @@ async function loadOptions() {
   try {
     const text=await readJsonFile(file);
     if(id!==ticket) return;
-    const value=JSON.parse(text), keys=["depth_offset_mm","camera_distance_mm","click_px","sheet_level_sigma_deg","bootstrap","seed"];
-    if(!value || typeof value!=="object" || Array.isArray(value) || Object.keys(value).some(key=>!keys.includes(key))) {
-      throw Error("Choose a photo-options.json object containing only measurement settings.");
-    }
+    checkedOptions(text);
     // Do not reserialize: a valid Rust u64 seed need not be representable as a JavaScript number.
     importedOptions=text;
     kill(); status("Settings loaded; review their assumptions for this photo, then measure again.");
@@ -128,12 +146,7 @@ async function loadPoints() {
   try {
     const text=await readJsonFile(file);
     if(id!==ticket) return;
-    for(const spec of Object.values(pointPairs(text))) {
-      const pair=Array.isArray(spec)?spec:spec?.points;
-      if(!Array.isArray(pair) || pair.length!==2 || pair.some(p=>!Array.isArray(p) || p.length!==2 || !p.every(Number.isFinite))) {
-        throw Error("Point file must contain named pairs of finite [x, y] coordinates.");
-      }
-    }
+    checkedPointPairs(text);
     $("points").value=text;
     // Textareas normalize line endings; retain the original source until an actual point edit.
     pointSource={text,displayed:$("points").value};
@@ -142,6 +155,44 @@ async function loadPoints() {
     if(id!==ticket) return;
     kill(); $("error").textContent=String(error.message || error);
     status("Points file not loaded; existing pairs are unchanged.");
+  }
+}
+function saveDraft() {
+  if(busy || cameraBusy || !bitmap || scale?.ok!==true || pending.length) return;
+  revoke(draftUrls); $("draftDownloads").replaceChildren();
+  try {
+    const points=pointText(), opts=options();
+    checkedPointPairs(points); checkedOptions(opts);
+    const text=JSON.stringify({schema:"ftx-photo-annotations/1",scale:$("scale").textContent,points,options:opts},null,2);
+    if(new Blob([text]).size>32*1024*1024) throw Error("Annotation draft exceeds 32 MiB.");
+    link($("draftDownloads"),text,"photo-annotations.json","application/json",draftUrls);
+    status("Annotation draft ready to download; this saves work, not a measurement result.");
+  } catch(error) {$("error").textContent=String(error.message || error); status("No annotation draft prepared.");}
+}
+async function loadDraft() {
+  const file=$("draftFile").files[0];
+  if(!file || cameraBusy || !bitmap || scale?.ok!==true) return;
+  withdraw(); const id=ticket;
+  if(file.size>32*1024*1024) {
+    $("error").textContent="Annotation draft exceeds 32 MiB; no source was read.";
+    status("Annotation draft not loaded; current work is unchanged."); return;
+  }
+  busy=true; controls(); status("Reading local annotation draft…");
+  try {
+    const text=await readJsonFile(file);
+    if(id!==ticket) return;
+    const draft=JSON.parse(text);
+    if(!draft || draft.schema!=="ftx-photo-annotations/1" || Object.keys(draft).length!==4 ||
+      ["scale","points","options"].some(key=>typeof draft[key]!=="string")) throw Error("Choose an ordinary photo-annotations.json draft.");
+    if(draft.scale!==$("scale").textContent) throw Error("Draft belongs to a different analyzed photo, reference or calibration. Analyze its original sources first.");
+    checkedPointPairs(draft.points); checkedOptions(draft.options);
+    $("points").value=draft.points; pointSource={text:draft.points,displayed:$("points").value};
+    importedOptions=draft.options; pending=[]; $("clickStatus").textContent="";
+    kill(); draw(); status("Annotation draft loaded; review its points and settings, then measure again.");
+  } catch(error) {
+    if(id!==ticket) return;
+    kill(); $("error").textContent=String(error.message || error);
+    status("Annotation draft not loaded; current work is unchanged.");
   }
 }
 function stopCamera() { cameraWorker?.terminate(); cameraWorker=null; cameraBusy=false; controls(); }
@@ -307,6 +358,7 @@ async function run(op) {
 }
 $("analyze").onclick=()=>run("analyze"); $("measure").onclick=()=>run("measure");
 $("pointFile").addEventListener("change",loadPoints);
+$("draftFile").addEventListener("change",loadDraft); $("saveDraft").onclick=saveDraft;
 $("optionsFile").addEventListener("change",loadOptions);
 $("useFormOptions").onclick=()=>{importedOptions=null; withdraw(); status("Using form settings; review their assumptions and measure again.");};
 $("cancel").onclick=()=>{withdraw(); status("Cancelled; no measurements published.");};

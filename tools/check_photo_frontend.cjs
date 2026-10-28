@@ -80,7 +80,7 @@ const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text
 async function photoPage({decode}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
-  for(const id of ['pointFile','optionsFile'])if(e[id])e[id].type='file';e.points.type='textarea';
+  for(const id of ['pointFile','optionsFile','draftFile'])if(e[id])e[id].type='file';e.points.type='textarea';
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images'}))e[id].value=value;
   const workers=[],urls=new Map(),closed=[]; let serial=0;
   class Worker {
@@ -196,6 +196,66 @@ test('pending photo click cancellation preserves exact saved pairs and permits r
   assert.match(p.e.status.textContent,/cleared/);
   p.e.image.onclick({clientX:60.25,clientY:70.25});p.e.name.value='shoulder_length';p.e.name.handlers.input();
   assert.equal(p.e.clickStatus.textContent,'');assert.equal(p.e.cancelPoint.disabled,true);
+});
+
+test('photo annotation drafts save work before measurement and restore exact bound sources',async()=>{
+  const p=await photoPage();assert.ok(p.e.saveDraft,'Save unfinished annotation work');
+  assert.equal(p.e.saveDraft.disabled,true);p.select();await p.analyze();
+  const points=' {\r\n"across_back":[[30,40],[80,40]]\r\n}\r\n',opts=' {"seed":18446744073709551615,"bootstrap":19}\r\n';
+  p.e.pointFile.files=[file(points)];await p.e.pointFile.handlers.change();
+  p.e.optionsFile.files=[file(opts)];await p.e.optionsFile.handlers.change();
+  p.e.saveDraft.onclick();
+  const link=p.e.draftDownloads.children.find(a=>a.download==='photo-annotations.json');assert.ok(link);
+  const text=await p.urls.get(link.href).text(),saved=JSON.parse(text);
+  assert.deepEqual(saved,{schema:'ftx-photo-annotations/1',scale:p.e.scale.textContent,points,options:opts});
+  assert.equal(p.e.downloads.children.length,0);assert.equal(p.e.result.hidden,true);
+  p.e.clearPoints.onclick();assert.equal(p.e.draftDownloads.children.length,0);
+  p.e.useFormOptions.onclick();
+  p.e.draftFile.files=[file(text)];await p.e.draftFile.handlers.change();
+  assert.equal(p.e.points.value,points.replace(/\r\n/g,'\n'));assert.equal(p.e.optionsSource.textContent,opts);
+  assert.equal(p.e.draftFile.files.length,0);assert.equal(p.e.click.disabled,true);
+  await p.e.measure.onclick();const w=p.current();assert.equal(w.messages[0].points,points);assert.equal(w.messages[0].options,opts);
+  await w.emit({type:'error',request:w.messages[0].request,message:'bootstrap refused'});
+  assert.equal(p.e.result.hidden,true);assert.equal(p.e.saveDraft.disabled,false);
+  p.e.saveDraft.onclick();assert.ok(p.e.draftDownloads.children.find(a=>a.download==='photo-annotations.json'),'Refused work remains saveable');
+  p.e.image.getBoundingClientRect=()=>({left:0,top:0,width:800,height:600});
+  p.e.image.onclick({clientX:30.25,clientY:40.25});assert.equal(p.e.saveDraft.disabled,true);
+  assert.equal(p.e.draftDownloads.children.length,0);p.e.cancelPoint.onclick();assert.equal(p.e.saveDraft.disabled,false);
+});
+
+test('photo annotation draft loading refuses wrong sources atomically and ignores superseded reads',async()=>{
+  const p=await photoPage();assert.ok(p.e.draftFile,'Restore source-bound annotation work');p.select();await p.analyze();
+  const points=' {"arm_length":[[3,4],[8,4]]}\n',opts=' {"seed":7}\n';
+  p.e.pointFile.files=[file(points)];await p.e.pointFile.handlers.change();
+  p.e.optionsFile.files=[file(opts)];await p.e.optionsFile.handlers.change();
+  const draft={schema:'ftx-photo-annotations/1',scale:p.e.scale.textContent,points:'{"across_back":[[1,2],[3,4]]}',options:'{"seed":9}'};
+  const load=async f=>{p.e.draftFile.files=[f];await p.e.draftFile.handlers.change();};
+  for(const bad of [null,[],{}, {...draft,scale:draft.scale+' '},{...draft,schema:'fabric-measurements/1'},
+    {...draft,extra:true},{...draft,points:'{"bad":null}'},{...draft,options:'{"records":[]}'},
+    {...draft,options:7},{...draft,points:' '.repeat(256*1024)+'{}'},{...draft,options:' '.repeat(256*1024)+'{}'}]){
+    await load(file(JSON.stringify(bad)));assert.ok(p.e.error.textContent);
+    assert.equal(p.e.points.value,points);assert.equal(p.e.optionsSource.textContent,opts);
+  }
+  for(const bytes of [new Uint8Array([255]),new TextEncoder().encode('\ufeff{}'),new TextEncoder().encode('{')]){
+    await load({size:bytes.length,arrayBuffer:async()=>bytes.buffer});assert.ok(p.e.error.textContent);
+    assert.equal(p.e.points.value,points);assert.equal(p.e.optionsSource.textContent,opts);
+  }
+  let reads=0;await load({size:32*1024*1024+1,arrayBuffer:async()=>{reads++;return new ArrayBuffer(0);}});assert.equal(reads,0);
+  await load({size:1,arrayBuffer:async()=>{throw Error('active draft read failure');}});
+  assert.match(p.e.error.textContent,/active draft read failure/);assert.equal(p.e.optionsSource.textContent,opts);assert.equal(p.e.points.value,points);
+  for(const reject of [false,true])for(const change of ['source','points','options','cancel','replacement']){
+    const q=await photoPage();q.select();await q.analyze();let finish;
+    const text=JSON.stringify({...draft,scale:q.e.scale.textContent}),read=new Promise((resolve,fail)=>{finish=()=>reject?fail(Error('late draft failure')):resolve(new TextEncoder().encode(text).buffer);});
+    q.e.draftFile.files=[{size:text.length,arrayBuffer:()=>read}];const old=q.e.draftFile.handlers.change();
+    if(change==='source'){q.e.photo.handlers.change();await q.analyze();}
+    if(change==='points'){q.e.points.value=points;q.e.points.handlers.input();}
+    if(change==='options'){q.e.optionsFile.files=[file(opts)];await q.e.optionsFile.handlers.change();}
+    if(change==='cancel')q.e.cancel.onclick();
+    if(change==='replacement'){q.e.draftFile.files=[file(text)];await q.e.draftFile.handlers.change();}
+    await q.e.measure.onclick();const worker=q.current(),before=[q.e.points.value,q.e.optionsSource.textContent,q.e.status.textContent];
+    finish();await old;assert.deepEqual([q.e.points.value,q.e.optionsSource.textContent,q.e.status.textContent],before,change);
+    assert.equal(worker.dead,undefined,change);
+  }
 });
 
 test('saved photo settings replay exact source and explicitly replace inactive form values',async()=>{

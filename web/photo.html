@@ -109,6 +109,14 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
   <button id="clearPoints">Clear all points</button>
   <label>Load saved point pairs <input id="pointFile" type="file" accept=".json,application/json" disabled></label>
   <p><small>Loading replaces the current set. Use full-resolution points from the same oriented photo and review their overlay.</small></p>
+  <p><button id="saveDraft" disabled>Save annotation draft</button>
+    <label>Load annotation draft <input id="draftFile" type="file" accept=".json,application/json" disabled></label></p>
+  <p><small>Save completed pairs and settings before measuring, or after a measurement refusal.
+    Complete or cancel an unfinished first click first. To reopen the draft, analyze the original photo
+    with the same reference, calibration and capture declarations. Loading replaces points and settings
+    together only when that analyzed source matches exactly. A draft contains no measurement result
+    or original photo; keep the source files privately. Draft limit: 32 MiB.</small></p>
+  <div id="draftDownloads" class="files"></div>
   <canvas id="image" aria-label="Oriented photo with detected reference; click two landmarks, or enter coordinates below"></canvas>
   <p id="clickStatus" aria-live="polite"></p>
   <label for="points">Named point pairs (editable JSON)</label>

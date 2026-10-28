@@ -81,6 +81,28 @@ across photo changes, so review them for every capture. Invalid UTF-8/JSON or un
 documents preserve current settings; numerical/type/domain errors refuse when measuring,
 with no fallback. Cancellation or intervening source/point/settings edits discard late reads.
 
+### Save and reopen annotation work
+
+After analyzing a photo, **Save annotation draft** prepares `photo-annotations.json` without
+running measurement. Complete or cancel a pending first click first. This preserves complete
+point pairs and settings even after a numerical measurement refusal. The file contains no
+measurement result or original photo; keep it and the original source files privately.
+To reopen it, analyze the original photo with the same reference/calibration/capture inputs,
+then choose **Load annotation draft**. The exact analyzed scale document must match before
+any pairs/settings are replaced. Another photo, orientation, reference, lens or capture
+declaration refuses without replacing current work. This guards accidental source mixups;
+a hand-edited draft is not an authenticity certificate.
+
+The browser-only draft format is an object with exactly four fields: `schema` is
+`ftx-photo-annotations/1`; `scale`, `points` and `options` are the exact original UTF-8 JSON
+texts as strings. Scale is the ordinary `photo-scale.json`; points and options are the
+ordinary full-resolution point map and photo settings documents. The whole file is limited
+to 32 MiB, and each points/options text to 256 KiB. Loading replaces both together, activates
+the displayed imported settings, and withdraws old results. Invalid or superseded loads keep
+current work. Edits withdraw a prepared draft link; prepare a fresh download after editing.
+Saving/restoring a draft does not validate anatomy, uncertainty assumptions, measurement
+readiness or fit. Ordinary Rust checks still run when measuring.
+
 For ChArUco, downloads also retain the exact original sidecar and calibration JSON plus
 the explicit capture assertions. **Remove calibration** clears the selected lens and
 its assertions, after which the current photo must be analyzed again. A rejected lens

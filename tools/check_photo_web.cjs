@@ -46,6 +46,7 @@ const server=http.createServer((req,res)=>{
   };
   try {
     await page.goto(origin+"/photo.html");
+    let annotationDraft;
     for(const [file,tag,width,height,end,knownLength] of [["photo.png","png",720,960,630,400],["photo.jpg","jpeg",600,800,530,250]]) {
       await upload(file); await absent(); assert.equal(await page.isDisabled("#measure"),true);
       await page.selectOption("#paper","letter"); await action("analyze");
@@ -53,6 +54,7 @@ const server=http.createServer((req,res)=>{
       assert.deepEqual(await page.locator("#image").evaluate(c=>[c.width,c.height]),[width,height]);
       const scale=JSON.parse(await download("photo-scale.json"));
       assert.deepEqual(scale,expected(`native-scale-${tag}.json`,false));
+      assert.equal(await page.locator("#saveDraft").count(),1,"Save annotations before measurement succeeds");
       assert.equal(await page.locator("#cancelPoint").count(),1,"Cancel a first click without clearing saved pairs");
       assert.equal(scale.ok,true); if(tag==="jpeg")assert.equal(scale.image_input.exif_orientation,6);
       const box=await page.locator("#image").boundingBox();
@@ -118,6 +120,33 @@ const server=http.createServer((req,res)=>{
       assert.equal(await page.inputValue("#points"),beforeWrongFile);await absent();
       await action("measure");assert.deepEqual(JSON.parse(await download("photo-measurements.json")),report);
       assert.equal((await download("photo-points.json")).toString(),saved,"A rejected import preserves the original source too");
+      await loadOptions('{"bootstrap":19}');await action("measure");await absent();
+      assert.match(await page.textContent("#error"),/bootstrap/);
+      await page.click("#saveDraft");
+      const refusedDraft=JSON.parse(await download("photo-annotations.json"));
+      assert.equal(refusedDraft.points,saved);assert.equal(refusedDraft.options,'{"bootstrap":19}');
+      assert.equal(refusedDraft.scale,await page.textContent("#scale"));await absent();
+      await page.click("#useFormOptions");await page.click("#saveDraft");
+      const draftBytes=await download("photo-annotations.json"),draft=JSON.parse(draftBytes);
+      annotationDraft=draftBytes;
+      assert.equal(draft.schema,"ftx-photo-annotations/1");assert.equal(draft.points,saved);
+      const restore=async()=>{
+        await page.setInputFiles("#draftFile",{name:"photo-annotations.json",mimeType:"application/json",buffer:draftBytes});
+        await page.waitForFunction(()=>/Annotation draft (loaded|not loaded)/.test(document.getElementById("status").textContent));
+      };
+      await page.reload();await upload(file);await page.selectOption("#paper","letter");await action("analyze");
+      await restore();assert.match(await page.textContent("#status"),/draft loaded/);await absent();
+      assert.equal(await page.inputValue("#points"),saved.replace(/\r\n/g,'\n'));assert.equal(await page.isDisabled("#click"),true);
+      await action("measure");assert.deepEqual(JSON.parse(await download("photo-measurements.json")),report);
+      assert.equal((await download("photo-points.json")).toString(),saved);
+      assert.equal((await download("photo-options.json")).toString(),draft.options);
+      await upload(tag==="png"?"photo.jpg":"photo.png");await action("analyze");
+      const otherPoints='{"arm_length":[[5,6],[9,10]]}';await page.fill("#points",otherPoints);await loadOptions('{"seed":7}');
+      await restore();assert.match(await page.textContent("#status"),/draft not loaded/);
+      assert.equal(await page.inputValue("#points"),otherPoints);assert.equal(await page.textContent("#optionsSource"),'{"seed":7}');await absent();
+      await upload(file);await action("analyze");await restore();await action("measure");
+      assert.deepEqual(JSON.parse(await download("photo-measurements.json")),report);
+      await page.click("#useFormOptions");
       const annotated={points:clicked,view:"front",depth_offset_mm:0};
       await page.fill("#points",JSON.stringify({...JSON.parse(points),arm_length:annotated}));
       await page.fill("#name","across_back");await page.click("#removePair");
@@ -143,7 +172,7 @@ const server=http.createServer((req,res)=>{
     assert.match(await page.textContent("#error"),/bootstrap/); await absent();
     await page.fill("#bootstrap","200"); await action("measure");
     // Delay the actual module response to exercise cancellation/replacement while work is pending.
-    for(const change of ["cancel","options","points","source","paper","removePair","importOptions","useFormOptions"]) {
+    for(const change of ["cancel","options","points","source","paper","removePair","importOptions","useFormOptions","draft"]) {
       if(await page.isDisabled("#measure")) {await upload("photo.jpg");await page.selectOption("#paper","letter");await action("analyze");await page.fill("#points",fs.readFileSync(path.join(native,"points-jpeg.json"),"utf8"));}
       if(change==="useFormOptions") {
         await page.setInputFiles("#optionsFile",{name:"saved.json",mimeType:"application/json",buffer:Buffer.from('{"bootstrap":100}')});
@@ -168,6 +197,10 @@ const server=http.createServer((req,res)=>{
         await page.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Settings loaded"));
       }
       if(change==="useFormOptions")await page.click("#useFormOptions");
+      if(change==="draft") {
+        await page.setInputFiles("#draftFile",{name:"photo-annotations.json",mimeType:"application/json",buffer:annotationDraft});
+        await page.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Annotation draft loaded"));
+      }
       await absent(); assert.equal(await page.isDisabled("#cancel"),true);
       await release.continue().catch(()=>{}); await page.context().unroute("**/ftx_wasm_bg.wasm",route);
       await absent();
