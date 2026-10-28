@@ -594,6 +594,346 @@ fn routed_recipe_selection_uses_only_each_specialists_setup_domain() {
     }
 }
 
+fn route_selection() -> (Pattern, Value) {
+    let (pattern, mut original) = fixture(2);
+    original["production"]["routing"]["cells"][1]["available_at_milliseconds"] = json!(18000);
+    refresh_locks(&mut original);
+    let mut alternative = original.clone();
+    let route = &mut alternative["production"]["routing"];
+    route["cells"][1]["id"] = json!("cell-c");
+    route["cells"][1]["available_at_milliseconds"] = json!(0);
+    route["cells"][1]["configuration"]["recipes"]["reinforce"]["max_stitch_mm"] = json!(4.0);
+    route["route"][1]["cell"] = json!("cell-c");
+    route["transfer"]["transfers"][0]["to"] = json!("cell-c");
+    route["source"] = source("available-specialists");
+    refresh_locks(&mut alternative);
+    let request = json!({"schema":"ftx-sewing-selection/6","options":original,
+        "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+        "route_candidates":[{"id":"available-specialists","routing":alternative["production"]["routing"]}]});
+    (pattern, request)
+}
+
+#[test]
+fn route_selection_compares_actual_complete_schedules_and_replays_winning_geometry() {
+    use ftx_export::sewing_selection::Request;
+
+    let (pattern, raw) = route_selection();
+    let request: Request = serde_json::from_value(raw).unwrap();
+    let original = serde_json::to_value(&request).unwrap();
+    let result = request.select(&pattern).unwrap();
+    assert_eq!(result.schema, "ftx-sewing-selection-report/6");
+    assert_eq!(result.candidate_combinations, 2);
+    assert_eq!(result.trials[0].route_choice.as_deref(), Some("template"));
+    assert_eq!(result.trials[0].objective_seconds, Some(23.1));
+    assert_eq!(result.trials[0].feed_seconds, Some(12.0));
+    assert_eq!(result.trials[1].objective_seconds, Some(13.1));
+    assert_eq!(result.trials[1].feed_seconds, Some(13.0));
+    assert_eq!(
+        result.selected_route.as_deref(),
+        Some("available-specialists")
+    );
+    assert!(result.search_complete && !result.budget_exhausted);
+    assert_eq!(result.optimality_proven, result.unresolved_trials == 0);
+    let plan = result.selected_plan.as_ref().unwrap();
+    assert_eq!(plan.total_stitch_intervals(), 130);
+    assert_eq!(plan.options.passes.len(), 2);
+    assert_eq!(
+        plan.options.production.as_ref().unwrap().production_copies,
+        Some(2)
+    );
+    assert_eq!(
+        serde_json::to_value(SewPlan::build(&pattern, &plan.options).unwrap()).unwrap(),
+        serde_json::to_value(plan).unwrap()
+    );
+    let stitches = SewProgram::build(&pattern, &plan.options).unwrap();
+    assert_eq!(stitches.stitches.len(), 130);
+    assert!(
+        stitches
+            .stitches
+            .iter()
+            .all(|stitch| { matches!(stitch.cell.as_deref(), Some("cell-a" | "cell-c")) })
+    );
+    assert!(!plan.hardware_execution_authorized && !plan.physical_seam_quality_validated);
+    assert_eq!(serde_json::to_value(&request).unwrap(), original);
+}
+
+#[test]
+fn route_and_recipe_search_share_one_cap_and_preserve_complete_incumbents() {
+    use ftx_export::sewing_selection::Request;
+
+    let (pattern, mut raw) = route_selection();
+    raw["max_plan_evaluations"] = json!(1);
+    let bounded = serde_json::from_value::<Request>(raw.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(bounded.selected_route.as_deref(), Some("template"));
+    assert_eq!(bounded.selected_objective_seconds, Some(23.1));
+    assert!(bounded.budget_exhausted && !bounded.optimality_proven);
+    let pass = raw["options"]["passes"][1].clone();
+    raw["alternatives"] = json!([{"operation":"reinforce","recipes":[{
+        "id":"authored-again","needle":pass["needle"],"thread":pass["thread"],
+        "max_stitch_mm":pass["max_stitch_mm"],"stitches_per_minute":pass["stitches_per_minute"]}]}]);
+    raw["max_plan_evaluations"] = json!(3);
+    let bounded = serde_json::from_value::<Request>(raw.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(bounded.candidate_combinations, 4);
+    assert_eq!(bounded.trials.len(), 3);
+    assert_eq!(bounded.trials[0].route_choice.as_deref(), Some("template"));
+    assert_eq!(bounded.trials[1].route_choice.as_deref(), Some("template"));
+    assert_eq!(bounded.trials[1].choices["reinforce"], "authored-again");
+    assert_eq!(
+        bounded.trials[2].route_choice.as_deref(),
+        Some("available-specialists")
+    );
+    assert_eq!(
+        bounded.selected_route.as_deref(),
+        Some("available-specialists")
+    );
+    assert_eq!(
+        bounded.selected_choices.as_ref().unwrap()["reinforce"],
+        "template"
+    );
+    assert!(bounded.budget_exhausted && !bounded.search_complete && !bounded.optimality_proven);
+    raw["max_plan_evaluations"] = json!(4);
+    let complete = serde_json::from_value::<Request>(raw)
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert!(complete.search_complete && !complete.budget_exhausted);
+    assert_eq!(complete.selected_route, bounded.selected_route);
+    assert_eq!(
+        serde_json::to_value(complete.selected_plan).unwrap(),
+        serde_json::to_value(bounded.selected_plan).unwrap()
+    );
+}
+
+#[test]
+fn route_selection_retains_stale_unresolved_and_equal_candidates_in_canonical_order() {
+    use ftx_export::sewing_selection::Request;
+
+    let (pattern, mut raw) = route_selection();
+    let mut equal = raw["route_candidates"][0].clone();
+    equal["id"] = json!("z-equal");
+    let mut stale = equal.clone();
+    stale["id"] = json!("stale-lock");
+    stale["routing"]["cell_locks"]["cell-c"] = json!("00".repeat(32));
+    let mut unresolved = equal.clone();
+    unresolved["id"] = json!("unresolved-window");
+    unresolved["routing"]["transfer"]["available_until_milliseconds"] = json!(0);
+    raw["route_candidates"]
+        .as_array_mut()
+        .unwrap()
+        .extend([equal, unresolved, stale]);
+    raw["max_plan_evaluations"] = json!(5);
+    let result = serde_json::from_value::<Request>(raw.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    let ids: Vec<_> = result
+        .trials
+        .iter()
+        .map(|trial| trial.route_choice.as_deref().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "template",
+            "available-specialists",
+            "stale-lock",
+            "unresolved-window",
+            "z-equal"
+        ]
+    );
+    assert!(
+        result.trials[2]
+            .refusal
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("lock")
+    );
+    assert_eq!(
+        result.trials[3].refusal.as_ref().unwrap().code,
+        RefusalCode::NotConverged
+    );
+    assert_eq!(
+        result.selected_route.as_deref(),
+        Some("available-specialists")
+    );
+    assert!(result.unresolved_trials > 0 && !result.optimality_proven && result.search_complete);
+    raw["route_candidates"].as_array_mut().unwrap().reverse();
+    let reordered = serde_json::from_value::<Request>(raw)
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(result.trials).unwrap(),
+        serde_json::to_value(reordered.trials).unwrap()
+    );
+    assert_eq!(result.selected_route, reordered.selected_route);
+}
+
+#[test]
+fn unavailable_route_evidence_retains_other_routes_without_claiming_an_optimum() {
+    use ftx_export::sewing_selection::Request;
+
+    let (pattern, mut raw) = route_selection();
+    raw["route_candidates"][0]["routing"]["cells"][1]["ordering"]["setup_times"]["transitions"] =
+        json!([]);
+    let result = serde_json::from_value::<Request>(raw.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(result.selected_route.as_deref(), Some("template"));
+    assert_eq!(result.trials.len(), 2);
+    assert!(result.trials[1].refusal.is_some());
+    assert!(result.trials[1].objective_unavailable.is_some());
+    assert!(result.trials[1].objective_seconds.is_none());
+    assert!(result.search_complete && !result.optimality_proven && result.unresolved_trials > 0);
+
+    let (pattern, mut raw) = route_selection();
+    raw["options"]["production"]["routing"]["cells"][1]["ordering"]["setup_times"] = Value::Null;
+    let result = serde_json::from_value::<Request>(raw)
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(
+        result.selected_route.as_deref(),
+        Some("available-specialists")
+    );
+    assert!(result.trials[0].objective_unavailable.is_some());
+    assert!(!result.optimality_proven);
+
+    let (pattern, mut raw) = route_selection();
+    let mut unqualified = raw["options"].clone();
+    unqualified["production"]["routing"] = raw["route_candidates"][0]["routing"].clone();
+    unqualified["production"]["routing"]["cells"][1]["configuration"]["qualifications"][0]["materials"]
+        [0] = json!("00".repeat(32));
+    refresh_locks(&mut unqualified);
+    raw["route_candidates"][0]["routing"] = unqualified["production"]["routing"].clone();
+    let result = serde_json::from_value::<Request>(raw)
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(result.selected_route.as_deref(), Some("template"));
+    assert!(
+        result.trials[1]
+            .refusal
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("exact stack")
+    );
+}
+
+#[test]
+fn route_selection_requires_opt_in_source_identity_and_reserves_the_largest_candidate() {
+    use ftx_export::sewing_selection::Request;
+
+    let (pattern, raw) = route_selection();
+    let mut wrong_schema = raw.clone();
+    wrong_schema["schema"] = json!("ftx-sewing-selection/5");
+    assert!(
+        serde_json::from_value::<Request>(wrong_schema)
+            .unwrap()
+            .select(&pattern)
+            .is_err()
+    );
+    for id in ["", "template"] {
+        let mut invalid = raw.clone();
+        invalid["route_candidates"][0]["id"] = json!(id);
+        assert!(
+            serde_json::from_value::<Request>(invalid)
+                .unwrap()
+                .select(&pattern)
+                .is_err()
+        );
+    }
+    let mut duplicate = raw.clone();
+    let candidate = duplicate["route_candidates"][0].clone();
+    duplicate["route_candidates"]
+        .as_array_mut()
+        .unwrap()
+        .push(candidate);
+    assert!(
+        serde_json::from_value::<Request>(duplicate)
+            .unwrap()
+            .select(&pattern)
+            .is_err()
+    );
+    let mut expensive = raw.clone();
+    expensive["route_candidates"][0]["routing"]["max_search_nodes"] = json!(100000);
+    let request: Request = serde_json::from_value(expensive).unwrap();
+    assert_eq!(
+        request.select(&pattern).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+    let mut study_candidate = raw.clone();
+    study_candidate["route_candidates"][0]["routing"]["max_search_nodes"] = json!(80000);
+    assert!(
+        serde_json::from_value::<Request>(study_candidate.clone())
+            .unwrap()
+            .scheduling_work_bound()
+            .is_ok()
+    );
+    let binding =
+        json!({"schema":"ftx-material-bindings/1","default":pattern.raw()["fabric"]["material"]});
+    let study: ftx_export::material_study::Request = serde_json::from_value(json!({
+        "schema":"ftx-material-study/1",
+        "variants":[{"key":"first","changes":binding},{"key":"second","changes":binding}],
+        "sewing_selection":study_candidate
+    }))
+    .unwrap();
+    assert_eq!(
+        study.evaluate(&pattern).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+    let request: Request = serde_json::from_value(raw).unwrap();
+    let mut changed = pattern.raw().clone();
+    changed["fabric"]["material"]["record"]["name"] = json!("Different exact specimen");
+    let result = request.select(&Pattern::new(changed)).unwrap();
+    assert!(result.selected_plan.is_none() && result.selected_route.is_none());
+    assert!(result.trials.iter().all(|trial| trial.refusal.is_some()));
+    assert!(!result.optimality_proven);
+}
+
+#[test]
+fn route_selection_study_reserves_complete_replays_for_inherited_cutting_quantity() {
+    use ftx_export::sewing_selection::Request;
+
+    let (pattern, mut selection) = route_selection();
+    selection["options"]["production"]["production_copies"] = Value::Null;
+    selection["options"]["production"]["routing"]["staging_capacity"] = json!(4);
+    selection["route_candidates"][0]["routing"]["staging_capacity"] = json!(4);
+    selection["route_candidates"][0]["routing"]["max_search_nodes"] = json!(49_990);
+    // At one copy the two-route bound fits twice; four copies add replay work to every plan.
+    assert_eq!(
+        serde_json::from_value::<Request>(selection.clone())
+            .unwrap()
+            .scheduling_work_bound()
+            .unwrap(),
+        99_988
+    );
+    let binding =
+        json!({"schema":"ftx-material-bindings/1","default":pattern.raw()["fabric"]["material"]});
+    for production_copies in [Value::Null, json!(4)] {
+        selection["options"]["production"]["production_copies"] = production_copies;
+        let study: ftx_export::material_study::Request = serde_json::from_value(json!({
+            "schema":"ftx-material-study/1",
+            "variants":[{"key":"first","changes":binding},{"key":"second","changes":binding}],
+            "cutting":{"copies":4,"gap_mm":2.0,"edge_margin_mm":0.0,"end_margin_mm":0.0},
+            "sewing_selection":selection
+        }))
+        .unwrap();
+        let refusal = study.evaluate(&pattern).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::BudgetExceeded);
+        assert!(refusal.message.contains("aggregate recipe/ordering"));
+    }
+}
+
 #[test]
 fn routed_study_compares_actual_specialist_sources_and_preserves_independent_refusals() {
     use ftx_export::material_study::Request;

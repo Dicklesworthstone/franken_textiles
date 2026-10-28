@@ -168,6 +168,11 @@ fn routed_specialist_options() -> Value {
                 "evidence":"estimate","allow_estimates":true},
             "source":source,"method":"Dedicated attending worker per machine; sufficient staging at every cell; separate handoff worker",
             "evidence":"estimate","allow_estimates":true}});
+    refresh_routed_locks(&mut options);
+    options
+}
+
+fn refresh_routed_locks(options: &mut Value) {
     let typed: ftx_export::sewing::SewOptions = serde_json::from_value(options.clone()).unwrap();
     let locks: std::collections::BTreeMap<_, _> = typed
         .production
@@ -187,7 +192,6 @@ fn routed_specialist_options() -> Value {
         })
         .collect();
     options["production"]["routing"]["cell_locks"] = json!(locks);
-    options
 }
 
 #[test]
@@ -292,6 +296,123 @@ fn routed_specialists_replay_actual_native_stitches_inventory_previews_and_mater
     stale["production"]["routing"]["cells"][1]["configuration"]["machine"]["max_stitches_per_minute"] =
         json!(1.0);
     assert!(ftx_wasm::manufacturing::sew_plan(PATTERN, &stale.to_string()).is_err());
+}
+
+#[test]
+fn authored_route_selection_replays_native_portable_stitches_yarn_orders_and_material_studies() {
+    let mut original = routed_specialist_options();
+    original["production"]["routing"]["cells"][1]["available_at_milliseconds"] = json!(18000);
+    refresh_routed_locks(&mut original);
+    let mut alternative = original.clone();
+    let route = &mut alternative["production"]["routing"];
+    route["cells"][1]["id"] = json!("cell-c");
+    route["cells"][1]["available_at_milliseconds"] = json!(0);
+    route["cells"][1]["configuration"]["recipes"]["reinforce"]["max_stitch_mm"] = json!(4.0);
+    route["route"][1]["cell"] = json!("cell-c");
+    route["transfer"]["transfers"][0]["to"] = json!("cell-c");
+    refresh_routed_locks(&mut alternative);
+    let request = json!({"schema":"ftx-sewing-selection/6","options":original,
+        "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+        "route_candidates":[{"id":"available-specialists","routing":alternative["production"]["routing"]}]});
+    let selected_text = ftx_wasm::sew_select(PATTERN, &request.to_string()).unwrap();
+    assert_eq!(
+        selected_text,
+        ftx_export::sewing_selection::select_json(PATTERN, &request.to_string()).unwrap()
+    );
+    let selected = portable(selected_text);
+    assert_eq!(
+        selected["report"]["selected_route"],
+        "available-specialists"
+    );
+    assert_eq!(selected["report"]["candidate_combinations"], 2);
+    let options = selected["selected_options_json"].as_str().unwrap();
+    let plan = &selected["report"]["selected_plan"];
+    assert_eq!(
+        portable(ftx_wasm::manufacturing::sew_plan(PATTERN, options).unwrap()),
+        *plan
+    );
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, options).unwrap());
+    assert_eq!(program["plan"], *plan);
+    assert_eq!(program["stitches"].as_array().unwrap().len(), 130);
+    assert!(
+        program["stitches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|stitch| { matches!(stitch["cell"].as_str(), Some("cell-a" | "cell-c")) })
+    );
+    assert_eq!(plan["consumables"]["complete_consumption_coverage"], true);
+    assert!(
+        plan["consumables"]["purchasing"]["least_observed_independent_order_total"]
+            .as_f64()
+            .is_some()
+    );
+    let svg =
+        ftx_wasm::manufacturing::sew_cell_svg(PATTERN, options, "cell-c", "reinforce").unwrap();
+    assert!(svg.contains("cell-c") && svg.contains("reinforce"));
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"specialists","changes":{"schema":"ftx-material-bindings/1","default":pattern["fabric"]["material"]}}],
+        "sewing_selection":request,
+        "comparison":{"basis":"nominal","required_consumers":["sewing","sewing_consumables","sewing_purchasing"],
+            "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"}]}});
+    let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    let row = &report["alternatives"][0];
+    assert_eq!(
+        row["sewing_selection"]["result"]["selected_route"],
+        "available-specialists"
+    );
+    assert_eq!(
+        row["sewing_selection"]["result"]["trials"],
+        selected["report"]["trials"]
+    );
+    assert_eq!(
+        row["sewing"]["result"]["production"]["routing"]["selected"],
+        plan["production"]["routing"]["selected"]
+    );
+    assert_eq!(row["sewing"]["result"]["consumables"], plan["consumables"]);
+    assert_eq!(report["comparison"]["frontier"], json!(["specialists"]));
+    let directory = workspace();
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    fs::write(directory.join("request.json"), request.to_string()).unwrap();
+    fs::write(directory.join("selected-options.json"), options).unwrap();
+    fs::write(directory.join("study.json"), study.to_string()).unwrap();
+    for main in [false, true] {
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-select",
+                "pattern.json",
+                "request.json"
+            ),
+            selected
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-plan",
+                "pattern.json",
+                "selected-options.json"
+            ),
+            *plan
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "selected-options.json"
+            ),
+            program
+        );
+        assert_eq!(
+            run(main, &directory, "study", "pattern.json", "study.json"),
+            report
+        );
+    }
 }
 
 #[test]

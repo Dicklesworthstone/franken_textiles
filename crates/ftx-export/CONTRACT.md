@@ -276,6 +276,19 @@ Missing/stale source qualification preserves independent manufacturing and simul
 Omitted selection retains legacy serialization. Tests: `material_study`, native and file-free WASM
 `material_study_consumers`; source admission is not physical seam validation or hardware permission.
 
+**Authored specialist-route selection** (`sewing_selection`, `ftx-pb2.2`). Opt-in selection `/6`
+compares the template fixed route with one to fifteen independently qualified complete route policies,
+optionally crossed with the existing recipe groups. Pattern, passes, production quantity, construction
+and thread market stay fixed; ordinary `SewPlan::build` remains the sole feasibility and timing
+authority. At most 64 full route/recipe attempts share one budget; source-plan, scheduling and
+purchasing bounds cover the largest candidate before expansion. Template route then lexical route
+IDs define traversal and equal-score ties. Trial `route_choice` and incumbent `selected_route` survive
+the compact material-study receipt, and selected options preserve the exact winning route for all
+existing manufacturing consumers. Complete incumbents survive bounded search; unresolved inner
+routes prohibit optimum claims. Omitted candidates preserve prior schemas and serialization.
+This is finite declared-route selection, not inferred machine eligibility, unrestricted routing
+optimality, measured factory performance or hardware authorization. See `docs/sewing-selection.md`.
+
 **Complete thread-cost recipe selection** (`sewing_selection`, plan §25.4 / `ftx-tm7`). The explicit
 `ftx-sewing-selection/3` objective `minimize_thread_observed_order_cost` requires dated thread
 purchasing and consumes only the complete canonical order total from each freshly admitted
