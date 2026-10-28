@@ -56,6 +56,12 @@ self-intersection audit. Legal shared vertices and edges are retained; crossing,
 coincident and folded-over faces are refused with their source triangle indices.
 The audit reuses the existing BVH and shared-feature predicates, does not move
 vertices, and refuses rather than treating an exhausted budget as a clear surface.
+Between these configurations, nonincident body vertex/triangle and edge/edge
+features use the same additive CCD as cloth contact, at zero body-surface offset.
+Only the exact shared indexed feature is excluded, not every pair of neighbouring
+triangles. The existing noncollapse test remains separate. A shortened CCD bound
+causes subdivision before solving cloth; an unresolved crossing refuses the whole
+request, including any provisional coupled heat or material history.
 Lagged Coulomb friction measures **relative** cloth/body material displacement,
 with the same frozen contact weights at both body endpoints. The combined
 cloth/body trajectory must pass CCD, conservative face-noncollapse checks and
@@ -72,8 +78,10 @@ retained body-plus-cloth vertex positions. These bound subdivision and output,
 not the wall time of a
 Newton iteration. The solver's existing Newton/friction/PCG policies still apply.
 Contact thickness and cloth material parameters are never relaxed to finish motion.
-`MotionReport.pairs_tested` includes completed initial-contact queries and
-body-surface audits as well as swept queries, including rejected trials.
+`MotionReport.pairs_tested` includes completed initial-contact queries, body-surface
+audits and continuous body/body feature queries as well as cloth swept queries,
+including rejected trials. A body feature query shares one `max_pairs` allowance
+across both feature families; no candidate is dropped when it runs out.
 
 ## Evidence and boundaries
 
@@ -89,8 +97,11 @@ known-answer tests and pinned digest remain unchanged.
 This is conservative continuation for an already valid prescribed body path, not
 IPC's augmented-Lagrangian treatment of large moving boundary displacements. Fast,
 blocked, ill-conditioned or excessive-turning motion may refuse rather than finish.
-The body-surface audits certify only the sampled configurations, not absence of
-body self-intersection between those samples. Anatomically valid motion, moving
+The exact audits concern sampled configurations; additive CCD additionally bounds
+nonincident feature separation along each accepted linear chord, with the same
+floating-point and conservative-advancement limits as existing cloth CCD. This is
+not an exact time-of-impact solver or a check of an unprovided curved trajectory.
+Anatomically valid motion, moving
 pins, mesh remapping, pose extraction and human-motion accuracy are not certified.
 The returned solver
 can continue normally after a successful motion, but success is neither settledness

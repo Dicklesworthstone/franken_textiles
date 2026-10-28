@@ -359,6 +359,42 @@ fn crossing_body_keyframes_refuse_even_when_both_endpoints_are_valid() {
 }
 
 #[test]
+fn body_crossing_between_all_nominal_samples_is_refused_transactionally() {
+    let mut s = separated_body_patches();
+    let initial = s.contact.as_ref().unwrap().body.vertices.clone();
+    let mut target = initial.clone();
+    // The moving patch crosses the static patch at t=0.37, not at any nominal endpoint.
+    for p in &mut target[3..] {
+        p.z = 3.0 - 1.0 / 0.37;
+    }
+    for t in [0.0, 0.3, 0.6, 0.9, 1.0] {
+        let pose: Vec<_> = initial
+            .iter()
+            .zip(&target)
+            .map(|(a, b)| *a + (*b - *a) * t)
+            .collect();
+        ftx_drape::collider::audit_surface(&pose, &[[0, 1, 2], [3, 4, 5]], 1).unwrap();
+    }
+    let before = format!("{s:?}");
+    let error = advance_body(
+        &mut s,
+        &target,
+        1.0,
+        MotionOptions {
+            max_step_s: 0.3,
+            max_trials: 64,
+            ..MotionOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error.code,
+        RefusalCode::NotConverged | RefusalCode::BudgetExceeded | RefusalCode::IntersectingStart
+    ));
+    assert_eq!(format!("{s:?}"), before);
+}
+
+#[test]
 fn valid_body_motion_retains_legal_shared_features_and_reports_audit_work() {
     let mut s = sliding_patch(0.0, true);
     let vertices = vec![
@@ -375,6 +411,7 @@ fn valid_body_motion_retains_legal_shared_features_and_reports_audit_work() {
         Body::new(vertices, vec![[0, 1, 2], [0, 2, 3]], 0.1).unwrap();
     let report = advance_body(&mut s, &target, 0.01, MotionOptions::default()).unwrap();
     assert_eq!(report.samples.len(), 1);
-    assert_eq!(report.pairs_tested, 3); // start, target and one accepted trial; no cloth overlap
+    // Three exact face-pair audits and two nonincident vertex/triangle CCD pairs.
+    assert_eq!(report.pairs_tested, 5);
     assert_eq!(s.contact.as_ref().unwrap().body.vertices, target);
 }
