@@ -64,21 +64,36 @@ pub fn point_triangle_closest(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> ([f64; 3], 
 }
 
 /// Closest parameters (s on a₀a₁, t on b₀b₁) of two segments and the feature pair (Ericson 5.1.9,
-/// parallel segments handled by clamping).
+/// parallel segments handled by clamping). Near-parallel but nonparallel edges retain their
+/// interior closest points: replacing them with an endpoint overestimates separation and can
+/// let additive CCD step through an edge crossing.
 #[must_use]
 pub fn edge_edge_closest(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> ((f64, f64), Closest) {
     let (d1, d2, r) = (a1 - a0, b1 - b0, a0 - b0);
     let (a, e, f) = (d1.dot(d1), d2.dot(d2), d2.dot(r));
     let (c, b) = (d1.dot(r), d1.dot(d2));
     let denom = a * e - b * b;
-    // Nearly parallel: the line-line distance is ill-conditioned; fall back to an endpoint.
-    let parallel = denom <= 1e-12 * a * e;
-    let mut s = if parallel {
-        0.0
+    let (mut s, mut t) = if denom <= 1e-12 * a * e {
+        // The Gram determinant subtracts nearly equal numbers. Cross-product ratios avoid
+        // that cancellation; the threshold selects arithmetic, not a parallel geometry model.
+        let n = d1.cross(d2);
+        let n2 = n.norm2();
+        if n2 > 0.0 {
+            let s = (d2.cross(r).dot(n) / n2).clamp(0.0, 1.0);
+            let t = if s > 0.0 && s < 1.0 {
+                d1.cross(r).dot(n) / n2
+            } else {
+                (b * s + f) / e
+            };
+            (s, t)
+        } else {
+            // A vanishing cross product retains the existing parallel boundary convention.
+            (0.0, f / e)
+        }
     } else {
-        ((b * f - c * e) / denom).clamp(0.0, 1.0)
+        let s = ((b * f - c * e) / denom).clamp(0.0, 1.0);
+        (s, (b * s + f) / e)
     };
-    let mut t = (b * s + f) / e;
     if t < 0.0 {
         t = 0.0;
         s = (-c / a).clamp(0.0, 1.0);
@@ -250,6 +265,141 @@ mod tests {
             check_derivatives(pts, kind, |p| squared_distance(p, [false; 4], kind));
         }
         assert!(seen.len() >= 4, "{seen:?}");
+    }
+
+    fn edge_orders(p: [Vec3; 4]) -> [[Vec3; 4]; 8] {
+        std::array::from_fn(|mask| {
+            let mut q = p;
+            if mask & 1 != 0 {
+                q.swap(0, 1);
+            }
+            if mask & 2 != 0 {
+                q.swap(2, 3);
+            }
+            if mask & 4 != 0 {
+                q.rotate_left(2);
+            }
+            q
+        })
+    }
+
+    #[test]
+    fn near_parallel_edges_keep_the_independently_known_interior_minimum() {
+        for scale in [1e-3, 1.0, 1e3] {
+            for slope in [1e-7, 1e-9] {
+                let z = scale * slope * 0.1;
+                let p = [
+                    Vec3::new(-scale, 0.0, 0.0),
+                    Vec3::new(scale, 0.0, 0.0),
+                    Vec3::new(-scale, -scale * slope, z),
+                    Vec3::new(scale, scale * slope, z),
+                ];
+                // Both segment midpoints have x=y=0; their separation is exactly the z gap.
+                // Exercise both windings, both segment orders, and all three coordinate axes.
+                for axis in 0..3 {
+                    let p = p.map(|v| Vec3::new(v[axis], v[(axis + 1) % 3], v[(axis + 2) % 3]));
+                    for q in edge_orders(p) {
+                        let ((s, t), kind) = edge_edge_closest(q[0], q[1], q[2], q[3]);
+                        assert_eq!(kind, Closest::LineLine);
+                        assert!((s - 0.5).abs() < 1e-12 && (t - 0.5).abs() < 1e-12);
+                        let d2 = squared_distance_f64(q, kind);
+                        assert!((d2 - z * z).abs() <= 1e-12 * z * z, "{d2} vs {}", z * z);
+                    }
+                }
+                let jet = squared_distance(p, [false; 4], Closest::LineLine);
+                assert!(
+                    jet.g
+                        .iter()
+                        .chain(jet.h.iter().flatten())
+                        .all(|v| v.is_finite())
+                );
+                for (i, expected) in [-z, -z, z, z].into_iter().enumerate() {
+                    assert!((jet.g[3 * i + 2] - expected).abs() <= 1e-12 * z);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn near_parallel_edges_still_clamp_to_the_correct_segment_boundary() {
+        let (eps, z) = (1e-7, 1e-8);
+        let a = [Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0)];
+        for (b, expected) in [
+            (
+                [Vec3::new(2.0, eps, z), Vec3::new(3.0, 2.0 * eps, z)],
+                1.0 + eps * eps + z * z,
+            ),
+            (
+                [Vec3::new(-1.0, -eps, z), Vec3::new(0.5, -0.25 * eps, z)],
+                0.0625 * eps * eps + z * z,
+            ),
+            (
+                [Vec3::new(0.25, eps, z), Vec3::new(1.25, 2.0 * eps, z)],
+                eps * eps + z * z,
+            ),
+        ] {
+            for q in edge_orders([a[0], a[1], b[0], b[1]]) {
+                let ((s, t), kind) = edge_edge_closest(q[0], q[1], q[2], q[3]);
+                assert_ne!(kind, Closest::LineLine);
+                assert!((0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t));
+                let distance = squared_distance_f64(q, kind);
+                assert!((distance - expected).abs() <= 1e-12 * expected);
+            }
+        }
+        // A genuinely parallel overlap retains the previous endpoint/edge convention.
+        assert_eq!(
+            edge_edge_closest(
+                Vec3::ZERO,
+                Vec3::new(2.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.25),
+                Vec3::new(3.0, 0.0, 0.25),
+            ),
+            ((0.5, 0.0), Closest::PointEdge(2, 0, 1))
+        );
+    }
+
+    #[test]
+    fn actual_edge_ccd_stops_near_parallel_crossings_between_clear_endpoints() {
+        use crate::contact::{Pair, accd};
+
+        for scale in [1e-3, 1.0, 1e3] {
+            let (eps, z) = (scale * 1e-7, scale * 1e-8);
+            let p = [
+                Vec3::new(-scale, 0.0, 0.0),
+                Vec3::new(scale, 0.0, 0.0),
+                Vec3::new(-scale, -eps, z),
+                Vec3::new(scale, eps, z),
+            ];
+            let movement = [
+                Vec3::ZERO,
+                Vec3::ZERO,
+                Vec3::new(0.0, 0.0, -2.0 * z),
+                Vec3::new(0.0, 0.0, -2.0 * z),
+            ];
+            for (q, dp) in edge_orders(p).into_iter().zip(edge_orders(movement)) {
+                for pair in [
+                    Pair::EdgeEdge { ce: 0, be: 0 },
+                    Pair::SelfEdgeEdge { a: 0, b: 1 },
+                ] {
+                    for xi in [0.0, 0.2 * z] {
+                        // At both endpoints the segments are separated; their midpoints meet
+                        // at t=0.5 (or touch the thickness offset earlier).
+                        let impact = (z - xi) / (2.0 * z);
+                        let fraction = accd(pair, q, dp, xi, 1.0);
+                        assert!(
+                            fraction > 0.0 && fraction < impact,
+                            "CCD must stop before the known first contact: {fraction} vs {impact}"
+                        );
+                        assert!(z - 2.0 * z * fraction > xi);
+                        assert_eq!(accd(pair, q, dp, xi, 0.2), 0.2);
+                    }
+                    let away = dp.map(|v| -v);
+                    assert_eq!(accd(pair, q, away, 0.0, 1.0), 1.0);
+                    let common = [Vec3::new(0.1, 0.2, 0.3); 4];
+                    assert_eq!(accd(pair, q, common, 0.0, 1.0), 1.0);
+                }
+            }
+        }
     }
 
     fn check_derivatives(pts: [Vec3; 4], kind: Closest, f: impl Fn([Vec3; 4]) -> Jet<12>) {
