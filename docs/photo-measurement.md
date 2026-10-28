@@ -36,6 +36,11 @@ covariance from an evidence string. The original image, sidecar and calibration 
 capture assertions and checked calibration document remain in the downloaded reports.
 
 Give a measurement name and click its two points, or edit the named-pair JSON directly.
+**Cancel first click** abandons an unfinished pair and keeps the saved point JSON unchanged.
+To remove one completed measurement, enter its name and choose **Remove named pair**;
+other pairs and their annotations remain available, and that name can be added again.
+**Clear all points** clears the entire set. Removing a pair also discards its unfinished
+replacement and cancels any pending measurement; review and download fresh results afterward.
 Review camera distance, possible depth offset, click uncertainty and bootstrap settings,
 then **Measure point pairs**. Download the ordinary `photo-measurements.json`, exact
 point pairs and explicit options. In the Pattern Workbench, choose **My tape measurements**

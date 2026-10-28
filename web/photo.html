@@ -104,7 +104,9 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     Click two landmarks to add a pair under the name below.
     Coordinates refer to the full-resolution oriented pixels, regardless of display size.</p>
   <label>Measurement name <input id="name" value="across_back" maxlength="128"></label>
-  <button id="clearPoints">Clear points</button>
+  <button id="cancelPoint" disabled>Cancel first click</button>
+  <button id="removePair" disabled>Remove named pair</button>
+  <button id="clearPoints">Clear all points</button>
   <canvas id="image" aria-label="Oriented photo with detected reference; click two landmarks, or enter coordinates below"></canvas>
   <p id="clickStatus" aria-live="polite"></p>
   <label for="points">Named point pairs (editable JSON)</label>

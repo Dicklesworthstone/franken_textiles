@@ -4,6 +4,11 @@ let sourceUrls = [], resultUrls = [];
 let cameraWorker = null, cameraTicket = 0, cameraBusy = false, cameraResult = null, generatedCalibration = null;
 const cameraUrls = [];
 const status = text => {$("status").textContent=text;};
+function pointPairs() {
+  const pairs=JSON.parse($("points").value);
+  if(!pairs || typeof pairs!=="object" || Array.isArray(pairs)) throw Error("Points must be a JSON object of named pairs.");
+  return pairs;
+}
 function controls() {
   const charuco=$("referenceMode").value==="charuco", calibrated=charuco && ($("calibration").files.length>0 || generatedCalibration!==null);
   $("plainControls").hidden=charuco; $("charucoControls").hidden=!charuco; $("lensControls").hidden=!calibrated;
@@ -11,6 +16,9 @@ function controls() {
   $("clearCalibration").disabled=!calibrated;
   $("analyze").disabled=busy || cameraBusy || !$("photo").files.length || (charuco && !$("sheet").files.length);
   $("measure").disabled=busy || cameraBusy || scale?.ok !== true || pending.length>0;
+  let namedPair=false;
+  try {namedPair=!!$("name").value.trim() && Object.hasOwn(pointPairs(),$("name").value.trim());} catch {}
+  $("removePair").disabled=!namedPair; $("cancelPoint").disabled=pending.length===0;
   $("cancel").disabled=!busy;
   const images=$("cameraMode").value==="images";
   $("cameraImageControls").hidden=!images;
@@ -253,8 +261,24 @@ for(const id of ["distance","depth","click","level","bootstrap","points"]) $(id)
   if(id==="points") {pending=[]; $("clickStatus").textContent="";}
   withdraw(); draw(); status("Inputs changed; measure again.");
 });
-$("name").addEventListener("input",()=>{pending=[]; withdraw(); draw();});
-$("clearPoints").onclick=()=>{$("points").value="{}"; pending=[]; withdraw(); draw();};
+$("name").addEventListener("input",()=>{pending=[]; $("clickStatus").textContent=""; withdraw(); draw(); status("Review the named pair, then measure again.");});
+$("clearPoints").onclick=()=>{$("points").value="{}"; pending=[]; withdraw(); draw(); $("clickStatus").textContent="All points cleared."; status("All points cleared; choose landmarks for a new pair.");};
+$("cancelPoint").onclick=()=>{
+  if(!pending.length) return;
+  pending=[]; withdraw(); draw(); $("clickStatus").textContent="First click cancelled. Saved pairs are unchanged.";
+  status("First click cancelled; review saved pairs and measure again.");
+};
+$("removePair").onclick=()=>{
+  const name=$("name").value.trim();
+  if(!name) return;
+  try {
+    const pairs=pointPairs();
+    if(!Object.hasOwn(pairs,name)) return;
+    delete pairs[name]; $("points").value=JSON.stringify(pairs,null,2); pending=[];
+    withdraw(); draw(); $("clickStatus").textContent=`Removed ${name}. Other point pairs are unchanged.`;
+    status("Point pair removed; review the remaining pairs and measure again.");
+  } catch(error) {$("error").textContent=error.message;}
+};
 $("image").onclick=e=>{
   if(!bitmap || scale?.ok!==true || busy) return;
   const name=$("name").value.trim(), box=$("image").getBoundingClientRect();
@@ -264,12 +288,12 @@ $("image").onclick=e=>{
   withdraw(); pending.push(point);
   if(pending.length===2) {
     try {
-      const pairs=JSON.parse($("points").value);
-      if(!pairs || typeof pairs!=="object" || Array.isArray(pairs)) throw Error("Points must be a JSON object of named pairs.");
+      const pairs=pointPairs();
       $("points").value=JSON.stringify(Object.fromEntries([...Object.entries(pairs),[name,pending]]),null,2); pending=[];
     } catch(error) {pending=[]; $("error").textContent=error.message;}
   }
-  $("clickStatus").textContent=pending.length?"First point selected; click the second.":"Pair added. Review its name and coordinates."; draw(); controls();
+  $("clickStatus").textContent=pending.length?"First point selected; click the second.":"Pair added. Review its name and coordinates.";
+  status(pending.length?"First point selected; click the second.":"Point pairs changed; measure again."); draw(); controls();
 };
 window.addEventListener("pagehide",()=>{withdrawCamera(); withdraw(true);});
 controls();

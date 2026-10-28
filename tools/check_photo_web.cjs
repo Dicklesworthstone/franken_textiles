@@ -53,6 +53,7 @@ const server=http.createServer((req,res)=>{
       assert.deepEqual(await page.locator("#image").evaluate(c=>[c.width,c.height]),[width,height]);
       const scale=JSON.parse(await download("photo-scale.json"));
       assert.deepEqual(scale,expected(`native-scale-${tag}.json`,false));
+      assert.equal(await page.locator("#cancelPoint").count(),1,"Cancel a first click without clearing saved pairs");
       assert.equal(scale.ok,true); if(tag==="jpeg")assert.equal(scale.image_input.exif_orientation,6);
       const box=await page.locator("#image").boundingBox();
       const click=async x=>page.locator("#image").click({position:{x:(x+.5)*box.width/width,y:400.5*box.height/height}});
@@ -61,6 +62,9 @@ const server=http.createServer((req,res)=>{
       await page.fill("#points",typed);assert.equal(await page.isDisabled("#measure"),false);
       await click(40);assert.equal(await page.inputValue("#points"),typed);
       assert.equal(await page.isDisabled("#measure"),true);
+      await page.click("#cancelPoint");assert.equal(await page.inputValue("#points"),typed);
+      assert.equal(await page.isDisabled("#cancelPoint"),true);assert.equal(await page.isDisabled("#measure"),false);
+      await click(40);
       await page.click("#clearPoints");assert.equal(await page.isDisabled("#measure"),false);
       for(const x of [30,end]) await page.locator("#image").click({position:{x:(x+.5)*box.width/width,y:400.5*box.height/height}});
       const clicked=JSON.parse(await page.inputValue("#points")).across_back;
@@ -80,6 +84,20 @@ const server=http.createServer((req,res)=>{
       assert.equal((await download("photo-points.json")).toString(),points);
       assert.deepEqual(JSON.parse(await download("photo-options.json")),{depth_offset_mm:0,camera_distance_mm:2500,click_px:3,sheet_level_sigma_deg:1.5,bootstrap:200,seed:0});
       assert.ok(report.records[0].sigma_mm>0); assert.equal(report.taken_on,null);
+      const annotated={points:clicked,view:"front",depth_offset_mm:0};
+      await page.fill("#points",JSON.stringify({...JSON.parse(points),arm_length:annotated}));
+      await page.fill("#name","across_back");await page.click("#removePair");
+      const edited=await page.inputValue("#points");assert.deepEqual(JSON.parse(edited),{arm_length:annotated});
+      assert.deepEqual(JSON.parse(await download("photo-scale.json")),scale);
+      await absent();await action("measure");
+      assert.equal(await page.textContent("#error"),"");
+      const remaining=JSON.parse(await download("photo-measurements.json"));
+      assert.equal(remaining.records.length,1);assert.equal(remaining.records[0].name,"arm_length");
+      assert.ok(Math.abs(remaining.records[0].value_mm-knownLength)<1);assert.ok(remaining.records[0].sigma_mm>0);
+      assert.equal((await download("photo-points.json")).toString(),edited);
+      for(const x of [30,end])await click(x);
+      assert.deepEqual(JSON.parse(await page.inputValue("#points")).arm_length,annotated);
+      assert.ok(JSON.parse(await page.inputValue("#points")).across_back,"Removed name can be added again");
       fs.writeFileSync(path.join(work,`${tag}-report.json`),rawReport,{flag:"wx"});
       console.log(`PASS ${tag}: actual scale, orientation, scaled clicks, PHOTO_ESTIMATED length/uncertainty, complete native equality and exact point/options downloads`);
     }
@@ -91,7 +109,7 @@ const server=http.createServer((req,res)=>{
     assert.match(await page.textContent("#error"),/bootstrap/); await absent();
     await page.fill("#bootstrap","200"); await action("measure");
     // Delay the actual module response to exercise cancellation/replacement while work is pending.
-    for(const change of ["cancel","options","points","source","paper"]) {
+    for(const change of ["cancel","options","points","source","paper","removePair"]) {
       if(await page.isDisabled("#measure")) {await upload("photo.jpg");await page.selectOption("#paper","letter");await action("analyze");await page.fill("#points",fs.readFileSync(path.join(native,"points-jpeg.json"),"utf8"));}
       let release, arrived;
       const parked=new Promise(resolve=>{arrived=resolve;});
@@ -106,6 +124,7 @@ const server=http.createServer((req,res)=>{
       if(change==="points")await page.fill("#points",'{"across_back":[[31,400],[530,400]]}');
       if(change==="source")await upload("photo.png");
       if(change==="paper")await page.selectOption("#paper","a4");
+      if(change==="removePair")await page.click("#removePair");
       await absent(); assert.equal(await page.isDisabled("#cancel"),true);
       await release.continue().catch(()=>{}); await page.context().unroute("**/ftx_wasm_bg.wasm",route);
       await absent();

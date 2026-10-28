@@ -135,6 +135,68 @@ test('photo controls retain exact local documents and explicitly asserted captur
   await p.analyze();assert.equal(p.current().messages[0].calibration,'');assert.equal(p.current().messages[0].capture,'{}');
 });
 
+test('photo pair removal keeps other annotations and cancels stale measurement replies',async()=>{
+  for(const completed of [false,true]){
+    const p=await photoPage();p.select();await p.analyze();
+    assert.ok(p.e.removePair,'Remove only the named photo pair');
+    const other={points:[[90,110],[110,140]],view:'front',depth_offset_mm:0};
+    p.e.points.value=JSON.stringify({across_back:[[30,40],[80,40]],arm_length:other});p.e.points.handlers.input();
+    const sourceLinks=p.e.sourceDownloads.children.map(a=>a.href);
+    await p.e.measure.onclick();const old=p.current(),request=old.messages[0].request;
+    if(completed){
+      await old.emit({type:'result',request,report:'{"records":[{"name":"across_back","value_mm":25,"sigma_mm":2}]}'});
+      assert.equal(p.e.result.hidden,false);assert.equal(p.e.downloads.children.length,3);
+    }
+    assert.equal(p.e.removePair.disabled,false,'Saved pairs can be edited during or after a measurement');
+    p.e.removePair.onclick();
+    assert.equal(old.dead,true);assert.deepEqual(JSON.parse(p.e.points.value),{arm_length:other});
+    assert.equal(p.e.result.hidden,true);assert.equal(p.e.downloads.children.length,0);
+    assert.match(p.e.status.textContent,/removed/);
+    assert.equal(p.e.preview.hidden,false);assert.equal(p.e.measure.disabled,false);
+    assert.deepEqual(p.e.sourceDownloads.children.map(a=>a.href),sourceLinks);
+    assert.equal(p.urls.size,sourceLinks.length);for(const url of sourceLinks)assert.equal(p.urls.has(url),true);
+    await old.emit({type:'result',request,report:'{"records":[]}'});
+    assert.equal(p.e.result.hidden,true);assert.equal(p.e.downloads.children.length,0);
+    await p.e.measure.onclick();assert.deepEqual(JSON.parse(p.current().messages[0].points),{arm_length:other});
+    for(const name of ['missing','  ']){
+      p.e.name.value=name;p.e.name.handlers.input();
+      const unchanged=p.e.points.value;assert.equal(p.e.removePair.disabled,true);
+      p.e.removePair.onclick();assert.equal(p.e.points.value,unchanged);
+    }
+    for(const text of ['{','[]','null']){
+      p.e.points.value=text;p.e.points.handlers.input();
+      assert.equal(p.e.removePair.disabled,true);p.e.removePair.onclick();assert.equal(p.e.points.value,text);
+    }
+  }
+});
+
+test('pending photo click cancellation preserves exact saved pairs and permits re-addition',async()=>{
+  const p=await photoPage();p.select();await p.analyze();
+  assert.ok(p.e.cancelPoint,'Cancel only the first click');
+  const saved=' {"across_back":[[30,40],[80,40]],"arm_length":{"points":[[5,6],[9,10]],"view":"front"}}\n';
+  p.e.points.value=saved;p.e.points.handlers.input();
+  p.e.image.getBoundingClientRect=()=>({left:0,top:0,width:800,height:600});
+  p.e.image.onclick({clientX:50.25,clientY:60.25});
+  assert.equal(p.e.measure.disabled,true);assert.equal(p.e.cancelPoint.disabled,false);
+  p.e.cancelPoint.onclick();assert.equal(p.e.points.value,saved);
+  assert.match(p.e.status.textContent,/cancelled/);
+  assert.equal(p.e.cancelPoint.disabled,true);assert.equal(p.e.measure.disabled,false);
+  p.e.image.onclick({clientX:30.25,clientY:40.25});assert.equal(p.e.points.value,saved);
+  p.e.image.onclick({clientX:70.25,clientY:80.25});
+  const pairs=JSON.parse(p.e.points.value);
+  assert.deepEqual(pairs.across_back,[[60,80],[140,160]]);assert.deepEqual(pairs.arm_length,JSON.parse(saved).arm_length);
+  p.e.image.onclick({clientX:40.25,clientY:50.25});p.e.removePair.onclick();
+  assert.equal(p.e.cancelPoint.disabled,true);assert.deepEqual(JSON.parse(p.e.points.value),{arm_length:pairs.arm_length});
+  p.e.image.onclick({clientX:60.25,clientY:70.25});assert.equal(p.e.measure.disabled,true);
+  assert.equal(JSON.parse(p.e.points.value).across_back,undefined,'Removal also discards the pending replacement');
+  p.e.cancelPoint.onclick();p.e.clearPoints.onclick();
+  assert.equal(p.e.points.value,'{}');assert.equal(p.e.removePair.disabled,true);assert.equal(p.e.cancelPoint.disabled,true);
+  assert.match(p.e.clickStatus.textContent,/cleared/);
+  assert.match(p.e.status.textContent,/cleared/);
+  p.e.image.onclick({clientX:60.25,clientY:70.25});p.e.name.value='shoulder_length';p.e.name.handlers.input();
+  assert.equal(p.e.clickStatus.textContent,'');assert.equal(p.e.cancelPoint.disabled,true);
+});
+
 test('every reference or capture edit cancels pending measurement and withdraws old scale and downloads',async()=>{
   for(const id of ['referenceMode','sheet','calibration','lensId','rotation','independence']){
     const p=await photoPage();p.select();await p.analyze();await p.measure();
