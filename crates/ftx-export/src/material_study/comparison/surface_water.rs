@@ -91,6 +91,172 @@ fn source(value: &Value) -> Result<(), Refusal> {
     Ok(())
 }
 
+// This checks the coupled producer's retained accounting, not its equations of motion. The
+// thermal inventory remains authoritative; bulk transfer energy is never added to latent heat.
+fn admit_mechanics(
+    simulation: &Value,
+    motion: &Value,
+    heat: &Value,
+    request: &Value,
+    coverage: bool,
+) -> Result<(), Refusal> {
+    let qualification = &request["mechanical_coupling"];
+    let trace = array(heat, "trace")?;
+    let initial = &motion["initial_sample"]["liquid_mechanics"];
+    let final_report = &motion["liquid_mechanics"];
+    if qualification.is_null() {
+        return if heat["mechanical_coupling"].is_null()
+            && trace.iter().all(|row| row["mechanical_coupling"].is_null())
+            && (coverage || (initial.is_null() && final_report.is_null()))
+        {
+            Ok(())
+        } else {
+            Err(fail())
+        };
+    }
+    let water = &request["surface_water"];
+    let bindings = qualification["bindings"].as_object().ok_or_else(fail)?;
+    let water_bindings = water["bindings"].as_object().ok_or_else(fail)?;
+    source(qualification)?;
+    if coverage
+        || water["schema"] != "ftx-textile-surface-water/1"
+        || qualification["schema"] != "ftx-evaporating-liquid-mechanics/1"
+        || qualification["model"] != "co_moving_evaporation_frozen_mechanics/1"
+        || qualification["material_report_sha256"] != hash(&simulation["drape"]["material"])?
+        || bindings.is_empty()
+        || bindings.len() > 65_536
+        || bindings.keys().ne(water_bindings.keys())
+        || !qualification["qualification"]
+            .as_str()
+            .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
+        || heat["mechanical_coupling"] != *final_report
+    {
+        return Err(fail());
+    }
+    let pressure = array(water, "wet_vapor_pressure_pa")?;
+    let low = finite(&pressure.first().ok_or_else(fail)?[0]).ok_or_else(fail)?;
+    let high = finite(&pressure.last().ok_or_else(fail)?[0]).ok_or_else(fail)?;
+    for (instance, binding) in bindings {
+        let range = array(binding, "temperature_range_c")?;
+        let maximum = number(binding, "maximum_liquid_loading_kg_m2")?;
+        if range.len() != 2
+            || binding["material_sha256"] != water_bindings[instance]["material_sha256"]
+            || maximum <= 0.
+            || maximum < number(water, "maximum_liquid_loading_kg_m2")?
+            || finite(&range[0]).is_none_or(|t| t < -273.15 || t > low)
+            || finite(&range[1]).is_none_or(|t| t < high)
+        {
+            return Err(fail());
+        }
+    }
+    let summary = |report: &Value| -> Result<Value, Refusal> {
+        if report["schema"] != "ftx-evaporating-liquid-mechanics-result/1"
+            || report["qualification"] != *qualification
+            || !report["scope"]
+                .as_str()
+                .is_some_and(|s| !s.trim().is_empty())
+        {
+            return Err(fail());
+        }
+        let mut value = report.as_object().ok_or_else(fail)?.clone();
+        for key in ["schema", "qualification", "scope"] {
+            value.remove(key);
+        }
+        for (full, short) in [
+            ("initial_liquid_mass_kg", "initial_liquid_kg"),
+            ("remaining_liquid_mass_kg", "remaining_liquid_kg"),
+            ("evaporated_liquid_mass_kg", "evaporated_liquid_kg"),
+        ] {
+            let mass = value.remove(full).ok_or_else(fail)?;
+            value.insert(short.into(), mass);
+        }
+        Ok(Value::Object(value))
+    };
+    let initial = summary(initial)?;
+    let final_summary = summary(final_report)?;
+    if trace.last().ok_or_else(fail)?["mechanical_coupling"] != final_summary {
+        return Err(fail());
+    }
+    let drape = &simulation["drape"];
+    let substrate = if drape["attached_mass"].is_null() {
+        nonnegative(drape, "mass_kg")?
+    } else {
+        nonnegative(&drape["attached_mass"], "total_inertial_mass_kg")?
+    };
+    if substrate <= 0. {
+        return Err(fail());
+    }
+    let mut previous_energy = 0.;
+    for (index, row) in std::iter::once(&initial)
+        .chain(trace.iter().map(|row| &row["mechanical_coupling"]))
+        .enumerate()
+    {
+        let water = if index == 0 {
+            &heat["surface_water"]
+        } else {
+            &trace[index - 1]["surface_water"]
+        };
+        let initial_mass = nonnegative(water, "initial_liquid_kg")?;
+        let remaining = nonnegative(row, "remaining_liquid_kg")?;
+        let evaporated = nonnegative(row, "evaporated_liquid_kg")?;
+        let total = nonnegative(row, "total_inertial_mass_kg")?;
+        let energy = nonnegative(row, "exported_kinetic_energy_j")?;
+        if number(row, "substrate_and_attached_mass_kg")? != substrate
+            || !near(
+                number(row, "initial_liquid_kg")?,
+                initial_mass,
+                initial_mass,
+            )
+            || !near(remaining + evaporated, initial_mass, initial_mass)
+            || !near(total, substrate + remaining, substrate + initial_mass)
+            || !near(
+                number(row, "mass_balance_residual_kg")?,
+                total - substrate - remaining,
+                total,
+            )
+            || energy < previous_energy
+            || (index == 0 && (remaining != initial_mass || evaporated != 0. || energy != 0.))
+            || (index != 0
+                && (!near(
+                    remaining,
+                    number(water, "remaining_liquid_kg")?,
+                    initial_mass,
+                ) || !near(
+                    evaporated,
+                    number(water, "evaporated_liquid_kg")?,
+                    initial_mass,
+                )))
+        {
+            return Err(fail());
+        }
+        for key in [
+            "exported_gravitational_energy_j",
+            "transfer_kinetic_residual_j",
+            "transfer_gravitational_residual_j",
+        ] {
+            let value = number(row, key)?;
+            if index == 0 && value != 0. {
+                return Err(fail());
+            }
+        }
+        for key in [
+            "exported_momentum_kg_m_s",
+            "transfer_momentum_residual_kg_m_s",
+        ] {
+            let vector = array(row, key)?;
+            if vector.len() != 3
+                || vector
+                    .iter()
+                    .any(|v| finite(v).is_none_or(|v| index == 0 && v != 0.))
+            {
+                return Err(fail());
+            }
+        }
+        previous_energy = energy;
+    }
+    Ok(())
+}
+
 // This integrates authored delivery, not evaporation or heat. Mechanical endpoints own each
 // piecewise-constant interval; retained thermal subdivisions must not change supplied inventory.
 struct Delivery {
@@ -201,6 +367,7 @@ pub(super) fn admit(
     coverage: bool,
     mechanical_heat: &[f64],
 ) -> Result<Option<Vec<f64>>, Refusal> {
+    admit_mechanics(simulation, motion, heat, heat_request, coverage)?;
     let policy = &heat_request["surface_water"];
     let water = &heat["surface_water"];
     let trace = array(heat, "trace")?;

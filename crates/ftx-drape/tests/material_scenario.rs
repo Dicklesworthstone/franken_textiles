@@ -12,6 +12,8 @@ use serde_json::{Value, json};
 
 #[path = "material_scenario/contact_loads.rs"]
 mod contact_loads;
+#[path = "material_scenario/liquid_mass.rs"]
+mod liquid_mass;
 #[path = "material_scenario/strain.rs"]
 mod material_strain;
 

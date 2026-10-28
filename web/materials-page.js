@@ -549,11 +549,29 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         "The combined balance includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, " +
         "against boundary energy plus qualified material heat" + (supplied ? " and incoming liquid sensible energy. Loading beyond the qualified cap refuses the interval. " : ". The initial-only model has zero replenishment. ") +
         (condensing ? "Independently qualified reverse vapor transfer can condense on dry or wet cloth and later re-evaporate. Condensation latent release and incoming vapor sensible enthalpy are separate energy inputs; the effective enthalpy convention remains explicit in the source policy. " : "") +
-        "The liquid adds no mechanical water mass. " +
+        (h.mechanical_coupling ? "Qualified evaporation updates cloth inertia and gravity after every accepted interval; co-moving vapor removes its own momentum without accelerating the remaining cloth. " :
+          "The liquid adds no mechanical water mass. ") +
         "It does not infer absorbed moisture, wicking, body sweat or wet material properties. Comparison admission checks the complete liquid and vapor ledger, " +
         "including exact material bindings and canonical vapor paths, before temperature, energy or textile-water objectives can qualify.";
       parent.append(scope);
       detail(parent, `${key}: textile liquid source, exact patches and canonical vapor paths (display only)`, water);
+      if (h.mechanical_coupling) {
+        const m = h.mechanical_coupling;
+        const inertia = table(parent, `${key}: evaporation changes moving cloth mass`,
+          ["Dry cloth + accessories (kg)", "Initial water (kg)", "Remaining water (kg)", "Current inertial mass (kg)", "Mass residual (kg)"]);
+        cells(inertia, [metric(m.substrate_and_attached_mass_kg), metric(m.initial_liquid_mass_kg),
+          metric(m.remaining_liquid_mass_kg), metric(m.total_inertial_mass_kg), metric(m.mass_balance_residual_kg)]);
+        const transfer = table(parent, `${key}: mechanical energy carried away by vapor`,
+          ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)", "Kinetic transfer residual (J)"]);
+        cells(transfer, [Array.isArray(m.exported_momentum_kg_m_s) ? m.exported_momentum_kg_m_s.map(metric).join(", ") : "Unknown",
+          metric(m.exported_kinetic_energy_j), metric(m.exported_gravitational_energy_j), metric(m.transfer_kinetic_residual_j)]);
+        const couplingScope = document.createElement("p");
+        couplingScope.textContent = "Initial liquid is added co-moving after the dry drape; it is not a wet equilibrium. Each mechanical step uses its initial water mass, then evaporation updates the next step. " +
+          "Refine the mechanical time step to assess this first-order coupling. The thermal latent/sensible ledger remains separate from the bulk mechanical energy carried away. " +
+          "A coupled heat or source-domain failure refuses the motion. Supply, condensation, drainage and inferred wet properties are unsupported in this mode.";
+        parent.append(couplingScope);
+        detail(parent, `${key}: evaporation mechanics qualification and complete transfer ledger (display only)`, m);
+      }
     }
     const channels = [
       ["plastic_dissipation_heat", "Plastic yield", "plastic_dissipation_j", "initial_plastic_dissipation_j"],
@@ -1166,14 +1184,21 @@ function manufacturingComparison(op, parent, study, computed) {
     }
   }
   if (study.alternatives.some(row => row.sewing_selection && row.sewing_selection.status !== "not_requested")) {
-    const selection = table(parent, "Material-specific sewing recipe search", ["Alternative", "Status", "Chosen recipes",
+    const routeSearch = study.alternatives.some(row => {
+      const result = available(row.sewing_selection);
+      return result?.request?.schema === "ftx-sewing-selection/6" || result?.selected_route != null;
+    });
+    const selection = table(parent, routeSearch ? "Material-specific sewing recipe and route search" : "Material-specific sewing recipe search",
+      ["Alternative", "Status", ...(routeSearch ? ["Chosen route"] : []), "Chosen recipes",
       "Trials evaluated", "Search complete", "Budget exhausted", "Listed optimum proved", "Unresolved trials"]);
     for (const row of study.alternatives) {
       const plan = available(row.sewing_selection);
       const choices = plan?.selected_choices ? Object.entries(plan.selected_choices)
         .map(([operation, recipe]) => `${operation}: ${recipe}`).join("; ") :
         plan ? "No listed recipe selected" : "Unavailable";
-      cells(selection, [row.key, state(row.sewing_selection), choices, metric(plan?.trials?.length),
+      cells(selection, [row.key, state(row.sewing_selection),
+        ...(routeSearch ? [plan?.selected_route ?? (plan ? "No route selected" : "Unavailable")] : []),
+        choices || "Original recipes", metric(plan?.trials?.length),
         plan ? String(plan.search_complete) : "Unknown", plan ? String(plan.budget_exhausted) : "Unknown",
         plan ? String(plan.optimality_proven) : "Unknown", metric(plan?.unresolved_trials)]);
       detail(parent, `${row.key}: sewing recipe choices, work limits and refusals (display only)`,
@@ -1287,6 +1312,7 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
     }
     detail(parent, `${row.key}: selected thread channels, exact yarns and order evidence (display only)`, {
       selected_recipe_choices: available(row.sewing_selection)?.selected_choices,
+      selected_route: available(row.sewing_selection)?.selected_route,
       consumables: report || null, qualifications: plan?.options?.qualifications,
       cell_qualifications: (plan?.production?.routing?.cell_plans || plan?.production?.parallel?.cell_plans)?.map(source =>
         ({ cell: source.cell, qualifications: source.plan.options.qualifications })),

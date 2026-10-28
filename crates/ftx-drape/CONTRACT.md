@@ -130,12 +130,26 @@ cover analytic mass/momentum/energy transfer, free-fall invariance, variable-mas
 convergence and actual sewn accessory ownership. These establish numerical behavior, not a
 measured wet law or garment fit.
 
+Optional `motion.transient_surface.mechanical_coupling` integrates this ledger with initial-only
+surface water `/1`. Each fully accepted mechanical interval evolves heat/water on its accepted
+geometry, removes co-moving vapor, then uses the new mass for the next interval. The qualification
+must cover the full thermal loading and pressure-table temperature domains. Initial liquid is
+co-moving at the end of the dry drape, not a silently inferred wet equilibrium. The first-order
+split requires mechanical time-step refinement independently of thermal subdivision. Heat failure
+refuses coupled motion and restores the pre-admission solver; it cannot publish a dry fallback.
+Native/portable named-case studies and comparison admission preserve exact source, initial/final
+inventory and every accepted transfer, with bulk mechanical energy separate from thermal enthalpy.
+See `docs/textile-surface-water.md`, `tests/material_scenario/liquid_mass.rs`, the private
+late-failure rollback test and the CLI accepted-body surface-water workflow. Supply, condensation,
+drainage and measured wet-garment qualification keep the parent task open.
+
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
 and conservative Frame/remap APIs. Time-zero temperatures and spatially uniform interval films are
 explicit. Heat storage follows reference mass; changing coverage preserves covered/exposed material
-enthalpy, with remap residual separated from physical heat. Thermal failures never erase complete
-mechanics or another consumer. Complete histories retain time/geometry/source identities and final
+enthalpy, with remap residual separated from physical heat. Without the explicit evaporation
+mechanical coupling above, thermal failures preserve complete mechanics and other consumers.
+Complete histories retain time/geometry/source identities and final
 fields; coverage includes a restorable checkpoint. Per-history/session work is bounded. Prescribed
 films, qualified exterior exchange and independently opted-in membrane-yield/Maxwell-dashpot/bending-yield heating retain
 separate source ledgers. Both thermal domains qualify their own conversion observations and sum selected
@@ -568,7 +582,8 @@ Optional `motion.transient_surface.surface_water` binds every cloth instance to 
 material and explicit kg/m² reference-area loading, including dry zeros. Independently admitted
 source evidence qualifies the authored liquid capacity, latent heat, pressure/temperature table,
 vapor films and retention of constant dry thermal/Ret observations over the complete temperature
-and [0, maximum loading] domains. Missing evidence or Ret refuses only this heat consumer.
+and [0, maximum loading] domains. Missing evidence or Ret refuses this heat consumer; when explicit
+mechanical coupling is selected it also refuses the dependent motion.
 The inner thermal cell and its free liquid share temperature. Each substep samples pressure and
 vapor sensible outflow at the old temperature using the canonical retained Ret flux authority.
 The earliest exact mass-depletion time splits the step. The existing implicit dry heat/exterior
@@ -579,8 +594,8 @@ Reference material area owns water and current area conducts vapor. Cumulative a
 receipts retain initial/remaining/evaporated water, dryout counts and signed mass/energy residuals.
 Any late domain, arithmetic or work-budget failure rolls back the whole accepted heat interval.
 Replenishment must be explicitly zero. Raw temperature-domain departure and condensation refuse;
-there is no sorption, wicking, wet-property inference, added mechanical mass, body-water transfer,
-thermal feedback to mechanics or empirical validation. Explicit mass transfer needs time/space
+there is no sorption, wicking, wet-property inference, body-water transfer or empirical validation.
+Added mechanical mass requires the separate evaporation coupling above. Explicit mass transfer needs time/space
 refinement; numerical conservation alone does not establish accuracy. Nominal comparison admission
 independently checks this complete mass/energy ownership through canonical material and Ret replay;
 thermal and water uncertainty bounds remain unsupported. Native/portable scenario JSON carries the
