@@ -4115,8 +4115,19 @@ late reads and obsolete worker replies cannot publish an old conversion over cur
 uses the existing original-pattern reset for assignments, interfaces, outfit ownership and results.
 
 This extends `ftx-a9dm` into a user-facing browser workflow without adding another geometry converter.
-Unsupported source semantics, physical limb placement and garment-completeness/fit qualification
+Unsupported source semantics and garment-completeness/fit qualification
 remain with the canonical import and downstream consumers. See the [README](README.md#import-an-evaluated-garmentcode-pattern).
+
+### 25.112 Physical limb panels retain their own geometry through placement
+
+Already expanded arm and leg panels can declare an explicit physical side through the ordinary
+pattern placement record. The same selection drives fit landmarks, body-frame placement and wrap/
+roll without generating another cut piece or reflecting its flat geometry. Contradictory side,
+quantity and fold declarations refuse; unplaced imported limb roles cannot infer a side. Existing
+generated mirror pairs retain their reference behavior. The current Anny adapter supplies a
+properly handed symmetric left start frame with right-derived heights and radii. Direct synthetic
+tests cover sewn imported panels and independent side-specific frame providers; no asymmetric
+anatomical, drape-convergence or physical-fit claim follows. See spec 01 §2.8 and spec 04 §3.4.
 
 ## Appendix A. Sources
 

@@ -10,7 +10,8 @@ use ftx_core::curve::{
 use ftx_core::polyline::{polyline_length, signed_area, tangent_at};
 use ftx_core::{Curve, End, Vec2, det, py};
 
-use crate::doc::{Piece, Vertices};
+use crate::doc::{Piece, Vertices, truthy};
+use serde_json::Value;
 
 /// An error with the reference's Python exception text: `str(KeyError(m))` is `repr(m)`, so key
 /// errors print quoted; value errors print as they are.
@@ -64,6 +65,35 @@ impl Side {
             Self::C => "C",
         }
     }
+}
+
+/// Explicit body side for a single physical limb panel, independent of instance mirroring.
+/// An absent side keeps the reference's generated-pair placement convention.
+///
+/// # Errors
+/// A side other than `R`/`L`, a non-limb part, a cut quantity other than one, or a fold.
+pub fn physical_side(piece: &Value) -> Result<Option<Side>, PyError> {
+    let placement = &piece["placement"];
+    let Some(side) = placement.get("side") else {
+        return Ok(None);
+    };
+    let id = piece["id"].as_str().unwrap_or("?");
+    let invalid = |message: &str| PyError::Value(format!("{id}: {message}"));
+    let side = match side.as_str() {
+        Some("R") => Side::R,
+        Some("L") => Side::L,
+        _ => return Err(invalid("placement.side must be R or L")),
+    };
+    if !matches!(placement["part"].as_str(), Some("arm" | "leg")) {
+        return Err(invalid("placement.side requires part arm or leg"));
+    }
+    let cut = &piece["cut"];
+    if cut.get("qty").is_some_and(|q| q.as_f64() != Some(1.0)) || truthy(&cut["on_fold"]) {
+        return Err(invalid(
+            "placement.side requires a single physical panel (cut.qty 1, no on_fold)",
+        ));
+    }
+    Ok(Some(side))
 }
 
 /// An edge of an instance's loop.
@@ -371,4 +401,73 @@ pub fn piece_instances(piece: &Piece, piece_index: usize) -> Result<Vec<Instance
         return Ok(vec![r, l]);
     }
     Ok(vec![base])
+}
+
+#[cfg(test)]
+mod physical_side_tests {
+    use super::*;
+    use crate::Pattern;
+    use serde_json::json;
+
+    fn panel() -> Value {
+        json!({"id":"panel","cut":{"qty":1},
+            "vertices":{"a":[10,20],"b":[80,20],"c":[65,110],"d":[20,110]},
+            "edges":[{"id":"bottom","from":"a","to":"b"},
+                {"id":"right","from":"b","to":"c"},
+                {"id":"top","from":"c","to":"d"},
+                {"id":"left","from":"d","to":"a"}],
+            "grain":[[30,30],[30,90]],"placement":{"part":"arm","side":"L"}})
+    }
+
+    #[test]
+    fn physical_side_never_expands_or_mirrors_the_panel() {
+        let mut raw = panel();
+        raw["placement"].as_object_mut().unwrap().remove("side");
+        let original =
+            Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm","pieces":[raw.clone()]}));
+        for (part, side) in [("arm", "L"), ("arm", "R"), ("leg", "L"), ("leg", "R")] {
+            raw["placement"] = json!({"part":part,"side":side});
+            let pattern = Pattern::new(
+                json!({"schema":"fabric-pattern/1","units":"mm","pieces":[raw.clone()]}),
+            );
+            assert!(pattern.structure_errors().is_empty());
+            assert_eq!(pattern.instances, original.instances);
+            assert_eq!(pattern.instances[0].side, Side::C);
+            assert!(!pattern.instances[0].mirrored);
+            assert_eq!(pattern.raw()["pieces"][0]["grain"], raw["grain"]);
+            let restored = Pattern::from_doc(pattern.doc.unwrap());
+            assert_eq!(restored.raw()["pieces"][0]["placement"]["side"], side);
+        }
+    }
+
+    #[test]
+    fn contradictory_physical_side_blocks_the_entire_pattern() {
+        for (pointer, value) in [
+            ("/placement/side", json!(null)),
+            ("/placement/side", json!("C")),
+            ("/placement/side", json!("left")),
+            ("/placement/side", json!(true)),
+            ("/placement/part", json!("torso")),
+            ("/placement/part", json!("hand")),
+            ("/cut/qty", json!(2)),
+        ] {
+            let mut raw = panel();
+            *raw.pointer_mut(pointer).unwrap() = value;
+            let pattern =
+                Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm","pieces":[raw]}));
+            assert!(pattern.instances.is_empty(), "{pointer}");
+            assert!(!pattern.structure_errors().is_empty(), "{pointer}");
+        }
+        let mut raw = panel();
+        raw["cut"]["on_fold"] = json!("left");
+        let pattern =
+            Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm","pieces":[raw]}));
+        assert!(pattern.instances.is_empty());
+        assert!(
+            pattern
+                .build_errors
+                .iter()
+                .any(|e| e.contains("placement.side"))
+        );
+    }
 }

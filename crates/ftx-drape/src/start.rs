@@ -52,7 +52,7 @@ pub struct PartFrame {
 /// wrap radius, the anchor column and angle, and the mirroring rules.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WrapPlacement {
-    /// The part frame (always the wearer's-right one for limbs).
+    /// The part frame (wearer's right for legacy mirror pairs, selected side for physical panels).
     pub frame: PartFrame,
     /// Height of piece y = 0 along `up` (mm).
     pub h0: f64,
@@ -64,8 +64,10 @@ pub struct WrapPlacement {
     pub x0: f64,
     /// The instance is a mirrored (`.L`) copy: mirror its 2D x, wrap, then mirror the 3D x.
     pub mirrored: bool,
-    /// Clamp the drafted-frame 3D x to ≤ −1 mm before mirroring (side R/L instances on the leg).
+    /// Keep a leg on its own side before any legacy mirroring.
     pub own_side: bool,
+    /// When `own_side`, clamp x to ≥ +1 mm for an explicit physical left leg; otherwise ≤ −1 mm.
+    pub own_side_left: bool,
 }
 
 /// The isometric wrap of one instance's 2D points (mm) into metres (spec 04 §3.3–3.4).
@@ -75,7 +77,11 @@ pub fn wrap_points(points: &[Vec2], p: &WrapPlacement) -> Vec<Vec3> {
         .into_iter()
         .map(|mut v| {
             if p.own_side {
-                v.x = v.x.min(-1.0);
+                v.x = if p.own_side_left {
+                    v.x.max(1.0)
+                } else {
+                    v.x.min(-1.0)
+                };
             }
             if p.mirrored {
                 v.x = -v.x;

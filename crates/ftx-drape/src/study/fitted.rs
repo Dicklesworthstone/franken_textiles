@@ -196,8 +196,7 @@ impl BodyMeasure for FlatFitBody {
     }
 
     fn landmark_h(&self, part_key: &str, name: &str) -> Result<f64, PyError> {
-        self.frames
-            .landmark_h(part_key, name)
+        crate::scene::PartFrames::landmark_h(&self.frames, part_key, name)
             .filter(|value| value.is_finite())
             .ok_or_else(|| PyError::Key(format!("{part_key}/{name}")))
     }
@@ -723,8 +722,14 @@ mod tests {
             )
             .unwrap();
         let reference = BodyFrames::new(&model, &posed).unwrap();
-        for (part, landmark) in [("torso", "waist"), ("arm_R", "wrist"), ("leg_R", "knee")] {
-            let expected = reference.landmark_h(part, landmark).unwrap();
+        for (part, reference_part, landmark) in [
+            ("torso", "torso", "waist"),
+            ("arm_R", "arm_R", "wrist"),
+            ("arm_L", "arm_R", "wrist"),
+            ("leg_R", "leg_R", "knee"),
+            ("leg_L", "leg_R", "knee"),
+        ] {
+            let expected = reference.landmark_h(reference_part, landmark).unwrap();
             assert_eq!(flat.landmark_h(part, landmark).unwrap(), expected);
             assert_eq!(again.landmark_h(part, landmark).unwrap(), expected);
         }

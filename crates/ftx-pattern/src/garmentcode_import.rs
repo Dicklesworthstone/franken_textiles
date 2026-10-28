@@ -14,7 +14,7 @@ use ftx_core::{Curve, Refusal, RefusalCode, Vec2};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
-use crate::Pattern;
+use crate::{Pattern, instance::physical_side};
 
 /// Maximum bytes in each original JSON input, before parsing or hashing.
 pub const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
@@ -418,6 +418,7 @@ fn annotate_panel(p: &mut Panel, a: &Value) -> Result<(), Refusal> {
                     v,
                     &[
                         "part",
+                        "side",
                         "y0_landmark",
                         "y0",
                         "x0",
@@ -427,18 +428,18 @@ fn annotate_panel(p: &mut Panel, a: &Value) -> Result<(), Refusal> {
                     ],
                     "placement",
                 )?;
-                if matches!(v["part"].as_str(), Some("arm" | "leg")) {
+                if matches!(v["part"].as_str(), Some("arm" | "leg")) && v.get("side").is_none() {
                     return Err(invalid(
-                        "expanded GarmentCode panels need explicit physical limb-side placement; native quantity-one limb wrapping would use the right frame",
+                        "expanded GarmentCode panels need explicit physical limb-side placement",
                     )
-                    .repair("Omit limb placement for a flat-only import; qualify explicit native limb-side support before draping."));
+                    .repair("Supply placement.side as R or L with the physical panel's native-mm anchor; omit placement for a flat-only import."));
                 }
-                if v["part"] != "torso" {
-                    return Err(invalid("imported placement.part must be torso"));
+                if !matches!(v["part"].as_str(), Some("torso" | "arm" | "leg")) {
+                    return Err(invalid("imported placement.part must be torso, arm or leg"));
                 }
                 for (key, value) in object(v, "placement")? {
                     match key.as_str() {
-                        "part" => {}
+                        "part" | "side" => {}
                         "y0_landmark" if value.is_string() => {}
                         "y0_landmark" => {
                             return Err(invalid("placement landmark must be a string"));
@@ -490,6 +491,7 @@ fn annotate_panel(p: &mut Panel, a: &Value) -> Result<(), Refusal> {
     if p.piece["sim"] == true && p.piece.get("placement").is_none() {
         return Err(invalid("sim:true requires explicit native placement"));
     }
+    physical_side(&p.piece).map_err(|error| invalid(error.to_string()))?;
     Ok(())
 }
 
@@ -1113,6 +1115,68 @@ mod tests {
         let imported = import_garmentcode(&source(), Some(&a)).unwrap();
         assert_eq!(imported.pattern["pieces"][0]["placement"]["part"], "torso");
         assert_eq!(imported.report["status"], "REVIEW_REQUIRED");
+    }
+
+    #[test]
+    fn explicit_limb_annotations_preserve_physical_geometry_and_stitches() {
+        let baseline = import_garmentcode(&source(), None).unwrap();
+        for part in ["arm", "leg"] {
+            let a = json!({"schema":"fabric-garmentcode-annotations/1","panels":{
+                "front.R":{"placement":{"part":part,"side":"L","x0":37,"theta_deg":23},
+                    "grain":[[20,10],[20,90]],"sim":true},
+                "back on fold":{"placement":{"part":part,"side":"R","x0":61,"theta_deg":-42},
+                    "grain":[[40,10],[40,90]],"sim":true}}});
+            let imported = import_garmentcode(&source(), Some(&a)).unwrap();
+            assert_eq!(imported.report["status"], "REVIEW_REQUIRED");
+            assert_eq!(imported.pattern["seams"], baseline.pattern["seams"]);
+            for (i, name) in ["front.R", "back on fold"].iter().enumerate() {
+                for field in ["vertices", "edges", "cut"] {
+                    assert_eq!(
+                        imported.pattern["pieces"][i][field],
+                        baseline.pattern["pieces"][i][field]
+                    );
+                }
+                for field in ["grain", "placement"] {
+                    assert_eq!(
+                        imported.pattern["pieces"][i][field],
+                        a["panels"][name][field]
+                    );
+                }
+            }
+            let pattern = Pattern::new(imported.pattern);
+            assert_eq!(pattern.instances.len(), 2);
+            assert!(
+                pattern
+                    .instances
+                    .iter()
+                    .all(|i| !i.mirrored && i.side == crate::Side::C)
+            );
+        }
+        for (part, side) in [
+            ("arm", json!(null)),
+            ("leg", json!("C")),
+            ("torso", json!("L")),
+        ] {
+            let a = json!({"schema":"fabric-garmentcode-annotations/1",
+                "panels":{"front.R":{"placement":{"part":part,"side":side}}}});
+            assert!(import_garmentcode(&source(), Some(&a)).is_err());
+        }
+    }
+
+    #[test]
+    fn role_inference_does_not_guess_imported_limb_sides() {
+        for role in ["sleeve", "pant_front", "pant_back"] {
+            let a = json!({"schema":"fabric-garmentcode-annotations/1",
+                "panels":{"front.R":{"role":role},"back on fold":{"sim":false}}});
+            let imported = import_garmentcode(&source(), Some(&a)).unwrap();
+            // No body measurements are needed to leave unplaced physical panels unchanged.
+            let (inferred, notes) =
+                crate::round::infer_placements(&imported.pattern, &Measurements(json!({})))
+                    .unwrap();
+            assert_eq!(inferred, imported.pattern);
+            assert_eq!(notes.len(), 1);
+            assert!(notes[0].contains("placement.side R or L"));
+        }
     }
 
     #[test]

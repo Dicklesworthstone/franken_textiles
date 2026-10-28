@@ -145,6 +145,21 @@ same relaxation blocks. Blender's float32 BVH (the reference as shipped) breaks 
 (2 of 128 bolero groups, 5 of 295 trouser groups); there the start differs by up to 19 mm and the bolero
 relaxes for two blocks instead of one.
 
+**Physical limb placement** (native extension to spec 04 §3.4). Explicit `placement.side: R|L`
+on a quantity-one, non-folded arm/leg panel selects that side's frame, landmarks and section radii.
+Flat geometry and grain are unchanged; no generated-instance reflection is applied. A properly
+handed frame preserves public normals through both wrap and partial roll. Completed leg wraps
+retain the own-side rule, with x ≤ −1 mm on the right and x ≥ +1 mm on the left; partial rolls
+remain unclamped. The new `WrapPlacement::own_side_left` is false on all legacy placements.
+Material-study receipts retain it when true. Existing pair, fold and absent-side behavior is
+unchanged. Direct scene tests cover asymmetric frame providers, selected anchors/radii, actual
+imported sewn geometry, public normals, roll endpoints and both leg constraints.
+
+The current `BodyFrames` adapter derives an explicit left start frame by reflecting right origin,
+up and front, then recomputing `lat = up × front`. It uses the same right-derived heights and radii;
+other `PartFrames` providers may supply independent sides. This is a symmetric start convention,
+not independent left-body measurement, a convergence guarantee or physical-fit qualification.
+
 **Scene** (`scene.rs`; plan §11.3–11.4). A pattern meshed, placed with a body's part frames (any
 `PartFrames`; `ftx_body::BodyFrames` reads them off a posed Anny body), started (wrap, pre-sew, relax
 against the drape body), untangled, welded and handed to the solver with contact over the body:

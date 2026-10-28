@@ -287,6 +287,21 @@ flat validation, draping and export checks. Conversion does not establish fit or
 from a simulation shell. See the [pattern contract](crates/ftx-pattern/CONTRACT.md)
 for the supported subset, annotation coordinates and refusal boundaries.
 
+For an arm or leg panel, annotations must name its physical side explicitly. For example, an
+already expanded source panel named `sleeve_left` can carry:
+
+```json
+{"schema":"fabric-garmentcode-annotations/1","panels":{"sleeve_left":{"sim":true,"placement":{"part":"arm","side":"L","y0_landmark":"shoulder_tip","y0":200,"x0":30,"theta_deg":-90}}}}
+```
+
+Use the actual source panel name and the garment's authored anchors: `x0` and `y0` are millimetres
+in that physical panel, and the angle is in its selected body frame. Side selection keeps the
+panel's geometry, grain and seam references unchanged; it does not generate another cut piece.
+Imported limb roles without explicit placement remain unplaced, with a review note. The current
+Anny adapter uses a properly handed reflected right frame for left-side initial placement, with
+the same right-derived landmark heights and radii. This enables the native wrap/roll path without
+claiming independently qualified asymmetric anatomy or physical fit.
+
 In the [materials workbench](web/materials.html), section 2 accepts an evaluated GarmentCode file
 and optional annotations, each at most 4 MiB. Choose **Convert & review imported pattern**, inspect the source mapping,
 missing construction information and `REVIEW_REQUIRED` report, then choose **Use imported pattern**

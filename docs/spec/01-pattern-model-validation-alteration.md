@@ -185,6 +185,20 @@ rest.
 Piece y of landmark *L* = `h(part, L) − h(part, y0_landmark) + y0`, where `h` is the landmark height
 in the part frame (§12).
 
+**Native extension: explicit physical limb side.** `placement.side: "R" | "L"` selects the
+corresponding `arm_R`/`arm_L` or `leg_R`/`leg_L` frame for a single, already expanded physical
+panel. It is valid only with `part: "arm" | "leg"`, cut quantity one and no fold. Unknown,
+null or contradictory sides are definition errors. The instance stays side `C`, unmirrored;
+its vertices, edge directions, grain and seam references do not change. `x0` and `theta_deg`
+are authored in that selected, properly handed physical frame. Landmark-based fit points use
+the selected side as well. Absent `side` retains the reference's right-frame and generated-pair
+behavior. This extension does not assert that the body provider has independently measured
+left/right anatomy; the ordinary measurement provider retains its symmetric model.
+
+Evaluated GarmentCode limb placement requires this explicit side. Role inference leaves imported
+limb panels without placement and records the need for explicit placement rather than inferring
+a side from a name or generating a mirror copy. An explicit `sim: false` remains a flat-only choice.
+
 ### 2.9 Seam
 
 | Field | Type | Req. | Default | Meaning |

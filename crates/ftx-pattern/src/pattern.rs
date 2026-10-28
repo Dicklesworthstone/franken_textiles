@@ -17,7 +17,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::doc::{PatternDoc, SCHEMA, Seam, truthy};
-use crate::instance::{Instance, PyError, piece_instances};
+use crate::instance::{Instance, PyError, physical_side, piece_instances};
 
 /// Python `repr` of a JSON scalar as the reference would print the decoded value.
 #[must_use]
@@ -202,6 +202,9 @@ pub fn piece_definition_errors(p: &Value) -> Result<Vec<String>, String> {
                 }
             }
         }
+    }
+    if let Err(error) = physical_side(p) {
+        errs.push(error.to_string());
     }
     Ok(errs)
 }

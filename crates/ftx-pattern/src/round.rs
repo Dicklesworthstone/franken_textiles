@@ -80,6 +80,14 @@ pub fn infer_placements(
         }
         let id = piece["id"].as_str().unwrap_or("?").to_string();
         let role = piece["role"].as_str().unwrap_or("").to_string();
+        if piece.get("garmentcode_source").is_some()
+            && matches!(role.as_str(), "sleeve" | "pant_front" | "pant_back")
+        {
+            notes.push(format!(
+                "{id}: imported physical limb panel needs explicit placement.side R or L and placement anchors; excluded from the fold-up"
+            ));
+            continue;
+        }
         if !matches!(
             role.as_str(),
             "bodice_front"

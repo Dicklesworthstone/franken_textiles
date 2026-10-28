@@ -35,8 +35,9 @@ pairs, on-fold unfolding), the structure checks with the reference's messages, s
 and notch-piecewise seam sampling (`docs/spec/01` §2, §6–8). Validation (FTX-04, `validate.rs`) and the
 alteration ops (FTX-05, `alter.rs`) and the drafting programs (FTX-07, `draft/`) build on it.
 
-**Units and frames.** Millimetres, 2D, x right, y up, loops counter-clockwise; every piece is the
-wearer's right side seen from its public side. `.L` instances are mirrored about x = 0.
+**Units and frames.** Millimetres, 2D, x right, y up, loops counter-clockwise; pieces use the
+wearer's-right drafting convention, except explicitly placed physical limb panels below. All are
+seen from their public side. Generated `.L` instances are mirrored about x = 0.
 
 **Invariants.**
 - `Pattern::new` never panics: problems land in `build_errors`, and when there are any no instances are
@@ -103,11 +104,21 @@ references use the emitted native IDs (`p0000`, `e0000`, etc.), available in the
 mapping. Import checks those references against the emitted pattern; ordinary validation evaluates
 the points and their measurement targets. Unknown panel or
 stitch annotation fields and source references refuse, as do geometry-changing cut overrides.
-`sim: true` requires explicit native placement. Only `placement.part: "torso"` is admitted:
-the current native draper chooses a left limb through a generated mirror-pair instance, while an
-imported physical panel has quantity one. Arm/leg placement hints therefore refuse until explicit
-physical-side placement exists; otherwise both sides could silently wrap onto the right limb.
-Limb outlines, roles and source transforms remain valid flat import/export data without those hints.
+`sim: true` requires explicit native placement. Torso placement and explicit physical arm/leg
+placement are admitted. Limb placement requires `placement.side: "R" | "L"`; panel names and roles
+never infer it. The native extension is valid only for cut quantity one without unfolding. It selects
+the corresponding body frame and fit landmarks while retaining the physical panel's vertices,
+curves, grain, instance ID and seam references. Its instance remains `C`, unmirrored. `x0` and
+`theta_deg` describe the selected physical frame, not a generated mirror copy. Invalid side,
+torso-side and quantity/fold contradictions block pattern construction. Absent side preserves
+the reference behavior for existing native patterns. Role inference leaves unplaced imported limb
+panels unchanged with an explicit review note; flat import/export remains available.
+
+`instance::physical_side`, importer tests and `validate::raw_point_tests` cover admission, unchanged
+geometry and distinct left/right fit landmarks. `ftx-drape` tests cover the actual sewn mesh,
+selected placement, outward public normals, partial rolls and the leg midline. The ordinary
+measurement model and current Anny placement adapter remain symmetric; this is not anatomical or
+physical-fit qualification.
 
 An optional top-level `provenance` object is retained verbatim in the report and pattern import
 metadata as unverified caller assertions. Source `fabric_pattern_export` metadata is retained as

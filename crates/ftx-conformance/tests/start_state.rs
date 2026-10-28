@@ -100,6 +100,7 @@ fn start_states_match_the_reference() {
                 mirrored: inst["mirrored"].as_bool().unwrap(),
                 own_side: matches!(inst["side"].as_str(), Some("R" | "L"))
                     && pl["part"].as_str() == Some("leg"),
+                own_side_left: false,
             };
             let (lo, hi) = mesh.inst_range[k];
             let pts: Vec<Vec2> = mesh.verts2d[lo..hi].to_vec();

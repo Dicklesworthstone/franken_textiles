@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ftx_body::BodyFrames;
 use ftx_core::np::linspace;
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3, det};
-use ftx_pattern::{Pattern, material_elastic::ElasticBand, truthy};
+use ftx_pattern::{Pattern, Side, instance::physical_side, material_elastic::ElasticBand, truthy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -28,7 +28,7 @@ pub use crate::material::Fabric;
 
 /// Body frames, landmarks and section radii in the form the wrap needs.
 pub trait PartFrames {
-    /// The frame of `part` (`torso`, `arm_R`, `leg_R`).
+    /// The frame of `part` (`torso`, `arm_R`, `leg_R`, or explicitly selected `arm_L`/`leg_L`).
     fn frame(&self, part: &str) -> Option<PartFrame>;
     /// A landmark's height coordinate in a part frame (mm).
     fn landmark_h(&self, part: &str, name: &str) -> Option<f64>;
@@ -36,20 +36,51 @@ pub trait PartFrames {
     fn section_radius(&self, part: &str, h: f64) -> f64;
 }
 
+fn right_part(part: &str) -> &str {
+    match part {
+        "arm_L" => "arm_R",
+        "leg_L" => "leg_R",
+        _ => part,
+    }
+}
+
+fn symmetric_left_frame(frame: PartFrame) -> PartFrame {
+    let reflect = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
+    let up = reflect(frame.up);
+    let front = reflect(frame.front);
+    PartFrame {
+        origin: reflect(frame.origin),
+        up,
+        front,
+        // Recompute handedness: reflecting the lateral vector alone turns public normals inward.
+        lat: up.cross(front),
+    }
+}
+
+// Anny's current placement authority supplies only right limb measurements. Explicit left panels
+// use a symmetric initial-placement convention, not a claim about asymmetric anatomy. Other
+// PartFrames providers can supply independently qualified left frames, landmarks and radii.
 impl PartFrames for BodyFrames {
     fn frame(&self, part: &str) -> Option<PartFrame> {
-        BodyFrames::frame(self, part).map(|f| PartFrame {
-            origin: f.origin,
-            up: f.up,
-            front: f.front,
-            lat: f.lat,
+        BodyFrames::frame(self, right_part(part)).map(|f| {
+            let frame = PartFrame {
+                origin: f.origin,
+                up: f.up,
+                front: f.front,
+                lat: f.lat,
+            };
+            if matches!(part, "arm_L" | "leg_L") {
+                symmetric_left_frame(frame)
+            } else {
+                frame
+            }
         })
     }
     fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
-        BodyFrames::landmark_h(self, part, name)
+        BodyFrames::landmark_h(self, right_part(part), name)
     }
     fn section_radius(&self, part: &str, h: f64) -> f64 {
-        BodyFrames::section_radius(self, part, h)
+        BodyFrames::section_radius(self, right_part(part), h)
     }
 }
 
@@ -84,10 +115,11 @@ pub fn placements(
         let part = pl["part"]
             .as_str()
             .ok_or_else(|| bad(format!("{id}: placement has no part")))?;
+        let physical = physical_side(piece).map_err(|e| bad(format!("{id}: {}", e.message())))?;
         let key = if part == "torso" {
             "torso".to_string()
         } else {
-            format!("{part}_R")
+            format!("{part}_{}", physical.unwrap_or(Side::R).as_str())
         };
         let frame = frames
             .frame(&key)
@@ -130,7 +162,9 @@ pub fn placements(
             theta_deg: num("theta_deg", 0.0),
             x0,
             mirrored: inst.mirrored,
-            own_side: matches!(inst.side.as_str(), "R" | "L") && part == "leg",
+            own_side: (physical.is_some() || matches!(inst.side, Side::R | Side::L))
+                && part == "leg",
+            own_side_left: physical == Some(Side::L) && part == "leg",
         });
     }
     Ok(out)
@@ -1181,7 +1215,307 @@ pub fn instance_ranges(mesh: &GarmentMesh) -> BTreeMap<String, (usize, usize)> {
 mod grain_tests {
     use super::*;
     use crate::garment::build_garment;
+    use crate::start::roll_points;
     use serde_json::json;
+
+    fn physical_panel(id: &str, part: &str, side: Option<&str>) -> Value {
+        let mut piece = json!({"id":id,"cut":{"qty":1},
+            "grain":{"p0":[13,0],"p1":[15,20]},
+            "vertices":{"a":[13,-2],"b":[37,-2],"c":[41,32],"d":[13,28]},
+            "edges":[{"id":"e0","from":"a","to":"b"},{"id":"e1","from":"b","to":"c"},
+                {"id":"e2","from":"c","to":"d"},{"id":"e3","from":"d","to":"a"}],
+            "placement":{"part":part,"y0_landmark":"anchor","x0":17,"y0":5,
+                "theta_deg":37,"clearance_mm":7}});
+        if let Some(side) = side {
+            piece["placement"]["side"] = json!(side);
+        }
+        piece
+    }
+
+    struct AsymmetricFrames;
+    impl PartFrames for AsymmetricFrames {
+        fn frame(&self, part: &str) -> Option<PartFrame> {
+            let (origin, up) = match part {
+                "arm_R" => (Vec3::new(-180., 4., 270.), Vec3::new(0., 0., 1.)),
+                "arm_L" => (Vec3::new(210., 9., 310.), Vec3::new(0.6, 0., 0.8)),
+                "leg_R" => (Vec3::new(-5., 0., 300.), Vec3::new(0., 0., 1.)),
+                "leg_L" => (Vec3::new(5., 0., 300.), Vec3::new(0., 0., 1.)),
+                _ => return None,
+            };
+            let front = Vec3::new(0., -1., 0.);
+            Some(PartFrame {
+                origin,
+                up,
+                front,
+                lat: up.cross(front),
+            })
+        }
+        fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
+            if name != "anchor" {
+                return None;
+            }
+            match part {
+                "arm_R" | "leg_R" => Some(110.),
+                "arm_L" | "leg_L" => Some(155.),
+                _ => None,
+            }
+        }
+        fn section_radius(&self, part: &str, h: f64) -> f64 {
+            match part {
+                "arm_R" | "leg_R" => 40. + 0.1 * h,
+                "arm_L" | "leg_L" => 55. + 0.2 * h,
+                _ => 0.,
+            }
+        }
+    }
+
+    #[test]
+    fn physical_panels_use_selected_frames_without_mirroring_flat_geometry() {
+        let mut right = physical_panel("right", "arm", Some("R"));
+        let mut left = physical_panel("left", "arm", Some("L"));
+        right["sim_scale"] = json!([1.5, 0.75]);
+        left["sim_scale"] = json!([1.5, 0.75]);
+        let pattern = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
+            "pieces":[right,left],"seams":[]}));
+        let mesh = build_garment(&pattern, 12.).unwrap();
+        let places = placements(&pattern, &mesh, &AsymmetricFrames).unwrap();
+        assert_eq!(mesh.instances, ["right", "left"]);
+        let wrapped = wrapped_positions(&mesh, &places);
+        let rest = grain_rest(&pattern, &mesh, true).unwrap();
+        let grain = Vec2::new(3., 15.).normalized();
+        for (k, (p, key)) in places.iter().zip(["arm_R", "arm_L"]).enumerate() {
+            assert_eq!(p.frame, AsymmetricFrames.frame(key).unwrap());
+            assert_eq!(p.x0, 25.5);
+            assert_eq!(p.h0, if k == 0 { 106.25 } else { 151.25 });
+            assert_eq!(p.theta_deg, 37.);
+            assert!(!p.mirrored && !p.own_side && !p.own_side_left);
+            assert!(!pattern.instance(&mesh.instances[k]).unwrap().mirrored);
+            let (lo, hi) = mesh.inst_range[k];
+            let max_y = mesh.verts2d[lo..hi]
+                .iter()
+                .map(|q| q.y)
+                .fold(f64::NEG_INFINITY, f64::max);
+            assert_eq!(
+                p.radius,
+                AsymmetricFrames.section_radius(key, p.h0 + max_y) + 7.
+            );
+            for (i, q) in mesh.verts2d.iter().enumerate().take(hi).skip(lo) {
+                let theta = 37_f64.to_radians() + (q.x - 25.5) / p.radius;
+                let expected = (p.frame.origin
+                    + p.frame.up * (p.h0 + q.y)
+                    + (p.frame.lat * theta.sin() + p.frame.front * theta.cos()) * p.radius)
+                    * MM;
+                assert!((wrapped[i] - expected).norm() < 1e-14);
+                let expected_rest = Vec2::new(grain.dot(*q), grain.cross(*q)) * MM;
+                assert!((rest[i] - expected_rest).norm() < 1e-15);
+            }
+            for t in mesh.faces.iter().filter(|t| mesh.owner[t[0]] == k) {
+                let normal = (wrapped[t[1]] - wrapped[t[0]]).cross(wrapped[t[2]] - wrapped[t[0]]);
+                let center = (wrapped[t[0]] + wrapped[t[1]] + wrapped[t[2]]) / 3.;
+                let mean_y = t.iter().map(|&i| mesh.verts2d[i].y).sum::<f64>() / 3.;
+                let radial = center - (p.frame.origin + p.frame.up * (p.h0 + mean_y)) * MM;
+                assert!(normal.dot(radial) > 0., "{key}: public side faces outward");
+            }
+            // The physical anchor is fixed throughout the roll, including an asymmetric left frame.
+            let points = [
+                Vec2::new(p.x0, 9.),
+                Vec2::new(p.x0 + 12., 9.),
+                Vec2::new(p.x0, 17.),
+            ];
+            let theta = p.theta_deg.to_radians();
+            let radial = p.frame.lat * theta.sin() + p.frame.front * theta.cos();
+            let expected_anchor =
+                (p.frame.origin + p.frame.up * (p.h0 + 9.) + radial * p.radius) * MM;
+            for progress in [0., 0.4, 0.9, 1.] {
+                let rolled = roll_points(&points, p, progress);
+                assert!((rolled[0] - expected_anchor).norm() < 1e-14);
+                assert!(
+                    (rolled[1] - rolled[0])
+                        .cross(rolled[2] - rolled[0])
+                        .dot(radial)
+                        > 0.
+                );
+            }
+            assert_eq!(roll_points(&points, p, 1.), wrap_points(&points, p));
+        }
+    }
+
+    #[test]
+    fn imported_two_panel_sleeve_keeps_seams_and_wraps_on_the_selected_limb() {
+        const SOURCE: &str =
+            include_str!("../../../tests/fixtures/import/synthetic-sleeve.garmentcode.json");
+        let annotations: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/import/synthetic-sleeve.annotations.json"
+        ))
+        .unwrap();
+        struct RightOnlyFrames;
+        impl PartFrames for RightOnlyFrames {
+            fn frame(&self, part: &str) -> Option<PartFrame> {
+                AsymmetricFrames
+                    .frame(part)
+                    .filter(|_| part.ends_with("_R"))
+            }
+            fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
+                AsymmetricFrames.landmark_h(part, name)
+            }
+            fn section_radius(&self, part: &str, h: f64) -> f64 {
+                AsymmetricFrames.section_radius(part, h)
+            }
+        }
+        for side in ["R", "L"] {
+            let mut notes = annotations.clone();
+            // Two 100 mm cuff edges make a 200 mm circumference; both pieces form one sleeve.
+            for (panel, angle) in [("outer", 0.), ("under", 180.)] {
+                notes["panels"][panel]["sim"] = json!(true);
+                notes["panels"][panel]["placement"] = json!({"part":"arm","side":side,
+                    "y0_landmark":"anchor","y0":200.,"x0":0.,"theta_deg":angle,
+                    "radius_mm":100. / std::f64::consts::PI});
+            }
+            let imported = ftx_pattern::garmentcode_import::import_garmentcode_json(
+                SOURCE,
+                Some(&serde_json::to_string(&notes).unwrap()),
+            )
+            .unwrap();
+            assert_eq!(imported.report["status"], "REVIEW_REQUIRED");
+            assert_eq!(imported.report["fit_spec"], annotations["fit"]);
+            let pattern = Pattern::new(imported.pattern);
+            assert_eq!(pattern.instances.len(), 2);
+            assert_eq!(pattern.raw()["meta"]["import"]["status"], "REVIEW_REQUIRED");
+            for (id, cuff, sides) in [
+                ("p0000", "e0000", ["e0001", "e0003"]),
+                ("p0001", "e0003", ["e0000", "e0002"]),
+            ] {
+                let instance = pattern.instance(id).unwrap();
+                assert!(!instance.mirrored);
+                assert!((instance.edge_length(cuff).unwrap() - 100.).abs() < 1e-10);
+                for edge in sides {
+                    assert!((instance.edge_length(edge).unwrap() - 200.).abs() < 1e-10);
+                }
+            }
+            let flat = ftx_pattern::validate(
+                &pattern,
+                &imported.report["fit_spec"],
+                &ftx_pattern::Measurements(json!({"cuff_pass":200.})),
+            );
+            assert_eq!(flat.status(), "CONVERGED");
+            let mesh = build_garment(&pattern, 12.).unwrap();
+            assert_eq!(mesh.instances, ["p0000", "p0001"]);
+            assert_eq!(mesh.seams.len(), 2);
+            assert!(mesh.seams.iter().all(|seam| !seam.pairs.is_empty()));
+            assert!(!mesh.pairs.is_empty());
+            let places = placements(&pattern, &mesh, &AsymmetricFrames).unwrap();
+            let key = format!("arm_{side}");
+            for place in &places {
+                assert_eq!(place.frame, AsymmetricFrames.frame(&key).unwrap());
+                assert!(!place.mirrored);
+            }
+            let wrapped = wrapped_positions(&mesh, &places);
+            assert!(
+                wrapped
+                    .iter()
+                    .all(|p| p.x.is_finite() && p.y.is_finite() && p.z.is_finite())
+            );
+            assert!(
+                wrapped
+                    .iter()
+                    .all(|p| if side == "R" { p.x < 0. } else { p.x > 0. })
+            );
+            for &(a, b) in &mesh.pairs {
+                assert_ne!(mesh.owner[a], mesh.owner[b]);
+                assert!((wrapped[a] - wrapped[b]).norm() < 1e-12);
+            }
+            for t in &mesh.faces {
+                let place = &places[mesh.owner[t[0]]];
+                let normal = (wrapped[t[1]] - wrapped[t[0]]).cross(wrapped[t[2]] - wrapped[t[0]]);
+                let center = (wrapped[t[0]] + wrapped[t[1]] + wrapped[t[2]]) / 3.;
+                let mean_y = t.iter().map(|&i| mesh.verts2d[i].y).sum::<f64>() / 3.;
+                let radial =
+                    center - (place.frame.origin + place.frame.up * (place.h0 + mean_y)) * MM;
+                assert!(normal.dot(radial) > 0.);
+            }
+            if side == "L" {
+                assert!(placements(&pattern, &mesh, &RightOnlyFrames).is_err());
+            } else {
+                assert!(placements(&pattern, &mesh, &RightOnlyFrames).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn symmetric_left_frame_retains_public_side_handedness() {
+        let up = Vec3::new(0.6, 0., 0.8);
+        let front = Vec3::new(0., -1., 0.);
+        let right = PartFrame {
+            origin: Vec3::new(-200., 12., 400.),
+            up,
+            front,
+            lat: up.cross(front),
+        };
+        let left = symmetric_left_frame(right);
+        assert_eq!(left.origin, Vec3::new(200., 12., 400.));
+        assert_eq!(left.up, Vec3::new(-0.6, 0., 0.8));
+        assert_eq!(left.front, front);
+        assert_eq!(left.lat, Vec3::new(0.8, 0., 0.6));
+        assert_eq!(left.lat.cross(left.up), left.front);
+    }
+
+    #[test]
+    fn physical_legs_use_the_selected_side_at_the_completed_wrap() {
+        let mut right = physical_panel("right", "leg", Some("R"));
+        let mut left = physical_panel("left", "leg", Some("L"));
+        for (piece, angle) in [(&mut right, 90.), (&mut left, -90.)] {
+            piece["placement"]["radius_mm"] = json!(30.);
+            piece["placement"]["theta_deg"] = json!(angle);
+            piece["placement"]["x0"] = json!(13.);
+        }
+        let pattern = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
+            "pieces":[right,left],"seams":[]}));
+        let mesh = build_garment(&pattern, 12.).unwrap();
+        let places = placements(&pattern, &mesh, &AsymmetricFrames).unwrap();
+        for (k, p) in places.iter().enumerate() {
+            assert!(p.own_side && !p.mirrored);
+            assert_eq!(p.own_side_left, k == 1);
+            let (lo, hi) = mesh.inst_range[k];
+            let wrapped = wrap_points(&mesh.verts2d[lo..hi], p);
+            assert!(
+                wrapped
+                    .iter()
+                    .all(|q| if k == 0 { q.x <= -MM } else { q.x >= MM })
+            );
+            let anchor = [Vec2::new(p.x0, 0.)];
+            let flat = roll_points(&anchor, p, 0.)[0];
+            assert!(if k == 0 { flat.x > 0. } else { flat.x < 0. });
+            let completed = roll_points(&anchor, p, 1.)[0];
+            assert_eq!(completed.x, if k == 0 { -MM } else { MM });
+        }
+    }
+
+    #[test]
+    fn absent_physical_side_preserves_pair_fold_and_single_placement() {
+        let mut pair = physical_panel("pair", "leg", None);
+        pair["cut"]["qty"] = json!(2);
+        let mut fold = physical_panel("fold", "torso", None);
+        fold["cut"]["on_fold"] = json!("e3");
+        let single = physical_panel("single", "arm", None);
+        let pattern = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
+            "pieces":[pair,fold,single],"seams":[]}));
+        let mesh = build_garment(&pattern, 12.).unwrap();
+        let places = placements(&pattern, &mesh, &DummyFrames).unwrap();
+        assert_eq!(mesh.instances, ["pair.R", "pair.L", "fold", "single"]);
+        for (k, p) in places.iter().enumerate() {
+            assert_eq!(p.mirrored, k == 1);
+            assert_eq!(p.own_side, k < 2);
+            assert!(!p.own_side_left);
+            assert_eq!(p.x0, 17.);
+            assert_eq!(p.h0, 495.);
+            assert_eq!(p.radius, 87.);
+        }
+        let q = [Vec2::new(23., 7.)];
+        let q_mirror = [Vec2::new(-23., 7.)];
+        let right = wrap_points(&q, &places[0])[0];
+        let left = wrap_points(&q_mirror, &places[1])[0];
+        assert_eq!(left, Vec3::new(-right.x, right.y, right.z));
+    }
 
     #[test]
     fn material_axes_scale_then_mirror_with_each_instance() {
