@@ -381,11 +381,11 @@ pub fn shoulder_and_back(
         Vec3::new(0.0, 1.0, 0.0),
     );
     let loops = section_loops(&coronal, faces, 0.0);
+    let shoulder_section = outermost_around(&loops, [j.x, j.z])?;
     // the top of the shoulder at x, below the side neck point's height (the head and ears are higher)
     let top_at = |x: f64| -> Option<f64> {
-        loops
-            .iter()
-            .flat_map(|l| crossings(l, 0, x))
+        crossings(shoulder_section, 0, x)
+            .into_iter()
             .map(|p| p[1])
             .filter(|&z| z <= snp.z + 5.0)
             .fold(None, |m: Option<f64>, z| Some(m.map_or(z, |m| m.max(z))))
@@ -766,6 +766,58 @@ mod tests {
                         assert_eq!(shoulder_and_back(&v, &t, &s, &missing_torso, snp), None);
                     }
                     t.reverse();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn qualification_shoulder_excludes_disconnected_coronal_sections() {
+        for shift in [
+            Vec3::ZERO,
+            Vec3::new(37.0, -100.0, 60.0),
+            Vec3::new(-140.0, 90.0, -50.0),
+        ] {
+            let mut frames = waist_frames();
+            frames.torso.origin = shift;
+            frames.shoulder_joint_r = Vec3::new(-50.0, 0.0, 90.0) + shift;
+            let snp = Vec3::new(-20.0, 0.0, 100.0) + shift;
+            for shell_z in [None, Some((1.02, 1.04)), Some((0.9, 0.95))] {
+                let (mut vertices, mut faces) =
+                    prism(&[[-80.0, -40.0], [80.0, -40.0], [80.0, 40.0], [-80.0, 40.0]]);
+                if let Some((bottom, top)) = shell_z {
+                    let (mut shell, triangles) =
+                        prism(&[[-55.0, -5.0], [-15.0, -5.0], [-15.0, 5.0], [-55.0, 5.0]]);
+                    for p in &mut shell {
+                        p.z = bottom + p.z * (top - bottom);
+                    }
+                    let offset = vertices.len();
+                    vertices.extend(shell);
+                    faces.extend(triangles.iter().map(|f| f.map(|i| i + offset)));
+                }
+                for p in &mut vertices {
+                    p.z *= 100.0;
+                    *p += shift;
+                }
+                for _ in 0..2 {
+                    let torso = Slicer::new(&vertices, &faces, 5.0);
+                    let (shoulder, back) =
+                        shoulder_and_back(&vertices, &faces, &torso, &frames, snp)
+                            .expect("closed shoulder section containing the joint");
+                    // The real shoulder is horizontal: 30 mm from x=-20 to x=-50.
+                    // The rectangular back is 100 mm between the two shoulder axes.
+                    assert!(
+                        (shoulder - 30.0).abs() < 1e-10,
+                        "shoulder={shoulder}, shell={shell_z:?}, shift={shift:?}"
+                    );
+                    assert!((back - 100.0).abs() < 1e-10);
+                    let mut outside = frames.clone();
+                    outside.shoulder_joint_r.z += 200.0;
+                    assert_eq!(
+                        shoulder_and_back(&vertices, &faces, &torso, &outside, snp),
+                        None
+                    );
+                    faces.reverse();
                 }
             }
         }
