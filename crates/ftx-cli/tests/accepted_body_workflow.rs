@@ -1426,6 +1426,7 @@ fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
         &measurements,
         &json!({}),
         2.0,
+        false,
         &source,
         |_| {},
     )
@@ -1497,6 +1498,7 @@ fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
                 &m,
                 &json!({}),
                 2.0,
+                false,
                 &ftx_wasm::fold::BodyFitSource {
                     model_sha256: &digest,
                     report: &report,

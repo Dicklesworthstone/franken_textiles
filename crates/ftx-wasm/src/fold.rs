@@ -154,6 +154,7 @@ pub struct BodyFitSource<'a> {
 ///
 /// # Errors
 /// Invalid report/model/wearer identity, excessive input, invalid pose or refused cloth solve.
+#[allow(clippy::too_many_arguments)] // The ordinary fold inputs plus the explicit accepted-shape source.
 pub fn fold_up_with_body_fit(
     model: &AnnyModel,
     pattern: &Value,
@@ -176,6 +177,7 @@ pub fn fold_up_with_body_fit(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // Shared adapter preserves the same inputs for both shape sources.
 fn fold_on_source(
     model: &AnnyModel,
     pattern: &Value,
