@@ -406,7 +406,7 @@ pub fn shoulder_and_back(
     if hull.len() < 3 {
         return None;
     }
-    // the hull's back-most crossings of x = ±(shoulder point): +y is the back
+    // The opposite shoulder is mirrored about the torso axis; +y is the back.
     let at = |x: f64| -> Option<[f64; 2]> {
         crossings(&hull, 0, x)
             .into_iter()
@@ -414,7 +414,8 @@ pub fn shoulder_and_back(
     };
     // a on the wearer's right (−x), b on the left; the hull's back chain between them is its vertices left
     // of a → b (larger y), in order of x
-    let (a, b) = (at(j.x.min(-j.x))?, at(j.x.max(-j.x))?);
+    let opposite_x = 2.0 * frames.torso.origin.x - j.x;
+    let (a, b) = (at(j.x.min(opposite_x))?, at(j.x.max(opposite_x))?);
     let left_of_ab =
         |p: [f64; 2]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) > 0.0;
     let mut arc: Vec<[f64; 2]> = hull
@@ -709,7 +710,12 @@ mod tests {
             torso_points: Vec::new(),
             leg_points: Vec::new(),
         };
-        for shift in [Vec3::ZERO, Vec3::new(0.0, 200.0, -125.0)] {
+        for shift in [
+            Vec3::ZERO,
+            Vec3::new(0.0, 200.0, -125.0),
+            Vec3::new(37.0, -100.0, 60.0),
+            Vec3::new(-140.0, 90.0, -50.0),
+        ] {
             frames.torso.origin = shift;
             frames.shoulder_joint_r = Vec3::new(-50.0, 0.0, 90.0) + shift;
             let snp = Vec3::new(-20.0, 0.0, 100.0) + shift;

@@ -34,7 +34,10 @@ C7), shoulder length (along the top of the shoulder in the coronal section throu
 from the side neck point to the shoulder point, taken as the top of the shoulder above the joint), across
 back (the back of the outermost horizontal section containing the torso axis 15 mm below the shoulder
 points, between them, as a hull; disconnected arm sections are excluded and a missing torso section
-yields no reading), total
+yields no reading). The opposite shoulder x coordinate is mirrored about the declared torso axis,
+not world zero, so a lateral translation preserves the tape path. This still assumes shoulder
+symmetry about that axis; it does not independently qualify asymmetric anatomy. The existing
+flat/ridged-back control includes positive and negative lateral offsets. Total
 crotch length (the lower hull of the outermost median sagittal loops containing the declared waist
 axis, within ±15 mm and clipped below the waist: a snug waist-to-waist tape bridges the gluteal cleft).
 Sections belonging only to a lower foot or an offset arm do not belong to that path; absent
