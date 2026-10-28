@@ -38,6 +38,22 @@ thickness-offset gap, additive CCD, lagged smoothed Coulomb friction); and the g
 (`garment.rs`). Placement, pre-sew, the drape schedule and the reference's metrics are described below.
 Optional cloth self-contact adds moving cloth–cloth barriers and independent friction.
 
+**Declared simulation coverage.** `garment::simulation_scope` validates all instance and seam
+references and requires explicit placement on each instance whose `sim` is not false. Missing
+placement refuses before production meshing, including disconnected panels. Explicit exclusions
+remain legal: the report retains source-ordered simulated and excluded identities, affected seams,
+and a `declared_subset` advisory. The native command and portable fold check before body fitting;
+studies check before charging mesh work. The low-level `build_garment` keeps reference selection.
+This establishes coverage of the authored document, not completeness of an actual garment.
+
+Requested girth metrics require every named contributor, a finite level and sampled ring edges
+from each. An unavailable contributor produces an `UNMEASURABLE` landmark with reasons and a
+gating flag; no partial circumference reading is published. This gate is independent of tightness
+qualification and also applies to deliberately excluded contributors. Complete-ring arithmetic
+and fields are unchanged. Explicit physical limb sides select the same landmark frame as placement
+and flat validation. Direct synthetic regressions live in `garment.rs`, `metrics.rs`, `run.rs`
+and the native CLI tests; none establishes physical fit.
+
 **Numerical acceptance** (`ftx-6en`). Every Newton solve, including friction lag rounds, must converge;
 iteration exhaustion or a failed line search returns `not_converged` with the residual (N), last
 correction (m), iteration count and repair suggestions. A refused step or static solve preserves

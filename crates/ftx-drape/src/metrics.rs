@@ -171,15 +171,56 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
             continue;
         }
         let mut sel = Vec::new();
-        for iid in p["instances"].as_array().unwrap_or(&empty) {
-            let Some(iid) = iid.as_str() else { continue };
+        let mut reasons = Vec::new();
+        let mut missing_instances = Vec::new();
+        let instances = p["instances"].as_array();
+        if instances.is_none_or(Vec::is_empty) {
+            reasons.push("instances must be a nonempty list".to_string());
+        }
+        let landmark = p["landmark"].as_str().filter(|s| !s.trim().is_empty());
+        if landmark.is_none() {
+            reasons.push("landmark must be a nonempty string".to_string());
+        }
+        let dy = match p.get("dy") {
+            None => Some(0.0),
+            Some(value) => value.as_f64().filter(|n| n.is_finite()),
+        };
+        if dy.is_none() {
+            reasons.push("dy must be a finite number".to_string());
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for (index, iid) in instances.unwrap_or(&empty).iter().enumerate() {
+            let Some(iid) = iid.as_str().filter(|s| !s.trim().is_empty()) else {
+                reasons.push(format!("instances[{index}] must be a nonempty string"));
+                continue;
+            };
+            if !seen.insert(iid) {
+                reasons.push(format!("duplicate contributor {iid}"));
+                continue;
+            }
             let Some((lo, hi)) = range_of(iid) else {
+                reasons.push(format!("{iid}: instance is absent from the simulated mesh"));
+                missing_instances.push(iid.to_string());
                 continue;
             };
-            let Some(level) = (input.level_y)(iid, p["landmark"].as_str().unwrap_or("")) else {
+            let (Some(landmark), Some(dy)) = (landmark, dy) else {
+                missing_instances.push(iid.to_string());
                 continue;
             };
-            let y = level + p.get("dy").and_then(Value::as_f64).unwrap_or(0.0);
+            let Some(level) = (input.level_y)(iid, landmark).filter(|n| n.is_finite()) else {
+                reasons.push(format!(
+                    "{iid}: landmark level is unavailable or non-finite"
+                ));
+                missing_instances.push(iid.to_string());
+                continue;
+            };
+            let y = level + dy;
+            if !y.is_finite() {
+                reasons.push(format!("{iid}: landmark level plus dy is non-finite"));
+                missing_instances.push(iid.to_string());
+                continue;
+            }
+            let before = sel.len();
             for &(i, j) in &edges {
                 if (lo..hi).contains(&i) && (lo..hi).contains(&j) {
                     let d = rest2d[j] - rest2d[i];
@@ -190,8 +231,27 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
                     }
                 }
             }
+            if sel.len() == before {
+                reasons.push(format!(
+                    "{iid}: no qualifying mesh edges at the requested level"
+                ));
+                missing_instances.push(iid.to_string());
+            }
         }
-        if sel.is_empty() {
+        if !reasons.is_empty() {
+            let id = p["id"].as_str().unwrap_or("");
+            let flag = format!("{id}: girth is UNMEASURABLE: {}", reasons.join("; "));
+            flags.push(flag.clone());
+            gating.push(flag);
+            landmarks.insert(
+                id.to_string(),
+                json!({
+                    "reading": "UNMEASURABLE",
+                    "status": "UNMEASURABLE",
+                    "reasons": reasons,
+                    "missing_instances": missing_instances,
+                }),
+            );
             continue;
         }
         let st = edge_strain(&co, rest2d, &sel);
@@ -494,4 +554,201 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
         }),
     );
     Value::Object(report)
+}
+
+#[cfg(test)]
+mod girth_coverage_tests {
+    use super::*;
+    use crate::garment::build_garment;
+
+    fn pattern(include_back: bool) -> Pattern {
+        let piece = |id: &str, x: f64| {
+            json!({
+                "id":id, "cut":{"qty":1}, "grain":[[x,0],[x,40]],
+                "vertices":{"a":[x,0],"b":[x+60.0,0],"c":[x+60.0,40],"d":[x,40]},
+                "edges":[
+                    {"id":"bottom","from":"a","to":"b"},
+                    {"id":"right","from":"b","to":"c"},
+                    {"id":"top","from":"c","to":"d"},
+                    {"id":"left","from":"d","to":"a"}
+                ],
+                "placement":{"part":"torso"}
+            })
+        };
+        let mut raw = json!({
+            "schema":"fabric-pattern/1", "units":"mm",
+            "pieces":[piece("front",0.0),piece("back",80.0)], "seams":[]
+        });
+        if !include_back {
+            raw["pieces"][1]["sim"] = json!(false);
+        }
+        Pattern::new(raw)
+    }
+
+    fn point() -> Value {
+        json!({"id":"chest","kind":"girth","instances":["front","back"],"landmark":"chest"})
+    }
+
+    fn report(pattern: &Pattern, point: Value, level: &dyn Fn(&str, &str) -> Option<f64>) -> Value {
+        let mesh = build_garment(pattern, 10.0).unwrap();
+        let posed: Vec<_> = mesh
+            .verts2d
+            .iter()
+            .map(|p| Vec3::new(p.x * MM, p.y * MM, 0.02))
+            .collect();
+        let seq = vec![posed.clone(); MIN_FRAMES];
+        let body = NearestTree::new(
+            vec![
+                Vec3::new(-1.0, -1.0, 0.0),
+                Vec3::new(3.0, -1.0, 0.0),
+                Vec3::new(-1.0, 3.0, 0.0),
+            ],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        metrics(
+            &mesh,
+            &MetricsInput {
+                pattern,
+                seq: &seq,
+                sew_end: 1,
+                wrapped: &posed,
+                body: &body,
+                level_y: level,
+                fit_spec: &json!({"points":[point]}),
+                spacing: 10.0,
+                arm_deg: 35.0,
+            },
+        )
+    }
+
+    fn assert_unmeasurable(report: &Value) {
+        let row = &report["landmarks"]["chest"];
+        assert_eq!(row["reading"], "UNMEASURABLE", "{report}");
+        assert_eq!(row["status"], "UNMEASURABLE");
+        assert!(!row["reasons"].as_array().unwrap().is_empty());
+        for key in [
+            "ring_strain_mean_pct",
+            "ring_strain_max_pct",
+            "ring_strain_p90_pct",
+            "contact_frac",
+            "clearance_mean_mm",
+            "ring_shift_mm",
+        ] {
+            assert!(
+                row.get(key).is_none(),
+                "{key} must not describe a partial ring"
+            );
+        }
+        let gate = report["gating"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g.as_str().unwrap().contains("chest: girth is UNMEASURABLE"))
+            .expect("missing girth coverage must gate");
+        assert!(report["flags"].as_array().unwrap().contains(gate));
+        assert!(
+            !report["tightness_gating"]
+                .as_array()
+                .unwrap()
+                .contains(gate)
+        );
+    }
+
+    #[test]
+    fn complete_ring_preserves_numeric_shape_and_stationary_reading() {
+        let result = report(&pattern(true), point(), &|_, _| Some(20.0));
+        assert_eq!(
+            result["landmarks"]["chest"],
+            json!({
+                "ring_strain_mean_pct":0.0,
+                "ring_strain_max_pct":0.0,
+                "ring_strain_p90_pct":0.0,
+                "contact_frac":0.0,
+                "clearance_mean_mm":20.0,
+                "ring_shift_mm":0.0,
+                "reading":"EASY"
+            })
+        );
+        assert_eq!(result["gating"], json!([]));
+    }
+
+    #[test]
+    fn declared_but_unsimulated_contributor_cannot_be_dropped() {
+        let result = report(&pattern(false), point(), &|_, _| Some(20.0));
+        assert_unmeasurable(&result);
+        assert_eq!(
+            result["landmarks"]["chest"]["missing_instances"],
+            json!(["back"])
+        );
+    }
+
+    #[test]
+    fn every_contributor_needs_a_finite_level_and_actual_mesh_samples() {
+        for back_level in [None, Some(f64::NAN), Some(f64::INFINITY), Some(1000.0)] {
+            let result = report(&pattern(true), point(), &|id, _| {
+                if id == "back" { back_level } else { Some(20.0) }
+            });
+            assert_unmeasurable(&result);
+            assert_eq!(
+                result["landmarks"]["chest"]["missing_instances"],
+                json!(["back"])
+            );
+        }
+        let mut overflow = point();
+        overflow["dy"] = json!(f64::MAX);
+        let result = report(&pattern(true), overflow, &|_, _| Some(f64::MAX));
+        assert_unmeasurable(&result);
+        assert!(
+            result["landmarks"]["chest"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r.as_str().unwrap().contains("plus dy is non-finite"))
+        );
+    }
+
+    #[test]
+    fn malformed_or_duplicate_contributors_and_coordinates_never_pass() {
+        for instances in [
+            Value::Null,
+            json!("front"),
+            json!([]),
+            json!([""]),
+            json!(["front", 3]),
+            json!(["front", "front"]),
+            json!(["front", "unknown"]),
+        ] {
+            let mut p = point();
+            p["instances"] = instances;
+            assert_unmeasurable(&report(&pattern(true), p, &|_, _| Some(20.0)));
+        }
+        let mut missing = point();
+        missing.as_object_mut().unwrap().remove("instances");
+        assert_unmeasurable(&report(&pattern(true), missing, &|_, _| Some(20.0)));
+        for landmark in [Value::Null, json!(""), json!(3)] {
+            let mut p = point();
+            p["landmark"] = landmark;
+            assert_unmeasurable(&report(&pattern(true), p, &|_, _| Some(20.0)));
+        }
+        let mut missing = point();
+        missing.as_object_mut().unwrap().remove("landmark");
+        assert_unmeasurable(&report(&pattern(true), missing, &|_, _| Some(20.0)));
+        for dy in [Value::Null, json!("20"), json!([])] {
+            let mut p = point();
+            p["dy"] = dy;
+            assert_unmeasurable(&report(&pattern(true), p, &|_, _| Some(20.0)));
+        }
+    }
+
+    #[test]
+    fn non_girth_points_do_not_require_ring_contributors() {
+        let result = report(
+            &pattern(true),
+            json!({"id":"length","kind":"vertical"}),
+            &|_, _| panic!("non-girth points do not sample landmark levels"),
+        );
+        assert_eq!(result["landmarks"], json!({}));
+        assert_eq!(result["gating"], json!([]));
+    }
 }

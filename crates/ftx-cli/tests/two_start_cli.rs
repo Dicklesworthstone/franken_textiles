@@ -62,7 +62,12 @@ fn round_checks_pair_policy_before_creating_any_workspace() {
 #[test]
 fn direct_pair_cannot_overwrite_an_old_report_even_when_model_loading_will_fail() {
     let d = dir();
-    std::fs::write(d.join("p.json"), b"{}").unwrap();
+    std::fs::write(
+        d.join("p.json"),
+        include_str!("../../../tests/fixtures/materials/synthetic-scenario-pattern.json")
+            .as_bytes(),
+    )
+    .unwrap();
     std::fs::write(d.join("m.json"), b"{}").unwrap();
     std::fs::create_dir(d.join("out")).unwrap();
     std::fs::write(d.join("out/sim_report.json"), b"old evidence").unwrap();

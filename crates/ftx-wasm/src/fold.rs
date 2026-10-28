@@ -179,21 +179,14 @@ fn fold_on_source(
     mut progress: impl FnMut(&str),
 ) -> Result<Fold, String> {
     let m = |r: ftx_core::Refusal| r.message;
-    // the page's own words, before the body is fitted (the library would refuse later, in its terms)
-    let placed = pattern["pieces"].as_array().is_some_and(|ps| {
-        ps.iter()
-            .any(|p| crate::page::truthy(&p["placement"]) && p["sim"] != false)
-    });
-    if !placed {
-        return Err("no piece has a fold-up placement: the pattern is judged flat".into());
-    }
+    let pat = Pattern::new(pattern.clone());
+    ftx_drape::garment::simulation_scope(&pat).map_err(m)?;
     if source.is_none() && !measurements["wearer"]["age_months"].is_number() {
         return Err("the fold-up fits a body of the wearer's age: fill in the age (months)".into());
     }
     if !self_contact_mm.is_finite() || self_contact_mm < 0.0 {
         return Err("self-contact thickness must be finite and nonnegative".into());
     }
-    let pat = Pattern::new(pattern.clone());
     let mut opts = DrapeOptions::default();
     if self_contact_mm > 0.0 {
         let mut p = opts.contact;

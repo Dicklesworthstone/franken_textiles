@@ -780,6 +780,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         selected.apply(&mut pat)?;
     }
     let material_probe = Pattern::new(pat.clone());
+    ftx_drape::garment::simulation_scope(&material_probe)?;
     ftx_drape::material::resolve(&material_probe, &opts)?;
     let meas_path = required(args, "measurements")?;
     let (meas, meas_bytes) = read_json(meas_path)?;
@@ -1052,6 +1053,58 @@ mod tests {
         path
     }
 
+    fn placed_drape_pattern() -> Value {
+        json!({
+            "schema":"fabric-pattern/1", "units":"mm",
+            "pieces":[{
+                "id":"panel", "cut":{"qty":1},
+                "vertices":{"a":[0,0],"b":[100,0],"c":[100,200],"d":[0,200]},
+                "edges":[
+                    {"id":"bottom","from":"a","to":"b"},
+                    {"id":"right","from":"b","to":"c"},
+                    {"id":"top","from":"c","to":"d"},
+                    {"id":"left","from":"d","to":"a"}
+                ],
+                "placement":{"part":"torso"}
+            }],
+            "seams":[]
+        })
+    }
+
+    #[test]
+    fn drape_refuses_unplaced_attachments_before_body_loading_or_output_creation() {
+        let dir = drape_scratch();
+        let out = dir.join("run");
+        let mut pattern = placed_drape_pattern();
+        let mut missing = pattern["pieces"][0].clone();
+        missing["id"] = json!("unplaced");
+        missing["placement"] = Value::Null;
+        pattern["pieces"].as_array_mut().unwrap().push(missing);
+        pattern["seams"] = json!([{"id":"attachment","a":"panel/right","b":"unplaced/left"}]);
+        std::fs::write(
+            dir.join("pattern.json"),
+            serde_json::to_vec(&pattern).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("measurements.json"), b"{}").unwrap();
+        let args = parse(&[
+            "drape".into(),
+            dir.join("pattern.json").to_string_lossy().into_owned(),
+            "--measurements".into(),
+            dir.join("measurements.json").to_string_lossy().into_owned(),
+            "--out".into(),
+            out.to_string_lossy().into_owned(),
+            "--model".into(),
+            dir.join("absent.ftxbody").to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let refusal = cmd_drape(&args).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+        assert!(refusal.message.contains("unplaced"));
+        assert!(refusal.message.contains("attachment"));
+        assert!(!out.exists());
+    }
+
     #[test]
     fn drape_refuses_existing_outputs_before_loading_the_body() {
         let dir = drape_scratch();
@@ -1059,7 +1112,11 @@ mod tests {
         std::fs::create_dir(&out).unwrap();
         let previous = br#"{"settled":true,"gating":[],"previous_run":true}"#;
         std::fs::write(out.join("sim_report.json"), previous).unwrap();
-        std::fs::write(dir.join("pattern.json"), b"{}").unwrap();
+        std::fs::write(
+            dir.join("pattern.json"),
+            serde_json::to_vec(&placed_drape_pattern()).unwrap(),
+        )
+        .unwrap();
         std::fs::write(dir.join("measurements.json"), b"{}").unwrap();
         let args = parse(&[
             "drape".into(),

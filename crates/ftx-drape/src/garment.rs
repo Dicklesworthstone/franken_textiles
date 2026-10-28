@@ -15,7 +15,7 @@ use ftx_core::np::{arange, linspace};
 use ftx_core::polyline::{at_fractions, point_in_polygon, polyline_length};
 use ftx_core::{Refusal, RefusalCode, Vec2};
 use ftx_pattern::{Instance, Pattern, PyError, truthy};
-use serde_json::Value;
+use serde_json::{Value, json};
 use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation};
 
 /// One seam's sewing record (spec 04 §2.6).
@@ -58,6 +58,97 @@ pub struct GarmentMesh {
 
 fn doc_error(e: &PyError) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, e.message().to_string())
+}
+
+/// Admit the production drape's declared piece and seam scope in source order.
+/// Every intended simulated instance needs a placement object with a string `part`; only an explicit
+/// `sim: false` excludes a physical piece. Frame/landmark validity remains the scene's authority.
+/// This does not change [`build_garment`]'s reference-compatible subset meshing primitive.
+///
+/// # Errors
+/// [`RefusalCode::InvalidDocument`] for invalid pattern structure/references, unresolved placements,
+/// or no active instances. Missing placements never silently remove attachment seams.
+pub fn simulation_scope(pattern: &Pattern) -> Result<Value, Refusal> {
+    let invalid = |message| Refusal::new(RefusalCode::InvalidDocument, message);
+    let errors = pattern.structure_errors();
+    if !errors.is_empty() {
+        return Err(invalid(format!(
+            "cannot determine simulation scope: {}",
+            errors.join("; ")
+        )));
+    }
+    let mut simulated_instances = Vec::new();
+    let mut excluded_instances = Vec::new();
+    let mut excluded = BTreeMap::new();
+    let mut missing = Vec::new();
+    for (order, instance) in pattern.instances.iter().enumerate() {
+        let piece = &pattern.raw()["pieces"][instance.piece_index];
+        if piece["sim"] == false {
+            excluded.insert(instance.id.as_str(), order);
+            excluded_instances.push(json!({"instance":instance.id,"piece":instance.piece,
+                "reason":"sim_false"}));
+        } else if piece["placement"].as_object().is_some_and(|placement| {
+            !placement.is_empty()
+                && placement
+                    .get("part")
+                    .and_then(Value::as_str)
+                    .is_some_and(|part| !part.trim().is_empty())
+        }) {
+            simulated_instances.push(instance.id.as_str());
+        } else {
+            missing.push(instance.id.as_str());
+        }
+    }
+    let mut simulated_seams = Vec::new();
+    let mut excluded_seams = Vec::new();
+    let mut affected = Vec::new();
+    for (index, seam) in pattern.seams().iter().enumerate() {
+        let reference = |key| {
+            seam.side_ref(key)
+                .ok_or_else(|| invalid(format!("seam {}: missing side {key}", seam.id_text())))
+        };
+        let (a_ref, b_ref) = (reference("a")?, reference("b")?);
+        let (a, _) = pattern.side(a_ref).map_err(|e| doc_error(&e))?;
+        let (b, _) = pattern.side(b_ref).map_err(|e| doc_error(&e))?;
+        let id = seam.0.get("id").cloned().unwrap_or(Value::Null);
+        if missing.contains(&a.id.as_str()) || missing.contains(&b.id.as_str()) {
+            affected.push(format!("#{index} {} ({a_ref} -> {b_ref})", seam.id_text()));
+        }
+        let mut omitted: Vec<_> = [a.id.as_str(), b.id.as_str()]
+            .into_iter()
+            .filter(|id| excluded.contains_key(id))
+            .collect();
+        omitted.sort_by_key(|id| excluded[id]);
+        omitted.dedup();
+        if omitted.is_empty() {
+            simulated_seams.push(json!({"index":index,"id":id}));
+        } else {
+            excluded_seams.push(json!({"index":index,"id":id,"a":a_ref,"b":b_ref,
+                "excluded_instances":omitted}));
+        }
+    }
+    if !missing.is_empty() {
+        return Err(invalid(format!(
+            "unresolved simulation placements for instances [{}]; affected seams: {}",
+            missing.join(", "),
+            if affected.is_empty() {
+                "none (unconnected instances still require a declared scope)".into()
+            } else {
+                affected.join("; ")
+            }
+        ))
+        .repair("Supply explicit placement objects and body-part anchors for every intended simulated piece.")
+        .repair("Set sim:false only for pieces deliberately excluded from this drape; their attachment seams will be reported as excluded."));
+    }
+    if simulated_instances.is_empty() {
+        return Err(invalid("nothing to drape: no active physical instances in the declared simulation scope".into())
+            .repair("Choose at least one piece to simulate and supply its placement; retain sim:false on deliberate exclusions."));
+    }
+    Ok(
+        json!({"basis":if excluded_instances.is_empty() {"complete_pattern"} else {"declared_subset"},
+        "simulated_instances":simulated_instances,"excluded_instances":excluded_instances,
+        "simulated_seams":simulated_seams,"excluded_seams":excluded_seams}),
+    )
 }
 
 /// `np.linalg.norm` of a 2-vector, as numpy evaluates it (√(x² + y²), not `hypot`).
@@ -400,6 +491,149 @@ mod tests {
             "notches": [], "cut": {"qty": 1}, "grain": [[10, 10], [10, 40]],
             "placement": {"part": "torso"}
         })
+    }
+
+    fn imported_sleeve() -> Value {
+        let mut notes: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/import/synthetic-sleeve.annotations.json"
+        ))
+        .unwrap();
+        for (panel, angle) in [("outer", 0.), ("under", 180.)] {
+            notes["panels"][panel]["placement"] = json!({"part":"arm","side":"R",
+                "y0_landmark":"shoulder_tip","y0":200.,"x0":0.,"theta_deg":angle,
+                "radius_mm":100. / std::f64::consts::PI});
+            notes["panels"][panel]["sim"] = json!(true);
+        }
+        let imported = ftx_pattern::garmentcode_import::import_garmentcode_json(
+            include_str!("../../../tests/fixtures/import/synthetic-sleeve.garmentcode.json"),
+            Some(&serde_json::to_string(&notes).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(imported.report["status"], "REVIEW_REQUIRED");
+        imported.pattern
+    }
+
+    #[test]
+    fn production_scope_retains_the_complete_imported_sleeve() {
+        let pattern = Pattern::new(imported_sleeve());
+        let scope = simulation_scope(&pattern).unwrap();
+        assert_eq!(
+            scope,
+            json!({"basis":"complete_pattern",
+            "simulated_instances":["p0000","p0001"],"excluded_instances":[],
+            "simulated_seams":[{"index":0,"id":"s0000"},{"index":1,"id":"s0001"}],
+            "excluded_seams":[]})
+        );
+        let mesh = build_garment(&pattern, 12.).unwrap();
+        assert_eq!(mesh.instances, ["p0000", "p0001"]);
+        assert_eq!(mesh.seams.len(), 2);
+        assert!(mesh.seams.iter().all(|seam| !seam.pairs.is_empty()));
+        assert_eq!(simulation_scope(&pattern).unwrap(), scope);
+    }
+
+    #[test]
+    fn unresolved_scope_names_the_missing_panel_and_both_attachment_seams() {
+        let mut raw = imported_sleeve();
+        raw["pieces"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("placement");
+        let pattern = Pattern::new(raw);
+        let refusal = simulation_scope(&pattern).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+        for expected in ["p0001", "s0000", "s0001", "p0000/e0001", "p0001/e0002"] {
+            assert!(refusal.message.contains(expected), "{expected}");
+        }
+        assert!(
+            refusal
+                .repairs
+                .iter()
+                .any(|repair| repair.contains("placement"))
+        );
+        assert!(
+            refusal
+                .repairs
+                .iter()
+                .any(|repair| repair.contains("sim:false"))
+        );
+        // The lower-level reference primitive still deliberately meshes subsets.
+        let mesh = build_garment(&pattern, 12.).unwrap();
+        assert_eq!(mesh.instances, ["p0000"]);
+        assert!(mesh.seams.is_empty() && mesh.pairs.is_empty());
+    }
+
+    #[test]
+    fn disconnected_or_unusable_placements_cannot_disappear() {
+        for placement in [
+            Value::Null,
+            json!({}),
+            json!({"x0":0.}),
+            json!({"part":17}),
+            json!({"part":""}),
+            json!({"part":"  "}),
+        ] {
+            let mut raw = imported_sleeve();
+            let mut pocket = rect("pocket", 50., 40.);
+            pocket["placement"] = placement;
+            raw["pieces"].as_array_mut().unwrap().push(pocket);
+            let refusal = simulation_scope(&Pattern::new(raw)).unwrap_err();
+            assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+        }
+        let mut raw = imported_sleeve();
+        let mut pocket = rect("pocket", 50., 40.);
+        pocket.as_object_mut().unwrap().remove("placement");
+        raw["pieces"].as_array_mut().unwrap().push(pocket);
+        let refusal = simulation_scope(&Pattern::new(raw)).unwrap_err();
+        assert!(refusal.message.contains("pocket"));
+        assert!(refusal.message.contains("affected seams: none"));
+    }
+
+    #[test]
+    fn deliberate_exclusions_retain_exact_instance_and_seam_scope() {
+        let mut raw = imported_sleeve();
+        raw["pieces"][1]["sim"] = json!(false);
+        raw["pieces"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("placement");
+        let mut lining = rect("lining", 50., 40.);
+        lining["sim"] = json!(false);
+        lining["cut"]["qty"] = json!(2);
+        raw["pieces"].as_array_mut().unwrap().push(lining);
+        let pattern = Pattern::new(raw);
+        assert_eq!(
+            simulation_scope(&pattern).unwrap(),
+            json!({
+            "basis":"declared_subset","simulated_instances":["p0000"],
+            "excluded_instances":[
+                {"instance":"p0001","piece":"p0001","reason":"sim_false"},
+                {"instance":"lining.R","piece":"lining","reason":"sim_false"},
+                {"instance":"lining.L","piece":"lining","reason":"sim_false"}],
+            "simulated_seams":[],
+            "excluded_seams":[
+                {"index":0,"id":"s0000","a":"p0000/e0001","b":"p0001/e0000","excluded_instances":["p0001"]},
+                {"index":1,"id":"s0001","a":"p0000/e0003","b":"p0001/e0002","excluded_instances":["p0001"]}]})
+        );
+        let mesh = build_garment(&pattern, 12.).unwrap();
+        assert_eq!(mesh.instances, ["p0000"]);
+        assert!(mesh.seams.is_empty());
+    }
+
+    #[test]
+    fn invalid_hidden_seams_and_empty_active_scope_refuse() {
+        let mut raw = imported_sleeve();
+        raw["pieces"][1]["sim"] = json!(false);
+        for reference in [json!("p0001/missing"), json!("unknown/e0000"), Value::Null] {
+            let mut broken = raw.clone();
+            broken["seams"][0]["b"] = reference;
+            let refusal = simulation_scope(&Pattern::new(broken)).unwrap_err();
+            assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+            assert!(refusal.message.contains("seam s0000"));
+        }
+        raw["pieces"][0]["sim"] = json!(false);
+        let refusal = simulation_scope(&Pattern::new(raw)).unwrap_err();
+        assert!(refusal.message.contains("nothing to drape"));
+        assert!(!refusal.repairs.is_empty());
     }
 
     /// Two rectangles sewn right edge (curved) to left edge: matched samples, CCW triangles covering
