@@ -63,6 +63,19 @@ numbers, never gates.
   global vertex numbering, `inst_range`, the board layout, the animation stagger and the viewer data.
 - Seams are kept, in pattern order, when both side refs (`INST/EDGE[+EDGE]`) name simulated instances.
 
+**Native production admission.** The low-level mesher retains this reference selection rule. Before
+an ordinary native/browser/study drape, every intended simulation instance (`sim` not explicitly
+false) must have an explicit, nonempty placement record with a part. A missing placement refuses
+the run before meshing, naming the instance and attachment seams that would disappear. Disconnected
+unplaced instances also refuse. Repairs are authored placement or an explicit `sim: false` choice;
+neither names nor roles authorize deleting an attachment or inferring a physical side.
+
+Deliberate exclusions remain supported. Successful production reports retain `simulation_scope`
+with `complete_pattern` or `declared_subset` basis, the simulated instance/seam identities and the
+explicitly excluded instances and affected seam references. A declared subset adds a visible advisory;
+its numerical results describe that subset. No claim of complete garment construction or physical
+fit follows from this scope statement. A pattern with no simulated instances remains flat-only.
+
 ### 2.2 Seam sampling (matched pairs)
 
 For each kept seam, matched sample sequences come from the pattern model's seam pairing with `spacing`:
@@ -433,6 +446,16 @@ Flags:
   pull, not a length mismatch.
 
 ### 6.3 Landmarks (`landmarks.{id}`): ring strain at girth points
+
+**Native completeness correction.** A requested girth reading requires every listed instance,
+a finite landmark level for each, and sampled ring edges from each. Missing, malformed, repeated
+or unsampled contributors cannot be silently dropped while scoring the remainder. Such a point
+is `UNMEASURABLE`, names the unavailable contributors, publishes no numeric ring reading and adds
+a gating flag independent of tightness. This also applies when a contributor was deliberately
+excluded with `sim: false`. Complete ring arithmetic and existing successful fields are unchanged.
+Explicit physical limb sides select the same frame for these levels as for placement and flat fit.
+
+The reference calculation retained for complete rings is:
 
 For each fit-spec point with `kind == "girth"`:
 

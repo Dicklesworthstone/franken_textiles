@@ -98,7 +98,10 @@ fn no_fold_up_placement_refuses() {
         panic!("a pattern with no placement draped");
     };
     assert_eq!(err.code, ftx_core::RefusalCode::InvalidDocument);
-    assert!(err.message.contains("no piece has a fold-up placement"));
+    assert!(
+        err.message.contains("back") && err.message.contains("placement"),
+        "{err}"
+    );
 }
 
 fn numbers(v: &Value) -> Vec<(String, f64)> {

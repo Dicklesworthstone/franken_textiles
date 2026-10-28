@@ -293,10 +293,7 @@ impl<'a, 'body> Session<'a, 'body> {
         pattern: &Pattern,
         mut progress: impl FnMut(&str),
     ) -> Result<Value, Refusal> {
-        let errors = pattern.structure_errors();
-        if !errors.is_empty() {
-            return Err(invalid(errors.join("; ")));
-        }
+        crate::garment::simulation_scope(pattern)?;
         let casings = elastic_casings(pattern, self.scenario.options.elastic_ea)?;
         let simulated = (!casings.is_empty()).then(|| casings_at_cut_length(pattern, &casings));
         let points = mesh_bound(

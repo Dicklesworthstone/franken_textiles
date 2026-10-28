@@ -5,7 +5,7 @@
 use ftx_core::np::percentile;
 use ftx_core::py::round;
 use ftx_core::{Refusal, RefusalCode, Vec3};
-use ftx_pattern::Pattern;
+use ftx_pattern::{Pattern, Side, instance::physical_side};
 use serde_json::{Value, json};
 
 use crate::animation::{
@@ -13,7 +13,7 @@ use crate::animation::{
     viewer_html, viewer_payload, zip_frames,
 };
 use crate::contact::{Contact, ContactParams};
-use crate::garment::build_garment;
+use crate::garment::{build_garment, simulation_scope};
 use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
 use crate::nearest::NearestTree;
 use crate::scene::{
@@ -219,11 +219,52 @@ fn strings(v: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+// Keep metric levels on the same physical frame as placement and flat fit. Absent side retains
+// the reference's right-frame convention, including generated mirrored instances.
+fn metric_level_y(
+    pattern: &Pattern,
+    frames: &dyn PartFrames,
+    inst: &str,
+    landmark: &str,
+) -> Option<f64> {
+    let i = pattern.instance(inst)?;
+    let piece = &pattern.raw()["pieces"][i.piece_index];
+    let pl = &piece["placement"];
+    let part = pl["part"].as_str()?;
+    let side = physical_side(piece).ok()?.unwrap_or(Side::R);
+    let key = if part == "torso" {
+        part.to_string()
+    } else {
+        format!("{part}_{}", side.as_str())
+    };
+    let anchor = pl["y0_landmark"].as_str().unwrap_or("waist");
+    Some(
+        frames.landmark_h(&key, landmark)? - frames.landmark_h(&key, anchor)?
+            + pl["y0"].as_f64().unwrap_or(0.0),
+    )
+}
+
+fn add_simulation_scope(report: &mut Value, scope: Value) {
+    if scope["basis"] == "declared_subset" {
+        let excluded = scope["excluded_instances"].as_array().map_or(0, Vec::len);
+        let seams = scope["excluded_seams"].as_array().map_or(0, Vec::len);
+        let message = format!(
+            "Declared simulation subset: {excluded} instance(s) and {seams} seam(s) excluded; \
+             see simulation_scope. Results describe only the simulated subset."
+        );
+        report["flags"]
+            .as_array_mut()
+            .expect("metrics flags are an array")
+            .push(json!(message));
+    }
+    report["simulation_scope"] = scope;
+}
+
 /// Drapes `pattern` on `body`, calling `progress` with a line per stage.
 ///
 /// # Errors
 /// [`RefusalCode::OutOfRange`] for fewer than [`MIN_FRAMES`] steps in all; refusals from meshing,
-/// placement, the start state, the cloth model, contact or the solver.
+/// simulation scope, placement, the start state, the cloth model, contact or the solver.
 pub fn drape(
     pattern: &Pattern,
     fit_spec: &Value,
@@ -231,6 +272,7 @@ pub fn drape(
     opts: &DrapeOptions,
     mut progress: impl FnMut(&str),
 ) -> Result<DrapeRun, Refusal> {
+    let scope = simulation_scope(pattern)?;
     let material = crate::material::resolve(pattern, opts)?;
     let opts = &material.options;
     let fabric = material.fabric;
@@ -308,23 +350,7 @@ pub fn drape(
 
     // Metrics against the collision body, levels from the body's frames.
     let true_body = NearestTree::new(body.collision.0.to_vec(), body.collision.1.to_vec())?;
-    let raw = pattern.raw();
-    let level_y = |inst: &str, landmark: &str| -> Option<f64> {
-        let i = pattern.instance(inst)?;
-        let pl = &raw["pieces"][i.piece_index]["placement"];
-        let part = pl["part"].as_str().unwrap_or("torso");
-        let key = if part == "torso" {
-            part.to_string()
-        } else {
-            format!("{part}_R")
-        };
-        let anchor = pl["y0_landmark"].as_str().unwrap_or("waist");
-        Some(
-            PartFrames::landmark_h(body.frames, &key, landmark)?
-                - PartFrames::landmark_h(body.frames, &key, anchor)?
-                + pl["y0"].as_f64().unwrap_or(0.0),
-        )
-    };
+    let level_y = |inst: &str, landmark: &str| metric_level_y(pattern, body.frames, inst, landmark);
     let seq = &fold.frames[FOLD_FRAMES + ZIP_FRAMES..];
     let mut report = metrics(
         &scene.mesh,
@@ -361,6 +387,7 @@ pub fn drape(
         &casing_mu,
     );
     add_numerical_report(&mut report, &sew, &drape, opts);
+    add_simulation_scope(&mut report, scope);
     report["material"] = material.report;
     add_casing_windows(&mut report, &scene, &fold, &initial_positions, &drape, opts);
     if let Some(fabrics) = &material.piece_fabrics {
@@ -886,6 +913,124 @@ mod self_contact_tests {
     use crate::cloth::SolveReport;
     use crate::contact::Body;
     use crate::scene::PhaseStep;
+
+    fn scope_pattern() -> Value {
+        json!({
+            "schema":"fabric-pattern/1", "units":"mm",
+            "pieces":[{
+                "id":"panel", "cut":{"qty":1},
+                "vertices":{"a":[0,0],"b":[100,0],"c":[100,200],"d":[0,200]},
+                "edges":[
+                    {"id":"bottom","from":"a","to":"b"},
+                    {"id":"right","from":"b","to":"c"},
+                    {"id":"top","from":"c","to":"d"},
+                    {"id":"left","from":"d","to":"a"}
+                ],
+                "placement":{"part":"arm","y0_landmark":"anchor","y0":7}
+            }],
+            "seams":[]
+        })
+    }
+
+    struct LevelFrames;
+    impl PartFrames for LevelFrames {
+        fn frame(&self, _: &str) -> Option<crate::start::PartFrame> {
+            panic!("scope and level checks do not place geometry")
+        }
+        fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
+            match (part, name) {
+                ("arm_R" | "leg_R", "anchor") => Some(10.0),
+                ("arm_R" | "leg_R", "cuff") => Some(30.0),
+                ("arm_L" | "leg_L", "anchor") => Some(100.0),
+                ("arm_L" | "leg_L", "cuff") => Some(220.0),
+                _ => None,
+            }
+        }
+        fn section_radius(&self, _: &str, _: f64) -> f64 {
+            panic!("scope and level checks do not sample the body")
+        }
+    }
+
+    #[test]
+    fn metric_levels_follow_explicit_physical_limb_side() {
+        let mut raw = scope_pattern();
+        assert_eq!(
+            metric_level_y(&Pattern::new(raw.clone()), &LevelFrames, "panel", "cuff"),
+            Some(27.0)
+        );
+        for part in ["arm", "leg"] {
+            for (side, expected) in [("R", 27.0), ("L", 127.0)] {
+                raw["pieces"][0]["placement"]["part"] = json!(part);
+                raw["pieces"][0]["placement"]["side"] = json!(side);
+                let pattern = Pattern::new(raw.clone());
+                assert!(pattern.structure_errors().is_empty());
+                assert_eq!(
+                    metric_level_y(&pattern, &LevelFrames, "panel", "cuff"),
+                    Some(expected)
+                );
+                assert_eq!(
+                    metric_level_y(&pattern, &LevelFrames, "panel", "unknown"),
+                    None
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn production_drape_refuses_missing_panels_before_body_or_solver_work() {
+        let mut raw = scope_pattern();
+        let mut missing = raw["pieces"][0].clone();
+        missing["id"] = json!("unplaced");
+        missing["placement"] = Value::Null;
+        raw["pieces"].as_array_mut().unwrap().push(missing);
+        raw["seams"] = json!([{"id":"attachment","a":"panel/right","b":"unplaced/left"}]);
+        let pattern = Pattern::new(raw);
+        let body = DrapeBody {
+            frames: &LevelFrames,
+            collision: (&[], &[]),
+            display: (&[], &[]),
+            arm_deg: 0.0,
+        };
+        let refusal = drape(
+            &pattern,
+            &json!({}),
+            &body,
+            &DrapeOptions::default(),
+            |_| panic!("incomplete garments must refuse before progress"),
+        )
+        .err()
+        .expect("incomplete garment must refuse");
+        assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+        assert!(refusal.message.contains("unplaced"));
+        assert!(refusal.message.contains("attachment"));
+    }
+
+    #[test]
+    fn declared_subset_is_visible_without_erasing_existing_gates() {
+        let mut raw = scope_pattern();
+        let mut excluded = raw["pieces"][0].clone();
+        excluded["id"] = json!("lining");
+        excluded["sim"] = json!(false);
+        raw["pieces"].as_array_mut().unwrap().push(excluded);
+        raw["seams"] = json!([{"id":"lining_join","a":"panel/right","b":"lining/left"}]);
+        let scope = simulation_scope(&Pattern::new(raw)).unwrap();
+        let mut report = json!({"flags":["existing gate"],"gating":["existing gate"]});
+        add_simulation_scope(&mut report, scope.clone());
+        assert_eq!(report["simulation_scope"], scope);
+        assert_eq!(report["flags"].as_array().unwrap().len(), 2);
+        assert_eq!(report["gating"], json!(["existing gate"]));
+        assert!(
+            report["flags"][1]
+                .as_str()
+                .unwrap()
+                .contains("1 instance(s) and 1 seam(s)")
+        );
+        let scope = simulation_scope(&Pattern::new(scope_pattern())).unwrap();
+        let mut complete = json!({"flags":[],"gating":[]});
+        add_simulation_scope(&mut complete, scope);
+        assert_eq!(complete["simulation_scope"]["basis"], "complete_pattern");
+        assert_eq!(complete["flags"], json!([]));
+    }
 
     #[test]
     fn casing_window_retains_duration_signed_drift_and_sampled_peak() {

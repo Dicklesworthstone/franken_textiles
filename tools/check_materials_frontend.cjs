@@ -1068,8 +1068,57 @@ test('GarmentCode strict file decoding refuses invalid UTF-8 and BOM without rep
     assert.match(p.e.error.textContent,/UTF-8|JSON|Unexpected|unexpected/);
   }
 });
+test('GarmentCode circular-arc controls require explicit limits and preserve annotation-file authority', async () => {
+  const p=await pageModule();await p.load();const oldName=p.e.patternName.textContent;
+  garmentcodeFile(p,'garmentcodeSource',garmentcodeSource);p.e.garmentcodeSource.handlers.change();
+  assert.equal(p.e.garmentcodeArcSagitta.disabled,true);assert.equal(p.e.garmentcodeArcLength.disabled,true);
+  p.e.garmentcodeArcs.checked=true;p.e.garmentcodeArcs.handlers.change();
+  assert.equal(p.e.garmentcodeArcSagitta.disabled,false);assert.equal(p.e.garmentcodeArcLength.disabled,false);
+  for(const [distance,length] of [['','0.1'],['0','0.1'],['-1','0.1'],['0.05',''],['0.05','Infinity'],['NaN','0.1']]) {
+    p.e.garmentcodeArcSagitta.value=distance;p.e.garmentcodeArcLength.value=length;
+    const before=p.current().messages.length;await p.e.garmentcode.onclick();
+    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/positive finite/);
+    assert.equal(p.e.patternName.textContent,oldName);assert.equal(p.e.useGarmentcode.disabled,true);
+  }
+  p.e.garmentcodeArcSagitta.value='0.05';p.e.garmentcodeArcLength.value='0.1';
+  await p.e.garmentcode.onclick();const request=p.current().messages.at(-1);
+  assert.equal(request.source,garmentcodeSource);
+  assert.deepEqual(JSON.parse(request.annotations),{schema:'fabric-garmentcode-annotations/1',circular_arcs:{
+    model:'bounded_chord_polylines/1',max_sagitta_mm:0.05,max_length_error_mm:0.1}});
+  assert.ok(request.annotations.endsWith('\n'));
+  p.current().emit({type:'error',request:request.request,message:'Synthetic policy transport only'});
+  garmentcodeFile(p,'garmentcodeAnnotations',garmentcodeAnnotations);p.e.garmentcodeAnnotations.handlers.change();
+  assert.equal(p.e.garmentcodeArcs.disabled,true);assert.equal(p.e.garmentcodeArcSagitta.disabled,true);
+  p.e.garmentcodeArcSagitta.value='';p.e.garmentcodeArcLength.value='';
+  await p.e.garmentcode.onclick();assert.equal(p.current().messages.at(-1).annotations,garmentcodeAnnotations);
+});
+test('GarmentCode circular-arc review exposes the admitted approximation and withdraws adopted results on tolerance edits', async () => {
+  const p=await pageModule(),r=garmentcodeImport(false);
+  const circular_arcs={policy:{model:'bounded_chord_polylines/1',max_sagitta_mm:0.05,max_length_error_mm:0.1},
+    curves:[{source_panel:'<curved panel>',source_edge:0,piece:'p0000',edge:'e0000',radius_mm:100,large_arc:false,right:true,
+      segments:32,max_deviation_bound_mm:0.021,length_error_bound_mm:0.03,polyline_length_mm:104.7,arc_length_mm:104.72}],
+    scope:'Bounds cover frozen imported sew-edge polylines; later alterations, drape meshing and offsets have separate errors.'};
+  r.report.circular_arcs=circular_arcs;r.pattern.meta.import.circular_arcs=circular_arcs;
+  r.report_json=JSON.stringify(r.report)+'\n';r.pattern_json=JSON.stringify(r.pattern)+'\n';
+  garmentcodeFile(p,'garmentcodeSource',garmentcodeSource);p.e.garmentcodeSource.handlers.change();
+  p.e.garmentcodeArcs.checked=true;p.e.garmentcodeArcSagitta.value='0.05';p.e.garmentcodeArcLength.value='0.1';
+  p.e.garmentcodeArcs.handlers.change();await p.e.garmentcode.onclick();
+  const request=p.current().messages.at(-1),w=await workerModule({bindings:{default:()=>Promise.resolve(),import_garmentcode:()=>JSON.stringify(r)}});
+  const response=await w.send(request);assert.equal(response.type,'result',response.message);p.current().emit(response);
+  const s=section(p,'Imported GarmentCode pattern — review required');
+  const t=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes('Circular-arc approximation'));
+  assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),[
+    '<curved panel> / 0','p0000/e0000','100','Minor; right','32','0.021 / 0.05','0.03 / 0.1','104.7 / 104.72']);
+  assert.match(visibleText(s),/frozen imported sew-edge polylines/);assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  const annotations=descendants(s).find(n=>n.download==='garmentcode-annotations.json');
+  assert.equal(await p.blobs.get(annotations.href).text(),request.annotations);
+  p.e.useGarmentcode.onclick();p.select('cutOptions');await p.bind();assert.equal(p.e.cut.disabled,false);
+  p.e.garmentcodeArcLength.value='0.2';p.e.garmentcodeArcLength.handlers.input();
+  assert.equal(p.e.bind.disabled,true);assert.equal(p.e.cut.disabled,true);assert.equal(p.live.size,0);
+  assert.equal(s.hidden,true);assert.match(p.e.patternName.textContent,/withdrawn/);
+});
 test('GarmentCode changes, cancellation and native pattern replacement defeat delayed reads and stale replies', async () => {
-  for (const change of ['source','annotations','cancel','native']) {
+  for (const change of ['source','annotations','arc-enable','arc-distance','arc-length','cancel','native']) {
     const p=await pageModule(),delay=deferred();await p.load();
     garmentcodeFile(p,'garmentcodeSource',garmentcodeSource);p.e.garmentcodeSource.handlers.change();
     garmentcodeFile(p,'garmentcodeAnnotations',garmentcodeAnnotations);p.e.garmentcodeAnnotations.handlers.change();
@@ -1077,6 +1126,9 @@ test('GarmentCode changes, cancellation and native pattern replacement defeat de
     const old=p.current(),running=p.e.garmentcode.onclick();
     if(change==='source')p.e.garmentcodeSource.handlers.change();
     else if(change==='annotations')p.e.garmentcodeAnnotations.handlers.change();
+    else if(change==='arc-enable')p.e.garmentcodeArcs.handlers.change();
+    else if(change==='arc-distance')p.e.garmentcodeArcSagitta.handlers.input();
+    else if(change==='arc-length')p.e.garmentcodeArcLength.handlers.input();
     else if(change==='cancel')p.e.cancel.onclick();
     else await p.load();
     assert.equal(old.dead,true,change);p.ready();
@@ -1115,6 +1167,39 @@ test('compiled WASM GarmentCode sleeve conversion reaches review and exact expli
       assert.equal(p.e.fit.files.length,0);assert.match(p.e.patternName.textContent,/REVIEW_REQUIRED/);
       await p.e.bind.onclick();assert.equal(p.current().messages.at(-1).pattern,native.pattern_json);
     }
+  });
+test('compiled WASM GarmentCode circular panels use the authored bounds and exact frozen adoption',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const source=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/import/synthetic-sleeve.garmentcode.json'),'utf8'));
+    source.pattern.panels.outer.edges[0].curvature={type:'circle',params:[10,0,1]};
+    source.pattern.panels.under.edges[3].curvature={type:'circle',params:[10,0,0]};
+    const raw=JSON.stringify(source)+'\n',p=await pageModule(),w=await workerModule({bindings:ftx});
+    garmentcodeFile(p,'garmentcodeSource',raw);p.e.garmentcodeSource.handlers.change();
+    p.e.garmentcodeArcs.checked=true;p.e.garmentcodeArcSagitta.value='0.01';p.e.garmentcodeArcLength.value='0.01';
+    p.e.garmentcodeArcs.handlers.change();await p.e.garmentcode.onclick();
+    const request=p.current().messages.at(-1),response=await w.send(request);
+    assert.equal(response.type,'result',response.message);p.current().emit(response);
+    const converted=JSON.parse(ftx.import_garmentcode(raw,request.annotations));
+    assert.equal(response.result.pattern_json,converted.pattern_json);assert.equal(response.result.report_json,converted.report_json);
+    assert.equal(converted.report.circular_arcs.curves.length,2);
+    assert.deepEqual(converted.pattern.meta.import.circular_arcs,converted.report.circular_arcs);
+    for(const arc of converted.report.circular_arcs.curves) {
+      assert.equal(arc.radius_mm,100);assert.ok(Math.abs(arc.arc_length_mm-100*Math.PI/3)<1e-10);
+      assert.ok(arc.max_deviation_bound_mm<=0.01);assert.ok(arc.length_error_bound_mm<=0.01);
+      assert.ok(Math.abs(arc.arc_length_mm-arc.polyline_length_mm)<=arc.length_error_bound_mm);
+      const piece=converted.pattern.pieces.find(piece=>piece.id===arc.piece),edge=piece.edges.find(edge=>edge.id===arc.edge);
+      assert.equal(edge.curve.type,'poly');assert.equal(edge.curve.c.length,arc.segments-1);
+    }
+    const s=section(p,'Imported GarmentCode pattern — review required');
+    assert.match(visibleText(s),/Circular-arc approximation/);assert.match(visibleText(s),/REVIEW_REQUIRED/);
+    const link=descendants(s).find(n=>n.download==='garmentcode-annotations.json');
+    assert.equal(await p.blobs.get(link.href).text(),request.annotations);
+    p.e.useGarmentcode.onclick();await p.e.bind.onclick();assert.equal(p.current().messages.at(-1).pattern,converted.pattern_json);
+    const refusal=await w.send({type:'garmentcode',request:902,source:raw});
+    assert.equal(refusal.type,'error');assert.match(refusal.message,/circular_arcs/);assert.equal(refusal.files,undefined);
   });
 test('treatment page uses the current bound basis, displays measured changes and adopts exact derived bytes', async () => {
   const p=await pageModule(), report=treatmentReport(true), original=report.source_pattern_json,

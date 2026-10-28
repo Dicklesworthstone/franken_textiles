@@ -73,6 +73,14 @@ unchanged. Direct rollback/replay, quiet-window and oscillatory mean-cancellatio
 `cloth.rs` and `run.rs`. Historical fitted-garment timings/verdicts below are not fresh proof of this
 stricter boundary, nor evidence of physical fit.
 
+Production admission now refuses intended simulation instances without explicit placement before
+meshing. Deliberate `sim: false` omissions remain supported and are listed with excluded seams in
+`simulation_scope`, with a subset advisory. Requested girth readings require every contributor;
+incomplete rings are `UNMEASURABLE` and gated, without partial numeric readings. Direct regressions
+are in `garment.rs`, `metrics.rs`, `run.rs` and the CLI's drape tests. The low-level mesher's oracle
+selection and complete-ring arithmetic are retained. This is declared simulation coverage, not
+evidence that the authored catalog garment is complete or fits a person.
+
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
 | Garment mesh (spacing, seam pairs, instance ranges) | 04 §2 | present | drape/garment_mesh (7 garments: bolero and trousers at 80/92/116 cm, bolero at 8 mm; structure exact, vertices 99.0 % bit-exact, worst 3.8e-15; all 42,003 triangles identical to Blender's CDT) |
@@ -145,7 +153,9 @@ stricter boundary, nor evidence of physical fit.
 
 | Behaviour | Reference | Port | Reason |
 |---|---|---|---|
-| Explicit physical limb side | limb placement uses the right frame and generated `.L` mirroring | optional `placement.side: R|L` selects a physical arm/leg frame for quantity-one, non-folded panels; absent side is unchanged | Imported panels are already expanded. `instance::physical_side_tests`, importer tests, `validate::raw_point_tests` and scene tests retain geometry/seams/grain, exercise distinct fit landmarks, proper-handed wrap/roll and leg-side rules. Current Anny initial placement remains symmetric, with no asymmetric-anatomy or physical-fit claim |
+| Production simulation coverage | unplaced instances and their seams are silently omitted | canonical draping requires placement on every active instance; explicit `sim: false` exclusions are reported with an advisory | Prevent a partial garment from appearing complete; low-level meshing retains reference selection. `garment::tests`, `run::self_contact_tests`, CLI drape regression |
+| Girth contributor completeness | missing instances/levels/samples are skipped, possibly scoring the remaining arc | each requested contributor is required; incomplete rings are `UNMEASURABLE` and gated independently of tightness | Partial rings cannot stand in for the requested circumference. `metrics::girth_coverage_tests`; complete-ring oracle arithmetic retained |
+| Explicit physical limb side | limb placement uses the right frame and generated `.L` mirroring | optional `placement.side: R|L` selects a physical arm/leg frame for quantity-one, non-folded panels; absent side is unchanged | Imported panels are already expanded. `instance::physical_side_tests`, importer tests, `validate::raw_point_tests` and scene/run tests retain geometry/seams/grain, exercise distinct flat and drape fit landmarks, proper-handed wrap/roll and leg-side rules. Current Anny initial placement remains symmetric, with no asymmetric-anatomy or physical-fit claim |
 | `viewer-offline-r160`: fold-up HTML dependencies | Three.js 0.160.0 and OrbitControls fetched from jsdelivr; local HTML fails without network | same pinned upstream modules and complete MIT notice embedded in each HTML; payload and controls unchanged | Actual offline failure; shared generator unit/CLI regressions and `tools/check_web.cjs --viewer HTML` exercise local rendering without HTTP(S). HTML bytes and size intentionally differ; no oracle regenerated |
 | Trace review images | OpenCV 5 TrueType text, antialiased lines and cubic resizing | existing uppercase ASCII stroke font, clipped solid lines and nearest-pixel sampling; exact IDs/messages remain in JSON | Native local/WASM-compatible images without a new font or image runtime; deliberate visual, not numerical, deviation |
 | Trace/audit output reuse; annotation with an overlay | files may be replaced in an existing output | existing artifacts and stale label directories refused; compute first, exclusive files, primary JSON last; 16-million-pixel review budget | Do not replace input evidence or confuse old crops with a new trace; ordinary annotation without an overlay unchanged |

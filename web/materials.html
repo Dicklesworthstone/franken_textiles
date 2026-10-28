@@ -180,6 +180,17 @@ wrinkling, grip slip, bending, rate dependence or hysteresis.</p>
 <label>Optional construction annotations (<code>fabric-garmentcode-annotations/1</code>)
 <input id="garmentcodeAnnotations" type="file" accept=".json,application/json"></label>
 <button id="clearGarmentcodeAnnotations" type="button" disabled>Clear annotations</button>
+<fieldset><legend>Circular arcs without an annotations file</legend>
+<label><input id="garmentcodeArcs" type="checkbox"> Allow circular arcs to become bounded polylines</label>
+<label>Maximum distance from each circular arc (mm)
+<input id="garmentcodeArcSagitta" type="number" min="0" step="any" placeholder="Enter a positive tolerance" disabled></label>
+<label>Maximum length error per circular edge (mm)
+<input id="garmentcodeArcLength" type="number" min="0" step="any" placeholder="Enter a positive tolerance" disabled></label>
+<p class="note">Choose both limits explicitly to import circular panels. Review the reported approximation before adoption.
+An annotations file owns its own <code>circular_arcs</code> policy and disables these controls; its original bytes are retained.
+Without a file, these controls create downloadable annotations. The limits apply to the imported sewing-edge polylines;
+later stitch spacing, drape meshing and allowance offsets have their own discretization.</p>
+</fieldset>
 <button id="garmentcode" data-command="garmentcode" disabled>Convert &amp; review imported pattern</button>
 <button id="useGarmentcode" type="button" disabled>Use imported pattern</button>
 <p class="note">Supply UTF-8 JSON; each input is limited to 4 MiB. This imports already evaluated panels and stitches, not a design program or a garment mesh.

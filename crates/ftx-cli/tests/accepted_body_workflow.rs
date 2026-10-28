@@ -1272,7 +1272,11 @@ fn reused_shapes_never_overwrite_evidence_or_completed_outputs() {
 #[test]
 fn drape_and_round_reach_shape_reuse_without_falling_back_to_tape() {
     let dir = setup();
-    save(&dir.join("pattern.json"), &json!({}));
+    let pattern: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+    ))
+    .unwrap();
+    save(&dir.join("pattern.json"), &pattern);
     save(&dir.join("m.json"), &json!({}));
     let mut report = read(&dir.join("fit.json"));
     report["status"] = json!("REJECTED");
