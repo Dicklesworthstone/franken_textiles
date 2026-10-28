@@ -80,7 +80,7 @@ const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text
 async function photoPage({decode}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
-  if(e.pointFile)e.pointFile.type='file';e.points.type='textarea';
+  for(const id of ['pointFile','optionsFile'])if(e[id])e[id].type='file';e.points.type='textarea';
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images'}))e[id].value=value;
   const workers=[],urls=new Map(),closed=[]; let serial=0;
   class Worker {
@@ -196,6 +196,60 @@ test('pending photo click cancellation preserves exact saved pairs and permits r
   assert.match(p.e.status.textContent,/cleared/);
   p.e.image.onclick({clientX:60.25,clientY:70.25});p.e.name.value='shoulder_length';p.e.name.handlers.input();
   assert.equal(p.e.clickStatus.textContent,'');assert.equal(p.e.cancelPoint.disabled,true);
+});
+
+test('saved photo settings replay exact source and explicitly replace inactive form values',async()=>{
+  const p=await photoPage();assert.ok(p.e.optionsFile,'Replay saved measurement settings');
+  p.select();await p.analyze();
+  const raw=' {\r\n"camera_distance_mm":3100,"click_px":2,"bootstrap":80,"seed":18446744073709551615\r\n}\r\n';
+  p.e.optionsFile.files=[file(raw)];await p.e.optionsFile.handlers.change();
+  assert.equal(p.e.optionsSource.textContent,raw);assert.equal(p.e.optionsFile.files.length,0);
+  for(const id of ['distance','depth','click','level','bootstrap'])assert.equal(p.e[id].disabled,true,id);
+  assert.equal(p.e.useFormOptions.disabled,false);assert.match(p.e.optionsSummary.textContent,/imported/i);
+  p.e.points.value='{"across_back":[[30,40],[80,40]]}';await p.e.measure.onclick();
+  const w=p.current();assert.equal(w.messages[0].options,raw);
+  await w.emit({type:'result',request:w.messages[0].request,report:'{"records":[]}'});
+  const link=p.e.downloads.children.find(a=>a.download==='photo-options.json');
+  assert.equal(await p.urls.get(link.href).text(),raw);
+  p.e.name.handlers.input();p.e.cancel.onclick();p.e.photo.handlers.change();await p.analyze();
+  await p.measure();assert.equal(p.current().messages[0].options,raw,'Accepted settings remain explicit across source changes');
+  p.e.useFormOptions.onclick();assert.equal(p.e.optionsSource.textContent,'');
+  for(const id of ['distance','depth','click','level','bootstrap'])assert.equal(p.e[id].disabled,false,id);
+  assert.equal(p.e.downloads.children.length,0);assert.equal(p.e.result.hidden,true);
+  await p.measure();assert.deepEqual(JSON.parse(p.current().messages[0].options),{depth_offset_mm:0,camera_distance_mm:2500,click_px:3,sheet_level_sigma_deg:1.5,bootstrap:200,seed:0});
+});
+
+test('saved photo settings refuse wrong files atomically and discard stale reads',async()=>{
+  const p=await photoPage();assert.ok(p.e.optionsFile,'Atomic saved-settings reader');p.select();await p.analyze();
+  const raw=' {"bootstrap":100,"seed":17}\n';
+  const load=async f=>{p.e.optionsFile.files=[f];await p.e.optionsFile.handlers.change();};
+  await load(file(raw));
+  for(const text of ['{','null','[]','\ufeff{}','{"records":[]}','{"across_back":[[1,2],[3,4]]}']){
+    await load(file(text));assert.equal(p.e.optionsSource.textContent,raw);assert.ok(p.e.error.textContent);
+  }
+  let oversizedReads=0;
+  await load({size:256*1024+1,arrayBuffer:async()=>{oversizedReads++;return new ArrayBuffer(0);}});
+  assert.equal(oversizedReads,0);assert.equal(p.e.optionsSource.textContent,raw);
+  await load({size:1,arrayBuffer:async()=>new Uint8Array([255]).buffer});
+  assert.ok(p.e.error.textContent);assert.equal(p.e.optionsSource.textContent,raw);
+  for(const reject of [false,true])for(const change of ['source','points','form','cancel','replacement']){
+    const q=await photoPage();q.select();await q.analyze();
+    q.e.optionsFile.files=[file(raw)];await q.e.optionsFile.handlers.change();
+    let finish;const read=new Promise((resolve,fail)=>{finish=()=>reject?fail(Error('late read failure')):resolve(new TextEncoder().encode('{"seed":99}').buffer);});
+    q.e.optionsFile.files=[{size:11,arrayBuffer:()=>read}];const old=q.e.optionsFile.handlers.change();
+    if(change==='source')q.e.photo.handlers.change();
+    if(change==='points')q.e.points.handlers.input();
+    if(change==='form')q.e.useFormOptions.onclick();
+    if(change==='cancel')q.e.cancel.onclick();
+    if(change==='replacement'){q.e.optionsFile.files=[file('{"seed":42}')];await q.e.optionsFile.handlers.change();}
+    if(change==='source')await q.analyze();
+    q.e.points.value='{"across_back":[[30,40],[80,40]]}';await q.e.measure.onclick();
+    const worker=q.current(),before=q.e.optionsSource.textContent,message=q.e.status.textContent;
+    finish();await old;assert.equal(q.e.optionsSource.textContent,before,change);
+    assert.equal(q.e.status.textContent,message,change);assert.equal(worker.dead,undefined,change);
+    await worker.emit({type:'result',request:worker.messages[0].request,report:'{"records":[]}'});
+    assert.equal(q.e.result.hidden,false,change);
+  }
 });
 
 test('saved photo points reload exact source while display and edits retain their own text',async()=>{

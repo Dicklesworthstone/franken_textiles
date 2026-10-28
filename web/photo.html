@@ -93,7 +93,7 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
   </div>
   <p><button id="analyze" disabled>Analyze photo</button> <button id="cancel" disabled>Cancel</button></p>
   <p id="status" role="status" aria-live="polite">Choose a photo. PNG must be opaque, already oriented 8-bit gray/RGB; JPEG EXIF is applied once.</p>
-  <p><small>Limits: 64 MiB encoded and 16 million pixels per photo; 256 KiB sheet/point JSON; 16 MiB retained calibration.
+  <p><small>Limits: 64 MiB encoded and 16 million pixels per photo; 256 KiB sheet/point/options JSON; 16 MiB retained calibration.
     Unsupported HEIC/WebP, transparency and animation require conversion; images are never silently resized.</small></p>
   <pre id="error" role="alert"></pre>
 </section>
@@ -120,6 +120,13 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
 </section>
 <section>
   <h2>3. Measurement uncertainty</h2>
+  <label>Load saved measurement settings <input id="optionsFile" type="file" accept=".json,application/json"></label>
+  <button id="useFormOptions" disabled>Use form values</button>
+  <p id="optionsSummary">Using the form values below (bootstrap seed 0).</p>
+  <pre id="optionsSource" hidden></pre>
+  <p><small>Loading replaces all measurement settings with the exact options file, including its bootstrap seed;
+    omitted fields use the Rust defaults. Imported settings stay visible and active across photo changes.
+    Review their assumptions for each photo. Use form values to return to the entries below.</small></p>
   <label>Camera to sheet (mm) <input id="distance" type="number" value="2500" min="1"></label>
   <label>Possible depth offset (mm) <input id="depth" type="number" value="0"></label>
   <label>Click σ (full-resolution pixels) <input id="click" type="number" value="3" min="0" step="0.1"></label>

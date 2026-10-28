@@ -84,6 +84,25 @@ const server=http.createServer((req,res)=>{
       assert.equal((await download("photo-points.json")).toString(),points);
       assert.deepEqual(JSON.parse(await download("photo-options.json")),{depth_offset_mm:0,camera_distance_mm:2500,click_px:3,sheet_level_sigma_deg:1.5,bootstrap:200,seed:0});
       assert.ok(report.records[0].sigma_mm>0); assert.equal(report.taken_on,null);
+      assert.equal(await page.locator("#optionsFile").count(),1,"Replay saved measurement settings directly");
+      const savedOptions=' {\r\n"depth_offset_mm":0,"camera_distance_mm":2500,"click_px":3,"sheet_level_sigma_deg":1.5,"bootstrap":200,"seed":0\r\n}\r\n';
+      const loadOptions=async text=>{
+        await page.setInputFiles("#optionsFile",{name:"photo-options.json",mimeType:"application/json",buffer:Buffer.from(text)});
+        await page.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Settings loaded"));
+      };
+      await page.fill("#click","9");await loadOptions(savedOptions);await absent();
+      assert.equal(await page.isDisabled("#click"),true);assert.equal(await page.inputValue("#click"),"9");
+      assert.equal(await page.textContent("#optionsSource"),savedOptions);
+      await action("measure");assert.deepEqual(JSON.parse(await download("photo-measurements.json")),report);
+      assert.equal((await download("photo-options.json")).toString(),savedOptions,"Exact imported settings override inactive form values");
+      await loadOptions('{"bootstrap":200,"seed":18446744073709551615}');await action("measure");
+      const seeded=(await download("photo-measurements.json")).toString();
+      assert.match(seeded,/"seed":\s*18446744073709551615/,'Full-width seed reaches Rust without JavaScript rounding');
+      assert.equal(JSON.parse(seeded).records[0].value_mm,report.records[0].value_mm);
+      await loadOptions('{"bootstrap":19}');await action("measure");await absent();
+      assert.match(await page.textContent("#error"),/bootstrap/,'Imported invalid settings refuse without falling back to form values');
+      await page.click("#useFormOptions");assert.equal(await page.isDisabled("#click"),false);
+      assert.equal(await page.inputValue("#click"),"9");await page.fill("#click","3");
       assert.equal(await page.locator("#pointFile").count(),1,"Replay a saved point file directly");
       const saved=' \r\n'+points.replace(/\r?\n/g,'\r\n')+'\r\n';
       await page.setInputFiles("#pointFile",{name:"saved-points.json",mimeType:"application/json",buffer:Buffer.from(saved)});
@@ -124,8 +143,12 @@ const server=http.createServer((req,res)=>{
     assert.match(await page.textContent("#error"),/bootstrap/); await absent();
     await page.fill("#bootstrap","200"); await action("measure");
     // Delay the actual module response to exercise cancellation/replacement while work is pending.
-    for(const change of ["cancel","options","points","source","paper","removePair"]) {
+    for(const change of ["cancel","options","points","source","paper","removePair","importOptions","useFormOptions"]) {
       if(await page.isDisabled("#measure")) {await upload("photo.jpg");await page.selectOption("#paper","letter");await action("analyze");await page.fill("#points",fs.readFileSync(path.join(native,"points-jpeg.json"),"utf8"));}
+      if(change==="useFormOptions") {
+        await page.setInputFiles("#optionsFile",{name:"saved.json",mimeType:"application/json",buffer:Buffer.from('{"bootstrap":100}')});
+        await page.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Settings loaded"));
+      }
       let release, arrived;
       const parked=new Promise(resolve=>{arrived=resolve;});
       const route=async r=>{release=r;arrived();};
@@ -140,9 +163,15 @@ const server=http.createServer((req,res)=>{
       if(change==="source")await upload("photo.png");
       if(change==="paper")await page.selectOption("#paper","a4");
       if(change==="removePair")await page.click("#removePair");
+      if(change==="importOptions") {
+        await page.setInputFiles("#optionsFile",{name:"saved.json",mimeType:"application/json",buffer:Buffer.from('{"bootstrap":100}')});
+        await page.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Settings loaded"));
+      }
+      if(change==="useFormOptions")await page.click("#useFormOptions");
       await absent(); assert.equal(await page.isDisabled("#cancel"),true);
       await release.continue().catch(()=>{}); await page.context().unroute("**/ftx_wasm_bg.wasm",route);
       await absent();
+      if(!await page.isDisabled("#useFormOptions"))await page.click("#useFormOptions");
     }
     await page.selectOption("#paper","a4"); await upload("photo.png"); await action("analyze");
     assert.equal(JSON.parse(await download("photo-scale.json")).ok,false);

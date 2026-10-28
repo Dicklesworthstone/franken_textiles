@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 let worker = null, ticket = 0, busy = false, scale = null, bitmap = null, pending = [];
 let sourceUrls = [], resultUrls = [];
 let pointSource = null;
+let importedOptions = null;
 let cameraWorker = null, cameraTicket = 0, cameraBusy = false, cameraResult = null, generatedCalibration = null;
 const cameraUrls = [];
 const status = text => {$("status").textContent=text;};
@@ -22,6 +23,13 @@ function controls() {
   $("analyze").disabled=busy || cameraBusy || !$("photo").files.length || (charuco && !$("sheet").files.length);
   $("measure").disabled=busy || cameraBusy || scale?.ok !== true || pending.length>0;
   $("pointFile").disabled=!bitmap || scale?.ok!==true;
+  $("optionsFile").disabled=cameraBusy;
+  $("useFormOptions").disabled=importedOptions===null;
+  for(const id of ["distance","depth","click","level","bootstrap"]) $(id).disabled=importedOptions!==null;
+  $("optionsSource").textContent=importedOptions ?? "";
+  $("optionsSource").hidden=importedOptions===null;
+  $("optionsSummary").textContent=importedOptions===null?"Using the form values below (bootstrap seed 0).":
+    "Using imported settings below; form values are inactive. Rust checks these settings when measuring.";
   let namedPair=false;
   try {namedPair=!!$("name").value.trim() && Object.hasOwn(pointPairs(),$("name").value.trim());} catch {}
   $("removePair").disabled=!namedPair; $("cancelPoint").disabled=pending.length===0;
@@ -39,7 +47,7 @@ function controls() {
 function kill() { worker?.terminate(); worker=null; busy=false; controls(); }
 function revoke(urls) { urls.forEach(u=>URL.revokeObjectURL(u)); urls.length=0; }
 function withdraw(source=false) {
-  ++ticket; kill(); $("pointFile").value=""; revoke(resultUrls); $("downloads").replaceChildren();
+  ++ticket; kill(); $("pointFile").value=""; $("optionsFile").value=""; revoke(resultUrls); $("downloads").replaceChildren();
   $("result").hidden=true; $("report").textContent=""; $("values").replaceChildren(); $("error").textContent="";
   if(source) {
     scale=null; bitmap?.close(); bitmap=null; pending=[]; pointSource=null; revoke(sourceUrls);
@@ -73,6 +81,7 @@ function draw() {
   }
 }
 function options() {
+  if(importedOptions!==null) return importedOptions;
   return JSON.stringify({depth_offset_mm:Number($("depth").value),camera_distance_mm:Number($("distance").value),
     click_px:Number($("click").value),sheet_level_sigma_deg:Number($("level").value),bootstrap:Number($("bootstrap").value),seed:0});
 }
@@ -81,6 +90,31 @@ async function readJsonFile(file) {
   // Preserve the exact UTF-8 source, including a BOM (which the Rust JSON parser will reject).
   // Replacing invalid bytes or stripping a BOM would change the source identity before hashing.
   return new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(await file.arrayBuffer());
+}
+async function loadOptions() {
+  const file=$("optionsFile").files[0];
+  if(!file || cameraBusy) return;
+  withdraw(); const id=ticket;
+  if(file.size>256*1024) {
+    $("error").textContent="Options JSON exceeds 256 KiB; no source was read.";
+    status("Settings file not loaded; current settings are unchanged."); return;
+  }
+  busy=true; controls(); status("Reading local measurement settings…");
+  try {
+    const text=await readJsonFile(file);
+    if(id!==ticket) return;
+    const value=JSON.parse(text), keys=["depth_offset_mm","camera_distance_mm","click_px","sheet_level_sigma_deg","bootstrap","seed"];
+    if(!value || typeof value!=="object" || Array.isArray(value) || Object.keys(value).some(key=>!keys.includes(key))) {
+      throw Error("Choose a photo-options.json object containing only measurement settings.");
+    }
+    // Do not reserialize: a valid Rust u64 seed need not be representable as a JavaScript number.
+    importedOptions=text;
+    kill(); status("Settings loaded; review their assumptions for this photo, then measure again.");
+  } catch(error) {
+    if(id!==ticket) return;
+    kill(); $("error").textContent=String(error.message || error);
+    status("Settings file not loaded; current settings are unchanged.");
+  }
 }
 async function loadPoints() {
   const file=$("pointFile").files[0];
@@ -273,6 +307,8 @@ async function run(op) {
 }
 $("analyze").onclick=()=>run("analyze"); $("measure").onclick=()=>run("measure");
 $("pointFile").addEventListener("change",loadPoints);
+$("optionsFile").addEventListener("change",loadOptions);
+$("useFormOptions").onclick=()=>{importedOptions=null; withdraw(); status("Using form settings; review their assumptions and measure again.");};
 $("cancel").onclick=()=>{withdraw(); status("Cancelled; no measurements published.");};
 for(const id of ["photo","paper","referenceMode","sheet","calibration","rotation"]) $(id).addEventListener("change",()=>{if(id==="calibration")generatedCalibration=null; withdraw(true); status("Source changed; analyze the current photo.");});
 for(const id of ["lensId","independence"]) $(id).addEventListener("input",()=>{withdraw(true); status("Capture evidence changed; analyze the current photo.");});

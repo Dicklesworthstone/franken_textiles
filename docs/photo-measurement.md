@@ -72,6 +72,15 @@ worker; superseded asynchronous reads/replies cannot publish a result. Photos an
 measurements are neither uploaded nor written to browser storage. Source/preview
 downloads are user actions, so retain them privately.
 
+To replay measurement assumptions, choose **Load saved measurement settings** and select
+the downloaded `photo-options.json` (at most 256 KiB). Its exact UTF-8 text and bootstrap
+seed reach Rust unchanged and remain in subsequent options downloads. The imported JSON
+is displayed; form values are inactive until **Use form values** is selected. There is no
+merge with those inactive entries: omitted options use Rust defaults. Settings remain active
+across photo changes, so review them for every capture. Invalid UTF-8/JSON or unrelated
+documents preserve current settings; numerical/type/domain errors refuse when measuring,
+with no fallback. Cancellation or intervening source/point/settings edits discard late reads.
+
 For ChArUco, downloads also retain the exact original sidecar and calibration JSON plus
 the explicit capture assertions. **Remove calibration** clears the selected lens and
 its assertions, after which the current photo must be analyzed again. A rejected lens
