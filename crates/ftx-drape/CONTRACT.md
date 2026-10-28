@@ -116,6 +116,20 @@ mass remains additive once. Dry thermal/vapor and changing-water histories canno
 the wet state. No variable mass, liquid slip or unmeasured wet constitutive change is inferred.
 Tests: `attached_mass`; source contract: `docs/attached-mass.md`.
 
+**Evaporating liquid inertia** (`liquid_mass`, bounded `ftx-vc2.3` slice). An independent
+`ftx-evaporating-liquid-mechanics/1` qualification binds the complete material/interface report
+and every retained instance's exact material and temperature/loading domain. Reference triangle
+liquid distributes once through the real weld map on top of dry sheet and attached accessory mass.
+`Solver::evaporate_liquid` removes only nonincreasing co-moving liquid: velocity is preserved,
+while exported momentum, bulk kinetic energy and signed gravitational energy retain separate
+transfer residuals. Those mechanical terms are not latent or sensible thermal energy. Source,
+mass, topology, constraints and frozen-law mutations refuse before changing state; pinned DOFs,
+already-fixed retained liquid and incoming/draining liquid are outside this closure. Numerical
+cache invalidation preserves symbolic structure and accepted contact/material histories. Tests
+cover analytic mass/momentum/energy transfer, free-fall invariance, variable-mass spring time-step
+convergence and actual sewn accessory ownership. These establish numerical behavior, not a
+measured wet law or garment fit.
+
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
 and conservative Frame/remap APIs. Time-zero temperatures and spatially uniform interval films are

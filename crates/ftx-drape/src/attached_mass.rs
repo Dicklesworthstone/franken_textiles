@@ -62,6 +62,10 @@ pub struct Report {
     pub cloth_mass_kg: f64,
     /// Sum of independently admitted total group masses, never multiplied by target count.
     pub attached_mass_kg: f64,
+    /// Additional co-moving evaporating liquid, when separately qualified by `liquid_mass`.
+    /// Original sheet and accessory observations above are retained without relabeling their mass.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evaporating_liquid_mass_kg: Option<f64>,
     /// Actual sum of the solver's lumped mass vector, used by gravity and implicit inertia.
     pub total_inertial_mass_kg: f64,
     /// Actual total minus cloth and source group masses; numerical, not an uncertainty interval.
@@ -93,6 +97,20 @@ impl Binding {
 }
 
 impl ClothModel {
+    // Called only after the source-bound liquid allocator has validated its complete trial.
+    pub(crate) fn accept_liquid_mass(&mut self, mass: Vec<f64>, liquid_kg: f64) {
+        if let Some(binding) = &mut self.attached_mass {
+            binding.mass = mass.clone();
+            binding.report.evaporating_liquid_mass_kg = Some(liquid_kg);
+            binding.report.total_inertial_mass_kg = mass.iter().sum();
+            binding.report.mass_balance_residual_kg = binding.report.total_inertial_mass_kg
+                - binding.report.cloth_mass_kg
+                - binding.report.attached_mass_kg
+                - liquid_kg;
+        }
+        self.mass = mass;
+    }
+
     /// Validate an active attachment binding before consuming its inertial mass.
     ///
     /// # Errors
@@ -223,6 +241,7 @@ pub(crate) fn bind(
             input_sha256,
             cloth_mass_kg,
             attached_mass_kg,
+            evaporating_liquid_mass_kg: None,
             total_inertial_mass_kg,
             mass_balance_residual_kg: residual,
             groups,
