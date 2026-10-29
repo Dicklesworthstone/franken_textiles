@@ -27,6 +27,19 @@ jobs:
       - name: Check lints
         if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Package pinned tools for offline reproduction
+        if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[offline-tools]')) }}
+        run: |
+          toolchain="$(rustup show active-toolchain | cut -d ' ' -f1)"
+          tar --exclude='*/share/doc' -czf "$RUNNER_TEMP/rust-tools.tar.gz" -C "$HOME" ".rustup/toolchains/$toolchain" .cargo/bin .cargo/registry
+      - name: Preserve offline tools
+        if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[offline-tools]')) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-tools-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-tools.tar.gz
+          retention-days: 1
+          compression-level: 0
       - name: Check capture and manufacturing workflows
         if: ${{ !cancelled() }}
         run: |
@@ -89,16 +102,3 @@ jobs:
           name: browser-${{ github.sha }}
           path: web/
           retention-days: 1
-      - name: Package pinned tools for offline reproduction
-        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[offline-tools]')
-        run: |
-          toolchain="$(rustup show active-toolchain | cut -d ' ' -f1)"
-          tar --exclude='*/share/doc' -czf "$RUNNER_TEMP/rust-tools.tar.gz" -C "$HOME" ".rustup/toolchains/$toolchain" .cargo/bin .cargo/registry
-      - name: Preserve offline tools
-        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[offline-tools]')
-        uses: actions/upload-artifact@v4
-        with:
-          name: offline-tools-${{ github.sha }}
-          path: ${{ runner.temp }}/rust-tools.tar.gz
-          retention-days: 1
-          compression-level: 0

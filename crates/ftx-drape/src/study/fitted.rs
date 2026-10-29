@@ -915,9 +915,25 @@ mod tests {
         .unwrap();
         assert_eq!(first["drape"], ordinary.report);
         assert_eq!(first["positions_m"], json!(ordinary.scene.solver.x));
+        // The prism's cap is not an anatomical shoulder: at 50 degrees its right and left
+        // panels cross. Keep that previously accepted pose as a negative, not a weaker audit.
         req.arm_abduction_deg = 50.0;
+        let invalid_body = FittedBody::prepare(&model, &hash, &req).unwrap();
+        let invalid_body = invalid_body.body();
+        let refusal = Session::new(&scenario, &invalid_body)
+            .unwrap()
+            .evaluate(&pattern, |_| {})
+            .unwrap_err();
+        assert_eq!(refusal.code, ftx_core::RefusalCode::IntersectingStart);
+        assert!(refusal.message.contains("body triangles 6 and 63"));
+        assert_eq!(first, session.evaluate(&pattern, |_| {}).unwrap());
+
+        // At 36 degrees the cap panels remain on their own sides of the prism. Audit that
+        // positive geometry independently of the ordinary drape and heat comparison below.
+        req.arm_abduction_deg = 36.0;
         let b = FittedBody::prepare(&model, &hash, &req).unwrap();
         let body = b.body();
+        crate::collider::audit_surface(body.collision.0, body.collision.1, 10_000).unwrap();
         let second = Session::new(&scenario, &body)
             .unwrap()
             .evaluate(&pattern, |_| {})
