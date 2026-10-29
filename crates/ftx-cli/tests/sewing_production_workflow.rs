@@ -247,8 +247,9 @@ fn routed_attending_workers_replay_actual_operations_through_both_native_command
             "method":"Exclusive travel, waiting, loading, setup, feed and unloading; garment handoffs use a separate resource",
             "conditions":{},"evidence":"estimate","allow_estimates":true
         });
-        let program =
-            portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &options.to_string()).unwrap());
+        let program_json =
+            ftx_wasm::manufacturing::sew_stitches(PATTERN, &options.to_string()).unwrap();
+        let program = portable(program_json.clone());
         let plan = &program["plan"];
         let route = &plan["production"]["routing"];
         let labor = &route["attending_labor"];
@@ -318,6 +319,28 @@ fn routed_attending_workers_replay_actual_operations_through_both_native_command
                 ),
                 program
             );
+        }
+        if let Some(capture) = std::env::var_os("FTX_ROUTED_FIXTURE_REPLAY") {
+            use std::io::Write;
+            let capture = PathBuf::from(capture).join(if eligible {
+                "attending-eligible"
+            } else {
+                "attending-fixed"
+            });
+            fs::create_dir_all(&capture).unwrap();
+            for (name, text) in [
+                ("pattern.json", PATTERN.to_owned()),
+                ("options.json", options.to_string()),
+                ("program.json", program_json),
+            ] {
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(capture.join(name))
+                    .unwrap()
+                    .write_all(text.as_bytes())
+                    .unwrap();
+            }
         }
     }
 }

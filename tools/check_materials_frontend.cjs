@@ -8160,7 +8160,7 @@ test('compiled WASM moving seam bridges change qualified heat decisions and pres
     } finally {globalThis.ftxProgress=previousProgress;}
   });
 
-test('compiled WASM routed shared fixtures replay exact native sewing and material-study reports',
+test('compiled WASM routed shared fixtures and attending workers replay exact native sewing reports',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_ROUTED_FIXTURE_REPLAY},async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
@@ -8185,6 +8185,40 @@ test('compiled WASM routed shared fixtures replay exact native sewing and materi
     assert.equal(study.type,'result',study.message);
     assert.equal(study.files.find(file=>file.name==='material-study.json').text,report);
     assert.equal(study.files.find(file=>file.name==='study-request.json').text,studyRequest);
+    for(const [index,kind] of ['fixed','eligible'].entries()) {
+      const captured=name=>input(`attending-${kind}/${name}`);
+      const workerPattern=captured('pattern.json'),workerOptions=captured('options.json');
+      const expected=captured('program.json');
+      assert.equal(ftx.sew_stitches(workerPattern,workerOptions),expected);
+      const attended=await w.send({type:'sew',request:211+index,pattern:workerPattern,options:workerOptions});
+      assert.equal(attended.type,'result',attended.message);
+      assert.equal(attended.files.find(file=>file.name==='sewing-program.json').text,expected);
+      assert.deepEqual(attended.result,JSON.parse(expected));
+      const plan=attended.result.plan,routed=plan.production.routing,labor=routed.attending_labor;
+      assert.equal(plan.schema,'ftx-sewing-plan/21');assert.equal(routed.schema,'ftx-sewing-routing/4');
+      assert.equal(labor.schema,'ftx-sewing-attending-labor/1');assert.equal(labor.physical_labor_validated,false);
+      assert.equal(labor.selected.steps.length,routed.selected.operations.length);
+      assert.equal(plan.production.stitch_intervals,attended.result.stitches.length);
+      for(const operation of routed.selected.operations) {
+        const step=labor.selected.steps.find(step=>step.operation===operation.id);
+        assert.equal(step.worker,'synthetic-attending-worker');
+        assert.equal(step.copy,operation.copy);assert.equal(step.cell,operation.cell);
+        assert.equal(step.loading_start_milliseconds,operation.loading_start_milliseconds);
+        assert.equal(step.finish_milliseconds,operation.finish_milliseconds);
+        const seam=routed.cell_plans.find(source=>source.cell===operation.cell).plan.seams[operation.seam_index];
+        const stitches=attended.result.stitches.filter(step=>step.cell===operation.cell&&step.copy===operation.copy&&step.operation===operation.seam_index);
+        assert.equal(stitches.length,seam.stitch_intervals);
+        for(const stitch of stitches) {
+          assert.deepEqual(stitch.a_mm,seam.stations.a[stitch.to_station]);
+          assert.deepEqual(stitch.b_mm,seam.stations.b[stitch.to_station]);
+        }
+      }
+      const unavailable=JSON.parse(workerOptions);
+      unavailable.production.routing.attending_labor.workers[0].available_until_milliseconds=0;
+      const refused=await w.send({type:'sew',request:213+index,pattern:workerPattern,options:JSON.stringify(unavailable)});
+      assert.equal(refused.type,'error');
+      assert.equal(w.sent.some(message=>message.type==='result'&&message.request===213+index),false);
+    }
   });
 
 test('compiled WASM evaporating, supplied and condensing textile-water objectives and moving mass replay native commands and named scenarios',
