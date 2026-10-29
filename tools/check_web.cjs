@@ -57,6 +57,11 @@ async function tracingEdits(browser, origin) {
   const assert=require("node:assert/strict"),context=await browser.newContext({userAgent});
   const errors=[],requests=[],work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-trace-drafts-"));
   context.on("request",r=>requests.push({url:r.url(),method:r.method()}));
+  await context.route("**/worker.js",async route=>{
+    const response=await route.fetch();
+    // Both ordinary Workbench paths receive the same explicit export clock, not altered numerics.
+    await route.fulfill({response,body:"const NativeDate=Date;globalThis.Date=class extends NativeDate {constructor(...a){super(...(a.length?a:[2026,9,29,12,0]));}};\n"+await response.text()});
+  });
   if(process.env.FTX_WASM_PKG) await context.route("**/pkg/*",async route=>{
     const name=path.basename(new URL(route.request().url()).pathname);
     assert.ok(["ftx_wasm.js","ftx_wasm_bg.wasm"].includes(name));
@@ -65,7 +70,7 @@ async function tracingEdits(browser, origin) {
   const page=await context.newPage();page.on("pageerror",e=>errors.push(String(e)));
   const cases=JSON.parse(fs.readFileSync(path.join(root,"tests/fixtures/oracle/trace/raster_trace.json"))).cases;
   const image=Buffer.from(cases[0].input.png,"base64"),other=Buffer.from(cases.find(c=>c.input.png!==cases[0].input.png).input.png,"base64");
-  const download=async name=>{const event=page.waitForEvent("download");await page.click(`a[download="${name}"]`);const d=await event;assert.equal(await d.failure(),null);return fs.readFileSync(await d.path());};
+  const download=async(name,tab=page)=>{const event=tab.waitForEvent("download");await tab.click(`a[download="${name}"]`);const d=await event;assert.equal(await d.failure(),null);return fs.readFileSync(await d.path());};
   const action=async id=>{await page.click("#"+id);await page.waitForFunction(()=>/^(Review ready|No current review)/.test(document.getElementById("status").textContent));};
   const trace=async bytes=>{
     await page.setInputFiles("#image",{name:"oracle.png",mimeType:"image/png",buffer:bytes});
@@ -79,6 +84,7 @@ async function tracingEdits(browser, origin) {
   try {
     await page.goto(origin+"/trace.html");await trace(image);
     assert.equal(await page.locator("#saveDraft").count(),1,"Reopen saved tracing edits");
+    assert.equal(await page.locator("#openPattern").count(),1,"Check traced pattern without download/reupload");
     assert.equal(JSON.parse(await page.textContent("#details")).source_sha256,sha(image));
     await page.fill("#names",'{"pieces":{"p1":{"id":"front","name":"Front"}}}');
     await page.fill("#targets",'[{"reference":"front/e1","target_mm":200}]');await action("apply");
@@ -102,7 +108,7 @@ async function tracingEdits(browser, origin) {
     await page.check("#dashes");await page.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Ready."));await action("trace");
     await page.fill("#names","{");await action("apply");assert.equal(await page.isVisible("#error"),true);
     await page.click("#saveDraft");assert.equal(JSON.parse(await download("trace-edits.json")).names,"{");
-    await page.evaluate(()=>{const original=File.prototype.arrayBuffer;File.prototype.arrayBuffer=function(){return original.call(this).then(bytes=>new Promise(resolve=>{window.releaseDraft=()=>resolve(bytes);}));};});
+    await page.evaluate(()=>{const original=File.prototype.arrayBuffer;window.originalTraceRead=original;File.prototype.arrayBuffer=function(){return original.call(this).then(bytes=>new Promise(resolve=>{window.releaseDraft=()=>resolve(bytes);}));};});
     await page.setInputFiles("#draftFile",{name:"delayed.json",mimeType:"application/json",buffer:bytes});
     await page.waitForFunction(()=>typeof window.releaseDraft==="function");await page.click("#cancel");
     await page.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Ready."));
@@ -111,6 +117,37 @@ async function tracingEdits(browser, origin) {
     assert.equal(await page.isDisabled("#apply"),true);assert.deepEqual(errors,[]);
     assert.ok(requests.every(r=>r.url.startsWith(origin+"/")&&r.method==="GET"));
     assert.equal(await page.evaluate(()=>localStorage.length),0);
+    await page.evaluate(()=>{
+      File.prototype.arrayBuffer=window.originalTraceRead;window.traceStored=false;
+      const set=Storage.prototype.setItem;Storage.prototype.setItem=function(...a){window.traceStored=true;return set.apply(this,a);};
+    });
+    await trace(image);await load(bytes);await action("apply");
+    const opened=page.waitForEvent("popup");await page.click("#openPattern");const bench=await opened;
+    await bench.waitForFunction(()=>!document.getElementById("go").disabled && document.getElementById("traceImportText").textContent.startsWith("Loaded the local tracing"));
+    assert.equal(await bench.isChecked('input[name="program"][value="audit"]'),true);
+    assert.equal(await bench.isVisible("#results"),false,"Handoff never automatically runs");
+    assert.equal(await bench.evaluate(()=>window.opener===null),true,"Opener released after handoff");
+    await bench.screenshot({path:path.join(work,"trace-workbench.png"),fullPage:true});
+    const round=async tab=>{await tab.click("#go");await tab.waitForFunction(()=>!document.getElementById("results").classList.contains("hidden") || !document.getElementById("errorBox").classList.contains("hidden"));assert.equal(await tab.isVisible("#errorBox"),false,await tab.textContent("#errorText"));return download(await tab.locator('#resFiles a[download$=".zip"]').getAttribute("download"),tab);};
+    const handed=await round(bench);
+    const manual=await context.newPage();await manual.goto(origin+"/index.html");
+    await manual.waitForFunction(()=>!document.getElementById("go").disabled);await manual.check('input[name="program"][value="audit"]');
+    await manual.setInputFiles("#patternFile",{name:"pattern.json",mimeType:"application/json",buffer:pattern});
+    assert.ok((await round(manual)).equals(handed),"Handoff and ordinary file upload produce identical complete export archives");
+    await bench.click("#clearTraceImport");assert.equal(await bench.locator("#resFiles a").count(),0);
+    await bench.click("#go");await bench.waitForFunction(()=>!document.getElementById("errorBox").classList.contains("hidden"));
+    assert.match(await bench.textContent("#errorText"),/choose a pattern.json file/);
+    await bench.close();await manual.close();
+    let release,arrived;const parked=new Promise(resolve=>{arrived=resolve;});
+    const hold=route=>{release=route;arrived();},filter=/\/index\.html\?traceImport=/;
+    await context.route(filter,hold);const waiting=page.waitForEvent("popup");await page.click("#openPattern");await parked;
+    await page.fill("#names","{}");await release.continue();await context.unroute(filter,hold);const stale=await waiting;
+    await stale.waitForFunction(()=>document.getElementById("traceImportText").textContent.startsWith("Tracing review changed"));
+    assert.equal(await stale.isVisible("#results"),false);await stale.close();
+    assert.equal(await page.evaluate(()=>window.traceStored),false,"Tracing handoff performs no storage writes");
+    assert.deepEqual(await page.evaluate(()=>Object.fromEntries(Object.keys(localStorage).map(k=>[k,localStorage.getItem(k)]))),{"fab-wb-bodyMode":'"chart"',"fab-wb-program":'"audit"'},"Only existing Workbench preferences persist, never a pattern");
+    assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.url.startsWith(origin+"/")&&r.method==="GET"));
+    console.log("PASS trace-to-Workbench: explicit same-origin handoff, ordinary-upload archive equality, no automatic run, cleared/stale transfer controls and no pattern persistence.");
     console.log("PASS tracing drafts: actual compiled-WASM scaled-pattern replay, exact editor source, wrong image/settings, native JSON refusal, save-after-refusal, cancellation and local-only controls. Artifacts:",work);
   } finally {await context.close();}
 }

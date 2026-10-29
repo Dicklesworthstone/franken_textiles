@@ -132,6 +132,7 @@ test('trace pattern handoff sends only current review to its same-origin request
   const p=await pageModule();assert.ok(p.e.openPattern,'Check traced pattern without download/reupload');p.select();await p.trace();
   p.e.openPattern.onclick();const child=p.popups[0],token=new URL(child.url).searchParams.get('traceImport');
   assert.equal(child.target,'_blank');assert.equal(new URL(child.url).origin,'https://unit.invalid');assert.ok(token);
+  p.e.openPattern.onclick();assert.equal(p.popups.length,1,'One pending handoff cannot orphan an earlier tab');
   const ready={type:'ftx-trace-pattern-ready',token};
   for(const [origin,source,data] of [['https://wrong.invalid',child,ready],['https://unit.invalid',{},ready],['https://unit.invalid',child,{...ready,token:'wrong'}]]){
     p.events.message({origin,source,data});assert.equal(child.messages.length,0);

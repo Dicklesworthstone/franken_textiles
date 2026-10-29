@@ -243,6 +243,9 @@ function show({ report, files }) {
 
 $("openPattern").onclick = () => {
   if(busy || !reviewPattern) return;
+  if(workbenchTransfer && !workbenchTransfer.target.closed) {
+    $("status").textContent="A Workbench handoff is still opening. Finish or close that tab before opening another.";return;
+  }
   const token=Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,"0")).join("");
   const url=new URL("index.html",import.meta.url);url.searchParams.set("traceImport",token);
   const target=window.open(url.href,"_blank");
