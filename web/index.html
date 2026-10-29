@@ -92,7 +92,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   <section>
     <h2>2. Body</h2>
     <p><a href="photo.html">Measure photo landmarks locally</a> with a blank Letter/A4 reference,
-      then add their downloaded records below alongside stature and the other required measurements.</p>
+      then send or add their records below alongside stature and the other required measurements.</p>
     <div class="seg" id="bodyModes">
       <label><input type="radio" name="bodyMode" value="chart" checked>Size-chart demo <small>(no child needed)</small></label>
       <label><input type="radio" name="bodyMode" value="tape">My tape measurements</label>
@@ -113,8 +113,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       <div class="scroll"><table class="tape"><tbody id="tapeRows"></tbody></table></div>
     </div>
     <div id="fileBox" class="hidden"><label>measurements.json <input type="file" id="measFile" accept=".json,application/json"></label></div>
-    <details>
+    <details id="supplementalEvidence">
       <summary>Add photo or other measurement evidence</summary>
+      <p id="photoImportNote" class="mut" hidden><span id="photoImportText"></span></p>
       <p>Choose <b>My tape measurements</b> or a primary <b>Measurements file</b>, then add local
         <code>fabric-measurements/1</code> files. Their original records are fused with the primary body's
         records; definitions, uncertainty, conflicts and MODEL_FIT restrictions still apply.</p>
@@ -244,6 +245,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   let bodyFitText = null, bodyFitReady = true, bodyFitRead = 0;
   let tracedPattern = null, traceToken = new URL(location.href).searchParams.get("traceImport");
   function clearTraceImport() {if(traceToken)window.opener=null;tracedPattern=traceToken=null;$("traceImportNote").hidden=true;}
+  let photoEvidence = null, photoImportProblem = null, photoToken = new URL(location.href).searchParams.get("photoImport");
+  function clearPhotoImport() {if(photoToken)window.opener=null;photoEvidence=photoToken=photoImportProblem=null;$("photoImportNote").hidden=true;}
   let nextRequest = 0, roundRequest = 0, bodyRequest = 0, foldRequest = 0, fieldsRequest = 0;
   const worker = new Worker(new URL("worker.js", location.href), { type: "module" });
   const status = (t) => { $("status").textContent = t; };
@@ -320,6 +323,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       }
     }
     const sources = Array.from($("supplementalFiles").files || []);
+    if(photoToken) throw Error("Wait for the photo handoff or clear added files before checking.");
+    if(photoImportProblem) throw Error(photoImportProblem);
+    if(photoEvidence) sources.unshift(photoEvidence);
     if (sources.length) {
       if (m === "chart") throw Error("Choose tape measurements or a measurements file before adding wearer evidence.");
       if (!$("supplementalConsent").checked) throw Error("Confirm that every added file describes this same wearer.");
@@ -584,7 +590,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     for (const event of ["input", "change"]) $(id).addEventListener(event, invalidateEvidence);
   }
   $("supplementalConsent").addEventListener("change", invalidateRound);
-  $("clearSupplemental").addEventListener("click", () => { $("supplementalFiles").value = ""; invalidateEvidence(); });
+  $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change", invalidateFold);
   $("twoStart").addEventListener("change", invalidateFold);
   $("resetStyle").addEventListener("click", () => {
@@ -689,6 +695,28 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     });
     source.postMessage({type:"ftx-trace-pattern-ready",token:traceToken},traceOrigin);
   }
+  if(photoToken && !traceToken && /^[0-9a-f]{32}$/.test(photoToken) && traceOrigin!=="null" && window.opener) {
+    const source=window.opener;
+    $("supplementalEvidence").open=true;$("photoImportNote").hidden=false;
+    $("photoImportText").textContent="Waiting for photo records. Choose primary evidence and review the same-wearer confirmation.";
+    window.addEventListener("message",event=>{
+      const m=event.data;
+      if(!photoToken || event.origin!==traceOrigin || event.source!==source || m?.token!==photoToken ||
+        !["ftx-photo-records","ftx-photo-records-cancelled"].includes(m.type)) return;
+      photoToken=null;window.opener=null;invalidateEvidence();
+      if(m.type==="ftx-photo-records-cancelled") {
+        photoImportProblem="Photo review changed before transfer. Clear added files, then measure the current photo again or add a downloaded file.";
+        $("photoImportText").textContent=photoImportProblem;return;
+      }
+      if(!(m.records instanceof Blob) || m.records.size>16*1024*1024) {
+        photoImportProblem="Photo handoff refused. Clear added files, then add a photo-measurements.json file.";
+        $("photoImportText").textContent=photoImportProblem;return;
+      }
+      photoEvidence=m.records;
+      $("photoImportText").textContent="Photo-record file received. Choose primary tape measurements or a measurements file, review this evidence and confirm the same wearer before Draft and check. Clear added files removes this snapshot.";
+    });
+    source.postMessage({type:"ftx-photo-records-ready",token:photoToken},traceOrigin);
+  } else if(photoToken) {photoToken=null;}
   worker.postMessage({ type: "init", pkg: PKG });
 })();
 </script>

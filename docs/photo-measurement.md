@@ -8,6 +8,22 @@ these paths infers body landmarks or establishes fit.
 
 ## Measure locally in the browser
 
+After measuring, **Add records in Pattern Workbench** opens a new local tab with the
+exact current `photo-measurements.json` file. Choose primary tape measurements or a
+measurements file, review the added evidence, explicitly confirm the same wearer,
+then **Draft and check**. This uses the ordinary supplemental-file fusion, uncertainty,
+conflict and readiness checks; a photo length supplies neither a girth nor READY status.
+The transfer does not run a round or select a body. **Clear added files** removes it.
+
+The tabs use the same origin, opener window and a one-use request token. No records
+enter browser storage or a server. Edits, cancellation or a source change before the
+receiving tab requests the file cancel the pending transfer; an already received file
+remains the transferred snapshot. Only one receiving tab can be pending. If popups
+are blocked, download the file and select it under **Additional measurements** instead.
+The existing eight-file/16 MiB combined budget and native record limits still apply.
+Cancelled or refused transfers block checking until **Clear added files**; a failed
+transfer never silently removes the requested evidence from a round.
+
 Open **Measure photo landmarks locally** from the Pattern Workbench's Body section
 (`web/photo.html`). Choose an opaque oriented PNG or supported EXIF JPEG. Select
 **Blank paper** for Letter/A4/auto detection, or **ChArUco board** and the original

@@ -3154,7 +3154,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 
 // The original inline workshop script, using a small DOM transport double. These tests inspect
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
-function draftingPage({traceToken=null}={}) {
+function draftingPage({traceToken=null,photoToken=null}={}) {
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const el of Object.values(e)) {
     el.addEventListener=(name,fn)=>{const previous=el.handlers[name];el.handlers[name]=(...args)=>{
@@ -3171,7 +3171,7 @@ function draftingPage({traceToken=null}={}) {
   class LocalURL extends URL {}
   LocalURL.createObjectURL=blob=>{const u=`blob:${++next}`;live.set(u,blob);return u;};
   LocalURL.revokeObjectURL=u=>assert.equal(live.delete(u),true);
-  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:'')},
+  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:photoToken?'?photoImport='+photoToken:'')},
     window:{opener,addEventListener:(name,fn)=>{windowEvents[name]=fn;}},
     localStorage:{getItem:()=>null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},
       querySelector:()=>modes.find(m=>m.checked),querySelectorAll:()=>modes,
@@ -3188,6 +3188,39 @@ function draftingPage({traceToken=null}={}) {
   const dispatch=(id,event)=>e[id].handlers[event]?.();
   return {e,modes,messages,live,emit,last,result,body,worker,dispatch,opener,openerMessages,windowEvents,hasOpener:()=>!!context.window.opener};
 }
+
+test('workbench photo handoff preserves original evidence, explicit wearer consent and ordinary supplemental budgets',async()=>{
+  const token='2'.repeat(32),p=draftingPage({photoToken:token});assert.ok(p.e.photoImportNote,'Visible photo-record import');
+  assert.equal(p.openerMessages[0].data.type,'ftx-photo-records-ready');assert.equal(p.openerMessages[0].origin,'https://unit.invalid');
+  const text='\r\n{"schema":"fabric-measurements/1","signed":-0.0,"seed":18446744073709551615}\r\n';
+  const data={type:'ftx-photo-records',token,records:new Blob([text])};
+  for(const [origin,source,m] of [['https://foreign.invalid',p.opener,data],['https://unit.invalid',{},data],['https://unit.invalid',p.opener,{...data,token:'wrong'}]]) {
+    p.windowEvents.message({origin,source,data:m});assert.equal(p.e.photoImportNote.hidden,false);
+    assert.equal(p.hasOpener(),true);
+  }
+  p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});assert.equal(p.hasOpener(),false);
+  assert.equal(p.last('run'),undefined,'Never automatically runs');assert.equal(p.e.supplementalEvidence.open,true);
+  await p.e.go.handlers.click();assert.equal(p.last('run'),undefined);assert.match(p.e.errorText.textContent,/tape measurements/);
+  p.modes[0].checked=false;p.modes[1].checked=true;
+  await p.e.go.handlers.click();assert.equal(p.last('run'),undefined);assert.match(p.e.errorText.textContent,/same wearer/);
+  p.e.supplementalConsent.checked=true;await p.e.go.handlers.click();
+  assert.deepEqual([...p.last('run').req.body.supplemental_measurements],[text]);p.result();
+  p.e.stature.value='100';p.dispatch('stature','input');assert.equal(p.e.supplementalConsent.checked,false);
+  p.e.supplementalFiles.files=Array(8).fill({size:1,arrayBuffer:()=>{throw Error('must not read');}});
+  p.e.supplementalConsent.checked=true;await p.e.go.handlers.click();assert.match(p.e.errorText.textContent,/at most 8/);
+  Object.defineProperty(p.e.supplementalFiles,'value',{set(value){assert.equal(value,'');this.files=[];}});
+  p.e.clearSupplemental.handlers.click();assert.equal(p.e.photoImportNote.hidden,true);assert.equal(p.e.supplementalConsent.checked,false);
+  assert.equal(p.e.results.classList.contains('hidden'),true);await p.e.go.handlers.click();assert.equal(p.last('run').req.body.supplemental_measurements,undefined);
+  const q=draftingPage({photoToken:token});q.e.clearSupplemental.handlers.click();assert.equal(q.hasOpener(),false);
+  q.windowEvents.message({origin:'https://unit.invalid',source:q.opener,data});await q.e.go.handlers.click();
+  assert.equal(q.last('run').req.body.supplemental_measurements,undefined,'Clear cancels late transfer');
+  for(const records of ['not a Blob',new Blob([new Uint8Array(16*1024*1024+1)])]) {
+    const r=draftingPage({photoToken:token});r.windowEvents.message({origin:'https://unit.invalid',source:r.opener,data:{...data,records}});
+    assert.equal(r.hasOpener(),false);assert.match(r.e.photoImportText.textContent,/refused/);
+    await r.e.go.handlers.click();assert.equal(r.last('run'),undefined);assert.match(r.e.errorText.textContent,/refused/);
+    r.e.clearSupplemental.handlers.click();await r.e.go.handlers.click();assert.ok(r.last('run'));
+  }
+});
 
 test('workbench tracing handoff uses ordinary pattern checks and rejects foreign or superseded imports',async()=>{
   const token='1'.repeat(32),p=draftingPage({traceToken:token});assert.ok(p.e.traceImportNote,'Visible local tracing handoff');

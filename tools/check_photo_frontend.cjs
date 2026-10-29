@@ -82,7 +82,7 @@ async function photoPage({decode}={}) {
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
   for(const id of ['pointFile','optionsFile','draftFile'])if(e[id])e[id].type='file';e.points.type='textarea';
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images'}))e[id].value=value;
-  const workers=[],urls=new Map(),closed=[]; let serial=0;
+  const workers=[],urls=new Map(),closed=[],windowEvents={},popups=[]; let serial=0;
   class Worker {
     constructor(){this.messages=[];workers.push(this);}
     postMessage(m){assert.equal(this.dead,undefined);this.messages.push(m);}
@@ -96,7 +96,11 @@ async function photoPage({decode}={}) {
   const context=vm.createContext({Worker,URL:LocalURL,Blob,TextDecoder,JSON,Number,Set,Uint8Array,
     createImageBitmap:decode || (async()=>bitmap()),
     document:{getElementById:id=>{assert.ok(e[id],`missing photo control ${id}`);return e[id];},createElement:()=>new Element()},
-    window:{addEventListener(){}},
+    crypto:{getRandomValues:a=>a.fill(7)},
+    window:{addEventListener:(name,fn)=>{windowEvents[name]=fn;},open:url=>{
+      const messages=[],target={closed:false,postMessage:(data,origin)=>messages.push({data,origin})};
+      popups.push({url,target,messages});return target;
+    }},
   });
   const module=new vm.SourceTextModule(read('photo-page.js'),{context,initializeImportMeta:m=>{m.url='https://unit.invalid/photo-page.js';}});
   await module.link(()=>{throw Error('unexpected photo page import');});await module.evaluate();
@@ -118,8 +122,28 @@ async function photoPage({decode}={}) {
     e.cameraImages.files=[file('first pixels','first.png'),file('second pixels','second.png')];e.cameraMode.handlers.change();
   }
   async function calibrate(report=cameraReport()){await e.cameraRun.onclick();const w=current();await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(report)});return w;}
-  return {e,workers,urls,closed,current,select,analyze,measure,scaleResult,bitmap,selectCamera,calibrate};
+  return {e,workers,urls,closed,current,select,analyze,measure,scaleResult,bitmap,selectCamera,calibrate,windowEvents,popups};
 }
+
+test('photo records handoff transfers only the current exact measurement snapshot once to its own tab',async()=>{
+  const p=await photoPage();assert.ok(p.e.openWorkbench,'Local photo-record handoff control');
+  assert.equal(p.e.openWorkbench.disabled,true);p.select();await p.analyze();await p.measure();
+  assert.equal(p.e.openWorkbench.disabled,false);
+  const text=p.e.report.textContent;p.e.openWorkbench.onclick();p.e.openWorkbench.onclick();
+  assert.equal(p.popups.length,1,'Only one pending tab');
+  const popup=p.popups[0],token=new URL(popup.url).searchParams.get('photoImport');assert.match(token,/^[0-9a-f]{32}$/);
+  const data={type:'ftx-photo-records-ready',token};
+  for(const [origin,source,m] of [['https://foreign.invalid',popup.target,data],['https://unit.invalid',{},data],['https://unit.invalid',popup.target,{...data,token:'wrong'}]]) {
+    p.windowEvents.message({origin,source,data:m});assert.equal(popup.messages.length,0);
+  }
+  const ready=()=>p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data});
+  ready();assert.equal(popup.messages.length,1);assert.equal(popup.messages[0].data.type,'ftx-photo-records');
+  assert.equal(await popup.messages[0].data.records.text(),text);assert.equal(popup.messages[0].origin,'https://unit.invalid');
+  ready();assert.equal(popup.messages.length,1);
+  p.e.openWorkbench.onclick();const stale=p.popups[1];p.e.points.handlers.input();assert.equal(p.e.openWorkbench.disabled,true);
+  p.windowEvents.message({origin:'https://unit.invalid',source:stale.target,data:{type:'ftx-photo-records-ready',token:new URL(stale.url).searchParams.get('photoImport')}});
+  assert.equal(stale.messages[0].data.type,'ftx-photo-records-cancelled');
+});
 
 test('photo controls retain exact local documents and explicitly asserted capture settings',async()=>{
   const p=await photoPage();p.select();await p.analyze();

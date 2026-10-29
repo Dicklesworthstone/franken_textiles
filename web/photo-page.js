@@ -3,6 +3,7 @@ let worker = null, ticket = 0, busy = false, scale = null, bitmap = null, pendin
 let sourceUrls = [], resultUrls = [], draftUrls = [];
 let pointSource = null;
 let importedOptions = null;
+let photoRecords = null, workbenchTransfer = null;
 let cameraWorker = null, cameraTicket = 0, cameraBusy = false, cameraResult = null, generatedCalibration = null;
 const cameraUrls = [];
 const status = text => {$("status").textContent=text;};
@@ -40,6 +41,7 @@ function controls() {
   $("clearCalibration").disabled=!calibrated;
   $("analyze").disabled=busy || cameraBusy || !$("photo").files.length || (charuco && !$("sheet").files.length);
   $("measure").disabled=busy || cameraBusy || scale?.ok !== true || pending.length>0;
+  $("openWorkbench").disabled=busy || cameraBusy || photoRecords===null;
   $("pointFile").disabled=!bitmap || scale?.ok!==true;
   $("draftFile").disabled=cameraBusy || !bitmap || scale?.ok!==true;
   $("saveDraft").disabled=busy || cameraBusy || !bitmap || scale?.ok!==true || pending.length>0;
@@ -67,6 +69,8 @@ function controls() {
 function kill() { worker?.terminate(); worker=null; busy=false; controls(); }
 function revoke(urls) { urls.forEach(u=>URL.revokeObjectURL(u)); urls.length=0; }
 function withdraw(source=false) {
+  photoRecords=null;
+  if(workbenchTransfer) workbenchTransfer.records=null;
   ++ticket; kill(); $("pointFile").value=""; $("optionsFile").value=""; revoke(resultUrls); $("downloads").replaceChildren();
   $("draftFile").value=""; revoke(draftUrls); $("draftDownloads").replaceChildren();
   $("result").hidden=true; $("report").textContent=""; $("values").replaceChildren(); $("error").textContent="";
@@ -345,6 +349,7 @@ async function run(op) {
             $("values").append(row);
           }
           link($("downloads"),m.report,"photo-measurements.json","application/json",resultUrls);
+          photoRecords=new Blob([m.report],{type:"application/json"});
           link($("downloads"),points,"photo-points.json","application/json",resultUrls);
           link($("downloads"),opts,"photo-options.json","application/json",resultUrls);
           status("Photo-estimated records available; review uncertainty before use.");
@@ -419,5 +424,25 @@ $("image").onclick=e=>{
   $("clickStatus").textContent=pending.length?"First point selected; click the second.":"Pair added. Review its name and coordinates.";
   status(pending.length?"First point selected; click the second.":"Point pairs changed; measure again."); draw(); controls();
 };
+$("openWorkbench").onclick=()=>{
+  if(busy || cameraBusy || !photoRecords) return;
+  if(workbenchTransfer && !workbenchTransfer.target.closed) {
+    status("A Workbench handoff is still opening. Finish or close that tab before opening another.");return;
+  }
+  const token=Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,"0")).join("");
+  const url=new URL("index.html",import.meta.url);url.searchParams.set("photoImport",token);
+  const target=window.open(url.href,"_blank");
+  if(!target) {status("Workbench popup blocked. Download photo-measurements.json and add it there instead.");return;}
+  workbenchTransfer={target,token,records:photoRecords};
+  status("Workbench opened. Choose primary measurements and confirm the same wearer before checking.");
+};
+window.addEventListener("message",event=>{
+  const transfer=workbenchTransfer,origin=new URL(import.meta.url).origin,m=event.data;
+  if(!transfer || event.origin!==origin || event.source!==transfer.target ||
+    m?.type!=="ftx-photo-records-ready" || m.token!==transfer.token) return;
+  transfer.target.postMessage(transfer.records ? {type:"ftx-photo-records",token:transfer.token,records:transfer.records} :
+    {type:"ftx-photo-records-cancelled",token:transfer.token},origin);
+  workbenchTransfer=null;
+});
 window.addEventListener("pagehide",()=>{withdrawCamera(); withdraw(true);});
 controls();

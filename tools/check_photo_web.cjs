@@ -7,6 +7,71 @@ const root=path.resolve(__dirname,".."), web=path.join(root,"web"), native=proce
 const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(web,"pkg");
 if(!native) throw Error("Supply the directory containing native photo scale and measurement captures");
 const work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-photo-browser-"));
+async function photoHandoff(browser,origin) {
+  const context=await browser.newContext({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"}),errors=[],requests=[];
+  context.on("page",p=>p.on("pageerror",e=>errors.push(String(e))));
+  context.on("request",r=>requests.push({url:r.url(),method:r.method()}));
+  // Give both ordinary round exporters the same explicit clock, preserving all numerical code.
+  await context.route("**/worker.js",async route=>{
+    const response=await route.fetch(),body=await response.text();assert.ok(body.includes("const d = new Date();"));
+    await route.fulfill({response,body:body.replace("const d = new Date();","const d = new Date(2026, 9, 29, 12, 0);")});
+  });
+  const source=await context.newPage();
+  const ready=async p=>p.waitForFunction(()=>/^Ready/.test(document.getElementById("status").textContent));
+  const prepare=async p=>{
+    await p.check('input[name="program"][value="zouave_bolero"]');
+    await p.check('input[name="bodyMode"][value="tape"]');
+  };
+  const run=async p=>{
+    await p.click("#go");await p.waitForFunction(()=>!document.getElementById("results").classList.contains("hidden") || !document.getElementById("errorBox").classList.contains("hidden"));
+    assert.equal(await p.locator("#errorBox").isVisible(),false,await p.textContent("#errorText"));
+    const event=p.waitForEvent("download");await p.click("#resFiles a[download$='.zip']");const d=await event;
+    assert.equal(await d.failure(),null);return fs.readFileSync(await d.path());
+  };
+  try {
+    await source.goto(origin+"/photo.html");
+    await source.setInputFiles("#photo",path.join(native,"photo.jpg"));await source.selectOption("#paper","letter");
+    await source.click("#analyze");await source.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Review the detected"));
+    await source.fill("#points",fs.readFileSync(path.join(native,"points-jpeg.json"),"utf8"));
+    await source.click("#measure");await source.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Photo-estimated records available"));
+    const text=await source.textContent("#report");assert.deepEqual(JSON.parse(text),(()=>{
+      const value=JSON.parse(fs.readFileSync(path.join(native,"native-measure-jpeg.json"))).result;delete value.photo.image_input.path;return value;
+    })());
+    assert.equal(await source.evaluate(()=>localStorage.length),0);
+    const [receiver]=await Promise.all([source.waitForEvent("popup"),source.click("#openWorkbench")]);
+    await ready(receiver);await receiver.waitForFunction(()=>document.getElementById("photoImportText").textContent.startsWith("Photo-record file received"));
+    assert.equal(await receiver.evaluate(()=>window.opener),null);assert.equal(await receiver.locator("#results").isVisible(),false);
+    await receiver.click("#go");await receiver.waitForFunction(()=>document.getElementById("errorText").textContent.includes("tape measurements"));
+    await prepare(receiver);await receiver.click("#go");await receiver.waitForFunction(()=>document.getElementById("errorText").textContent.includes("same wearer"));
+    await receiver.check("#supplementalConsent");const transferred=await run(receiver);
+    fs.writeFileSync(path.join(work,"photo-handoff.zip"),transferred,{flag:"wx"});
+    const measurements=JSON.parse(require("node:child_process").execFileSync("unzip",["-p",path.join(work,"photo-handoff.zip"),"measurements.json"]));
+    assert.equal(measurements.measurement_imports[0],text);assert.equal(measurements.fused.across_back.primary_provenance,"PHOTO_ESTIMATED");
+    assert.equal(measurements.taken_on,null);assert.match(await receiver.textContent("#resGate"),/before cutting cloth/);
+    await receiver.screenshot({path:path.join(work,"photo-handoff-workbench.png"),fullPage:true});
+    const manual=await context.newPage();await manual.goto(origin+"/index.html");await ready(manual);await prepare(manual);
+    await manual.locator("#supplementalEvidence").evaluate(e=>{e.open=true;});
+    await manual.setInputFiles("#supplementalFiles",{name:"photo-measurements.json",mimeType:"application/json",buffer:Buffer.from(text)});
+    await manual.check("#supplementalConsent");assert.deepEqual(await run(manual),transferred,"Complete round ZIP equals ordinary manual upload");
+    await receiver.click("#clearSupplemental");assert.equal(await receiver.locator("#results").isVisible(),false);
+    const cleared=await run(receiver);fs.writeFileSync(path.join(work,"photo-handoff-cleared.zip"),cleared,{flag:"wx"});
+    const clearedMeasurements=JSON.parse(require("node:child_process").execFileSync("unzip",["-p",path.join(work,"photo-handoff-cleared.zip"),"measurements.json"]));
+    assert.equal(clearedMeasurements.measurement_imports,undefined);
+    // Hold the real receiving document until a source edit invalidates its pending transfer.
+    let release,arrived;const parked=new Promise(resolve=>{arrived=resolve;});
+    const hold=route=>{release=route;arrived();};await context.route("**/index.html?photoImport=*",hold);
+    const popup=source.waitForEvent("popup");await source.click("#openWorkbench");await parked;
+    await source.fill("#points","{}");assert.equal(await source.isDisabled("#openWorkbench"),true);
+    await release.continue();const cancelled=await popup;await ready(cancelled);
+    await cancelled.waitForFunction(()=>document.getElementById("photoImportText").textContent.startsWith("Photo review changed"));
+    assert.equal(await cancelled.evaluate(()=>window.opener),null);assert.equal(await cancelled.locator("#results").isVisible(),false);
+    await cancelled.click("#go");await cancelled.waitForFunction(()=>document.getElementById("errorText").textContent.includes("Photo review changed"));
+    await context.unroute("**/index.html?photoImport=*",hold);
+    assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.url.startsWith(origin+"/")&&r.method==="GET"));
+    assert.equal(await source.evaluate(()=>Object.values(localStorage).some(v=>v.includes('fabric-measurements/1'))),false);
+    console.log("PASS photo-to-Workbench: real local popup, exact original PHOTO_ESTIMATED records, explicit primary evidence/consent, unchanged NOT_READY, complete manual-upload ZIP equality, clear/stale cancellation and opener cleanup; no uploads or stored photo records.");
+  } finally {await context.close();}
+}
 const server=http.createServer((req,res)=>{
   let file,base=web;
   try {
@@ -271,5 +336,6 @@ const server=http.createServer((req,res)=>{
     assert.equal(await page.locator("#results").isVisible(),false);
     assert.deepEqual(errors,[]);
     console.log("PASS: ordinary Workbench consumes the downloaded file but refuses drafting with missing required measurements; photo evidence is not a ready body.");
+    await photoHandoff(browser,origin);
   } finally {await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);server.close();process.exitCode=1;});
