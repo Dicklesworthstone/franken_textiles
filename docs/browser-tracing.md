@@ -52,7 +52,15 @@ names, scale-target and label inputs; and `review.json` with the source SHA-256,
 scale residuals and complete diagnostics. It excludes the original uploaded PNG.
 The archive timestamp is fixed at 1980-01-01; no capture date is inferred.
 
-To continue to manufacturing, download `pattern.json`, return to the Pattern
+To continue to manufacturing, choose **Check in Pattern Workbench** to open a new tab
+with the current pattern. The tabs exchange an immutable file locally, using the same
+origin, opener window and one-use request token. No pattern enters browser storage or
+a server. The Workbench selects **Check my own pattern.json** and shows the source image
+hash; choose measurement evidence and a fit contract, then explicitly **Draft and check**.
+The handoff does not apply measurements, run a round or approve cutting. Source edits
+before the receiving tab requests the file cancel the transfer. Choosing a local pattern
+file, another garment or **Clear tracing handoff** cancels pending or imported data.
+Blocked popups can use the ordinary file route instead: download `pattern.json`, return to the Pattern
 Workbench and choose **Check my own pattern.json** with your measurement evidence
 and fit contract. The workshop itself never creates PDF, DXF or other cutting
 files. Its `REVIEW_ONLY` status is not a convergence verdict.

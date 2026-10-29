@@ -82,6 +82,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         <label>pattern.json <input type="file" id="patternFile" accept=".json,application/json"></label>
         <label>fit_spec.json (optional) <input type="file" id="fitFile" accept=".json,application/json"></label>
       </div>
+      <p id="traceImportNote" class="mut" hidden><span id="traceImportText"></span>
+        <button id="clearTraceImport" type="button">Clear tracing handoff</button></p>
       <small>Without a fit spec the checks use role-based defaults.</small>
     </div>
   </section>
@@ -239,6 +241,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   let foldable = false, bodyLoaded = false, folding = false, dead = false;
   let bodyCheckable = false, bodyChecking = false, bodyCheckRequest = 0, bodyCheckUrls = [];
   let bodyFitText = null, bodyFitReady = true, bodyFitRead = 0;
+  let tracedPattern = null, traceToken = new URL(location.href).searchParams.get("traceImport");
+  function clearTraceImport() {tracedPattern=traceToken=null;$("traceImportNote").hidden=true;}
   let nextRequest = 0, roundRequest = 0, bodyRequest = 0, foldRequest = 0, fieldsRequest = 0;
   const worker = new Worker(new URL("worker.js", location.href), { type: "module" });
   const status = (t) => { $("status").textContent = t; };
@@ -259,7 +263,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     const entries = Object.entries(info).map(([k, v]) => [k, v.label]).concat([["audit", "Check my own pattern.json"]]);
     $("programs").innerHTML = entries.map(([k, label]) =>
       `<label><input type="radio" name="program" value="${esc(k)}"${k === program ? " checked" : ""}>${esc(label)}</label>`).join("");
-    $("programs").querySelectorAll("input").forEach((el) => el.addEventListener("change", () => { program = el.value; onProgram(); }));
+    $("programs").querySelectorAll("input").forEach((el) => el.addEventListener("change", () => { clearTraceImport(); program = el.value; onProgram(); }));
   }
   function onProgram() {
     invalidateRound();
@@ -331,7 +335,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       }
     }
     if (program === "audit") {
-      const req = { body, pattern: await readJson($("patternFile"), "pattern.json") };
+      const req = { body, pattern: await readJson(tracedPattern ? {files:[tracedPattern]} : $("patternFile"), "pattern.json") };
       if ($("fitFile").files.length) req.fit_spec = await readJson($("fitFile"), "fit_spec.json");
       return req;
     }
@@ -569,8 +573,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("nappies").addEventListener("change", () => { store.set("nappies", $("nappies").checked); requestFields(); });
   showBodyMode();
   for (const id of ["style", "patternFile", "fitFile"]) {
-    for (const event of ["input", "change"]) $(id).addEventListener(event, invalidateRound);
+    for (const event of ["input", "change"]) $(id).addEventListener(event, () => {
+      if(id==="patternFile") clearTraceImport();
+      invalidateRound();
+    });
   }
+  $("clearTraceImport").addEventListener("click",()=>{clearTraceImport();invalidateRound();status("Tracing handoff cleared; choose a pattern.json file.");});
   for (const id of ["stature", "age", "sex", "nappies", "measFile", "supplementalFiles"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event, invalidateEvidence);
   }
@@ -658,6 +666,27 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       bodyFit: bodyFitText, bodyFitConsent: $("bodyFitConsent").checked,
       armDeg: Number($("bodyArmDeg").value) });
   });
+  const traceOrigin=new URL(location.href).origin;
+  if(traceToken && /^[0-9a-f]{32}$/.test(traceToken) && traceOrigin!=="null" && window.opener) {
+    const source=window.opener;
+    program="audit";$("traceImportNote").hidden=false;$("traceImportText").textContent="Waiting for the current local tracing review…";
+    window.addEventListener("message",event=>{
+      const m=event.data;
+      if(!traceToken || event.origin!==traceOrigin || event.source!==source || m?.token!==traceToken) return;
+      if(m.type==="ftx-trace-pattern-cancelled") {
+        traceToken=null;$("traceImportText").textContent="Tracing review changed before transfer. Choose a pattern.json file or export the current review again.";return;
+      }
+      if(m.type!=="ftx-trace-pattern") return;
+      traceToken=null;
+      if(!(m.pattern instanceof Blob) || m.pattern.size>64*1024*1024 || !/^[0-9a-f]{64}$/.test(m.source_sha256)) {
+        $("traceImportText").textContent="Tracing handoff refused. Choose a pattern.json file.";return;
+      }
+      tracedPattern=m.pattern;
+      $("traceImportText").textContent=`Loaded the local tracing review for image ${m.source_sha256}. Choose measurement evidence and a fit contract, then Draft and check. Tracing remains REVIEW_ONLY.`;
+      if(ready) {renderPrograms();onProgram();}
+    });
+    source.postMessage({type:"ftx-trace-pattern-ready",token:traceToken},traceOrigin);
+  }
   worker.postMessage({ type: "init", pkg: PKG });
 })();
 </script>

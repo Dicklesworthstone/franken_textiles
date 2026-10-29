@@ -3154,7 +3154,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 
 // The original inline workshop script, using a small DOM transport double. These tests inspect
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
-function draftingPage() {
+function draftingPage({traceToken=null}={}) {
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const el of Object.values(e)) {
     el.addEventListener=(name,fn)=>{const previous=el.handlers[name];el.handlers[name]=(...args)=>{
@@ -3165,12 +3165,14 @@ function draftingPage() {
   }
   e.stature.value='92';e.age.value='30';e.style.value='{}';
   const modes=['chart','tape','file'].map(value=>Object.assign(new Element(),{value,checked:value==='chart'}));
-  const messages=[], live=new Map();let worker, next=0;
+  const messages=[], live=new Map(),windowEvents={},openerMessages=[];let worker, next=0;
+  const opener={postMessage:(data,origin)=>openerMessages.push({data,origin})};
   class Worker {constructor(){worker=this;}postMessage(m){messages.push(m);}}
   class LocalURL extends URL {}
   LocalURL.createObjectURL=blob=>{const u=`blob:${++next}`;live.set(u,blob);return u;};
   LocalURL.revokeObjectURL=u=>assert.equal(live.delete(u),true);
-  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,location:{href:'https://unit.invalid/'},
+  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:'')},
+    window:{opener,addEventListener:(name,fn)=>{windowEvents[name]=fn;}},
     localStorage:{getItem:()=>null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},
       querySelector:()=>modes.find(m=>m.checked),querySelectorAll:()=>modes,
       createElement:tag=>Object.assign(new Element(),{tag})}});
@@ -3184,8 +3186,29 @@ function draftingPage() {
   const body=async()=>{e.bodyFile.files=[{arrayBuffer:async()=>new ArrayBuffer(1)}];await e.bodyFile.handlers.change();
     emit({type:'bodyReady',request:last('body').request});};
   const dispatch=(id,event)=>e[id].handlers[event]?.();
-  return {e,modes,messages,live,emit,last,result,body,worker,dispatch};
+  return {e,modes,messages,live,emit,last,result,body,worker,dispatch,opener,openerMessages,windowEvents};
 }
+
+test('workbench tracing handoff uses ordinary pattern checks and rejects foreign or superseded imports',async()=>{
+  const token='1'.repeat(32),p=draftingPage({traceToken:token});assert.ok(p.e.traceImportNote,'Visible local tracing handoff');
+  assert.equal(p.openerMessages[0].data.type,'ftx-trace-pattern-ready');assert.equal(p.openerMessages[0].origin,'https://unit.invalid');
+  const pattern={schema:'fabric-pattern/1',pieces:[],seams:[]},data={type:'ftx-trace-pattern',token,source_sha256:'a'.repeat(64),pattern:new Blob([JSON.stringify(pattern)])};
+  for(const [origin,source,m] of [['https://wrong.invalid',p.opener,data],['https://unit.invalid',{},data],['https://unit.invalid',p.opener,{...data,token:'wrong'}]]){
+    p.windowEvents.message({origin,source,data:m});await p.e.go.handlers.click();assert.equal(p.last('run'),undefined);
+  }
+  p.e.stature.value='105';p.e.age.value='40';
+  p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});assert.equal(p.last('run'),undefined,'Never automatically runs');
+  await p.e.go.handlers.click();assert.deepEqual(plain(p.last('run').req.pattern),pattern);assert.equal(p.last('run').req.body.mode,'chart');
+  assert.equal(p.last('run').req.body.stature_cm,105);assert.equal(p.last('run').req.body.age_months,40);
+  p.e.clearTraceImport.handlers.click();p.result();assert.equal(p.e.results.classList.contains('hidden'),true);
+  p.e.patternFile.files=[{text:async()=>'{"manual":true}'}];p.dispatch('patternFile','change');
+  await p.e.go.handlers.click();assert.deepEqual(plain(p.last('run').req.pattern),{manual:true});
+  const q=draftingPage({traceToken:token});q.e.patternFile.files=[{text:async()=>'{"manual":true}'}];q.dispatch('patternFile','change');
+  q.windowEvents.message({origin:'https://unit.invalid',source:q.opener,data});await q.e.go.handlers.click();
+  assert.deepEqual(plain(q.last('run').req.pattern),{manual:true},'Manual choice wins over a late handoff');
+  const r=draftingPage({traceToken:token});r.windowEvents.message({origin:'https://unit.invalid',source:r.opener,data:{...data,pattern:'not a Blob'}});
+  await r.e.go.handlers.click();assert.equal(r.last('run'),undefined);assert.match(r.e.traceImportText.textContent,/refused/);
+});
 
 test('primary workshop withdraws obsolete rounds and folds while retaining the latest positive workflow', async () => {
   const p=draftingPage();await p.e.go.handlers.click();p.result();await p.body();

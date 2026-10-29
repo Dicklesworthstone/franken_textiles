@@ -6,6 +6,7 @@ const editControls = [...document.querySelectorAll("#edits textarea")];
 let worker, epoch = 0, request = 0, pending = null;
 let ready = false, busy = false, hasSheet = false;
 let sheetSource = null, traceOptions = null, restoredEdits = null, draftLoading = false;
+let reviewPattern = null, workbenchTransfer = null;
 const urls = [], draftUrls = [], editFields = ["names", "targets", "labels"];
 const editText = id => restoredEdits?.[id]?.displayed === $(id).value ? restoredEdits[id].text : $(id).value;
 
@@ -16,6 +17,7 @@ function controls() {
   $("cancel").disabled = !busy;
   $("saveDraft").disabled = busy || !hasSheet || !sheetSource?.source_sha256;
   $("draftFile").disabled = !hasSheet || !sheetSource?.source_sha256 || (busy && !draftLoading);
+  $("openPattern").disabled = busy || !reviewPattern;
 }
 
 function clearDraft() {
@@ -23,6 +25,8 @@ function clearDraft() {
   for(const url of draftUrls.splice(0)) URL.revokeObjectURL(url);
 }
 function clearResults() {
+  reviewPattern = null; $("openPattern").disabled = true;
+  if(workbenchTransfer) workbenchTransfer.pattern = null;
   clearDraft();
   $("results").hidden = true;
   $("files").replaceChildren();
@@ -219,7 +223,9 @@ function show({ report, files }) {
   }
   for (const { name, bytes } of files) {
     const png = name.endsWith(".png");
-    const url = URL.createObjectURL(new Blob([bytes], { type: png ? "image/png" : name.endsWith(".zip") ? "application/zip" : "application/json" }));
+    const blob = new Blob([bytes], { type: png ? "image/png" : name.endsWith(".zip") ? "application/zip" : "application/json" });
+    if(name === "pattern.json") reviewPattern = {pattern:blob,source_sha256:report.source_sha256};
+    const url = URL.createObjectURL(blob);
     urls.push(url);
     const a = document.createElement("a");
     a.href = url; a.download = name.split("/").pop(); a.textContent = name;
@@ -234,6 +240,25 @@ function show({ report, files }) {
   $("results").hidden = false;
   $("status").textContent = "Review ready. Inspect the scale residuals and every audit finding.";
 }
+
+$("openPattern").onclick = () => {
+  if(busy || !reviewPattern) return;
+  const token=Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,"0")).join("");
+  const url=new URL("index.html",import.meta.url);url.searchParams.set("traceImport",token);
+  const target=window.open(url.href,"_blank");
+  if(!target) {$("status").textContent="Workbench popup blocked. Download pattern.json and open it in the Workbench instead.";return;}
+  workbenchTransfer={target,token,...reviewPattern};
+  $("status").textContent="Workbench opened. Choose measurement evidence and run its ordinary checks there.";
+};
+window.addEventListener("message",event=>{
+  const transfer=workbenchTransfer,origin=new URL(import.meta.url).origin,m=event.data;
+  if(!transfer || event.origin!==origin || event.source!==transfer.target ||
+    m?.type!=="ftx-trace-pattern-ready" || m.token!==transfer.token) return;
+  transfer.target.postMessage(transfer.pattern ? {type:"ftx-trace-pattern",token:transfer.token,
+    pattern:transfer.pattern,source_sha256:transfer.source_sha256} :
+    {type:"ftx-trace-pattern-cancelled",token:transfer.token},origin);
+  workbenchTransfer=null;
+});
 
 window.addEventListener("beforeunload", () => { worker?.terminate(); for (const url of [...urls,...draftUrls]) URL.revokeObjectURL(url); });
 startWorker();

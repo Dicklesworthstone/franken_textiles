@@ -89,7 +89,7 @@ async function pageModule() {
   Object.assign(elements.channel, { value: 'auto' });
   elements.threshold.value = 'otsu'; elements.invert.value = 'auto'; elements.area.value = '0.01';
   elements.names.value = '{}'; elements.targets.value = elements.labels.value = '[]';
-  const workers = [], live = new Set(), blobs = new Map(); let next = 0;
+  const workers = [], live = new Set(), blobs = new Map(), events={},popups=[]; let next = 0,popupBlocked=false;
   class Worker {
     constructor() { this.messages = []; this.dead = false; workers.push(this); }
     postMessage(message) { assert.equal(this.dead, false); this.messages.push(message); }
@@ -100,11 +100,15 @@ async function pageModule() {
   LocalURL.createObjectURL = blob => { const id = `blob:${++next}`; live.add(id);blobs.set(id,blob);return id; };
   LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true);blobs.delete(id); };
   const context = vm.createContext({ Worker, URL: LocalURL, Blob, TextEncoder, TextDecoder, Uint8Array, JSON, Number,
+    crypto:{getRandomValues:a=>{a.fill(popups.length+1);return a;}},
     document: {
       getElementById: id => { assert.ok(elements[id], `missing HTML id ${id}`); return elements[id]; },
       querySelectorAll: q => q.startsWith('#source') ? source : edits,
       createElement: () => new Element(),
-    }, window: { addEventListener() {} }
+    }, window: { addEventListener:(name,fn)=>{events[name]=fn;},open:(url,target)=>{
+      if(popupBlocked)return null;
+      const child={url,target,messages:[],postMessage(m,origin){this.messages.push({data:m,origin});}};popups.push(child);return child;
+    } }
   });
   const module = new vm.SourceTextModule(read('trace-page.js'), {
     context, initializeImportMeta: m => { m.url = 'https://unit.invalid/trace-page.js'; }
@@ -121,8 +125,27 @@ async function pageModule() {
     files: [{ name: 'pattern.json', bytes: new Uint8Array([1, 2]) }]
   });
   const trace=async()=>{await elements.trace.onclick();current().emit(result(current().messages.at(-1).request));};
-  return { e: elements, workers, current, select, result, live,blobs,trace };
+  return { e: elements, workers, current, select, result, live,blobs,trace,events,popups,blockPopups:()=>{popupBlocked=true;} };
 }
+
+test('trace pattern handoff sends only current review to its same-origin requesting window',async()=>{
+  const p=await pageModule();assert.ok(p.e.openPattern,'Check traced pattern without download/reupload');p.select();await p.trace();
+  p.e.openPattern.onclick();const child=p.popups[0],token=new URL(child.url).searchParams.get('traceImport');
+  assert.equal(child.target,'_blank');assert.equal(new URL(child.url).origin,'https://unit.invalid');assert.ok(token);
+  const ready={type:'ftx-trace-pattern-ready',token};
+  for(const [origin,source,data] of [['https://wrong.invalid',child,ready],['https://unit.invalid',{},ready],['https://unit.invalid',child,{...ready,token:'wrong'}]]){
+    p.events.message({origin,source,data});assert.equal(child.messages.length,0);
+  }
+  p.events.message({origin:'https://unit.invalid',source:child,data:ready});
+  assert.equal(child.messages.length,1);const sent=child.messages[0];assert.equal(sent.origin,'https://unit.invalid');
+  assert.equal(sent.data.type,'ftx-trace-pattern');assert.equal(sent.data.source_sha256,'a'.repeat(64));
+  assert.deepEqual([...new Uint8Array(await sent.data.pattern.arrayBuffer())],[1,2]);
+  p.events.message({origin:'https://unit.invalid',source:child,data:ready});assert.equal(child.messages.length,1);
+  p.e.openPattern.onclick();const stale=p.popups[1],oldToken=new URL(stale.url).searchParams.get('traceImport');
+  p.e.names.handlers.input();p.events.message({origin:'https://unit.invalid',source:stale,data:{...ready,token:oldToken}});
+  assert.equal(stale.messages[0].data.type,'ftx-trace-pattern-cancelled');assert.equal(stale.messages[0].data.pattern,undefined);
+  await p.trace();p.blockPopups();p.e.openPattern.onclick();assert.match(p.e.status.textContent,/popup blocked/);
+});
 
 test('tracing edit drafts retain exact text before applying and after native refusal',async()=>{
   const p=await pageModule();assert.ok(p.e.saveDraft,'Save unfinished tracing edits');p.select();await p.trace();
