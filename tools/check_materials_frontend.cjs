@@ -3186,7 +3186,7 @@ function draftingPage({traceToken=null}={}) {
   const body=async()=>{e.bodyFile.files=[{arrayBuffer:async()=>new ArrayBuffer(1)}];await e.bodyFile.handlers.change();
     emit({type:'bodyReady',request:last('body').request});};
   const dispatch=(id,event)=>e[id].handlers[event]?.();
-  return {e,modes,messages,live,emit,last,result,body,worker,dispatch,opener,openerMessages,windowEvents};
+  return {e,modes,messages,live,emit,last,result,body,worker,dispatch,opener,openerMessages,windowEvents,hasOpener:()=>!!context.window.opener};
 }
 
 test('workbench tracing handoff uses ordinary pattern checks and rejects foreign or superseded imports',async()=>{
@@ -3198,12 +3198,14 @@ test('workbench tracing handoff uses ordinary pattern checks and rejects foreign
   }
   p.e.stature.value='105';p.e.age.value='40';
   p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});assert.equal(p.last('run'),undefined,'Never automatically runs');
+  assert.equal(p.hasOpener(),false,'Opener released after one-use handshake');
   await p.e.go.handlers.click();assert.deepEqual(plain(p.last('run').req.pattern),pattern);assert.equal(p.last('run').req.body.mode,'chart');
   assert.equal(p.last('run').req.body.stature_cm,105);assert.equal(p.last('run').req.body.age_months,40);
   p.e.clearTraceImport.handlers.click();p.result();assert.equal(p.e.results.classList.contains('hidden'),true);
   p.e.patternFile.files=[{text:async()=>'{"manual":true}'}];p.dispatch('patternFile','change');
   await p.e.go.handlers.click();assert.deepEqual(plain(p.last('run').req.pattern),{manual:true});
   const q=draftingPage({traceToken:token});q.e.patternFile.files=[{text:async()=>'{"manual":true}'}];q.dispatch('patternFile','change');
+  assert.equal(q.hasOpener(),false);
   q.windowEvents.message({origin:'https://unit.invalid',source:q.opener,data});await q.e.go.handlers.click();
   assert.deepEqual(plain(q.last('run').req.pattern),{manual:true},'Manual choice wins over a late handoff');
   const r=draftingPage({traceToken:token});r.windowEvents.message({origin:'https://unit.invalid',source:r.opener,data:{...data,pattern:'not a Blob'}});
