@@ -971,7 +971,7 @@ class Element {
       moveTo: (...point) => this.paint.push(['move', ...point]), lineTo: (...point) => this.paint.push(['line', ...point]) };
   }
 }
-async function pageModule() {
+async function pageModule({roundToken=null}={}) {
   const html = read('materials.html');
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
@@ -987,10 +987,13 @@ async function pageModule() {
   class LocalURL extends URL {}
   LocalURL.createObjectURL = blob => { const id = `blob:${++next}`; live.add(id); blobs.set(id, blob); return id; };
   LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true); blobs.delete(id); };
+  const openerMessages=[],opener={postMessage:(data,origin)=>openerMessages.push({data,origin})};
+  const window={opener,location:{href:'https://unit.invalid/materials.html'+(roundToken?'?roundImport='+roundToken:'')},
+    addEventListener:(name,fn)=>{windowEvents[name]=fn;}};
   const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder, document: {
     getElementById: id => { assert.ok(e[id], `HTML missing ${id}`); return e[id]; },
     querySelectorAll: () => commands, createElement: tag => Object.assign(new Element(), { tag }),
-  }, window: { addEventListener: (name, fn) => { windowEvents[name] = fn; } } });
+  }, window });
   const module = new vm.SourceTextModule(read('materials-page.js'), { context, initializeImportMeta: m => { m.url = 'https://unit.invalid/materials-page.js'; } });
   await module.link(() => { throw Error('unexpected import'); }); await module.evaluate();
   const current = () => workers.at(-1), ready = () => current().emit({ type: 'ready' }); ready();
@@ -1000,8 +1003,47 @@ async function pageModule() {
   const load = async () => { select('patternFile', JSON.stringify(pattern)); await e.patternFile.onchange(); };
   const inspect = async id => { e.selection.value = JSON.stringify({ id }); e.selection.handlers.input(); await e.inspect.onclick(); emit({ selection: { id, expected_sha256: 'locked' }, capabilities: {}, snapshot: { id } }); };
   const bind = async () => { await e.bind.onclick(); emit({ pattern, pattern_json:JSON.stringify(pattern), pieces: [], pattern_sha256: 'test' }, [{ name: 'pattern.json', text: '{}', mime: 'application/json' }]); };
-  return { e, current, workers, ready, select, emit, load, inspect, bind, live, blobs, windowEvents };
+  return { e, current, workers, ready, select, emit, load, inspect, bind, live, blobs, windowEvents,
+    opener,openerMessages,hasOpener:()=>!!window.opener };
 }
+test('material round handoff retains three exact sources and requires explicit binding and consumers',async()=>{
+  const token='3'.repeat(32),p=await pageModule({roundToken:token});
+  assert.equal(p.openerMessages[0]?.data.type,'ftx-round-sources-ready');
+  const raw={pattern:' {"pieces":[{"id":"front"}],"sequence":18446744073709551615}\n',
+    measurements:' {"probe":-0.0}\n',fit:' {"probe":1.0}\n'};
+  const data={type:'ftx-round-sources',token,files:Object.fromEntries(Object.entries(raw).map(([id,text])=>[id,new Blob([text])]))};
+  for(const [origin,source,m] of [['https://foreign.invalid',p.opener,data],['https://unit.invalid',{},data],['https://unit.invalid',p.opener,{...data,token:'wrong'}]]) {
+    await p.windowEvents.message({origin,source,data:m});assert.equal(p.e.bind.disabled,true);assert.equal(p.hasOpener(),true);
+  }
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
+  assert.equal(p.hasOpener(),false);assert.equal(p.current().messages.length,0,'No automatic operation');
+  assert.equal(p.e.bind.disabled,false);assert.equal(p.e.exports.disabled,true);assert.equal(p.e.fold.disabled,true);
+  await p.e.bind.onclick();assert.equal(p.current().messages.at(-1).pattern,raw.pattern);
+  p.emit({pattern:{pieces:[{id:'front'}]},pattern_json:raw.pattern,pieces:[],pattern_sha256:'test'});
+  assert.equal(p.e.exports.disabled,false);assert.equal(p.e.fold.disabled,true,'No body transferred');
+  await p.e.exports.onclick();const req=p.current().messages.at(-1);
+  assert.equal(req.measurements,raw.measurements);assert.equal(req.fit,raw.fit);assert.equal(req.pattern,raw.pattern);
+  p.emit({},[{name:'export.zip',bytes:new Uint8Array([1])}]);const old=[...p.live];
+  p.e.clearRoundImport.onclick();assert.equal(p.e.bind.disabled,true);assert.equal(p.e.exports.disabled,true);
+  assert.ok(old.every(url=>!p.live.has(url)));assert.equal(p.e.roundImportNote.hidden,true);
+});
+test('material round handoff refuses invalid sources and manual choices defeat delayed packets',async()=>{
+  const token='4'.repeat(32),files={pattern:new Blob(['{"pieces":[{"id":"front"}]}']),measurements:new Blob(['{}']),fit:new Blob(['{}'])};
+  for(const bad of [new Blob(['{']),new Blob(['\ufeff{}']),new Blob([new Uint8Array([0xc3,0x28])]),new Blob(['[]'])]) {
+    const p=await pageModule({roundToken:token});
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-round-sources',token,files:{...files,pattern:bad}}});
+    assert.equal(p.e.bind.disabled,true);assert.equal(p.hasOpener(),false);assert.match(p.e.roundImportText.textContent,/refused/i);
+  }
+  const p=await pageModule({roundToken:token});let release;
+  const delayed=new Blob(['{"pieces":[{"id":"front"}]}']);
+  delayed.arrayBuffer=()=>new Promise(resolve=>{release=resolve;});
+  const wait=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-round-sources',token,files:{...files,pattern:delayed}}});
+  p.select('patternFile','{"pieces":[{"id":"manual"}]}');await p.e.patternFile.onchange();
+  release(await files.pattern.arrayBuffer());await wait;
+  await p.e.bind.onclick();assert.match(p.current().messages.at(-1).pattern,/manual/);
+  p.emit({pattern:{pieces:[]},pattern_json:'{"pieces":[]}',pieces:[],pattern_sha256:'test'});
+  assert.equal(p.e.exports.disabled,true,'Cancelled measurements and fit do not survive manual pattern');
+});
 test('GarmentCode review preserves the current pattern until explicit use resets its material and downstream state', async () => {
   const p=await pageModule(),r=garmentcodeImport(),outfit=outfitImport();
   p.select('patternFile',outfit.request_json);await p.e.patternFile.onchange();p.emit(outfit);
@@ -3113,7 +3155,9 @@ test('drafting worker discards refused replacements, frees failed rounds and che
   const body=()=>send({type:'body',request:2,bytes:new Uint8Array([1]).buffer});
   const run=()=>send({type:'run',request:3,req:{}});
   const fold=extra=>send({type:'fold',request:4,round:3,body:2,...extra});
-  await body();await run();assert.equal((await fold()).type,'folded');
+  await body();const completed=await run();assert.equal((await fold()).type,'folded');
+  assert.deepEqual(plain(completed.roundSources),{pattern:'{"pieces":[{"placement":{"part":"torso"}}]}',measurements:'{}',fit:'{}'});
+  assert.equal(freed.at(-2),'round','Round sources retained before native handle was freed');
   assert.equal((await fold({round:1})).type,'error');assert.equal(calls.length,1);
   for(const stage of ['run','page','zip','pattern.json','measurements.json','fit_spec.json']) {
     failure=undefined;await run();const count=freed.filter(x=>x==='round').length;
@@ -3168,14 +3212,15 @@ function draftingPage({traceToken=null,photoToken=null,audit=false}={}) {
   }
   e.stature.value='92';e.age.value='30';e.style.value='{}';
   const modes=['chart','tape','file'].map(value=>Object.assign(new Element(),{value,checked:value==='chart'}));
-  const messages=[], live=new Map(),windowEvents={},openerMessages=[];let worker, next=0;
+  const messages=[], live=new Map(),windowEvents={},openerMessages=[],popups=[];let worker, next=0;
   const opener={postMessage:(data,origin)=>openerMessages.push({data,origin})};
   class Worker {constructor(){worker=this;}postMessage(m){messages.push(m);}}
   class LocalURL extends URL {}
   LocalURL.createObjectURL=blob=>{const u=`blob:${++next}`;live.set(u,blob);return u;};
   LocalURL.revokeObjectURL=u=>assert.equal(live.delete(u),true);
-  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:photoToken?'?photoImport='+photoToken:'')},
-    window:{opener,addEventListener:(name,fn)=>{windowEvents[name]=fn;}},
+  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,crypto:{getRandomValues:a=>a.fill(5)},location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:photoToken?'?photoImport='+photoToken:'')},
+    window:{opener,open:(url,target)=>{const popup={url,target,closed:false,messages:[],postMessage(data,origin){this.messages.push({data,origin});}};popups.push(popup);return popup;},
+      addEventListener:(name,fn)=>{const previous=windowEvents[name];windowEvents[name]=(...args)=>{previous?.(...args);return fn(...args);};}},
     localStorage:{getItem:key=>audit&&key==='fab-wb-program'?'"audit"':null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},
       querySelector:()=>modes.find(m=>m.checked),querySelectorAll:()=>modes,
       createElement:tag=>Object.assign(new Element(),{tag})}});
@@ -3193,8 +3238,29 @@ function draftingPage({traceToken=null,photoToken=null,audit=false}={}) {
   const body=async()=>{e.bodyFile.files=[{arrayBuffer:async()=>new ArrayBuffer(1)}];await e.bodyFile.handlers.change();
     emit({type:'bodyReady',request:last('body').request});};
   const dispatch=(id,event)=>e[id].handlers[event]?.();
-  return {e,modes,messages,live,emit,last,result,body,worker,dispatch,opener,openerMessages,windowEvents,hasOpener:()=>!!context.window.opener};
+  return {e,modes,messages,live,emit,last,result,body,worker,dispatch,opener,openerMessages,windowEvents,popups,hasOpener:()=>!!context.window.opener};
 }
+test('current drafting round hands off exact immutable files once and cancels unsent source edits',async()=>{
+  const p=draftingPage(),raw={pattern:' {"sequence":18446744073709551615}\n',measurements:' {"probe":-0.0}\n',fit:' {"probe":1.0}\n'};
+  assert.equal(p.e.chooseMaterials.disabled,true);await p.e.go.handlers.click();p.result(undefined,{roundSources:raw});
+  assert.equal(p.e.chooseMaterials.disabled,false);await p.e.chooseMaterials.handlers.click();
+  const popup=p.popups[0],token=new URL(popup.url).searchParams.get('roundImport');
+  assert.equal(new URL(popup.url).pathname,'/materials.html');assert.match(token,/^[0-9a-f]{32}$/);
+  await p.e.chooseMaterials.handlers.click();assert.equal(p.popups.length,1,'Only one waiting tab');
+  const data={type:'ftx-round-sources-ready',token};
+  for(const [origin,source,m] of [['https://foreign.invalid',popup,data],['https://unit.invalid',{},data],['https://unit.invalid',popup,{...data,token:'wrong'}]])
+    p.windowEvents.message({origin,source,data:m});
+  assert.equal(popup.messages.length,0);
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup,data});
+  assert.equal(popup.messages[0].data.type,'ftx-round-sources');assert.equal(popup.messages[0].origin,'https://unit.invalid');
+  for(const id of Object.keys(raw))assert.equal(await popup.messages[0].data.files[id].text(),raw[id]);
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup,data});assert.equal(popup.messages.length,1);
+  await p.e.chooseMaterials.handlers.click();const waiting=p.popups[1];
+  await p.e.style.handlers.input();assert.equal(p.e.chooseMaterials.disabled,true);
+  p.windowEvents.message({origin:'https://unit.invalid',source:waiting,data});
+  assert.equal(waiting.messages[0].data.type,'ftx-round-sources-cancelled');assert.equal(waiting.messages[0].data.files,undefined);
+  assert.equal(await popup.messages[0].data.files.pattern.text(),raw.pattern,'Received snapshot remains unchanged');
+});
 
 test('primary workshop preserves original JSON file and style text instead of rounding numeric semantics',async()=>{
   const p=draftingPage({audit:true}),text=' \r\n{"probe":[-0.0,1.0,9007199254740993]}\r\n';

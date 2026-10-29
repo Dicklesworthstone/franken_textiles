@@ -13,6 +13,8 @@ let preparedImport = null, adoptedImport = false;
 let sourceText = null, outfit = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
+let roundRead = 0, roundToken = new URL(window.location.href).searchParams.get("roundImport");
+const roundFiles = new Map();
 let interfaceChange = null, interfaceRead = 0, interfaceReady = true;
 let calibratedPair = null;
 const pieceChanges = new Map(), urls = new Map();
@@ -34,7 +36,7 @@ for (const op of operations) {
   sections.set(op, { section, summary, comparison, links });
 }
 const text = value => JSON.stringify(value, null, 2);
-const has = id => !!$(id).files.length;
+const has = id => roundFiles.has(id) || !!$(id).files.length;
 function controls() {
   for (const el of commands) el.disabled = !ready || !!pending;
   $("bind").disabled ||= !source || !interfaceReady;
@@ -2824,6 +2826,7 @@ function show(op, msg) {
   }
 }
 async function read(id, binary = false) {
+  if (!binary && roundFiles.has(id)) return roundFiles.get(id);
   const f = $(id).files[0]; if (!f) throw Error(`Choose ${id} first.`);
   if (f.size > (binary ? 256 : 64) * 1024 * 1024) throw Error(`${id} exceeds its input budget.`);
   const data = binary ? await f.arrayBuffer() : await f.text();
@@ -3063,6 +3066,7 @@ function resetPatternInput(keepImport = false) {
   return patternRead;
 }
 $("patternFile").onchange = async () => {
+  clearRoundSources();
   const rev = resetPatternInput();
   try { const raw = await read("patternFile"), data = JSON.parse(raw); if (rev !== patternRead) return;
     if (data.schema === "ftx-outfit-drape/1") {
@@ -3095,6 +3099,7 @@ $("useTreatment").onclick = () => {
 $("useGarmentcode").onclick = () => {
   if (!preparedImport || pending) return;
   const raw = preparedImport;
+  clearRoundSources();
   resetPatternInput(true); preparedImport = null;
   $("patternFile").value = "";
   installPattern(raw, "Imported GarmentCode pattern — REVIEW_REQUIRED");
@@ -3177,6 +3182,9 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:["scenario"] })) {
   $(id).addEventListener("change", () => {
+    if (id === "measurements" || id === "fit") {
+      ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
+    }
     const affected = id === "measurements" && has("scenarioBody") ? keys.filter(k => k !== "scenario") : [...keys];
     if ($("studyOnBody").checked && (id === "body" || id === "scenarioBody" || (id === "measurements" && !has("scenarioBody")))) affected.push("study");
     invalidate(affected);
@@ -3187,5 +3195,47 @@ $("thermalPointTemperature").addEventListener("input", invalidateThermalPoint);
 $("thermalRequest").addEventListener("change", () => invalidate(["thermalHistory"]));
 $("clearCoverageBridges").onclick = () => { $("coverageBridges").value = ""; invalidate(["coverage"]); };
 $("coverageBridges").addEventListener("change", () => invalidate(["coverage"]));
-window.addEventListener("pagehide", () => { ++epoch; worker?.terminate(); clear(["bind", ...operations]); });
+function clearRoundSources() {
+  ++roundRead; roundToken = null; roundFiles.clear(); window.opener = null;
+  $("roundImportNote").hidden = true;
+}
+$("clearRoundImport").onclick = () => { clearRoundSources(); resetPatternInput(); controls(); };
+const roundOrigin = new URL(window.location.href).origin;
+if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" && window.opener) {
+  const sender = window.opener;
+  $("roundImportNote").hidden = false;
+  $("roundImportText").textContent = "Waiting for the current flat round. Material binding and every computation require your action.";
+  window.addEventListener("message", async event => {
+    const m = event.data;
+    if (!roundToken || event.origin !== roundOrigin || event.source !== sender || m?.token !== roundToken ||
+      !["ftx-round-sources", "ftx-round-sources-cancelled"].includes(m.type)) return;
+    roundToken = null; window.opener = null;
+    const rev = ++roundRead;
+    resetPatternInput();
+    try {
+      if (m.type === "ftx-round-sources-cancelled") throw Error("The source round changed before transfer. Draft and check it again.");
+      const files = new Map();
+      for (const [key, id] of [["pattern", "patternFile"], ["measurements", "measurements"], ["fit", "fit"]]) {
+        const blob = m.files?.[key];
+        if (!(blob instanceof Blob) || blob.size > 64 * 1024 * 1024) throw Error("Each of the three round files must be JSON within 64 MiB.");
+        const bytes = await blob.arrayBuffer();
+        if (rev !== roundRead) return;
+        if (bytes.byteLength > 64 * 1024 * 1024) throw Error("A round file exceeds 64 MiB.");
+        const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+        JSON.parse(raw); files.set(id, raw);
+      }
+      installPattern(files.get("patternFile"), "Received round pattern.json");
+      for (const [id, raw] of files) roundFiles.set(id, raw);
+      $("roundImportText").textContent = "Received pattern.json, measurements.json and fit_spec.json. Originals retained in this tab. Review sources, then Freeze selections and bind before running a consumer. Body and pose selection are separate. Manual file choices replace received inputs.";
+      controls();
+    } catch (e) {
+      if (rev !== roundRead) return;
+      roundFiles.clear(); resetPatternInput();
+      $("roundImportText").textContent = `Round handoff refused: ${e.message || e} Choose the files manually or return to the current round.`;
+      controls();
+    }
+  });
+  sender.postMessage({ type: "ftx-round-sources-ready", token: roundToken }, roundOrigin);
+} else roundToken = null;
+window.addEventListener("pagehide", () => { clearRoundSources(); ++epoch; worker?.terminate(); clear(["bind", ...operations]); });
 start();

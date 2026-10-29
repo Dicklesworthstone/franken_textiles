@@ -58,12 +58,16 @@ onmessage = async (ev) => {
         const foldable = !!data && res.status !== "BLOCKED" && (data.meta || {}).scale_status !== "UNSCALED"
           && (data.pieces || []).some((p) => truthy(p.placement) && p.sim !== false);
         const measurements = text(round.file("measurements.json"));
+        const fit = text(round.file("fit_spec.json"));
         if (foldable) {
-          docs = { request: msg.request, pattern, measurements, fit: text(round.file("fit_spec.json")) };
+          docs = { request: msg.request, pattern, measurements, fit };
         }
         if (!res.errors && measurements) bodyRound = { request: msg.request, measurements };
+        // These native saved texts outlive the round handle without a JavaScript numeric round-trip.
+        const roundSources = res.zip && !res.errors && pattern && measurements && fit
+          ? { pattern, measurements, fit } : null;
         return postMessage({ type: "result", request: msg.request, res, blobs, foldable,
-          bodyCheckable: !!bodyRound }, Object.values(blobs).map((b) => b.buffer));
+          bodyCheckable: !!bodyRound, roundSources }, Object.values(blobs).map((b) => b.buffer));
       } finally { round.free(); }
     }
     if (msg.type === "clearBody") {

@@ -183,6 +183,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     <p id="resBasis" class="mut"></p>
     <div id="resGate"></div>
     <div id="resFiles" class="files"></div>
+    <p><button id="chooseMaterials" type="button" disabled>Choose materials</button>
+      <span class="mut">Open this round’s pattern, measurements and fit contract in the local Material Workbench. Bind materials there before running a consumer; body selection is separate.</span></p>
     <div class="sheet"><img id="resPreview" alt="the pattern pieces as exported (master SVG)"></div>
     <h2 style="margin-top:14px">Finished measurements</h2>
     <div class="scroll"><table id="resPoints"></table></div>
@@ -444,6 +446,31 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       + "</details>";
   }
   let foldUrls = [];
+  let materialSources = null, materialTransfer = null;
+  const materialOrigin = new URL(location.href).origin;
+  $("chooseMaterials").addEventListener("click", () => {
+    if (!materialSources || materialOrigin === "null") return;
+    if (materialTransfer && !materialTransfer.target.closed) {
+      status("The material tab is waiting for this round. Finish or close it before opening another."); return;
+    }
+    const token = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2, "0")).join("");
+    const url = new URL("materials.html", location.href); url.searchParams.set("roundImport", token);
+    const target = window.open(url.href, "_blank");
+    if (!target) { status("Allow the local material tab, or download the round ZIP and choose its three JSON files there."); return; }
+    materialTransfer = { target, token, files: materialSources };
+  });
+  window.addEventListener("message", event => {
+    const m = event.data, transfer = materialTransfer;
+    if (!transfer || event.origin !== materialOrigin || event.source !== transfer.target ||
+      m?.type !== "ftx-round-sources-ready" || m.token !== transfer.token) return;
+    transfer.target.postMessage({ type: transfer.files ? "ftx-round-sources" : "ftx-round-sources-cancelled",
+      token: transfer.token, ...(transfer.files ? { files: transfer.files } : {}) }, materialOrigin);
+    materialTransfer = null;
+  });
+  window.addEventListener("pagehide", () => {
+    materialSources = null;
+    if (materialTransfer) materialTransfer.files = null;
+  });
   function dropBodyCheck() {
     bodyCheckRequest = ++nextRequest; bodyChecking = false;
     bodyCheckUrls.forEach(u => URL.revokeObjectURL(u)); bodyCheckUrls = [];
@@ -460,6 +487,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   }
   function invalidateRound() {
     roundRequest = ++nextRequest; foldable = false; bodyCheckable = false;
+    materialSources = null; $("chooseMaterials").disabled = true;
+    if (materialTransfer) materialTransfer.files = null;
     if (bodyFitText !== null) $("bodyFitConsent").checked = false;
     urls.forEach((u) => URL.revokeObjectURL(u)); urls = [];
     $("results").classList.add("hidden"); $("resFiles").innerHTML = "";
@@ -497,6 +526,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     else if (msg.type === "result") {
       $("go").disabled = false; status("Done.");
       renderResult(msg.res, msg.blobs);
+      materialSources = msg.roundSources && !msg.res.errors && msg.res.zip &&
+        ["pattern", "measurements", "fit"].every(id => typeof msg.roundSources[id] === "string")
+        ? Object.fromEntries(["pattern", "measurements", "fit"].map(id =>
+          [id, new Blob([msg.roundSources[id]], { type: "application/json" })])) : null;
+      $("chooseMaterials").disabled = !materialSources;
       // a new round's pattern: the last fold-up (its links revoked above) belongs to another one
       dropFold();
       // a validated, to-scale garment with fold-up placements can be draped once the body model is loaded

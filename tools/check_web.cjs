@@ -57,6 +57,10 @@ async function tracingEdits(browser, origin) {
   const assert=require("node:assert/strict"),context=await browser.newContext({userAgent});
   const errors=[],requests=[],work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-trace-drafts-"));
   context.on("request",r=>requests.push({url:r.url(),method:r.method()}));
+  await context.addInitScript(()=>{
+    const NativeDate=Date;
+    window.Date=class extends NativeDate {constructor(...a){super(...(a.length?a:[2026,9,29,12,0]));}};
+  });
   await context.route("**/worker.js",async route=>{
     const response=await route.fetch();
     // Both ordinary Workbench paths receive the same explicit export clock, not altered numerics.
@@ -130,6 +134,36 @@ async function tracingEdits(browser, origin) {
     await bench.screenshot({path:path.join(work,"trace-workbench.png"),fullPage:true});
     const round=async tab=>{await tab.click("#go");await tab.waitForFunction(()=>!document.getElementById("results").classList.contains("hidden") || !document.getElementById("errorBox").classList.contains("hidden"));assert.equal(await tab.isVisible("#errorBox"),false,await tab.textContent("#errorText"));return download(await tab.locator('#resFiles a[download$=".zip"]').getAttribute("download"),tab);};
     const handed=await round(bench);
+    // The complete native round is the source of both handoff and ordinary-upload inputs.
+    const roundPath=path.join(work,'source-round.zip');fs.writeFileSync(roundPath,handed);
+    const entries=execFileSync('unzip',['-Z1',roundPath],{encoding:'utf8'}).trim().split('\n');
+    const sources=Object.fromEntries(['pattern.json','measurements.json','fit_spec.json'].map(name=>{
+      const matches=entries.filter(entry=>entry===name||entry.endsWith('/'+name));assert.equal(matches.length,1,name);
+      return [name,execFileSync('unzip',['-p',roundPath,matches[0]])];
+    }));
+    const materialOpened=bench.waitForEvent('popup');await bench.click('#chooseMaterials');const material=await materialOpened;
+    material.on('pageerror',e=>errors.push(String(e)));
+    await material.waitForFunction(()=>document.getElementById('roundImportText').textContent.startsWith('Received pattern.json')&&!document.getElementById('bind').disabled);
+    assert.equal(await material.evaluate(()=>window.opener===null),true);
+    assert.equal(await material.isDisabled('#exports'),true,'No automatic material binding');
+    assert.equal(await material.isDisabled('#fold'),true,'No body is transferred');
+    const bind=async tab=>{await tab.click('#bind');await tab.waitForFunction(()=>!document.getElementById('exports').disabled||!document.getElementById('error').hidden);
+      assert.equal(await tab.isVisible('#error'),false,await tab.textContent('#error'));};
+    await bind(material);
+    assert.ok((await download('original-pattern.json',material)).equals(sources['pattern.json']),'Original pattern bytes come from the native round');
+    const exportRound=async tab=>{await tab.click('#exports');await tab.locator('a[download="export.zip"]').waitFor();return download('export.zip',tab);};
+    const materialZip=await exportRound(material),boundPattern=await download('pattern.json',material);
+    const materialManual=await context.newPage();await materialManual.goto(origin+'/materials.html');
+    await materialManual.waitForFunction(()=>document.getElementById('status').textContent.startsWith('Ready'));
+    for(const [id,name] of [['patternFile','pattern.json'],['measurements','measurements.json'],['fit','fit_spec.json']])
+      await materialManual.setInputFiles('#'+id,{name,mimeType:'application/json',buffer:sources[name]});
+    await bind(materialManual);
+    assert.ok((await download('pattern.json',materialManual)).equals(boundPattern),'Same native material binding');
+    assert.ok((await exportRound(materialManual)).equals(materialZip),'Handed round and manual three-file upload produce identical complete material export archives');
+    await material.click('#clearRoundImport');assert.equal(await material.locator('a[download="export.zip"]').count(),0);
+    assert.equal(await material.isDisabled('#bind'),true);assert.equal(await material.isDisabled('#exports'),true);
+    await material.close();await materialManual.close();
+    console.log('PASS round-to-material: exact native saved files, explicit binding/exports, complete manual-upload archive equality, no body transfer and clear withdraws outputs.');
     const manual=await context.newPage();await manual.goto(origin+"/index.html");
     await manual.waitForFunction(()=>!document.getElementById("go").disabled);await manual.check('input[name="program"][value="audit"]');
     await manual.setInputFiles("#patternFile",{name:"pattern.json",mimeType:"application/json",buffer:pattern});
