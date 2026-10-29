@@ -453,18 +453,35 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (materialTransfer && !materialTransfer.target.closed) {
       status("The material tab is waiting for this round. Finish or close it before opening another."); return;
     }
+    const model = $("bodyFile").files[0], imported = bodyFitText !== null;
+    if (!bodyFitReady || (model && (!bodyLoaded || dead))) {
+      status("Finish loading the selected body sources, or clear the unavailable selection before opening materials."); return;
+    }
+    if (imported && !$("bodyFitConsent").checked) {
+      status("Associate the accepted fit with this wearer before handing it to materials."); return;
+    }
+    const angle = $("bodyArmDeg").value.trim();
+    if (imported && (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180)) {
+      status("Supply a finite drape arm angle from 0 to 180 degrees before opening materials."); return;
+    }
+    if (model && model.size > 256 * 1024 * 1024) {
+      status("The material workbench supports body models up to 256 MiB. This selected model cannot be transferred."); return;
+    }
+    const bodySource = model || imported ? { model: model || null,
+      fit: imported ? new Blob([bodyFitText], { type: "application/json" }) : null,
+      armDeg: imported ? Number(angle) : null } : null;
     const token = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2, "0")).join("");
     const url = new URL("materials.html", location.href); url.searchParams.set("roundImport", token);
     const target = window.open(url.href, "_blank");
     if (!target) { status("Allow the local material tab, or download the round ZIP and choose its three JSON files there."); return; }
-    materialTransfer = { target, token, files: materialSources };
+    materialTransfer = { target, token, files: materialSources, bodySource };
   });
   window.addEventListener("message", event => {
     const m = event.data, transfer = materialTransfer;
     if (!transfer || event.origin !== materialOrigin || event.source !== transfer.target ||
       m?.type !== "ftx-round-sources-ready" || m.token !== transfer.token) return;
     transfer.target.postMessage({ type: transfer.files ? "ftx-round-sources" : "ftx-round-sources-cancelled",
-      token: transfer.token, ...(transfer.files ? { files: transfer.files } : {}) }, materialOrigin);
+      token: transfer.token, ...(transfer.files ? { files: transfer.files, bodySource: transfer.bodySource } : {}) }, materialOrigin);
     materialTransfer = null;
   });
   window.addEventListener("pagehide", () => {
@@ -659,6 +676,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   });
   $("bodyFile").addEventListener("change", async () => {
     if (dead) return;
+    if (materialTransfer) materialTransfer.files = null;
+    $("bodyFitConsent").checked = false;
     const request = bodyRequest = ++nextRequest;
     bodyLoaded = false; invalidateFold();
     worker.postMessage({ type: "clearBody" });
@@ -676,6 +695,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   });
   $("bodyFitFile").addEventListener("change", async () => {
     if (dead) return;
+    if (materialTransfer) materialTransfer.files = null;
     const request = ++bodyFitRead;
     bodyFitText = null; bodyFitReady = false; $("bodyFitConsent").checked = false;
     invalidateFold();
@@ -694,8 +714,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       showError(e.message); foldButton();
     }
   });
-  for (const id of ["bodyFitConsent", "bodyArmDeg"]) $(id).addEventListener("change", invalidateFold);
-  $("bodyArmDeg").addEventListener("input", invalidateFold);
+  function bodySourceChanged() {
+    if (materialTransfer) materialTransfer.files = null;
+    invalidateFold();
+  }
+  for (const id of ["bodyFitConsent", "bodyArmDeg"]) $(id).addEventListener("change", bodySourceChanged);
+  $("bodyArmDeg").addEventListener("input", bodySourceChanged);
   $("bodyCheckGo").addEventListener("click", () => {
     if ($("bodyCheckGo").disabled) return;
     dropBodyCheck(); bodyChecking = true; foldButton();

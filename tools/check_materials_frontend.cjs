@@ -1110,6 +1110,57 @@ test('material round handoff refuses invalid sources and manual choices defeat d
   p.emit({pattern:{pieces:[]},pattern_json:'{"pieces":[]}',pieces:[],pattern_sha256:'test'});
   assert.equal(p.e.exports.disabled,true,'Cancelled measurements and fit do not survive manual pattern');
 });
+test('material body handoff retains exact model, report and pose until explicit wearer association and binding', async () => {
+  const token = '6'.repeat(32), p = await pageModule({roundToken:token});
+  const raw = ' \r\n{"schema":"ftx-body-fit/1","probe":-0.0,"seed":18446744073709551615}\r\n';
+  const model = new Blob([new Uint8Array([3,5,7])]);
+  const packet = {type:'ftx-round-sources',token,files:{pattern:new Blob(['{"pieces":[{"id":"front"}]}']),measurements:new Blob(['{}']),fit:new Blob(['{}'])},
+    bodySource:{model,fit:new Blob([raw]),armDeg:50}};
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:packet});
+  assert.equal(p.current().messages.length,0); assert.equal(p.e.bodyFitConsent.checked,false);
+  assert.equal(p.e.bodyArmDeg.value,'50'); assert.equal(p.e.fold.disabled,true);
+  const sourceLink = p.e.receivedBodyFiles.children.find(a=>a.download==='body_fit.json');
+  assert.equal(await p.blobs.get(sourceLink.href).text(),raw);
+  const modelLink = p.e.receivedBodyFiles.children.find(a=>a.download==='body-model.ftxbody');
+  assert.deepEqual([...new Uint8Array(await p.blobs.get(modelLink.href).arrayBuffer())],[3,5,7]);
+  await p.bind(); assert.equal(p.e.fold.disabled,true);
+  p.e.bodyFitConsent.checked=true; p.e.bodyFitConsent.handlers.change();
+  assert.equal(p.e.fold.disabled,false); await p.e.fold.onclick();
+  const msg=p.current().messages.at(-1);
+  assert.equal(msg.bodyFit,raw);assert.equal(msg.bodyFitConsent,true);assert.equal(msg.armDeg,50);
+  assert.deepEqual([...new Uint8Array(msg.bytes)],[3,5,7]);p.emit({});
+  p.e.body.files=[new Blob([new Uint8Array([11])])];p.e.body.handlers.change();
+  assert.equal(p.e.bodyFitConsent.checked,false);assert.equal(p.e.fold.disabled,true);
+  assert.equal(p.e.receivedBodyFiles.children.some(a=>a.download==='body-model.ftxbody'),false);
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();await p.e.fold.onclick();
+  assert.equal(p.current().messages.at(-1).bodyFit,raw);
+  assert.deepEqual([...new Uint8Array(p.current().messages.at(-1).bytes)],[11]);p.emit({});
+  const old=[...p.live];p.e.clearRoundImport.onclick();
+  assert.equal(p.e.bind.disabled,true);assert.equal(p.e.fold.disabled,true);assert.equal(p.e.receivedBodyNote.hidden,true);
+  assert.ok(old.every(url=>!p.live.has(url)));assert.equal(p.e.bodyFitConsent.checked,false);
+});
+test('material body handoff rejects malformed context and delayed reports lose to manual body choices', async () => {
+  const token='7'.repeat(32),files={pattern:new Blob(['{"pieces":[]}']),measurements:new Blob(['{}']),fit:new Blob(['{}'])};
+  for(const bodySource of [{},{model:new Blob([])},{model:{}},{fit:new Blob(['{}']),armDeg:181},
+    {fit:new Blob(['\ufeff{}']),armDeg:50},{fit:new Blob([new Uint8Array([0xff])]),armDeg:50},
+    {fit:new Blob(['[]']),armDeg:50},{model:new Blob([new Uint8Array([1])]),armDeg:50}]) {
+    const p=await pageModule({roundToken:token});
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-round-sources',token,files,bodySource}});
+    assert.equal(p.e.bind.disabled,true);assert.match(p.e.roundImportText.textContent,/refused/i);assert.equal(p.live.size,0);
+  }
+  for(const edit of ['body','bodyFitFile','bodyArmDeg','bodyFitConsent']) {
+    const p=await pageModule({roundToken:token}),fit=new Blob(['{}']);let release;
+    fit.arrayBuffer=()=>new Promise(resolve=>{release=resolve;});
+    const receiving=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+      data:{type:'ftx-round-sources',token,files,bodySource:{model:new Blob([new Uint8Array([1])]),fit,armDeg:50}}});
+    while(!release)await new Promise(resolve=>setImmediate(resolve));
+    if(edit==='body'||edit==='bodyFitFile')p.e[edit].files=[new Blob(['{}'])];
+    p.e[edit].handlers[edit==='bodyArmDeg'?'input':'change']();
+    release(new TextEncoder().encode('{}').buffer);await receiving;
+    assert.equal(p.e.bind.disabled,true);assert.equal(p.current().messages.length,0);
+    assert.equal(p.e.receivedBodyFiles.children.length,0,'A superseded packet installs no body context');
+  }
+});
 test('GarmentCode review preserves the current pattern until explicit use resets its material and downstream state', async () => {
   const p=await pageModule(),r=garmentcodeImport(),outfit=outfitImport();
   p.select('patternFile',outfit.request_json);await p.e.patternFile.onchange();p.emit(outfit);
@@ -3326,6 +3377,40 @@ test('current drafting round hands off exact immutable files once and cancels un
   p.windowEvents.message({origin:'https://unit.invalid',source:waiting,data});
   assert.equal(waiting.messages[0].data.type,'ftx-round-sources-cancelled');assert.equal(waiting.messages[0].data.files,undefined);
   assert.equal(await popup.messages[0].data.files.pattern.text(),raw.pattern,'Received snapshot remains unchanged');
+});
+test('drafting handoff snapshots the loaded model and exact accepted fit and cancels pending body-source edits', async () => {
+  const raw=' {"schema":"ftx-body-fit/1","probe":-0.0,"seed":18446744073709551615}\r\n';
+  const prepare=async()=>{
+    const p=draftingPage();await p.e.go.handlers.click();
+    p.result(undefined,{roundSources:{pattern:'{"pieces":[]}',measurements:'{}',fit:'{}'}});
+    p.e.bodyFile.files=[new Blob([new Uint8Array([1,2,3])])];await p.e.bodyFile.handlers.change();
+    p.emit({type:'bodyReady',request:p.last('body').request});
+    p.e.bodyFitFile.files=[new Blob([raw])];await p.e.bodyFitFile.handlers.change();
+    p.e.bodyArmDeg.value='50';
+    await p.e.chooseMaterials.handlers.click();assert.equal(p.popups.length,0,'Unassociated fit cannot be handed off');
+    p.e.bodyFitConsent.checked=true;await p.e.bodyFitConsent.handlers.change();
+    await p.e.chooseMaterials.handlers.click();return p;
+  };
+  const send=p=>{
+    const popup=p.popups.at(-1),token=new URL(popup.url).searchParams.get('roundImport');
+    p.windowEvents.message({origin:'https://unit.invalid',source:popup,data:{type:'ftx-round-sources-ready',token}});
+    return popup.messages.at(-1).data;
+  };
+  const p=await prepare(),packet=send(p);
+  assert.equal(packet.type,'ftx-round-sources');assert.equal(packet.bodySource.armDeg,50);
+  assert.equal(await packet.bodySource.fit.text(),raw);
+  assert.deepEqual([...new Uint8Array(await packet.bodySource.model.arrayBuffer())],[1,2,3]);
+  p.e.bodyFitFile.files=[new Blob(['{"replacement":true}'])];await p.e.bodyFitFile.handlers.change();
+  assert.equal(await packet.bodySource.fit.text(),raw,'Received report snapshot cannot be changed by subsequent source edits');
+  for(const edit of ['bodyFile','bodyFitFile','bodyArmDeg','bodyFitConsent']) {
+    const current=await prepare();
+    if(edit==='bodyFile'||edit==='bodyFitFile')current.e[edit].files=[];
+    if(edit==='bodyArmDeg')current.e.bodyArmDeg.value='35';
+    if(edit==='bodyFitConsent')current.e.bodyFitConsent.checked=false;
+    await current.e[edit].handlers[edit==='bodyArmDeg'?'input':'change']();
+    const cancelled=send(current);assert.equal(cancelled.type,'ftx-round-sources-cancelled');
+    assert.equal(cancelled.files,undefined);assert.equal(cancelled.bodySource,undefined);
+  }
 });
 
 test('primary workshop preserves original JSON file and style text instead of rounding numeric semantics',async()=>{

@@ -11,16 +11,20 @@ has no Python or native-library runtime dependency. It does not install or opera
 After drafting or checking a round in Pattern Workbench, **Choose materials** opens this
 workbench with the round's exact pattern, measurements and fit-specification files. Inspect
 material sources, **Freeze selections and bind**, then explicitly validate/regenerate exports
-or run another supported consumer. Body models, accepted-shape associations and drape results
-are selected separately; this handoff supplies the flat round files. Measurement readiness
-is recomputed by the ordinary export consumer and does not become approval to cut.
+or run another supported consumer. When selected, the exact local body model, original accepted
+image-fit report and ordinary drape arm angle accompany those files. The receiving tab requires
+a fresh wearer association before using an accepted shape; arrival never runs a consumer.
+Measurement readiness is recomputed by the ordinary export consumer and does not become approval
+to cut. A round without body sources still uses the original three-file route.
 
 The tabs exchange immutable local files through the same origin, window and a one-use token;
-no files enter browser storage or a server. Editing the source round before the receiving tab
-requests its files cancels the pending transfer. A received round remains that snapshot.
-Choosing another pattern cancels the handoff; individual measurement/fit file choices replace
-their imported counterparts. **Clear received round** withdraws its pattern and dependent
-outputs. If popups are blocked, download the ordinary round ZIP and select its three files.
+no files enter browser storage or a server. Editing the source round, selected model, accepted
+report, wearer association or pose before the receiving tab requests its files cancels the pending
+transfer. A received round remains that snapshot. Choosing another pattern cancels the handoff;
+individual file choices replace their imported counterparts and defeat delayed packets. Received
+body sources have local download links for inspection and replay. **Clear received round** withdraws
+its imported pattern/body sources, download URLs and dependent outputs. If popups are blocked,
+download the ordinary round ZIP and select its files and original body sources manually.
 
 Search the unified built-in catalog, select an exact record, and inspect its original observations,
 normalized units, conditioning, sources and independent capability refusals. Alternatively, load a

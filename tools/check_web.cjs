@@ -916,6 +916,32 @@ async function offlineViewer(browser, file) {
       assert.equal(await material.locator("#outputs a[download='sim_report.json']").count(),0);
       await material.close();
       check(true,"material preview: exact accepted shape and complete native report/viewer equality; refused replacement cannot tape-refit");
+      const popup = page.waitForEvent("popup"); await page.click("#chooseMaterials");
+      const received = await popup; received.on("pageerror",e=>errors.push(String(e)));
+      await received.waitForFunction(() => document.getElementById("roundImportText").textContent.startsWith("Received pattern.json") &&
+        !document.getElementById("bind").disabled,null,{timeout:120000});
+      const receivedBytes = async (name,selector="#outputs") => {
+        const event=received.waitForEvent("download");await received.click(`${selector} a[download='${name}']`);
+        const file=await event;assert.equal(await file.failure(),null);return fs.readFileSync(await file.path());
+      };
+      assert.ok((await receivedBytes("body_fit.json","#receivedBodyFiles")).equals(raw));
+      assert.equal(await received.inputValue("#bodyArmDeg"),"50");
+      assert.equal(await received.isChecked("#bodyFitConsent"),false);
+      assert.equal(await received.locator("#outputs a").count(),0,'No consumer ran on arrival');
+      await received.click("#bind");await received.waitForFunction(() => document.getElementById("status").textContent.startsWith("bind complete"));
+      assert.ok((await receivedBytes("pattern.json")).equals(boundPattern));
+      assert.equal(await received.isEnabled("#fold"),false);
+      await received.locator("details").filter({has:received.locator("#bodyFitFile")}).locator("summary").click();
+      await received.check("#bodyFitConsent");await received.click("#fold");
+      await received.waitForFunction(() => /^fold (complete|refused)/.test(document.getElementById("status").textContent),null,{timeout:900000});
+      assert.equal(await received.isVisible("#error"),false,await received.textContent("#error"));
+      assert.deepEqual(JSON.parse(await receivedBytes("sim_report.json")),materialReport);
+      assert.ok((await receivedBytes("body_fit.json")).equals(raw));
+      await received.click("#clearRoundImport");
+      assert.equal(await received.locator("#receivedBodyFiles a").count(),0);
+      assert.equal(await received.locator("#outputs a").count(),0);assert.equal(await received.isEnabled("#fold"),false);
+      await received.close();
+      check(true,"pattern-to-material body handoff: exact accepted source, same bound pattern and full manual/native drape result after explicit association");
       const rejected = {...saved,status:"REJECTED"};
       await page.setInputFiles("#bodyFitFile",{name:"rejected.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify(rejected))});
       await page.waitForFunction(() => /Fit report read/.test(document.getElementById("status").textContent));

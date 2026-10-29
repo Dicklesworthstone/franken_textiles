@@ -2832,7 +2832,8 @@ function show(op, msg) {
 }
 async function read(id, binary = false) {
   if (!binary && roundFiles.has(id)) return roundFiles.get(id);
-  const f = $(id).files[0]; if (!f) throw Error(`Choose ${id} first.`);
+  const f = binary && roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
+  if (!f) throw Error(`Choose ${id} first.`);
   if (id === "bodyFitFile") {
     if (f.size > 16 * 1024 * 1024) throw Error("Accepted body-fit report exceeds 16 MiB.");
     const bytes = await f.arrayBuffer();
@@ -2843,6 +2844,7 @@ async function read(id, binary = false) {
   }
   if (f.size > (binary ? 256 : 64) * 1024 * 1024) throw Error(`${id} exceeds its input budget.`);
   const data = binary ? await f.arrayBuffer() : await f.text();
+  if (binary && data.byteLength > 256 * 1024 * 1024) throw Error(`${id} exceeds its input budget.`);
   if (!binary) JSON.parse(data);
   return data;
 }
@@ -3207,8 +3209,9 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:["scenario"] })) {
   $(id).addEventListener("change", () => {
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
-    if (id === "measurements" || id === "fit") {
+    if (id === "measurements" || id === "fit" || id === "body") {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
+      if (id === "body") showReceivedBody();
     }
     const affected = id === "measurements" && has("scenarioBody") ? keys.filter(k => k !== "scenario") : [...keys];
     if ($("studyOnBody").checked && (id === "body" || id === "scenarioBody" || (id === "measurements" && !has("scenarioBody")))) affected.push("study");
@@ -3216,14 +3219,21 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
   });
 }
 $("bodyFitFile").addEventListener("change", () => {
+  ++roundRead; roundToken = null; window.opener = null; roundFiles.delete("bodyFitFile");
+  showReceivedBody();
   $("bodyFitConsent").checked = false;
   invalidate(["fold", "heat", "vaporSurface", "coverage"]);
 });
 for (const id of ["bodyFitConsent", "bodyArmDeg"]) {
-  $(id).addEventListener(id === "bodyArmDeg" ? "input" : "change", () => invalidate(["fold", "heat", "vaporSurface", "coverage"]));
+  $(id).addEventListener(id === "bodyArmDeg" ? "input" : "change", () => {
+    ++roundRead; roundToken = null; window.opener = null;
+    invalidate(["fold", "heat", "vaporSurface", "coverage"]);
+  });
 }
 $("clearBodyFit").onclick = () => {
+  ++roundRead; roundToken = null; window.opener = null;
   $("bodyFitFile").value = ""; roundFiles.delete("bodyFitFile"); $("bodyFitConsent").checked = false;
+  showReceivedBody();
   invalidate(["fold", "heat", "vaporSurface", "coverage"]);
 };
 $("studyOnBody").addEventListener("change", () => invalidate(["study"]));
@@ -3231,8 +3241,19 @@ $("thermalPointTemperature").addEventListener("input", invalidateThermalPoint);
 $("thermalRequest").addEventListener("change", () => invalidate(["thermalHistory"]));
 $("clearCoverageBridges").onclick = () => { $("coverageBridges").value = ""; invalidate(["coverage"]); };
 $("coverageBridges").addEventListener("change", () => invalidate(["coverage"]));
+function showReceivedBody() {
+  clear(["roundBody"]); $("receivedBodyFiles").replaceChildren();
+  const model = roundFiles.get("body"), fit = roundFiles.get("bodyFitFile");
+  $("receivedBodyNote").hidden = !model && !fit;
+  $("receivedBodyNote").textContent = "Received body sources remain local immutable snapshots. Manual file choices replace them. " +
+    (fit ? "Review the original fit, confirm this wearer, and choose the exact model before draping. The transferred angle selects the ordinary drape pose." :
+      "The received model will be fitted to the current measurements when you choose Re-drape.");
+  if (model) link("roundBody", $("receivedBodyFiles"), { name: "body-model.ftxbody", bytes: model, mime: "application/octet-stream" });
+  if (fit) link("roundBody", $("receivedBodyFiles"), { name: "body_fit.json", text: fit, mime: "application/json" });
+}
 function clearRoundSources() {
   ++roundRead; roundToken = null; roundFiles.clear(); window.opener = null;
+  $("bodyFitConsent").checked = false; showReceivedBody();
   $("roundImportNote").hidden = true;
 }
 $("clearRoundImport").onclick = () => { clearRoundSources(); resetPatternInput(); controls(); };
@@ -3260,13 +3281,36 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
         const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
         JSON.parse(raw); files.set(id, raw);
       }
+      const context = m.bodySource;
+      if (context != null) {
+        if (typeof context !== "object" || Array.isArray(context) || (!context.model && !context.fit)) throw Error("Body context needs a model or an accepted-fit source.");
+        if (context.model != null) {
+          if (!(context.model instanceof Blob) || !context.model.size || context.model.size > 256 * 1024 * 1024) throw Error("Received body model must be a nonempty file within 256 MiB.");
+          files.set("body", context.model);
+        }
+        if (context.fit != null) {
+          if (!(context.fit instanceof Blob) || context.fit.size > 16 * 1024 * 1024) throw Error("Received accepted fit exceeds its 16 MiB input budget.");
+          if (!Number.isFinite(context.armDeg) || context.armDeg < 0 || context.armDeg > 180) throw Error("Received drape arm angle must be from 0 to 180 degrees.");
+          const bytes = await context.fit.arrayBuffer();
+          if (rev !== roundRead) return;
+          if (bytes.byteLength > 16 * 1024 * 1024) throw Error("Received accepted fit exceeds its 16 MiB input budget.");
+          const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw Error("Received accepted fit must be a JSON object.");
+          files.set("bodyFitFile", raw);
+        } else if (context.armDeg != null) throw Error("A received drape pose requires an accepted-fit source.");
+      }
       installPattern(files.get("patternFile"), "Received round pattern.json");
       for (const [id, raw] of files) roundFiles.set(id, raw);
-      $("roundImportText").textContent = "Received pattern.json, measurements.json and fit_spec.json. Originals retained in this tab. Review sources, then Freeze selections and bind before running a consumer. Body and pose selection are separate. Manual file choices replace received inputs.";
+      if (context?.fit) $("bodyArmDeg").value = String(context.armDeg);
+      $("bodyFitConsent").checked = false; showReceivedBody();
+      $("roundImportText").textContent = "Received pattern.json, measurements.json and fit_spec.json. Originals retained in this tab. Review sources, then Freeze selections and bind before running a consumer. " +
+        (context ? "Selected body sources also arrived; review them and confirm the accepted-fit association separately before draping. " : "Choose a body separately for draping. ") +
+        "Manual file choices replace received inputs.";
       controls();
     } catch (e) {
       if (rev !== roundRead) return;
-      roundFiles.clear(); resetPatternInput();
+      roundFiles.clear(); showReceivedBody(); resetPatternInput();
       $("roundImportText").textContent = `Round handoff refused: ${e.message || e} Choose the files manually or return to the current round.`;
       controls();
     }
