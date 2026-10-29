@@ -313,8 +313,16 @@ mod tests {
     fn every_closed_component_must_be_outward_even_when_total_volume_is_positive() {
         let (mut vertices, mut faces) = tetrahedron();
         let (small, small_faces) = tetrahedron();
-        vertices.extend(small.into_iter().map(|p| p * 0.5 + Vec3::new(3.0, 0.0, 0.0)));
-        faces.extend(small_faces.into_iter().map(|[a, b, c]| [a + 4, c + 4, b + 4]));
+        vertices.extend(
+            small
+                .into_iter()
+                .map(|p| p * 0.5 + Vec3::new(3.0, 0.0, 0.0)),
+        );
+        faces.extend(
+            small_faces
+                .into_iter()
+                .map(|[a, b, c]| [a + 4, c + 4, b + 4]),
+        );
         let volume: f64 = faces
             .iter()
             .map(|t| {
@@ -351,7 +359,11 @@ mod tests {
         // A second outward tetrahedron touches the first only at the shared vertex 0.
         let map = [0, 4, 5, 6];
         let (_, other_faces) = tetrahedron();
-        faces.extend(other_faces.into_iter().map(|[a, b, c]| [map[a], map[c], map[b]]));
+        faces.extend(
+            other_faces
+                .into_iter()
+                .map(|[a, b, c]| [map[a], map[c], map[b]]),
+        );
         let error = audit_surface(&vertices, &faces, 100).unwrap_err();
         assert_eq!(error.code, RefusalCode::DegenerateGeometry);
         assert!(error.message.contains("vertex 0"));
@@ -406,7 +418,10 @@ mod tests {
                 *p += shift;
             }
             for _ in 0..2 {
-                assert_eq!(audit_surface(&vertices, &faces, 12).unwrap().pairs_tested, 12);
+                assert_eq!(
+                    audit_surface(&vertices, &faces, 12).unwrap().pairs_tested,
+                    12
+                );
                 faces.reverse();
             }
         }

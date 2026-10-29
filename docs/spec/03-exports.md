@@ -190,6 +190,12 @@ Stroke text is always called with `cap = font_size × CAP`, so its height equals
 - JSON files (manifest, cutter report, GarmentCode): Python `json.dumps(obj, indent=1)` + `"\n"`: one-space
   indent, `", "`/`": "` separators, ASCII-only output (non-ASCII escaped `\uXXXX`), floats in shortest round-trip
   `repr` (Python writes `1e-05`, `1e+16`; integers stay integers, floats keep `.0`).
+  Integer identity is not limited to binary64's exact range: parsing and dumping
+  `9223372036854775808` and `18446744073709551615` keeps those decimal integers, rather than
+  converting them to scientific-notation floats. The Python 3.12 standard-library check
+  `json.dumps(json.loads("[9223372036854775808,18446744073709551615,-0.0,1.0]"), indent=1)`
+  retains both integers, `-0.0` and `1.0`. This specifies the reference's formatting, not an
+  arbitrary-precision requirement for every native numerical calculation.
 
 ---
 

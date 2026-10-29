@@ -11,6 +11,14 @@ basis; the documents (`pattern.json`, `fit_spec.json`, `measurements.json`, `val
 `form_fields(args, today)` and `run(req, today, created)` → `WebRound {page(), zip_name(), zip(), file(name)}`
 to the page's worker as JSON text and bytes. The numerical crates never see browser types.
 
+Uploaded source metadata retains signed `i64` and full unsigned `u64` JSON integers through
+the shared `PyJson` adapter and saved round documents. In particular, an actual photo report's
+`bootstrap.seed` and `measurement_options.seed` remain exact when used in the primary
+measurements file. Numerical conversion to a physical floating-point input still follows the
+ordinary range checks; out-of-range integer literals refuse instead of being rounded. This
+does not add arbitrary-precision numerical calculations or fit evidence. Test:
+`page::full_width_photo_seed_and_source_metadata_survive_an_ordinary_round`.
+
 **Material treatments and production.** `materials::treatment` and `treatment_pattern` expose the
 shared source-qualified before/after state and grain-axis geometry consumers within a combined
 64 MiB input budget. Browser exports `material_treatment` and `material_treatment_pattern` retain

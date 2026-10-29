@@ -75,6 +75,7 @@ pub(crate) fn truthy(v: &Value) -> bool {
 fn number(v: &PyJson) -> Result<f64, String> {
     match v {
         PyJson::Int(i) => Ok(*i as f64),
+        PyJson::UInt(i) => Ok(*i as f64),
         PyJson::Float(f) => Ok(*f),
         PyJson::Str(s) => s
             .trim()
@@ -91,6 +92,7 @@ fn number(v: &PyJson) -> Result<f64, String> {
 fn py_str(v: &PyJson) -> String {
     match v {
         PyJson::Int(i) => i.to_string(),
+        PyJson::UInt(i) => i.to_string(),
         PyJson::Float(f) => py::repr_f64(*f),
         PyJson::Str(s) => s.clone(),
         PyJson::Bool(b) => if *b { "True" } else { "False" }.into(),

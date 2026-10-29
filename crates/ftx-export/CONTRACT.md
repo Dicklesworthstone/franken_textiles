@@ -613,7 +613,14 @@ HPGL plots the master layout at 40 units per mm (ties to even), pen 1 (sew, inte
 lines, drills, label stroke text) before pen 2 (internal cuts, notches, the cut line) per piece, optionally
 mirrored and turned. Cutter SVGs: per instance (labels naming the side), grain vertical, the cut polygon united with
 a 4 × 3 mm outward triangle per notch, 1 mm margin, with the mat report. JSON is written like Python's
-`json.dumps(indent=1)` (key order kept, ASCII, `repr` floats; `PyJson`). Against
+`json.dumps(indent=1)` (key order kept, ASCII, `repr` floats; `PyJson`). Under
+the same integer-format contract, `PyJson` preserves signed `i64` and unsigned `u64`
+metadata through parsing, `serde_json::Value` conversion and writing; seeds and identifiers
+above `i64::MAX` never pass through `f64`. Existing float and signed-zero formatting is
+unchanged. Larger integer literals refuse explicitly (the named JSON-integer-range exception
+in `FEATURE_PARITY.md`); this is bounded integer support, not arbitrary-precision Python arithmetic.
+Boundary regressions are `pyjson::tests::full_width_unsigned_integers_keep_their_identity_through_every_conversion`;
+the ordinary photo/round regression is in `ftx-wasm/tests/page.rs`. Against
 `tests/fixtures/oracle/export/targets.json` (TESTBODICE also rotated and mirrored, ROBUST, the 92 cm fez, bolero
 and trousers): every HPGL command and pen equal and every polyline identical but the main label's strokes (ftx's
 anchor, the same strokes) and union cut lines (within 0.05 mm); cutter titles and reports equal, outlines within

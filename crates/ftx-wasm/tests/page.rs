@@ -166,6 +166,55 @@ fn file_request() -> Value {
 }
 
 #[test]
+fn full_width_photo_seed_and_source_metadata_survive_an_ordinary_round() {
+    let mut request = file_request();
+    let mut photo = ftx_wasm::photo::Photo::new(
+        include_bytes!("../../../tests/fixtures/photo/plain-letter-exif6.jpg"),
+        "letter",
+    )
+    .unwrap()
+    .measure(
+        r#"{"arm_length":[[30,400],[530,400]]}"#,
+        r#"{"seed":18446744073709551615}"#,
+    )
+    .unwrap();
+    assert_eq!(photo["photo"]["bootstrap"]["seed"].as_u64(), Some(u64::MAX));
+    // Synthetic photo evidence plus the public-prior records makes a complete primary file.
+    let prior = &request["body"]["measurements"];
+    photo["wearer"] = prior["wearer"].clone();
+    photo["records"]
+        .as_array_mut()
+        .unwrap()
+        .extend(prior["records"].as_array().unwrap().iter().cloned());
+    request["body"]["measurements"] = photo;
+    request["pattern"]["meta"]["source_sequence"] = json!(u64::MAX - 1);
+    request["fit_spec"]["source_sequence"] = json!(u64::MAX);
+    let original = request.clone();
+    let round = ftx_wasm::page::run(&request.to_string(), TODAY, CREATED).unwrap();
+    let saved = |name: &str| -> Value {
+        serde_json::from_slice(&round.files.iter().find(|(n, _)| n == name).unwrap().1).unwrap()
+    };
+    let measurements = saved("measurements.json");
+    assert_eq!(
+        measurements["photo"]["bootstrap"]["seed"].as_u64(),
+        Some(u64::MAX)
+    );
+    assert_eq!(
+        measurements["photo"]["measurement_options"]["seed"].as_u64(),
+        Some(u64::MAX)
+    );
+    assert_eq!(
+        saved("pattern.json")["meta"]["source_sequence"].as_u64(),
+        Some(u64::MAX - 1)
+    );
+    assert_eq!(
+        saved("fit_spec.json")["source_sequence"].as_u64(),
+        Some(u64::MAX)
+    );
+    assert_eq!(request, original);
+}
+
+#[test]
 fn uploaded_records_override_a_poisoned_cache_in_every_round_document() {
     let fresh = file_request();
     let expected = ftx_wasm::page::run(&fresh.to_string(), TODAY, CREATED).unwrap();

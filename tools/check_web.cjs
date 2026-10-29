@@ -134,7 +134,7 @@ async function tracingEdits(browser, origin) {
     await manual.waitForFunction(()=>!document.getElementById("go").disabled);await manual.check('input[name="program"][value="audit"]');
     await manual.setInputFiles("#patternFile",{name:"pattern.json",mimeType:"application/json",buffer:pattern});
     assert.ok((await round(manual)).equals(handed),"Handoff and ordinary file upload produce identical complete export archives");
-    const probe='"transport_numeric_probe":{"integer":9007199254740993,"signed_zero":-0.0,"float_tag":1.0},';
+    const probe='"transport_numeric_probe":{"integer":9007199254740993,"unsigned":18446744073709551615,"signed_zero":-0.0,"float_tag":1.0},';
     const numericPattern=pattern.toString('utf8').replace('"meta": {','"meta": {'+probe);
     assert.notEqual(numericPattern,pattern.toString('utf8'),'Actual source pattern receives synthetic metadata probe');
     let primary=null,fit=null;
@@ -155,14 +155,17 @@ async function tracingEdits(browser, origin) {
         finally {result.free();}
       },request);
       assert.match(expected.pattern,/"integer": 9007199254740993/);assert.match(expected.pattern,/"signed_zero": -0\.0/);assert.match(expected.pattern,/"float_tag": 1\.0/);
+      assert.match(expected.pattern,/"unsigned": 18446744073709551615/);
       assert.ok((await round(manual)).equals(Buffer.from(expected.zip)),mode+': browser complete archive equals direct raw-text Rust run');
       primary=expected.primary.replace('"wearer": {','"wearer": {'+probe);fit=expected.fit.replace('{','{'+probe);
     }
-    for(const buffer of [Buffer.from([0xc3,0x28]),Buffer.from('\ufeff{}'),Buffer.from('{')]) {
+    for(const [buffer,error] of [[Buffer.from([0xc3,0x28]),/not valid UTF-8 JSON/],[Buffer.from('\ufeff{}'),/not valid UTF-8 JSON/],[Buffer.from('{'),/not valid UTF-8 JSON/],
+      [Buffer.from(numericPattern.replace('18446744073709551615','18446744073709551616')),/64-bit range/],
+      [Buffer.from(numericPattern.replace('18446744073709551615','-9223372036854775809')),/64-bit range/]]) {
       await manual.setInputFiles("#patternFile",{name:"invalid.json",mimeType:"application/json",buffer});
       assert.equal(await manual.locator("#resFiles a").count(),0,'Invalid replacement withdraws prior downloads');
       await manual.click("#go");await manual.waitForFunction(()=>!document.getElementById("errorBox").classList.contains("hidden"));
-      assert.match(await manual.textContent("#errorText"),/not valid UTF-8 JSON/);assert.equal(await manual.isVisible("#results"),false);
+      assert.match(await manual.textContent("#errorText"),error);assert.equal(await manual.isVisible("#results"),false);
     }
     await manual.check('input[name="bodyMode"][value="chart"]');
     console.log("PASS JSON fidelity: uploaded pattern, primary measurement and fit files retain native-supported i64, signed zero and float semantics; complete archives equal direct raw-text WASM execution.");

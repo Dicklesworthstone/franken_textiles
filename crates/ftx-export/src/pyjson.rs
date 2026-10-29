@@ -13,6 +13,8 @@ pub enum PyJson {
     Bool(bool),
     /// An integer.
     Int(i64),
+    /// An unsigned integer, including source identifiers and seeds above `i64::MAX`.
+    UInt(u64),
     /// A float (`12.0` stays `12.0`).
     Float(f64),
     /// A string.
@@ -68,6 +70,7 @@ impl PyJson {
             Self::Null => Value::Null,
             Self::Bool(b) => Value::Bool(*b),
             Self::Int(i) => Value::from(*i),
+            Self::UInt(i) => Value::from(*i),
             Self::Float(f) => serde_json::Number::from_f64(*f).map_or(Value::Null, Value::Number),
             Self::Str(s) => Value::String(s.clone()),
             Self::List(v) => Value::Array(v.iter().map(Self::to_value).collect()),
@@ -86,8 +89,9 @@ impl PyJson {
         match v {
             Value::Null => Self::Null,
             Value::Bool(b) => Self::Bool(*b),
-            Value::Number(n) => match n.as_i64() {
-                Some(i) if !n.is_f64() => Self::Int(i),
+            Value::Number(n) => match (n.is_f64(), n.as_i64(), n.as_u64()) {
+                (false, Some(i), _) => Self::Int(i),
+                (false, _, Some(i)) => Self::UInt(i),
                 _ => Self::Float(n.as_f64().unwrap_or(f64::NAN)),
             },
             Value::String(s) => Self::Str(s.clone()),
@@ -137,6 +141,7 @@ impl PyJson {
             Self::Null => out.push_str("null"),
             Self::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             Self::Int(i) => out.push_str(&i.to_string()),
+            Self::UInt(i) => out.push_str(&i.to_string()),
             Self::Float(f) => out.push_str(&if f.is_nan() {
                 "NaN".to_string()
             } else if f.is_infinite() {
@@ -271,10 +276,16 @@ impl Parser<'_> {
                 if t.is_empty() {
                     return self.err("unexpected character");
                 }
-                if !t.contains(['.', 'e', 'E'])
-                    && let Ok(n) = t.parse::<i64>()
-                {
-                    return Ok(PyJson::Int(n));
+                if !t.contains(['.', 'e', 'E']) {
+                    if let Ok(n) = t.parse::<i64>() {
+                        return Ok(PyJson::Int(n));
+                    }
+                    if let Ok(n) = t.parse::<u64>() {
+                        return Ok(PyJson::UInt(n));
+                    }
+                    return Err(format!(
+                        "integer outside signed/unsigned 64-bit range at byte {start}"
+                    ));
                 }
                 t.parse::<f64>()
                     .map(PyJson::Float)
@@ -390,5 +401,29 @@ mod tests {
         // parsing keeps key order and round-trips
         let text = v.dumps(Some(1));
         assert_eq!(PyJson::parse(&text).unwrap().dumps(Some(1)), text);
+    }
+
+    #[test]
+    fn full_width_unsigned_integers_keep_their_identity_through_every_conversion() {
+        for value in [i64::MAX as u64, i64::MAX as u64 + 1, u64::MAX - 1, u64::MAX] {
+            let text = value.to_string();
+            let parsed = PyJson::parse(&text).unwrap();
+            assert_eq!(parsed.dumps(None), text);
+            assert_eq!(parsed.to_value().as_u64(), Some(value));
+            let from_value = PyJson::from_value(&serde_json::json!(value));
+            assert_eq!(from_value.dumps(None), text);
+            assert_eq!(from_value.to_value().as_u64(), Some(value));
+        }
+        let text = "[-9223372036854775808, 9223372036854775808, 18446744073709551615, -0.0, 1.0]";
+        assert_eq!(PyJson::parse(text).unwrap().dumps(None), text);
+    }
+
+    #[test]
+    fn integer_overflow_refuses_instead_of_becoming_a_float() {
+        for text in ["18446744073709551616", "-9223372036854775809"] {
+            assert!(PyJson::parse(text).unwrap_err().contains("64-bit range"));
+        }
+        // An explicitly floating-point source retains floating-point semantics.
+        assert!(matches!(PyJson::parse("1e20").unwrap(), PyJson::Float(_)));
     }
 }
