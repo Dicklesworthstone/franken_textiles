@@ -48,11 +48,21 @@ and folded-over faces, including defects far from the current garment. Static
 admission allows at most 1,000,000 overlapping triangle pairs and refuses an
 exhausted audit instead of silently admitting the unchecked remainder.
 
+Admission also requires at most two oppositely traversing faces per shared edge
+and one connected face fan at every referenced vertex. Every closed component
+must have positive signed volume, evaluated about a component-local origin;
+an outward large component cannot hide an inward small one. No source faces or
+vertices are repaired automatically. Coherent open surfaces remain supported,
+but a mixture of open and closed components is refused because the current
+contact containment query applies only to a wholly closed collider. An open
+appendage must not disable detection of cloth wholly inside the closed body.
+
 This checks the collision mesh, not a separate display mesh. Valid open surfaces
 and legal shared edges remain supported; the low-level `Body::new` and general
 nearest-point API are unchanged. Surface separation does not establish closure,
-outward winding, anatomical plausibility, thickness or real fit. Production Anny
-pose qualification remains a separate requirement.
+anatomical plausibility, thickness or real fit. Open surfaces do not acquire a
+closed-body inside/outside interpretation. Production Anny pose qualification
+remains a separate requirement.
 
 ## What runs
 

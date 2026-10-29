@@ -5,6 +5,8 @@
 //! and an explicit work budget. This checks one supplied configuration, not an anatomical model or
 //! the continuous trajectory between configurations.
 
+use std::collections::BTreeMap;
+
 use ftx_core::intersection::{indexed_triangle_pair, validate_mesh};
 use ftx_core::{Refusal, RefusalCode, Vec3};
 
@@ -22,8 +24,10 @@ pub struct SurfaceAudit {
 }
 
 /// Refuse crossings, coincident faces and contact beyond a shared indexed vertex or edge.
-/// Open test surfaces are supported; closure, winding, volume, thickness and anatomy are separate
-/// contracts. All coordinates are in the caller's units. No snapping or contact epsilon is used.
+/// Require coherent manifold topology and outward winding on every closed component. Open test
+/// surfaces remain supported, but mixing open and closed components is refused: the existing
+/// contact containment test is defined only when the entire collider is closed. Thickness and
+/// anatomy remain separate contracts. No snapping, reorientation or contact epsilon is used.
 ///
 /// Candidate pairs are visited in original face-index order, once each. The existing owning BVH
 /// retains O(faces) storage instead of first collecting a potentially quadratic pair list. Exhausting
@@ -31,7 +35,8 @@ pub struct SurfaceAudit {
 ///
 /// # Errors
 /// Invalid or non-finite geometry, an empty surface, a zero work budget, an intersection, or work
-/// beyond `max_pairs`. Intersection refusals identify the original pair of face indices.
+/// beyond `max_pairs`, pinched/non-manifold topology or inward closed components. Intersection
+/// refusals identify the original pair of face indices; topology refusals identify source features.
 ///
 /// # Panics
 /// On predicate arithmetic outside `ftx_core::exact`'s documented normal-f64 domain.
@@ -101,11 +106,149 @@ pub fn audit_surface(
             }
         }
     }
+    audit_topology(vertices, triangles)?;
     Ok(SurfaceAudit { pairs_tested })
 }
 
+// Triangle separation alone permits reversed faces, several fans meeting at one indexed vertex,
+// and three sheets sharing an edge. Those do not provide a coherent collider boundary. Each face
+// and corner is visited a bounded number of times; the maps and traversal storage are O(mesh).
+fn audit_topology(vertices: &[Vec3], triangles: &[[usize; 3]]) -> Result<(), Refusal> {
+    let bad = |message| Refusal::new(RefusalCode::DegenerateGeometry, message);
+    let mut edges = BTreeMap::<(usize, usize), (usize, usize)>::new();
+    let mut neighbours = vec![[None; 3]; triangles.len()];
+    let mut first_face = vec![usize::MAX; vertices.len()];
+    let mut incident = vec![0usize; vertices.len()];
+    for (face, t) in triangles.iter().enumerate() {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            first_face[a] = first_face[a].min(face);
+            incident[a] += 1;
+            let key = (a.min(b), a.max(b));
+            match edges.entry(key) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert((face, k));
+                }
+                std::collections::btree_map::Entry::Occupied(entry) => {
+                    let &(other, edge) = entry.get();
+                    if neighbours[other][edge].is_some() {
+                        return Err(bad(format!(
+                            "body edge {}–{} has more than two incident faces",
+                            key.0, key.1
+                        )));
+                    }
+                    if triangles[other][edge] == a {
+                        return Err(bad(format!(
+                            "body faces {other} and {face} traverse shared edge {}–{} in the same direction",
+                            key.0, key.1
+                        )));
+                    }
+                    neighbours[face][k] = Some(other);
+                    neighbours[other][edge] = Some(face);
+                }
+            }
+        }
+    }
+
+    // The incident faces of a manifold vertex form one chain (boundary) or cycle (interior).
+    // Edge degree alone misses two otherwise closed shells joined only at one pinched vertex.
+    let mut visited = vec![usize::MAX; triangles.len()];
+    let mut stack = Vec::new();
+    for (vertex, &first) in first_face.iter().enumerate() {
+        if first == usize::MAX {
+            continue;
+        }
+        stack.push(first);
+        let mut count = 0;
+        while let Some(face) = stack.pop() {
+            if visited[face] == vertex {
+                continue;
+            }
+            visited[face] = vertex;
+            count += 1;
+            let t = triangles[face];
+            for k in 0..3 {
+                if (t[k] == vertex || t[(k + 1) % 3] == vertex)
+                    && let Some(next) = neighbours[face][k]
+                {
+                    stack.push(next);
+                }
+            }
+        }
+        if count != incident[vertex] {
+            return Err(bad(format!(
+                "body vertex {vertex} has disconnected incident face fans"
+            )));
+        }
+    }
+
+    let mut seen = vec![false; triangles.len()];
+    let mut component = Vec::new();
+    let (mut has_open, mut has_closed) = (false, false);
+    for first in 0..triangles.len() {
+        if seen[first] {
+            continue;
+        }
+        component.clear();
+        stack.push(first);
+        let mut closed = true;
+        while let Some(face) = stack.pop() {
+            if seen[face] {
+                continue;
+            }
+            seen[face] = true;
+            component.push(face);
+            for neighbour in neighbours[face] {
+                if let Some(next) = neighbour {
+                    stack.push(next);
+                } else {
+                    closed = false;
+                }
+            }
+        }
+        if closed {
+            has_closed = true;
+            // Use a component-local origin: translating a small closed mesh must not reverse
+            // its volume through cancellation of large world-coordinate tetrahedra.
+            let origin = vertices[triangles[first][0]];
+            let mut volume = 0.0;
+            for &face in &component {
+                let [a, b, c] = triangles[face].map(|i| vertices[i] - origin);
+                volume += a.cross(b).dot(c) / 6.0;
+            }
+            if !volume.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    format!("closed body component at face {first} has non-finite signed volume"),
+                ));
+            }
+            if volume <= 0.0 {
+                return Err(Refusal::new(
+                    RefusalCode::InwardWound,
+                    format!(
+                        "closed body component at face {first} has nonpositive signed volume {volume}"
+                    ),
+                )
+                .repair(
+                    "correct the source component winding; no faces were reversed automatically",
+                ));
+            }
+        } else {
+            has_open = true;
+        }
+    }
+    if has_open && has_closed {
+        return Err(bad(
+            "body mixes open and closed components; whole-body containment would be disabled"
+                .to_string(),
+        )
+        .repair("supply a coherent closed collider or a separately scoped open test surface"));
+    }
+    Ok(())
+}
+
 impl Body {
-    /// Audit the body's current public geometry, without relying on possibly stale cached boxes.
+    /// Audit current public surface geometry, topology and winding, not possibly stale cached boxes.
     /// This does not check cached contact topology or certify a continuous motion path.
     ///
     /// # Errors
@@ -149,6 +292,124 @@ mod tests {
         );
         let body = Body::new(vertices, triangles, 0.01).unwrap();
         assert_eq!(body.audit_self_intersections(6).unwrap().pairs_tested, 6);
+    }
+
+    #[test]
+    fn reversed_face_cannot_hide_inside_points_from_contact() {
+        let (vertices, mut faces) = tetrahedron();
+        faces[0].swap(1, 2);
+        let body = Body::new(vertices, faces, 0.01).unwrap();
+        assert!(body.closed); // edge multiplicities alone still say "closed"
+        let winding = body.winding_number(Vec3::new(0.1, 0.1, 0.1));
+        assert!(winding > 0.0 && winding < 0.5); // an actual interior point would be missed
+        let before = (body.vertices.clone(), body.triangles.clone());
+        let error = body.audit_self_intersections(6).unwrap_err();
+        assert_eq!(error.code, RefusalCode::DegenerateGeometry);
+        assert!(error.message.contains("same direction"));
+        assert_eq!((body.vertices, body.triangles), before);
+    }
+
+    #[test]
+    fn every_closed_component_must_be_outward_even_when_total_volume_is_positive() {
+        let (mut vertices, mut faces) = tetrahedron();
+        let (small, small_faces) = tetrahedron();
+        vertices.extend(small.into_iter().map(|p| p * 0.5 + Vec3::new(3.0, 0.0, 0.0)));
+        faces.extend(small_faces.into_iter().map(|[a, b, c]| [a + 4, c + 4, b + 4]));
+        let volume: f64 = faces
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|i| vertices[i]);
+                a.cross(b).dot(c) / 6.0
+            })
+            .sum();
+        assert!(volume > 0.0);
+        for _ in 0..2 {
+            assert_eq!(
+                audit_surface(&vertices, &faces, 12).unwrap_err().code,
+                RefusalCode::InwardWound
+            );
+            faces.reverse();
+        }
+        let (vertices, mut faces) = tetrahedron();
+        for f in &mut faces {
+            f.swap(1, 2);
+        }
+        assert_eq!(
+            audit_surface(&vertices, &faces, 6).unwrap_err().code,
+            RefusalCode::InwardWound
+        );
+    }
+
+    #[test]
+    fn pinched_vertex_and_branched_edge_refuse_without_geometric_crossings() {
+        let (mut vertices, mut faces) = tetrahedron();
+        vertices.extend([
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+        ]);
+        // A second outward tetrahedron touches the first only at the shared vertex 0.
+        let map = [0, 4, 5, 6];
+        let (_, other_faces) = tetrahedron();
+        faces.extend(other_faces.into_iter().map(|[a, b, c]| [map[a], map[c], map[b]]));
+        let error = audit_surface(&vertices, &faces, 100).unwrap_err();
+        assert_eq!(error.code, RefusalCode::DegenerateGeometry);
+        assert!(error.message.contains("vertex 0"));
+        assert!(error.message.contains("disconnected"));
+        let error = audit_surface(&vertices, &[[0, 1, 2], [0, 4, 5]], 1).unwrap_err();
+        assert_eq!(error.code, RefusalCode::DegenerateGeometry);
+        assert!(error.message.contains("disconnected"));
+
+        let vertices = [
+            Vec3::ZERO,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(0.0, -1.0, 0.0),
+        ];
+        let faces = [[0, 1, 2], [1, 0, 3], [0, 1, 4]];
+        let error = audit_surface(&vertices, &faces, 3).unwrap_err();
+        assert_eq!(error.code, RefusalCode::DegenerateGeometry);
+        assert!(error.message.contains("more than two"));
+    }
+
+    #[test]
+    fn open_appendage_cannot_disable_closed_body_containment() {
+        let (mut vertices, mut faces) = tetrahedron();
+        vertices.extend([
+            Vec3::new(3.0, 0.0, 0.0),
+            Vec3::new(4.0, 0.0, 0.0),
+            Vec3::new(3.0, 1.0, 0.0),
+        ]);
+        faces.push([4, 5, 6]);
+        let body = Body::new(vertices, faces, 0.01).unwrap();
+        assert!(!body.closed); // otherwise this disables the whole-body inside audit
+        let error = body.audit_self_intersections(6).unwrap_err();
+        assert_eq!(error.code, RefusalCode::DegenerateGeometry);
+        assert!(error.message.contains("mixes open and closed"));
+        assert_eq!(
+            audit_surface(&body.vertices[4..], &[[0, 1, 2]], 1)
+                .unwrap()
+                .pairs_tested,
+            0
+        );
+    }
+
+    #[test]
+    fn outward_shells_keep_translation_order_and_disconnected_component_support() {
+        for shift in [Vec3::ZERO, Vec3::new(1e9, -1e9, 1e9)] {
+            let (mut vertices, mut faces) = tetrahedron();
+            let (other, other_faces) = tetrahedron();
+            vertices.extend(other.into_iter().map(|p| p + Vec3::new(3.0, 0.0, 0.0)));
+            faces.extend(other_faces.into_iter().map(|t| t.map(|i| i + 4)));
+            for p in &mut vertices {
+                *p += shift;
+            }
+            for _ in 0..2 {
+                assert_eq!(audit_surface(&vertices, &faces, 12).unwrap().pairs_tested, 12);
+                faces.reverse();
+            }
+        }
     }
 
     #[test]
