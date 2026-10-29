@@ -150,6 +150,41 @@ fn build(pattern: &Pattern, options: Value) -> Result<SewPlan, Refusal> {
     SewPlan::build(pattern, &serde_json::from_value(options).unwrap())
 }
 
+fn attending_labor(mut options: Value, groups: &[&[&str]], travel: u32) -> Value {
+    let workers: Vec<_> = groups
+        .iter()
+        .enumerate()
+        .map(|(index, cells)| {
+            let initial: BTreeMap<_, _> = cells.iter().map(|&cell| (cell, 0)).collect();
+            let transfers: Vec<_> = cells
+                .iter()
+                .flat_map(|&from| {
+                    cells
+                        .iter()
+                        .filter(move |&&to| to != from)
+                        .map(move |&to| json!({"from":from,"to":to,"milliseconds":travel}))
+                })
+                .collect();
+            json!({"id":format!("worker-{index}"),"cells":cells,
+                "available_at_milliseconds":0,"initial_arrival_milliseconds":initial,
+                "transfers":transfers})
+        })
+        .collect();
+    let route = &mut options["production"]["routing"];
+    route["independence"] = json!(if route.get("shared_workholding").is_some() {
+        "shared_attending_workers_workholding_and_transfer_resource/1"
+    } else {
+        "shared_attending_workers_and_transfer_resource/1"
+    });
+    route["attending_labor"] = json!({
+        "model":"exclusive_full_operation_attendance/1","cells":route["cell_locks"],
+        "workers":workers,"source":source("attending-workers"),
+        "method":"Invented workers attend all loading, setup, feed and unloading; separate initial and directed travel; the unloaded garment handoff worker remains independent",
+        "conditions":{},"evidence":"estimate","allow_estimates":true
+    });
+    options
+}
+
 fn shared_fixtures(mut options: Value, capacity: u32) -> Value {
     for cell in options["production"]["routing"]["cells"]
         .as_array_mut()
@@ -235,6 +270,13 @@ fn specialist_cells_jointly_sew_copies_with_exact_geometry_and_independent_timin
     let plan = &program.plan;
     let routed = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
     assert!(routed.workholding.is_none());
+    assert!(routed.attending_labor.is_none());
+    assert!(
+        serde_json::to_value(routed)
+            .unwrap()
+            .get("attending_labor")
+            .is_none()
+    );
     assert!(
         serde_json::to_value(routed)
             .unwrap()
@@ -319,6 +361,322 @@ fn specialist_cells_jointly_sew_copies_with_exact_geometry_and_independent_timin
             bytes.push(b'\n');
             std::fs::write(directory.join(name), bytes).unwrap();
         }
+    }
+}
+
+#[test]
+fn shared_attending_worker_serializes_full_feed_and_changes_actual_dispatch() {
+    let (pattern, raw) = fixture(2);
+    let options: SewOptions =
+        serde_json::from_value(attending_labor(raw, &[&["cell-a", "cell-b"]], 500)).unwrap();
+    let program = SewProgram::build(&pattern, &options).unwrap();
+    let production = program.plan.production.as_ref().unwrap();
+    let route = production.routing.as_ref().unwrap();
+    let labor = route.attending_labor.as_ref().unwrap();
+    assert_eq!(program.plan.schema, "ftx-sewing-plan/21");
+    assert_eq!(production.schema, "ftx-sewing-production/9");
+    assert_eq!(route.schema, "ftx-sewing-routing/4");
+    assert_eq!(route.baseline.makespan_milliseconds, 16600);
+    assert_eq!(route.selected.makespan_milliseconds, 15200);
+    assert_eq!(labor.selected.travel_milliseconds, 500);
+    assert_eq!(labor.selected.waiting_milliseconds, 0);
+    assert_eq!(labor.selected.attended_milliseconds, 14700);
+    assert_eq!(labor.baseline.travel_milliseconds, 1500);
+    assert_eq!(labor.baseline.waiting_milliseconds, 400);
+    assert_eq!(program.stitches.len(), 120);
+    assert!((program.plan.total_feed_seconds() - 12.0).abs() < 1e-12);
+    assert!(!labor.physical_labor_validated);
+    assert_eq!(
+        route
+            .selected
+            .operations
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        ["0/join", "1/join", "0/reinforce", "1/reinforce"]
+    );
+    assert!(route.lower_bound_makespan_milliseconds <= 15200);
+    for (operation, step) in route.selected.operations.iter().zip(&labor.selected.steps) {
+        assert_eq!(step.operation, operation.id);
+        assert_eq!(step.copy, operation.copy);
+        assert_eq!(step.cell, operation.cell);
+        assert_eq!(step.worker, "worker-0");
+        assert!(step.arrival_milliseconds <= step.loading_start_milliseconds);
+        assert_eq!(
+            step.feed_finish_milliseconds,
+            operation.feed_finish_milliseconds
+        );
+        assert_eq!(step.finish_milliseconds, operation.finish_milliseconds);
+    }
+    for pair in labor.selected.steps.windows(2) {
+        assert_eq!(pair[1].departure_milliseconds, pair[0].finish_milliseconds);
+        assert!(pair[1].loading_start_milliseconds >= pair[0].finish_milliseconds);
+    }
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn separate_attending_workers_reproduce_independent_cell_timing() {
+    let (pattern, raw) = fixture(2);
+    let old = build(&pattern, raw.clone()).unwrap();
+    let new = build(
+        &pattern,
+        attending_labor(raw, &[&["cell-a"], &["cell-b"]], 0),
+    )
+    .unwrap();
+    let old = old.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let new = new.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert_eq!(
+        serde_json::to_value(&old.baseline).unwrap(),
+        serde_json::to_value(&new.baseline).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&old.selected).unwrap(),
+        serde_json::to_value(&new.selected).unwrap()
+    );
+    assert_eq!(old.search_nodes, new.search_nodes);
+    assert_eq!(new.selected.makespan_milliseconds, 12600);
+    let steps = &new.attending_labor.as_ref().unwrap().selected.steps;
+    let a_second = steps
+        .iter()
+        .find(|step| step.operation == "1/join")
+        .unwrap();
+    let b_first = steps
+        .iter()
+        .find(|step| step.operation == "0/reinforce")
+        .unwrap();
+    assert!(a_second.loading_start_milliseconds < b_first.finish_milliseconds);
+    assert!(b_first.loading_start_milliseconds < a_second.finish_milliseconds);
+    assert_ne!(a_second.worker, b_first.worker);
+}
+
+#[test]
+fn worker_shift_is_inclusive_and_search_replaces_an_unavailable_copy_major_seed() {
+    let (pattern, raw) = fixture(2);
+    let mut options = attending_labor(raw, &[&["cell-a", "cell-b"]], 500);
+    options["production"]["routing"]["attending_labor"]["workers"][0]["available_until_milliseconds"] =
+        json!(15200);
+    let plan = build(&pattern, options.clone()).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert!(route.baseline_replaced);
+    assert_eq!(route.selected.makespan_milliseconds, 15200);
+    assert_eq!(
+        serde_json::to_value(&route.baseline).unwrap(),
+        serde_json::to_value(&route.selected).unwrap()
+    );
+    let mut short = options.clone();
+    short["production"]["routing"]["attending_labor"]["workers"][0]["available_until_milliseconds"] =
+        json!(15199);
+    assert_eq!(
+        build(&pattern, short).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+    options["production"]["routing"]["max_search_nodes"] = json!(4);
+    assert_eq!(
+        build(&pattern, options).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+}
+
+#[test]
+fn bounded_labor_search_retains_a_complete_feasible_execution() {
+    let (pattern, raw) = fixture(2);
+    let mut options = attending_labor(raw, &[&["cell-a", "cell-b"]], 500);
+    options["production"]["routing"]["max_search_nodes"] = json!(4);
+    let plan = build(&pattern, options).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert!(route.budget_exhausted && !route.search_complete && !route.optimality_proven);
+    assert_eq!(route.selected.makespan_milliseconds, 16600);
+    assert_eq!(route.selected.operations.len(), 4);
+    assert_eq!(
+        route.attending_labor.as_ref().unwrap().selected.steps.len(),
+        4
+    );
+    assert_eq!((route.search_nodes, route.work_used), (4, 12));
+}
+
+#[test]
+fn eligible_assignment_uses_actual_workers_and_relaxes_unused_late_labor() {
+    let (pattern, raw) = eligible_fixture(2);
+    let options: SewOptions = serde_json::from_value(attending_labor(
+        raw,
+        &[&["cell-a", "cell-b"], &["cell-c"]],
+        500,
+    ))
+    .unwrap();
+    let program = SewProgram::build(&pattern, &options).unwrap();
+    let route = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    assert_eq!(route.selected.makespan_milliseconds, 10900);
+    assert_eq!(program.stitches.len(), 100);
+    assert!((program.plan.total_feed_seconds() - 10.0).abs() < 1e-12);
+    assert!(route.lower_bound_makespan_milliseconds <= 10900);
+    let labor = &route.attending_labor.as_ref().unwrap().selected;
+    assert_eq!(
+        labor
+            .steps
+            .iter()
+            .filter(|step| step.worker == "worker-0")
+            .count(),
+        3
+    );
+    assert_eq!(
+        labor
+            .steps
+            .iter()
+            .filter(|step| step.worker == "worker-1")
+            .count(),
+        1
+    );
+    let (pattern, mut raw) = eligible_fixture(1);
+    raw["production"]["routing"]["cells"][0]["available_at_milliseconds"] = json!(1_000_000);
+    raw["production"]["routing"]["cells"][0]["available_until_milliseconds"] = json!(1_005_300);
+    refresh_locks(&mut raw);
+    let mut raw = attending_labor(raw, &[&["cell-a"], &["cell-b", "cell-c"]], 500);
+    raw["production"]["routing"]["attending_labor"]["workers"][0]["available_at_milliseconds"] =
+        json!(1_000_000);
+    let plan = build(&pattern, raw).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert_eq!(route.selected.makespan_milliseconds, 7000);
+    assert!(route.lower_bound_makespan_milliseconds <= 7000);
+    assert!(
+        route
+            .attending_labor
+            .as_ref()
+            .unwrap()
+            .selected
+            .steps
+            .iter()
+            .all(|step| step.worker == "worker-1")
+    );
+}
+
+#[test]
+fn worker_arrival_travel_waiting_and_full_unloading_compose_with_fixtures() {
+    let (pattern, raw) = fixture(2);
+    let mut options = attending_labor(shared_fixtures(raw, 1), &[&["cell-a"], &["cell-b"]], 0);
+    let b = &mut options["production"]["routing"]["attending_labor"]["workers"][1];
+    b["available_at_milliseconds"] = json!(2000);
+    b["initial_arrival_milliseconds"]["cell-b"] = json!(1000);
+    let plan = build(&pattern, options).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let labor = route.attending_labor.as_ref().unwrap();
+    let holding = route.workholding.as_ref().unwrap();
+    assert_eq!(route.selected.makespan_milliseconds, 14700);
+    assert_eq!(holding.selected.shared_peak_occupancy["common-jigs"], 1);
+    let first_b = labor
+        .selected
+        .steps
+        .iter()
+        .find(|row| row.cell == "cell-b")
+        .unwrap();
+    assert_eq!(first_b.departure_milliseconds, 2000);
+    assert_eq!(first_b.arrival_milliseconds, 3000);
+    assert!(first_b.loading_start_milliseconds > first_b.arrival_milliseconds);
+    assert_eq!(labor.selected.travel_milliseconds, 1000);
+    for hold in &holding.selected.holds {
+        let step = labor
+            .selected
+            .steps
+            .iter()
+            .find(|step| step.operation == hold.operation)
+            .unwrap();
+        assert_eq!(
+            hold.acquired_at_milliseconds,
+            step.loading_start_milliseconds
+        );
+        assert_eq!(hold.released_at_milliseconds, step.finish_milliseconds);
+    }
+}
+
+#[test]
+fn routed_labor_requires_complete_unique_qualified_ownership_and_exact_sources() {
+    let (pattern, raw) = fixture(2);
+    let raw = attending_labor(raw, &[&["cell-a", "cell-b"]], 500);
+    let mut mutations: Vec<Value> = Vec::new();
+    for (path, value) in [
+        (
+            "/production/routing/attending_labor/model",
+            json!("autonomous_feed"),
+        ),
+        (
+            "/production/routing/attending_labor/allow_estimates",
+            json!(false),
+        ),
+        ("/production/routing/attending_labor/method", json!("")),
+        (
+            "/production/routing/attending_labor/cells/cell-a",
+            json!("0".repeat(64)),
+        ),
+        (
+            "/production/routing/attending_labor/workers/0/id",
+            json!("handoff-worker"),
+        ),
+        (
+            "/production/routing/attending_labor/workers/0/cells",
+            json!(["cell-a"]),
+        ),
+        (
+            "/production/routing/attending_labor/workers/0/cells",
+            json!(["cell-a", "cell-a"]),
+        ),
+        (
+            "/production/routing/attending_labor/workers/0/initial_arrival_milliseconds",
+            json!({"cell-a":0}),
+        ),
+        (
+            "/production/routing/attending_labor/workers/0/transfers",
+            json!([]),
+        ),
+        (
+            "/production/routing/attending_labor/workers/0/transfers/0/to",
+            json!("cell-a"),
+        ),
+        (
+            "/production/routing/attending_labor/workers/0/transfers/0/milliseconds",
+            json!(86_400_001),
+        ),
+        (
+            "/production/routing/attending_labor/workers/0/available_at_milliseconds",
+            json!(86_400_001),
+        ),
+        (
+            "/production/routing/independence",
+            json!("independent_attended_cells_and_transfer_resource/1"),
+        ),
+    ] {
+        let mut changed = raw.clone();
+        *changed.pointer_mut(path).unwrap() = value;
+        mutations.push(changed);
+    }
+    let mut duplicate = attending_labor(raw.clone(), &[&["cell-a"], &["cell-b"]], 0);
+    duplicate["production"]["routing"]["attending_labor"]["workers"][1]["id"] = json!("worker-0");
+    mutations.push(duplicate);
+    let mut expired = raw.clone();
+    expired["production"]["routing"]["attending_labor"]["workers"][0]["available_at_milliseconds"] =
+        json!(20);
+    expired["production"]["routing"]["attending_labor"]["workers"][0]["available_until_milliseconds"] =
+        json!(19);
+    mutations.push(expired);
+    let mut stale = raw;
+    stale["production"]["routing"]["cells"][0]["handling"]["initial_milliseconds"]["join"] =
+        json!(101);
+    refresh_cell_locks(&mut stale);
+    mutations.push(stale);
+    for (index, invalid) in mutations.into_iter().enumerate() {
+        assert!(
+            build(&pattern, invalid).is_err(),
+            "mutation {index} must refuse"
+        );
     }
 }
 

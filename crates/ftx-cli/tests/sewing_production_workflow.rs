@@ -222,6 +222,107 @@ fn eligible_route_options(windowed: bool) -> Value {
 }
 
 #[test]
+fn routed_attending_workers_replay_actual_operations_through_both_native_commands() {
+    for eligible in [false, true] {
+        let mut options = if eligible {
+            eligible_route_options(false)
+        } else {
+            routed_specialist_options()
+        };
+        let route = &mut options["production"]["routing"];
+        route["independence"] = json!("shared_attending_workers_and_transfer_resource/1");
+        route["method"] = json!(
+            "One explicitly shared attending worker and an independent unloaded-garment handoff resource"
+        );
+        route["attending_labor"] = json!({
+            "model":"exclusive_full_operation_attendance/1",
+            "cells":route["cell_locks"],
+            "workers":[{"id":"synthetic-attending-worker","cells":["cell-a","cell-b"],
+                "available_at_milliseconds":0,"available_until_milliseconds":50000,
+                "initial_arrival_milliseconds":{"cell-a":120,"cell-b":240},
+                "transfers":[{"from":"cell-a","to":"cell-b","milliseconds":300},
+                    {"from":"cell-b","to":"cell-a","milliseconds":500}]}],
+            "source":{"reference":"test:native-routed-attending-worker","accessed_on":"2026-10-29",
+                "note":"Synthetic fully attended operations and directed travel; no measured labor claim"},
+            "method":"Exclusive travel, waiting, loading, setup, feed and unloading; garment handoffs use a separate resource",
+            "conditions":{},"evidence":"estimate","allow_estimates":true
+        });
+        let program =
+            portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &options.to_string()).unwrap());
+        let plan = &program["plan"];
+        let route = &plan["production"]["routing"];
+        let labor = &route["attending_labor"];
+        assert_eq!(plan["schema"], "ftx-sewing-plan/21");
+        assert_eq!(plan["production"]["schema"], "ftx-sewing-production/9");
+        assert_eq!(route["schema"], "ftx-sewing-routing/4");
+        assert_eq!(labor["schema"], "ftx-sewing-attending-labor/1");
+        assert_eq!(labor["physical_labor_validated"], false);
+        assert_eq!(
+            labor["policy"],
+            options["production"]["routing"]["attending_labor"]
+        );
+        let mut prior_finish = 0;
+        let mut attended = 0;
+        let operations = route["selected"]["operations"].as_array().unwrap();
+        let steps = labor["selected"]["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 4);
+        for step in steps {
+            let operation = operations
+                .iter()
+                .find(|op| op["id"] == step["operation"])
+                .unwrap();
+            assert_eq!(step["worker"], "synthetic-attending-worker");
+            assert_eq!(step["cell"], operation["cell"]);
+            assert_eq!(step["copy"], operation["copy"]);
+            for phase in [
+                "loading_start_milliseconds",
+                "setup_start_milliseconds",
+                "feed_start_milliseconds",
+                "feed_finish_milliseconds",
+                "finish_milliseconds",
+            ] {
+                assert_eq!(step[phase], operation[phase]);
+            }
+            assert!(step["departure_milliseconds"].as_u64().unwrap() >= prior_finish);
+            assert!(
+                step["arrival_milliseconds"].as_u64().unwrap()
+                    <= step["loading_start_milliseconds"].as_u64().unwrap()
+            );
+            prior_finish = step["finish_milliseconds"].as_u64().unwrap();
+            attended += prior_finish - step["loading_start_milliseconds"].as_u64().unwrap();
+        }
+        assert_eq!(labor["selected"]["attended_milliseconds"], attended);
+        assert_eq!(route["selected"]["makespan_milliseconds"], prior_finish);
+        assert_eq!(
+            portable(
+                ftx_wasm::manufacturing::sew_stitches(PATTERN, &plan["options"].to_string())
+                    .unwrap()
+            ),
+            program
+        );
+        let directory = workspace();
+        fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+        fs::write(directory.join("options.json"), options.to_string()).unwrap();
+        for main in [false, true] {
+            assert_eq!(
+                run(main, &directory, "sew-plan", "pattern.json", "options.json"),
+                *plan
+            );
+            assert_eq!(
+                run(
+                    main,
+                    &directory,
+                    "sew-stitches",
+                    "pattern.json",
+                    "options.json"
+                ),
+                program
+            );
+        }
+    }
+}
+
+#[test]
 fn eligible_routes_replay_actual_cell_choices_yarn_and_studies_through_both_native_commands() {
     for windowed in [false, true] {
         let options = eligible_route_options(windowed);

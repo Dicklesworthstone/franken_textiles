@@ -16,6 +16,7 @@ use crate::sewing::{
 };
 
 pub mod fixtures;
+pub mod labor;
 
 const MAX_CELLS: usize = 8;
 const MAX_OPERATIONS: usize = 63;
@@ -34,7 +35,7 @@ pub struct Policy {
     pub time_basis: String,
     /// `unloaded_between_operations/1`; every operation consumes its own load and unload evidence.
     pub protocol: String,
-    /// `independent_attended_cells_and_transfer_resource/1`; each cell has dedicated attending labor.
+    /// Explicit dedicated-cell or shared-attending-worker independence, qualified with this route.
     pub independence: String,
     /// Maximum examined dispatch extensions, including the complete copy-major seed attempt.
     pub max_search_nodes: usize,
@@ -48,6 +49,10 @@ pub struct Policy {
     /// cell loading/unloading; occupied fixtures never travel with a routed garment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_workholding: Option<parallel::shared_workholding::Policy>,
+    /// Optional explicit workers shared across specialist cells. Complete loading, setup, feed and
+    /// unloading occupy the assigned worker; unloaded garment handoffs remain independent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attending_labor: Option<labor::Policy>,
     /// Every original operation exactly once, in an order respecting every original predecessor.
     pub route: Vec<RouteStep>,
     /// One independent resource for all unloaded inter-cell handoffs.
@@ -204,7 +209,7 @@ pub struct Timeline {
 /// Source-qualified fixed routing with an exact complete incumbent and bounded dispatch search.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` fixed route; `/2` eligible cells; `/3` qualified local/shared fixture reservations.
+    /// `/1` fixed route; `/2` eligible cells; `/3` fixture reservations; `/4` attending labor.
     pub schema: &'static str,
     /// Source-qualified fixed operation route.
     pub route: Vec<RouteStep>,
@@ -217,6 +222,9 @@ pub struct Report {
     /// Optional complete local/shared fixture capacities and independently swept physical holds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workholding: Option<fixtures::Report>,
+    /// Explicit worker availability, travel and complete attended-operation replay, when requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attending_labor: Option<labor::Report>,
     /// Complete copy-major seed, or selected replacement if resources/windows excluded that seed.
     pub baseline: Timeline,
     /// Best complete feasible dispatch found within the admitted budget.
@@ -304,10 +312,16 @@ impl Policy {
 
     fn validate(&self, options: &SewOptions, copies: usize) -> Result<BTreeSet<String>, Refusal> {
         self.work_bound(copies, options.passes.len())?;
-        let independence = if self.shared_workholding.is_some() {
-            "independent_attended_cells_shared_workholding_and_transfer_resource/1"
-        } else {
-            "independent_attended_cells_and_transfer_resource/1"
+        let independence = match (
+            self.attending_labor.is_some(),
+            self.shared_workholding.is_some(),
+        ) {
+            (true, true) => "shared_attending_workers_workholding_and_transfer_resource/1",
+            (true, false) => "shared_attending_workers_and_transfer_resource/1",
+            (false, true) => {
+                "independent_attended_cells_shared_workholding_and_transfer_resource/1"
+            }
+            (false, false) => "independent_attended_cells_and_transfer_resource/1",
         };
         if !matches!(
             self.model.as_str(),
@@ -515,6 +529,7 @@ struct Prepared<'a> {
     handoffs: Vec<Vec<Option<u64>>>,
     copies: usize,
     fixtures: Option<fixtures::Compiled>,
+    labor: Option<labor::Compiled>,
 }
 
 #[derive(Clone)]
@@ -527,6 +542,7 @@ struct State {
     transfer_ready: u64,
     makespan: u64,
     reservations: Vec<fixtures::Reservation>,
+    labor: Option<labor::State>,
 }
 
 #[derive(Clone, Copy)]
@@ -562,6 +578,7 @@ impl Prepared<'_> {
             transfer_ready: u64::from(self.policy.transfer.available_at_milliseconds),
             makespan: 0,
             reservations: Vec::new(),
+            labor: self.labor.as_ref().map(labor::Compiled::initial),
         }
     }
 
@@ -598,7 +615,19 @@ impl Prepared<'_> {
             add(add(task.load, self.setup[from][index])?, task.feed)?,
             task.unload,
         )?;
-        let earliest = ready.max(state.cell_ready[task.cell]);
+        let arrival = self
+            .labor
+            .as_ref()
+            .map(|labor| {
+                labor.arrival(
+                    state.labor.as_ref().expect("admitted attending labor"),
+                    task.cell,
+                )
+            })
+            .transpose()?;
+        let earliest = ready
+            .max(state.cell_ready[task.cell])
+            .max(arrival.map_or(0, |arrival| arrival.time));
         let load_start = if let Some(fixtures) = &self.fixtures {
             fixtures.earliest_start(
                 &state.reservations,
@@ -620,6 +649,15 @@ impl Prepared<'_> {
         {
             return Ok(None);
         }
+        if let Some(arrival) = arrival
+            && !self
+                .labor
+                .as_ref()
+                .expect("admitted attending labor")
+                .available(arrival, finish)
+        {
+            return Ok(None);
+        }
         let mut next = state.clone();
         next.next[copy] += 1;
         next.copy_ready[copy] = finish;
@@ -630,6 +668,17 @@ impl Prepared<'_> {
             next.transfer_ready = finish;
         }
         next.makespan = next.makespan.max(finish);
+        if let Some(arrival) = arrival {
+            self.labor
+                .as_ref()
+                .expect("admitted attending labor")
+                .finish(
+                    next.labor.as_mut().expect("admitted attending labor"),
+                    arrival,
+                    task.cell,
+                    finish,
+                );
+        }
         if let Some(fixtures) = &self.fixtures {
             fixtures.reserve(
                 &mut next.reservations,
@@ -1052,9 +1101,13 @@ pub(in crate::sewing) fn build(
         });
     }
     let fixtures = fixtures::Compiled::compile(policy, options, &cell_plans, copies)?;
+    let labor = labor::Compiled::compile(policy)?;
     let uses_fixtures = fixtures.is_some();
+    let uses_labor = labor.is_some();
     let mut out = SewPlan {
-        schema: if uses_fixtures {
+        schema: if uses_labor {
+            "ftx-sewing-plan/21"
+        } else if uses_fixtures {
             "ftx-sewing-plan/20"
         } else if policy.eligible() {
             "ftx-sewing-plan/19"
@@ -1201,8 +1254,16 @@ pub(in crate::sewing) fn build(
         handoffs,
         copies,
         fixtures,
+        labor,
     };
-    let lower = prepared.lower_bound()?;
+    let lower = prepared.lower_bound()?.max(
+        prepared
+            .labor
+            .as_ref()
+            .map(|labor| labor.lower_bound(&prepared.tasks, &prepared.choices, copies))
+            .transpose()?
+            .unwrap_or(0),
+    );
     let mut seed = prepared.initial();
     let mut seed_path = Vec::with_capacity(copies * count);
     let mut seed_used = 0;
@@ -1317,8 +1378,15 @@ pub(in crate::sewing) fn build(
         .as_ref()
         .map(|fixtures| fixtures.report(&baseline, &selected))
         .transpose()?;
+    let attending_labor = prepared
+        .labor
+        .as_ref()
+        .map(|labor| labor.report(&baseline, &selected))
+        .transpose()?;
     let report = Report {
-        schema: if uses_fixtures {
+        schema: if uses_labor {
+            "ftx-sewing-routing/4"
+        } else if uses_fixtures {
             "ftx-sewing-routing/3"
         } else if policy.eligible() {
             "ftx-sewing-routing/2"
@@ -1329,6 +1397,7 @@ pub(in crate::sewing) fn build(
         reference_scope: policy.eligible().then_some("seed_route_one_garment/1"),
         cell_plans,
         workholding,
+        attending_labor,
         baseline,
         selected,
         baseline_replaced: !seed_complete,
@@ -1337,7 +1406,11 @@ pub(in crate::sewing) fn build(
         optimality_proven: proven,
         budget_exhausted: !search_complete,
         lower_bound_makespan_milliseconds: lower,
-        search_scope: if policy.eligible() {
+        search_scope: if uses_labor && policy.eligible() {
+            "coupled_eligible_handoff_cell_worker_append_dispatch/1"
+        } else if uses_labor {
+            "coupled_handoff_cell_worker_append_dispatch/1"
+        } else if policy.eligible() {
             "coupled_eligible_handoff_cell_append_dispatch/1"
         } else {
             "coupled_handoff_cell_append_dispatch/1"
@@ -1347,7 +1420,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if uses_fixtures {
+        schema: if uses_labor {
+            "ftx-sewing-production/9"
+        } else if uses_fixtures {
             "ftx-sewing-production/8"
         } else if policy.eligible() {
             "ftx-sewing-production/7"

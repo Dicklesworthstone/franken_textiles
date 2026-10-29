@@ -1905,6 +1905,32 @@ test('routed specialist cells show actual operations, serialized garment transfe
       const summary=JSON.parse(s.children[1].textContent);
       assert.equal(summary.finite_workholding_enforced,true);assert.equal(summary.shared_fixture_pools_enforced,true);
     }
+    const previous = new Map();
+    const laborSteps = selected.operations.map(operation => {
+      const departure = previous.get(operation.cell) || 0;
+      const from = previous.has(operation.cell) ? operation.cell : null;
+      previous.set(operation.cell, operation.finish_milliseconds);
+      return {...operation,worker:`${operation.cell}-worker`,operation:operation.id,from_cell:from,
+        departure_milliseconds:departure,arrival_milliseconds:departure};
+    });
+    const laborTimeline={steps:laborSteps,travel_milliseconds:0,waiting_milliseconds:7500,attended_milliseconds:14700};
+    routing.attending_labor={schema:'ftx-sewing-attending-labor/1',physical_labor_validated:false,
+      policy:{source:{note:'<qualified attending workers>'},workers:['straight','finish'].map(cell=>({
+        id:`${cell}-worker`,cells:[cell],available_at_milliseconds:0,available_until_milliseconds:13000}))},
+      baseline:laborTimeline,selected:laborTimeline};
+    routing.schema='ftx-sewing-routing/4';plan.schema='ftx-sewing-plan/21';
+    await p.e[op].onclick();p.emit(report);
+    assert.deepEqual(plain(table('routed attending labor').children[3].children.map(n=>n.textContent)),
+      ['Selected','0','7.5','14.7']);
+    assert.deepEqual(plain(table('qualified attending workers').children[3].children.map(n=>n.textContent)),
+      ['finish-worker','finish','0','13']);
+    assert.deepEqual(plain(table('selected attending worker timeline').children.at(-1).children.map(n=>n.textContent)),
+      ['finish-worker','1','1/reinforce','finish','finish','8.8','8.8','10.3','10.4','12.6']);
+    assert.match(visibleText(s),/Travel and waiting also occupy that worker/);
+    assert.doesNotMatch(visibleText(s),/Each dedicated worker/);
+    const laborDetail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('attending worker sources, cell locks and complete replay'));
+    laborDetail.open=true;laborDetail.handlers.toggle();assert.match(visibleText(laborDetail),/<qualified attending workers>/);
+    delete routing.attending_labor;
     delete routing.workholding;routing.schema='ftx-sewing-routing/1';plan.schema='ftx-sewing-plan/18';
   }
   p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();

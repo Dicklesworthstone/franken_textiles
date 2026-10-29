@@ -1002,6 +1002,65 @@ protocol identity. They establish this bounded software model, not measured fact
 physical seam quality, cross-operation retained fixtures or hardware authorization. Optional local
 and shared inventories follow the selected cell for every actual operation as described above.
 
+## Several specialist cells with fewer attending workers
+
+Optional `production.routing.attending_labor` assigns every configured cell to exactly one
+explicit physical worker. Multiple cells may share one person; separate workers can operate
+concurrently. This protocol attends **every phase**, including feed. It does not infer the
+autonomous-feed qualification used by whole-garment `parallel.shared_operator`.
+
+Set routing `independence` to `shared_attending_workers_and_transfer_resource/1`, or to
+`shared_attending_workers_workholding_and_transfer_resource/1` when sharing fixture pools.
+The following is a structural excerpt; its invented durations are not labor measurements:
+
+```json
+{
+  "attending_labor": {
+    "model": "exclusive_full_operation_attendance/1",
+    "cells": {"cell-a": "FULL_CELL_SHA256", "cell-b": "FULL_CELL_SHA256"},
+    "workers": [{
+      "id": "attending-worker", "cells": ["cell-a", "cell-b"],
+      "available_at_milliseconds": 0,
+      "available_until_milliseconds": 60000,
+      "initial_arrival_milliseconds": {"cell-a": 100, "cell-b": 200},
+      "transfers": [
+        {"from": "cell-a", "to": "cell-b", "milliseconds": 300},
+        {"from": "cell-b", "to": "cell-a", "milliseconds": 500}
+      ]
+    }],
+    "source": {"reference": "YOUR_QUALIFIED_LABOR_SOURCE", "accessed_on": "2026-10-29"},
+    "method": "Qualified full attendance, initial location, directed travel and worker availability",
+    "conditions": {}, "evidence": "estimate", "allow_estimates": true
+  }
+}
+```
+
+Use the same full cell hashes as routing `cell_locks`, computed by the existing
+`parallel::operator::cell_sha256` authority. Every configured cell belongs to one worker,
+including eligible alternatives that the selected schedule leaves unused. Every worker needs
+explicit initial travel to each owned cell and every directed pair between their cells.
+Worker identities must be unique and distinct from the cells and garment-transfer resource.
+Source applicability and estimate consent are independent of machine/process qualification.
+
+An operation waits for its garment, machine, attending worker and fixture availability. The worker
+is occupied from departure through any waiting, loading, setup, feed and complete unloading;
+their inclusive shift must contain that entire interval. Garment transfers still use the separately
+qualified handoff resource and unloaded staging. A person is not silently reused as that resource.
+Fixed routes, eligible-cell choices, finite fixture pools and bounded dispatch all use this same
+worker state. Optional work on an unused worker cannot raise the mandatory-work lower bound.
+
+Requested labor produces plan `/21`, production `/9`, routing `/4` and nested
+`ftx-sewing-attending-labor/1`. The nested report retains the exact policy, both complete timelines,
+each worker's movement and operation phases, and separate travel/waiting/attendance totals.
+The existing workbench shows these values in ordinary sewing, material and scenario results.
+Stitch geometry and yarn demand still follow the selected cell's actual source operation.
+Absent labor retains existing report versions and dedicated-attendant timing.
+
+Synthetic routing regressions and actual native/portable replay cover the software contract.
+They do not qualify measured labor, seam quality, unrestricted factory optimization or hardware
+execution. Cooperative handling, worker reassignment between cells during a job, breaks and using
+the same person for garment handoffs require separate protocols.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **63 copy/operation pairs** and 1–200000 examined search nodes.

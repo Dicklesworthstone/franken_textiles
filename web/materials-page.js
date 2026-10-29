@@ -1848,6 +1848,34 @@ function sewingRoutedWorkholding(parent, routing, label) {
   parent.append(note);
   detail(parent, `${label}: routed fixture sources, cell locks and complete reservation histories`, report);
 }
+function sewingRoutedLabor(parent, routing, label) {
+  const report = routing.attending_labor;
+  if (!report) return;
+  const seconds = value => typeof value === "number" ? value / 1000 : null;
+  const totals = table(parent, `${label}: routed attending labor`,
+    ["Schedule", "Travel (s)", "Waiting (s)", "Full attendance (s)"]);
+  for (const [name, timeline] of [["Baseline", report.baseline], ["Selected", report.selected]]) cells(totals, [name,
+    metric(seconds(timeline?.travel_milliseconds)), metric(seconds(timeline?.waiting_milliseconds)),
+    metric(seconds(timeline?.attended_milliseconds))]);
+  const workers = table(parent, `${label}: qualified attending workers`,
+    ["Worker", "Cells", "Available (s)", "Inclusive finish limit (s)"]);
+  for (const worker of report.policy?.workers || []) cells(workers, [worker.id, (worker.cells || []).join(", "),
+    metric(seconds(worker.available_at_milliseconds)), typeof worker.available_until_milliseconds === "number" ?
+      metric(seconds(worker.available_until_milliseconds)) : "Open ended"]);
+  const steps = table(parent, `${label}: selected attending worker timeline`,
+    ["Worker", "Garment copy", "Operation", "From", "Cell", "Departure (s)", "Arrival (s)",
+      "Loading (s)", "Feed (s)", "Unloading complete (s)"]);
+  for (const step of report.selected?.steps || []) cells(steps, [step.worker, metric(step.copy), step.operation,
+    step.from_cell ?? "Declared initial location", step.cell, metric(seconds(step.departure_milliseconds)),
+    metric(seconds(step.arrival_milliseconds)), metric(seconds(step.loading_start_milliseconds)),
+    metric(seconds(step.feed_start_milliseconds)), metric(seconds(step.finish_milliseconds))]);
+  const note = document.createElement("p");
+  note.textContent = "Each named worker attends the complete operation, including feed and final unloading. " +
+    "Travel and waiting also occupy that worker; cells assigned to the same person cannot use them concurrently. " +
+    "Garment handoffs retain their separate qualified resource. These source-qualified modeled times do not establish measured labor performance or hardware authorization.";
+  parent.append(note);
+  detail(parent, `${label}: attending worker sources, cell locks and complete replay`, report);
+}
 function sewingRouting(parent, plan, label = "Selected sewing plan") {
   const report = plan?.production?.routing;
   if (!report) return;
@@ -1894,6 +1922,7 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
   if (policy?.transfer) cells(resources, [policy.transfer.id, metric(seconds(policy.transfer.available_at_milliseconds)),
     typeof policy.transfer.available_until_milliseconds === "number" ? metric(seconds(policy.transfer.available_until_milliseconds)) : "Open ended"]);
   sewingRoutedWorkholding(parent, report, label);
+  sewingRoutedLabor(parent, report, label);
   for (const source of report.cell_plans || []) {
     sewingAccess(parent, source.plan, `${label}: routed cell ${source.cell}`);
     detail(parent, `${label}: routed cell ${source.cell} admitted operations and exact geometry`, source);
@@ -1911,7 +1940,8 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
       "Every eligible operation/cell pair is qualified; selected copy counts distinguish used recipes from unused alternatives. " +
       "The outer one-garment seam table is the authored seed reference; the selected timeline, stitch stream and batch totals use actual cell assignments. " :
       "Each garment follows the same explicit operation route. Each specialist cell qualifies only its assigned operations. ") +
-    "Each dedicated worker attends loading, setup, feed and unloading before the cell becomes free. " +
+    (report.attending_labor ? "Explicit worker ownership and availability constrain the complete loading, setup, feed and unloading interval. " :
+      "Each dedicated worker attends loading, setup, feed and unloading before the cell becomes free. ") +
     "One separately qualified transfer resource serializes unloaded garment handoffs; its source duration includes positioning, pickup, movement and deposit. " +
     `Qualified staging has ${metric(policy?.staging_capacity)} garment slots. ` +
     "Stitch geometry and thread demand come from the actual assigned cell. Elapsed completion is distinct from summed machine and transfer work. " +
