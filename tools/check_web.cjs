@@ -876,6 +876,46 @@ async function offlineViewer(browser, file) {
       assert.deepEqual(report,native);
       assert.ok(viewer.equals(fs.readFileSync(path.join(dir,"native/fold_viewer.html"))));
       check(true,"accepted fit: complete native/browser report and viewer equality, exact original report bytes, no refit or readiness promotion");
+      const material = await page.context().newPage(); material.on("pageerror", e => errors.push(String(e)));
+      const materialBytes = async name => {
+        const event = material.waitForEvent("download"); await material.click(`#outputs a[download='${name}']`);
+        const file = await event; assert.equal(await file.failure(), null); return fs.readFileSync(await file.path());
+      };
+      await material.goto(`http://localhost:${port}/materials.html`);
+      await material.waitForFunction(() => document.getElementById("status").textContent.startsWith("Ready."));
+      await material.setInputFiles("#patternFile",path.join(dir,"pattern.json"));
+      await material.waitForFunction(() => !document.getElementById("bind").disabled);
+      await material.click("#bind"); await material.waitForFunction(() => document.getElementById("status").textContent.startsWith("bind complete"));
+      const boundPattern = await materialBytes("pattern.json");
+      fs.writeFileSync(path.join(dir,"bound-pattern.json"),boundPattern,{flag:"wx"});
+      await material.setInputFiles("#measurements",path.join(dir,"measurements.json"));
+      await material.setInputFiles("#fit",path.join(dir,"fit_spec.json"));
+      await material.setInputFiles("#body",model);
+      await material.locator("details").filter({has:material.locator("#bodyFitFile")}).locator("summary").click();
+      await material.setInputFiles("#bodyFitFile",acceptedFit);
+      assert.equal(await material.isEnabled("#fold"),false);
+      await material.check("#bodyFitConsent"); await material.fill("#bodyArmDeg","50");
+      await material.click("#fold"); await material.waitForFunction(() => /^fold (complete|refused)/.test(document.getElementById("status").textContent),null,{timeout:900000});
+      assert.equal(await material.isVisible("#error"),false,await material.textContent("#error"));
+      const materialReport = JSON.parse(await materialBytes("sim_report.json"));
+      assert.deepEqual(materialReport.body,report.body);
+      assert.ok((await materialBytes("body_fit.json")).equals(raw));
+      const materialNative = spawnSync(ftx,["drape","bound-pattern.json","--measurements","measurements.json","--fit","fit_spec.json",
+        "--body-fit","body_fit.json","--arm-deg","50","--self-contact-mm","2","--model",model,"--out","material-native"],
+        {cwd:dir,stdio:["ignore","pipe","inherit"]});
+      assert.ok([0,2].includes(materialNative.status),String(materialNative.stdout));
+      const expectedMaterial = JSON.parse(fs.readFileSync(path.join(dir,"material-native/sim_report.json")));
+      delete expectedMaterial.pattern; delete expectedMaterial.wall_s;
+      assert.deepEqual(materialReport,expectedMaterial);
+      assert.ok((await materialBytes("fold_viewer.html")).equals(fs.readFileSync(path.join(dir,"material-native/fold_viewer.html"))));
+      await material.setInputFiles("#bodyFitFile",{name:"rejected.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify({...saved,status:"REJECTED"}))});
+      assert.equal(await material.locator("#outputs a[download='sim_report.json']").count(),0);
+      assert.equal(await material.isEnabled("#fold"),false); await material.check("#bodyFitConsent");
+      await material.click("#fold"); await material.waitForFunction(() => document.getElementById("status").textContent.startsWith("fold refused"),null,{timeout:120000});
+      assert.match(await material.textContent("#error"),/accepted Anny shape/);
+      assert.equal(await material.locator("#outputs a[download='sim_report.json']").count(),0);
+      await material.close();
+      check(true,"material preview: exact accepted shape and complete native report/viewer equality; refused replacement cannot tape-refit");
       const rejected = {...saved,status:"REJECTED"};
       await page.setInputFiles("#bodyFitFile",{name:"rejected.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify(rejected))});
       await page.waitForFunction(() => /Fit report read/.test(document.getElementById("status").textContent));

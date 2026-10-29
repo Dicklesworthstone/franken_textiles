@@ -73,6 +73,9 @@ function controls() {
   }
   $("exports").disabled ||= !has("measurements") || !has("fit");
   $("fold").disabled ||= !has("measurements") || !has("fit") || !has("body");
+  $("fold").disabled ||= has("bodyFitFile") && !$("bodyFitConsent").checked;
+  $("clearBodyFit").disabled = !has("bodyFitFile");
+  $("bodyArmDeg").disabled = !has("bodyFitFile");
   $("selfContact").disabled = !!outfit;
   $("cut").disabled ||= !has("cutOptions");
   $("stock").disabled ||= !has("stockRequest");
@@ -2778,7 +2781,9 @@ function show(op, msg) {
       op === "calibrate" ? calibrationResult(s.comparison, r) :
       op === "stripHistory" ? stripHistoryResult(s.comparison, r) :
       ["stripAcquisition", "stripExperiment", "stripFit"].includes(op) ? stripResult(s.comparison, op, r) :
-      op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis } :
+      op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis,
+        body_source: r.body?.shape_source || "Tape-fitted MODEL_FIT shape", body_fit: r.body?.fit,
+        measurement_comparison: r.body?.measurement_comparison } :
       op === "cut" ? { pattern_sha256: r.pattern_sha256, maximum_marker_length_m: r.options?.maximum_marker_length_m,
         rolls: r.rolls.map((x, i) => ({ marker_number: i + 1, material: x.material?.authored?.id,
         width_m: x.width_m, ...(x.layout_width ? { layout_width: x.layout_width } : {}),
@@ -2828,6 +2833,14 @@ function show(op, msg) {
 async function read(id, binary = false) {
   if (!binary && roundFiles.has(id)) return roundFiles.get(id);
   const f = $(id).files[0]; if (!f) throw Error(`Choose ${id} first.`);
+  if (id === "bodyFitFile") {
+    if (f.size > 16 * 1024 * 1024) throw Error("Accepted body-fit report exceeds 16 MiB.");
+    const bytes = await f.arrayBuffer();
+    if (bytes.byteLength > 16 * 1024 * 1024) throw Error("Accepted body-fit report exceeds 16 MiB.");
+    const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    JSON.parse(raw);
+    return raw;
+  }
   if (f.size > (binary ? 256 : 64) * 1024 * 1024) throw Error(`${id} exceeds its input budget.`);
   const data = binary ? await f.arrayBuffer() : await f.text();
   if (!binary) JSON.parse(data);
@@ -2979,7 +2992,17 @@ async function execute(op) {
       if (!bound) throw Error("Bind the current materials first.");
       msg.pattern = bound.pattern_json;
       if (op === "fold" || op === "exports") { msg.measurements = await read("measurements"); msg.fit = await read("fit"); }
-      if (op === "fold") { msg.bytes = await read("body", true); msg.selfContactMm = $("selfContact").checked ? 2 : 0; }
+      if (op === "fold") {
+        if (has("bodyFitFile")) {
+          if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before draping.");
+          const angle = $("bodyArmDeg").value.trim();
+          if (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180) {
+            throw Error("Supply a finite drape arm angle from 0 to 180 degrees.");
+          }
+          msg.bodyFit = await read("bodyFitFile"); msg.bodyFitConsent = true; msg.armDeg = Number(angle);
+        }
+        msg.bytes = await read("body", true); msg.selfContactMm = $("selfContact").checked ? 2 : 0;
+      }
       if (op === "exports") { const d = new Date(), pad = n => String(n).padStart(2, "0");
         msg.today = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
         msg.created = `${msg.today}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
@@ -3056,6 +3079,7 @@ function installPattern(raw, label, garments = []) {
 }
 function resetPatternInput(keepImport = false) {
   ++patternRead; source = null; sourceText = null; outfit = null; adoptedImport = false;
+  $("bodyFitConsent").checked = false;
   defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
   outfitTargets.clear();
   combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
@@ -3182,6 +3206,7 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:["scenario"] })) {
   $(id).addEventListener("change", () => {
+    if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
     if (id === "measurements" || id === "fit") {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
     }
@@ -3190,6 +3215,17 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
     invalidate(affected);
   });
 }
+$("bodyFitFile").addEventListener("change", () => {
+  $("bodyFitConsent").checked = false;
+  invalidate(["fold", "heat", "vaporSurface", "coverage"]);
+});
+for (const id of ["bodyFitConsent", "bodyArmDeg"]) {
+  $(id).addEventListener(id === "bodyArmDeg" ? "input" : "change", () => invalidate(["fold", "heat", "vaporSurface", "coverage"]));
+}
+$("clearBodyFit").onclick = () => {
+  $("bodyFitFile").value = ""; roundFiles.delete("bodyFitFile"); $("bodyFitConsent").checked = false;
+  invalidate(["fold", "heat", "vaporSurface", "coverage"]);
+};
 $("studyOnBody").addEventListener("change", () => invalidate(["study"]));
 $("thermalPointTemperature").addEventListener("input", invalidateThermalPoint);
 $("thermalRequest").addEventListener("change", () => invalidate(["thermalHistory"]));

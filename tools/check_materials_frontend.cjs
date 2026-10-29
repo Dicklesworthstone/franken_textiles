@@ -590,6 +590,38 @@ test('material worker frees model and fold on success or report failure, without
     assert.equal(w.sent.filter(m => m.type === 'result').length, failFold ? 0 : 1);
   }
 });
+test('material fold reuses the exact accepted shape and pose, with explicit association and no tape fallback', async () => {
+  const called = [], freed = [], raw = ' {"schema":"ftx-body-fit/1","probe":-0.0,"seed":18446744073709551615}\r\n';
+  const w = await workerModule({ bindings: {
+    default: () => Promise.resolve(),
+    WebBody: class { constructor() { called.push('body'); } free() { freed.push('body'); } },
+    fold_up: () => { called.push('tape'); return { report: () => '{}', viewer: () => '<html/>', free() { freed.push('fold'); } }; },
+    fold_up_with_body_fit: (...args) => {
+      called.push(args.slice(1));
+      if (args[6] === 'refused') throw Error('accepted shape or model identity refused');
+      return { report: () => '{"body":{"shape_source":{"refitted":false}},"raw":-0.0}', viewer: () => '<html/>', free() { freed.push('fold'); } };
+    }
+  } });
+  const input = { type:'fold', bytes:new ArrayBuffer(1), pattern:'{"x":1.0}', measurements:'{"x":-0.0}', fit:'{}', selfContactMm:2,
+    bodyFit:raw, armDeg:50 };
+  assert.match((await w.send(input)).message, /Associate/); assert.deepEqual(called, []);
+  const result = await w.send({ ...input, bodyFitConsent:true });
+  assert.equal(result.type, 'result'); assert.deepEqual(called[1], [input.pattern,input.measurements,input.fit,2,false,raw,50]);
+  assert.equal(result.files.find(f => f.name === 'body_fit.json').text, raw);
+  assert.equal(result.reportText, result.files.find(f => f.name === 'sim_report.json').text);
+  assert.deepEqual(freed, ['fold','body']);
+  assert.match((await w.send({ ...input, bodyFitConsent:true, bodyFit:'refused' })).message, /identity refused/);
+  assert.equal(called.includes('tape'), false); assert.equal(freed.at(-1), 'body');
+  for (const angle of [NaN, Infinity, -1, 181, '50']) {
+    const before = called.length;
+    assert.match((await w.send({ ...input, bodyFitConsent:true, armDeg:angle })).message, /angle/);
+    assert.equal(called.length, before, 'Invalid pose refuses before loading the model');
+  }
+  assert.match((await w.send({ ...input, bodyFitConsent:true, bodyFit:{} })).message, /JSON text/);
+  const tape = await w.send({ ...input, bodyFit:null });
+  assert.equal(tape.type, 'result'); assert.equal(called.at(-1), 'tape');
+  assert.equal(tape.files.some(f => f.name === 'body_fit.json'), false);
+});
 test('material worker rejects blocked exports, initialization failure and further work after a WASM trap', async () => {
   const e = await workerModule({ failExport: true });
   assert.equal((await e.send({ type: 'exports', pattern: '{}', fit: '{}', measurements: '{}' })).type, 'error');
@@ -1006,6 +1038,40 @@ async function pageModule({roundToken=null}={}) {
   return { e, current, workers, ready, select, emit, load, inspect, bind, live, blobs, windowEvents,
     opener,openerMessages,hasOpener:()=>!!window.opener };
 }
+test('material accepted-body controls preserve source text and withdraw stale body, pose and downstream results', async () => {
+  const p = await pageModule(); await p.load(); await p.bind();
+  p.select('measurements'); p.select('fit'); p.e.body.files = [new Blob([new Uint8Array([1,2,3])])];
+  p.e.body.handlers.change();
+  const raw = ' \r\n{"schema":"ftx-body-fit/1","probe":-0.0,"seed":18446744073709551615}\r\n';
+  p.e.bodyFitFile.files = [new Blob([raw])]; p.e.bodyFitFile.handlers.change();
+  assert.equal(p.e.fold.disabled, true); assert.equal(p.e.bodyArmDeg.disabled, false);
+  p.e.bodyArmDeg.value = '50'; p.e.bodyFitConsent.checked = true; p.e.bodyFitConsent.handlers.change();
+  assert.equal(p.e.fold.disabled, false); await p.e.fold.onclick();
+  const msg = p.current().messages.at(-1);
+  assert.equal(msg.bodyFit, raw); assert.equal(msg.armDeg, 50); assert.equal(msg.bodyFitConsent, true);
+  assert.deepEqual([...new Uint8Array(msg.bytes)], [1,2,3]);
+  p.emit({body:{shape_source:{refitted:false}}}, [{name:'body_fit.json',text:raw},{name:'fold_viewer.html',text:'<html/>',mime:'text/html'}]);
+  const old = [...p.live].filter(url => p.blobs.get(url)?.type === 'text/html');
+  assert.equal(old.length, 1); p.e.bodyArmDeg.value = '35'; p.e.bodyArmDeg.handlers.input();
+  assert.equal(p.e.viewer.hidden, true); assert.ok(old.every(url => !p.live.has(url)));
+  assert.equal([...p.blobs.values()].some(b => b.type === 'text/html'), false);
+  const bytes = new TextEncoder().encode(raw).buffer; let release;
+  p.e.bodyFitFile.files = [{size:bytes.byteLength,arrayBuffer:() => new Promise(resolve => { release = resolve; })}];
+  p.e.bodyFitFile.handlers.change(); p.e.bodyFitConsent.checked = true; p.e.bodyFitConsent.handlers.change();
+  const reading = p.e.fold.onclick();
+  while (!release) await new Promise(resolve => setImmediate(resolve));
+  const previous = p.current(); p.e.body.handlers.change(); p.ready();
+  assert.equal(p.e.bodyFitConsent.checked, false); assert.equal(p.e.fold.disabled, true);
+  release(bytes); await reading;
+  assert.equal(previous.dead, true); assert.equal(p.current().messages.length, 0, 'Old report read cannot publish a fold after model replacement');
+  for (const bad of [new Blob(['\ufeff{}']),new Blob([new Uint8Array([0xc3,0x28])]),new Blob(['{'])]) {
+    p.e.bodyFitFile.files = [bad]; p.e.bodyFitFile.handlers.change(); p.e.bodyFitConsent.checked = true; p.e.bodyFitConsent.handlers.change();
+    await p.e.fold.onclick(); assert.equal(p.e.error.hidden, false); assert.equal(p.current().messages.length, 0);
+    assert.equal(p.e.clearBodyFit.disabled, false, 'A bad replacement stays selected instead of enabling tape fallback');
+  }
+  p.e.bodyFitFile.files = []; p.e.clearBodyFit.onclick(); assert.equal(p.e.bodyArmDeg.disabled, true);
+  await p.e.fold.onclick(); assert.equal(p.current().messages.at(-1).bodyFit, undefined);
+});
 test('material round handoff retains three exact sources and requires explicit binding and consumers',async()=>{
   const token='3'.repeat(32),p=await pageModule({roundToken:token});
   assert.equal(p.openerMessages[0]?.data.type,'ftx-round-sources-ready');

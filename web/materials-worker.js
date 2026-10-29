@@ -405,13 +405,25 @@ self.onmessage = async ({ data: msg }) => {
           file("material-changes.json", msg.changes), file("original-pattern.json", msg.pattern)];
         break;
       case "fold": {
+        const imported = msg.bodyFit != null;
+        if (imported) {
+          if (typeof msg.bodyFit !== "string" || new TextEncoder().encode(msg.bodyFit).byteLength > 16 * 1024 * 1024) {
+            throw Error("Accepted body-fit report must be JSON text of at most 16 MiB.");
+          }
+          if (msg.bodyFitConsent !== true) throw Error("Associate the accepted fit with this wearer before draping.");
+          if (!Number.isFinite(msg.armDeg) || msg.armDeg < 0 || msg.armDeg > 180) throw Error("Supply a finite drape arm angle from 0 to 180 degrees.");
+          if (typeof ftx.fold_up_with_body_fit !== "function") throw Error("Rebuild web/pkg: missing accepted-body drape engine.");
+        }
         const model = new ftx.WebBody(new Uint8Array(msg.bytes));
         try {
-          const fold = ftx.fold_up(model, msg.pattern, msg.measurements, msg.fit, msg.selfContactMm, false);
+          const fold = imported
+            ? ftx.fold_up_with_body_fit(model, msg.pattern, msg.measurements, msg.fit, msg.selfContactMm, false, msg.bodyFit, msg.armDeg)
+            : ftx.fold_up(model, msg.pattern, msg.measurements, msg.fit, msg.selfContactMm, false);
           try { reportText = fold.report(); result = json(reportText); viewer = fold.viewer(); }
           finally { fold.free(); }
         } finally { model.free(); }
         files = [file("sim_report.json", reportText), file("fold_viewer.html", viewer, "text/html")];
+        if (imported) files.push(file("body_fit.json", msg.bodyFit));
         break;
       }
       case "vaporSurface": {

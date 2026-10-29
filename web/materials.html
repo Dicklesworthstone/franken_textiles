@@ -238,6 +238,16 @@ It does not replace the inspected material selection. Freeze selections &amp; bi
 <label>Fit specification JSON <input id="fit" type="file" accept=".json,application/json"></label>
 <button id="exports" data-command="exports" disabled>Validate &amp; regenerate exports</button>
 <label>Local converted body model (.ftxbody) <input id="body" type="file" accept=".ftxbody"></label>
+<details><summary>Reuse an accepted image-fit shape for this drape</summary>
+<label>Accepted fit JSON <input id="bodyFitFile" type="file" accept=".json,application/json"></label>
+<button id="clearBodyFit" type="button" disabled>Clear accepted fit and use tape fitting</button>
+<label><input id="bodyFitConsent" type="checkbox"> I associate this accepted fit with the current wearer</label>
+<label>Ordinary drape arm angle (degrees) <input id="bodyArmDeg" type="number" min="0" max="180" step="any" value="35" disabled></label>
+<p class="note">The original accepted shape must match the selected model. It is reused without tape refitting;
+image-frame poses are not garment poses. A refused report or start never falls back to tape fitting.
+Current measurements remain the independent export and readiness evidence. Model predictions and a successful
+drape do not establish physical fit. Scenario studies below keep their explicit body-source request.</p>
+</details>
 <label><input id="selfContact" type="checkbox" checked> Enable cloth self-contact (requires unlike-material pair evidence)</label>
 <button id="fold" data-command="fold" disabled>Re-drape on this body</button>
 </div><div>

@@ -64,12 +64,23 @@ The remaining operations consume this same bound pattern:
 | Operation | Additional local inputs | Existing authority and output |
 |---|---|---|
 | Validate/export | Measurements and fit-specification JSON | `ftx_wasm::page::run`; current verdict basis, measurement readiness and checked export ZIP. No implicit drape/fit claim. |
-| Mechanical drape | Measurements, fit specification, converted `.ftxbody` model | Existing `fold_up` fits the same supplied body model and invokes the production drape engine. Current report and fold-up viewer, or an explicit refusal. |
+| Mechanical drape | Measurements, fit specification, converted `.ftxbody` model, optional accepted image-fit report | Existing `fold_up` fits the supplied model, or `fold_up_with_body_fit` reuses the exact accepted shape at the declared arm angle. Current report and fold-up viewer, or an explicit refusal. |
 | Cutting | `CutOptions` JSON | `ftx_export::cutting::CutPlan`; all material-specific roll requirements and a bounded first-roll SVG preview. Not a machine-coordinate program or proof of optimal nesting. |
 | Purchasing | Cut options, dated `QuoteBook`, comparable `Market` scope | Existing marker procurement evaluates gross stock including layout waste and order terms. Missing offers remain unknown, not zero-cost purchases. No checkout or live refresh runs in the page. |
 | Sewing | Complete `SewOptions` recipes and machine envelope | Existing `SewProgram`; every declared stitch interval and process refusals. Execution remains unauthorized. |
 | Independent sheet heat | A fresh workbench drape and `SurfaceConditions` JSON | Existing `thermal_steady_surface`; material-following fields, optional declared exterior exchange and source-locked replay. |
 | Layered body coverage | A fresh workbench drape, body/instance-layer map and coverage conditions | Existing `thermal_steady_coverage`; recomputed overlaps, covered/bare accounting and exposed-face exchange. No guessed layer map or environmental data. |
+
+To keep a previously accepted image-fitted shape, open **Reuse an accepted image-fit shape for
+this drape**, choose its original report, explicitly associate it with the current wearer and
+select the ordinary drape arm angle. The existing Rust body authority verifies the exact model,
+accepted status and measurement consistency. It does not reuse an image-frame pose or refit the
+shape from tape. The original report is downloadable alongside the simulation and viewer.
+An invalid replacement stays selected and refuses; only **Clear accepted fit and use tape fitting**
+returns to the tape-fitting path. Changing the pattern, model or measurements clears the wearer
+association. Report or pose changes withdraw drape, heat, vapor and coverage results, including
+pending work. The independent measurement/export readiness gate is unchanged. Numerical acceptance
+and a completed drape do not establish physical garment fit.
 
 Material and source data requirements are unchanged. See `material-sewing-plans.md`,
 `material-platform-progress.md`, `steady-conduction.md`, `steady-thermal-coverage.md`,
