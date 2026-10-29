@@ -315,6 +315,52 @@ fn separated_body_patches() -> Solver {
 }
 
 #[test]
+fn malformed_body_topology_refuses_before_motion_and_keeps_the_full_solver() {
+    for mode in 0..3 {
+        let mut s = sliding_patch(0.0, true);
+        let mut vertices = vec![
+            Vec3::new(0.0, 0.0, 2.0),
+            Vec3::new(1.0, 0.0, 2.0),
+            Vec3::new(0.0, 1.0, 2.0),
+            Vec3::new(0.0, 0.0, 3.0),
+        ];
+        let mut faces = vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        match mode {
+            0 => faces[0].swap(1, 2),
+            1 => {
+                for face in &mut faces {
+                    face.swap(1, 2);
+                }
+            }
+            _ => {
+                vertices.extend([
+                    Vec3::new(3.0, 0.0, 2.0),
+                    Vec3::new(4.0, 0.0, 2.0),
+                    Vec3::new(3.0, 1.0, 2.0),
+                ]);
+                faces.push([4, 5, 6]);
+            }
+        }
+        let target: Vec<_> = vertices
+            .iter()
+            .map(|p| *p + Vec3::new(0.01, 0.0, 0.0))
+            .collect();
+        s.contact.as_mut().unwrap().body = Body::new(vertices, faces, 0.1).unwrap();
+        let before = format!("{s:?}");
+        let error = advance_body(&mut s, &target, 0.01, MotionOptions::default()).unwrap_err();
+        assert_eq!(
+            error.code,
+            if mode == 1 {
+                RefusalCode::InwardWound
+            } else {
+                RefusalCode::DegenerateGeometry
+            }
+        );
+        assert_eq!(format!("{s:?}"), before);
+    }
+}
+
+#[test]
 fn intersecting_body_start_and_target_refuse_without_changing_the_solver() {
     for invalid_start in [false, true] {
         let mut s = separated_body_patches();
