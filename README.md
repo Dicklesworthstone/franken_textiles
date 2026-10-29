@@ -227,6 +227,12 @@ They are never averaged into one number. A drape with no gating flags is a predi
 `ftx round` runs the measurement gate, the flat validation, the drape and the exports, and writes one round
 directory whose verdict names its basis. The browser page runs the same crates as wasm.
 
+The Pattern Workbench reads uploaded pattern, fit and primary measurement files as strict UTF-8
+JSON, up to 64 MiB per file. Their original text and the submitted style JSON reach Rust without
+JavaScript rewriting integers, signed zero or integer/float distinctions. Rust still applies its
+ordinary validation, numerical limits and canonical output formatting; this is not arbitrary-precision
+JSON support. Invalid encoding, a BOM, malformed JSON or an oversized file refuses the round.
+
 ---
 
 ## Workspace and budget

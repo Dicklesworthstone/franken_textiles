@@ -3066,9 +3066,9 @@ test('material changes withdraw drape and thermal outputs while environment edit
 });
 
 test('original drafting worker also retains replayable drape JSON and frees its fold handle', async () => {
-  const sent=[], raw='{"coordinate":-0.0,"coefficient":1.0}', freed=[];
+  const sent=[], raw='{"coordinate":-0.0,"coefficient":1.0}', freed=[],requests=[];
   const values={default:async()=>{},program_info:()=> '{}',calibration_dictionaries:()=> '["DICT_4X4_50"]',
-    run:()=>({page:()=>'{"status":"CONVERGED"}',file:n=>new TextEncoder().encode(n==='pattern.json'?'{"pieces":[{"placement":{"part":"torso"}}]}':'{}'),free(){}}),
+    run:input=>{requests.push(input);return {page:()=>'{"status":"CONVERGED"}',file:n=>new TextEncoder().encode(n==='pattern.json'?'{"pieces":[{"placement":{"part":"torso"}}]}':'{}'),free(){}};},
     WebBody:class{},fold_up:()=>({report:()=>raw,viewer:()=>'<html/>',free:()=>freed.push('fold')})};
   const context=vm.createContext({JSON,Date,TextDecoder,Uint8Array,WebAssembly,Error,self:{},onmessage:null,postMessage:m=>sent.push(m)});
   const imports=new vm.SyntheticModule(Object.keys(values),function(){for(const[n,v]of Object.entries(values))this.setExport(n,v);},{context});
@@ -3081,6 +3081,9 @@ test('original drafting worker also retains replayable drape JSON and frees its 
   }
   assert.equal(sent.at(-1).type,'folded');assert.equal(sent.at(-1).reportText,raw);assert.deepEqual(freed,['fold']);
   assert.ok(read('index.html').includes('new Blob([msg.reportText]'));
+  assert.equal(requests[0],'{}','Legacy object requests still work');
+  const request=' {"pattern":{"meta":{"probe":[-0.0,1.0,9007199254740993]}}}\r\n';
+  await context.onmessage({data:{type:'run',req:request}});assert.equal(requests.at(-1),request,'Exact request text reaches Rust');
 });
 
 test('drafting worker discards refused replacements, frees failed rounds and checks fold and body sources', async () => {
@@ -3154,7 +3157,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 
 // The original inline workshop script, using a small DOM transport double. These tests inspect
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
-function draftingPage({traceToken=null,photoToken=null}={}) {
+function draftingPage({traceToken=null,photoToken=null,audit=false}={}) {
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const el of Object.values(e)) {
     el.addEventListener=(name,fn)=>{const previous=el.handlers[name];el.handlers[name]=(...args)=>{
@@ -3173,11 +3176,15 @@ function draftingPage({traceToken=null,photoToken=null}={}) {
   LocalURL.revokeObjectURL=u=>assert.equal(live.delete(u),true);
   const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:photoToken?'?photoImport='+photoToken:'')},
     window:{opener,addEventListener:(name,fn)=>{windowEvents[name]=fn;}},
-    localStorage:{getItem:()=>null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},
+    localStorage:{getItem:key=>audit&&key==='fab-wb-program'?'"audit"':null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},
       querySelector:()=>modes.find(m=>m.checked),querySelectorAll:()=>modes,
       createElement:tag=>Object.assign(new Element(),{tag})}});
   vm.runInContext(/<script>([\s\S]*?)<\/script>/.exec(html)[1],context);
-  const emit=m=>worker.onmessage({data:m}), last=type=>messages.findLast(m=>m.type===type);
+  const emit=m=>worker.onmessage({data:m}), last=type=>{
+    const m=messages.findLast(m=>m.type===type);
+    // Existing semantic assertions decode the transport; fidelity checks inspect messages directly.
+    return m?.type==='run'&&typeof m.req==='string'?{...m,req:JSON.parse(m.req)}:m;
+  };
   const sheetDictionaries=['DICT_4X4_50','DICT_5X5_50'];
   emit({type:'ready',info:{zouave_bolero:{style:{}}},sheetDictionaries,version:'test',dxf:'test'});
   assert.deepEqual(e.sheetDictionaries.children.map(option=>option.value),sheetDictionaries);
@@ -3188,6 +3195,24 @@ function draftingPage({traceToken=null,photoToken=null}={}) {
   const dispatch=(id,event)=>e[id].handlers[event]?.();
   return {e,modes,messages,live,emit,last,result,body,worker,dispatch,opener,openerMessages,windowEvents,hasOpener:()=>!!context.window.opener};
 }
+
+test('primary workshop preserves original JSON file and style text instead of rounding numeric semantics',async()=>{
+  const p=draftingPage({audit:true}),text=' \r\n{"probe":[-0.0,1.0,9007199254740993]}\r\n';
+  p.modes[0].checked=false;p.modes[2].checked=true;
+  for(const id of ['patternFile','fitFile','measFile'])p.e[id].files=[new Blob([text])];
+  await p.e.go.handlers.click();const req=p.messages.findLast(m=>m.type==='run').req;
+  assert.equal(typeof req,'string');
+  for(const key of ['pattern','fit_spec','measurements'])assert.ok(req.includes('"'+key+'":'+text),key+' original source text');
+  const q=draftingPage();q.e.style.value=text;await q.e.go.handlers.click();
+  assert.ok(q.messages.findLast(m=>m.type==='run').req.includes('"style":'+text));
+  for(const source of [new Blob([new Uint8Array([0xc3,0x28])]),new Blob(['\ufeff{}']),new Blob(['{']),
+    {size:64*1024*1024+1,arrayBuffer(){throw Error('must not read');}},
+    {size:1,arrayBuffer:async()=>({byteLength:64*1024*1024+1})}]) {
+    p.result();p.e.patternFile.files=[source];p.dispatch('patternFile','change');const count=p.messages.length;
+    await p.e.go.handlers.click();assert.equal(p.messages.length,count,'Invalid file never reaches worker');
+    assert.equal(p.e.results.classList.contains('hidden'),true);assert.ok(p.e.errorText.textContent);
+  }
+});
 
 test('workbench photo handoff preserves original evidence, explicit wearer consent and ordinary supplemental budgets',async()=>{
   const token='2'.repeat(32),p=draftingPage({photoToken:token});assert.ok(p.e.photoImportNote,'Visible photo-record import');
@@ -3235,9 +3260,9 @@ test('workbench tracing handoff uses ordinary pattern checks and rejects foreign
   await p.e.go.handlers.click();assert.deepEqual(plain(p.last('run').req.pattern),pattern);assert.equal(p.last('run').req.body.mode,'chart');
   assert.equal(p.last('run').req.body.stature_cm,105);assert.equal(p.last('run').req.body.age_months,40);
   p.e.clearTraceImport.handlers.click();p.result();assert.equal(p.e.results.classList.contains('hidden'),true);
-  p.e.patternFile.files=[{text:async()=>'{"manual":true}'}];p.dispatch('patternFile','change');
+  p.e.patternFile.files=[new Blob(['{"manual":true}'])];p.dispatch('patternFile','change');
   await p.e.go.handlers.click();assert.deepEqual(plain(p.last('run').req.pattern),{manual:true});
-  const q=draftingPage({traceToken:token});q.e.patternFile.files=[{text:async()=>'{"manual":true}'}];q.dispatch('patternFile','change');
+  const q=draftingPage({traceToken:token});q.e.patternFile.files=[new Blob(['{"manual":true}'])];q.dispatch('patternFile','change');
   assert.equal(q.hasOpener(),false);
   q.windowEvents.message({origin:'https://unit.invalid',source:q.opener,data});await q.e.go.handlers.click();
   assert.deepEqual(plain(q.last('run').req.pattern),{manual:true},'Manual choice wins over a late handoff');
@@ -3270,10 +3295,10 @@ test('primary workshop withdraws obsolete rounds and folds while retaining the l
 
 test('primary workshop cancels delayed measurement reads and accepts only the latest fields', async () => {
   const p=draftingPage(), pending=deferred();p.modes[0].checked=false;p.modes[2].checked=true;
-  p.e.measFile.files=[{text:()=>pending.promise}];const loading=p.e.go.handlers.click();
-  p.dispatch('stature','input');pending.resolve('{}');await loading;
+  p.e.measFile.files=[{size:2,arrayBuffer:()=>pending.promise}];const loading=p.e.go.handlers.click();
+  p.dispatch('stature','input');pending.resolve(Buffer.from('{}'));await loading;
   assert.equal(p.last('run'),undefined);assert.equal(p.e.go.disabled,false);
-  p.e.measFile.files=[{text:async()=>'{}'}];await p.e.go.handlers.click();p.result();assert.equal(p.live.size,1);
+  p.e.measFile.files=[new Blob(['{}'])];await p.e.go.handlers.click();p.result();assert.equal(p.live.size,1);
   const old=p.last('fields');p.e.stature.handlers.change();const fresh=p.last('fields');
   p.emit({type:'fields',request:old.request,program:'zouave_bolero',rows:[{name:'old'}]});assert.equal(p.e.tapeRows.innerHTML,undefined);
   p.emit({type:'fields',request:fresh.request,program:'zouave_bolero',rows:[]});assert.equal(p.e.tapeRows.innerHTML,'');
@@ -3292,7 +3317,7 @@ test('primary workshop transports original local evidence only with current wear
   p.dispatch('stature','input');assert.equal(p.e.supplementalConsent.checked,false);
   assert.equal(p.live.size,0);p.result(request.request);assert.equal(p.live.size,0);
   p.modes[1].checked=false;p.modes[2].checked=true;
-  p.e.measFile.files=[{text:async()=>'{}'}];p.e.supplementalConsent.checked=true;
+  p.e.measFile.files=[new Blob(['{}'])];p.e.supplementalConsent.checked=true;
   await p.e.go.handlers.click();assert.equal(p.last('run').req.body.mode,'file');
   assert.deepEqual([...p.last('run').req.body.supplemental_measurements],[raw]);
   p.dispatch('measFile','change');assert.equal(p.e.supplementalConsent.checked,false);

@@ -46,7 +46,7 @@ onmessage = async (ev) => {
       docs = null; // a refused replacement must never leave the previous garment available
       bodyRound = null;
       const { today, created } = clock();
-      const round = ftx.run(JSON.stringify(msg.req), today, created);
+      const round = ftx.run(typeof msg.req === "string" ? msg.req : JSON.stringify(msg.req), today, created);
       try {
         const res = JSON.parse(round.page());
         const blobs = {};

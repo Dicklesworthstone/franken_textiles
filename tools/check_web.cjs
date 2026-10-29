@@ -134,6 +134,38 @@ async function tracingEdits(browser, origin) {
     await manual.waitForFunction(()=>!document.getElementById("go").disabled);await manual.check('input[name="program"][value="audit"]');
     await manual.setInputFiles("#patternFile",{name:"pattern.json",mimeType:"application/json",buffer:pattern});
     assert.ok((await round(manual)).equals(handed),"Handoff and ordinary file upload produce identical complete export archives");
+    const probe='"transport_numeric_probe":{"integer":9007199254740993,"signed_zero":-0.0,"float_tag":1.0},';
+    const numericPattern=pattern.toString('utf8').replace('"meta": {','"meta": {'+probe);
+    assert.notEqual(numericPattern,pattern.toString('utf8'),'Actual source pattern receives synthetic metadata probe');
+    let primary=null,fit=null;
+    for(const mode of ['chart','file']) {
+      await manual.setInputFiles("#patternFile",{name:"pattern.json",mimeType:"application/json",buffer:Buffer.from(numericPattern)});
+      if(mode==='file') {
+        await manual.check('input[name="bodyMode"][value="file"]');
+        await manual.setInputFiles("#measFile",{name:"measurements.json",mimeType:"application/json",buffer:Buffer.from(primary)});
+        await manual.setInputFiles("#fitFile",{name:"fit_spec.json",mimeType:"application/json",buffer:Buffer.from(fit)});
+      }
+      const body=mode==='chart'?'{"mode":"chart","stature_cm":92,"age_months":30}':'{"mode":"file","measurements":'+primary+'}';
+      const request='{"body":'+body+',"pattern":'+numericPattern+(fit?',"fit_spec":'+fit:'')+'}';
+      const expected=await manual.evaluate(async request=>{
+        const ftx=await import('/pkg/ftx_wasm.js');await ftx.default({module_or_path:'/pkg/ftx_wasm_bg.wasm'});
+        const result=ftx.run(request,'2026-10-29','2026-10-29T12:00');
+        try {return {zip:Array.from(result.zip()),pattern:new TextDecoder().decode(result.file('pattern.json')),
+          primary:new TextDecoder().decode(result.file('measurements.json')),fit:new TextDecoder().decode(result.file('fit_spec.json'))};}
+        finally {result.free();}
+      },request);
+      assert.match(expected.pattern,/"integer": 9007199254740993/);assert.match(expected.pattern,/"signed_zero": -0\.0/);assert.match(expected.pattern,/"float_tag": 1\.0/);
+      assert.ok((await round(manual)).equals(Buffer.from(expected.zip)),mode+': browser complete archive equals direct raw-text Rust run');
+      primary=expected.primary.replace('"wearer": {','"wearer": {'+probe);fit=expected.fit.replace('{','{'+probe);
+    }
+    for(const buffer of [Buffer.from([0xc3,0x28]),Buffer.from('\ufeff{}'),Buffer.from('{')]) {
+      await manual.setInputFiles("#patternFile",{name:"invalid.json",mimeType:"application/json",buffer});
+      assert.equal(await manual.locator("#resFiles a").count(),0,'Invalid replacement withdraws prior downloads');
+      await manual.click("#go");await manual.waitForFunction(()=>!document.getElementById("errorBox").classList.contains("hidden"));
+      assert.match(await manual.textContent("#errorText"),/not valid UTF-8 JSON/);assert.equal(await manual.isVisible("#results"),false);
+    }
+    await manual.check('input[name="bodyMode"][value="chart"]');
+    console.log("PASS JSON fidelity: uploaded pattern, primary measurement and fit files retain native-supported i64, signed zero and float semantics; complete archives equal direct raw-text WASM execution.");
     await bench.click("#clearTraceImport");assert.equal(await bench.locator("#resFiles a").count(),0);
     await bench.click("#go");await bench.waitForFunction(()=>!document.getElementById("errorBox").classList.contains("hidden"));
     assert.match(await bench.textContent("#errorText"),/choose a pattern.json file/);
