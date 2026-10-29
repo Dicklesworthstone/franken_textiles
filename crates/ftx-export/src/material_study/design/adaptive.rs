@@ -52,6 +52,10 @@ pub struct Request {
     /// selected geometries still cross every authored material alternative after discovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_key: Option<String>,
+    /// Named scenario whose sole nominal objective guides matrix polling. Every case must still
+    /// admit the trial. Required for consumer-guided matrices and forbidden in single-case work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_key: Option<String>,
     /// One to three variables, polled in authored order and negative then positive direction.
     pub variables: Vec<Variable>,
     /// Explicit canonical operations after each trial's linked alterations, such as seam truing.
@@ -89,6 +93,10 @@ pub struct Trial {
     /// reports a more general missing metric. Only the explicit comparison controls selection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumer_refusal: Option<Refusal>,
+    /// Unmodified decisions for every named case, in authored order. A nominated-case improvement
+    /// cannot select a trial that another case excludes; independent callback refusals stay visible.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub consumer_cases: Vec<CaseDecision>,
     /// Unrounded shared point readings, or the concrete reason they could not be admitted.
     pub raw_fit: Outcome<Vec<fit::RawReading>>,
     /// Maximum absolute distance outside the declared bands; unknown for inadmissible geometry.
@@ -96,6 +104,18 @@ pub struct Trial {
     /// Sum of absolute band distances, used only to break maximum-violation ties.
     pub total_fit_band_violation_mm: Option<f64>,
     /// Canonical geometry/fit refusal or consumer-admission/protocol exclusion, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Refusal>,
+}
+
+/// One named case's ordinary comparison decision during an adaptive production probe.
+#[derive(Clone, Debug, Serialize)]
+pub struct CaseDecision {
+    /// Authored case identity, independent of its display or evaluation order.
+    pub key: String,
+    /// Exact ordinary source-qualified decision, including readings and all exclusions.
+    pub comparison: comparison::Candidate,
+    /// Original binding or scenario callback refusal, even when the policy does not require it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Refusal>,
 }
@@ -141,6 +161,12 @@ pub struct Receipt {
 pub struct ConsumerGuidance {
     /// Exact authored material key; other material alternatives do not silently steer discovery.
     pub material_key: String,
+    /// Explicit nominated case for matrix guidance; absent for single-case/manufacturing studies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub case_key: Option<String>,
+    /// Every case whose ordinary policy must admit a selected trial, in authored order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub case_order: Vec<String>,
     /// The sole objective from the ordinary nominal comparison policy.
     pub objective: comparison::Objective,
     /// Conservative upper bound on probe plus final consumer slots. Scenario work is still
@@ -170,6 +196,15 @@ impl Request {
         {
             return Err(invalid(
                 "consumer_comparison needs one nonempty material_key; fit_band_violation_mm does not accept material_key",
+            ));
+        }
+        if self
+            .case_key
+            .as_ref()
+            .is_some_and(|key| !self.consumer_guided() || key.trim().is_empty() || key.len() > 128)
+        {
+            return Err(invalid(
+                "adaptive case_key needs consumer_comparison and a nonempty case name of at most 128 bytes",
             ));
         }
         if serde_json::to_vec(self)
@@ -407,7 +442,7 @@ impl Request {
             ));
         }
         let (variants, receipt, _) =
-            self.expand_with::<()>(study, pattern, materials, context, None)?;
+            self.expand_with::<()>(study, pattern, materials, context, None, &[])?;
         Ok((variants, receipt))
     }
 
@@ -418,6 +453,7 @@ impl Request {
         materials: Vec<PreparedVariant>,
         context: Option<&fit::Context<'_>>,
         evaluate: Option<&mut ConsumerEvaluator<'_, T>>,
+        case_order: &[String],
     ) -> Result<Expansion<T>, Refusal> {
         self.validate()?;
         let context = context.ok_or_else(|| {
@@ -455,9 +491,11 @@ impl Request {
                 })?,
                 protocol: None,
                 evaluations: 0,
+                case_order: case_order.to_vec(),
                 reserved_evaluations: self
                     .max_evaluations
-                    .saturating_add((self.max_designs + 1).saturating_mul(materials.len())),
+                    .saturating_add((self.max_designs + 1).saturating_mul(materials.len()))
+                    .saturating_mul(case_order.len().max(1)),
             })
         } else {
             None
@@ -597,6 +635,8 @@ impl Request {
             consumer_guidance: discovery.guidance.as_ref().map(|guidance| {
                 Box::new(ConsumerGuidance {
                     material_key: guidance.material.variant.key.clone(),
+                    case_key: self.case_key.clone(),
+                    case_order: guidance.case_order.clone(),
                     objective: guidance.policy.objectives[0].clone(),
                     reserved_evaluations: guidance.reserved_evaluations,
                     evaluations: guidance.evaluations,
@@ -645,8 +685,16 @@ impl Request {
     }
 }
 
+pub(in crate::material_study) struct ConsumerEvaluation<T> {
+    pub comparison: comparison::Candidate,
+    pub refusal: Option<Refusal>,
+    pub cases: Vec<CaseDecision>,
+    pub admission_refusal: Option<Refusal>,
+    pub output: T,
+}
+
 type ConsumerEvaluator<'a, T> =
-    dyn FnMut(PreparedVariant) -> Result<(comparison::Candidate, Option<Refusal>, T), Refusal> + 'a;
+    dyn FnMut(PreparedVariant) -> Result<ConsumerEvaluation<T>, Refusal> + 'a;
 type Expansion<T> = (Vec<PreparedVariant>, Receipt, BTreeMap<String, T>);
 
 struct Guidance<'a, T> {
@@ -655,6 +703,7 @@ struct Guidance<'a, T> {
     evaluate: &'a mut ConsumerEvaluator<'a, T>,
     protocol: Option<Option<String>>,
     evaluations: usize,
+    case_order: Vec<String>,
     reserved_evaluations: usize,
 }
 
@@ -759,6 +808,7 @@ impl Evaluator<'_, '_> {
                 selected: result.is_ok(),
                 consumer_comparison: None,
                 consumer_refusal: None,
+                consumer_cases: Vec::new(),
                 raw_fit,
                 max_fit_band_violation_mm: score.map(|score| score.0),
                 total_fit_band_violation_mm: score.map(|score| score.1),
@@ -825,7 +875,7 @@ impl<T> Discovery<'_, '_, '_, T> {
                 material.key = serde_json::to_string(&(&variant.key, &material.key))
                     .map_err(|e| invalid(e.to_string()))?;
                 guidance.evaluations += 1;
-                let (candidate, consumer_refusal, output) = (guidance.evaluate)(PreparedVariant {
+                let evaluation = (guidance.evaluate)(PreparedVariant {
                     variant: material,
                     choices: guidance.material.choices.clone(),
                     design: Some(Prepared {
@@ -835,8 +885,12 @@ impl<T> Discovery<'_, '_, '_, T> {
                         evaluated: Some((row.design.clone(), result.clone())),
                     }),
                 })?;
-                row.consumer_refusal = consumer_refusal;
-                if candidate.eligible {
+                let candidate = evaluation.comparison;
+                row.consumer_refusal = evaluation.refusal;
+                row.consumer_cases = evaluation.cases;
+                if let Some(refusal) = evaluation.admission_refusal {
+                    row.refusal = Some(refusal);
+                } else if candidate.eligible {
                     if guidance.protocol.as_ref().is_some_and(|protocol| {
                         !guidance.policy.allow_mixed_protocols
                             && *protocol != candidate.input_protocol_sha256
@@ -849,7 +903,7 @@ impl<T> Discovery<'_, '_, '_, T> {
                             .protocol
                             .get_or_insert_with(|| candidate.input_protocol_sha256.clone());
                         row.selected = true;
-                        consumer = Some(output);
+                        consumer = Some(evaluation.output);
                     }
                 } else {
                     row.refusal = candidate.exclusions.first().cloned();

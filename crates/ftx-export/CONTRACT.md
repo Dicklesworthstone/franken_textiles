@@ -69,9 +69,16 @@ manufacturing aggregate counts are reserved up front; mass/outline/station count
 scenario Session remain shared. A slot count is not a promise that each physical simulation fits
 its per-callback work reservation. Search/step limits and later callback refusals preserve successful
 incumbents; structural/global manufacturing hard-budget errors still refuse the complete request.
-Manufacturing and single scenarios are supported; matrices, multiple objectives, reported-bounds
-guidance and unavailable nominees refuse before production callbacks. Optional receipt fields keep
-fit-only serialization unchanged. No new surrogate score, physical law, empirical validation or
+Manufacturing and single scenarios omit `case_key`. Named matrices require an explicit guidance
+case with one nominal objective and effective comparison policies for every case. Each case's
+ordinary required-consumer, constraint and protocol checks must admit a selected trial; the
+nominated objective cannot bypass another case's exclusion. Optional independent consumer failures
+retain their original policy semantics. Per-case decisions and refusals remain in `consumer_cases`;
+retained nominees reuse complete case outputs while all case callbacks share the existing cumulative
+session budgets. Probe-plus-final reservations multiply by the case count, within the ordinary
+matrix limit. Multiple guidance objectives, reported-bounds guidance and unavailable nominees refuse
+before production callbacks. Optional receipt fields keep fit-only serialization unchanged.
+No new surrogate score, physical law, empirical validation or
 continuous/global optimality claim. Tests: real mass/constraint/source/reservation checks in
 `design_study/adaptive` and real selected-body sewn-scenario guidance/cache replay through both CLIs
 and the portable authority in `accepted_body_workflow/consumer_adaptive`.

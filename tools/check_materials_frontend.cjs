@@ -7642,6 +7642,24 @@ test('consumer-guided adaptive search shows authoritative readings, displaced tr
   const replay=descendants(s).find(n=>n.download==='adaptive-design-3-pattern.json');
   assert.equal(await p.blobs.get(replay.href).text(),source);
   assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  report.design_search.consumer_guidance.case_key='<warm>';
+  report.design_search.consumer_guidance.case_order=['<cold>','<warm>'];
+  report.design_search.rows[0].consumer_cases=[
+    {key:'<cold>',comparison:candidate('adaptive:0000',0.1,false),refusal:{message:'<cold-only consumer refusal>'}},
+    {key:'<warm>',comparison:report.design_search.rows[0].consumer_comparison}];
+  report.design_search.rows[0].refusal={message:'The cold case did not admit this design'};
+  report.design_search.rows[2].consumer_cases=['<cold>','<warm>'].map(key=>({key,
+    comparison:report.design_search.rows[2].consumer_comparison}));
+  await p.e.study.onclick();p.emit(report);
+  assert.match(visibleText(s),/Guidance case: <warm>/);
+  assert.match(visibleText(s),/Every declared case must admit a selected trial: <cold>, <warm>/);
+  assert.equal(table('Adaptive alteration trials').children[2].children[5].textContent,'Excluded',
+    'An eligible nominated-case objective does not conceal another case exclusion');
+  assert.deepEqual(plain(table('adaptive:0000: operating-case admission').children[2].children.map(n=>n.textContent)),
+    ['<cold>','Excluded','assembly_mass_kg: 0.1 kg',
+      '<required consumer>: source qualification missing; <cold-only consumer refusal>']);
+  assert.equal(table('adaptive:0002: operating-case admission').children[3].children[1].textContent,
+    'Eligible under declared policy');
   report.design_search.consumer_guidance.best_trial_key=null;
   report.design_search.consumer_guidance.best_reading=null;
   await p.e.study.onclick(); p.emit(report);
@@ -8082,6 +8100,18 @@ test('compiled WASM consumer-guided alterations optimize real cloth mass and pre
         assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
         assert.equal(result.files.find(file=>file.name==='body-input.json').text,input('body-input.json'));
       }
+      const matrixStudy=input('matrix-study.json'),matrixScenario=input('matrix-scenario.json');
+      const matrix=await w.send({type:'scenario',request:222,pattern:input('pattern.json'),studyRequest:matrixStudy,
+        scenarioRequest:matrixScenario,measurements:input('body-input.json'),
+        bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+      assert.equal(matrix.type,'result',matrix.message);
+      assert.deepEqual(matrix.result,JSON.parse(input('matrix-report.json')));
+      const matrixSearch=matrix.result.manufacturing.design_search;
+      assert.equal(matrixSearch.consumer_guidance.case_key,'weight');
+      assert.equal(matrixSearch.rows.find(row=>row.selected).design.variables_mm.length,-20);
+      assert.equal(matrix.result.cases.length,2);
+      assert.equal(matrix.files.find(file=>file.name==='study-request.json').text,matrixStudy);
+      assert.equal(matrix.files.find(file=>file.name==='scenario-request.json').text,matrixScenario);
     } finally {globalThis.ftxProgress=previousProgress;}
   });
 

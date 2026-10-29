@@ -4342,7 +4342,7 @@ and empirical wet-garment qualification remain outside this model and under the 
 
 Adaptive design studies can now nominate one authored material alternative and one existing nominal
 comparison objective to guide bounded alteration search. Canonical geometry and selected-body flat-fit
-gates run before actual manufacturing and optional single-scenario probes. The ordinary comparison
+gates run before actual manufacturing and optional production-scenario probes. The ordinary comparison
 authority supplies readings, source admission, required consumers, constraints and protocol compatibility;
 no surrogate fit score or browser ranking replaces those quantities. The original fit-only search remains
 available with its original behavior.
@@ -4356,9 +4356,13 @@ share aggregate reservations and counters; scenario callbacks use their existing
 
 Evaluation/step stops and individual callback refusals preserve admitted cached candidates. Structural
 or global manufacturing hard-budget failures still refuse the whole request. The guidance material does
-not optimize the other material alternatives, and named-case matrices refuse this mode until an explicit
-case aggregation rule exists. Unvisited values, global optimality and empirical garment fit remain
-unqualified. This bounded extension is tracked by `ftx-ds2.1`; the broader `ftx-ds2` remains open.
+not optimize the other material alternatives. Named matrices explicitly nominate one `case_key` whose
+sole nominal objective guides polling; every case's ordinary comparison policy must admit the trial.
+Each case retains its constraints, required consumers and protocol admission, without a cross-unit
+weighted score. Manufacturing runs once per trial and retained nominees reuse complete case outputs.
+All probe and final callbacks share the existing matrix allowance and cumulative numerical budgets.
+Unvisited values, global optimality and empirical garment fit remain unqualified. Single-case guidance
+is tracked by `ftx-ds2.1` and named-case guidance by `ftx-ds2.2`; the broader `ftx-ds2` remains open.
 See [material-screening-and-studies.md](docs/material-screening-and-studies.md).
 
 ### 25.123 Carry independently qualified seam and closure exchange through motion
@@ -4388,6 +4392,26 @@ This bounded software delivery is tracked by `ftx-tm5.3`; see
 endpoints, so thermal subdivisions do not resolve intervening motion. Seam heat capacity, recovery,
 inferred pressure/compression laws and empirical garment warmth remain separate work under `ftx-tm5`.
 No material receives an invented temporal qualification or a measured-property upgrade.
+
+### 25.124 Share attending workers across routed specialist cells
+
+The existing routed production scheduler admits an optional source-qualified attending-labor policy.
+Every configured cell belongs to one explicit worker; several specialist machines may share a person.
+Complete initial/directed travel, inclusive shifts and exclusive waiting/loading/setup/feed/unloading
+participate in the same dispatch, eligible-cell choices and finite fixture reservations. Garment
+handoffs keep their separately qualified resource and unloaded staging. No autonomous feed or shared
+transfer attendant is inferred.
+
+Exact worker timelines and source locks accompany baseline and selected schedules, actual stitches,
+yarn procurement and the existing material/design consumers. Mandatory-work lower bounds omit optional
+workers and optional travel/setup. A capped search retains a complete feasible schedule without an
+unrestricted optimality claim. Absent worker policy preserves dedicated-attendant behavior.
+
+This software increment is tracked by `ftx-pb2.2.11`; see [sewing-production.md](docs/sewing-production.md).
+Measured labor, physical fixture access and seam quality remain under the open parent qualification.
+The browser material preview also retains accepted image-fit shapes and exact model/report/pose
+context from a pattern round, with fresh wearer association and no automatic execution (`ftx-onn.22`).
+Independent camera/anatomical and physical garment acceptance remain separate.
 
 ## Appendix A. Sources
 

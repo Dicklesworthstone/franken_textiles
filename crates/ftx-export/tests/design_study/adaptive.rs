@@ -47,6 +47,323 @@ fn consumer_request(evaluations: usize) -> Request {
     serde_json::from_value(value).unwrap()
 }
 
+fn matrix_request(evaluations: usize) -> Request {
+    let mut request = consumer_request(evaluations);
+    request.design_adaptive.as_mut().unwrap().case_key = Some("guide".into());
+    request
+}
+
+fn consumer_cases() -> Vec<Case> {
+    ["guard", "guide"]
+        .into_iter()
+        .map(|key| Case {
+            key: key.into(),
+            scenario: json!({
+                "scenario_sha256":sha256_hex(key.as_bytes()),
+                "body_geometry_sha256":"2".repeat(64),
+                "declared_case":key}),
+            comparison: (key == "guard").then(|| {
+                serde_json::from_value(json!({"basis":"nominal",
+                    "objectives":[{"metric":"simulated_cloth_mass_kg","direction":"minimize"}],
+                    "constraints":[{"metric":"simulated_cloth_mass_kg","maximum":40}]}))
+                .unwrap()
+            }),
+        })
+        .collect()
+}
+
+fn case_output(pattern: &Pattern, case: &Case) -> Value {
+    let length = pattern.raw()["pieces"][0]["vertices"]["d"][1]
+        .as_f64()
+        .unwrap();
+    // Deliberately synthetic callback response, separate from real assembly/cutting consumers.
+    // Its independent guard excludes lengths below 130 mm while flat fit admits 120..160 mm.
+    json!({"schema":"ftx-drape-scenario-result/1",
+        "pattern_sha256":sha256_hex(&serde_json::to_vec(pattern.raw()).unwrap()),
+        "scenario_sha256":case.scenario["scenario_sha256"],
+        "body_geometry_sha256":case.scenario["body_geometry_sha256"],
+        "metrics":{"simulation_gating_clear":true},
+        "drape":{"settled":true,"gating":[],"mass_kg":170.0-length}})
+}
+
+#[test]
+fn named_consumer_search_obeys_every_case_and_reuses_exact_selected_probes() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":120}));
+    let identity = json!({"source":"test:adaptive-matrix"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let request = matrix_request(20);
+    let cases = consumer_cases();
+    let mut calls = std::collections::BTreeMap::new();
+    let report = request
+        .evaluate_matrix_with_fit(&pattern, &cases, 48, Some(&fit), |index, key, bound| {
+            *calls.entry((index, key.to_owned())).or_insert(0) += 1;
+            Ok(case_output(bound, &cases[index]))
+        })
+        .unwrap();
+    let report = serde_json::to_value(report).unwrap();
+    let search = &report["manufacturing"]["design_search"];
+    let guidance = &search["consumer_guidance"];
+    assert_eq!(guidance["case_key"], "guide");
+    assert_eq!(guidance["case_order"], json!(["guard", "guide"]));
+    assert_eq!(guidance["objective"]["metric"], "assembly_mass_kg");
+    assert_eq!(guidance["reserved_evaluations"], 48);
+    assert_eq!(report["planned_evaluations"], 48);
+    assert_eq!(
+        report["evaluations"].as_u64().unwrap() as usize,
+        calls.values().sum::<usize>()
+    );
+    assert!(calls.values().all(|&count| count == 1));
+    let trials = search["rows"].as_array().unwrap();
+    let selected = trials
+        .iter()
+        .find(|trial| trial["selected"] == true)
+        .unwrap();
+    assert_eq!(selected["design"]["variables_mm"]["length"], 30.0);
+    let rejected = trials
+        .iter()
+        .find(|trial| trial["design"]["variables_mm"]["length"] == 20.0)
+        .unwrap();
+    assert_eq!(rejected["consumer_comparison"]["eligible"], true);
+    assert_eq!(
+        rejected["consumer_cases"][0]["comparison"]["eligible"],
+        false
+    );
+    assert_eq!(
+        rejected["consumer_cases"][1]["comparison"]["eligible"],
+        true
+    );
+    assert_eq!(rejected["selected"], false);
+    assert!(
+        rejected["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("guard")
+    );
+    let selected_key = key(selected["design"]["key"].as_str().unwrap(), "light-sheet");
+    for (index, case) in cases.iter().enumerate() {
+        let output = report["cases"][index]["simulations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["key"] == selected_key)
+            .unwrap();
+        let manufacture = report["manufacturing"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["key"] == selected_key)
+            .unwrap();
+        let bound = Pattern::new(manufacture["binding"]["result"]["pattern"].clone());
+        assert_eq!(output["evaluation"]["result"], case_output(&bound, case));
+        assert_eq!(
+            calls[&(index, selected_key.as_str().unwrap().to_owned())],
+            1
+        );
+        let decision = report["cases"][index]["comparison"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate["key"] == selected_key)
+            .unwrap();
+        for field in [
+            "readings",
+            "eligible",
+            "exclusions",
+            "input_protocol_sha256",
+        ] {
+            assert_eq!(
+                selected["consumer_cases"][index]["comparison"][field],
+                decision[field]
+            );
+        }
+        assert_eq!(
+            manufacture["cutting"]["result"],
+            serde_json::to_value(
+                CutPlan::build(&bound, request.cutting.as_ref().unwrap()).unwrap()
+            )
+            .unwrap()
+        );
+    }
+    assert_eq!(search["global_optimum_claim"], false);
+    assert_eq!(report["comparison"]["physical_validation_claim"], false);
+
+    // Case identities, rather than vector positions or an unused fallback, select the objective.
+    let mut other = request.clone();
+    other.design_adaptive.as_mut().unwrap().case_key = Some("guard".into());
+    let other = serde_json::to_value(
+        other
+            .evaluate_matrix_with_fit(&pattern, &cases, 48, Some(&fit), |index, _, bound| {
+                Ok(case_output(bound, &cases[index]))
+            })
+            .unwrap(),
+    )
+    .unwrap();
+    let selected = other["manufacturing"]["design_search"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|trial| trial["selected"] == true)
+        .unwrap();
+    assert_eq!(selected["design"]["variables_mm"]["length"], 60.0);
+    assert_eq!(
+        other["manufacturing"]["design_search"]["consumer_guidance"]["objective"]["metric"],
+        "simulated_cloth_mass_kg"
+    );
+}
+
+#[test]
+fn named_consumer_search_retains_prior_incumbents_after_case_refusal_and_work_limit() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":120}));
+    let identity = json!({"source":"test:adaptive-matrix-partial"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let request = matrix_request(3);
+    let cases = consumer_cases();
+    let mut calls = std::collections::BTreeMap::new();
+    let report = serde_json::to_value(
+        request
+            .evaluate_matrix_with_fit(&pattern, &cases, 14, Some(&fit), |index, key, bound| {
+                *calls.entry((index, key.to_owned())).or_insert(0) += 1;
+                if index == 0 && bound.raw()["pieces"][0]["vertices"]["d"][1] == 120.0 {
+                    return Err(ftx_core::Refusal::new(
+                        RefusalCode::BudgetExceeded,
+                        "synthetic guard callback exhausted its numerical work",
+                    ));
+                }
+                Ok(case_output(bound, &cases[index]))
+            })
+            .unwrap(),
+    )
+    .unwrap();
+    let search = &report["manufacturing"]["design_search"];
+    assert_eq!(search["budget_exhausted"], true);
+    assert_eq!(search["stop_reason"], "evaluation_budget");
+    let rows = search["rows"].as_array().unwrap();
+    let selected = rows.iter().find(|trial| trial["selected"] == true).unwrap();
+    assert_eq!(selected["design"]["variables_mm"]["length"], 40.0);
+    let failed = rows
+        .iter()
+        .find(|trial| trial["design"]["variables_mm"]["length"] == 20.0)
+        .unwrap();
+    assert!(
+        failed["consumer_cases"][0]["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("numerical work")
+    );
+    assert_eq!(failed["consumer_cases"][1]["comparison"]["eligible"], true);
+    assert_eq!(failed["consumer_comparison"]["eligible"], true);
+    assert_eq!(failed["selected"], false);
+    assert_eq!(
+        report["evaluations"].as_u64().unwrap() as usize,
+        calls.values().sum::<usize>()
+    );
+    assert!(calls.values().all(|&count| count == 1));
+    assert!(
+        !report["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn named_consumer_search_preflights_case_selection_all_policies_and_every_callback_slot() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":120}));
+    let identity = json!({"source":"test:adaptive-matrix-admission"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let request = matrix_request(20);
+    let cases = consumer_cases();
+    let mut calls = 0;
+    let error = request
+        .evaluate_matrix_with_fit(&pattern, &cases, 47, Some(&fit), |_, _, _| {
+            calls += 1;
+            Ok(json!({}))
+        })
+        .unwrap_err();
+    assert_eq!(error.code, RefusalCode::BudgetExceeded);
+    assert_eq!(calls, 0);
+    assert!(
+        request
+            .evaluate_with_fit(&pattern, &json!({}), Some(&fit), |_, _| {
+                calls += 1;
+                Ok(json!({}))
+            })
+            .unwrap_err()
+            .message
+            .contains("named scenario matrix")
+    );
+    assert_eq!(calls, 0);
+    let mut invalids = Vec::new();
+    for key in [None, Some("absent"), Some("")] {
+        let mut bad = request.clone();
+        bad.design_adaptive.as_mut().unwrap().case_key = key.map(str::to_owned);
+        invalids.push((bad, cases.clone()));
+    }
+    let mut missing = request.clone();
+    missing.comparison = None;
+    invalids.push((missing, cases.clone()));
+    let mut bounds = cases.clone();
+    let mut policy = request.comparison.clone().unwrap();
+    policy.basis = ftx_export::material_study::comparison::Basis::ReportedBounds;
+    bounds[1].comparison = Some(policy);
+    invalids.push((request.clone(), bounds));
+    let mut multiple = cases.clone();
+    let mut policy = request.comparison.clone().unwrap();
+    policy.objectives.push(
+        serde_json::from_value(json!({
+        "metric":"simulated_cloth_mass_kg","direction":"minimize"}))
+        .unwrap(),
+    );
+    multiple[1].comparison = Some(policy);
+    invalids.push((request.clone(), multiple));
+    for (bad, cases) in invalids {
+        assert!(
+            bad.evaluate_matrix_with_fit(&pattern, &cases, 64, Some(&fit), |_, _, _| {
+                calls += 1;
+                Ok(json!({}))
+            })
+            .is_err()
+        );
+        assert_eq!(calls, 0);
+    }
+    let mut explicit = request.clone();
+    explicit.comparison = None;
+    let mut explicit_cases = cases.clone();
+    explicit_cases[1].comparison = request.comparison.clone();
+    let output = explicit
+        .evaluate_matrix_with_fit(
+            &pattern,
+            &explicit_cases,
+            48,
+            Some(&fit),
+            |index, _, bound| Ok(case_output(bound, &explicit_cases[index])),
+        )
+        .unwrap();
+    assert_eq!(
+        output.cases[1]
+            .comparison
+            .as_ref()
+            .unwrap()
+            .policy
+            .objectives
+            .len(),
+        1
+    );
+    assert!(output.manufacturing.comparison.is_none());
+}
+
 #[test]
 fn consumer_polling_replaces_flat_fit_incumbents_with_lighter_real_assemblies() {
     let body = Measurements(json!({"desired_length":120}));
@@ -244,7 +561,7 @@ fn consumer_search_preflights_all_probe_work_and_requires_explicit_single_case_p
             },
         )
         .unwrap_err();
-    assert!(error.message.contains("one scenario"));
+    assert!(error.message.contains("case_key"));
     assert_eq!(calls, 0);
 }
 

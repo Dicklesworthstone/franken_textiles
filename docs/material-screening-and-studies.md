@@ -1139,10 +1139,34 @@ later per-callback refusals preserve an already retained successful nominee. Str
 and global manufacturing hard-budget failures still refuse the whole request. Only up to
 `max_designs` full probe outputs are retained; rejected probes keep bounded decision evidence.
 
-Consumer guidance currently requires one scenario or manufacturing-only evaluation. Named scenario
-matrices refuse it before callbacks because they have no declared scalar aggregation rule for
-adaptive polling. Multiple objectives, reported-bounds search and an unknown material key also
-refuse. Original `fit_band_violation_mm` requests and their serialization remain unchanged.
+For a named scenario matrix, set `design_adaptive.case_key` to the authored case that guides
+polling. Its effective comparison policy must declare exactly one nominal objective. Every case
+must have an explicit effective policy, either its own `comparison` or the study fallback, and
+every case must admit a trial before it can become an incumbent. A better guidance-case objective
+cannot bypass another case's constraint or protocol rule. Other cases may use their own ordinary
+multi-objective policies; the engine never combines unlike quantities into a weighted score.
+
+For example, nominate `"case_key": "weight"` to minimize `simulated_cloth_mass_kg`, and give a second
+case a declared mass or strain constraint. Both cases execute the existing production consumers on
+the actual altered garment. If shortening improves the nominated objective but violates the other
+case's limit, its exact geometry and readings remain visible while the earlier admitted design stays
+selected. All-case admission follows each policy's **required** consumers; an optional independent
+consumer may refuse without invalidating an otherwise admitted manufacturing-only policy.
+
+The receipt retains `consumer_guidance.case_key`, authored `case_order`, and each trial's
+`consumer_cases` with original decisions and independent refusals. Protocol compatibility is checked
+separately against each case's first fully admitted incumbent. Manufacturing runs once per probe;
+the selected nominee reuses its exact cached manufacturing and complete case results. Final baseline
+and other material combinations receive fresh ordinary evaluations. Both reserved and actual matrix
+callback counts include probes; the conservative slot reservation is
+`(max_evaluations + (max_designs + 1) * material_alternatives) * cases`, within the existing 64-slot
+matrix limit. Case sessions retain their cumulative geometry/motion/thermal budgets.
+
+Missing or unknown case keys, missing effective policies, an inadmissible guidance objective or an
+insufficient aggregate reservation refuse before callbacks. Single-case and manufacturing-only
+guidance omit `case_key`; original `fit_band_violation_mm` requests reject it and retain their
+previous serialization. Multiple guidance objectives, reported-bounds guidance and unknown material
+keys remain unsupported.
 Both modes retain `complete_search: false` and `global_optimum_claim: false`; neither an empty
 result nor a local improvement establishes empirical garment fit or a global optimum.
 

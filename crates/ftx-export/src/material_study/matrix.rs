@@ -7,7 +7,22 @@ use ftx_pattern::Pattern;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Outcome, Request, ScenarioAlternative, budget, comparison, hash, invalid};
+use super::{
+    Alternative, ManufacturingWork, Outcome, Request, ScenarioAlternative, budget, comparison,
+    design, hash, invalid, scenario_alternative,
+};
+
+struct GuidedProbe<T> {
+    manufacturing: Alternative,
+    simulations: Vec<ScenarioAlternative<T>>,
+}
+
+struct GuidedEvaluation<T> {
+    manufacturing: super::Report,
+    simulations: Vec<Vec<ScenarioAlternative<T>>>,
+    planned_evaluations: usize,
+    evaluations: usize,
+}
 
 /// One exact production scenario and its optional override of the study's comparison policy.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -99,8 +114,10 @@ pub struct Report<T> {
     /// Caller-declared maximum callback slots, between one and 64 inclusive.
     pub max_evaluations: usize,
     /// All alternatives times all cases, reserved before any manufacturing or callback work.
+    /// Consumer-guided discovery additionally reserves every possible probe for every case.
     pub planned_evaluations: usize,
-    /// Actual callback attempts; binding refusals retain their rows without invoking a consumer.
+    /// Actual callback attempts, including adaptive probes; cached final outputs add no attempts.
+    /// Binding refusals retain their rows without invoking a consumer.
     pub evaluations: usize,
     /// Binding, screening and manufacturing run once for all cases.
     pub manufacturing: super::Report,
@@ -145,15 +162,6 @@ impl Request {
         fit: Option<&super::design::fit::Context<'_>>,
         mut evaluate: impl FnMut(usize, &str, &Pattern) -> Result<T, Refusal>,
     ) -> Result<Report<T>, Refusal> {
-        if self
-            .design_adaptive
-            .as_ref()
-            .is_some_and(super::design::adaptive::Request::consumer_guided)
-        {
-            return Err(invalid(
-                "consumer-guided adaptive design needs one scenario; named cases have no declared scalar aggregation for adaptive polling",
-            ));
-        }
         if cases.is_empty() || cases.len() > 8 || !(1..=64).contains(&max_evaluations) {
             return Err(invalid(
                 "scenario matrix needs 1..8 cases and 1..64 maximum evaluations",
@@ -174,23 +182,6 @@ impl Request {
         if !errors.is_empty() {
             return Err(invalid(errors.join("; ")));
         }
-        // Case policies have already been validated. An unused fallback must not reject valid
-        // overrides, and shared manufacturing must not invent another comparison context.
-        let mut manufacturing_request = self.clone();
-        manufacturing_request.comparison = None;
-        let prepared = manufacturing_request.variants(pattern, true, fit)?;
-        let planned_evaluations = prepared
-            .variants
-            .len()
-            .checked_mul(cases.len())
-            .ok_or_else(|| {
-                budget("scenario matrix alternative/case evaluation reservation overflows")
-            })?;
-        if planned_evaluations > max_evaluations {
-            return Err(budget(
-                "scenario matrix exceeds its aggregate alternative/case evaluation allowance",
-            ));
-        }
         let request_sha256 = if self.design_fit.is_some() {
             hash(&(
                 pattern.raw(),
@@ -202,36 +193,65 @@ impl Request {
         } else {
             hash(&(pattern.raw(), self, cases, max_evaluations))?
         };
-        let mut manufacturing =
-            manufacturing_request.evaluate_prepared(pattern, true, prepared, fit)?;
+        let (mut manufacturing, mut cached, planned_evaluations, mut evaluations) = if self
+            .consumer_guided()
+        {
+            let result =
+                self.evaluate_consumer_matrix(pattern, cases, max_evaluations, fit, &mut evaluate)?;
+            (
+                result.manufacturing,
+                Some(result.simulations.into_iter()),
+                result.planned_evaluations,
+                result.evaluations,
+            )
+        } else {
+            // An unused fallback must not reject valid case overrides, and shared
+            // manufacturing must not invent another comparison context.
+            let mut manufacturing_request = self.clone();
+            manufacturing_request.comparison = None;
+            let prepared = manufacturing_request.variants(pattern, true, fit)?;
+            let planned_evaluations = prepared
+                .variants
+                .len()
+                .checked_mul(cases.len())
+                .ok_or_else(|| {
+                    budget("scenario matrix alternative/case evaluation reservation overflows")
+                })?;
+            if planned_evaluations > max_evaluations {
+                return Err(budget(
+                    "scenario matrix exceeds its aggregate alternative/case evaluation allowance",
+                ));
+            }
+            (
+                manufacturing_request.evaluate_prepared(pattern, true, prepared, fit)?,
+                None,
+                planned_evaluations,
+                0,
+            )
+        };
         // The shared request is still the exact authored study, including its optional fallback.
         manufacturing.request_sha256 = self.manufacturing_identity(fit)?;
         let mut reports = Vec::with_capacity(cases.len());
-        let mut evaluations = 0;
         for (case_index, case) in cases.iter().enumerate() {
             let mut effective_request = self.clone();
             effective_request.comparison = case.comparison.clone().or(self.comparison.clone());
             let context = effective_request.scenario_identity(pattern, &case.scenario, fit)?;
-            let mut simulations = Vec::with_capacity(manufacturing.alternatives.len());
-            for row in &manufacturing.alternatives {
-                let evaluation = match &row.binding {
-                    Outcome::Available { result } => {
-                        let bound = Pattern::new(result["pattern"].clone());
-                        evaluations += 1;
-                        Outcome::from_result(evaluate(case_index, &row.key, &bound))
-                    }
-                    Outcome::Refused { refusal } => Outcome::Refused {
-                        refusal: refusal.clone(),
-                    },
-                    Outcome::NotRequested => Outcome::Refused {
-                        refusal: invalid("additional evaluation requires a successful binding"),
-                    },
-                };
-                simulations.push(ScenarioAlternative {
-                    key: row.key.clone(),
-                    evaluation,
-                });
-            }
+            let simulations = if let Some(cached) = &mut cached {
+                cached
+                    .next()
+                    .expect("one cached output vector for every case")
+            } else {
+                manufacturing
+                    .alternatives
+                    .iter()
+                    .map(|row| {
+                        scenario_alternative(row, &mut |key, bound| {
+                            evaluations += 1;
+                            evaluate(case_index, key, bound)
+                        })
+                    })
+                    .collect()
+            };
             let comparison = effective_request
                 .comparison
                 .as_ref()
@@ -266,6 +286,9 @@ impl Request {
         if comparison.is_none() {
             notes.push("At least one case has no explicit effective comparison policy. Requested per-case comparisons remain available; no all-cases policy or frontier is synthesized.");
         }
+        if self.consumer_guided() {
+            notes.push("Adaptive polling follows only the explicitly nominated case's sole nominal objective. Every named case must independently admit each selected trial under its own policy and source protocol. Complete successful probe outputs are reused exactly for final rows; no cross-case score, unrestricted optimum or physical fit is inferred.");
+        }
         Ok(Report {
             schema: if self.is_design() {
                 "ftx-design-scenario-matrix-study/1"
@@ -282,4 +305,191 @@ impl Request {
             notes,
         })
     }
+
+    fn evaluate_consumer_matrix<T: Serialize>(
+        &self,
+        pattern: &Pattern,
+        cases: &[Case],
+        max_evaluations: usize,
+        fit: Option<&design::fit::Context<'_>>,
+        evaluate: &mut impl FnMut(usize, &str, &Pattern) -> Result<T, Refusal>,
+    ) -> Result<GuidedEvaluation<T>, Refusal> {
+        let adaptive = self
+            .design_adaptive
+            .as_ref()
+            .expect("consumer-guided matrix");
+        let case_key = adaptive.case_key.as_ref().ok_or_else(|| {
+            invalid("consumer-guided named matrices require an explicit adaptive case_key")
+        })?;
+        let nominated = cases
+            .iter()
+            .position(|case| case.key == *case_key)
+            .ok_or_else(|| invalid("adaptive case_key must identify an authored named case"))?;
+        let policies = cases
+            .iter()
+            .map(|case| {
+                case.comparison.as_ref().or(self.comparison.as_ref()).ok_or_else(|| {
+                    invalid(format!(
+                        "adaptive matrix case '{}' requires an explicit effective comparison policy",
+                        case.key
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // Resolve the sole guidance policy before the ordinary design/material admission. An
+        // unused fallback is not the nominated case's objective and cannot silently steer search.
+        let mut guided = self.clone();
+        guided.comparison = Some(policies[nominated].clone());
+        let materials = guided.material_variants(pattern, true)?;
+        let slots = adaptive
+            .max_evaluations
+            .saturating_add((adaptive.max_designs + 1).saturating_mul(materials.variants.len()));
+        let planned_evaluations = slots.saturating_mul(cases.len());
+        if planned_evaluations > max_evaluations {
+            return Err(budget(
+                "adaptive matrix exceeds its aggregate probe and final case evaluation allowance",
+            ));
+        }
+        self.reserve_consumers(pattern, slots)?;
+        let source = hash(pattern.raw())?;
+        let contexts = cases
+            .iter()
+            .zip(&policies)
+            .map(|(case, policy)| {
+                let mut effective = self.clone();
+                effective.comparison = Some((*policy).clone());
+                effective.scenario_identity(pattern, &case.scenario, fit)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let case_order: Vec<_> = cases.iter().map(|case| case.key.clone()).collect();
+        let mut work = ManufacturingWork::new();
+        let mut evaluations = 0;
+        let mut protocols: Option<Vec<Option<String>>> = None;
+        let (mut variants, receipt, mut retained) = adaptive.expand_with(
+            &guided,
+            pattern,
+            materials.variants,
+            fit,
+            Some(&mut |variant| {
+                let row = self.evaluate_charged(pattern, variant, fit, &mut work)?;
+                let simulations = evaluate_cases(&row, cases.len(), &mut evaluations, evaluate);
+                let decisions = cases
+                    .iter()
+                    .enumerate()
+                    .map(|(index, case)| {
+                        let mut comparison = policies[index].evaluate_scenarios(
+                            std::slice::from_ref(&row),
+                            std::slice::from_ref(&simulations[index]),
+                            &case.scenario,
+                            &source,
+                            &contexts[index],
+                            self.purchasing_currency(),
+                        )?;
+                        let refusal = match &simulations[index].evaluation {
+                            Outcome::Refused { refusal } => Some(refusal.clone()),
+                            _ => None,
+                        };
+                        Ok(design::adaptive::CaseDecision {
+                            key: case.key.clone(),
+                            comparison: comparison.alternatives.remove(0),
+                            refusal,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Refusal>>()?;
+                let mut admission_refusal = decisions
+                    .iter()
+                    .find(|decision| !decision.comparison.eligible)
+                    .map(|decision| {
+                        invalid(format!(
+                            "adaptive matrix case '{}' did not admit this trial: {}",
+                            decision.key,
+                            decision.comparison.exclusions.first().map_or(
+                                "comparison unavailable",
+                                |refusal| refusal.message.as_str()
+                            )
+                        ))
+                    });
+                if admission_refusal.is_none() {
+                    let current: Vec<_> = decisions
+                        .iter()
+                        .map(|decision| decision.comparison.input_protocol_sha256.clone())
+                        .collect();
+                    if let Some(first) = &protocols {
+                        if let Some(index) = (0..cases.len()).find(|&index| {
+                            !policies[index].allow_mixed_protocols && current[index] != first[index]
+                        }) {
+                            admission_refusal = Some(invalid(format!(
+                                "adaptive matrix case '{}' source protocols differ from the first admitted incumbent; no ordering inferred",
+                                cases[index].key
+                            )));
+                        }
+                    } else {
+                        protocols = Some(current);
+                    }
+                }
+                Ok(design::adaptive::ConsumerEvaluation {
+                    comparison: decisions[nominated].comparison.clone(),
+                    refusal: decisions[nominated].refusal.clone(),
+                    cases: decisions,
+                    admission_refusal,
+                    output: GuidedProbe {
+                        manufacturing: row,
+                        simulations,
+                    },
+                })
+            }),
+            &case_order,
+        )?;
+        variants.sort_by(|a, b| a.variant.key.cmp(&b.variant.key));
+        let mut alternatives = Vec::with_capacity(variants.len());
+        let mut simulations: Vec<Vec<ScenarioAlternative<T>>> = (0..cases.len())
+            .map(|_| Vec::with_capacity(variants.len()))
+            .collect();
+        for variant in variants {
+            let probe = if let Some(probe) = retained.remove(&variant.variant.key) {
+                probe
+            } else {
+                let row = self.evaluate_charged(pattern, variant, fit, &mut work)?;
+                let simulations = evaluate_cases(&row, cases.len(), &mut evaluations, evaluate);
+                GuidedProbe {
+                    manufacturing: row,
+                    simulations,
+                }
+            };
+            alternatives.push(probe.manufacturing);
+            for (case, output) in simulations.iter_mut().zip(probe.simulations) {
+                case.push(output);
+            }
+        }
+        let manufacturing = self.finish_manufacturing(
+            pattern,
+            true,
+            materials.screening,
+            Some(design::SearchReceipt::Adaptive(receipt)),
+            alternatives,
+            fit,
+        )?;
+        Ok(GuidedEvaluation {
+            manufacturing,
+            simulations,
+            planned_evaluations,
+            evaluations,
+        })
+    }
+}
+
+fn evaluate_cases<T>(
+    row: &Alternative,
+    count: usize,
+    evaluations: &mut usize,
+    evaluate: &mut impl FnMut(usize, &str, &Pattern) -> Result<T, Refusal>,
+) -> Vec<ScenarioAlternative<T>> {
+    (0..count)
+        .map(|index| {
+            scenario_alternative(row, &mut |key, bound| {
+                *evaluations += 1;
+                evaluate(index, key, bound)
+            })
+        })
+        .collect()
 }

@@ -760,6 +760,15 @@ impl Request {
         fit: Option<&design::fit::Context<'_>>,
         evaluate: &mut impl FnMut(&str, &Pattern) -> Result<T, Refusal>,
     ) -> Result<(Report, Vec<ScenarioAlternative<T>>), Refusal> {
+        if self
+            .design_adaptive
+            .as_ref()
+            .is_some_and(|adaptive| adaptive.case_key.is_some())
+        {
+            return Err(invalid(
+                "adaptive case_key requires a named scenario matrix; one scenario or manufacturing study has no named case",
+            ));
+        }
         let errors = pattern.structure_errors();
         if !errors.is_empty() {
             return Err(invalid(errors.join("; ")));
@@ -816,15 +825,18 @@ impl Request {
                         _ => None,
                     },
                 };
-                Ok((
-                    comparison.alternatives.remove(0),
+                Ok(design::adaptive::ConsumerEvaluation {
+                    comparison: comparison.alternatives.remove(0),
                     refusal,
-                    ConsumerProbe {
+                    cases: Vec::new(),
+                    admission_refusal: None,
+                    output: ConsumerProbe {
                         manufacturing: row,
                         simulation,
                     },
-                ))
+                })
             }),
+            &[],
         )?;
         variants.sort_by(|a, b| a.variant.key.cmp(&b.variant.key));
         let mut alternatives = Vec::with_capacity(variants.len());

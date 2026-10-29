@@ -188,5 +188,149 @@ fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_b
             save(&capture.join(format!("{name}-scenario.json")), &scenario);
             save(&capture.join(format!("{name}-report.json")), &report);
         }
+        if name == "complete" {
+            let mut matrix_study = study.clone();
+            matrix_study["design_adaptive"]["case_key"] = json!("weight");
+            // The second case has an independent authored constraint. Its actual 0.017 kg
+            // threshold admits the 80 mm band but excludes the lighter 70 mm candidate.
+            let matrix = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":24,
+                "cases":[{"key":"weight","scenario":scenario},
+                    {"key":"guard","scenario":scenario,"comparison":{"basis":"nominal",
+                        "objectives":[{"metric":"simulated_cloth_mass_kg","direction":"minimize"}],
+                        "constraints":[{"metric":"simulated_cloth_mass_kg","minimum":0.017}]}}]});
+            let matrix_report: Value = serde_json::from_str(
+                &on_model(
+                    &model,
+                    &digest,
+                    &pattern.to_string(),
+                    &matrix_study.to_string(),
+                    &matrix.to_string(),
+                    &body.to_string(),
+                    |_| {},
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let search = &matrix_report["manufacturing"]["design_search"];
+            let guidance = &search["consumer_guidance"];
+            assert_eq!(guidance["case_key"], "weight");
+            assert_eq!(guidance["case_order"], json!(["weight", "guard"]));
+            assert_eq!(guidance["reserved_evaluations"], 24);
+            assert_eq!(matrix_report["planned_evaluations"], 24);
+            assert_eq!(search["selected_designs"], 1);
+            let trials = search["rows"].as_array().unwrap();
+            let selected = trials
+                .iter()
+                .find(|trial| trial["selected"] == true)
+                .unwrap();
+            assert_eq!(selected["design"]["variables_mm"]["length"], -20.0);
+            let shorter = trials
+                .iter()
+                .find(|trial| trial["design"]["variables_mm"]["length"] == -30.0)
+                .unwrap();
+            assert_eq!(shorter["consumer_comparison"]["eligible"], true);
+            assert_eq!(shorter["consumer_cases"][0]["comparison"]["eligible"], true);
+            assert_eq!(
+                shorter["consumer_cases"][1]["comparison"]["eligible"],
+                false
+            );
+            assert_eq!(shorter["selected"], false);
+            assert!(
+                shorter["refusal"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("guard")
+            );
+            let mass = guidance["best_reading"]["value"].as_f64().unwrap();
+            assert!((mass - width * 80.0 * 1e-6 * 0.2).abs() < 1e-6);
+            let selected_key =
+                serde_json::to_string(&json!([selected["design"]["key"], "light"])).unwrap();
+            assert_eq!(
+                matrix_report["comparison"]["frontier"],
+                json!([selected_key])
+            );
+            for (index, key) in ["weight", "guard"].iter().enumerate() {
+                let case = &matrix_report["cases"][index];
+                assert_eq!(case["key"], *key);
+                assert_eq!(selected["consumer_cases"][index]["key"], *key);
+                let candidate = case["comparison"]["alternatives"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|candidate| candidate["key"] == selected_key)
+                    .unwrap();
+                for field in [
+                    "readings",
+                    "eligible",
+                    "exclusions",
+                    "input_protocol_sha256",
+                ] {
+                    assert_eq!(
+                        selected["consumer_cases"][index]["comparison"][field],
+                        candidate[field]
+                    );
+                }
+                let simulation = case["simulations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|simulation| simulation["key"] == selected_key)
+                    .unwrap();
+                assert_eq!(simulation["evaluation"]["status"], "available");
+                assert_eq!(simulation["evaluation"]["result"]["drape"]["settled"], true);
+                assert!(
+                    (simulation["evaluation"]["result"]["drape"]["mass_kg"]
+                        .as_f64()
+                        .unwrap()
+                        - mass)
+                        .abs()
+                        < 1e-12
+                );
+            }
+            // Every admitted trial calls both actual sessions once. The retained light-material
+            // pair is reused for both cases instead of spending another two callback slots.
+            let rows = matrix_report["manufacturing"]["alternatives"]
+                .as_array()
+                .unwrap()
+                .len();
+            let probes = guidance["evaluations"].as_u64().unwrap() as usize;
+            assert_eq!(matrix_report["evaluations"], 2 * (probes + rows - 1));
+            assert!(matrix_report["evaluations"].as_u64().unwrap() <= 24);
+            save(&dir.join("matrix-study.json"), &matrix_study);
+            save(&dir.join("matrix-scenario.json"), &matrix);
+            for (binary, prefix) in [
+                (
+                    env!("CARGO_BIN_EXE_ftx"),
+                    &["--json", "materials", "scenario-study"][..],
+                ),
+                (env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"][..]),
+            ] {
+                let output = Command::new(binary)
+                    .current_dir(&dir)
+                    .args(prefix)
+                    .args([
+                        "pattern.json",
+                        "matrix-study.json",
+                        "matrix-scenario.json",
+                        "body-input.json",
+                        "model.ftxbody",
+                    ])
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{} / {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(actual.get("result").unwrap_or(&actual), &matrix_report);
+            }
+            if let Some(capture) = &capture {
+                save(&capture.join("matrix-study.json"), &matrix_study);
+                save(&capture.join("matrix-scenario.json"), &matrix);
+                save(&capture.join("matrix-report.json"), &matrix_report);
+            }
+        }
     }
 }

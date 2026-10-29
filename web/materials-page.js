@@ -1071,6 +1071,7 @@ function designComparison(op, parent, study) {
           guidance.best_trial_key ?? "Unknown", reading ? `${metric(reading.value)} ${reading.unit}` : "Unknown"]);
         const objective = document.createElement("p");
         objective.textContent = `Guidance material: ${guidance.material_key ?? "Unknown"}. ` +
+          (guidance.case_key ? `Guidance case: ${guidance.case_key}. Every declared case must admit a selected trial: ${(guidance.case_order || []).join(", ")}. ` : "") +
           `Declared objective: ${guidance.objective?.metric ?? "Unknown"} (${guidance.objective?.direction ?? "Unknown"}). ` +
           "Rust evaluates the nominated material with the ordinary manufacturing and requested scenario consumers. " +
           "Existing source admission, required consumers, protocol rules and inclusive constraints govern each probe. " +
@@ -1099,6 +1100,8 @@ function designComparison(op, parent, study) {
         const design = row.design || {}, fit = available(design.fit);
         const passed = design.validation?.passed === true && fit?.passed === true;
         const candidate = row.consumer_comparison, reading = candidate?.readings?.[guidance?.objective?.metric];
+        const admitted = candidate?.eligible === true && !row.refusal &&
+          (row.consumer_cases || []).every(item => item.comparison?.eligible === true);
         const reasons = [row.refusal?.message, row.consumer_refusal?.message,
           ...(candidate?.exclusions || []).map(e => e.message)]
           .filter((message, index, all) => message && all.indexOf(message) === index).join("; ");
@@ -1106,10 +1109,20 @@ function designComparison(op, parent, study) {
           design.variables_mm ? Object.entries(design.variables_mm).map(([key, value]) => `${key}: ${metric(value)}`).join("; ") : "Unknown",
           metric(row.max_fit_band_violation_mm), metric(row.total_fit_band_violation_mm),
           passed ? "Passed declared flat gates" : "Refused",
-          ...(guidance ? [candidate ? (candidate.eligible ? "Eligible" : "Excluded") : "Not attempted",
+          ...(guidance ? [candidate ? (admitted ? "Eligible" : "Excluded") : "Not attempted",
             reading ? `${metric(reading.value)} ${reading.unit}` : "Unknown"] : []),
           row.selected === true ? "Selected" : "Not selected",
           reasons || (passed ? "Passed declared targets" : "Inspect retained validation")]);
+        if (row.consumer_cases?.length) {
+          const cases = table(parent, `${design.key ?? "Unknown design"}: operating-case admission`,
+            ["Case", "Admission", "Readings", "Exclusions or consumer refusal"]);
+          for (const item of row.consumer_cases) cells(cases, [item.key,
+            item.comparison?.eligible === true ? "Eligible under declared policy" : "Excluded",
+            Object.entries(item.comparison?.readings || {}).map(([key, value]) =>
+              `${key}: ${metric(value.value)} ${value.unit || ""}`).join("; ") || "Unavailable",
+            [...(item.comparison?.exclusions || []).map(reason => reason.message), item.refusal?.message]
+              .filter(Boolean).join("; ") || "None"]);
+        }
         if (typeof design.altered_pattern_json === "string") {
           const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
           link(op, actions, {name: `adaptive-design-${i + 1}-pattern.json`, text: design.altered_pattern_json, mime: "application/json"});
