@@ -2045,6 +2045,45 @@ test('routed specialist cells show actual operations, serialized garment transfe
     assert.doesNotMatch(visibleText(s),/Each dedicated worker/);
     const laborDetail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('attending worker sources, cell locks and complete replay'));
     laborDetail.open=true;laborDetail.handlers.toggle();assert.match(visibleText(laborDetail),/<qualified attending workers>/);
+    const ownedReport=plain(report);
+    const ownedPlan=op==='sew'?ownedReport.plan:op==='study'?ownedReport.alternatives[0].sewing.result:
+      ownedReport.manufacturing.alternatives[0].sewing.result;
+    const ownedRoute=ownedPlan.production.routing,worker='<carrying worker>';
+    ownedPlan.schema='ftx-sewing-plan/22';ownedPlan.production.schema='ftx-sewing-production/10';
+    ownedRoute.schema='ftx-sewing-routing/5';delete ownedRoute.workholding;
+    const ownedPolicy=ownedPlan.options.production.routing;
+    ownedPolicy.cells.forEach(cell=>{cell.available_until_milliseconds=17000;});
+    ownedPolicy.transfer={id:'one-mover',model:'attended_source_to_destination_handoffs/1',attending_worker:worker,
+      source:{note:'<qualified pickup, carry and deposit>'},available_at_milliseconds:0,available_until_milliseconds:14050};
+    const ownedOperations=[step(0,'join','straight',0,1100,5300),step(0,'reinforce','finish',6000,6600,8800),
+      step(1,'join','straight',9050,9150,13350),step(1,'reinforce','finish',14050,14150,16350)];
+    const ownedTransfers=[5300,13350].map((start,copy)=>({copy,from_operation:'join',to_operation:'reinforce',
+      from:'straight',to:'finish',start_milliseconds:start,finish_milliseconds:start+700}));
+    ownedRoute.baseline=ownedRoute.selected={...plain(selected),makespan_milliseconds:16350,
+      operations:ownedOperations,transfers:ownedTransfers};
+    const ownedSteps=ownedOperations.map((operation,index)=>({...operation,worker,operation:operation.id,
+      from_cell:index===0?null:'finish',departure_milliseconds:[0,6000,8800,14050][index],
+      arrival_milliseconds:operation.loading_start_milliseconds}));
+    const ownedTimeline={steps:ownedSteps,travel_milliseconds:250,waiting_milliseconds:0,attended_milliseconds:14700,
+      transfer_milliseconds:1400,transfers:ownedTransfers.map(transfer=>({worker,resource:'one-mover',copy:transfer.copy,
+        from_operation:`${transfer.copy}/join`,to_operation:`${transfer.copy}/reinforce`,from_cell:'straight',
+        source_cell:'straight',destination_cell:'finish',departure_milliseconds:transfer.start_milliseconds,
+        arrival_milliseconds:transfer.start_milliseconds,start_milliseconds:transfer.start_milliseconds,
+        finish_milliseconds:transfer.finish_milliseconds}))};
+    ownedRoute.attending_labor={...ownedRoute.attending_labor,schema:'ftx-sewing-attending-labor/2',transfer:ownedPolicy.transfer,
+      policy:{source:{note:'<qualified attending workers>'},workers:[{id:worker,cells:['straight','finish'],
+        available_at_milliseconds:0,available_until_milliseconds:17000}]},baseline:ownedTimeline,selected:ownedTimeline};
+    await p.e[op].onclick();p.emit(ownedReport);
+    assert.deepEqual(plain(table('routed attending labor').children[3].children.map(n=>n.textContent)),
+      ['Selected','0.25','0','14.7','1.4']);
+    assert.deepEqual(plain(table('selected worker-owned garment transfers').children.at(-1).children.map(n=>n.textContent)),
+      [worker,'one-mover','1','1/join','1/reinforce','straight','straight','finish','13.35','13.35','13.35','14.05']);
+    assert.match(visibleText(s),/Worker <carrying worker> performs the garment handoffs using resource one-mover/);
+    assert.match(visibleText(s),/pickup, carrying and deposit occupy the same worker and end at the destination cell/);
+    assert.match(visibleText(s),/machine attendance and handoffs cannot overlap/);
+    assert.doesNotMatch(visibleText(s),/Garment handoffs retain their separate qualified resource|One separately qualified transfer resource/);
+    const ownedDetail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('attending worker sources, cell locks and complete replay'));
+    ownedDetail.open=true;ownedDetail.handlers.toggle();assert.match(visibleText(ownedDetail),/<qualified pickup, carry and deposit>/);
     delete routing.attending_labor;
     delete routing.workholding;routing.schema='ftx-sewing-routing/1';plan.schema='ftx-sewing-plan/18';
   }
@@ -8352,18 +8391,22 @@ test('compiled WASM routed shared fixtures and attending workers replay exact na
     assert.equal(study.type,'result',study.message);
     assert.equal(study.files.find(file=>file.name==='material-study.json').text,report);
     assert.equal(study.files.find(file=>file.name==='study-request.json').text,studyRequest);
-    for(const [index,kind] of ['fixed','eligible'].entries()) {
+    for(const [index,kind] of ['fixed','eligible','owned-fixed','owned-eligible'].entries()) {
+      const owned=kind.startsWith('owned-');
       const captured=name=>input(`attending-${kind}/${name}`);
       const workerPattern=captured('pattern.json'),workerOptions=captured('options.json');
       const expected=captured('program.json');
       assert.equal(ftx.sew_stitches(workerPattern,workerOptions),expected);
-      const attended=await w.send({type:'sew',request:211+index,pattern:workerPattern,options:workerOptions});
+      const attended=await w.send({type:'sew',request:230+index,pattern:workerPattern,options:workerOptions});
       assert.equal(attended.type,'result',attended.message);
       assert.equal(attended.files.find(file=>file.name==='sewing-program.json').text,expected);
       assert.deepEqual(attended.result,JSON.parse(expected));
       const plan=attended.result.plan,routed=plan.production.routing,labor=routed.attending_labor;
-      assert.equal(plan.schema,'ftx-sewing-plan/21');assert.equal(routed.schema,'ftx-sewing-routing/4');
-      assert.equal(labor.schema,'ftx-sewing-attending-labor/1');assert.equal(labor.physical_labor_validated,false);
+      assert.equal(plan.schema,owned?'ftx-sewing-plan/22':'ftx-sewing-plan/21');
+      assert.equal(plan.production.schema,owned?'ftx-sewing-production/10':'ftx-sewing-production/9');
+      assert.equal(routed.schema,owned?'ftx-sewing-routing/5':'ftx-sewing-routing/4');
+      assert.equal(labor.schema,owned?'ftx-sewing-attending-labor/2':'ftx-sewing-attending-labor/1');
+      assert.equal(labor.physical_labor_validated,false);
       assert.equal(labor.selected.steps.length,routed.selected.operations.length);
       assert.equal(plan.production.stitch_intervals,attended.result.stitches.length);
       for(const operation of routed.selected.operations) {
@@ -8380,11 +8423,30 @@ test('compiled WASM routed shared fixtures and attending workers replay exact na
           assert.deepEqual(stitch.b_mm,seam.stations.b[stitch.to_station]);
         }
       }
+      if(owned) {
+        assert.deepEqual(labor.transfer,JSON.parse(workerOptions).production.routing.transfer);
+        assert.equal(labor.selected.transfer_milliseconds,routed.selected.transfer_milliseconds);
+        assert.equal(labor.selected.transfers.length,routed.selected.transfers.length);
+        if(kind==='owned-fixed') assert.ok(labor.selected.transfers.length>0);
+        for(const transfer of labor.selected.transfers) {
+          assert.equal(transfer.worker,'synthetic-attending-worker');
+          const source=routed.selected.operations.find(operation=>operation.id===transfer.from_operation);
+          const destination=routed.selected.operations.find(operation=>operation.id===transfer.to_operation);
+          assert.equal(transfer.source_cell,source.cell);assert.equal(transfer.destination_cell,destination.cell);
+          assert.ok(transfer.departure_milliseconds<=transfer.arrival_milliseconds);
+          assert.ok(transfer.arrival_milliseconds<=transfer.start_milliseconds);
+          assert.ok(source.finish_milliseconds<=transfer.start_milliseconds);
+          assert.ok(transfer.start_milliseconds<=transfer.finish_milliseconds);
+          assert.ok(transfer.finish_milliseconds<=destination.loading_start_milliseconds);
+        }
+      } else {
+        assert.equal(labor.transfer,undefined);assert.equal(labor.selected.transfers,undefined);
+      }
       const unavailable=JSON.parse(workerOptions);
       unavailable.production.routing.attending_labor.workers[0].available_until_milliseconds=0;
-      const refused=await w.send({type:'sew',request:213+index,pattern:workerPattern,options:JSON.stringify(unavailable)});
+      const refused=await w.send({type:'sew',request:240+index,pattern:workerPattern,options:JSON.stringify(unavailable)});
       assert.equal(refused.type,'error');
-      assert.equal(w.sent.some(message=>message.type==='result'&&message.request===213+index),false);
+      assert.equal(w.sent.some(message=>message.type==='result'&&message.request===240+index),false);
     }
   });
 

@@ -1890,12 +1890,13 @@ function sewingRoutedWorkholding(parent, routing, label) {
 function sewingRoutedLabor(parent, routing, label) {
   const report = routing.attending_labor;
   if (!report) return;
+  const transfer = report.transfer;
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: routed attending labor`,
-    ["Schedule", "Travel (s)", "Waiting (s)", "Full attendance (s)"]);
+    ["Schedule", "Travel (s)", "Waiting (s)", "Full attendance (s)", ...(transfer ? ["Garment carry (s)"] : [])]);
   for (const [name, timeline] of [["Baseline", report.baseline], ["Selected", report.selected]]) cells(totals, [name,
     metric(seconds(timeline?.travel_milliseconds)), metric(seconds(timeline?.waiting_milliseconds)),
-    metric(seconds(timeline?.attended_milliseconds))]);
+    metric(seconds(timeline?.attended_milliseconds)), ...(transfer ? [metric(seconds(timeline?.transfer_milliseconds))] : [])]);
   const workers = table(parent, `${label}: qualified attending workers`,
     ["Worker", "Cells", "Available (s)", "Inclusive finish limit (s)"]);
   for (const worker of report.policy?.workers || []) cells(workers, [worker.id, (worker.cells || []).join(", "),
@@ -1908,10 +1909,22 @@ function sewingRoutedLabor(parent, routing, label) {
     step.from_cell ?? "Declared initial location", step.cell, metric(seconds(step.departure_milliseconds)),
     metric(seconds(step.arrival_milliseconds)), metric(seconds(step.loading_start_milliseconds)),
     metric(seconds(step.feed_start_milliseconds)), metric(seconds(step.finish_milliseconds))]);
+  if (transfer) {
+    const transfers = table(parent, `${label}: selected worker-owned garment transfers`,
+      ["Worker", "Resource", "Garment copy", "After operation", "Before operation", "Worker from", "Pickup cell", "Deposit cell",
+        "Approach starts (s)", "At pickup cell (s)", "Pickup and carry starts (s)", "Deposit complete (s)"]);
+    for (const step of report.selected?.transfers || []) cells(transfers, [step.worker, step.resource, metric(step.copy),
+      step.from_operation, step.to_operation, step.from_cell ?? "Declared initial location", step.source_cell, step.destination_cell,
+      metric(seconds(step.departure_milliseconds)), metric(seconds(step.arrival_milliseconds)),
+      metric(seconds(step.start_milliseconds)), metric(seconds(step.finish_milliseconds))]);
+  }
   const note = document.createElement("p");
   note.textContent = "Each named worker attends the complete operation, including feed and final unloading. " +
     "Travel and waiting also occupy that worker; cells assigned to the same person cannot use them concurrently. " +
-    "Garment handoffs retain their separate qualified resource. These source-qualified modeled times do not establish measured labor performance or hardware authorization.";
+    (transfer ? `Worker ${transfer.attending_worker} performs the garment handoffs using resource ${transfer.id}. ` +
+      "Empty approach is charged to worker travel; pickup, carrying and deposit occupy the same worker and end at the destination cell. " +
+      "The worker's machine attendance and handoffs cannot overlap. " : "Garment handoffs retain their separate qualified resource. ") +
+    "These source-qualified modeled times do not establish measured labor performance or hardware authorization.";
   parent.append(note);
   detail(parent, `${label}: attending worker sources, cell locks and complete replay`, report);
 }
@@ -1981,7 +1994,10 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
       "Each garment follows the same explicit operation route. Each specialist cell qualifies only its assigned operations. ") +
     (report.attending_labor ? "Explicit worker ownership and availability constrain the complete loading, setup, feed and unloading interval. " :
       "Each dedicated worker attends loading, setup, feed and unloading before the cell becomes free. ") +
-    "One separately qualified transfer resource serializes unloaded garment handoffs; its source duration includes positioning, pickup, movement and deposit. " +
+    (policy?.transfer?.attending_worker ?
+      `Worker ${policy.transfer.attending_worker} and the qualified transfer resource are both reserved from pickup through deposit; ` +
+      "empty approach uses the worker's travel qualification. " :
+      "One separately qualified transfer resource serializes unloaded garment handoffs; its source duration includes positioning, pickup, movement and deposit. ") +
     `Qualified staging has ${metric(policy?.staging_capacity)} garment slots. ` +
     "Stitch geometry and thread demand come from the actual assigned cell. Elapsed completion is distinct from summed machine and transfer work. " +
     "The proof covers the supplied route and dispatch model; it does not establish unrestricted factory optimality, measured seam quality or hardware authorization.";

@@ -185,6 +185,50 @@ fn attending_labor(mut options: Value, groups: &[&[&str]], travel: u32) -> Value
     options
 }
 
+fn worker_owned_transfer(mut options: Value, owner: usize, travel: u32) -> Value {
+    let route = &mut options["production"]["routing"];
+    let cells: Vec<_> = route["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|cell| cell["id"].as_str().unwrap().to_string())
+        .collect();
+    let initial: BTreeMap<_, _> = cells.iter().map(|cell| (cell, 0)).collect();
+    let transfers: Vec<_> = cells
+        .iter()
+        .flat_map(|from| {
+            cells
+                .iter()
+                .filter(move |&to| to != from)
+                .map(move |to| json!({"from":from,"to":to,"milliseconds":travel}))
+        })
+        .collect();
+    let worker = &mut route["attending_labor"]["workers"][owner];
+    worker["initial_arrival_milliseconds"] = json!(initial);
+    worker["transfers"] = json!(transfers);
+    let owner = worker["id"].clone();
+    route["transfer"]["attending_worker"] = owner;
+    route["transfer"]["model"] = json!("attended_source_to_destination_handoffs/1");
+    route["transfer"]["source"] = source("worker-owned-handoffs");
+    route["transfer"]["method"] = json!(
+        "Synthetic pickup at the source, carrying and deposit at the destination; empty worker approach is separate and no return is included"
+    );
+    route["independence"] = json!(if route.get("shared_workholding").is_some() {
+        "shared_attending_workers_workholding_and_worker_owned_transfer_resource/1"
+    } else {
+        "shared_attending_workers_and_worker_owned_transfer_resource/1"
+    });
+    route["source"] = source("worker-owned-route");
+    route["method"] = json!(
+        "Synthetic complete staging, fully attended operations and explicit shared ownership of the garment handoff resource"
+    );
+    route["attending_labor"]["source"] = source("worker-owned-labor");
+    route["attending_labor"]["method"] = json!(
+        "Synthetic exclusive machine attendance and garment handoffs on the same person; complete initial and directed empty travel across every visited cell"
+    );
+    options
+}
+
 fn shared_fixtures(mut options: Value, capacity: u32) -> Value {
     for cell in options["production"]["routing"]["cells"]
         .as_array_mut()
@@ -361,6 +405,450 @@ fn specialist_cells_jointly_sew_copies_with_exact_geometry_and_independent_timin
             bytes.push(b'\n');
             std::fs::write(directory.join(name), bytes).unwrap();
         }
+    }
+}
+
+#[test]
+fn worker_owned_handoffs_share_attendance_without_double_counting_carriage() {
+    let (pattern, raw) = fixture(2);
+    let independent = attending_labor(raw, &[&["cell-a", "cell-b"]], 500);
+    let old = build(&pattern, independent.clone()).unwrap();
+    let old_json = serde_json::to_value(&old).unwrap();
+    let old_labor = &old_json["production"]["routing"]["attending_labor"];
+    assert_eq!(old.schema, "ftx-sewing-plan/21");
+    assert!(old_labor.get("transfer").is_none());
+    assert!(old_labor["selected"].get("transfers").is_none());
+    assert!(old_labor["selected"].get("transfer_milliseconds").is_none());
+    assert!(
+        old_json["options"]["production"]["routing"]["transfer"]
+            .get("attending_worker")
+            .is_none()
+    );
+    let mut explicit_null = independent.clone();
+    explicit_null["production"]["routing"]["transfer"]["attending_worker"] = Value::Null;
+    assert_eq!(
+        old_json,
+        serde_json::to_value(build(&pattern, explicit_null).unwrap()).unwrap()
+    );
+
+    let mut raw = worker_owned_transfer(independent, 0, 500);
+    // This empty A-to-B trip is never taken: the qualified carrying interval already ends at B.
+    raw["production"]["routing"]["attending_labor"]["workers"][0]["transfers"][0]["milliseconds"] =
+        json!(9000);
+    let options: SewOptions = serde_json::from_value(raw.clone()).unwrap();
+    let program = SewProgram::build(&pattern, &options).unwrap();
+    let production = program.plan.production.as_ref().unwrap();
+    let route = production.routing.as_ref().unwrap();
+    let labor = route.attending_labor.as_ref().unwrap();
+    assert_eq!(program.plan.schema, "ftx-sewing-plan/22");
+    assert_eq!(production.schema, "ftx-sewing-production/10");
+    assert_eq!(route.schema, "ftx-sewing-routing/5");
+    assert_eq!(labor.schema, "ftx-sewing-attending-labor/2");
+    assert_eq!(
+        serde_json::to_value(labor.transfer.as_ref().unwrap()).unwrap(),
+        raw["production"]["routing"]["transfer"]
+    );
+    assert_eq!(route.baseline.makespan_milliseconds, 16600);
+    assert_eq!(route.selected.makespan_milliseconds, 16600);
+    assert_eq!(labor.selected.travel_milliseconds, 500);
+    assert_eq!(labor.selected.waiting_milliseconds, 0);
+    assert_eq!(labor.selected.attended_milliseconds, 14700);
+    assert_eq!(labor.selected.transfer_milliseconds, Some(1400));
+    let transfers = labor.selected.transfers.as_ref().unwrap();
+    assert_eq!(transfers.len(), 2);
+    assert_eq!(transfers[0].from_operation, "0/join");
+    assert_eq!(transfers[0].to_operation, "0/reinforce");
+    assert_eq!(transfers[0].start_milliseconds, 5300);
+    assert_eq!(transfers[0].finish_milliseconds, 6000);
+    let destination = &labor.selected.steps[1];
+    assert_eq!(destination.from_cell.as_deref(), Some("cell-b"));
+    assert_eq!(destination.departure_milliseconds, 6000);
+    assert_eq!(destination.arrival_milliseconds, 6000);
+    assert_eq!(labor.selected.steps[2].arrival_milliseconds, 9300);
+    assert_eq!(program.stitches.len(), 120);
+    assert!(route.lower_bound_makespan_milliseconds <= 16600);
+    for stitch in &program.stitches {
+        let source = program
+            .plan
+            .parallel_cell_plan(stitch.cell.as_deref().unwrap())
+            .unwrap();
+        let seam = &source.seams[stitch.operation];
+        assert_eq!(stitch.a_mm, seam.stations.a[stitch.to_station]);
+        assert_eq!(stitch.b_mm, seam.stations.b[stitch.to_station]);
+    }
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &options).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn worker_owned_transfer_visits_unowned_cells_and_releases_other_attendants() {
+    let (pattern, raw) = fixture(2);
+    let mut options =
+        worker_owned_transfer(attending_labor(raw, &[&["cell-a"], &["cell-b"]], 0), 0, 500);
+    options["production"]["routing"]["attending_labor"]["workers"][0]["available_until_milliseconds"] =
+        json!(11500);
+    options["production"]["routing"]["transfer"]["available_until_milliseconds"] = json!(11500);
+    let plan = build(&pattern, options.clone()).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let labor = route.attending_labor.as_ref().unwrap();
+    assert_eq!(route.selected.makespan_milliseconds, 13800);
+    assert_eq!(labor.policy.workers[0].cells, ["cell-a"]);
+    let second_a = labor
+        .selected
+        .steps
+        .iter()
+        .find(|step| step.operation == "1/join")
+        .unwrap();
+    let first_b = labor
+        .selected
+        .steps
+        .iter()
+        .find(|step| step.operation == "0/reinforce")
+        .unwrap();
+    assert_eq!(second_a.worker, "worker-0");
+    assert_eq!(second_a.from_cell.as_deref(), Some("cell-b"));
+    assert_eq!(second_a.departure_milliseconds, 6000);
+    assert_eq!(second_a.arrival_milliseconds, 6500);
+    assert_eq!(first_b.worker, "worker-1");
+    assert!(second_a.loading_start_milliseconds < first_b.finish_milliseconds);
+    assert_eq!(
+        labor.selected.transfers.as_ref().unwrap()[1].finish_milliseconds,
+        11500
+    );
+    // The owner's shift can end while the other person completes the destination operation.
+    for path in [
+        "/production/routing/attending_labor/workers/0/available_until_milliseconds",
+        "/production/routing/transfer/available_until_milliseconds",
+    ] {
+        let mut short = options.clone();
+        *short.pointer_mut(path).unwrap() = json!(11499);
+        assert_eq!(
+            build(&pattern, short).unwrap_err().code,
+            RefusalCode::NotConverged
+        );
+    }
+}
+
+#[test]
+fn owned_handoff_approach_and_waiting_precede_pickup_inside_inclusive_windows() {
+    let (pattern, raw) = fixture(1);
+    let mut options =
+        worker_owned_transfer(attending_labor(raw, &[&["cell-a"], &["cell-b"]], 0), 1, 500);
+    let worker = &mut options["production"]["routing"]["attending_labor"]["workers"][1];
+    worker["available_at_milliseconds"] = json!(1000);
+    worker["available_until_milliseconds"] = json!(11500);
+    worker["initial_arrival_milliseconds"]["cell-a"] = json!(300);
+    options["production"]["routing"]["transfer"]["available_at_milliseconds"] = json!(8000);
+    options["production"]["routing"]["transfer"]["available_until_milliseconds"] = json!(8700);
+    let plan = build(&pattern, options.clone()).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let labor = &route.attending_labor.as_ref().unwrap().selected;
+    let transfer = &labor.transfers.as_ref().unwrap()[0];
+    assert_eq!(route.selected.makespan_milliseconds, 11500);
+    assert_eq!(transfer.worker, "worker-1");
+    assert_eq!(transfer.from_cell, None);
+    assert_eq!(transfer.source_cell, "cell-a");
+    assert_eq!(transfer.destination_cell, "cell-b");
+    assert_eq!(
+        (
+            transfer.departure_milliseconds,
+            transfer.arrival_milliseconds
+        ),
+        (1000, 1300)
+    );
+    assert_eq!(
+        (transfer.start_milliseconds, transfer.finish_milliseconds),
+        (8000, 8700)
+    );
+    assert_eq!(labor.travel_milliseconds, 300);
+    assert_eq!(labor.waiting_milliseconds, 6700);
+    assert_eq!(labor.transfer_milliseconds, Some(700));
+    assert_eq!(labor.steps[1].departure_milliseconds, 8700);
+    for (path, end) in [
+        (
+            "/production/routing/transfer/available_until_milliseconds",
+            8699,
+        ),
+        (
+            "/production/routing/attending_labor/workers/1/available_until_milliseconds",
+            11499,
+        ),
+    ] {
+        let mut short = options.clone();
+        *short.pointer_mut(path).unwrap() = json!(end);
+        assert_eq!(
+            build(&pattern, short).unwrap_err().code,
+            RefusalCode::NotConverged
+        );
+    }
+}
+
+#[test]
+fn worker_owned_transfer_and_fixtures_recover_a_complete_window_feasible_seed() {
+    let (pattern, raw) = fixture(2);
+    let mut options = worker_owned_transfer(
+        attending_labor(shared_fixtures(raw, 1), &[&["cell-a"], &["cell-b"]], 0),
+        0,
+        500,
+    );
+    options["production"]["routing"]["attending_labor"]["workers"][0]["available_until_milliseconds"] =
+        json!(11500);
+    options["production"]["routing"]["transfer"]["available_until_milliseconds"] = json!(11500);
+    let plan = build(&pattern, options.clone()).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let holding = route.workholding.as_ref().unwrap();
+    let labor = route.attending_labor.as_ref().unwrap();
+    assert!(route.baseline_replaced && route.search_complete && !route.optimality_proven);
+    assert_eq!(route.selected.makespan_milliseconds, 15400);
+    assert_eq!(holding.selected.shared_peak_occupancy["common-jigs"], 1);
+    assert_eq!(holding.selected.shared_final_occupancy["common-jigs"], 0);
+    assert_eq!(
+        serde_json::to_value(&route.baseline).unwrap(),
+        serde_json::to_value(&route.selected).unwrap()
+    );
+    for transfer in labor.selected.transfers.as_ref().unwrap() {
+        let before = holding
+            .selected
+            .holds
+            .iter()
+            .find(|hold| hold.operation == transfer.from_operation)
+            .unwrap();
+        let after = holding
+            .selected
+            .holds
+            .iter()
+            .find(|hold| hold.operation == transfer.to_operation)
+            .unwrap();
+        assert!(before.released_at_milliseconds <= transfer.start_milliseconds);
+        assert!(after.acquired_at_milliseconds >= transfer.finish_milliseconds);
+    }
+    let first_b = labor
+        .selected
+        .steps
+        .iter()
+        .find(|step| step.operation == "0/reinforce")
+        .unwrap();
+    let second_transfer = &labor.selected.transfers.as_ref().unwrap()[1];
+    assert!(second_transfer.start_milliseconds >= first_b.loading_start_milliseconds);
+    assert!(second_transfer.finish_milliseconds < first_b.finish_milliseconds);
+    assert_eq!(plan.total_stitch_intervals(), 120);
+    options["production"]["routing"]["max_search_nodes"] = json!(4);
+    assert_eq!(
+        build(&pattern, options).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+}
+
+#[test]
+fn eligible_worker_owned_handoffs_retain_actual_stitches_and_relax_optional_labor() {
+    let (pattern, raw) = eligible_fixture(2);
+    let options = worker_owned_transfer(
+        attending_labor(
+            shared_fixtures(raw, 2),
+            &[&["cell-a", "cell-b"], &["cell-c"]],
+            500,
+        ),
+        0,
+        500,
+    );
+    let program =
+        SewProgram::build(&pattern, &serde_json::from_value(options.clone()).unwrap()).unwrap();
+    let route = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    assert!(route.baseline_replaced);
+    assert_eq!(route.selected.makespan_milliseconds, 12500);
+    assert_eq!(program.stitches.len(), 100);
+    assert_eq!(route.selected.transfer_milliseconds, 1600);
+    assert_eq!(
+        route
+            .attending_labor
+            .as_ref()
+            .unwrap()
+            .selected
+            .transfer_milliseconds,
+        Some(1600)
+    );
+    assert!(route.lower_bound_makespan_milliseconds <= 12500);
+    for stitch in &program.stitches {
+        let source = program
+            .plan
+            .parallel_cell_plan(stitch.cell.as_deref().unwrap())
+            .unwrap();
+        let seam = &source.seams[stitch.operation];
+        assert_eq!(stitch.a_mm, seam.stations.a[stitch.to_station]);
+        assert_eq!(stitch.b_mm, seam.stations.b[stitch.to_station]);
+    }
+    let mut insufficient = options;
+    insufficient["production"]["routing"]["shared_workholding"]["resources"][0]["capacity"] =
+        json!(1);
+    assert_eq!(
+        build(&pattern, insufficient).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+
+    // The mover can begin at unowned C, then carry to its owned B. A lower bound based only on
+    // initial arrivals at owned machines would falsely add one million milliseconds.
+    let (pattern, raw) = eligible_fixture(1);
+    let mut options = worker_owned_transfer(
+        attending_labor(raw, &[&["cell-a", "cell-b"], &["cell-c"]], 500),
+        0,
+        500,
+    );
+    let arrival = &mut options["production"]["routing"]["attending_labor"]["workers"][0]["initial_arrival_milliseconds"];
+    arrival["cell-a"] = json!(1_000_000);
+    arrival["cell-b"] = json!(1_000_000);
+    let plan = build(&pattern, options).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert_eq!(route.selected.makespan_milliseconds, 7000);
+    assert!(route.lower_bound_makespan_milliseconds <= 7000);
+
+    // Both operations may stay at C, avoiding the late transfer owner altogether. Optional
+    // carrying work and unused attending cells cannot raise the mandatory-work lower bound.
+    let (pattern, mut raw) = eligible_fixture(1);
+    let c = &mut raw["production"]["routing"]["cells"][2];
+    c["available_until_milliseconds"] = json!(5600);
+    let mut recipe = c["configuration"]["recipes"]["join"].clone();
+    recipe["id"] = json!("same-cell-reinforcement");
+    c["configuration"]["recipes"]["reinforce"] = recipe;
+    c["handling"]["initial_milliseconds"]["reinforce"] = json!(100);
+    c["handling"]["final_milliseconds"]["reinforce"] = json!(200);
+    raw["production"]["routing"]["route"][1]["eligible_cells"] = json!(["cell-b", "cell-c"]);
+    raw["production"]["routing"]["transfer"]["transfers"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"from":"cell-a","to":"cell-c","milliseconds":600}));
+    refresh_locks(&mut raw);
+    let mut options = worker_owned_transfer(
+        attending_labor(raw, &[&["cell-a", "cell-b"], &["cell-c"]], 500),
+        0,
+        500,
+    );
+    options["production"]["routing"]["attending_labor"]["workers"][0]["available_at_milliseconds"] =
+        json!(1_000_000);
+    let plan = build(&pattern, options).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert_eq!(route.selected.makespan_milliseconds, 5600);
+    assert!(route.lower_bound_makespan_milliseconds <= 5600);
+    assert!(
+        route
+            .selected
+            .operations
+            .iter()
+            .all(|operation| operation.cell == "cell-c")
+    );
+    assert!(route.selected.transfers.is_empty());
+    let labor = &route.attending_labor.as_ref().unwrap().selected;
+    assert!(labor.transfers.as_ref().unwrap().is_empty());
+    assert_eq!(labor.transfer_milliseconds, Some(0));
+    assert!(labor.steps.iter().all(|step| step.worker == "worker-1"));
+    assert_eq!(plan.total_stitch_intervals(), 40);
+}
+
+#[test]
+fn bounded_worker_owned_transfer_search_retains_complete_worker_and_stitch_histories() {
+    let (pattern, raw) = fixture(2);
+    let mut options =
+        worker_owned_transfer(attending_labor(raw, &[&["cell-a", "cell-b"]], 500), 0, 500);
+    options["production"]["routing"]["max_search_nodes"] = json!(4);
+    let program = SewProgram::build(&pattern, &serde_json::from_value(options).unwrap()).unwrap();
+    let route = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    assert!(route.budget_exhausted && !route.search_complete && !route.optimality_proven);
+    assert_eq!(route.selected.makespan_milliseconds, 16600);
+    assert_eq!((route.search_nodes, route.work_used), (4, 12));
+    assert_eq!(route.selected.operations.len(), 4);
+    assert_eq!(
+        route
+            .attending_labor
+            .as_ref()
+            .unwrap()
+            .selected
+            .transfers
+            .as_ref()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(program.stitches.len(), 120);
+}
+
+#[test]
+fn worker_owned_transfer_requires_explicit_qualified_ownership_and_complete_travel() {
+    let (pattern, raw) = fixture(1);
+    let options =
+        worker_owned_transfer(attending_labor(raw, &[&["cell-a"], &["cell-b"]], 0), 0, 500);
+    let mut invalid = Vec::new();
+    for (path, value) in [
+        (
+            "/production/routing/transfer/model",
+            json!("serialized_unloaded_handoffs/1"),
+        ),
+        (
+            "/production/routing/transfer/attending_worker",
+            json!("unknown-worker"),
+        ),
+        ("/production/routing/transfer/attending_worker", Value::Null),
+        ("/production/routing/transfer/source/reference", json!("")),
+        ("/production/routing/transfer/method", json!("")),
+        ("/production/routing/transfer/allow_estimates", json!(false)),
+        (
+            "/production/routing/attending_labor/allow_estimates",
+            json!(false),
+        ),
+        ("/production/routing/attending_labor", Value::Null),
+        (
+            "/production/routing/attending_labor/workers/0/id",
+            json!("handoff-worker"),
+        ),
+        (
+            "/production/routing/attending_labor/workers/0/initial_arrival_milliseconds",
+            json!({"cell-a":0}),
+        ),
+        (
+            "/production/routing/attending_labor/workers/0/transfers",
+            json!([]),
+        ),
+        (
+            "/production/routing/attending_labor/workers/0/transfers/0/to",
+            json!("unknown-cell"),
+        ),
+        (
+            "/production/routing/attending_labor/cells/cell-a",
+            json!("0".repeat(64)),
+        ),
+        (
+            "/production/routing/independence",
+            json!("shared_attending_workers_and_transfer_resource/1"),
+        ),
+    ] {
+        let mut changed = options.clone();
+        *changed.pointer_mut(path).unwrap() = value;
+        invalid.push(changed);
+    }
+    // Equal identity strings without an explicit ownership reference still refuse.
+    let (_, raw) = fixture(1);
+    let mut matching_name = attending_labor(raw, &[&["cell-a"], &["cell-b"]], 0);
+    matching_name["production"]["routing"]["transfer"]["id"] = json!("worker-0");
+    invalid.push(matching_name);
+    for (index, changed) in invalid.into_iter().enumerate() {
+        assert!(
+            build(&pattern, changed).is_err(),
+            "invalid owned transfer case {index}"
+        );
     }
 }
 

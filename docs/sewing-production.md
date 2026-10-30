@@ -797,14 +797,15 @@ handling/workholding, or parallel allocation. Source geometry is built separatel
 specialist on the unchanged original pattern. All passes together must still cover both full
 seam sides, including partial operations split across cells, and preserve all original dependencies.
 
-Every cell has its own independently qualified attending worker. Loading, setup, feed and unloading
-occupy that cell and worker consecutively; **feed does not release the worker**. Unloading releases
+By default every cell has its own independently qualified attending worker. Loading, setup, feed and
+unloading occupy that cell and worker consecutively; **feed does not release the worker**. Unloading releases
 the cell while the garment waits in staging or moves elsewhere. Needle/thread setup persists until
 the cell's next operation. All copies start in the first cell's unloaded staging, and the declared
 `staging_capacity` applies at **every used cell** and must be at least the complete copy count.
 
-One separately qualified resource performs all inter-cell handoffs without overlap. Each directed
-row includes the complete positioning, pickup, movement and deposit work and return to its qualified
+Without explicit worker ownership, one separately qualified resource performs all inter-cell handoffs
+without overlap. Each directed row includes complete positioning, pickup, movement and deposit work
+and return to its qualified
 ready state before another handoff. Its duration is additional to source unloading and destination
 loading; neither empty travel nor carrying time is inferred from a cell name. Supply exactly the
 directed edges actually used by the route. Same-cell successors need no handoff. Cell and transfer
@@ -813,9 +814,9 @@ unloading and complete handoffs. A cell can finish one garment while another wai
 
 Optional cell `workholding` policies now admit fixtures confined to one complete operation, with
 separately qualified common pools as described below. Existing per-operation planar access checks
-still apply. Retained fixtures across operations, moving an occupied fixture, sharing a cell worker,
-autonomous feed and insufficient staging require separately qualified extensions. Explicit
-eligible-machine domains use the model below and retain the selected cell's fixture obligations.
+still apply. Retained fixtures across operations, moving an occupied fixture, autonomous feed and
+insufficient staging require separately qualified extensions. Explicit worker sharing is described
+below. Explicit eligible-machine domains retain the selected cell's fixture obligations.
 
 The bounded search appends a copy's next handoff and cell operation at their earliest admitted
 times. It considers copy dispatch permutations for the fixed route; it does not enumerate arbitrary
@@ -1044,8 +1045,9 @@ Source applicability and estimate consent are independent of machine/process qua
 
 An operation waits for its garment, machine, attending worker and fixture availability. The worker
 is occupied from departure through any waiting, loading, setup, feed and complete unloading;
-their inclusive shift must contain that entire interval. Garment transfers still use the separately
-qualified handoff resource and unloaded staging. A person is not silently reused as that resource.
+their inclusive shift must contain that entire interval. By default garment transfers use the separately
+qualified independent handoff resource and unloaded staging. Reusing a person requires the explicit
+source-to-destination ownership protocol below.
 Fixed routes, eligible-cell choices, finite fixture pools and bounded dispatch all use this same
 worker state. Optional work on an unused worker cannot raise the mandatory-work lower bound.
 
@@ -1058,8 +1060,78 @@ Absent labor retains existing report versions and dedicated-attendant timing.
 
 Synthetic routing regressions and actual native/portable replay cover the software contract.
 They do not qualify measured labor, seam quality, unrestricted factory optimization or hardware
-execution. Cooperative handling, worker reassignment between cells during a job, breaks and using
-the same person for garment handoffs require separate protocols.
+execution. Cooperative handling, worker reassignment between cells during a job and breaks require
+separate protocols.
+
+## An attending worker can also carry garments
+
+An explicit `routing.transfer.attending_worker` names one existing `attending_labor.workers[].id`.
+That person performs every actual inter-cell handoff as well as their assigned machine operations.
+The resource ID remains distinct from every worker ID; equal names never infer shared ownership.
+Both the route and labor sources must qualify this assignment, the complete visit/travel domain and
+the worker's availability. The transfer source independently qualifies pickup, carrying and deposit.
+
+Ownership requires `transfer.model: "attended_source_to_destination_handoffs/1"`. A supplied duration
+starts with pickup of an already unloaded garment at the source and ends after deposit at the
+destination, with the worker also at that destination. It excludes empty approach to the source and
+any return trip. **Legacy `serialized_unloaded_handoffs/1` durations include positioning and return
+to a qualified ready state and cannot be relabeled as this different phase law.** Supply observations
+qualified for the requested model. This structural example uses invented software durations:
+
+```json
+{
+  "independence": "shared_attending_workers_and_worker_owned_transfer_resource/1",
+  "transfer": {
+    "id": "handoff-resource",
+    "model": "attended_source_to_destination_handoffs/1",
+    "attending_worker": "attending-worker",
+    "available_at_milliseconds": 0,
+    "transfers": [{"from": "cell-a", "to": "cell-b", "milliseconds": 700}],
+    "source": {"reference": "YOUR_QUALIFIED_CARRYING_SOURCE", "accessed_on": "2026-10-30"},
+    "method": "Qualified source pickup, carrying and destination deposit; empty approach is separate, with no return included",
+    "conditions": {}, "evidence": "estimate", "allow_estimates": true
+  }
+}
+```
+
+With common fixture pools, use
+`shared_attending_workers_workholding_and_worker_owned_transfer_resource/1`. The transfer owner's
+`initial_arrival_milliseconds` must cover **every configured cell**, and their `transfers` must cover
+every directed pair of distinct configured cells, including eligible alternatives not selected.
+Their `cells` still lists only machines they attend. Other workers retain their owned-cell travel
+domains. Separate workers may supply different observed travel durations for the same directed edge.
+
+For each actual move, the owner first travels empty from their previous operation or handoff endpoint
+to the garment's source. They remain occupied while waiting for full source unloading and transfer
+resource readiness, then perform the complete pickup/carry/deposit interval. The same worker clock
+and location govern all these phases and subsequent machine work. If they also attend the destination,
+that operation starts from the destination without charging a second source-to-destination trip.
+If someone else attends it, the mover is available after deposit while that other person operates.
+The mover's next visit starts from the actual deposit location, even if it is not one of their machines.
+
+Worker shifts inclusively contain empty approach, waiting, handoffs and attended machine phases.
+The transfer resource's inclusive window contains pickup through complete deposit; the worker may
+approach before the resource opens and wait at the source. Staging remains fully unloaded and sized
+for the batch. Source fixtures are released through complete unloading; destination fixtures are
+acquired for the later destination operation. No occupied fixture is transported or retained during a
+handoff, and no physical travel speed, return law or cooperative handling is inferred.
+
+Fixed routes, eligible assignments and finite fixture pools share this exact state transition.
+A failed copy-major seed may be replaced by a complete feasible searched execution, and a bounded
+search retains only complete incumbents. The labor lower bound adds only minimum unavoidable
+handoff work to forced machine work. It relaxes setup, empty travel and incompatible adjacent choices;
+optional handoffs and unused late workers cannot create a false minimum. Exhausting append dispatch
+still does not prove unrestricted factory optimality or enumerate arbitrary independent prestaging.
+
+Requested ownership produces plan `/22`, production `/10`, routing `/5` and nested labor `/2`.
+`attending_labor.transfer` retains the exact ownership and source-qualified transfer policy.
+Baseline/selected labor `transfers` retain global source/destination operation IDs, worker/resource,
+previous worker location, source/destination cells, departure, arrival, pickup start and deposit finish.
+Labor travel/waiting totals include empty approaches and pre-pickup waiting; `transfer_milliseconds`
+counts pickup/carry/deposit separately from machine `attended_milliseconds`. Selected stitches still
+come from each actual chosen cell and copy. Omitted ownership preserves prior model, schemas and
+serialized fields. Synthetic regressions establish these software rules, not measured labor capacity,
+factory throughput, seam quality or hardware authorization.
 
 ## Bounds and remaining scope
 

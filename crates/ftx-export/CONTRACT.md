@@ -324,6 +324,20 @@ reservations, complete unloading, summed/multiple pools, source/material invalid
 bounded complete incumbents, exact stitch and material-study replay; `sewing_parallel` guards the
 shared source validator. Integer inventory does not establish physical grip/access or hardware permission.
 
+**Worker-owned routed handoffs** (`routing.transfer.attending_worker`). An explicit existing
+worker owns source pickup through destination deposit under the separately qualified
+`attended_source_to_destination_handoffs/1` law. Legacy ready-state transfer observations cannot
+qualify this law. The same exclusive worker clock and location cover empty approach, waiting,
+carrying and full machine attendance; deposit ends at the destination without a second carriage
+trip. The owner qualifies visits to every configured cell while machine ownership remains fixed.
+Worker and transfer windows, local/shared fixtures, eligible assignments and complete-incumbent
+search share the ordinary routing authority. Lower bounds include only unavoidable handoff work.
+Plan `/22`, production `/10`, routing `/5` and labor `/2` retain exact source policy and global
+copy/operation handoff phases; omission preserves prior schemas and timing. Actual stitches and
+yarn retain the selected-cell authority. Tests: `sewing_routing` ownership, phase, window, fixture,
+bound and stitch cases; both native commands and captured compiled-WASM production replay.
+Source-qualified software timing does not establish measured labor or hardware authorization.
+
 **Eligible specialist cells** (`production.routing`, `ftx-pb2.2`). Explicit
 `eligible_operation_route/1` retains one authored operation sequence and a seed cell per step, while
 bounded search chooses an independently qualified cell for each physical copy/operation. All eligible

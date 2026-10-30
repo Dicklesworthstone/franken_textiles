@@ -223,7 +223,7 @@ fn eligible_route_options(windowed: bool) -> Value {
 
 #[test]
 fn routed_attending_workers_replay_actual_operations_through_both_native_commands() {
-    for eligible in [false, true] {
+    for (eligible, owned_transfer) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut options = if eligible {
             eligible_route_options(false)
         } else {
@@ -247,16 +247,68 @@ fn routed_attending_workers_replay_actual_operations_through_both_native_command
             "method":"Exclusive travel, waiting, loading, setup, feed and unloading; garment handoffs use a separate resource",
             "conditions":{},"evidence":"estimate","allow_estimates":true
         });
+        if owned_transfer {
+            route["independence"] =
+                json!("shared_attending_workers_and_worker_owned_transfer_resource/1");
+            route["method"] = json!(
+                "One explicitly shared attending worker also owns the unloaded-garment transfer resource"
+            );
+            route["source"] = json!({
+                "reference":"test:native-worker-owned-route","accessed_on":"2026-10-29",
+                "note":"Synthetic explicit common worker ownership; no measured process claim"
+            });
+            route["transfer"]["model"] = json!("attended_source_to_destination_handoffs/1");
+            route["transfer"]["attending_worker"] = json!("synthetic-attending-worker");
+            route["transfer"]["source"] = json!({
+                "reference":"test:native-worker-owned-handoff","accessed_on":"2026-10-29",
+                "note":"Invented source-pickup through destination-deposit duration, excluding empty approach and return"
+            });
+            route["transfer"]["method"] = json!(
+                "Source pickup, carrying and destination deposit, ending at the destination; empty approach uses the qualified worker travel table"
+            );
+            route["transfer"]["conditions"] = json!({});
+            route["attending_labor"]["method"] = json!(
+                "Exclusive empty travel, waiting and full machine attendance, plus explicit source-to-destination garment handoffs by the same worker"
+            );
+        }
         let program_json =
             ftx_wasm::manufacturing::sew_stitches(PATTERN, &options.to_string()).unwrap();
         let program = portable(program_json.clone());
         let plan = &program["plan"];
         let route = &plan["production"]["routing"];
         let labor = &route["attending_labor"];
-        assert_eq!(plan["schema"], "ftx-sewing-plan/21");
-        assert_eq!(plan["production"]["schema"], "ftx-sewing-production/9");
-        assert_eq!(route["schema"], "ftx-sewing-routing/4");
-        assert_eq!(labor["schema"], "ftx-sewing-attending-labor/1");
+        assert_eq!(
+            plan["schema"],
+            if owned_transfer {
+                "ftx-sewing-plan/22"
+            } else {
+                "ftx-sewing-plan/21"
+            }
+        );
+        assert_eq!(
+            plan["production"]["schema"],
+            if owned_transfer {
+                "ftx-sewing-production/10"
+            } else {
+                "ftx-sewing-production/9"
+            }
+        );
+        assert_eq!(
+            route["schema"],
+            if owned_transfer {
+                "ftx-sewing-routing/5"
+            } else {
+                "ftx-sewing-routing/4"
+            }
+        );
+        assert_eq!(
+            labor["schema"],
+            if owned_transfer {
+                "ftx-sewing-attending-labor/2"
+            } else {
+                "ftx-sewing-attending-labor/1"
+            }
+        );
         assert_eq!(labor["physical_labor_validated"], false);
         assert_eq!(
             labor["policy"],
@@ -294,6 +346,77 @@ fn routed_attending_workers_replay_actual_operations_through_both_native_command
         }
         assert_eq!(labor["selected"]["attended_milliseconds"], attended);
         assert_eq!(route["selected"]["makespan_milliseconds"], prior_finish);
+        if owned_transfer {
+            assert_eq!(
+                labor["transfer"],
+                options["production"]["routing"]["transfer"]
+            );
+            let transfers = labor["selected"]["transfers"].as_array().unwrap();
+            let handoffs = route["selected"]["transfers"].as_array().unwrap();
+            assert_eq!(transfers.len(), handoffs.len());
+            let mut intervals: Vec<_> = steps
+                .iter()
+                .map(|step| {
+                    (
+                        step["departure_milliseconds"].as_u64().unwrap(),
+                        step["finish_milliseconds"].as_u64().unwrap(),
+                    )
+                })
+                .collect();
+            let mut transfer_total = 0;
+            for movement in transfers {
+                let handoff = handoffs
+                    .iter()
+                    .find(|handoff| {
+                        let copy = handoff["copy"].as_u64().unwrap();
+                        handoff["copy"] == movement["copy"]
+                            && format!("{copy}/{}", handoff["from_operation"].as_str().unwrap())
+                                == movement["from_operation"]
+                            && format!("{copy}/{}", handoff["to_operation"].as_str().unwrap())
+                                == movement["to_operation"]
+                    })
+                    .unwrap();
+                assert_eq!(movement["worker"], "synthetic-attending-worker");
+                assert_eq!(
+                    movement["resource"],
+                    options["production"]["routing"]["transfer"]["id"]
+                );
+                assert_eq!(movement["source_cell"], handoff["from"]);
+                assert_eq!(movement["destination_cell"], handoff["to"]);
+                assert_eq!(
+                    movement["start_milliseconds"],
+                    handoff["start_milliseconds"]
+                );
+                assert_eq!(
+                    movement["finish_milliseconds"],
+                    handoff["finish_milliseconds"]
+                );
+                let departure = movement["departure_milliseconds"].as_u64().unwrap();
+                let arrival = movement["arrival_milliseconds"].as_u64().unwrap();
+                let start = movement["start_milliseconds"].as_u64().unwrap();
+                let finish = movement["finish_milliseconds"].as_u64().unwrap();
+                assert!(departure <= arrival && arrival <= start && start <= finish);
+                let predecessor = operations
+                    .iter()
+                    .find(|op| op["id"] == movement["from_operation"])
+                    .unwrap();
+                let successor = operations
+                    .iter()
+                    .find(|op| op["id"] == movement["to_operation"])
+                    .unwrap();
+                assert!(start >= predecessor["finish_milliseconds"].as_u64().unwrap());
+                assert!(finish <= successor["loading_start_milliseconds"].as_u64().unwrap());
+                intervals.push((departure, finish));
+                transfer_total += finish - start;
+            }
+            intervals.sort_unstable();
+            assert!(intervals.windows(2).all(|pair| pair[0].1 <= pair[1].0));
+            assert_eq!(labor["selected"]["transfer_milliseconds"], transfer_total);
+            assert_eq!(route["selected"]["transfer_milliseconds"], transfer_total);
+            if !eligible {
+                assert!(!transfers.is_empty());
+            }
+        }
         assert_eq!(
             portable(
                 ftx_wasm::manufacturing::sew_stitches(PATTERN, &plan["options"].to_string())
@@ -322,10 +445,11 @@ fn routed_attending_workers_replay_actual_operations_through_both_native_command
         }
         if let Some(capture) = std::env::var_os("FTX_ROUTED_FIXTURE_REPLAY") {
             use std::io::Write;
-            let capture = PathBuf::from(capture).join(if eligible {
-                "attending-eligible"
-            } else {
-                "attending-fixed"
+            let capture = PathBuf::from(capture).join(match (eligible, owned_transfer) {
+                (false, false) => "attending-fixed",
+                (true, false) => "attending-eligible",
+                (false, true) => "attending-owned-fixed",
+                (true, true) => "attending-owned-eligible",
             });
             fs::create_dir_all(&capture).unwrap();
             for (name, text) in [

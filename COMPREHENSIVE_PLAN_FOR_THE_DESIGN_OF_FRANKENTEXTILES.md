@@ -4451,6 +4451,23 @@ This software increment is tracked by `ftx-ds2.3`; see
 ranges do not establish uncertainty in geometry or empirical fit, and bounded discovery does not
 prove a complete frontier or global optimum.
 
+### 25.127 Account for the worker who carries garments between sewing cells
+
+A routed transfer may now explicitly belong to an existing attending worker. The qualified
+pickup/carry/deposit law ends with that worker and the garment at the destination; empty approach
+uses the worker's independently qualified travel. One exclusive clock covers approach, waiting,
+carrying and complete machine attendance, so a person cannot sew and transport simultaneously.
+Legacy ready-state transfer observations cannot be silently reused as carrying qualifications.
+
+Fixed and eligible routes retain finite worker/resource windows, source-locked machine ownership,
+local/shared fixture reservations, complete bounded incumbents and exact selected stitches.
+Worker-owned handoff receipts expose every physical copy, operation, location and phase, and the
+workbench separates carry time from travel, waiting and machine attendance. Conservative lower
+bounds omit optional handoffs and unused workers.
+
+This software increment is tracked by `ftx-pb2.2.12`; see [sewing-production.md](docs/sewing-production.md).
+Occupied-fixture transport, cooperative handling and empirical factory qualification remain open.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

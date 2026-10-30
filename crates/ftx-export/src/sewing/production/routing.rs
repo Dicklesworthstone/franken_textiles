@@ -1,5 +1,5 @@
 //! Source-qualified specialist cells execute a complete operation route. Every operation is
-//! loaded, attended and unloaded at its cell; a separate serialized resource moves unloaded garments.
+//! loaded, attended and unloaded at its cell; a qualified serialized resource moves unloaded garments.
 //! Geometry and process admission remain with the ordinary sewing planner on the original pattern.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,12 +50,12 @@ pub struct Policy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_workholding: Option<parallel::shared_workholding::Policy>,
     /// Optional explicit workers shared across specialist cells. Complete loading, setup, feed and
-    /// unloading occupy the assigned worker; unloaded garment handoffs remain independent.
+    /// unloading occupy the assigned worker; explicit transfer ownership can share that person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attending_labor: Option<labor::Policy>,
     /// Every original operation exactly once, in an order respecting every original predecessor.
     pub route: Vec<RouteStep>,
-    /// One independent resource for all unloaded inter-cell handoffs.
+    /// One qualified resource for all unloaded inter-cell handoffs, optionally owned by a worker.
     pub transfer: TransferPolicy,
     /// Evidence for this complete route, dedicated cell labor, staging and handoff independence.
     pub source: Source,
@@ -96,15 +96,20 @@ impl RouteStep {
     }
 }
 
-/// An explicitly independent, serialized unloaded-garment handoff protocol.
+/// A serialized unloaded-garment handoff protocol with explicit independent or worker ownership.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransferPolicy {
     /// Stable physical transfer-resource identity, distinct from all attending cell identities.
     pub id: String,
-    /// `serialized_unloaded_handoffs/1`: each complete interval includes positioning, pickup,
-    /// movement and deposit, returning to a source-qualified ready state before another handoff.
+    /// `serialized_unloaded_handoffs/1` includes positioning and return to a qualified ready state.
+    /// `attended_source_to_destination_handoffs/1` instead starts at source pickup and ends after
+    /// destination deposit; the explicitly assigned worker's empty approach is separate.
     pub model: String,
+    /// Explicit existing attending-worker ID, required only by the source-to-destination model.
+    /// Resource and worker identities remain distinct; matching names never imply ownership.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attending_worker: Option<String>,
     /// Availability from the common job origin, at most one day.
     pub available_at_milliseconds: u32,
     /// Optional inclusive end; every complete handoff must finish inside this window.
@@ -113,9 +118,9 @@ pub struct TransferPolicy {
     /// Exactly every directed inter-cell edge between adjacent eligible domains; same-cell steps
     /// need no handoff. Fixed routing has one cell per domain.
     pub transfers: Vec<Handoff>,
-    /// Evidence for complete handoffs and their independence from attending cell workers.
+    /// Evidence for complete handoffs and the declared independent or shared worker ownership.
     pub source: Source,
-    /// Full phase definition, including any positioning/return work in each declared duration.
+    /// Full phase definition: legacy positioning/return, or source pickup through destination deposit.
     pub method: String,
     /// Source applicability conditions.
     #[serde(default)]
@@ -179,13 +184,13 @@ pub struct Transfer {
     pub from: String,
     /// Destination physical cell.
     pub to: String,
-    /// Begins after source unloading and the previous complete handoff.
+    /// Begins after source unloading, the previous handoff and any explicitly assigned worker arrival.
     pub start_milliseconds: u64,
-    /// The garment is staged at the destination and the transfer resource is ready again.
+    /// The garment is staged and the transfer resource is free; an explicit owner ends at destination.
     pub finish_milliseconds: u64,
 }
 
-/// A complete feasible batch execution, with independent cells and one exclusive transfer resource.
+/// A complete feasible batch execution, with qualified cells and one exclusive transfer resource.
 #[derive(Clone, Debug, Serialize)]
 pub struct Timeline {
     /// Dispatch order; independent cell phases may overlap and need not start in this list's order.
@@ -209,7 +214,7 @@ pub struct Timeline {
 /// Source-qualified fixed routing with an exact complete incumbent and bounded dispatch search.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` fixed route; `/2` eligible cells; `/3` fixture reservations; `/4` attending labor.
+    /// `/1` fixed; `/2` eligible; `/3` fixtures; `/4` attending labor; `/5` worker-owned handoffs.
     pub schema: &'static str,
     /// Source-qualified fixed operation route.
     pub route: Vec<RouteStep>,
@@ -312,16 +317,25 @@ impl Policy {
 
     fn validate(&self, options: &SewOptions, copies: usize) -> Result<BTreeSet<String>, Refusal> {
         self.work_bound(copies, options.passes.len())?;
-        let independence = match (
-            self.attending_labor.is_some(),
-            self.shared_workholding.is_some(),
-        ) {
-            (true, true) => "shared_attending_workers_workholding_and_transfer_resource/1",
-            (true, false) => "shared_attending_workers_and_transfer_resource/1",
-            (false, true) => {
-                "independent_attended_cells_shared_workholding_and_transfer_resource/1"
+        let owned_transfer = self.transfer.attending_worker.is_some();
+        let independence = if owned_transfer {
+            if self.shared_workholding.is_some() {
+                "shared_attending_workers_workholding_and_worker_owned_transfer_resource/1"
+            } else {
+                "shared_attending_workers_and_worker_owned_transfer_resource/1"
             }
-            (false, false) => "independent_attended_cells_and_transfer_resource/1",
+        } else {
+            match (
+                self.attending_labor.is_some(),
+                self.shared_workholding.is_some(),
+            ) {
+                (true, true) => "shared_attending_workers_workholding_and_transfer_resource/1",
+                (true, false) => "shared_attending_workers_and_transfer_resource/1",
+                (false, true) => {
+                    "independent_attended_cells_shared_workholding_and_transfer_resource/1"
+                }
+                (false, false) => "independent_attended_cells_and_transfer_resource/1",
+            }
         };
         if !matches!(
             self.model.as_str(),
@@ -330,6 +344,7 @@ impl Policy {
             || self.time_basis != "ceil_operation_feed_milliseconds/1"
             || self.protocol != "unloaded_between_operations/1"
             || self.independence != independence
+            || (owned_transfer && self.attending_labor.is_none())
             || self.staging_capacity < copies
             || self.staging_capacity > 4096
             || !source_valid(&self.source, &self.method, &self.conditions)
@@ -420,9 +435,18 @@ impl Policy {
             ));
         }
         let transfer = &self.transfer;
+        let transfer_model = if owned_transfer {
+            "attended_source_to_destination_handoffs/1"
+        } else {
+            "serialized_unloaded_handoffs/1"
+        };
         if !qualified_text(&transfer.id)
             || cells.contains(transfer.id.as_str())
-            || transfer.model != "serialized_unloaded_handoffs/1"
+            || transfer.model != transfer_model
+            || transfer
+                .attending_worker
+                .as_ref()
+                .is_some_and(|worker| !qualified_text(worker))
             || !window_valid(
                 transfer.available_at_milliseconds,
                 transfer.available_until_milliseconds,
@@ -431,7 +455,7 @@ impl Policy {
             || transfer.transfers.len() > MAX_OPERATIONS
         {
             return Err(bad(
-                "invalid independent serialized handoff resource, source or availability",
+                "invalid serialized handoff resource, ownership model, source or availability",
             ));
         }
         if transfer.evidence == Evidence::Estimate && !transfer.allow_estimates {
@@ -592,10 +616,24 @@ impl Prepared<'_> {
         if state.next[copy] != task.route {
             return Err(bad("routed dispatch changed its original operation order"));
         }
+        let mut next = state.clone();
         let mut ready = state.copy_ready[copy];
         let duration = state.copy_cell[copy].and_then(|from| self.handoffs[from][task.cell]);
         let handoff = if let Some(duration) = duration {
-            let start = ready.max(state.transfer_ready);
+            let arrival = self
+                .labor
+                .as_ref()
+                .map(|labor| {
+                    labor.transfer_arrival(
+                        next.labor.as_ref().expect("admitted attending labor"),
+                        state.copy_cell[copy].expect("handoff source cell"),
+                    )
+                })
+                .transpose()?
+                .flatten();
+            let start = ready
+                .max(state.transfer_ready)
+                .max(arrival.map_or(0, |arrival| arrival.time));
             let finish = add(start, duration)?;
             if self
                 .policy
@@ -604,6 +642,20 @@ impl Prepared<'_> {
                 .is_some_and(|end| finish > end)
             {
                 return Ok(None);
+            }
+            if let Some(arrival) = arrival {
+                let labor = self.labor.as_ref().expect("admitted attending labor");
+                if !labor.available(arrival, finish) {
+                    return Ok(None);
+                }
+                // The carrying interval already moves the worker to the destination. Charging
+                // ordinary source-to-destination travel again would double-count that movement.
+                labor.finish(
+                    next.labor.as_mut().expect("admitted attending labor"),
+                    arrival,
+                    task.cell,
+                    finish,
+                );
             }
             ready = finish;
             Some([start, finish])
@@ -620,7 +672,7 @@ impl Prepared<'_> {
             .as_ref()
             .map(|labor| {
                 labor.arrival(
-                    state.labor.as_ref().expect("admitted attending labor"),
+                    next.labor.as_ref().expect("admitted attending labor"),
                     task.cell,
                 )
             })
@@ -658,7 +710,6 @@ impl Prepared<'_> {
         {
             return Ok(None);
         }
-        let mut next = state.clone();
         next.next[copy] += 1;
         next.copy_ready[copy] = finish;
         next.copy_cell[copy] = Some(task.cell);
@@ -1104,8 +1155,11 @@ pub(in crate::sewing) fn build(
     let labor = labor::Compiled::compile(policy)?;
     let uses_fixtures = fixtures.is_some();
     let uses_labor = labor.is_some();
+    let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if uses_labor {
+        schema: if owned_transfer {
+            "ftx-sewing-plan/22"
+        } else if uses_labor {
             "ftx-sewing-plan/21"
         } else if uses_fixtures {
             "ftx-sewing-plan/20"
@@ -1260,7 +1314,14 @@ pub(in crate::sewing) fn build(
         prepared
             .labor
             .as_ref()
-            .map(|labor| labor.lower_bound(&prepared.tasks, &prepared.choices, copies))
+            .map(|labor| {
+                labor.lower_bound(
+                    &prepared.tasks,
+                    &prepared.choices,
+                    &prepared.handoffs,
+                    copies,
+                )
+            })
             .transpose()?
             .unwrap_or(0),
     );
@@ -1384,7 +1445,9 @@ pub(in crate::sewing) fn build(
         .map(|labor| labor.report(&baseline, &selected))
         .transpose()?;
     let report = Report {
-        schema: if uses_labor {
+        schema: if owned_transfer {
+            "ftx-sewing-routing/5"
+        } else if uses_labor {
             "ftx-sewing-routing/4"
         } else if uses_fixtures {
             "ftx-sewing-routing/3"
@@ -1406,7 +1469,11 @@ pub(in crate::sewing) fn build(
         optimality_proven: proven,
         budget_exhausted: !search_complete,
         lower_bound_makespan_milliseconds: lower,
-        search_scope: if uses_labor && policy.eligible() {
+        search_scope: if owned_transfer && policy.eligible() {
+            "coupled_eligible_worker_owned_handoff_cell_append_dispatch/1"
+        } else if owned_transfer {
+            "coupled_worker_owned_handoff_cell_append_dispatch/1"
+        } else if uses_labor && policy.eligible() {
             "coupled_eligible_handoff_cell_worker_append_dispatch/1"
         } else if uses_labor {
             "coupled_handoff_cell_worker_append_dispatch/1"
@@ -1420,7 +1487,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if uses_labor {
+        schema: if owned_transfer {
+            "ftx-sewing-production/10"
+        } else if uses_labor {
             "ftx-sewing-production/9"
         } else if uses_fixtures {
             "ftx-sewing-production/8"
