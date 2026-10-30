@@ -9,6 +9,8 @@
 // --purchasing-proof checks bounded marker previews and combined whole-order purchasing.
 // --area-proof DIR checks six-parameter area fitting against native-input.json/native-report.json.
 // --swatch-area-proof DIR checks joint swatch identification against retained native consent reports.
+// --adaptive-proof DIR checks guarded Pareto studies on the real page against retained native reports.
+// --sewing-selection-proof DIR checks native captured fixed-route requests through direct recipe selection.
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
@@ -38,7 +40,13 @@ const swatchAreaProof = swatchAreaIndex < 0 ? null : path.resolve(process.argv[s
 const fitIndex = process.argv.indexOf('--fit-manufacturing-proof');
 if (fitIndex >= 0 && !process.argv[fitIndex + 1]) throw Error('--fit-manufacturing-proof requires the native fit-screening replay directory');
 const fitProof = fitIndex < 0 ? null : path.resolve(process.argv[fitIndex + 1]);
-assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,areaProof,swatchAreaProof,fitProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
+const adaptiveIndex = process.argv.indexOf('--adaptive-proof');
+if (adaptiveIndex >= 0 && !process.argv[adaptiveIndex + 1]) throw Error('--adaptive-proof requires the native guarded capture directory');
+const adaptiveProof = adaptiveIndex < 0 ? null : path.resolve(process.argv[adaptiveIndex + 1]);
+const sewingSelectionIndex = process.argv.indexOf('--sewing-selection-proof');
+if (sewingSelectionIndex >= 0 && !process.argv[sewingSelectionIndex + 1]) throw Error('--sewing-selection-proof requires the native route-cost capture directory');
+const sewingSelectionProof = sewingSelectionIndex < 0 ? null : path.resolve(process.argv[sewingSelectionIndex + 1]);
+assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,areaProof,swatchAreaProof,fitProof,adaptiveProof,sewingSelectionProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -63,7 +71,7 @@ const server = http.createServer((req, res) => {
 });
 (async () => {
   assert.ok(fs.existsSync(path.join(web, 'pkg/ftx_wasm_bg.wasm')), 'Build web/pkg first');
-  if (!stripProof && !outfitProof && !compressionProof && !purchasingProof && !areaProof && !swatchAreaProof && !fitProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
+  if (!stripProof && !outfitProof && !compressionProof && !purchasingProof && !areaProof && !swatchAreaProof && !fitProof && !adaptiveProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args:['--no-sandbox'] });
@@ -88,6 +96,127 @@ const server = http.createServer((req, res) => {
   try {
     await page.goto(origin); await page.click('a[href="materials.html"]');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (sewingSelectionProof) {
+      const source=name=>fs.readFileSync(path.join(sewingSelectionProof,name),'utf8');
+      const output=name=>page.locator(`#outputs a[download="${name}"]`).evaluate(async a=>await(await fetch(a.href)).text());
+      await page.setInputFiles('#patternFile',path.join(sewingSelectionProof,'pattern.json'));
+      await page.waitForFunction(()=>!document.getElementById('bind').disabled);
+      assert.equal(await run('bind'),'');
+      const bound=await download('pattern.json'),patternFile=path.join(work,'bound-pattern.json');
+      fs.writeFileSync(patternFile,bound,{flag:'wx'});
+      await page.check('#sewOptimize');
+      let selectedOptions,selectedProgram;
+      const table=name=>page.getByRole('table',{name,exact:true});
+      for (const [filename,cost] of [['unconstrained-request.json',10],['request.json',14]]) {
+        const requestPath=path.join(sewingSelectionProof,filename),request=source(filename);
+        await page.setInputFiles('#sewOptions',requestPath);
+        assert.equal(await run('sew'),'');
+        const expected=JSON.parse(invoke('sew-select',patternFile,requestPath));
+        assert.deepEqual(JSON.parse(await output('sewing-selection.json')),expected);
+        assert.equal(expected.report.selected_thread_order_cost,cost);
+        assert.equal(await output('sewing-selection-request.json'),request);
+        assert.equal(await output('original-pattern.json'),bound);
+        selectedOptions=await output('selected-sewing-options.json');
+        assert.equal(selectedOptions,expected.selected_options_json);
+        const optionsFile=path.join(work,`selected-${cost}.json`);fs.writeFileSync(optionsFile,selectedOptions,{flag:'wx'});
+        selectedProgram=JSON.parse(invoke('sew-stitches',patternFile,optionsFile));
+        assert.deepEqual(JSON.parse(await output('sewing-program.json')),selectedProgram);
+        const rows=await table('Complete thread order costs by recipe and route').locator('tr').allTextContents();
+        assert.equal(rows.length,expected.report.trials.length+1);
+        assert.match(rows[1],/10/);assert.match(rows[2],/14/);
+        if(cost===14) { assert.match(rows[1],/Misses deadline \(proved\)/);assert.match(rows[2],/Meets deadline/); }
+      }
+      await page.uncheck('#sewOptimize');
+      assert.equal(await page.locator('a[download="selected-sewing-options.json"]').count(),0);
+      await input('sewOptions',JSON.parse(selectedOptions));assert.equal(await run('sew'),'');
+      assert.deepEqual(JSON.parse(await download('sewing-program.json')),selectedProgram);
+      await page.check('#sewOptimize');
+      const impossible=JSON.parse(source('request.json'));impossible.completion_deadline_milliseconds=0;
+      await input('sewOptions',impossible);assert.equal(await run('sew'),'');
+      assert.equal(JSON.parse(await download('sewing-selection.json')).selected_options_json,null);
+      assert.equal(await page.locator('a[download="selected-sewing-options.json"]').count(),0);
+      assert.equal(await page.locator('a[download="sewing-program.json"]').count(),0);
+      assert.match(await page.locator('#outputs').textContent(),/No complete sewing candidate was selected/);
+      await input('sewOptions',{schema:'unsupported'});assert.notEqual(await run('sew'),'');
+      assert.equal(await page.locator('a[download="sewing-selection.json"]').count(),0);
+      await page.setInputFiles('#sewOptions',path.join(sewingSelectionProof,'request.json'));
+      await page.evaluate(()=>{document.getElementById('sew').click();document.getElementById('cancel').click();});
+      await page.waitForFunction(()=>document.getElementById('status').textContent.startsWith('Ready'));
+      assert.equal(await page.locator('a[download="sewing-program.json"]').count(),0);
+      assert.equal(await run('sew'),'');
+      await input('patternFile',{schema:'fabric-pattern/1',pieces:[]});
+      assert.equal(await page.locator('a[download="sewing-program.json"]').count(),0);
+      assert.equal(await page.locator('a[download="selected-sewing-options.json"]').count(),0);
+      assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(methods.every(m=>m==='GET'));
+      console.log('PASS: direct Chromium recipe/route choice matches native selection and actual stitches, retains cheaper deadline-excluded costs, exact source/options downloads and ordinary sewing replay; no incumbent, invalid input, cancellation and source edits withdraw stale programs. Synthetic software evidence only. Artifacts:',work);
+      return;
+    }
+    if (adaptiveProof) {
+      const source=name=>fs.readFileSync(path.join(adaptiveProof,name),'utf8');
+      const reportName='design-scenario-matrix-study.json';
+      const table=name=>page.getByRole('table',{name,exact:true});
+      await page.setInputFiles('#patternFile',path.join(adaptiveProof,'pattern.json'));
+      await page.selectOption('#studyBodySource','request');
+      await page.setInputFiles('#body',path.join(adaptiveProof,'model.ftxbody'));
+      await page.setInputFiles('#scenarioBody',path.join(adaptiveProof,'body-input.json'));
+      for (const label of ['pareto-guarded','pareto-guarded-budget','matrix-pareto-guarded','matrix-pareto-guarded-budget']) {
+        const allCases=label.startsWith('matrix-');
+        await page.setInputFiles('#studyRequest',path.join(adaptiveProof,`${label}-study.json`));
+        await page.setInputFiles('#scenarioRequest',path.join(adaptiveProof,`${label}-scenario.json`));
+        await page.waitForFunction(()=>!document.getElementById('scenario').disabled);
+        assert.equal(await run('scenario'),'');
+        const actual=JSON.parse(await download(reportName));
+        assert.deepEqual(actual,JSON.parse(source(`${label}-report.json`)));
+        assert.equal(await download('original-pattern.json'),source('pattern.json'));
+        assert.equal(await download('study-request.json'),source(`${label}-study.json`));
+        assert.equal(await download('scenario-request.json'),source(`${label}-scenario.json`));
+        assert.equal(await download('body-input.json'),source('body-input.json'));
+        const search=actual.manufacturing.design_search,guidance=search.consumer_guidance;
+        assert.equal(await table('Adaptive alteration trials').locator('tr').count(),search.rows.length+1);
+        if (allCases) {
+          const policies=await table('Adaptive guidance policies by operating case').locator('tr').allTextContents();
+          assert.equal(policies.length,guidance.case_order.length+1);
+          for (const [i,key] of guidance.case_order.entries()) assert.ok(policies[i+1].startsWith(key));
+          assert.match(policies[1],/assembly_mass_kg \(minimize\)/);
+          assert.match(policies[2],/independent_surface_power_w \(minimize\)/);
+          const frontier=await table('Multi-case Pareto adaptive alteration search').textContent();
+          for (const key of guidance.pareto_frontier.evaluated_trial_keys) assert.ok(frontier.includes(key));
+          assert.equal(await table('Consumer-guided adaptive alteration search').count(),0);
+        }
+        for (const [i,row] of search.rows.entries()) {
+          if (typeof row.design.altered_pattern_json==='string')
+            assert.equal(await download(`adaptive-design-${i+1}-pattern.json`),row.design.altered_pattern_json);
+          const cells=await table('Adaptive alteration trials').locator('tr').nth(i+1).locator('td').allTextContents();
+          assert.ok(cells.includes(row.selected?'Selected':'Not selected'));
+          if (allCases) assert.equal(cells[5],row.consumer_cases.every(c=>c.comparison?.eligible===true)?'Eligible':'Excluded');
+        }
+        await page.screenshot({path:path.join(work,`${label}.png`),fullPage:true});
+        await input('scenarioRequest',{schema:'unsupported'});
+        assert.equal(await page.locator(`a[download="${reportName}"]`).count(),0);
+        assert.notEqual(await run('scenario'),'');
+        assert.equal(await page.locator('a[download="adaptive-design-1-pattern.json"]').count(),0);
+      }
+      const label='matrix-pareto-guarded';
+      await page.setInputFiles('#scenarioRequest',path.join(adaptiveProof,`${label}-scenario.json`));
+      await page.setInputFiles('#studyRequest',path.join(adaptiveProof,`${label}-study.json`));
+      assert.equal(await run('scenario'),'');
+      const rejected=JSON.parse(source('body-input.json'));rejected.accepted_body_fit.status='REJECTED';
+      await input('scenarioBody',rejected);
+      assert.equal(await page.locator(`a[download="${reportName}"]`).count(),0);
+      assert.match(await run('scenario'),/fitted-body measurement context/);
+      await page.setInputFiles('#scenarioBody',path.join(adaptiveProof,'body-input.json'));
+      await page.evaluate(()=>{document.getElementById('scenario').click();document.getElementById('cancel').click();});
+      await page.waitForFunction(()=>document.getElementById('status').textContent.startsWith('Ready'));
+      assert.equal(await page.locator(`a[download="${reportName}"]`).count(),0);
+      assert.equal(await run('scenario'),'');
+      assert.deepEqual(JSON.parse(await download(reportName)),JSON.parse(source(`${label}-report.json`)));
+      await input('patternFile',{schema:'fabric-pattern/1',pieces:[]});
+      assert.equal(await page.locator(`a[download="${reportName}"]`).count(),0);
+      assert.equal(await page.locator('a[download="adaptive-design-1-pattern.json"]').count(),0);
+      assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(methods.every(m=>m==='GET'));
+      console.log('PASS: actual Chromium/compiled WASM matches four complete native guarded Pareto reports, independent case policies, all trial pattern bytes and source downloads; malformed scenarios, rejected bodies, cancellation and source edits withdraw stale outputs. Synthetic software evidence only. Artifacts:',work);
+      return;
+    }
     if (fitProof) {
       const source=name=>fs.readFileSync(path.join(fitProof,name),'utf8');
       const expected=JSON.parse(source('manufacturing-report.json'));

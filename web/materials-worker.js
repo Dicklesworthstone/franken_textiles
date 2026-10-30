@@ -508,9 +508,30 @@ self.onmessage = async ({ data: msg }) => {
       case "price":
         raw = ftx.cut_price(msg.pattern, msg.options, msg.quotes, msg.market); result = json(raw);
         files = [file("cut-price.json", raw)]; break;
-      case "sew":
-        raw = ftx.sew_stitches(msg.pattern, msg.options); result = json(raw);
-        files = [file("sewing-program.json", raw)]; break;
+      case "sew": {
+        if (msg.selectRecipes !== undefined && typeof msg.selectRecipes !== "boolean") throw Error("Declare sewing recipe selection as a boolean.");
+        if (msg.selectRecipes) {
+          if (typeof ftx.sew_select !== "function") throw Error("Rebuild web/pkg: missing sewing recipe selection.");
+          raw = ftx.sew_select(msg.pattern, msg.options);
+          const selection = json(raw);
+          if (!selection.report || !Array.isArray(selection.report.trials) ||
+              !(selection.selected_options_json === null || typeof selection.selected_options_json === "string")) {
+            throw Error("Rebuild web/pkg: incomplete sewing selection result.");
+          }
+          result = { selection, program: null };
+          files = [file("sewing-selection.json", raw), file("sewing-selection-request.json", msg.options),
+            file("original-pattern.json", msg.pattern)];
+          if (typeof selection.selected_options_json === "string") {
+            const program = ftx.sew_stitches(msg.pattern, selection.selected_options_json);
+            result.program = json(program);
+            files.push(file("selected-sewing-options.json", selection.selected_options_json), file("sewing-program.json", program));
+          }
+        } else {
+          raw = ftx.sew_stitches(msg.pattern, msg.options); result = json(raw);
+          files = [file("sewing-program.json", raw)];
+        }
+        break;
+      }
       case "exports": {
         for (const fragment of [msg.pattern, msg.fit, msg.measurements]) json(fragment);
         const round = ftx.run(`{"pattern":${msg.pattern},"fit_spec":${msg.fit},"body":{"mode":"file","measurements":${msg.measurements}}}`, msg.today, msg.created);

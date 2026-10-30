@@ -57,6 +57,7 @@ function controls() {
     for (const button of section.adoptions) button.disabled = !ready || !!pending;
   }
   $("bind").disabled ||= !source || !interfaceReady;
+  $("sew").textContent = $("sewOptimize").checked ? "Choose recipes & evaluate stitch paths" : "Evaluate sewing & stitch paths";
   $("assign").disabled = !!pending || !source || !inspected;
   $("reset").disabled = !!pending || !source;
   $("addCombination").disabled = !!pending || !source || !inspected;
@@ -1454,15 +1455,19 @@ function manufacturingComparison(op, parent, study, computed, casePolicies = {})
       if (plan) detail(parent, `${row.key}: physical stock, defects and allocated pieces (display only)`, plan);
     }
   }
-  if (study.alternatives.some(row => row.sewing_selection && row.sewing_selection.status !== "not_requested")) {
-    const routeSearch = study.alternatives.some(row => {
+  sewingSelection(parent, study.alternatives);
+  manufacturingSewingMetrics(op, parent, study, computed);
+}
+function sewingSelection(parent, alternatives) {
+  if (alternatives.some(row => row.sewing_selection && row.sewing_selection.status !== "not_requested")) {
+    const routeSearch = alternatives.some(row => {
       const result = available(row.sewing_selection);
       return result?.request?.schema === "ftx-sewing-selection/6" || result?.selected_route != null;
     });
     const selection = table(parent, routeSearch ? "Material-specific sewing recipe and route search" : "Material-specific sewing recipe search",
       ["Alternative", "Status", ...(routeSearch ? ["Chosen route"] : []), "Chosen recipes",
       "Trials evaluated", "Search complete", "Budget exhausted", "Listed optimum proved", "Unresolved trials"]);
-    for (const row of study.alternatives) {
+    for (const row of alternatives) {
       const plan = available(row.sewing_selection);
       const choices = plan?.selected_choices ? Object.entries(plan.selected_choices)
         .map(([operation, recipe]) => `${operation}: ${recipe}`).join("; ") :
@@ -1475,7 +1480,7 @@ function manufacturingComparison(op, parent, study, computed, casePolicies = {})
       detail(parent, `${row.key}: sewing recipe choices, work limits and refusals (display only)`,
         plan || { refusal: row.sewing_selection?.refusal });
     }
-    const costSearches = study.alternatives.filter(row => {
+    const costSearches = alternatives.filter(row => {
       const result = available(row.sewing_selection);
       return result?.request?.objective === "minimize_thread_observed_order_cost" ||
         result?.objective_currency != null;
@@ -1526,7 +1531,7 @@ function manufacturingComparison(op, parent, study, computed, casePolicies = {})
         "Cutting costs, setup time and undeclared supplier bundles are outside this objective.";
       parent.append(scope);
     }
-    const deadlineSearches = study.alternatives.filter(row => {
+    const deadlineSearches = alternatives.filter(row => {
       const result = available(row.sewing_selection);
       return result?.request?.completion_deadline_milliseconds != null ||
         result?.trials?.some(trial => trial.completion_deadline);
@@ -1567,6 +1572,8 @@ function manufacturingComparison(op, parent, study, computed, casePolicies = {})
       parent.append(scope);
     }
   }
+}
+function manufacturingSewingMetrics(op, parent, study, computed) {
   if (study.alternatives.some(row => row.metrics?.sewing_setup_seconds != null ||
       row.metrics?.sewing_feed_and_setup_seconds != null) ||
       [...(computed?.policy?.objectives || []), ...(computed?.policy?.constraints || [])]
@@ -2461,6 +2468,18 @@ function sewingAccess(parent, plan, label = "Selected sewing plan") {
   parent.append(note);
 }
 function sewingResult(parent, r) {
+  if (r.selection) {
+    sewingSelection(parent, [{ key: "Current bound pattern", sewing_selection: { status: "available", result: r.selection.report } }]);
+    if (!r.program) {
+      const note = document.createElement("p");
+      note.textContent = "No complete sewing candidate was selected. Review the retained trials and source-qualified repairs; no stitch program was produced.";
+      parent.append(note);
+      return { schema: r.selection.report.schema, selected: false,
+        search_complete: r.selection.report.search_complete, budget_exhausted: r.selection.report.budget_exhausted,
+        unresolved_trials: r.selection.report.unresolved_trials, hardware_execution_authorized: false };
+    }
+    r = r.program;
+  }
   const plan = r.plan, production = plan?.production, parallel = production?.parallel, routing = production?.routing;
   const order = parallel || routing ? null : production?.ordering || plan?.ordering;
   if (order) {
@@ -3454,7 +3473,7 @@ async function execute(op) {
       }
       if (op === "stock") msg.stockRequest = await read("stockRequest");
       if (op === "price") { msg.quotes = await read("quotes"); msg.market = await read("market"); }
-      if (op === "sew") msg.options = await read("sewOptions");
+      if (op === "sew") { msg.options = await read("sewOptions"); msg.selectRecipes = $("sewOptimize").checked; }
     }
     if (outfit && (op === "bind" || boundOperations.includes(op) || op === "study" || op === "scenario")) msg.outfit = outfit;
     if (pending?.id !== id) return;
@@ -3636,7 +3655,7 @@ for (const [id, operation] of [["compressionRequest", "pressure"], ["compression
 }
 for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
-  stockRequest:["stock"], sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
+  stockRequest:["stock"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {

@@ -24,7 +24,7 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <header><a href="index.html">Drafting &amp; fitting</a> · <a href="trace.html">Pattern tracing</a>
 <h1>Material workbench</h1>
 <p>Keep the pattern. Change the material. Recompute from one frozen source of truth.</p>
-<p class="note">Your selected files stay in this tab, not in browser storage or on a server. The fold-up viewer loads its existing Three.js library from a CDN. A catalog entry is not necessarily fully characterized. Calculated drape, heat and process plans are not measured fit, warmth ratings or hardware authorization.</p>
+<p class="note">Your selected files stay in this tab, not in browser storage or on a server. The downloaded fold-up viewer includes its libraries and opens offline. A catalog entry is not necessarily fully characterized. Calculated drape, heat and process plans are not measured fit, warmth ratings or hardware authorization.</p>
 <p id="status" role="status">Loading local engine…</p><p id="error" role="alert" hidden></p>
 <button id="cancel" disabled>Cancel current operation</button></header>
 <div class="grid">
@@ -278,7 +278,14 @@ applying minimum quantities, increments and observed capacity to each selected o
 or pools stock across material revisions. Review the selected complete cost separately from the proven least cost;
 a work-limited feasible result does not prove an optimum. These are dated observations, not stock reservations.</p>
 <label>Sewing recipe and machine limits JSON <input id="sewOptions" type="file" accept=".json,application/json"></label>
+<label><input id="sewOptimize" type="checkbox"> Choose from listed sewing recipes and routes</label>
 <button id="sew" data-command="sew" disabled>Evaluate sewing &amp; stitch paths</button>
+<p class="note">To compare recipes or routes directly, enable the choice above and load an
+<code>ftx-sewing-selection</code> request in the same file input. Declare the objective, candidate recipes
+or fixed routes, work limits, qualifications and any deadline. Review every trial, the selected complete
+order and whether the listed optimum was proved. Download the exact selected options and their stitch
+paths for replay. If no candidate qualifies, the result retains the diagnostics and produces no stitch
+program. This does not authorize machine execution.</p>
 <p class="note">To reduce needle and thread changes, add <code>ordering</code> to the recipe with
 <code>objective: "minimize_setup_changes"</code> and an explicit <code>max_search_nodes</code>.
 The bounded planner preserves declared predecessors and every stitch pass. The result shows the

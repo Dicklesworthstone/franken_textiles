@@ -921,6 +921,13 @@ fn fixed_route_cost_selection_respects_deadlines_and_replays_actual_native_order
 }
 
 fn replay_authored_route_selection(cost: bool) {
+    let capture = std::env::var_os("FTX_ROUTED_FIXTURE_REPLAY")
+        .map(PathBuf::from)
+        .map(|root| root.join(if cost { "route-cost" } else { "route-time" }));
+    if let Some(capture) = &capture {
+        fs::create_dir_all(capture).unwrap();
+        fs::write(capture.join("pattern.json"), PATTERN).unwrap();
+    }
     let mut original = routed_specialist_options();
     original["production"]["routing"]["cells"][1]["available_at_milliseconds"] = json!(18000);
     refresh_routed_locks(&mut original);
@@ -994,6 +1001,18 @@ fn replay_authored_route_selection(cost: bool) {
         assert_eq!(unconstrained["report"]["selected_thread_order_cost"], 10.0);
         assert_eq!(unconstrained["report"]["optimality_proven"], true);
         assert!(unconstrained["report"]["selected_objective_seconds"].is_null());
+        if let Some(capture) = &capture {
+            fs::write(
+                capture.join("unconstrained-request.json"),
+                request.to_string(),
+            )
+            .unwrap();
+            fs::write(
+                capture.join("unconstrained-result.json"),
+                unconstrained.to_string(),
+            )
+            .unwrap();
+        }
         let fast_plan =
             portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &alternative.to_string()).unwrap());
         let deadline = fast_plan["production"]["routing"]["selected"]["makespan_milliseconds"]
@@ -1083,6 +1102,18 @@ fn replay_authored_route_selection(cost: bool) {
     );
     assert_eq!(row["sewing"]["result"]["consumables"], plan["consumables"]);
     assert_eq!(report["comparison"]["frontier"], json!(["specialists"]));
+    if let Some(capture) = &capture {
+        for (name, text) in [
+            ("request.json", request.to_string()),
+            ("selection.json", selected.to_string()),
+            ("selected-options.json", options.to_owned()),
+            ("program.json", program.to_string()),
+            ("study.json", study.to_string()),
+            ("study-report.json", report.to_string()),
+        ] {
+            fs::write(capture.join(name), text).unwrap();
+        }
+    }
     let directory = workspace();
     fs::write(directory.join("pattern.json"), PATTERN).unwrap();
     fs::write(directory.join("request.json"), request.to_string()).unwrap();

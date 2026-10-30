@@ -143,6 +143,15 @@ worst-case searches retain their own meanings and views.
 
 ### Compare thread-order costs across fixed sewing routes
 
+For one bound pattern, enable **Choose from listed sewing recipes and routes** in the
+direct sewing controls and load a complete `ftx-sewing-selection` request in the sewing
+file input. **Choose recipes & evaluate stitch paths** calls the shared bounded selector,
+then generates the selected job's actual stitch program. Downloads retain the original
+request and pattern, complete selection report, exact selected options and canonical program.
+No selected candidate means no options/program download and no fallback to the original
+recipe. Changing the request, selection mode, bound pattern or material withdraws the old
+results; cancellation discards pending output. These plans do not authorize hardware execution.
+
 A study's `sewing_selection` may use `ftx-sewing-selection/6` with
 `objective: "minimize_thread_observed_order_cost"` to compare its authored fixed routes
 and recipe choices. Each route supplies the actual qualified cell recipe, thread demand and

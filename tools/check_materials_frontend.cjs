@@ -580,6 +580,71 @@ test('bounded-marker worker previews the selected intact marker and refuses inva
   assert.equal(w.called.filter(c=>c[0]==='svg').length,1);
   assert.equal(w.sent.filter(m=>m.type==='result').length,1);
 });
+test('direct sewing selection retains exact requests and selected options and never falls back without an incumbent', async () => {
+  const pattern=' {"original":-0.0}\n',request=' {"schema":"ftx-sewing-selection/6","limit":1.0}\n';
+  const options=' {"chosen":1.0,"seed":18446744073709551615}\n',calls=[];
+  for (const selected of [true,false]) {
+    const selection={report:{schema:'ftx-sewing-selection-report/7',trials:[],selected_route:selected?'fast':null},
+      selected_options_json:selected?options:null};
+    const raw=JSON.stringify(selection),program=' {"schema":"ftx-sewing-program/1","stitches":[]}\n';
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),
+      sew_select:(p,r)=>{assert.equal(p,pattern);assert.equal(r,request);return raw;},
+      sew_stitches:(p,o)=>{calls.push([p,o]);return program;}}});
+    const result=await w.send({type:'sew',request:80,pattern,options:request,selectRecipes:true});
+    assert.equal(result.type,'result',result.message);
+    assert.deepEqual(plain(result.result.selection),selection);
+    assert.equal(result.files.find(f=>f.name==='sewing-selection.json').text,raw);
+    assert.equal(result.files.find(f=>f.name==='sewing-selection-request.json').text,request);
+    assert.equal(result.files.find(f=>f.name==='original-pattern.json').text,pattern);
+    if (selected) {
+      assert.equal(result.files.find(f=>f.name==='selected-sewing-options.json').text,options);
+      assert.equal(result.files.find(f=>f.name==='sewing-program.json').text,program);
+    } else {
+      assert.equal(result.result.program,null);
+      assert.equal(result.files.some(f=>['selected-sewing-options.json','sewing-program.json'].includes(f.name)),false);
+    }
+  }
+  assert.deepEqual(calls,[[pattern,options]]);
+  for (const selectRecipes of [true,'yes']) {
+    const old=await workerModule({bindings:{default:()=>Promise.resolve(),sew_stitches:()=>{throw Error('Unexpected fallback');}}});
+    const result=await old.send({type:'sew',request:81,pattern,options:request,selectRecipes});
+    assert.equal(result.type,'error');assert.equal(result.files,undefined);
+    assert.match(result.message,selectRecipes===true?/missing sewing recipe selection/:/as a boolean/);
+    assert.equal(old.sent.some(m=>m.type==='result'),false);
+  }
+});
+
+test('compiled WASM direct fixed-route sewing keeps complete orders separate from deadline admission',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_ROUTED_FIXTURE_REPLAY},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const read=name=>fs.readFileSync(path.join(process.env.FTX_ROUTED_FIXTURE_REPLAY,'route-cost',name),'utf8');
+    const w=await workerModule({bindings:ftx}),pattern=read('pattern.json');
+    for(const [name,expectedFile,cost] of [['unconstrained-request.json','unconstrained-result.json',10],['request.json','selection.json',14]]) {
+      const request=read(name),expected=JSON.parse(read(expectedFile));
+      const result=await w.send({type:'sew',request:82,pattern,options:request,selectRecipes:true});
+      assert.equal(result.type,'result',result.message);
+      assert.deepEqual(result.result.selection,expected);
+      assert.equal(result.result.selection.report.selected_thread_order_cost,cost);
+      assert.equal(result.files.find(f=>f.name==='selected-sewing-options.json').text,expected.selected_options_json);
+      assert.equal(result.files.find(f=>f.name==='sewing-selection-request.json').text,request);
+      assert.equal(result.files.find(f=>f.name==='original-pattern.json').text,pattern);
+      assert.equal(result.files.find(f=>f.name==='sewing-program.json').text,ftx.sew_stitches(pattern,expected.selected_options_json));
+      if(cost===14) {
+        assert.deepEqual(result.result.program,JSON.parse(read('program.json')));
+        assert.equal(expected.report.trials[0].thread_order_cost,10);
+        assert.equal(expected.report.trials[0].completion_deadline.status,'excluded');
+      }
+    }
+    const impossible=JSON.parse(read('request.json'));impossible.completion_deadline_milliseconds=0;
+    const result=await w.send({type:'sew',request:83,pattern,options:JSON.stringify(impossible),selectRecipes:true});
+    assert.equal(result.type,'result',result.message);assert.equal(result.result.program,null);
+    assert.equal(result.result.selection.selected_options_json,null);
+    assert.ok(result.result.selection.report.trials.every(t=>t.completion_deadline.status==='excluded'));
+    assert.equal(result.files.some(f=>['selected-sewing-options.json','sewing-program.json'].includes(f.name)),false);
+  });
+
 test('material worker frees model and fold on success or report failure, without caching an old drape', async () => {
   for (const failFold of [false, true]) {
     const w = await workerModule({ failFold });
@@ -1753,6 +1818,33 @@ test('sewing setup results retain Rust order, proof scope and complete downloads
   assert.match(visibleText(s),/search reached its declared work limit/);
   p.e.sewOptions.handlers.change(); assert.equal(s.hidden,true);
   assert.equal(p.live.size,1); // only the still-current bound pattern remains
+});
+
+test('direct recipe selection exposes complete orders and withdraws dependent options and stitch downloads on edits', async () => {
+  const p=await pageModule();await p.load();await p.bind();
+  const request=' {"schema":"ftx-sewing-selection/6","value":-0.0}\n';
+  p.select('sewOptions',request);p.e.sewOptions.handlers.change();
+  p.e.sewOptimize.checked=true;p.e.sewOptimize.handlers.change();
+  assert.match(p.e.sew.textContent,/Choose recipes/);
+  await p.e.sew.onclick();const msg=p.current().messages.at(-1);
+  assert.equal(msg.selectRecipes,true);assert.equal(msg.options,request);
+  const report={request:{objective:'minimize_thread_observed_order_cost'},selected_thread_order_cost:14,
+    objective_currency:'USD',selected_choices:{join:'fast'},trials:[],search_complete:true,
+    optimality_proven:true,budget_exhausted:false,unresolved_trials:0};
+  const files=[{name:'selected-sewing-options.json',text:' {"exact":-0.0}\n'},
+    {name:'sewing-program.json',text:'{"stitches":[]}'}];
+  p.emit({selection:{report},program:{schema:'ftx-sewing-program/1',stitches:[],plan:{seams:[],options:{},feed_seconds:1}}},files);
+  const s=section(p,'sew');assert.match(visibleText(s),/Thread-cost-directed recipe search/);
+  const chosen=descendants(s).find(n=>n.download==='selected-sewing-options.json');
+  assert.equal(await p.blobs.get(chosen.href).text(),files[0].text);
+  p.e.sewOptimize.checked=false;p.e.sewOptimize.handlers.change();
+  assert.equal(s.hidden,true);assert.equal(p.live.size,1);
+  assert.equal(p.e.sew.textContent,'Evaluate sewing & stitch paths');
+  p.e.sewOptimize.checked=true;p.e.sewOptimize.handlers.change();await p.e.sew.onclick();
+  p.emit({selection:{report:{...report,selected_choices:null,selected_thread_order_cost:null,unresolved_trials:1}},program:null});
+  assert.match(visibleText(s),/No complete sewing candidate was selected/);
+  assert.equal(JSON.parse(s.children[1].textContent).selected,false);
+  p.e.sewOptions.handlers.change();assert.equal(s.hidden,true);
 });
 
 test('batch sewing displays production ordering, scoped copy dependencies and actual batch feed with objective-specific proof', async () => {
