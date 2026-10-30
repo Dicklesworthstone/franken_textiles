@@ -8,7 +8,7 @@ use ftx_core::{Refusal, RefusalCode};
 use serde::Serialize;
 
 use super::super::{parallel, workholding};
-use super::{Policy, Timeline as RouteTimeline, add};
+use super::{MAX_EXACT_MILLISECONDS, Policy, Timeline as RouteTimeline};
 use crate::sewing::{SewOptions, bad};
 
 const MAX_POOLS: usize = 16;
@@ -241,10 +241,13 @@ impl Compiled {
         cell: usize,
         earliest: u64,
         duration: u64,
-    ) -> Result<u64, Refusal> {
+    ) -> Result<Option<u64>, Refusal> {
+        if duration > MAX_EXACT_MILLISECONDS - earliest {
+            return Ok(None);
+        }
         let required = &self.demands[route][cell];
         if required.iter().all(|&units| units == 0) {
-            return Ok(earliest);
+            return Ok(Some(earliest));
         }
         let mut events = Vec::with_capacity(2 * reservations.len());
         for (index, reservation) in reservations.iter().enumerate() {
@@ -269,7 +272,11 @@ impl Compiled {
                 .iter()
                 .enumerate()
                 .any(|(pool, &capacity)| occupied[pool] + required[pool] > capacity);
-            if previous < time && blocked && start < time && add(start, duration)? > previous {
+            if previous < time
+                && blocked
+                && start < time
+                && (start > previous || duration > previous - start)
+            {
                 // Every admissible start within this forbidden interval must wait until it ends.
                 // Repeating over all sorted intervals also handles future reservations and short
                 // gaps; inspecting occupancy only at the requested start would miss these cases.
@@ -293,8 +300,7 @@ impl Compiled {
                 "routed fixture reservation sweep leaves inventory held",
             ));
         }
-        add(start, duration)?;
-        Ok(start)
+        Ok((duration <= MAX_EXACT_MILLISECONDS - start).then_some(start))
     }
 
     pub(super) fn reserve(

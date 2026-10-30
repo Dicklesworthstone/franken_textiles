@@ -15,6 +15,7 @@ use crate::sewing::{
     span,
 };
 
+pub mod calendars;
 pub mod fixtures;
 pub mod labor;
 
@@ -53,6 +54,10 @@ pub struct Policy {
     /// unloading occupy the assigned worker; explicit transfer ownership can share that person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attending_labor: Option<labor::Policy>,
+    /// Optional independently qualified operating windows for named cells, workers or the transfer
+    /// resource. Complete occupancy fits one window; unnamed resources retain their outer window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability_calendars: Option<calendars::Policy>,
     /// Every original operation exactly once, in an order respecting every original predecessor.
     pub route: Vec<RouteStep>,
     /// One qualified resource for all unloaded inter-cell handoffs, optionally owned by a worker.
@@ -214,7 +219,7 @@ pub struct Timeline {
 /// Source-qualified fixed routing with an exact complete incumbent and bounded dispatch search.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` fixed; `/2` eligible; `/3` fixtures; `/4` attending labor; `/5` worker-owned handoffs.
+    /// `/1` fixed; `/2` eligible; `/3` fixtures; `/4` labor; `/5` owned handoffs; `/6` calendars.
     pub schema: &'static str,
     /// Source-qualified fixed operation route.
     pub route: Vec<RouteStep>,
@@ -230,6 +235,10 @@ pub struct Report {
     /// Explicit worker availability, travel and complete attended-operation replay, when requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attending_labor: Option<labor::Report>,
+    /// Exact source-qualified nonpreemptive windows, when requested. Inactive gaps do not reset
+    /// machine setups, worker locations or independently tracked fixture inventory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability_calendars: Option<calendars::Policy>,
     /// Complete copy-major seed, or selected replacement if resources/windows excluded that seed.
     pub baseline: Timeline,
     /// Best complete feasible dispatch found within the admitted budget.
@@ -490,6 +499,9 @@ impl Policy {
                 "source-qualified handoffs must cover exactly the inter-cell edges of every adjacent route domain",
             ));
         }
+        if let Some(calendars) = &self.availability_calendars {
+            calendars.validate(self)?;
+        }
         Ok(done)
     }
 }
@@ -606,6 +618,78 @@ impl Prepared<'_> {
         }
     }
 
+    fn earliest_interval(
+        &self,
+        state: &State,
+        resource: &str,
+        mut start: u64,
+        duration: u64,
+        arrival: Option<labor::Arrival>,
+        fixture_task: Option<&Task>,
+    ) -> Result<Option<(u64, Option<labor::Arrival>)>, Refusal> {
+        if duration > MAX_EXACT_MILLISECONDS - start {
+            return Ok(None);
+        }
+        let Some(calendars) = &self.policy.availability_calendars else {
+            if let (Some(fixtures), Some(task)) = (&self.fixtures, fixture_task) {
+                let Some(next) = fixtures.earliest_start(
+                    &state.reservations,
+                    task.route,
+                    task.cell,
+                    start,
+                    duration,
+                )?
+                else {
+                    return Ok(None);
+                };
+                start = next;
+            }
+            return Ok(Some((start, arrival)));
+        };
+        // Each strict advance crosses a resource/worker window opening or a retained fixture
+        // release. The finite bound covers every such event, including nonchronological holds.
+        for _ in 0..=2 * calendars::MAX_WINDOWS + state.reservations.len() {
+            let previous = start;
+            let Some(next) = calendars.earliest_start(resource, start, duration)? else {
+                return Ok(None);
+            };
+            start = next;
+            if let (Some(fixtures), Some(task)) = (&self.fixtures, fixture_task) {
+                let Some(next) = fixtures.earliest_start(
+                    &state.reservations,
+                    task.route,
+                    task.cell,
+                    start,
+                    duration,
+                )?
+                else {
+                    return Ok(None);
+                };
+                start = next;
+            }
+            let adjusted = if let Some(arrival) = arrival {
+                let Some((arrival, next)) = self
+                    .labor
+                    .as_ref()
+                    .expect("admitted attending labor")
+                    .fit_arrival(arrival, start, duration)?
+                else {
+                    return Ok(None);
+                };
+                start = next;
+                Some(arrival)
+            } else {
+                None
+            };
+            if start == previous {
+                return Ok(Some((start, adjusted)));
+            }
+        }
+        Err(budget(
+            "routed calendar alignment exceeded its bounded resource events",
+        ))
+    }
+
     fn advance(
         &self,
         state: &State,
@@ -631,9 +715,23 @@ impl Prepared<'_> {
                 })
                 .transpose()?
                 .flatten();
-            let start = ready
+            if self.policy.transfer.attending_worker.is_some() && arrival.is_none() {
+                return Ok(None);
+            }
+            let earliest = ready
                 .max(state.transfer_ready)
                 .max(arrival.map_or(0, |arrival| arrival.time));
+            let Some((start, arrival)) = self.earliest_interval(
+                state,
+                &self.policy.transfer.id,
+                earliest,
+                duration,
+                arrival,
+                None,
+            )?
+            else {
+                return Ok(None);
+            };
             let finish = add(start, duration)?;
             if self
                 .policy
@@ -676,20 +774,24 @@ impl Prepared<'_> {
                     task.cell,
                 )
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
+        if self.labor.is_some() && arrival.is_none() {
+            return Ok(None);
+        }
         let earliest = ready
             .max(state.cell_ready[task.cell])
             .max(arrival.map_or(0, |arrival| arrival.time));
-        let load_start = if let Some(fixtures) = &self.fixtures {
-            fixtures.earliest_start(
-                &state.reservations,
-                task.route,
-                task.cell,
-                earliest,
-                duration,
-            )?
-        } else {
-            earliest
+        let Some((load_start, arrival)) = self.earliest_interval(
+            state,
+            &self.policy.cells[task.cell].id,
+            earliest,
+            duration,
+            arrival,
+            Some(task),
+        )?
+        else {
+            return Ok(None);
         };
         let setup_start = add(load_start, task.load)?;
         let feed_start = add(setup_start, self.setup[from][index])?;
@@ -1157,7 +1259,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if owned_transfer {
+        schema: if policy.availability_calendars.is_some() {
+            "ftx-sewing-plan/23"
+        } else if owned_transfer {
             "ftx-sewing-plan/22"
         } else if uses_labor {
             "ftx-sewing-plan/21"
@@ -1445,7 +1549,9 @@ pub(in crate::sewing) fn build(
         .map(|labor| labor.report(&baseline, &selected))
         .transpose()?;
     let report = Report {
-        schema: if owned_transfer {
+        schema: if policy.availability_calendars.is_some() {
+            "ftx-sewing-routing/6"
+        } else if owned_transfer {
             "ftx-sewing-routing/5"
         } else if uses_labor {
             "ftx-sewing-routing/4"
@@ -1461,6 +1567,7 @@ pub(in crate::sewing) fn build(
         cell_plans,
         workholding,
         attending_labor,
+        availability_calendars: policy.availability_calendars.clone(),
         baseline,
         selected,
         baseline_replaced: !seed_complete,
@@ -1487,7 +1594,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if owned_transfer {
+        schema: if policy.availability_calendars.is_some() {
+            "ftx-sewing-production/11"
+        } else if owned_transfer {
             "ftx-sewing-production/10"
         } else if uses_labor {
             "ftx-sewing-production/9"

@@ -470,6 +470,102 @@ fn routed_attending_workers_replay_actual_operations_through_both_native_command
 }
 
 #[test]
+fn routed_calendars_replay_complete_delayed_operations_through_native_and_portable_commands() {
+    let mut options = routed_specialist_options();
+    options["production"]["routing"]["availability_calendars"] = json!({
+        "model":"nonpreemptive_resource_windows/1",
+        "resources":{
+            "cell-a":[{"start_milliseconds":0,"end_milliseconds":5299},
+                {"start_milliseconds":10000,"end_milliseconds":20000}],
+            "transfer-worker":[{"start_milliseconds":0,"end_milliseconds":15999},
+                {"start_milliseconds":17000,"end_milliseconds":23000}]},
+        "source":{"reference":"test:native-routed-calendars","accessed_on":"2026-10-29",
+            "note":"Invented resource windows; no measured factory availability"},
+        "method":"Complete machine operations and unloaded handoffs fit one declared window",
+        "conditions":{},"evidence":"estimate","allow_estimates":true
+    });
+    let program_json =
+        ftx_wasm::manufacturing::sew_stitches(PATTERN, &options.to_string()).unwrap();
+    let program = portable(program_json.clone());
+    let plan = &program["plan"];
+    let routing = &plan["production"]["routing"];
+    assert_eq!(plan["schema"], "ftx-sewing-plan/23");
+    assert_eq!(plan["production"]["schema"], "ftx-sewing-production/11");
+    assert_eq!(routing["schema"], "ftx-sewing-routing/6");
+    assert_eq!(
+        routing["availability_calendars"],
+        options["production"]["routing"]["availability_calendars"]
+    );
+    // First join: 100 load + 1000 initial setup + 4000 feed + 200 unload = 5300 ms.
+    // It misses the first window by 1 ms, so the whole operation starts at 10000 ms.
+    // The second join retains setup and occupies 4300 ms; neither is split across the break.
+    let timeline = &routing["selected"];
+    let joins: Vec<_> = timeline["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|operation| operation["cell"] == "cell-a")
+        .collect();
+    assert_eq!(joins.len(), 2);
+    assert_eq!(joins[0]["loading_start_milliseconds"], 10000);
+    assert_eq!(joins[0]["finish_milliseconds"], 15300);
+    assert_eq!(joins[1]["loading_start_milliseconds"], 15300);
+    assert_eq!(joins[1]["finish_milliseconds"], 19600);
+    // The first 700 ms handoff would end at 16000, one millisecond after its own window.
+    // Staging permits waiting, then a complete handoff from 17000 through 17700.
+    let handoffs = timeline["transfers"].as_array().unwrap();
+    assert_eq!(handoffs.len(), 2);
+    assert_eq!(handoffs[0]["start_milliseconds"], 17000);
+    assert_eq!(handoffs[0]["finish_milliseconds"], 17700);
+    assert_eq!(timeline["makespan_milliseconds"], 21934);
+    assert_eq!(timeline["scheduled_feed_milliseconds"], 10668);
+    assert_eq!(program["stitches"].as_array().unwrap().len(), 120);
+    assert_eq!(
+        portable(
+            ftx_wasm::manufacturing::sew_stitches(PATTERN, &plan["options"].to_string()).unwrap()
+        ),
+        program
+    );
+    let directory = workspace();
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    fs::write(directory.join("options.json"), options.to_string()).unwrap();
+    for main in [false, true] {
+        assert_eq!(
+            run(main, &directory, "sew-plan", "pattern.json", "options.json"),
+            *plan
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "options.json"
+            ),
+            program
+        );
+    }
+    if let Some(capture) = std::env::var_os("FTX_ROUTED_FIXTURE_REPLAY") {
+        use std::io::Write;
+        let capture = PathBuf::from(capture).join("calendar-fixed");
+        fs::create_dir_all(&capture).unwrap();
+        for (name, text) in [
+            ("pattern.json", PATTERN.to_owned()),
+            ("options.json", options.to_string()),
+            ("program.json", program_json),
+        ] {
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(capture.join(name))
+                .unwrap()
+                .write_all(text.as_bytes())
+                .unwrap();
+        }
+    }
+}
+
+#[test]
 fn eligible_routes_replay_actual_cell_choices_yarn_and_studies_through_both_native_commands() {
     for windowed in [false, true] {
         let options = eligible_route_options(windowed);

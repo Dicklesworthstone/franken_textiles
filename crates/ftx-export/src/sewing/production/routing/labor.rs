@@ -8,8 +8,8 @@ use ftx_pattern::materials::{Evidence, Source};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Policy as RoutePolicy, Task, Timeline as RouteTimeline, TransferPolicy, add, source_valid,
-    window_valid,
+    MAX_EXACT_MILLISECONDS, Policy as RoutePolicy, Task, Timeline as RouteTimeline, TransferPolicy,
+    add, calendars, source_valid, window_valid,
 };
 use crate::sewing::{bad, production::parallel::operator::Transfer, qualified_text};
 
@@ -174,6 +174,7 @@ pub(super) struct Compiled {
     transfer_worker: Option<usize>,
     initial: Vec<Vec<u64>>,
     travel: Vec<Vec<Vec<u64>>>,
+    calendars: Vec<Option<Vec<calendars::Window>>>,
 }
 
 impl Compiled {
@@ -227,6 +228,17 @@ impl Compiled {
             transfer_worker,
             initial: vec![vec![0; cells.len()]; policy.workers.len()],
             travel: vec![vec![vec![0; cells.len()]; cells.len()]; policy.workers.len()],
+            calendars: policy
+                .workers
+                .iter()
+                .map(|worker| {
+                    route
+                        .availability_calendars
+                        .as_ref()
+                        .and_then(|calendars| calendars.windows(&worker.id))
+                        .map(<[_]>::to_vec)
+                })
+                .collect(),
         };
         for (index, worker) in policy.workers.iter().enumerate() {
             let owned: BTreeSet<_> = worker.cells.iter().map(String::as_str).collect();
@@ -307,7 +319,7 @@ impl Compiled {
         }
     }
 
-    pub(super) fn arrival(&self, state: &State, cell: usize) -> Result<Arrival, Refusal> {
+    pub(super) fn arrival(&self, state: &State, cell: usize) -> Result<Option<Arrival>, Refusal> {
         self.worker_arrival(state, self.cell_worker[cell], cell)
     }
 
@@ -319,6 +331,7 @@ impl Compiled {
         self.transfer_worker
             .map(|worker| self.worker_arrival(state, worker, source))
             .transpose()
+            .map(Option::flatten)
     }
 
     fn worker_arrival(
@@ -326,24 +339,72 @@ impl Compiled {
         state: &State,
         worker: usize,
         cell: usize,
-    ) -> Result<Arrival, Refusal> {
+    ) -> Result<Option<Arrival>, Refusal> {
         let from = state.last[worker];
         let departure = state.ready[worker];
         let duration = from.map_or(self.initial[worker][cell], |from| {
             self.travel[worker][from][cell]
         });
-        Ok(Arrival {
+        if duration > MAX_EXACT_MILLISECONDS - departure {
+            return Ok(None);
+        }
+        Ok(Some(Arrival {
             worker,
             from,
             departure,
             time: add(departure, duration)?,
-        })
+        }))
     }
 
     pub(super) fn available(&self, arrival: Arrival, finish: u64) -> bool {
         self.policy.workers[arrival.worker]
             .available_until_milliseconds
             .is_none_or(|end| finish <= end)
+            && self.calendars[arrival.worker]
+                .as_ref()
+                .is_none_or(|windows| {
+                    windows.iter().any(|window| {
+                        arrival.departure >= window.start_milliseconds
+                            && finish <= window.end_milliseconds
+                    })
+                })
+    }
+
+    pub(super) fn fit_arrival(
+        &self,
+        arrival: Arrival,
+        earliest: u64,
+        duration: u64,
+    ) -> Result<Option<(Arrival, u64)>, Refusal> {
+        let Some(windows) = &self.calendars[arrival.worker] else {
+            let start = earliest.max(arrival.time);
+            if duration > MAX_EXACT_MILLISECONDS - start {
+                return Ok(None);
+            }
+            return Ok(self
+                .available(arrival, add(start, duration)?)
+                .then_some((arrival, start)));
+        };
+        let travel = arrival.time - arrival.departure;
+        for window in windows {
+            let departure = arrival.departure.max(window.start_milliseconds);
+            if departure > window.end_milliseconds || travel > window.end_milliseconds - departure {
+                continue;
+            }
+            let time = add(departure, travel)?;
+            let start = earliest.max(time);
+            if start <= window.end_milliseconds && duration <= window.end_milliseconds - start {
+                return Ok(Some((
+                    Arrival {
+                        departure,
+                        time,
+                        ..arrival
+                    },
+                    start,
+                )));
+            }
+        }
+        Ok(None)
     }
 
     pub(super) fn finish(&self, state: &mut State, arrival: Arrival, cell: usize, finish: u64) {
@@ -466,9 +527,19 @@ impl Compiled {
                     .iter()
                     .find(|row| row.from == transfer.from && row.to == transfer.to)
                     .ok_or_else(|| bad("worker handoff omits its qualified carrying duration"))?;
-                let arrival = self
+                let initial_arrival = self
                     .transfer_arrival(&state, source)?
-                    .expect("explicit handoff owner");
+                    .ok_or_else(|| bad("retained handoff has no available worker approach"))?;
+                let Some((arrival, start)) = self.fit_arrival(
+                    initial_arrival,
+                    transfer.start_milliseconds,
+                    u64::from(duration.milliseconds),
+                )?
+                else {
+                    return Err(bad(
+                        "worker handoff cannot fit its retained availability calendar",
+                    ));
+                };
                 if transfer.from != previous.cell
                     || transfer.to != operation.cell
                     || transfer.start_milliseconds
@@ -482,6 +553,7 @@ impl Compiled {
                             u64::from(duration.milliseconds),
                         )?
                     || operation.loading_start_milliseconds < transfer.finish_milliseconds
+                    || start != transfer.start_milliseconds
                     || !self.available(arrival, transfer.finish_milliseconds)
                     || policy
                         .available_until_milliseconds
@@ -525,7 +597,23 @@ impl Compiled {
                 self.finish(&mut state, arrival, cell, transfer.finish_milliseconds);
                 transfer_ready = transfer.finish_milliseconds;
             }
-            let arrival = self.arrival(&state, cell)?;
+            let initial_arrival = self
+                .arrival(&state, cell)?
+                .ok_or_else(|| bad("retained routed operation has no available worker approach"))?;
+            let duration = operation
+                .finish_milliseconds
+                .checked_sub(operation.loading_start_milliseconds)
+                .ok_or_else(|| bad("routed operation has reversed occupancy"))?;
+            let Some((arrival, start)) = self.fit_arrival(
+                initial_arrival,
+                operation.loading_start_milliseconds,
+                duration,
+            )?
+            else {
+                return Err(bad(
+                    "routed operation cannot fit its retained worker calendar",
+                ));
+            };
             let phases = [
                 arrival.time,
                 operation.loading_start_milliseconds,
@@ -535,6 +623,7 @@ impl Compiled {
                 operation.finish_milliseconds,
             ];
             if phases.windows(2).any(|pair| pair[0] > pair[1])
+                || start != operation.loading_start_milliseconds
                 || !self.available(arrival, operation.finish_milliseconds)
             {
                 return Err(bad(

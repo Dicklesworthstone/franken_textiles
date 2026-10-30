@@ -150,6 +150,373 @@ fn build(pattern: &Pattern, options: Value) -> Result<SewPlan, Refusal> {
     SewPlan::build(pattern, &serde_json::from_value(options).unwrap())
 }
 
+fn availability_calendars(mut options: Value, resources: Value) -> Value {
+    options["production"]["routing"]["availability_calendars"] = json!({
+        "model":"nonpreemptive_resource_windows/1", "resources":resources,
+        "source":source("availability-calendars"),
+        "method":"Invented finite resource windows containing complete nonpreemptive occupancy; setup and location persist across inactive gaps",
+        "conditions":{}, "evidence":"estimate", "allow_estimates":true
+    });
+    options
+}
+
+#[test]
+fn routed_calendars_delay_whole_operations_and_handoffs_with_inclusive_finishes() {
+    let (pattern, raw) = fixture(1);
+    let old = serde_json::to_value(build(&pattern, raw.clone()).unwrap()).unwrap();
+    assert!(
+        old["production"]["routing"]
+            .get("availability_calendars")
+            .is_none()
+    );
+    let mut omitted = raw.clone();
+    omitted["production"]["routing"]["availability_calendars"] = Value::Null;
+    assert_eq!(
+        old,
+        serde_json::to_value(build(&pattern, omitted).unwrap()).unwrap()
+    );
+    let options: SewOptions = serde_json::from_value(availability_calendars(
+        raw,
+        json!({
+            "cell-a":[{"start_milliseconds":0,"end_milliseconds":5299},
+                      {"start_milliseconds":6000,"end_milliseconds":11300}],
+            "handoff-worker":[{"start_milliseconds":0,"end_milliseconds":6000},
+                              {"start_milliseconds":12000,"end_milliseconds":12700}],
+            "cell-b":[{"start_milliseconds":0,"end_milliseconds":8800},
+                      {"start_milliseconds":13000,"end_milliseconds":15800}]
+        }),
+    ))
+    .unwrap();
+    let program = SewProgram::build(&pattern, &options).unwrap();
+    let production = program.plan.production.as_ref().unwrap();
+    let route = production.routing.as_ref().unwrap();
+    assert_eq!(program.plan.schema, "ftx-sewing-plan/23");
+    assert_eq!(production.schema, "ftx-sewing-production/11");
+    assert_eq!(route.schema, "ftx-sewing-routing/6");
+    let first = &route.selected.operations[0];
+    assert_eq!(
+        (first.loading_start_milliseconds, first.finish_milliseconds),
+        (6000, 11300)
+    );
+    let handoff = &route.selected.transfers[0];
+    assert_eq!(
+        (handoff.start_milliseconds, handoff.finish_milliseconds),
+        (12000, 12700)
+    );
+    let last = &route.selected.operations[1];
+    assert_eq!(
+        (last.loading_start_milliseconds, last.finish_milliseconds),
+        (13000, 15800)
+    );
+    assert_eq!(route.selected.makespan_milliseconds, 15800);
+    assert_eq!(route.selected.setup_milliseconds, 1500);
+    assert_eq!(program.stitches.len(), 60);
+    assert_eq!(
+        serde_json::to_value(route.availability_calendars.as_ref().unwrap()).unwrap(),
+        serde_json::to_value(
+            options
+                .production
+                .as_ref()
+                .unwrap()
+                .routing
+                .as_ref()
+                .unwrap()
+                .availability_calendars
+                .as_ref()
+                .unwrap()
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn worker_calendar_contains_travel_waiting_and_full_attendance_without_preemption() {
+    let (pattern, raw) = fixture(1);
+    let mut options = attending_labor(raw, &[&["cell-a", "cell-b"]], 500);
+    options["production"]["routing"]["attending_labor"]["workers"][0]["initial_arrival_milliseconds"]
+        ["cell-a"] = json!(1000);
+    let options = availability_calendars(
+        options,
+        json!({
+            "worker-0":[{"start_milliseconds":0,"end_milliseconds":6299},
+                        {"start_milliseconds":7000,"end_milliseconds":13300},
+                        {"start_milliseconds":14000,"end_milliseconds":18000}]
+        }),
+    );
+    let plan = build(&pattern, options).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let labor = &route.attending_labor.as_ref().unwrap().selected;
+    let first = &labor.steps[0];
+    assert_eq!(
+        (
+            first.departure_milliseconds,
+            first.arrival_milliseconds,
+            first.loading_start_milliseconds,
+            first.finish_milliseconds
+        ),
+        (7000, 8000, 8000, 13300)
+    );
+    let second = &labor.steps[1];
+    assert_eq!(
+        (
+            second.departure_milliseconds,
+            second.arrival_milliseconds,
+            second.loading_start_milliseconds,
+            second.finish_milliseconds
+        ),
+        (14000, 14500, 14500, 17300)
+    );
+    assert_eq!(second.from_cell.as_deref(), Some("cell-a"));
+    assert_eq!(labor.travel_milliseconds, 1500);
+    assert_eq!(labor.waiting_milliseconds, 0);
+    assert_eq!(labor.attended_milliseconds, 8100);
+    assert_eq!(route.selected.makespan_milliseconds, 17300);
+}
+
+#[test]
+fn worker_owned_handoffs_find_common_calendars_and_preserve_destination_location() {
+    let (pattern, raw) = fixture(1);
+    let options =
+        worker_owned_transfer(attending_labor(raw, &[&["cell-a", "cell-b"]], 500), 0, 500);
+    let options = availability_calendars(
+        options,
+        json!({
+            "worker-0":[{"start_milliseconds":0,"end_milliseconds":5300},
+                        {"start_milliseconds":6000,"end_milliseconds":6700},
+                        {"start_milliseconds":8000,"end_milliseconds":10800},
+                        {"start_milliseconds":12000,"end_milliseconds":14800}],
+            "handoff-worker":[{"start_milliseconds":0,"end_milliseconds":6000},
+                              {"start_milliseconds":6400,"end_milliseconds":7100},
+                              {"start_milliseconds":9000,"end_milliseconds":9700}]
+        }),
+    );
+    let plan = build(&pattern, options).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let labor = &route.attending_labor.as_ref().unwrap().selected;
+    let handoff = &labor.transfers.as_ref().unwrap()[0];
+    assert_eq!(
+        (
+            handoff.departure_milliseconds,
+            handoff.arrival_milliseconds,
+            handoff.start_milliseconds,
+            handoff.finish_milliseconds
+        ),
+        (8000, 8000, 9000, 9700)
+    );
+    assert_eq!(handoff.from_cell.as_deref(), Some("cell-a"));
+    let last = &labor.steps[1];
+    assert_eq!(last.from_cell.as_deref(), Some("cell-b"));
+    assert_eq!(
+        (
+            last.departure_milliseconds,
+            last.arrival_milliseconds,
+            last.loading_start_milliseconds,
+            last.finish_milliseconds
+        ),
+        (12000, 12000, 12000, 14800)
+    );
+    assert_eq!(labor.travel_milliseconds, 0);
+    assert_eq!(labor.waiting_milliseconds, 1000);
+    assert_eq!(labor.transfer_milliseconds, Some(700));
+    assert_eq!(route.selected.makespan_milliseconds, 14800);
+}
+
+#[test]
+fn fixture_delays_recheck_cell_and_worker_calendars_before_retaining_a_bounded_schedule() {
+    let (pattern, raw) = fixture(2);
+    let mut options = attending_labor(shared_fixtures(raw, 1), &[&["cell-a"], &["cell-b"]], 0);
+    options["production"]["routing"]["max_search_nodes"] = json!(4);
+    let options = availability_calendars(
+        options,
+        json!({
+            "cell-a":[{"start_milliseconds":0,"end_milliseconds":10000},
+                      {"start_milliseconds":12000,"end_milliseconds":16300}],
+            "worker-0":[{"start_milliseconds":0,"end_milliseconds":10000},
+                        {"start_milliseconds":12000,"end_milliseconds":16300}]
+        }),
+    );
+    let plan = build(&pattern, options).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    // The retained copy-major order reserves B0 at [6000,8800). A1 initially fits its
+    // machine window at 5300, but the fixture delay to 8800 crosses the 10000ms closure.
+    let a1 = route
+        .selected
+        .operations
+        .iter()
+        .find(|op| op.id == "1/join")
+        .unwrap();
+    assert_eq!(
+        (a1.loading_start_milliseconds, a1.finish_milliseconds),
+        (12000, 16300)
+    );
+    assert_eq!(route.selected.makespan_milliseconds, 19300);
+    let labor = route.attending_labor.as_ref().unwrap();
+    let step = labor
+        .selected
+        .steps
+        .iter()
+        .find(|step| step.operation == "1/join")
+        .unwrap();
+    assert_eq!(step.departure_milliseconds, 12000);
+    assert_eq!(step.from_cell.as_deref(), Some("cell-a"));
+    assert_eq!(route.selected.setup_milliseconds, 1500);
+    assert_eq!((route.search_nodes, route.work_used), (4, 12));
+    assert!(route.budget_exhausted && !route.optimality_proven);
+    assert_eq!(route.selected.operations.len(), 4);
+    let holding = route.workholding.as_ref().unwrap();
+    assert_eq!(holding.selected.shared_final_occupancy["common-jigs"], 0);
+    let mut intervals: Vec<_> = holding
+        .selected
+        .holds
+        .iter()
+        .map(|hold| (hold.acquired_at_milliseconds, hold.released_at_milliseconds))
+        .collect();
+    intervals.sort_unstable();
+    assert!(intervals.windows(2).all(|pair| pair[0].1 <= pair[1].0));
+}
+
+#[test]
+fn eligible_calendars_change_actual_machine_choices_and_reject_incomplete_jobs() {
+    let (pattern, raw) = eligible_fixture(1);
+    let original = build(&pattern, raw.clone()).unwrap();
+    assert_eq!(
+        original
+            .production
+            .as_ref()
+            .unwrap()
+            .routing
+            .as_ref()
+            .unwrap()
+            .selected
+            .operations[0]
+            .cell,
+        "cell-c"
+    );
+    let mut options = availability_calendars(
+        raw,
+        json!({
+            "cell-c":[{"start_milliseconds":0,"end_milliseconds":3299}]
+        }),
+    );
+    let plan = build(&pattern, options.clone()).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert_eq!(route.selected.operations[0].cell, "cell-a");
+    assert_eq!(route.selected.makespan_milliseconds, 8800);
+    assert_eq!(plan.total_stitch_intervals(), 60);
+    assert!(route.lower_bound_makespan_milliseconds <= 8800);
+    options["production"]["routing"]["availability_calendars"]["resources"]["cell-a"] =
+        json!([{"start_milliseconds":0,"end_milliseconds":5299}]);
+    assert_eq!(
+        build(&pattern, options).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+}
+
+#[test]
+fn late_calendar_branches_do_not_abort_feasible_eligible_routes_on_clock_exhaustion() {
+    const LAST: u64 = 9_007_199_254_740_991;
+    let (pattern, mut raw) = eligible_fixture(1);
+    raw["production"]["routing"]["cells"][0]["available_until_milliseconds"] = json!(LAST);
+    refresh_locks(&mut raw);
+    let raw = availability_calendars(
+        raw,
+        json!({
+            "cell-a":[{"start_milliseconds":LAST-5300,"end_milliseconds":LAST}]
+        }),
+    );
+    for with_worker in [false, true] {
+        let mut options = raw.clone();
+        if with_worker {
+            // A zero-duration handoff can finish at LAST, but the next 500ms worker approach
+            // cannot. This branch is unavailable; the independently eligible cell-c still works.
+            options["production"]["routing"]["transfer"]["transfers"][0]["milliseconds"] = json!(0);
+            options = attending_labor(options, &[&["cell-a", "cell-b", "cell-c"]], 500);
+        }
+        let plan = build(&pattern, options).unwrap();
+        let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+        assert!(route.baseline_replaced);
+        assert_eq!(route.selected.operations[0].cell, "cell-c");
+        assert_eq!(route.selected.makespan_milliseconds, 7000);
+        assert_eq!(route.selected.operations.len(), 2);
+        assert_eq!(plan.total_stitch_intervals(), 40);
+    }
+}
+
+#[test]
+fn routed_calendars_require_bounded_exact_resource_domains_and_independent_evidence() {
+    let (pattern, raw) = fixture(1);
+    let valid = availability_calendars(
+        raw,
+        json!({
+            "cell-a":[{"start_milliseconds":0,"end_milliseconds":10000}]
+        }),
+    );
+    let prefix = "/production/routing/availability_calendars";
+    for (field, value) in [
+        ("model", json!("preemptive/1")),
+        ("resources", json!({})),
+        (
+            "resources",
+            json!({"unknown":[{"start_milliseconds":0,"end_milliseconds":10000}]}),
+        ),
+        (
+            "resources",
+            json!({"worker-0":[{"start_milliseconds":0,"end_milliseconds":10000}]}),
+        ),
+        ("resources", json!({"cell-a":[]})),
+        (
+            "resources",
+            json!({"cell-a":[{"start_milliseconds":100,"end_milliseconds":99}]}),
+        ),
+        (
+            "resources",
+            json!({"cell-a":[{"start_milliseconds":10,"end_milliseconds":20},
+                                      {"start_milliseconds":0,"end_milliseconds":5}]}),
+        ),
+        (
+            "resources",
+            json!({"cell-a":[{"start_milliseconds":0,"end_milliseconds":10},
+                                      {"start_milliseconds":10,"end_milliseconds":20}]}),
+        ),
+        (
+            "resources",
+            json!({"cell-a":[{"start_milliseconds":0,"end_milliseconds":9007199254740992u64}]}),
+        ),
+        (
+            "resources",
+            json!({"cell-a":(0..17).map(|n|json!({"start_milliseconds":n*10000,
+                                                   "end_milliseconds":n*10000+9000})).collect::<Vec<_>>()}),
+        ),
+        ("allow_estimates", json!(false)),
+        ("source/reference", json!("")),
+        ("method", json!("")),
+    ] {
+        let mut options = valid.clone();
+        *options.pointer_mut(&format!("{prefix}/{field}")).unwrap() = value;
+        assert_eq!(
+            build(&pattern, options).unwrap_err().code,
+            RefusalCode::InvalidDocument,
+            "{field}"
+        );
+    }
+    for (field, value) in [
+        ("available_at_milliseconds", 100u64),
+        ("available_until_milliseconds", 9999),
+    ] {
+        let mut options = valid.clone();
+        options["production"]["routing"]["cells"][0][field] = json!(value);
+        refresh_cell_locks(&mut options);
+        assert_eq!(
+            build(&pattern, options).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+    }
+}
+
 fn attending_labor(mut options: Value, groups: &[&[&str]], travel: u32) -> Value {
     let workers: Vec<_> = groups
         .iter()

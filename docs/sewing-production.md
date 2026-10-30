@@ -1133,6 +1133,75 @@ come from each actual chosen cell and copy. Omitted ownership preserves prior mo
 serialized fields. Synthetic regressions establish these software rules, not measured labor capacity,
 factory throughput, seam quality or hardware authorization.
 
+## Routed operating calendars: shifts, breaks and maintenance windows
+
+Optional `production.routing.availability_calendars` restricts any existing specialist cell,
+attending worker or transfer resource to explicit nonpreemptive windows. Both fixed and eligible
+routes use the same calendar scheduler. Standalone serial and whole-garment parallel policies
+retain their existing availability model. This example uses synthetic software timings:
+
+```json
+{
+  "availability_calendars": {
+    "model": "nonpreemptive_resource_windows/1",
+    "resources": {
+      "cell-a": [
+        {"start_milliseconds": 0, "end_milliseconds": 5299},
+        {"start_milliseconds": 10000, "end_milliseconds": 20000}
+      ],
+      "handoff-resource": [
+        {"start_milliseconds": 0, "end_milliseconds": 15999},
+        {"start_milliseconds": 17000, "end_milliseconds": 25000}
+      ]
+    },
+    "source": {"reference": "YOUR_QUALIFIED_CALENDAR_SOURCE", "accessed_on": "2026-10-30"},
+    "method": "Resource-specific operating windows and complete nonpreemptive occupancy",
+    "conditions": {},
+    "evidence": "estimate",
+    "allow_estimates": true
+  }
+}
+```
+
+Each key names an existing physical resource; an unlisted resource keeps its outer availability.
+The calendar needs its own source, method, conditions, evidence class and explicit estimate consent,
+independently of machine, process, handling and labor qualifications. Existing cell locks still
+apply. This planning input does not query or reserve a live factory calendar.
+
+Every named resource has 1–16 strictly sorted, separated windows inside its existing
+`available_at_milliseconds` and optional `available_until_milliseconds` bounds. Endpoints are
+inclusive exact integer milliseconds from the common job origin, at most `9007199254740991`.
+Touching windows are rejected; combine continuous availability into one window. A zero-length
+window can admit only zero-duration occupancy. Unknown IDs, empty calendars, overlapping windows,
+excess windows and out-of-domain clocks refuse. Up to 17 resources can be named: eight cells,
+eight workers and the transfer resource.
+
+The complete machine interval—loading, setup, feed and final unloading—must fit one cell window.
+A 5,300 ms operation misses a window ending at 5,299 ms and moves intact to the next window.
+A handoff occupies its transfer resource through complete deposit. Worker windows also contain
+empty approach, waiting and the whole attended operation or owned handoff. Departure may move
+to a later window; inactive time before departure is not charged as occupied waiting. An owned
+handoff must fit both the worker and transfer calendars.
+
+Fixture and calendar delays are rechecked together. Each advance crosses a bounded window opening
+or retained fixture release. Gaps preserve setup, worker location and retained state; they do not
+imply travel, inventory return, setup reset or preemption. Complete operations remain dispatch units.
+An unavailable or too-late seed can be replaced by a complete eligible alternative. A branch that
+cannot finish inside the exact clock domain is unavailable, without clamping or preventing other
+qualified cells from being searched. Conservative lower bounds ignore calendar gaps; budget
+exhaustion retains only complete incumbents and does not prove unvisited schedules infeasible.
+
+Calendar jobs use plan `/23`, production `/11` and routing `/6`. The routing report retains the
+exact `availability_calendars` policy. The workbench displays each window beside authoritative
+operation and transfer timelines; retained requests replay without browser-side rescheduling.
+Omission preserves the original schemas and scheduling path.
+
+Synthetic regressions cover complete-phase endpoints, worker travel, shared handoff windows,
+fixture-induced closures, eligible alternatives, finite search, source admission and late-clock
+branches. Native/portable replay checks actual selected stitches and complete schedules. These
+checks do not establish empirical labor capacity, factory throughput, seam quality or hardware
+authorization.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **63 copy/operation pairs** and 1–200000 examined search nodes.
