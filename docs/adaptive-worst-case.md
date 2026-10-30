@@ -68,6 +68,13 @@ reading, source protocol and refusal. The guidance `best_reading` contains the a
 and `best_reported_bound_case_keys` identifies its witnesses. `best_case_key` still names the nominal
 limiting case. These additional range fields are absent in nominal mode.
 
+The workbench's search summary and each trial row display the aggregate range and its separate
+nominal, lower and upper case witnesses. Per-case tables keep their original readings. This avoids
+presenting the nominal case's own interval as the all-case enclosure. Unadmitted trials retain
+their ordinary exclusions without inventing an endpoint witness. Both native commands and the
+portable API replay the same source-qualified mass ranges on the actual sewn-body workflow;
+the existing capture route also supplies exact compiled-WASM replay inputs.
+
 Polling and incumbent replacement require **strict interval separation**, not improvement of
 nominal values, midpoints or only the adverse endpoint. Overlapping, equal or touching intervals
 remain unresolved. Once retention is full, only a strictly dominated incumbent can be replaced;

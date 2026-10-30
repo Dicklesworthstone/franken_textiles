@@ -1120,6 +1120,10 @@ function designComparison(op, parent, study, casePolicies = {}) {
     if (grid.schema === "ftx-design-adaptive-search/1") {
       const guidance = grid.consumer_guidance;
       const bounded = guidance?.basis === "reported_bounds";
+      const worstCase = guidance?.case_aggregation === "worst_case";
+      const limitingCases = (nominal, endpoints) => nominal ?
+        `; nominal limiting case: ${nominal}` + (endpoints ?
+          `; lower endpoint case: ${endpoints[0]}; upper endpoint case: ${endpoints[1]}` : "") : "";
       const readingText = (reading, needsBounds = bounded) => {
         if (!reading) return "Unknown";
         const range = reading.reported_bounds ?
@@ -1134,10 +1138,13 @@ function designComparison(op, parent, study, casePolicies = {}) {
         const reading = guidance.best_reading;
         cells(search, [metric(grid.evaluations), metric(guidance.evaluations), metric(guidance.reserved_evaluations),
           metric(grid.selected_designs), grid.stop_reason?.replaceAll("_", " ") ?? "Unknown",
-          guidance.best_trial_key ?? "Unknown", readingText(reading)]);
+          guidance.best_trial_key ?? "Unknown", readingText(reading) +
+            (worstCase && reading ? limitingCases(guidance.best_case_key, guidance.best_reported_bound_case_keys) : "")]);
         const objective = document.createElement("p");
         objective.textContent = `Guidance material: ${guidance.material_key ?? "Unknown"}. ` +
           (guidance.case_key ? `Guidance case: ${guidance.case_key}. Every declared case must admit a selected trial: ${(guidance.case_order || []).join(", ")}. ` : "") +
+          (worstCase ? `Case aggregation: worst case. Every declared case must admit a selected trial: ${(guidance.case_order || []).join(", ")}. ` +
+            (bounded ? "Reported lower and upper endpoints each retain their own limiting case; they may differ from the nominal limiting case. " : "") : "") +
           `Declared objective: ${guidance.objective?.metric ?? "Unknown"} (${guidance.objective?.direction ?? "Unknown"}). ` +
           (bounded ? "Objective basis: source-reported ranges. Bounded constraints admit the entire reported range; missing required ranges cannot qualify. " +
             "Search advances only when one range is strictly preferred. Overlapping, touching or equal ranges remain unresolved; retained trials do not form a total ranking. " :
@@ -1170,8 +1177,8 @@ function designComparison(op, parent, study, casePolicies = {}) {
         const design = row.design || {}, fit = available(design.fit);
         const passed = design.validation?.passed === true && fit?.passed === true;
         const candidate = row.consumer_comparison;
-        const reading = guidance?.case_aggregation === "worst_case" && bounded ?
-          row.consumer_worst_case?.reading : candidate?.readings?.[guidance?.objective?.metric];
+        const reading = worstCase && bounded ? row.consumer_worst_case?.reading :
+          candidate?.readings?.[guidance?.objective?.metric];
         const admitted = candidate?.eligible === true && !row.refusal &&
           (row.consumer_cases || []).every(item => item.comparison?.eligible === true);
         const reasons = [row.refusal?.message, row.consumer_refusal?.message,
@@ -1182,7 +1189,8 @@ function designComparison(op, parent, study, casePolicies = {}) {
           metric(row.max_fit_band_violation_mm), metric(row.total_fit_band_violation_mm),
           passed ? "Passed declared flat gates" : "Refused",
           ...(guidance ? [candidate ? (admitted ? "Eligible" : "Excluded") : "Not attempted",
-            readingText(reading)] : []),
+            readingText(reading) + (worstCase && reading ?
+              limitingCases(row.consumer_case_key, row.consumer_worst_case?.reported_bound_case_keys) : "")] : []),
           row.selected === true ? "Selected" : "Not selected",
           reasons || (passed ? "Passed declared targets" : "Inspect retained validation")]);
         if (row.consumer_cases?.length) {
@@ -2079,6 +2087,22 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended"]);
   if (policy?.transfer) cells(resources, [policy.transfer.id, metric(seconds(policy.transfer.available_at_milliseconds)),
     typeof policy.transfer.available_until_milliseconds === "number" ? metric(seconds(policy.transfer.available_until_milliseconds)) : "Open ended"]);
+  if (report.availability_calendars) {
+    const calendars = report.availability_calendars;
+    const windows = table(parent, `${label}: nonpreemptive operating windows`,
+      ["Resource", "Window", "Opens (s)", "Inclusive finish (s)"]);
+    for (const [resource, intervals] of Object.entries(calendars.resources)) {
+      for (const [index, interval] of intervals.entries()) cells(windows, [resource, metric(index + 1),
+        metric(seconds(interval.start_milliseconds)), metric(seconds(interval.end_milliseconds))]);
+    }
+    const scope = document.createElement("p");
+    scope.textContent = "Each listed window contains a complete occupied interval. Machine loading, setup, feed and unloading stay together; " +
+      "worker windows include empty travel, waiting and full attendance or carrying. Fixture delays recheck the windows. " +
+      "Gaps preserve machine setup and worker location. Resources without a listed calendar retain their outer availability. " +
+      "These qualified planning inputs do not reserve live resources or authorize hardware.";
+    parent.append(scope);
+    detail(parent, `${label}: operating calendar source and exact windows`, calendars);
+  }
   sewingRoutedWorkholding(parent, report, label);
   sewingRoutedLabor(parent, report, label);
   for (const source of report.cell_plans || []) {
@@ -2315,6 +2339,7 @@ function sewingResult(parent, r) {
     routed_lower_bound_seconds: routing ? routing.lower_bound_makespan_milliseconds / 1000 : undefined,
     routed_optimality_proven: routing?.optimality_proven,
     routed_search_work: routing?.search_nodes,
+    routed_calendar_resources: routing?.availability_calendars ? Object.keys(routing.availability_calendars.resources).length : undefined,
     garment_transfers: routing?.selected?.transfers?.length,
     transfer_seconds: routing ? routing.selected.transfer_milliseconds / 1000 : undefined,
     setup_changes: order?.selected_changes,

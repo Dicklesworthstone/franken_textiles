@@ -71,6 +71,10 @@ pub(super) fn replay(
         assert!(guidance.get("case_key").is_none());
         assert_eq!(guidance["best_case_key"], "weight");
         assert_eq!(selected["consumer_case_key"], "weight");
+        assert_eq!(
+            selected["consumer_comparison"],
+            selected["consumer_cases"][0]["comparison"]
+        );
         assert_eq!(guidance["case_order"], json!(["weight", "guard"]));
         assert_eq!(guidance["reserved_evaluations"], 24);
         assert_eq!(search["selected_designs"], 1);
@@ -85,6 +89,10 @@ pub(super) fn replay(
             assert_eq!(
                 guidance["best_reported_bound_case_keys"],
                 json!(["weight", "weight"])
+            );
+            assert_eq!(
+                selected["consumer_worst_case"]["reported_bound_case_keys"],
+                guidance["best_reported_bound_case_keys"]
             );
             assert_eq!(
                 selected["consumer_worst_case"]["reading"],

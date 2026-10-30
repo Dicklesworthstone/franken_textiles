@@ -121,6 +121,20 @@ admission. Tests: `scenario_comparison::steady_heat_bounds` plus the production 
 conduction, surface and coverage suites; `ftx-wasm/material_scenario::steady_heat_bounds` verifies
 signed range decisions and frozen replay on actual sewn geometry and projected coverage.
 
+**Reported-range worst-case discovery** (`design_adaptive.objective: consumer_worst_case`).
+Every named case declares the same single metric, direction and objective basis, with independent
+ordinary constraint bases and required consumers. Nominal guidance retains its original result.
+Bounded guidance encloses the adverse case outcome with maximum lower/upper endpoints for
+minimization or minimum lower/upper endpoints for maximization. Nominal and endpoint witness case
+keys are independent and deterministically follow authored order on ties. Original per-case
+decisions, source protocols and refusals are retained; missing ranges never become singleton bounds.
+Only strict interval separation advances polling or replaces a dominated retained trial. Each
+case still checks its own protocol across trials even when witnesses change. Actual manufacturing
+and scenario outputs remain cached under shared cumulative budgets. The enclosure assumes only
+the admitted per-case bounds, not independent errors or joint endpoint attainment. Tests:
+`design_worst_case` and selected-body native/portable/WASM replay.
+See `docs/adaptive-worst-case.md`; no global optimality or empirical fit claim follows.
+
 **Moving zero-storage bridge decisions** (`motion.transient_coverage.thermal_bridges`). Existing
 incoming-coverage energy objectives consume the complete signed baseline-plus-excess result. A
 separate temporal qualification binds the exact steady excess observation, actual elapsed/sample
@@ -150,6 +164,20 @@ Geometry, boundaries, initial liquid, supply, latent heat and integration stay f
 comparison ranges do not establish per-interval water bounds, general water-state uncertainty or
 confidence intervals. The consumer shares the ordinary single-case and matrix decision rules and
 preserves independent outputs on refusal. It introduces no wet-textile law or textile-temperature feedback.
+
+**Routed availability calendars** (`production.routing.availability_calendars`, `ftx-pb2.2.13`).
+Source-qualified finite windows constrain complete cell, worker and transfer occupancy in fixed and
+eligible specialist routes. Each named resource has 1–16 strictly separated inclusive windows inside
+its existing outer availability and the exact browser-integer clock domain. Unnamed resources keep
+their prior continuous bounds. Worker approach, waiting and full attendance/carrying fit one window;
+fixture and calendar delays are rechecked together with bounded monotone advancement. Inactive gaps
+preserve setup and location and do not imply preemption. Candidate clock exhaustion excludes only
+that dispatch so an early eligible alternative remains searchable. Exact source policy, complete
+baseline/incumbent, selected cells, stitch streams and conservative proof limits are retained.
+Omission preserves the original schema and scheduling path; calendar jobs use plan `/23`, production
+`/11` and routing `/6`. This is neither a live resource reservation nor empirical factory validation.
+Tests: `sewing_routing`, native/portable `sewing_production_workflow` and compiled-WASM replay.
+See `docs/sewing-production.md` for the supported route-only scope.
 
 **Purpose.** Every deliverable of a pattern as a projection of one model (spec 03). So far: the text and
 number helpers (§2), the seam-allowance cut outline (§3–4), piece geometry (§5), shelf layouts (§6), the

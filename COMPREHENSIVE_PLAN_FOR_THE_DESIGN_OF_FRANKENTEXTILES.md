@@ -4522,6 +4522,34 @@ results. The workbench shows those distinctions. This increment is tracked by `f
 equipment, unrepresented trims, global recipe/design optimality and actual purchasing remain outside
 the declared merchandise calculation.
 
+### 25.132 Carry worst-case source ranges through the garment workbench and replay
+
+Named-case adaptive discovery now composes its worst-case objective with existing source-reported
+consumer ranges. Each case retains its own ordinary admission, protocol and independently based
+constraints. The shared single metric, direction and objective basis determine an enclosing
+worst-case range; nominal, lower and upper endpoints retain their own limiting case identities.
+Strict interval separation governs polling and retained-candidate replacement, leaving touching
+or overlapping ranges unresolved. Original case readings and cached physical-consumer outputs
+remain available under the same cumulative work reservations.
+
+This software increment is tracked by `ftx-ds2.5`; see [adaptive-worst-case.md](docs/adaptive-worst-case.md).
+The enclosure does not infer a statistical dependence model, joint endpoint attainment, empirical
+garment fit or a global search optimum.
+
+### 25.133 Respect qualified shifts and breaks throughout specialist sewing routes
+
+Fixed and eligible specialist routes now accept explicit finite calendars for existing machines,
+attending workers and the transfer resource. Every complete occupied interval fits one inclusive
+window; worker travel, waiting and owned carrying use the same exclusive clock. Fixture-induced
+delays and calendar openings are reconciled before retaining a schedule. Gaps preserve setup and
+worker location, without inventing preemption or transport.
+
+Exact source qualifications, complete bounded incumbents, conservative lower bounds and actual
+chosen-cell stitches remain shared with the ordinary production path. The workbench displays
+effective windows, and retained requests replay through native and portable consumers. This
+increment is tracked by `ftx-pb2.2.13`; see [sewing-production.md](docs/sewing-production.md).
+Live factory reservations, occupied-fixture transport and empirical throughput remain separate.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

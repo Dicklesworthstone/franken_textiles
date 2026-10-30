@@ -84,10 +84,18 @@ test('compiled WASM worst-case sewn-body studies reproduce native constraints an
         if (bounded) {
           assert.equal(guidance.basis, 'reported_bounds');
           assert.deepEqual(guidance.best_reported_bound_case_keys, ['weight', 'weight']);
+          assert.deepEqual(selected.consumer_worst_case.reported_bound_case_keys, guidance.best_reported_bound_case_keys);
           assert.deepEqual(guidance.best_reading, selected.consumer_worst_case.reading);
           assert.ok(guidance.best_reading.reported_bounds[0] < guidance.best_reading.value);
           assert.ok(guidance.best_reading.value < guidance.best_reading.reported_bounds[1]);
+          assert.deepEqual(selected.consumer_comparison, selected.consumer_cases[0].comparison);
+          const expectedArea = Math.PI * 2 * 180 * (100 + selected.design.variables_mm.length) * 1e-6;
+          for (const [i, density] of [0.19, 0.21].entries()) assert.ok(
+            Math.abs(guidance.best_reading.reported_bounds[i] - expectedArea * density) < 1e-6);
+          const guard = selected.consumer_cases[1].comparison.readings.assembly_mass_kg;
+          assert.ok(guard.reported_bounds[0] >= 0.0155);
         } else {
+          assert.equal(guidance.best_reported_bound_case_keys, undefined);
           assert.equal(selected.consumer_worst_case, undefined);
         }
         const note = report.notes.find(text => text.startsWith('Worst-case retained trial'));

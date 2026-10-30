@@ -1986,6 +1986,22 @@ test('routed specialist cells show actual operations, serialized garment transfe
       assert.match(visibleText(s),/Feasible replacement baseline/);
       routing.optimality_proven=true; routing.budget_exhausted=false; routing.baseline_replaced=false;
     }
+    const calendars={model:'nonpreemptive_resource_windows/1',resources:{
+      finish:[{start_milliseconds:0,end_milliseconds:5300},{start_milliseconds:6000,end_milliseconds:12600}],
+      'one-mover':[{start_milliseconds:0,end_milliseconds:10300}]},source:{note:'<qualified calendar evidence>'}};
+    plan.options.production.routing.availability_calendars=calendars;
+    routing.availability_calendars=calendars;
+    await p.e[op].onclick();p.emit(report);
+    assert.deepEqual(plain(table('nonpreemptive operating windows').children[3].children.map(n=>n.textContent)),
+      ['finish','2','6','12.6']);
+    assert.match(visibleText(s),/worker windows include empty travel, waiting and full attendance or carrying/);
+    assert.match(visibleText(s),/Gaps preserve machine setup and worker location/);
+    const calendarDetail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('operating calendar source and exact windows'));
+    calendarDetail.open=true;calendarDetail.handlers.toggle();assert.match(visibleText(calendarDetail),/<qualified calendar evidence>/);
+    if(op==='sew')assert.equal(JSON.parse(s.children[1].textContent).routed_calendar_resources,2);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    delete routing.availability_calendars;
+    delete plan.options.production.routing.availability_calendars;
     const localPeak={straight:{fixture:1},finish:{fixture:1}}, localFinal={straight:{fixture:0},finish:{fixture:0}};
     routing.workholding={schema:'ftx-sewing-routed-workholding/1',
       release_protocol:'available_after_unload_with_access_in_cell_handling/1',
@@ -8068,18 +8084,29 @@ test('consumer-guided adaptive search shows authoritative readings, displaced tr
   assert.match(visibleText(s),/Objective basis: source-reported ranges/);
   assert.match(visibleText(s),/Overlapping, touching or equal ranges remain unresolved/);
   assert.match(visibleText(s),/retained trials do not form a total ranking/);
-  const worst=report.design_search.rows[2];
-  worst.consumer_cases[0].comparison=plain(worst.consumer_comparison);
-  worst.consumer_cases[0].comparison.readings.assembly_mass_kg.reported_bounds=[0.05,0.11];
-  worst.consumer_worst_case={reading:{value:0.08,unit:'kg',reported_bounds:[0.07,0.11]},
+  const guidance=report.design_search.consumer_guidance;
+  delete guidance.case_key;
+  guidance.case_aggregation='worst_case';
+  guidance.best_case_key='<warm>';
+  guidance.best_reported_bound_case_keys=['<warm>','<cold>'];
+  const retained=report.design_search.rows[2];
+  retained.consumer_cases[0].comparison=plain(retained.consumer_comparison);
+  retained.consumer_cases[0].comparison.readings.assembly_mass_kg.reported_bounds=[0.05,0.11];
+  retained.consumer_case_key='<warm>';
+  retained.consumer_worst_case={reading:{value:0.08,unit:'kg',reported_bounds:[0.07,0.11]},
     reported_bound_case_keys:['<warm>','<cold>']};
-  report.design_search.consumer_guidance.case_aggregation='worst_case';
-  report.design_search.consumer_guidance.best_reading=worst.consumer_worst_case.reading;
+  guidance.best_reading=retained.consumer_worst_case.reading;
   await p.e.study.onclick();p.emit(report);
+  assert.equal(table('Consumer-guided adaptive alteration search').children[2].children.at(-1).textContent,
+    '0.08 kg; reported range [0.07, 0.11] kg; nominal limiting case: <warm>; lower endpoint case: <warm>; upper endpoint case: <cold>');
   assert.equal(table('Adaptive alteration trials').children[4].children[6].textContent,
-    '0.08 kg; reported range [0.07, 0.11] kg','Trial objective uses the authoritative worst-case envelope');
+    '0.08 kg; reported range [0.07, 0.11] kg; nominal limiting case: <warm>; lower endpoint case: <warm>; upper endpoint case: <cold>',
+    'Trial objective uses the authoritative worst-case envelope');
   assert.equal(table('Adaptive alteration trials').children[2].children[6].textContent,'Unknown',
     'An unavailable worst-case envelope cannot fall back to one available case interval');
+  assert.match(visibleText(s),/Case aggregation: worst case/);
+  assert.match(visibleText(s),/endpoints each retain their own limiting case/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
   report.design_search.consumer_guidance.best_trial_key=null;
   report.design_search.consumer_guidance.best_reading=null;
   await p.e.study.onclick(); p.emit(report);
@@ -8653,6 +8680,27 @@ test('compiled WASM moving seam bridges change qualified heat decisions and pres
         assert.equal(result.files.find(file=>file.name==='body-input.json').text,input('body-input.json'));
       }
     } finally {globalThis.ftxProgress=previousProgress;}
+  });
+
+test('compiled WASM routed calendars replay complete native operations and handoffs through the worker',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_ROUTED_FIXTURE_REPLAY},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const input=name=>fs.readFileSync(path.join(process.env.FTX_ROUTED_FIXTURE_REPLAY,'calendar-fixed',name),'utf8');
+    const pattern=input('pattern.json'),options=input('options.json'),expected=input('program.json');
+    assert.equal(ftx.sew_stitches(pattern,options),expected);
+    const worker=await workerModule({bindings:ftx});
+    const result=await worker.send({type:'sew',request:250,pattern,options});
+    assert.equal(result.type,'result',result.message);
+    assert.equal(result.files.find(file=>file.name==='sewing-program.json').text,expected);
+    assert.deepEqual(result.result,JSON.parse(expected));
+    const route=result.result.plan.production.routing;
+    assert.equal(route.schema,'ftx-sewing-routing/6');
+    assert.equal(route.selected.makespan_milliseconds,21934);
+    assert.equal(route.selected.operations[0].loading_start_milliseconds,10000);
+    assert.equal(route.selected.transfers[0].start_milliseconds,17000);
+    assert.deepEqual(route.availability_calendars,JSON.parse(options).production.routing.availability_calendars);
   });
 
 test('compiled WASM routed shared fixtures and attending workers replay exact native sewing reports',
