@@ -5507,6 +5507,44 @@ test('named adaptive trials apply each case constraint basis to retained reading
   assert.match(visibleText(s),/nominal \(explicit\)/);
 });
 
+test('complete fabric and thread costs retain independent refusals and bounded allocation proof in every study view', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const rows=['complete','bounded','shared stock'].map(key=>studyRow(key));
+  const receipt={schema:'ftx-cut-and-sew-purchasing/1',pattern_sha256:'pattern-lock',production_copies:2,
+    market:{currency:'USD',region:'US',quality:'synthetic',terms:'merchandise',as_of:'2026-10-30'},
+    quote_book_sha256:'same-history',fabric_consumer:'cutting_job',fabric_selected_order_cost:3.5,
+    thread_selected_order_cost:14,selected_order_cost:17.5,fabric_order_allocation_optimality_proven:true,
+    order_allocation_optimality_proven:true,complete_observed_quantity_coverage:true,
+    fabric_offer_ids:['<retained fabric>'],thread_offer_ids:['yarn'],stock_aliases_examined:3,execution_authorized:false};
+  rows[0].cut_and_sew_purchasing=outcome(receipt);
+  rows[1].cut_and_sew_purchasing=outcome({...receipt,order_allocation_optimality_proven:false,
+    fabric_order_allocation_optimality_proven:false});
+  rows[2].cut_and_sew_purchasing=refused('Current supplier stock alias shared between fabric and thread');
+  for(const row of rows){row.cutting=outcome();row.sewing=outcome();row.metrics.thread_observed_order_cost=14;}
+  const study=studyReport(rows);
+  for(const mode of ['study','scenario','matrix']) {
+    const report=mode==='study'?study:mode==='scenario'?{...scenarioReport(),manufacturing:study}:
+      {...scenarioMatrixReport(),manufacturing:study};
+    const op=mode==='study'?'study':'scenario';await p.e[op].onclick();p.emit(report);
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const tables=descendants(s).filter(n=>n.tag==='table'&&n.children[0].textContent==='Complete fabric + thread merchandise orders');
+    assert.equal(tables.length,1,mode);const t=tables[0];
+    assert.deepEqual(t.children[2].children.map(n=>n.textContent),
+      ['complete','Available','2','3.5','14','17.5','USD','Proved for fixed demands','Complete observed capacity']);
+    assert.equal(t.children[3].children[5].textContent,'17.5');
+    assert.equal(t.children[3].children[7].textContent,'Complete feasible orders; optimum unproved');
+    assert.match(t.children[4].children[1].textContent,/supplier stock alias/);
+    assert.deepEqual(t.children[4].children.slice(2).map(n=>n.textContent),Array(7).fill('Unknown'));
+    const detail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('complete: complete fabric and thread'));
+    detail.open=true;detail.handlers.toggle();assert.match(visibleText(detail),/<retained fabric>/);
+    assert.match(visibleText(s),/independent fabric and thread results available/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  await p.e.study.onclick();p.emit(studyReport());
+  assert.equal(descendants(section(p,'Fixed-pattern manufacturing alternatives')).some(n=>
+    n.tag==='table'&&n.children[0].textContent==='Complete fabric + thread merchandise orders'),false);
+});
+
 test('assembly mass and finite stock retain independent totals and refusals in manufacturing and scenario studies', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   const a = studyRow('complete'), b = studyRow('unknown'), c = studyRow('refused');
@@ -8030,6 +8068,18 @@ test('consumer-guided adaptive search shows authoritative readings, displaced tr
   assert.match(visibleText(s),/Objective basis: source-reported ranges/);
   assert.match(visibleText(s),/Overlapping, touching or equal ranges remain unresolved/);
   assert.match(visibleText(s),/retained trials do not form a total ranking/);
+  const worst=report.design_search.rows[2];
+  worst.consumer_cases[0].comparison=plain(worst.consumer_comparison);
+  worst.consumer_cases[0].comparison.readings.assembly_mass_kg.reported_bounds=[0.05,0.11];
+  worst.consumer_worst_case={reading:{value:0.08,unit:'kg',reported_bounds:[0.07,0.11]},
+    reported_bound_case_keys:['<warm>','<cold>']};
+  report.design_search.consumer_guidance.case_aggregation='worst_case';
+  report.design_search.consumer_guidance.best_reading=worst.consumer_worst_case.reading;
+  await p.e.study.onclick();p.emit(report);
+  assert.equal(table('Adaptive alteration trials').children[4].children[6].textContent,
+    '0.08 kg; reported range [0.07, 0.11] kg','Trial objective uses the authoritative worst-case envelope');
+  assert.equal(table('Adaptive alteration trials').children[2].children[6].textContent,'Unknown',
+    'An unavailable worst-case envelope cannot fall back to one available case interval');
   report.design_search.consumer_guidance.best_trial_key=null;
   report.design_search.consumer_guidance.best_reading=null;
   await p.e.study.onclick(); p.emit(report);
@@ -8527,6 +8577,37 @@ test('compiled WASM consumer-guided alterations optimize real cloth mass and pre
       assert.equal(mixed.files.find(file=>file.name==='scenario-request.json').text,mixedScenario);
       assert.equal(mixed.files.find(file=>file.name==='body-input.json').text,input('body-input.json'));
     } finally {globalThis.ftxProgress=previousProgress;}
+  });
+
+test('compiled WASM complete fabric and selected thread orders reproduce native totals and shared-stock refusals',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_CUT_AND_SEW_REPLAY},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const input=name=>fs.readFileSync(path.join(process.env.FTX_CUT_AND_SEW_REPLAY,name),'utf8');
+    const w=await workerModule({bindings:ftx}),pattern=input('pattern.json');
+    for(const [index,name] of ['complete','shared-stock'].entries()) {
+      const studyRequest=input(`${name}-study.json`);
+      const result=await w.send({type:'study',request:230+index,pattern,studyRequest});
+      assert.equal(result.type,'result',result.message);
+      assert.deepEqual(result.result,JSON.parse(input(`${name}-report.json`)));
+      assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
+      const row=result.result.alternatives[0];
+      assert.equal(row.cutting.status,'available');assert.equal(row.sewing.status,'available');
+      assert.equal(row.metrics.thread_observed_order_cost,14);
+      if(name==='complete') {
+        const receipt=row.cut_and_sew_purchasing.result;
+        assert.equal(row.cut_and_sew_purchasing.status,'available');assert.equal(receipt.production_copies,2);
+        assert.equal(receipt.thread_selected_order_cost,14);assert.equal(receipt.execution_authorized,false);
+        assert.equal(receipt.order_allocation_optimality_proven,true);
+        assert.equal(row.metrics.cut_and_sew_selected_order_cost,receipt.selected_order_cost);
+        assert.deepEqual(result.result.comparison.frontier,['complete-batch']);
+      } else {
+        assert.equal(row.cut_and_sew_purchasing.status,'refused');
+        assert.equal(row.metrics.cut_and_sew_selected_order_cost,undefined);
+        assert.deepEqual(result.result.comparison.frontier,[]);
+      }
+    }
   });
 
 test('compiled WASM moving seam bridges change qualified heat decisions and preserve native late-refusal histories',

@@ -269,6 +269,51 @@ its explicitly declared objective, including complete batch thread order cost wh
 At most 200,000 configured thread-purchasing work units are admitted across all expanded material
 and design alternatives and recipe trials. Named scenario cases reuse the manufacturing result.
 
+### Complete declared cut-and-sew purchasing
+
+Set `cut_and_sew_purchasing: true` to compose complete fabric and selected-plan thread orders for
+the same garment batch. Supply either ordinary `cutting` plus `purchasing`, or one complete
+`cutting_job` with purchasing for every used roll and finite item. Also supply priced consumables
+through `sewing` or `sewing_selection`. The two sides must use the exact same immutable quote book
+and comparable market: currency, region, quality, terms, evaluation date/instant, maximum age and
+capacity policies. Fabric's optional `split_orders` search policy can differ because it controls the
+allocation algorithm rather than the comparable market. No currency conversion or source history
+merging is inferred.
+
+The `cut_and_sew_purchasing` outcome retains an `ftx-cut-and-sew-purchasing/1` receipt containing the
+common pattern hash, reconciled production count, market, quote-book hash, selected offer identities,
+the fabric and thread contributions, and their complete `selected_order_cost`. Both contributions
+come from the actual consumer reports after supplier minimums, increments, tiers and source capacity
+checks. A complete mixed-stock job includes every used finite item and roll. The thread contribution
+uses the actual selected recipe and cell assignment, including its complete batch demand.
+
+Use this consumer and nominal objective to select a material or design by their combined declared
+merchandise requirement:
+
+```json
+{
+  "basis": "nominal",
+  "objectives": [{"metric": "cut_and_sew_selected_order_cost", "direction": "minimize"}],
+  "required_consumers": ["cut_and_sew_purchasing"]
+}
+```
+
+A bounded fabric allocation may supply a complete feasible selected cost while
+`order_allocation_optimality_proven` remains false. The proof flag concerns order allocation for
+these fixed material demands; it does not establish globally optimal nesting, design, recipe, cell
+assignment or supplier bundles. Missing or refused consumers, an unpriced item/channel, inconsistent
+counts, different market/history inputs, or cross-consumer stock aliases withhold only this composite
+outcome and metric. Independent cutting, sewing and purchasing reports remain available to inspect.
+Alias checks use current source observations, including transitive links through unused base and tier
+SKUs; future and superseded identities cannot create a current collision. This prevents the same
+supplier inventory from supplying fabric and thread independently. Additional history/alias work is
+included in the study's existing aggregate purchasing budget.
+
+The total covers the declared fabric and thread merchandise only. Labor, equipment, shipping or taxes
+outside the common quote terms, and unrepresented trims are outside its scope. It does not establish
+retained garment mass, reserve inventory, place orders or authorize machine execution. Omission of
+`cut_and_sew_purchasing` preserves the independent consumer behavior and wire format.
+
 ### Heterogeneous material combinations
 
 `combinations` is a third alternative source, exclusive with `variants` and `screened`. It evaluates

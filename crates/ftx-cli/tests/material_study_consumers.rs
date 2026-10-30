@@ -238,6 +238,137 @@ fn production_thread_orders_follow_cutting_copies_in_native_and_portable_consume
 }
 
 #[test]
+fn complete_cut_and_sew_orders_replay_in_both_native_and_portable_studies() {
+    let mut source: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+    ))
+    .unwrap();
+    source["fabric"]["material"]["record"]["properties"]["width"] = json!({
+        "value":0.1,"unit":"m","evidence":"estimate","source":"test",
+        "method":"Synthetic stock width for complete declared purchasing integration"});
+    let material = ftx_pattern::materials::Catalog {
+        schema: ftx_pattern::materials::CATALOG_SCHEMA.into(),
+        materials: Vec::new(),
+    }
+    .resolve(&serde_json::from_value(source["fabric"]["material"].clone()).unwrap())
+    .unwrap()
+    .frozen_selection();
+    source["fabric"]["material"] = json!(material);
+    let mut selection: Value = serde_json::from_str(include_str!(
+        "../../../examples/sewing-thread-cost-selection.json"
+    ))
+    .unwrap();
+    for qualification in selection["options"]["qualifications"]
+        .as_array_mut()
+        .unwrap()
+    {
+        qualification["materials"] = json!([material.expected_sha256, material.expected_sha256]);
+    }
+    let yarn = &mut selection["options"]["consumables"]["purchasing"]["quote_book"]["quotes"][0];
+    yarn["available_quantity"] = json!(16.0);
+    let mut fabric = yarn.clone();
+    fabric["offer_id"] = json!("synthetic-cloth-roll");
+    fabric["material_id"] = json!(material.id);
+    fabric["material_sha256"] = json!(material.expected_sha256);
+    fabric["sku"] = json!("synthetic-cloth-stock");
+    fabric["price"] = json!(3.0);
+    fabric["quantity"] = json!(1.0);
+    fabric["minimum_quantity"] = json!(0.1);
+    fabric["order_increment"] = json!(0.1);
+    fabric["price_breaks"] = json!([]);
+    let input = &mut selection["options"]["consumables"]["purchasing"];
+    input["quote_book"]["quotes"]
+        .as_array_mut()
+        .unwrap()
+        .push(fabric);
+    let purchasing = json!({"market":input["market"],"quotes":input["quote_book"]});
+    let mut study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"complete-batch","changes":{"schema":"ftx-material-bindings/1","default":material}}],
+        "cutting":{"copies":2,"gap_mm":2.0,"edge_margin_mm":0.0,"end_margin_mm":0.0},
+        "purchasing":purchasing,"cut_and_sew_purchasing":true,"sewing_selection":selection,
+        "comparison":{"basis":"nominal","required_consumers":["cut_and_sew_purchasing"],
+            "objectives":[{"metric":"cut_and_sew_selected_order_cost","direction":"minimize"}]}});
+    let pattern = source.to_string();
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-cut-and-sew-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("pattern.json"), &pattern).unwrap();
+    for shared_stock in [false, true] {
+        if shared_stock {
+            let sku = study["purchasing"]["quotes"]["quotes"][0]["sku"].clone();
+            study["purchasing"]["quotes"]["quotes"][1]["sku"] = sku;
+            study["sewing_selection"]["options"]["consumables"]["purchasing"]["quote_book"] =
+                study["purchasing"]["quotes"].clone();
+        }
+        let text = study.to_string();
+        let portable: Value =
+            serde_json::from_str(&ftx_wasm::materials::study(&pattern, &text).unwrap()).unwrap();
+        let row = &portable["alternatives"][0];
+        assert_eq!(row["cutting"]["status"], "available");
+        assert_eq!(row["purchasing"]["result"]["complete_offer_coverage"], true);
+        assert_eq!(row["sewing"]["status"], "available");
+        assert_eq!(row["sewing_selection"]["result"]["optimality_proven"], true);
+        assert_eq!(row["metrics"]["thread_observed_order_cost"], 14.0);
+        if shared_stock {
+            assert_eq!(row["cut_and_sew_purchasing"]["status"], "refused");
+            assert!(row["metrics"]["cut_and_sew_selected_order_cost"].is_null());
+            assert_eq!(portable["comparison"]["frontier"], json!([]));
+        } else {
+            let complete = &row["cut_and_sew_purchasing"]["result"];
+            assert_eq!(
+                row["cut_and_sew_purchasing"]["status"], "available",
+                "{row}"
+            );
+            assert_eq!(complete["production_copies"], 2);
+            assert_eq!(complete["thread_selected_order_cost"], 14.0);
+            assert_eq!(complete["order_allocation_optimality_proven"], true);
+            assert_eq!(complete["execution_authorized"], false);
+            let fabric = row["metrics"]["selected_observed_order_total"]
+                .as_f64()
+                .unwrap();
+            assert!(fabric > 0.0);
+            assert!(
+                (complete["selected_order_cost"].as_f64().unwrap() - fabric - 14.0).abs() < 1e-12
+            );
+            assert_eq!(
+                row["metrics"]["cut_and_sew_selected_order_cost"],
+                complete["selected_order_cost"]
+            );
+            assert_eq!(
+                portable["comparison"]["frontier"],
+                json!(["complete-batch"])
+            );
+        }
+        fs::write(dir.join("study.json"), &text).unwrap();
+        for main in [false, true] {
+            assert_eq!(run(main, &dir), portable);
+        }
+        if let Some(export) = std::env::var_os("FTX_CUT_AND_SEW_REPLAY") {
+            let export = std::path::PathBuf::from(export);
+            fs::create_dir_all(&export).unwrap();
+            fs::write(export.join("pattern.json"), &pattern).unwrap();
+            let name = if shared_stock {
+                "shared-stock"
+            } else {
+                "complete"
+            };
+            fs::write(export.join(format!("{name}-study.json")), &text).unwrap();
+            fs::write(
+                export.join(format!("{name}-report.json")),
+                portable.to_string(),
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
 fn sourced_yarn_mass_and_kilogram_purchasing_replay_in_native_and_portable_studies() {
     let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
     let source: Value = serde_json::from_str(pattern).unwrap();

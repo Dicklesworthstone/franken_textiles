@@ -44,7 +44,7 @@ trial's structured per-case results remain inspectable alongside this summary.
 ## Source-reported ranges across cases
 
 Set every effective policy's `basis` to `reported_bounds` to use the ordinary comparator's supported
-assembly-mass, vapor or final finite-water ranges. Unsupported metrics still refuse. Every case
+assembly-mass, constant steady-heat, vapor or final finite-water ranges. Unsupported metrics still refuse. Every case
 must supply complete admitted objective endpoints. Each constraint uses its explicit basis or
 inherits its case's objective basis: bounded guards admit the entire original range, while nominal
 guards test the original computed value. A nominal guard cannot relax a bounded objective.

@@ -31,6 +31,7 @@ pub mod combinations;
 pub mod comparison;
 pub mod design;
 pub mod matrix;
+pub mod purchasing;
 pub mod recipes;
 pub mod vapor;
 
@@ -174,6 +175,10 @@ pub struct Request {
     /// Optional pricing requires cutting, because purchased area comes from the actual marker.
     #[serde(default)]
     pub purchasing: Option<Purchasing>,
+    /// Compose complete declared cut-stock and selected-plan thread orders in one exact market.
+    /// Missing or incompatible dependencies refuse only this composite consumer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cut_and_sew_purchasing: bool,
     /// Optional complete cut-piece inventory plus declared extras for ONE assembly, not stock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assembly_mass: Option<assembly_mass::Request>,
@@ -304,6 +309,10 @@ pub struct Metrics {
     /// Separate from cut-stock purchasing; missing channels or offers never produce a subtotal.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_observed_order_cost: Option<f64>,
+    /// Complete feasible cut-stock plus thread orders, in their common declared market currency.
+    /// Excludes labor, equipment and unrepresented trims; no global manufacturing minimum claim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cut_and_sew_selected_order_cost: Option<f64>,
 }
 
 /// One source-locked alternative, with independent production-planner results.
@@ -339,6 +348,9 @@ pub struct Alternative {
     pub sewing_selection: Outcome<recipes::Selection>,
     /// Real marker-derived purchasing output or refusal; missing offers remain explicit within it.
     pub purchasing: Outcome<Value>,
+    /// Complete selected fabric/thread orders with coherent source history and disjoint stock.
+    #[serde(skip_serializing_if = "Outcome::is_not_requested")]
+    pub cut_and_sew_purchasing: Outcome<purchasing::Report>,
     /// Every physical cut piece plus sourced extras; an available report can still have unknown mass.
     #[serde(skip_serializing_if = "Outcome::is_not_requested")]
     pub assembly_mass: Outcome<assembly_mass::Report>,
@@ -551,6 +563,7 @@ impl Request {
                 && self.cutting_job.is_none()
                 && self.sewing.is_none()
                 && self.sewing_selection.is_none()
+                && !self.cut_and_sew_purchasing
                 && self.assembly_mass.is_none()
                 && self.vapor.is_none())
             || (self.purchasing.is_some() && self.cutting.is_none())
@@ -947,9 +960,18 @@ impl Request {
                 // its admission fails before the purchasing evaluator can perform quote work.
                 Err(_) => 0,
             };
-            if work.saturating_mul(alternatives) > 200_000 {
+            let composite_work = if self.cut_and_sew_purchasing {
+                purchasing::work_bound(options)
+            } else {
+                0
+            };
+            if work
+                .saturating_add(composite_work)
+                .saturating_mul(alternatives)
+                > 200_000
+            {
                 return Err(budget(
-                    "material/design study exceeds 200000 aggregate thread-purchasing work units; reduce variants, recipe trials or quote observations",
+                    "material/design study exceeds 200000 aggregate thread-purchasing/composite work units; reduce variants, recipe trials or quote observations",
                 ));
             }
         }
@@ -1088,6 +1110,9 @@ impl Request {
         if self.cutting_job.is_some() {
             notes.push("The cutting job routes every original physical instance and copy exactly once across roll and finite stock. Its gross stock includes waste, defects and prior cuts; complete purchasing adds whole roll orders and used physical items only when all same-market prices are known. No stock is reserved and no machine is driven.");
         }
+        if self.cut_and_sew_purchasing {
+            notes.push("Cut-and-sew purchasing composes only complete actual cut-stock and selected-plan thread orders for the same garment quantity, comparable market and immutable quote history. Cross-consumer supplier stock aliases refuse the composite while preserving independent reports. Selected feasible costs remain distinct from allocation minimum proofs; labor, equipment, unrepresented trims, supplier bundles and costs outside the declared terms are excluded. No inventory is reserved and no purchase is authorized.");
+        }
         if self.combinations.is_some() {
             notes.push("Every declared material combination is evaluated through the same production consumers. The frontier is conditional on this finite choice set and the declared comparison policy, not a global material/design optimum. Explicit interface pools select exact assigned snapshot pairs only; missing pair evidence remains a consumer refusal.");
         }
@@ -1205,6 +1230,7 @@ impl Request {
             sewing: Outcome::NotRequested,
             sewing_selection: Outcome::NotRequested,
             purchasing: Outcome::NotRequested,
+            cut_and_sew_purchasing: Outcome::NotRequested,
             assembly_mass: Outcome::NotRequested,
             vapor: Outcome::NotRequested,
             metrics: Metrics::default(),
@@ -1239,6 +1265,11 @@ impl Request {
                 }
                 if self.purchasing.is_some() {
                     row.purchasing = Outcome::Refused {
+                        refusal: refusal.clone(),
+                    };
+                }
+                if self.cut_and_sew_purchasing {
+                    row.cut_and_sew_purchasing = Outcome::Refused {
                         refusal: refusal.clone(),
                     };
                 }
@@ -1429,6 +1460,13 @@ impl Request {
                 } else {
                     row.metrics.least_observed_independent_order_total
                 };
+        }
+        if self.cut_and_sew_purchasing {
+            row.cut_and_sew_purchasing = Outcome::from_result(purchasing::evaluate(self, &row));
+            row.metrics.cut_and_sew_selected_order_cost = row
+                .cut_and_sew_purchasing
+                .value()
+                .map(|report| report.selected_order_cost);
         }
         row.binding = Outcome::Available { result: bound };
         Ok(row)

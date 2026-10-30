@@ -66,6 +66,7 @@ jobs:
           FTX_CONDENSING_MECHANICS_REPLAY: ${{ runner.temp }}/ftx-condensing-mechanics-replay
           FTX_ROUTED_FIXTURE_REPLAY: ${{ runner.temp }}/ftx-routed-fixture-replay
           FTX_CONSUMER_ADAPTIVE_CAPTURE_DIR: ${{ runner.temp }}/ftx-consumer-adaptive-replay
+          FTX_CUT_AND_SEW_REPLAY: ${{ runner.temp }}/ftx-cut-and-sew-replay
           FTX_MOVING_BRIDGES_REPLAY: ${{ runner.temp }}/ftx-moving-bridges-replay
         run: cargo test --workspace --locked
       - name: Test supplier source adapters
@@ -90,6 +91,7 @@ jobs:
           FTX_CONDENSING_MECHANICS_REPLAY: ${{ runner.temp }}/ftx-condensing-mechanics-replay
           FTX_ROUTED_FIXTURE_REPLAY: ${{ runner.temp }}/ftx-routed-fixture-replay
           FTX_CONSUMER_ADAPTIVE_REPLAY: ${{ runner.temp }}/ftx-consumer-adaptive-replay
+          FTX_CUT_AND_SEW_REPLAY: ${{ runner.temp }}/ftx-cut-and-sew-replay
           FTX_MOVING_BRIDGES_REPLAY: ${{ runner.temp }}/ftx-moving-bridges-replay
         run: |
           cargo install wasm-bindgen-cli --version 0.2.128 --locked

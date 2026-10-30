@@ -130,6 +130,7 @@ pub(super) fn case(combined: bool) -> (Alternative, Value, Value) {
         sewing: Outcome::NotRequested,
         sewing_selection: Outcome::NotRequested,
         purchasing: Outcome::NotRequested,
+        cut_and_sew_purchasing: Outcome::NotRequested,
         assembly_mass: Outcome::NotRequested,
         vapor: Outcome::NotRequested,
         metrics: Metrics::default(),

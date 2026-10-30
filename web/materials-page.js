@@ -356,7 +356,8 @@ function objectiveComparison(parent, r) {
   const threadLabels = {
     thread_required_length_m: "Required thread length",
     thread_required_mass_kg: "Consumed thread mass",
-    thread_observed_order_cost: "Complete thread order cost"
+    thread_observed_order_cost: "Complete thread order cost",
+    cut_and_sew_selected_order_cost: "Complete fabric + thread order cost"
   };
   const contactLabels = {
     body_contact_resultant_n: "Initial body-contact resultant",
@@ -404,10 +405,10 @@ function objectiveComparison(parent, r) {
     parent.append(textileWater);
   }
   if (metrics.some(o => Object.hasOwn(threadLabels, o.metric)) ||
-      r.policy.required_consumers?.some(name => ["sewing_consumables", "sewing_purchasing"].includes(name))) {
+      r.policy.required_consumers?.some(name => ["sewing_consumables", "sewing_purchasing", "cut_and_sew_purchasing"].includes(name))) {
     const thread = document.createElement("p");
     thread.textContent = "Thread comparison uses the selected sewing plan's complete, source-qualified channels and exact yarn orders. " +
-      "Thread purchasing retains its own currency and dated market, independently of cutting purchases. " +
+      "Thread purchasing retains its own currency and dated market. A requested complete fabric + thread cost additionally requires one coherent market and quote history with distinct physical stock. " +
       "Missing channels or offers leave the corresponding complete metric unknown. Recipe selection by time does not prove a thread-cost optimum.";
     parent.append(thread);
   }
@@ -1168,7 +1169,9 @@ function designComparison(op, parent, study, casePolicies = {}) {
       for (const [i, row] of (grid.rows || []).entries()) {
         const design = row.design || {}, fit = available(design.fit);
         const passed = design.validation?.passed === true && fit?.passed === true;
-        const candidate = row.consumer_comparison, reading = candidate?.readings?.[guidance?.objective?.metric];
+        const candidate = row.consumer_comparison;
+        const reading = guidance?.case_aggregation === "worst_case" && bounded ?
+          row.consumer_worst_case?.reading : candidate?.readings?.[guidance?.objective?.metric];
         const admitted = candidate?.eligible === true && !row.refusal &&
           (row.consumer_cases || []).every(item => item.comparison?.eligible === true);
         const reasons = [row.refusal?.message, row.consumer_refusal?.message,
@@ -1431,6 +1434,7 @@ function manufacturingComparison(op, parent, study, computed, casePolicies = {})
   }
   sewingConsumablesComparison(parent, study.alternatives, computed);
   cuttingJobComparison(op, parent, study.alternatives);
+  cutAndSewPurchasingComparison(parent, study.alternatives, computed);
   assemblyMassComparison(parent, study.alternatives);
   vaporComparison(op, parent, study.alternatives);
   if (study.screening) screening(parent, study.screening);
@@ -1511,8 +1515,36 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
     "Qualified yarn linear density can supply consumed mass and convert kilogram offers while keeping supplier rounding in the original sale units. " +
     "Missing density leaves length-only results usable; mass never establishes an uninterrupted thread length. " +
     "Consumed thread includes the declared allowances and is not retained assembly mass. Explicit production schedules report their complete batch timing. " +
-    "Thread prices retain their own currency and market; they are not combined with cutting costs. " +
+    "Thread prices retain their own currency and market; an explicitly requested cut-and-sew total separately checks complete fabric orders and a common source market. " +
     "Time-based recipe selection does not prove the least thread cost.";
+  parent.append(note);
+}
+function cutAndSewPurchasingComparison(parent, alternatives, computed) {
+  const requested = [...(computed?.policy?.objectives || []), ...(computed?.policy?.constraints || [])]
+    .some(item => item.metric === "cut_and_sew_selected_order_cost") ||
+    computed?.policy?.required_consumers?.includes("cut_and_sew_purchasing");
+  if (!requested && !alternatives.some(row => row.cut_and_sew_purchasing &&
+      row.cut_and_sew_purchasing.status !== "not_requested")) return;
+  const t = table(parent, "Complete fabric + thread merchandise orders",
+    ["Alternative", "Combined purchasing", "Garment copies", "Fabric cost", "Thread cost", "Complete selected cost",
+      "Currency", "Order allocation proof", "Observed quantity coverage"]);
+  for (const row of alternatives) {
+    const r = available(row.cut_and_sew_purchasing);
+    cells(t, [row.key, state(row.cut_and_sew_purchasing), metric(r?.production_copies),
+      metric(r?.fabric_selected_order_cost), metric(r?.thread_selected_order_cost), metric(r?.selected_order_cost),
+      r?.market?.currency || "Unknown", r ? (r.order_allocation_optimality_proven ? "Proved for fixed demands" :
+        "Complete feasible orders; optimum unproved") : "Unknown",
+      r ? (r.complete_observed_quantity_coverage ? "Complete observed capacity" : "Not fully observed") : "Unknown"]);
+    detail(parent, `${row.key}: complete fabric and thread orders, common market and source history (display only)`,
+      r || { refusal: row.cut_and_sew_purchasing?.refusal });
+  }
+  const note = document.createElement("p");
+  note.textContent = "The total uses complete actual fabric orders and the selected sewing plan's complete thread orders for the same garment count. " +
+    "Both sides share one comparable market and immutable quote history; current supplier stock aliases cannot supply both independently. " +
+    "Supplier minimums, increments, tiers and declared capacity rules are already included by Rust. " +
+    "A complete feasible total can remain available without a proved allocation minimum. Its proof applies to the fixed demands, not all designs, recipes or cell assignments. " +
+    "Labor, equipment, unrepresented trims and costs outside the declared quote terms are outside this merchandise total. " +
+    "A refused combined total leaves the independent fabric and thread results available for review.";
   parent.append(note);
 }
 function cuttingJobComparison(op, parent, alternatives) {

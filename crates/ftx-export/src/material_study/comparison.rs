@@ -51,6 +51,8 @@ pub enum Consumer {
     SewingConsumables,
     /// Complete exact-yarn whole orders in the sewing consumer's dated market.
     SewingPurchasing,
+    /// Complete declared fabric and selected-plan thread orders in one coherent source market.
+    CutAndSewPurchasing,
     /// Complete marker-derived whole-order offer coverage in the request's dated market scope.
     Purchasing,
     /// Complete declared pre-finishing assembly inventory, not a purchased or simulated subset.
@@ -142,6 +144,8 @@ pub enum Metric {
     ThreadRequiredMassKg,
     /// Complete independent thread orders in their own currency; never a cut-and-sew subtotal.
     ThreadObservedOrderCost,
+    /// Complete selected fabric plus thread merchandise cost for the same declared garment batch.
+    CutAndSewSelectedOrderCost,
     /// Potential latent power (W) through the declared stack; water supply is not modeled.
     VaporPotentialHeatFlowW,
     /// Potential vapor mass flow (kg/s), using the same explicit boundaries and latent heat.
@@ -273,6 +277,7 @@ impl Metric {
             | Self::SewingParallelMakespanSeconds => Consumer::Sewing,
             Self::ThreadRequiredLengthM | Self::ThreadRequiredMassKg => Consumer::SewingConsumables,
             Self::ThreadObservedOrderCost => Consumer::SewingPurchasing,
+            Self::CutAndSewSelectedOrderCost => Consumer::CutAndSewPurchasing,
             Self::VaporPotentialHeatFlowW | Self::VaporPotentialMassFlowKgS => Consumer::Vapor,
             Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
             Self::BodyContactResultantN | Self::MaxBodyContactVertexForceN => {
@@ -355,6 +360,7 @@ impl Metric {
             | Self::SelectedObservedOrderCost
             | Self::CuttingJobObservedOrderCost
             | Self::CuttingJobSelectedOrderCost
+            | Self::CutAndSewSelectedOrderCost
             | Self::ThreadObservedOrderCost => currency.unwrap_or("unavailable currency"),
             Self::ThreadRequiredLengthM => "m",
             Self::StitchIntervals | Self::UsedStockCount => "count",
@@ -434,6 +440,7 @@ impl Metric {
             Self::ThreadRequiredLengthM => row.metrics.thread_required_length_m,
             Self::ThreadRequiredMassKg => row.metrics.thread_required_mass_kg,
             Self::ThreadObservedOrderCost => row.metrics.thread_observed_order_cost,
+            Self::CutAndSewSelectedOrderCost => row.metrics.cut_and_sew_selected_order_cost,
             Self::VaporPotentialHeatFlowW => row.vapor.value().map(|r| r.potential_heat_flow_w),
             Self::VaporPotentialMassFlowKgS => {
                 row.vapor.value().map(|r| r.potential_mass_flow_kg_s)
@@ -603,7 +610,11 @@ impl Metric {
         row: &'a Alternative,
         cutting_currency: Option<&'a str>,
     ) -> Option<&'a str> {
-        if self == Self::ThreadObservedOrderCost {
+        if self == Self::CutAndSewSelectedOrderCost {
+            row.cut_and_sew_purchasing
+                .value()
+                .map(|p| p.market.currency.as_str())
+        } else if self == Self::ThreadObservedOrderCost {
             row.sewing
                 .value()?
                 .options
@@ -879,6 +890,7 @@ impl Policy {
                     .sewing_options()
                     .and_then(|s| s.consumables.as_ref())
                     .is_some_and(|c| c.purchasing.is_some()),
+                Consumer::CutAndSewPurchasing => request.cut_and_sew_purchasing,
                 Consumer::Purchasing => request.purchasing.is_some(),
                 Consumer::AssemblyMass => request.assembly_mass.is_some(),
                 Consumer::Vapor => request.vapor.is_some(),
@@ -1173,8 +1185,12 @@ impl Policy {
         }
         if self.consumers().contains(&Consumer::SewingConsumables)
             || self.consumers().contains(&Consumer::SewingPurchasing)
+            || self.consumers().contains(&Consumer::CutAndSewPurchasing)
         {
             report.notes.push("Thread objectives use the selected production plan's complete, independently qualified channel consumption. Exact yarn demands aggregate before supplier rounding and stock admission. Consumed mass requires each exact yarn's qualified linear density and includes the declared allowances; it is not retained garment mass. Kilogram offers retain their original mass minimums, increments, tiers and stock limits, without inventing an uninterrupted length from mass. Missing density preserves length-only capabilities. Costs retain the thread market's own currency and date; missing consumption or any eligible whole order remains unavailable, and time-based recipe selection does not prove a thread-cost optimum.");
+        }
+        if self.consumers().contains(&Consumer::CutAndSewPurchasing) {
+            report.notes.push("Complete declared cut-and-sew purchasing composes actual fabric and selected-plan thread orders for the same pattern and garment count in one exact comparable market and immutable source history. Current transitive supplier stock aliases cannot be counted on both sides. A complete feasible selected cost may remain available without an allocation minimum proof. Labor, equipment, unrepresented trims and costs outside the declared quote terms are excluded; inventory reservations, orders and hardware actions are not authorized.");
         }
         report
     }
@@ -1513,12 +1529,17 @@ impl Policy {
             .as_ref()
             .ok_or_else(|| invalid("frozen source selections unavailable"))?;
         let consumers = self.consumers();
+        let combined = consumers.contains(&Consumer::CutAndSewPurchasing);
         let mut keys = BTreeSet::new();
-        if consumers.contains(&Consumer::Cutting) || consumers.contains(&Consumer::Purchasing) {
+        if consumers.contains(&Consumer::Cutting)
+            || consumers.contains(&Consumer::Purchasing)
+            || (combined && row.cutting.value().is_some())
+        {
             keys.insert("width");
         }
         let thread = consumers.contains(&Consumer::SewingConsumables)
-            || consumers.contains(&Consumer::SewingPurchasing);
+            || consumers.contains(&Consumer::SewingPurchasing)
+            || combined;
         if consumers.contains(&Consumer::Sewing) || thread {
             keys.insert("thickness");
         }
@@ -1614,7 +1635,8 @@ impl Policy {
                 relevant.insert("retained_liquid_areal_density");
             }
             if (consumers.contains(&Consumer::CuttingJob)
-                || consumers.contains(&Consumer::CuttingJobPurchasing))
+                || consumers.contains(&Consumer::CuttingJobPurchasing)
+                || combined)
                 && row.cutting_job.value().is_some_and(|job| {
                     job.inventory.iter().any(|entry| {
                         entry.piece == id && entry.stock == crate::cutting::job::StockKind::Roll
@@ -1669,6 +1691,22 @@ impl Policy {
                 Value::Null
             },
         ))?;
+        if combined {
+            let receipt = row
+                .cut_and_sew_purchasing
+                .value()
+                .ok_or_else(|| invalid("complete declared purchasing protocol unavailable"))?;
+            base = hash(&(
+                base,
+                (
+                    receipt.schema,
+                    &receipt.market,
+                    &receipt.quote_book_sha256,
+                    receipt.production_copies,
+                    receipt.fabric_consumer,
+                ),
+            ))?;
+        }
         for (consumer, strain) in [
             (Consumer::MaterialStrain, admitted.material_strain),
             (
@@ -1742,7 +1780,7 @@ impl Policy {
                 .ok_or_else(|| invalid("selected sewing plan for thread protocols unavailable"))?;
             let mut consumption_protocols = BTreeMap::new();
             let mass_protocol = self.metrics().contains(&Metric::ThreadRequiredMassKg)
-                || (consumers.contains(&Consumer::SewingPurchasing)
+                || ((consumers.contains(&Consumer::SewingPurchasing) || combined)
                     && plan
                         .consumables
                         .as_ref()
@@ -2093,6 +2131,12 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
             .is_some_and(|p| {
                 p.complete_offer_coverage && p.least_observed_independent_order_total.is_some()
             }),
+        Consumer::CutAndSewPurchasing => row.cut_and_sew_purchasing.value().is_some_and(|r| {
+            row.metrics.cut_and_sew_selected_order_cost == Some(r.selected_order_cost)
+                && row.binding.value().is_some_and(|b| {
+                    b["pattern_sha256"].as_str() == Some(r.pattern_sha256.as_str())
+                })
+        }),
         Consumer::Purchasing => row
             .purchasing
             .value()

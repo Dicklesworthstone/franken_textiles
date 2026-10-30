@@ -362,8 +362,9 @@ geometries instead of stopping at the first passing designs; each retained geome
 alternatives. A single body scenario can supply the objective. In named-case matrices, declare
 <code>design_adaptive.case_key</code> to choose the guidance case; every case must still admit a retained trial.
 Reported ranges must be strictly preferred to advance the search; overlapping ranges remain unresolved.
-For one identical nominal objective across all cases, <code>consumer_worst_case</code> guides the limiting case
-without a <code>case_key</code>. The trial report retains objective readings, exclusions and exact patterns. Search
+For one identical objective and basis across all cases, <code>consumer_worst_case</code> guides the worst case
+without a <code>case_key</code>. Reported-range trials retain the aggregate endpoints and their original case witnesses.
+The trial report retains objective readings, exclusions and exact patterns. Search
 allowances do not override cumulative simulation budgets or establish a global optimum.</p>
 <details><summary>Build combinations of shell, lining, cuffs and other material choices</summary>
 <p>Inspect a material in section 1, select the source pieces that share a choice, and add it to a named group.
@@ -460,8 +461,15 @@ Thread purchasing has its own currency and market, which may differ from cutting
 an explicit <code>consumables.production_copies</code> must agree. Standalone sewing accepts the same field and otherwise describes one garment.
 Per-garment traversal and start/end allowances aggregate across copies before supplier minimums, increments, tiers and stock are evaluated.
 Continuity remains a single operation/channel requirement, and sewing geometry, feed duration and setup schedules remain per garment.
-Prices are not combined with cutting costs, purchased length is not retained garment mass,
+Independent thread prices can use a different market from cutting; purchased length is not retained garment mass,
 and time-based recipe selection does not prove a thread-cost optimum.</p>
+<p class="note">Set <code>cut_and_sew_purchasing: true</code> in the study to combine complete fabric and selected-plan
+thread orders for the same production count. Use the exact same immutable quote book and comparable market for both.
+Supply either ordinary cutting and purchasing or a complete priced cutting job; every fabric item and thread channel must be priced.
+The nominal objective <code>cut_and_sew_selected_order_cost</code> and required consumer <code>cut_and_sew_purchasing</code>
+use the complete selected total, including supplier rounding. Shared physical stock, missing prices or inconsistent markets refuse the
+combined total while independent results remain visible. Complete bounded allocations remain usable with their proof status shown.
+This merchandise total excludes labor, equipment, unrepresented trims and costs outside the declared quote terms.</p>
 <p class="note">To choose the recipe by thread purchasing cost, set <code>sewing_selection.schema</code> to
 <code>ftx-sewing-selection/3</code> and <code>objective</code> to <code>minimize_thread_observed_order_cost</code>.
 Supply <code>options.consumables.purchasing</code> with the dated quote book and explicit market.

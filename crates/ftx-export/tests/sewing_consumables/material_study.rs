@@ -10,6 +10,9 @@ use ftx_pattern::{
 };
 use serde_json::{Value, json};
 
+#[path = "material_study/purchasing.rs"]
+mod purchasing;
+
 fn frozen(selection: &Value) -> Selection {
     Catalog {
         schema: CATALOG_SCHEMA.into(),

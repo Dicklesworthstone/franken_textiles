@@ -4508,6 +4508,20 @@ consumed stagnant-gap coupling preserve nominal heat with explicit range unavail
 workbench displays this distinction. This increment is tracked by `ftx-tma.4`; geometry and boundary
 uncertainty, confidence levels, physical warmth and empirical material validation remain outside it.
 
+### 25.131 Compare complete fabric and thread merchandise requirements
+
+An opt-in cut-and-sew purchasing consumer now combines actual complete fabric orders with the
+selected sewing plan's complete thread orders for the same pattern and production count. Both
+sides retain ordinary supplier rounding and source admission, require one coherent market and
+quote history, and cannot reuse the same transitive supplier stock. Roll-only and complete mixed
+roll/finite-item jobs share this path.
+
+Studies can optimize the complete selected total while retaining separate fabric/thread costs,
+source evidence and bounded allocation proof. A refused composite preserves independent consumer
+results. The workbench shows those distinctions. This increment is tracked by `ftx-ms2.1`; labor,
+equipment, unrepresented trims, global recipe/design optimality and actual purchasing remain outside
+the declared merchandise calculation.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

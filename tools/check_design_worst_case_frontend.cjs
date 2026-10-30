@@ -16,6 +16,10 @@ function displayedNotes(report) {
   const parent = node();
   const context = vm.createContext({ document: { createElement: node },
     comparison() {}, detail() {}, table: node, cells() {}, metric: String });
+  const basisStart = source.indexOf('function metricUsesBounds(');
+  const basisEnd = source.indexOf('\nfunction objectiveComparison(', basisStart);
+  assert.ok(basisStart >= 0 && basisEnd > basisStart);
+  vm.runInContext(source.slice(basisStart, basisEnd), context);
   vm.runInContext(source.slice(start, end), context);
   context.scenarioMatrixComparison('scenario', parent, report);
   return parent.children.map(child => child.textContent);
@@ -24,6 +28,11 @@ function displayedNotes(report) {
 test('matrix page displays authoritative limiting-case notes without recomputing a score', () => {
   const note = "Worst-case retained trial 'adaptive:0003' on material 'light': limiting case '<guard>', simulated_cloth_mass_kg = 31 kg. This is the original admitted case reading, not an average.";
   const report = { schema: 'ftx-design-scenario-matrix-study/1', cases: [], notes: [note],
+    comparison: { frontier: ['trial'], case_order: ['guard'], incomparable: [],
+      policies: { guard: { basis: 'reported_bounds', objectives: [{ metric: 'assembly_mass_kg' }],
+        constraints: [{ metric: 'feed_seconds', basis: 'nominal', maximum: 10 }] } },
+      alternatives: [{ key: 'trial', eligible: true, dominated_by: [], cases: { guard: {
+        eligible: true, readings: { assembly_mass_kg: { value: 1, unit: 'kg' }, feed_seconds: { value: 5, unit: 's' } } } } }] },
     manufacturing: { design_search: { consumer_guidance: { best_reading: { value: 999 } } } } };
   assert.ok(displayedNotes(report).includes(note));
   assert.ok(!displayedNotes(report).some(text => text.includes('999')));

@@ -456,6 +456,22 @@ protocols use only selected qualifications. All expanded material/design rows an
 trials reserve at most 200000 purchasing work units. Tests: `sewing_consumables`, canonical
 `material_cost` units and workbench lifecycle checks. See `docs/material-sewing-plans.md`.
 
+**Complete declared fabric and thread purchasing** (`cut_and_sew_purchasing`, plan §25.131).
+The opt-in study consumer composes the complete actual fabric allocation and selected sewing plan's
+complete thread orders for the same frozen pattern and garment count. Ordinary cutting or a complete
+mixed-stock job retains its own pricing and supplier-rounding authority. Both sides require one
+canonical quote history and identical market, clock and capacity rules; only fabric's split-order
+search policy is excluded from market equality. Current transitive supplier/base/tier stock aliases
+cannot supply both consumers independently, including links through unused current observations.
+Extra alias work remains inside the ordinary aggregate purchasing budget. The nominal metric
+`cut_and_sew_selected_order_cost` uses the receipt's currency and complete selected total; missing,
+refused or incoherent dependencies preserve independent outcomes while withholding this metric.
+Complete bounded fabric orders remain usable with an unproved allocation minimum. The proof concerns
+fixed demands, without global design/recipe optimality, labor/equipment/undeclared trim costs, inventory
+reservation or execution permission. Omission preserves the independent wire format. Tests:
+`sewing_consumables::material_study::purchasing`, dual-CLI/portable material-study replay and the
+conditional captured compiled-WASM workbench regression.
+
 **Declared assembly mass** (`assembly_mass`, plan §25.10 / `ftx-ms2`). Every expanded physical
 cut instance uses the same exporter outline, fold/mirror semantics, allowances and outward tabs.
 Strictly contained disjoint closed cutouts are subtracted with the existing budgeted cutting
