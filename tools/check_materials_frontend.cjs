@@ -4451,6 +4451,7 @@ test('marker selection forwards a zero-based index and withdraws stale preview r
 
 test('qualified knife programs retain exact process scope and independent refusals in standalone and study routes', async () => {
   const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);p.select('cutOptions');
+  p.select('stockRequest');
   const selected={runs:[{path:{placement:0,internal_cut:0}},{path:{placement:0}}],
     cut_length_mm:480,travel_length_mm:120,cutting_seconds:4.8,travel_seconds:0.6,
     lift_lower_seconds:0.4,modeled_path_seconds:5.8};
@@ -4459,24 +4460,41 @@ test('qualified knife programs retain exact process scope and independent refusa
     markers:[{marker:1,qualification:'<independent knife observation>',material_sha256:'<exact textile>',
       geometry_sha256:'<exact marker>',thickness_mm:[0.8,1.1],baseline:selected,selected,improved:false}],
     budget_exhausted:true,optimality_proven:false,physical_cutting_validated:false,hardware_execution_authorized:false};
-  for(const [op,routed] of [['cut',false],['study',false],['scenario',false],['study',true],['scenario',true]]) {
-    const plan={schema:'ftx-roll-cut-plan/1',pattern_sha256:'pattern-lock',rolls:[{},{}],program};
+  for(const [op,routed,finite] of [['cut',false,false],['study',false,false],['scenario',false,false],
+    ['study',true,false],['scenario',true,false],['stock',false,true],['study',false,true],
+    ['scenario',false,true],['study',true,true],['scenario',true,true]]) {
+    const finiteProgram={...program,schema:'ftx-knife-cut-program/2',markers:program.markers.map(marker=>({...marker,
+      finite_stock:{stock_id:'<exact hide>',stock_sha256:'<exact physical stock>',
+        marker_to_machine_offset_mm:[-10,25],source_to_machine:[[1,0,-10],[0,1,25]]}}))};
+    const plan=finite?{schema:'ftx-finite-stock-plan/1',used_stock_count:1,
+      markers:[{id:'unused',placements:[]},{id:'<exact hide>',placements:[{}]}],program:finiteProgram}:
+      {schema:'ftx-roll-cut-plan/1',pattern_sha256:'pattern-lock',rolls:[{},{}],program};
     const row=studyRow('qualified'),study=studyReport([row]);
     if(routed) {
       row.cutting=omitted();
-      row.cutting_job=outcome({complete_inventory:true,inventory:[{piece:'front',stock:'roll'}],roll:plan});
-    } else row.cutting=outcome(plan);
+      row.cutting_job=outcome({complete_inventory:true,
+        inventory:[{piece:'front',stock:finite?'finite_stock':'roll'}],[finite?'finite_stock':'roll']:plan});
+    } else if(finite) {row.cutting=omitted();row.finite_stock=outcome(plan);}
+    else row.cutting=outcome(plan);
     row.purchasing=outcome({currency:'USD',complete_offer_coverage:true});
     row.metrics.least_observed_independent_order_total=12.5;
-    const report=op==='cut'?plan:op==='study'?study:{...scenarioReport(),manufacturing:study};
-    const label=op==='cut'?'Cutting plan':routed?'qualified: roll route':'qualified';
+    const standalone=op==='cut'||op==='stock';
+    const report=standalone?plan:op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const label=op==='cut'?'Cutting plan':op==='stock'?'Finite-stock plan':
+      routed?`qualified: ${finite?'finite-stock':'roll'} route`:finite?'qualified: finite stock':'qualified';
     await p.e[op].onclick();
     const raw=JSON.stringify(report);
     p.emit(report,[{name:'knife-program-report.json',text:raw,mime:'application/json'}],raw);
-    const s=section(p,op==='cut'?'cut':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const s=section(p,standalone?op:op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
     const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
     assert.deepEqual(plain(table(`${label}: material-qualified knife paths`).children[2].children.map(n=>n.textContent)),
       ['2','<independent knife observation>','2','480','120','4.8','0.6','0.4','5.8','Complete authored traversal']);
+    if(finite) {
+      assert.deepEqual(plain(table(`${label}: physical stock and machine placement`).children[2].children.map(n=>n.textContent)),
+        ['2','<exact hide>','<exact physical stock>','-10, 25']);
+      assert.match(visibleText(s),/whole stock bounding box is translated onto the declared bed without rotation/);
+      assert.match(visibleText(s),/Unused inventory is not a cutting program/);
+    }
     assert.match(visibleText(s),/Internal cuts finish before exterior pieces are released/);
     assert.match(visibleText(s),/Loading, acceleration, blade turning and inspection are outside this model/);
     assert.match(visibleText(s),/ordering budget ended; complete authored traversals remain available/);
@@ -4493,21 +4511,54 @@ test('qualified knife programs retain exact process scope and independent refusa
     plan.program_refusal={code:'MISSING_DATA',message:'No qualified knife observation for <changed textile>'};
     await p.e[op].onclick();p.emit(report);
     assert.equal(table(`${label}: material-qualified knife paths`),undefined);
+    assert.equal(table(`${label}: physical stock and machine placement`),undefined);
     assert.match(visibleText(s),/knife process unavailable — No qualified knife observation for <changed textile>/);
     assert.match(visibleText(s),/Valid marker geometry and independent purchasing remain available/);
     assert.doesNotMatch(visibleText(s),/Modeled path time|5\.8|exact knife paths, material locks/);
     assert.equal(p.live.has(download.href),false);
-    if(op==='cut') assert.equal(JSON.parse(s.children[1].textContent).rolls.length,2);
+    if(standalone) assert.equal(JSON.parse(s.children[1].textContent)[finite?'markers':'rolls'].length,2);
     else {
       const manufacturing=table('Independent manufacturing outcomes').children[2].children.map(n=>n.textContent);
-      assert.equal(manufacturing[2],routed?'Not requested':'Available');
+      assert.equal(manufacturing[2],routed||finite?'Not requested':'Available');
       assert.equal(manufacturing[4],'Available');
       assert.equal(manufacturing[8],'12.5 USD');
       if(routed) assert.equal(table('Complete cutting jobs — rolls, hides and remnants').children[2].children[1].textContent,'Available');
     }
   }
-  p.e.cutOptions.handlers.change();p.e.studyRequest.handlers.change();
+  p.e.cutOptions.handlers.change();p.e.stockRequest.handlers.change();p.e.studyRequest.handlers.change();
   assert.equal(section(p,'cut').hidden,true);
+  assert.equal(section(p,'stock').hidden,true);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
+test('cutting objectives retain roll finite and complete-job scope without converting refusal to zero', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const metrics=['cutting','finite_stock','cutting_job'].flatMap(prefix=>
+    ['modeled_path_seconds','cut_length_m','raised_travel_length_m'].map(suffix=>`${prefix}_${suffix}`));
+  const comparison={policy:{basis:'nominal',allow_mixed_protocols:false,constraints:[],
+    required_consumers:['cutting_program','finite_stock_program','cutting_job_program'],
+    objectives:metrics.map(metric=>({metric,direction:'minimize'}))},frontier:['A'],incomparable:[],alternatives:[
+      {key:'A',eligible:true,dominated_by:[],exclusions:[],readings:Object.fromEntries(metrics.map((name,i)=>
+        [name,{value:i+1,unit:name.endsWith('_seconds')?'s':'m'}]))},
+      {key:'B',eligible:false,dominated_by:[],exclusions:[{message:'Finite knife qualification unavailable'}],readings:{}}]};
+  for(const op of ['study','scenario']) {
+    const report=op==='study'?studyReport([studyRow('A'),studyRow('B')]):scenarioReport();
+    report.comparison=comparison;
+    await p.e[op].onclick();p.emit(report);
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const t=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Declared computed objectives — authoritative Rust comparison');
+    assert.match(visibleText(t),/Roll modeled knife time/);
+    assert.match(visibleText(t),/Finite stock cut length/);
+    assert.match(visibleText(t),/Complete cutting job raised travel/);
+    assert.deepEqual(plain(t.children[2].children.slice(3).map(n=>n.textContent)),
+      ['1 s','2 m','3 m','4 s','5 m','6 m','7 s','8 m','9 m']);
+    assert.deepEqual(plain(t.children[3].children.slice(3).map(n=>n.textContent)),Array(9).fill('Unknown'));
+    assert.match(visibleText(s),/only a complete cutting job combines its disjoint routes/);
+    assert.match(visibleText(s),/incomplete or refused process leaves these nominal metrics unknown/);
+    assert.match(visibleText(s),/do not establish production cycle time, physical cut quality or machine authorization/);
+  }
+  p.e.studyRequest.handlers.change();
   assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
@@ -7612,6 +7663,50 @@ test('compiled WASM qualified knife paths and changed-material process refusals 
     assert.ok(qualified.metrics.stock_area_m2>0);
     assert.equal(changed.metrics.stock_area_m2,qualified.metrics.stock_area_m2);
     assert.equal(changed.cutting.result.rolls.length,qualified.cutting.result.rolls.length);
+  });
+
+test('compiled WASM finite and mixed knife programs replay exact native stock inventory and process refusals',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_FINITE_KNIFE_REPLAY},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const input=name=>fs.readFileSync(path.join(process.env.FTX_FINITE_KNIFE_REPLAY,name),'utf8');
+    const pattern=input('finite-pattern.json'),stockRequest=input('stock.json');
+    const w=await workerModule({bindings:ftx});
+    const stock=await w.send({type:'stock',request:253,pattern,stockRequest});
+    assert.equal(stock.type,'result',stock.message);
+    assert.deepEqual(stock.result,JSON.parse(input('plan-report.json')));
+    assert.equal(stock.files.find(file=>file.name==='finite-stock-plan.json').text,ftx.stock_plan(pattern,stockRequest));
+    assert.equal(stock.result.program.schema,'ftx-knife-cut-program/2');
+    for(const marker of stock.result.program.markers) {
+      assert.equal(marker.finite_stock.stock_id,stock.result.markers[marker.marker].id);
+      assert.deepEqual(marker.thickness_mm,[0.8,1.2]);
+      assert.ok(marker.selected.modeled_path_seconds>0);
+    }
+    const mixed=input('mixed-pattern.json');
+    for(const name of ['job','refused-job']) {
+      const request=input(`${name}.json`);
+      const actual=JSON.parse(ftx.material_cut_job(mixed,request));
+      assert.deepEqual(actual,JSON.parse(input(`${name}-report.json`)));
+      assert.equal(actual.complete_inventory,true);
+      assert.equal(new Set(actual.inventory.map(item=>`${item.instance}/${item.copy}`)).size,actual.inventory.length);
+      assert.ok(actual.roll.program.markers[0].selected.modeled_path_seconds>0);
+      if(name==='job') assert.ok(actual.finite_stock.program.markers[0].selected.modeled_path_seconds>0);
+      else {
+        assert.equal(actual.finite_stock.program,undefined);
+        assert.match(actual.finite_stock.program_refusal.message,/qualification/);
+      }
+      const studyRequest=JSON.stringify({schema:'ftx-material-study/1',cutting_job:JSON.parse(request),
+        variants:[{key:'qualified',changes:{schema:'ftx-material-bindings/1'}}]});
+      const study=await w.send({type:'study',request:254,pattern:mixed,studyRequest});
+      assert.equal(study.type,'result',study.message);
+      const routed=study.result.alternatives[0].cutting_job.result;
+      assert.deepEqual(routed.inventory,actual.inventory);
+      assert.deepEqual(routed.roll.program,actual.roll.program);
+      assert.deepEqual(routed.finite_stock.program,actual.finite_stock.program);
+      assert.deepEqual(routed.finite_stock.program_refusal,actual.finite_stock.program_refusal);
+      assert.equal(study.files.find(file=>file.name==='study-request.json').text,studyRequest);
+    }
   });
 
 test('compiled WASM bounded markers retain whole geometry, selected SVG and one finite-stock order through the worker',

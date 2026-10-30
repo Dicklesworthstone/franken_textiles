@@ -933,12 +933,23 @@ impl Request {
             ));
         }
         let (knife_search, knife_geometry) = [
-            self.cutting.as_ref(),
-            self.cutting_job.as_ref().and_then(|job| job.roll.as_ref()),
+            self.cutting
+                .as_ref()
+                .and_then(|options| options.program.as_ref()),
+            self.finite_stock
+                .as_ref()
+                .and_then(|stock| stock.options.program.as_ref()),
+            self.cutting_job
+                .as_ref()
+                .and_then(|job| job.roll.as_ref())
+                .and_then(|options| options.program.as_ref()),
+            self.cutting_job
+                .as_ref()
+                .and_then(|job| job.finite_stock.as_ref())
+                .and_then(|stock| stock.options.program.as_ref()),
         ]
         .into_iter()
         .flatten()
-        .filter_map(|options| options.program.as_ref())
         .fold((0usize, 0usize), |(search, geometry), program| {
             (
                 search.saturating_add(program.work_limit.saturating_mul(alternatives)),

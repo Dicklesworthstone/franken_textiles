@@ -359,6 +359,12 @@ function objectiveComparison(parent, r) {
     thread_observed_order_cost: "Complete thread order cost",
     cut_and_sew_selected_order_cost: "Complete fabric + thread order cost"
   };
+  const cuttingLabels = {};
+  for (const [prefix, scope] of [["cutting", "Roll"], ["finite_stock", "Finite stock"], ["cutting_job", "Complete cutting job"]]) {
+    cuttingLabels[`${prefix}_modeled_path_seconds`] = `${scope} modeled knife time`;
+    cuttingLabels[`${prefix}_cut_length_m`] = `${scope} cut length`;
+    cuttingLabels[`${prefix}_raised_travel_length_m`] = `${scope} raised travel`;
+  }
   const contactLabels = {
     body_contact_resultant_n: "Initial body-contact resultant",
     max_body_contact_vertex_force_n: "Initial maximum nodal body-contact force",
@@ -412,6 +418,16 @@ function objectiveComparison(parent, r) {
       "Missing channels or offers leave the corresponding complete metric unknown. Recipe selection by time does not prove a thread-cost optimum.";
     parent.append(thread);
   }
+  if (metrics.some(o => Object.hasOwn(cuttingLabels, o.metric)) ||
+      r.policy.required_consumers?.some(name => ["cutting_program", "finite_stock_program", "cutting_job_program"].includes(name))) {
+    const cutting = document.createElement("p");
+    cutting.textContent = "Cutting objectives use complete selected knife traversals qualified for the exact textile and machine. " +
+      "Roll and finite-stock objectives retain their separate physical scope; only a complete cutting job combines its disjoint routes. " +
+      "Modeled time covers declared constant-rate cutting, raised travel and lift/lower phases. It excludes loading, acceleration and inspection. " +
+      "An incomplete or refused process leaves these nominal metrics unknown while independent geometry and purchasing remain available. " +
+      "A complete selected traversal need not be shortest; these objectives do not establish production cycle time, physical cut quality or machine authorization.";
+    parent.append(cutting);
+  }
   const waterMetrics = metrics.filter(o => Object.hasOwn(wetFilmLabels, o.metric));
   if (waterMetrics.length || r.policy.required_consumers?.includes("motion_wet_film")) {
     const water = document.createElement("p");
@@ -431,7 +447,7 @@ function objectiveComparison(parent, r) {
     parent.append(water);
   }
   const t = table(parent, "Declared computed objectives — authoritative Rust comparison", ["Alternative", "Admission", "Dominated by",
-    ...metrics.map(o => `${wetFilmLabels[o.metric] || textileWaterLabels[o.metric] || strainLabels[o.metric] || contactLabels[o.metric] || threadLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
+    ...metrics.map(o => `${wetFilmLabels[o.metric] || textileWaterLabels[o.metric] || strainLabels[o.metric] || contactLabels[o.metric] || threadLabels[o.metric] || cuttingLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
   for (const row of r.alternatives) {
     cells(t, [row.key, row.eligible ? "Eligible" : `Excluded: ${row.exclusions.map(e => e.message).join("; ")}`,
       row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
@@ -1434,6 +1450,7 @@ function manufacturingComparison(op, parent, study, computed, casePolicies = {})
       cells(stock, [row.key, state(row.finite_stock), metric(m.used_stock_count), metric(m.used_stock_gross_area_m2),
         metric(m.finite_stock_external_cut_area_m2), metric(m.used_stock_mass_kg)]);
       const plan = available(row.finite_stock);
+      knifeProgramResult(parent, plan?.program, `${row.key}: finite stock`, plan?.program_refusal);
       if (plan) detail(parent, `${row.key}: physical stock, defects and allocated pieces (display only)`, plan);
     }
   }
@@ -1706,6 +1723,21 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
       metric(route?.travel_seconds), metric(route?.lift_lower_seconds), metric(route?.modeled_path_seconds),
       marker.improved ? "Shorter complete traversal" : "Complete authored traversal"]);
   }
+  const finite = (program.markers || []).filter(marker => marker.finite_stock);
+  if (finite.length) {
+    const frames = table(parent, `${label}: physical stock and machine placement`,
+      ["Inventory marker", "Physical stock", "Frozen stock SHA-256", "Planning-frame translation to machine (mm)"]);
+    for (const marker of finite) {
+      const stock = marker.finite_stock;
+      cells(frames, [String(marker.marker + 1), stock.stock_id, stock.stock_sha256,
+        (stock.marker_to_machine_offset_mm || []).map(metric).join(", ")]);
+    }
+    const placement = document.createElement("p");
+    placement.textContent = "Each used hide or remnant keeps its original inventory identity, outline, defects and occupied regions. " +
+      "The whole stock bounding box is translated onto the declared bed without rotation; path coordinates use that machine frame. " +
+      "The exact source-to-machine transform is retained below. Unused inventory is not a cutting program.";
+    parent.append(placement);
+  }
   const note = document.createElement("p");
   note.textContent = "Internal cuts finish before exterior pieces are released. Every path retains its authored geometry and direction; " +
     "the process observation is locked to the exact textile and full machine configuration. " +
@@ -1738,6 +1770,7 @@ function cuttingJobComparison(op, parent, alternatives) {
       r || { refusal: row.cutting_job?.refusal });
     if (!r) continue;
     knifeProgramResult(parent, r.roll?.program, `${row.key}: roll route`, r.roll?.program_refusal);
+    knifeProgramResult(parent, r.finite_stock?.program, `${row.key}: finite-stock route`, r.finite_stock?.program_refusal);
     if (r.resolved_routes?.length) {
       const routes = table(parent, `${row.key}: cutting routes for the selected materials`,
         ["Source piece", "Stock route", "Material snapshot"]);
@@ -3154,7 +3187,9 @@ function show(op, msg) {
       }
     }
     const s = sections.get(op); s.section.hidden = false;
-    if (op === "cut") knifeProgramResult(s.comparison, r.program, "Cutting plan", r.program_refusal);
+    if (op === "cut" || op === "stock") {
+      knifeProgramResult(s.comparison, r.program, op === "stock" ? "Finite-stock plan" : "Cutting plan", r.program_refusal);
+    }
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
       op === "calibrate" ? calibrationResult(s.comparison, r) :
       op === "stripHistory" ? stripHistoryResult(s.comparison, r) :

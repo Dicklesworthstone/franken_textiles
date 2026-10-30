@@ -128,6 +128,77 @@ included. It is a review file, not machine coordinates, a cutting-order program,
 compensation, or permission to operate hardware. Numeric JSON retains the full computed coordinates.
 Preview output is bounded to one million rendered points and 64 MiB.
 
+## Material-qualified knife traversal
+
+Optional `options.program` accepts the same `qualified_cold_knife_paths/1` policy documented in
+[cutting-plans.md](cutting-plans.md). The ordinary `stock-plan` request then compiles the final
+allocated hide/remnant paths using the same knife engine as roll cutting. The policy supplies the
+complete machine configuration, exact material/machine process qualifications, an authored or
+bounded nearest-path ordering, and separate geometry and ordering work limits. Each used stock
+item needs an admitted qualification for its exact material snapshot. Unused inventory needs no
+knife qualification or bed fit. No roll width is inferred or required for a finite hide.
+
+The shared [unloaded-thickness authority](spec/06-textile-materials.md#unloaded-manufacturing-clearance)
+supplies the complete source-reported thickness interval. Its upper endpoint must fit the machine
+clearance, and the whole interval must fit the qualified process range. A pressure-conditioned
+gauge measurement does not silently supply unloaded clearance. An explicit, separately qualified
+`unloaded_thickness` observation can admit cutting while the original conditioned measurement is
+retained for its applicable consumers. A changed finish, conditioning, material source or unloaded
+observation changes the material identity and requires a matching process qualification.
+
+### Stock and machine coordinates
+
+The geometric allocation remains in its original emitted marker frame. For knife planning, each
+used physical stock item is independently loaded with the lower-left corner of its **complete**
+axis-aligned marker bounding box at the machine-bed origin. This is a reported translation, with
+no additional rotation, reflection, clipping or movement of individual pieces. A scanner's negative
+or offset coordinates therefore remain valid source coordinates. The entire stock must fit the
+declared bed, even when its newly allocated pieces occupy a smaller area.
+
+`ftx-finite-stock-plan/1` gains an optional `program` with schema `ftx-knife-cut-program/2`.
+Its `markers` array contains used items in their original inventory order. Each row retains:
+
+- `marker`: the index into the finite plan's complete `markers` inventory, including unused items.
+- `finite_stock.stock_id` and `finite_stock.stock_sha256`: the same physical identity and frozen
+  source-stock hash used by exact-item purchasing, including source geometry, material, defects,
+  prior occupied regions and their receipt basis.
+- `finite_stock.marker_to_machine_offset_mm`: the translation to apply to the retained marker
+  paths. `finite_stock.source_to_machine` composes that translation with `source_to_marker`, giving
+  the full affine map from the authored stock coordinates to the modeled bed.
+- `geometry_sha256`: the exact final marker transform, outline, defects, occupied regions, zones,
+  placements and loading offset. This is distinct from the source-stock and material identities.
+- The same complete `baseline` and `selected` traversal fields as a roll program: original
+  placement/feature references, piece/instance/copy identities, bed-coordinate travel and cut
+  endpoints, complete path lengths, and separate cut, travel and lift/lower durations.
+
+All internal cut paths on one loaded item finish before any exterior contour releases a part.
+Directions and starting vertices remain unchanged. Stock boundaries, defects, earlier cuts and
+named quality regions are inventory constraints, **not additional knife paths**. Residual-stock
+replay treats earlier exterior cuts as occupied space and emits only the newly allocated cuts.
+The exact stock and geometry hashes change when this consumed inventory changes.
+
+### Independent availability and limits
+
+An unavailable process does not discard a valid finite-stock allocation. The plan retains its
+geometry, optional mass and independent item pricing, omits `program`, and records the structured
+`program_refusal`. Missing qualifications, an oversized whole hide, unsupported drills, ambiguous
+or nested cutouts, invalid machine settings and process-budget exhaustion remain visible there.
+Invalid basic source geometry and exhausted **nesting** budgets still refuse the geometric plan.
+Omitting `options.program` preserves the earlier request and plan serialization.
+
+Mixed cutting jobs set the policy independently under `roll.program` and
+`finite_stock.options.program`. Their ordinary subplans expose the same independent program or
+refusal. Complete garment inventory and common-market purchasing remain authoritative even when
+one route lacks process evidence. Native, portable and material-study callers use this same path;
+there is no separate hide toolpath implementation in an adapter.
+
+Geometry validation and ordering work are shared across all used items in one program. An unfinished
+nearest-path candidate retains the complete authored baseline. Reported durations include only
+declared constant-rate cutting, raised-tool straight travel and lift/lower phases; loading,
+registration, workholding, acceleration, corner/blade dynamics and inspection are not modeled.
+The emitted placement is not a measured machine registration. No cutter command is transmitted,
+no empirical cycle-time or cut-quality claim is made, and hardware execution remains unauthorized.
+
 ## Browser integration
 
 The file-free APIs `stock_plan(pattern_json, request_json)` and

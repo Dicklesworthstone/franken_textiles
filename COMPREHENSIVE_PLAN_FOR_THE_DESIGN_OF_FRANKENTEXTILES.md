@@ -4692,6 +4692,27 @@ and [material-sewing-plans.md](docs/material-sewing-plans.md). It does not infer
 parse source prose into a pressure state, or turn catalog gauge measurements into empirical machine
 qualification. Independent unloaded/specimen and machine-coupon measurements remain required.
 
+### 25.142 Cut finite hides and remnants with the same qualified knife engine
+
+Finite-stock requests now accept the same optional material/machine-qualified knife policy as roll
+markers. The shared engine consumes the final complete nesting result and only the physical stock
+actually used. Every program retains its original inventory index, exact stock digest and composed
+source-to-machine transform. The entire stock bounding box must fit the declared bed; a small
+allocated piece cannot make an oversized hide admissible. Loading translates the retained planning
+frame without silently choosing another stock rotation.
+
+Original boundaries, defects, occupied regions, quality zones and residual-stock identity remain
+authoritative. They are not additional cutting paths. Supported internal cuts finish before exterior
+release, and the shared bounded ordering preserves a complete authored fallback and separate cut,
+raised-travel and lift/lower totals. Unloaded clearance comes from §25.141. An unavailable process
+leaves geometric allocation and independent purchasing available, including in a complete mixed
+roll/finite job. Shared study reservations now account for every requested knife route.
+
+This increment is tracked by `ftx-tm7.3`; see [finite-stock-cutting.md](docs/finite-stock-cutting.md).
+Both native commands, portable APIs and workbench reviews consume the same report. Source/coupon
+qualification, physical workholding, kerf, blade dynamics, loading/inspection time, drill operations
+and interlocked machine execution remain separate capabilities and evidence requirements.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

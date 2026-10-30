@@ -53,6 +53,9 @@ jobs:
           node --test tools/check_video_masks_frontend.cjs
           cargo test -p ftx-cli --test body_fit_workflow --locked
           cargo test -p ftx-export --test cutting --test cutting_job --test sewing_consumables --locked
+          cargo test -p ftx-pattern --test material_catalog --locked
+          cargo test -p ftx-export --test cutting_program --test finite_cutting_program --test sewing --test sewing_assembly --test sewing_pressure --locked
+          FTX_FINITE_KNIFE_REPLAY="$RUNNER_TEMP/ftx-finite-knife-replay" cargo test -p ftx-cli --test finite_stock_workflow --locked qualified_finite_and_mixed_knife_programs_replay_through_both_binaries
       - name: Test
         if: ${{ !cancelled() }}
         env:
@@ -67,6 +70,7 @@ jobs:
           FTX_INCOMING_WATER_IMPULSE_REPLAY: ${{ runner.temp }}/ftx-incoming-water-impulse-replay
           FTX_CONDENSING_IMPULSE_REPLAY: ${{ runner.temp }}/ftx-condensing-impulse-replay
           FTX_KNIFE_PROGRAM_REPLAY: ${{ runner.temp }}/ftx-knife-program-replay
+          FTX_FINITE_KNIFE_REPLAY: ${{ runner.temp }}/ftx-finite-knife-replay
           FTX_ROUTED_FIXTURE_REPLAY: ${{ runner.temp }}/ftx-routed-fixture-replay
           FTX_CONSUMER_ADAPTIVE_CAPTURE_DIR: ${{ runner.temp }}/ftx-consumer-adaptive-replay
           FTX_CUT_AND_SEW_REPLAY: ${{ runner.temp }}/ftx-cut-and-sew-replay
@@ -95,6 +99,7 @@ jobs:
           FTX_INCOMING_WATER_IMPULSE_REPLAY: ${{ runner.temp }}/ftx-incoming-water-impulse-replay
           FTX_CONDENSING_IMPULSE_REPLAY: ${{ runner.temp }}/ftx-condensing-impulse-replay
           FTX_KNIFE_PROGRAM_REPLAY: ${{ runner.temp }}/ftx-knife-program-replay
+          FTX_FINITE_KNIFE_REPLAY: ${{ runner.temp }}/ftx-finite-knife-replay
           FTX_ROUTED_FIXTURE_REPLAY: ${{ runner.temp }}/ftx-routed-fixture-replay
           FTX_CONSUMER_ADAPTIVE_REPLAY: ${{ runner.temp }}/ftx-consumer-adaptive-replay
           FTX_CUT_AND_SEW_REPLAY: ${{ runner.temp }}/ftx-cut-and-sew-replay

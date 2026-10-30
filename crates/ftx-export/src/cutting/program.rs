@@ -1,4 +1,4 @@
-//! Source-qualified cold-knife path planning on the existing final roll-marker geometry.
+//! Source-qualified cold-knife path planning on the existing final roll/finite-stock geometry.
 //! Every internal cut precedes every exterior release. Paths retain their authored start and
 //! direction; raised-tool travel may be reordered, but kerf and machine trajectories are not inferred.
 
@@ -7,11 +7,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use ftx_core::{Refusal, RefusalCode, Vec2, polyline::point_in_polygon, receipt::sha256_hex};
 use ftx_pattern::{
     Pattern,
+    material_catalog::ResolvedMaterial,
     materials::{Evidence, Source},
 };
 use serde::{Deserialize, Serialize};
 
-use super::{CutPlan, RollMarker, bad, geometry};
+use super::{CutPlacement, CutPlan, RollMarker, bad, bbox, geometry, stock};
 
 const MAX_PATHS: usize = 16_384;
 const MAX_POINTS: usize = 250_000;
@@ -88,7 +89,7 @@ pub struct Qualification {
     pub allow_estimates: bool,
 }
 
-/// Optional program policy on ordinary [`super::CutOptions`].
+/// Optional program policy on ordinary roll or finite-stock cutting options.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
@@ -161,11 +162,28 @@ pub struct Traversal {
     pub modeled_path_seconds: f64,
 }
 
+/// The exact physical hide/remnant and its explicitly reported modeled loading position.
+#[derive(Clone, Debug, Serialize)]
+pub struct FiniteStock {
+    /// Unique physical inventory identity, shared with finite-stock purchasing.
+    pub stock_id: String,
+    /// Exact frozen stock entry, including material, original geometry, sources and prior cuts.
+    pub stock_sha256: String,
+    /// Translation from unchanged final marker coordinates into the machine bed, in mm.
+    /// The complete stock bounding-box lower-left corner is placed at the bed origin.
+    pub marker_to_machine_offset_mm: Vec2,
+    /// Composed rigid affine transform from original stock coordinates to the modeled machine bed.
+    pub source_to_machine: [[f64; 3]; 2],
+}
+
 /// Complete baseline and selected traversal for one exact material marker.
 #[derive(Clone, Debug, Serialize)]
 pub struct Marker {
-    /// Index into the cut plan's `rolls` array.
+    /// Index into the cut plan's `rolls` or finite-stock `markers` array; unused stocks are omitted.
     pub marker: usize,
+    /// Present only for individually inventoried finite stock; no stock boundary is cut.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finite_stock: Option<FiniteStock>,
     /// Full unchanged material identity.
     pub material_sha256: String,
     /// Digest of all final placements, including directions, internal cuts, copies and transforms.
@@ -185,7 +203,7 @@ pub struct Marker {
 /// Source-qualified modeled cut planning, independent of hardware authorization.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `ftx-knife-cut-program/1`.
+    /// `ftx-knife-cut-program/1` for roll stock, or `/2` for finite-stock identities/bed transforms.
     pub schema: &'static str,
     /// Full machine configuration and timing lock used by all admitted recipes.
     pub machine_sha256: String,
@@ -350,19 +368,158 @@ pub(super) fn validate_source(pattern: &Pattern, indices: &BTreeSet<usize>) -> R
 struct Path<'a> {
     reference: PathRef,
     points: &'a [Vec2],
+    offset: Option<Vec2>,
     closed: bool,
     length: f64,
 }
 
 impl Path<'_> {
     fn start(&self) -> Vec2 {
-        self.points[0]
+        self.offset.map_or(self.points[0], |d| self.points[0] + d)
     }
     fn end(&self) -> Vec2 {
         if self.closed {
-            self.points[0]
+            self.start()
         } else {
-            self.points[self.points.len() - 1]
+            let p = self.points[self.points.len() - 1];
+            self.offset.map_or(p, |d| p + d)
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Envelope {
+    size_mm: [f64; 2],
+    offset: Option<Vec2>,
+}
+
+enum MarkerSource<'a> {
+    Roll(usize, &'a RollMarker),
+    Finite(usize, &'a stock::Marker, &'a stock::Stock),
+}
+
+fn digest(value: &impl Serialize) -> Result<String, Refusal> {
+    Ok(sha256_hex(
+        &serde_json::to_vec(value).map_err(|e| bad(e.to_string()))?,
+    ))
+}
+
+impl MarkerSource<'_> {
+    fn index(&self) -> usize {
+        match self {
+            Self::Roll(i, _) | Self::Finite(i, _, _) => *i,
+        }
+    }
+    fn material(&self) -> &ResolvedMaterial {
+        match self {
+            Self::Roll(_, m) => &m.material,
+            Self::Finite(_, m, _) => &m.material,
+        }
+    }
+    fn placements(&self) -> &[CutPlacement] {
+        match self {
+            Self::Roll(_, m) => &m.placements,
+            Self::Finite(_, m, _) => &m.placements,
+        }
+    }
+    fn frame(
+        &self,
+        machine: &Machine,
+        work: &mut geometry::Work,
+    ) -> Result<(Envelope, Option<FiniteStock>, String), Refusal> {
+        match self {
+            Self::Roll(_, marker) => {
+                let width = marker
+                    .layout_width
+                    .as_ref()
+                    .map_or(marker.width_m, |w| w.width_m)
+                    * 1000.0;
+                // A conservative layout does not make the loaded physical stock narrower.
+                let stock_width = marker
+                    .material
+                    .material()
+                    .properties
+                    .get("width")
+                    .ok_or_else(|| bad("knife program needs the material's source width"))?
+                    .bounds
+                    .map_or(marker.width_m, |bounds| bounds[1])
+                    * 1000.0;
+                let length = marker.length_m * 1000.0;
+                if !positive(width)
+                    || !positive(stock_width)
+                    || !positive(length)
+                    || stock_width > machine.bed_mm[0]
+                    || length > machine.bed_mm[1]
+                {
+                    return Err(bad(
+                        "complete roll marker exceeds the declared knife bed; repartition the marker explicitly",
+                    ));
+                }
+                Ok((
+                    Envelope {
+                        size_mm: [width, length],
+                        offset: None,
+                    },
+                    None,
+                    digest(&marker.placements)?,
+                ))
+            }
+            Self::Finite(_, marker, original) => {
+                let b = bbox(&marker.outline_mm)?;
+                let offset = Vec2::new(-b[0], -b[1]);
+                let size_mm = [b[2] - b[0], b[3] - b[1]];
+                if size_mm.iter().any(|&v| !positive(v))
+                    || size_mm[0] > machine.bed_mm[0]
+                    || size_mm[1] > machine.bed_mm[1]
+                {
+                    return Err(bad(
+                        "complete finite stock exceeds the declared knife bed; a fitting cut-piece subset cannot shrink the physical hide or remnant",
+                    ));
+                }
+                // Stock validation/nesting already checked actual polygon exclusions. Loading
+                // translates that complete inventory, including defects and earlier cuts.
+                for p in marker
+                    .outline_mm
+                    .iter()
+                    .chain(marker.defects_mm.iter().flatten())
+                    .chain(marker.occupied_mm.iter().flatten())
+                    .chain(marker.zones.iter().flat_map(|z| z.outline_mm.iter()))
+                {
+                    work.spend(1).ok_or_else(budget)?;
+                    if !on_bed(*p + offset, machine) {
+                        return Err(bad("finite-stock loading transform exceeds the knife bed"));
+                    }
+                }
+                let mut source_to_machine = marker.source_to_marker;
+                source_to_machine[0][2] += offset.x;
+                source_to_machine[1][2] += offset.y;
+                if source_to_machine.iter().flatten().any(|v| !v.is_finite()) {
+                    return Err(bad("finite-stock loading transform overflows"));
+                }
+                let identity = FiniteStock {
+                    stock_id: marker.id.clone(),
+                    stock_sha256: digest(original)?,
+                    marker_to_machine_offset_mm: offset,
+                    source_to_machine,
+                };
+                let geometry_sha256 = digest(&(
+                    marker.source_to_marker,
+                    &marker.outline_mm,
+                    &marker.defects_mm,
+                    &marker.occupied_mm,
+                    &marker.zones,
+                    &marker.placements,
+                    offset,
+                ))?;
+                Ok((
+                    Envelope {
+                        size_mm,
+                        offset: Some(offset),
+                    },
+                    Some(identity),
+                    geometry_sha256,
+                ))
+            }
         }
     }
 }
@@ -403,42 +560,16 @@ fn simple_path(points: &[Vec2], closed: bool, work: &mut geometry::Work) -> Resu
 }
 
 fn paths<'a>(
-    marker: &'a RollMarker,
+    placements: &'a [CutPlacement],
+    envelope: Envelope,
     machine: &Machine,
     work: &mut geometry::Work,
 ) -> Result<Vec<Path<'a>>, Refusal> {
-    let width = marker
-        .layout_width
-        .as_ref()
-        .map_or(marker.width_m, |w| w.width_m)
-        * 1000.0;
-    // A conservative layout width does not make the loaded stock narrower. Admit the whole
-    // reported stock envelope before checking the actual paths against their layout envelope.
-    let stock_width = marker
-        .material
-        .material()
-        .properties
-        .get("width")
-        .ok_or_else(|| bad("knife program needs the material's source width"))?
-        .bounds
-        .map_or(marker.width_m, |bounds| bounds[1])
-        * 1000.0;
-    let length = marker.length_m * 1000.0;
-    if !positive(width)
-        || !positive(stock_width)
-        || !positive(length)
-        || stock_width > machine.bed_mm[0]
-        || length > machine.bed_mm[1]
-    {
-        return Err(bad(
-            "complete roll marker exceeds the declared knife bed; repartition the marker explicitly",
-        ));
-    }
     let mut paths = Vec::new();
     let mut point_count = 0usize;
     // One complete internal phase preserves every part's exterior support until all features finish.
     for internal_phase in [true, false] {
-        for (placement, piece) in marker.placements.iter().enumerate() {
+        for (placement, piece) in placements.iter().enumerate() {
             if !piece.drills_mm.is_empty() {
                 return Err(bad(
                     "knife programs do not silently omit drills or turn drill marks into knife circles",
@@ -466,9 +597,12 @@ fn paths<'a>(
                     return Err(budget());
                 }
                 if points.len() < if closed { 3 } else { 2 }
-                    || points
-                        .iter()
-                        .any(|&p| !on_bed(p, machine) || p.x > width || p.y > length)
+                    || points.iter().any(|&p| {
+                        let loaded = envelope.offset.map_or(p, |d| p + d);
+                        !on_bed(loaded, machine)
+                            || loaded.x > envelope.size_mm[0]
+                            || loaded.y > envelope.size_mm[1]
+                    })
                     || edges(points, closed).any(|(a, b)| !positive(a.dist(b)))
                 {
                     return Err(bad(
@@ -492,6 +626,7 @@ fn paths<'a>(
                         internal_cut,
                     },
                     points,
+                    offset: envelope.offset,
                     closed,
                     length,
                 });
@@ -512,8 +647,8 @@ fn paths<'a>(
         }) {
             work.spend(a.points.len().saturating_add(b.points.len()))
                 .ok_or_else(budget)?;
-            if (a.closed && point_in_polygon(b.start(), a.points))
-                || (b.closed && point_in_polygon(a.start(), b.points))
+            if (a.closed && point_in_polygon(b.points[0], a.points))
+                || (b.closed && point_in_polygon(a.points[0], b.points))
             {
                 return Err(bad(
                     "nested knife cutouts or slits in removed regions need an explicit support/removal model",
@@ -535,7 +670,7 @@ fn paths<'a>(
 }
 
 fn traversal(
-    marker: &RollMarker,
+    placements: &[CutPlacement],
     paths: &[Path<'_>],
     order: &[usize],
     machine: &Machine,
@@ -547,7 +682,7 @@ fn traversal(
     let mut runs = Vec::with_capacity(order.len());
     for &i in order {
         let path = &paths[i];
-        let piece = &marker.placements[path.reference.placement];
+        let piece = &placements[path.reference.placement];
         travel_length_mm += position.dist(path.start());
         cut_length_mm += path.length;
         runs.push(Run {
@@ -629,26 +764,51 @@ fn nearest(paths: &[Path<'_>], machine: &Machine, work: &mut geometry::Work) -> 
 /// Missing/mismatched process evidence, unsupported drills or material state, unqualified thickness,
 /// invalid/oversized geometry, or exhaustion of the fixed geometric validation budget.
 pub(super) fn build(plan: &CutPlan, policy: &Policy) -> Result<Report, Refusal> {
+    let sources = plan
+        .rolls
+        .iter()
+        .enumerate()
+        .map(|(i, marker)| MarkerSource::Roll(i, marker))
+        .collect::<Vec<_>>();
+    build_markers(&sources, policy, false)
+}
+
+pub(super) fn build_finite(plan: &stock::Plan, policy: &Policy) -> Result<Report, Refusal> {
+    if plan.markers().len() != plan.request().stocks.len() {
+        return Err(bad(
+            "knife program lost finite-stock inventory correspondence",
+        ));
+    }
+    let sources = plan
+        .markers()
+        .iter()
+        .zip(&plan.request().stocks)
+        .enumerate()
+        .filter(|(_, (marker, _))| !marker.placements.is_empty())
+        .map(|(i, (marker, original))| MarkerSource::Finite(i, marker, original))
+        .collect::<Vec<_>>();
+    build_markers(&sources, policy, true)
+}
+
+fn build_markers(
+    sources: &[MarkerSource<'_>],
+    policy: &Policy,
+    finite: bool,
+) -> Result<Report, Refusal> {
     let (machine_sha256, recipes) = policy.validate()?;
     let mut geometry_work = geometry::Work::new(policy.geometry_work_limit);
     let mut search_work = geometry::Work::new(policy.work_limit);
-    let mut markers = Vec::with_capacity(plan.rolls.len());
-    if plan.rolls.is_empty() || plan.rolls.len() > 4096 {
+    let mut markers = Vec::with_capacity(sources.len());
+    if sources.is_empty() || sources.len() > 4096 {
         return Err(budget());
     }
-    for (index, roll) in plan.rolls.iter().enumerate() {
-        let q = recipes.get(roll.material.sha256()).ok_or_else(|| bad(format!("material {} has no exact knife process qualification; material substitution must requalify cutting", roll.material.material().id)))?;
-        let material = roll.material.material();
-        if material.structure.contains_key("compression_model") {
-            return Err(bad(
-                "knife clearance needs uncompressed thickness, not a pressure-conditioned sheet",
-            ));
-        }
-        let nominal = material.require("thickness", "m", roll.material.allows_estimates())?;
-        material.qualify_retained_liquid_property("thickness", roll.material.allows_estimates())?;
-        let thickness_mm = material.properties["thickness"]
+    for source in sources {
+        let material = source.material();
+        let q = recipes.get(material.sha256()).ok_or_else(|| bad(format!("material {} has no exact knife process qualification; material substitution must requalify cutting", material.material().id)))?;
+        let thickness = material.unloaded_thickness()?;
+        let thickness_mm = thickness
             .bounds
-            .unwrap_or([nominal, nominal])
+            .unwrap_or([thickness.value, thickness.value])
             .map(|v| v * 1000.0);
         if thickness_mm.iter().any(|&v| !positive(v))
             || thickness_mm[0] < q.thickness_mm[0]
@@ -659,12 +819,21 @@ pub(super) fn build(plan: &CutPlan, policy: &Policy) -> Result<Report, Refusal> 
                 "full source thickness range exceeds the knife process or machine envelope",
             ));
         }
-        let paths = paths(roll, &policy.machine, &mut geometry_work)?;
+        let (envelope, finite_stock, geometry_sha256) =
+            source.frame(&policy.machine, &mut geometry_work)?;
+        let placements = source.placements();
+        let paths = paths(placements, envelope, &policy.machine, &mut geometry_work)?;
         let baseline_order: Vec<_> = (0..paths.len()).collect();
-        let baseline = traversal(roll, &paths, &baseline_order, &policy.machine, q.feed_mm_s)?;
+        let baseline = traversal(
+            placements,
+            &paths,
+            &baseline_order,
+            &policy.machine,
+            q.feed_mm_s,
+        )?;
         let candidate = if policy.ordering == Ordering::NearestPath {
             nearest(&paths, &policy.machine, &mut search_work)
-                .map(|order| traversal(roll, &paths, &order, &policy.machine, q.feed_mm_s))
+                .map(|order| traversal(placements, &paths, &order, &policy.machine, q.feed_mm_s))
                 .transpose()?
         } else {
             None
@@ -678,11 +847,10 @@ pub(super) fn build(plan: &CutPlan, policy: &Policy) -> Result<Report, Refusal> 
             baseline.clone()
         };
         markers.push(Marker {
-            marker: index,
-            material_sha256: roll.material.sha256().into(),
-            geometry_sha256: sha256_hex(
-                &serde_json::to_vec(&roll.placements).map_err(|e| bad(e.to_string()))?,
-            ),
+            marker: source.index(),
+            finite_stock,
+            material_sha256: material.sha256().into(),
+            geometry_sha256,
             qualification: q.id.clone(),
             thickness_mm,
             baseline,
@@ -691,7 +859,11 @@ pub(super) fn build(plan: &CutPlan, policy: &Policy) -> Result<Report, Refusal> 
         });
     }
     Ok(Report {
-        schema: "ftx-knife-cut-program/1",
+        schema: if finite {
+            "ftx-knife-cut-program/2"
+        } else {
+            "ftx-knife-cut-program/1"
+        },
         machine_sha256,
         markers,
         search_work: search_work.used,
@@ -700,12 +872,18 @@ pub(super) fn build(plan: &CutPlan, policy: &Policy) -> Result<Report, Refusal> 
         optimality_proven: false,
         physical_cutting_validated: false,
         hardware_execution_authorized: false,
-        limitations: vec![
-            "Single-ply cold-knife planning uses exact final marker paths. All internal paths finish before exterior releases; paths retain their authored start, direction and closing edge.",
-            "Source qualifications are exact material and full machine locks. A changed textile, finish, thickness, blade, bed or timing configuration requires new applicable process evidence.",
-            "Modeled time includes only constant-rate cutting, raised-tool straight travel and explicit lift/lower cycles. Acceleration, corner slowing, blade turning, loading, workholding changes and inspection are not inferred.",
-            "No kerf compensation, common-line cutting, drill operation, thermal processing, tool/body collision check, measured cut quality, physical cycle-time claim or hardware execution authorization.",
-            "Nearest-path ordering is a bounded heuristic; an unfinished or longer candidate retains the complete authored baseline, without a shortest-path proof.",
-        ],
+        limitations: {
+            let mut limits = vec![
+                "Single-ply cold-knife planning uses exact final marker paths. All internal paths finish before exterior releases; paths retain their authored start, direction and closing edge.",
+                "Source qualifications are exact material and full machine locks. A changed textile, finish, thickness, blade, bed or timing configuration requires new applicable process evidence.",
+                "Modeled time includes only constant-rate cutting, raised-tool straight travel and explicit lift/lower cycles. Acceleration, corner slowing, blade turning, loading, workholding changes and inspection are not inferred.",
+                "No kerf compensation, common-line cutting, drill operation, thermal processing, tool/body collision check, measured cut quality, physical cycle-time claim or hardware execution authorization.",
+                "Nearest-path ordering is a bounded heuristic; an unfinished or longer candidate retains the complete authored baseline, without a shortest-path proof.",
+            ];
+            if finite {
+                limits.push("Each used physical stock item is independently loaded with its complete marker bounding-box lower-left corner at the bed origin. The reported translation preserves source orientation, all defects and prior occupied regions; stock boundaries, defects, occupied areas and zones are not cutting paths. This modeled loading position is not measured machine registration or workholding qualification.");
+            }
+            limits
+        },
     })
 }

@@ -94,6 +94,10 @@ pub struct Options {
     /// Requires `backtrack_limit`. A budget reached after a complete layout retains that incumbent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub optimize: Option<search::Objective>,
+    /// Optional source-qualified cold-knife traversal over the final used physical stock.
+    /// Missing process evidence preserves the complete geometric allocation and purchasing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<super::program::Policy>,
 }
 
 /// Finite stock allocation. Stock order is an explicit first-fit preference.
@@ -169,6 +173,10 @@ pub struct Plan {
     optimization: Option<search::Optimization>,
     #[serde(skip_serializing_if = "Option::is_none")]
     purchasing: Option<finite::PriceBasis>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    program: Option<super::program::Report>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    program_refusal: Option<Refusal>,
     optimality_claim: bool,
     hardware_execution_authorized: bool,
     limitations: Vec<&'static str>,
@@ -628,7 +636,7 @@ impl Request {
                 return Err(bad("stock search and purchasing totals disagree"));
             }
         }
-        Ok(Plan {
+        let mut plan = Plan {
             schema: "ftx-finite-stock-plan/1",
             pattern_sha256: hash(raw)?,
             source_piece_ids: scope.map(|_| scope_names(pattern, &indices)),
@@ -643,6 +651,8 @@ impl Request {
             backtracks_used,
             optimization,
             purchasing,
+            program: None,
+            program_refusal: None,
             optimality_claim: false,
             hardware_execution_authorized: false,
             limitations: vec![
@@ -665,7 +675,16 @@ impl Request {
                 },
                 "Residual requests preserve prior exterior cuts as occupied geometry; they do not reconstruct arbitrary free-space polygons, price offcuts, or authorize hardware.",
             ],
-        })
+        };
+        if let Some(policy) = &o.program {
+            match super::program::validate_source(pattern, &indices)
+                .and_then(|()| super::program::build_finite(&plan, policy))
+            {
+                Ok(program) => plan.program = Some(program),
+                Err(refusal) => plan.program_refusal = Some(refusal),
+            }
+        }
+        Ok(plan)
     }
 }
 fn hash(value: &impl Serialize) -> Result<String, Refusal> {
@@ -828,6 +847,30 @@ fn axis_steps(lo: f64, hi: f64, step: f64, limit: usize) -> Result<usize, Refusa
     Ok(count as usize)
 }
 impl Plan {
+    /// Digest of the complete source pattern, including material selections.
+    #[must_use]
+    pub fn pattern_sha256(&self) -> &str {
+        &self.pattern_sha256
+    }
+
+    /// Original piece scope for a mixed-job subplan; absent for the whole pattern.
+    #[must_use]
+    pub fn source_piece_ids(&self) -> Option<&[String]> {
+        self.source_piece_ids.as_deref()
+    }
+
+    /// Qualified modeled traversal over every used physical item, when requested and admitted.
+    #[must_use]
+    pub fn program(&self) -> Option<&super::program::Report> {
+        self.program.as_ref()
+    }
+
+    /// Independent process-admission failure; complete geometric stock allocation remains usable.
+    #[must_use]
+    pub fn program_refusal(&self) -> Option<&Refusal> {
+        self.program_refusal.as_ref()
+    }
+
     /// Dated candidate prices and the selected whole-item total, only for cost-directed jobs.
     /// Geometry and quote evidence remain immutable; this is not an inventory reservation.
     #[must_use]
