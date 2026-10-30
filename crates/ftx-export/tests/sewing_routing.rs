@@ -13,6 +13,9 @@ use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::materials::Catalog;
 use serde_json::{Value, json};
 
+#[path = "sewing_routing/selection_cost.rs"]
+mod selection_cost;
+
 fn source(id: &str) -> Value {
     json!({"reference":format!("test:routing-{id}"),"accessed_on":"2026-10-27",
         "note":"Invented software inputs; no measured process, factory timing or seam-quality claim"})

@@ -14,6 +14,13 @@ test('compiled WASM retains signed Pareto tradeoffs under independent case guard
     const dir = path.join(process.env.FTX_CONSUMER_ADAPTIVE_REPLAY, 'guarded');
     const read = name => fs.readFileSync(path.join(dir, name), 'utf8');
     const bytes = fs.readFileSync(path.join(dir, 'model.ftxbody'));
+    const sent = [], context = vm.createContext({ Uint8Array, TextEncoder, WebAssembly, JSON, Error,
+      self: {}, postMessage: message => sent.push(message) });
+    const bindings = new vm.SyntheticModule(Object.keys(ftx), function () {
+      for (const [name, value] of Object.entries(ftx)) this.setExport(name, value);
+    }, { context });
+    const worker = new vm.SourceTextModule(fs.readFileSync(path.join(__dirname, '../web/materials-worker.js'), 'utf8'), { context });
+    await worker.link(() => bindings); await worker.evaluate();
     const previous = globalThis.ftxProgress;
     globalThis.ftxProgress = () => {};
     try {
@@ -56,6 +63,45 @@ test('compiled WASM retains signed Pareto tradeoffs under independent case guard
         assert.equal(rejected.consumer_cases[0].comparison.eligible, true);
         assert.equal(rejected.consumer_cases[1].comparison.eligible, false);
         if (limited) assert.equal(rejected.consumer_cases[1].refusal.code, 'budget_exceeded');
+        if (allCases) {
+          const studyRequest = read(`${label}-study.json`), scenarioRequest = read(`${label}-scenario.json`);
+          globalThis.ftxProgress = line => context.self.ftxProgress(line);
+          await context.self.onmessage({ data: { type: 'scenario', request: limited ? 291 : 290,
+            pattern: read('pattern.json'), studyRequest, scenarioRequest, measurements: read('body-input.json'),
+            bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) } });
+          globalThis.ftxProgress = () => {};
+          const result = sent.at(-1); assert.equal(result.type, 'result', result.message);
+          assert.deepEqual(result.result, report);
+          assert.equal(result.files.find(file => file.name === 'study-request.json').text, studyRequest);
+          assert.equal(result.files.find(file => file.name === 'scenario-request.json').text, scenarioRequest);
+          assert.equal(result.files.find(file => file.name === 'body-input.json').text, read('body-input.json'));
+          assert.deepEqual(JSON.parse(result.files.find(file => file.name === 'design-scenario-matrix-study.json').text), report);
+          assert.equal(guidance.basis, undefined); assert.equal(guidance.input_protocol_sha256, null);
+          for (const key of guidance.case_order) {
+            assert.deepEqual(guidance.case_policies[key], report.cases.find(item => item.key === key).comparison.policy);
+          }
+          const rendered = displayedDesign(result.result.manufacturing), frontier = guidance.pareto_frontier;
+          assert.deepEqual(rendered.tables.get('Multi-case Pareto adaptive alteration search').rows[0].slice(5),
+            [frontier.evaluated_trial_keys.join(', '), frontier.retained_trial_keys.join(', '), frontier.unretained_trial_keys.join(', ') || 'None']);
+          assert.equal(rendered.tables.has('Consumer-guided adaptive alteration search'), false);
+          const policies = rendered.tables.get('Adaptive guidance policies by operating case').rows;
+          assert.match(policies[0][2], /assembly_mass_kg \(minimize\)/);
+          assert.match(policies[1][2], /independent_surface_power_w \(minimize\)/);
+          for (const [index, trial] of search.rows.entries()) {
+            assert.equal(trial.consumer_comparison, undefined);
+            const displayed = rendered.tables.get('Adaptive alteration trials').rows[index];
+            assert.equal(displayed[8], trial.selected ? 'Selected' : 'Not selected');
+            assert.match(displayed[6], /guide \[Nominal values\]: assembly_mass_kg \(minimize\)/);
+            assert.match(displayed[6], /guard \[Nominal values\]: independent_surface_power_w \(minimize\)/);
+            if (frontier.evaluated_trial_keys.includes(trial.design.key)) {
+              assert.equal(displayed[5], 'Eligible');
+              assert.equal(displayed[7], 'Nondominated among evaluated trials');
+            }
+            assert.equal(rendered.downloads.get(`adaptive-design-${index + 1}-pattern.json`), trial.design.altered_pattern_json);
+          }
+          const rejectedRow = rendered.tables.get('Adaptive alteration trials').rows.find(row => row[0] === rejected.design.key);
+          assert.equal(rejectedRow[5], 'Excluded'); assert.equal(rejectedRow[7], 'Not admitted');
+        }
       }
     } finally { globalThis.ftxProgress = previous; }
   });
@@ -94,8 +140,12 @@ function displayedDesign(study) {
     table: (_parent, caption, headings) => {
       const table = { headings, rows: [] }; tables.set(caption, table); return table;
     }, cells: (table, values) => table.rows.push(Array.from(values, String)),
-    detail() {}, designTreatments() {}, metricUsesBounds: policy => policy?.basis === 'reported_bounds',
+    detail() {}, designTreatments() {},
     link: (_op, _parent, file) => downloads.set(file.name, file.text) });
+  const basisStart = source.indexOf('function metricUsesBounds(');
+  const basisEnd = source.indexOf('\nfunction objectiveComparison(', basisStart);
+  assert.ok(basisStart >= 0 && basisEnd > basisStart);
+  vm.runInContext(source.slice(basisStart, basisEnd), context);
   vm.runInContext(source.slice(start, end), context);
   context.designComparison('scenario', parent, study);
   return { tables, downloads, text: parent.children.map(child => child.textContent).join('\n') };
@@ -143,6 +193,63 @@ test('Pareto renderer preserves the evaluated frontier separately from retained 
   assert.equal(rendered.tables.has('Consumer-guided adaptive alteration search'),false);
   assert.match(rendered.text,/assembly_mass_kg \(minimize\); independent_surface_power_w \(maximize\)/);
   assert.match(rendered.text,/retained subset is not a complete frontier or a single winner/);
+});
+
+test('matrix Pareto renders every independent policy and reads trial admission from all cases', () => {
+  const cold = {basis:'reported_bounds',allow_mixed_protocols:false,
+    objectives:[{metric:'independent_surface_power_w',direction:'minimize'},{metric:'assembly_mass_kg',direction:'minimize'}],
+    constraints:[{metric:'feed_seconds',maximum:5,basis:'nominal'}],required_consumers:['drape']};
+  const warm = {basis:'nominal',allow_mixed_protocols:true,
+    objectives:[{metric:'independent_surface_power_w',direction:'maximize'}],constraints:[],required_consumers:['surface']};
+  const reading=(value,unit,reported_bounds)=>({value,unit,...(reported_bounds?{reported_bounds}:{})});
+  const decision=(key,heat)=>({key,comparison:{eligible:true,exclusions:[],input_protocol_sha256:key,
+    readings:{independent_surface_power_w:reading(heat,'W',key==='<cold>'?[heat-1,heat+1]:null),
+      ...(key==='<cold>'?{assembly_mass_kg:reading(0.1,'kg',[0.09,0.11]),feed_seconds:reading(3,'s')}: {})}}});
+  const trial=(key,selected)=>({selected,max_fit_band_violation_mm:0,total_fit_band_violation_mm:0,
+    design:{key,variables_mm:{length:10},validation:{passed:true},fit:{status:'available',result:{passed:true}}},
+    consumer_cases:[decision('<cold>',10),decision('<warm>',20)]});
+  const rows=[trial('retained',true),trial('<capacity omitted>',false),trial('excluded',false),trial('flat refused',false)];
+  rows[0].design.altered_pattern_json=' {"schema":"fabric-pattern/1","coordinate":-0.0}\n';
+  delete rows[2].consumer_cases[0].comparison.readings.assembly_mass_kg.reported_bounds;
+  rows[2].consumer_cases[0].comparison.eligible=false;
+  rows[2].consumer_cases[0].comparison.exclusions=[{message:'Missing complete mass range'}];
+  rows[2].refusal={message:'The cold case did not admit this trial'};
+  rows[3].consumer_cases=[];rows[3].design.validation.passed=false;rows[3].design.fit.result.passed=false;
+  rows[3].refusal={message:'Selected-body target refused'};
+  const guidance={material_key:'<material>',case_aggregation:'pareto',case_order:['<cold>','<warm>'],
+    case_policies:{'<warm>':warm,'<cold>':cold},evaluations:3,reserved_evaluations:12,
+    best_trial_key:null,best_reading:null,input_protocol_sha256:null,
+    pareto_frontier:{evaluated_trial_keys:['retained','<capacity omitted>'],retained_trial_keys:['retained'],
+      unretained_trial_keys:['<capacity omitted>'],retention_capacity:1}};
+  const study={alternatives:[{key:'bound',design:{key:'retained'}}],design_search:{
+    schema:'ftx-design-adaptive-search/1',evaluations:4,selected_designs:1,stop_reason:'evaluation_budget',
+    consumer_guidance:guidance,rows}};
+  const rendered=displayedDesign(study),summary=rendered.tables.get('Multi-case Pareto adaptive alteration search');
+  assert.deepEqual(summary.rows[0],['4','3','12','1','evaluation budget','retained, <capacity omitted>','retained','<capacity omitted>']);
+  assert.equal(rendered.tables.has('Consumer-guided adaptive alteration search'),false);
+  assert.equal(rendered.tables.has('Pareto-guided adaptive alteration search'),false);
+  assert.deepEqual(rendered.tables.get('Adaptive guidance policies by operating case').rows,[
+    ['<cold>','Source-reported ranges','independent_surface_power_w (minimize); assembly_mass_kg (minimize)',
+      'feed_seconds: minimum Unbounded; maximum 5 (Nominal values)','drape','Matching case protocols required'],
+    ['<warm>','Nominal values','independent_surface_power_w (maximize)','None','surface','Mixed protocols explicitly admitted']]);
+  const trials=rendered.tables.get('Adaptive alteration trials').rows;
+  assert.equal(trials[0][5],'Eligible');
+  assert.equal(trials[0][7],'Nondominated among evaluated trials');
+  assert.equal(trials[0][8],'Selected');
+  assert.match(trials[0][6],/<cold> \[Source-reported ranges\]: independent_surface_power_w \(minimize\): 10 W; reported range \[9, 11\] W/);
+  assert.match(trials[0][6],/<warm> \[Nominal values\]: independent_surface_power_w \(maximize\): 20 W/);
+  assert.equal(trials[1][7],'Nondominated among evaluated trials');assert.equal(trials[1][8],'Not selected');
+  assert.equal(trials[2][5],'Excluded');assert.equal(trials[2][7],'Not admitted');
+  assert.match(trials[2][6],/assembly_mass_kg \(minimize\): 0.1 kg; reported range unknown/);
+  assert.match(trials[2][9],/<cold>: Missing complete mass range/);
+  assert.equal(trials[3][5],'Not attempted');assert.equal(trials[3][7],'Not admitted');
+  const coldReadings=rendered.tables.get('retained: operating-case admission').rows[0][2];
+  assert.match(coldReadings,/feed_seconds: 3 s/);assert.doesNotMatch(coldReadings,/feed_seconds: 3 s; reported range unknown/);
+  assert.match(rendered.text,/Guidance covers every named case: <cold>, <warm>/);
+  assert.match(rendered.text,/strict improvement in at least one case/);
+  assert.match(rendered.text,/retained subset is not a complete frontier or a single winner/);
+  assert.doesNotMatch(rendered.text,/Guidance case:|Declared objective:|Objective basis: nominal values/);
+  assert.equal(rendered.downloads.get('adaptive-design-1-pattern.json'),rows[0].design.altered_pattern_json);
 });
 
 test('compiled WASM Pareto mass and cooling tradeoffs replay native results through the worker and renderer',

@@ -1120,7 +1120,13 @@ function designComparison(op, parent, study, casePolicies = {}) {
     if (grid.schema === "ftx-design-adaptive-search/1") {
       const guidance = grid.consumer_guidance;
       const pareto = guidance?.pareto_frontier;
+      const matrixPareto = pareto && guidance.case_aggregation === "pareto";
+      const policies = matrixPareto ? (guidance.case_order || []).map(key =>
+        ({ key, policy: guidance.case_policies?.[key] })) : [];
       const objectives = pareto ? guidance.objectives || [] : guidance?.objective ? [guidance.objective] : [];
+      const policyFor = key => policies.find(item => item.key === key)?.policy || casePolicies[key];
+      const basisText = basis => basis === "reported_bounds" ? "Source-reported ranges" :
+        basis === "nominal" ? "Nominal values" : "Unknown";
       const bounded = guidance?.basis === "reported_bounds";
       const worstCase = guidance?.case_aggregation === "worst_case";
       const limitingCases = (nominal, endpoints) => nominal ?
@@ -1134,7 +1140,8 @@ function designComparison(op, parent, study, casePolicies = {}) {
         return `${metric(reading.value)} ${reading.unit || ""}${range}`;
       };
       if (guidance) {
-        const search = table(parent, pareto ? "Pareto-guided adaptive alteration search" : "Consumer-guided adaptive alteration search", ["Fit evaluations", "Consumer probes",
+        const search = table(parent, matrixPareto ? "Multi-case Pareto adaptive alteration search" :
+          pareto ? "Pareto-guided adaptive alteration search" : "Consumer-guided adaptive alteration search", ["Fit evaluations", "Consumer probes",
           "Planned callback slots (upper bound)", "Selected geometries", "Stop reason",
           ...(pareto ? ["Evaluated nondominated trials", "Retained trials", "Omitted by capacity"] :
             [bounded ? "Retained trial" : "Best trial", bounded ? "Retained objective" : "Best objective"])]);
@@ -1151,21 +1158,38 @@ function designComparison(op, parent, study, casePolicies = {}) {
           (guidance.case_key ? `Guidance case: ${guidance.case_key}. Every declared case must admit a selected trial: ${(guidance.case_order || []).join(", ")}. ` : "") +
           (worstCase ? `Case aggregation: worst case. Every declared case must admit a selected trial: ${(guidance.case_order || []).join(", ")}. ` +
             (bounded ? "Reported lower and upper endpoints each retain their own limiting case; they may differ from the nominal limiting case. " : "") : "") +
-          (pareto ? `Declared objectives: ${objectives.map(item => `${item.metric} (${item.direction})`).join("; ") || "Unknown"}. ` :
-            `Declared objective: ${guidance.objective?.metric ?? "Unknown"} (${guidance.objective?.direction ?? "Unknown"}). `) +
+          (matrixPareto ? `Guidance covers every named case: ${(guidance.case_order || []).join(", ")}. ` +
+            "Every declared case must admit a selected trial. Each case keeps its own objectives, directions, comparison basis and source protocols. " +
+            "Dominance requires no worse outcomes in every case and a strict improvement in at least one case. " :
+            pareto ? `Declared objectives: ${objectives.map(item => `${item.metric} (${item.direction})`).join("; ") || "Unknown"}. ` :
+              `Declared objective: ${guidance.objective?.metric ?? "Unknown"} (${guidance.objective?.direction ?? "Unknown"}). `) +
           (pareto ? `Retention capacity: ${metric(pareto.retention_capacity)} geometries. ` +
             "Polling also explores incomparable admitted designs, including those omitted from the output cache. " +
             "The displayed frontier covers evaluated trials only; the retained subset is not a complete frontier or a single winner. " +
             "No weighted score is introduced. " : "") +
-          (bounded ? "Objective basis: source-reported ranges. Bounded constraints admit the entire reported range; missing required ranges cannot qualify. " +
-            (pareto ? "Range comparisons retain every declared objective and direction; incomparable ranges do not acquire a total ranking. " :
-              "Search advances only when one range is strictly preferred. Overlapping, touching or equal ranges remain unresolved; retained trials do not form a total ranking. ") :
-            "Objective basis: nominal values. ") +
+          (matrixPareto ? "Objective bases are declared separately for each case below. Missing required ranges cannot qualify; nominal readings do not supply missing endpoints. " :
+            bounded ? "Objective basis: source-reported ranges. Bounded constraints admit the entire reported range; missing required ranges cannot qualify. " +
+              (pareto ? "Range comparisons retain every declared objective and direction; incomparable ranges do not acquire a total ranking. " :
+                "Search advances only when one range is strictly preferred. Overlapping, touching or equal ranges remain unresolved; retained trials do not form a total ranking. ") :
+              "Objective basis: nominal values. ") +
           "Each constraint uses its explicit basis or inherits its case policy; nominal guards do not acquire uncertainty bounds. " +
           "Rust evaluates the nominated material with the ordinary manufacturing and requested scenario consumers. " +
           "Existing source admission, required consumers, protocol rules and inclusive constraints govern each probe. " +
           "Callback slots are an upper bound on attempted work, not a preapproved simulation allowance; cumulative consumer budgets still apply.";
         parent.append(objective);
+        if (matrixPareto) {
+          const cases = table(parent, "Adaptive guidance policies by operating case",
+            ["Case", "Objective basis", "Objectives and directions", "Inclusive constraints", "Required consumers", "Protocol comparison"]);
+          for (const { key, policy } of policies) {
+            cells(cases, [key, basisText(policy.basis),
+              policy.objectives.map(item => `${item.metric} (${item.direction})`).join("; "),
+              (policy.constraints || []).map(item => `${item.metric}: minimum ${item.minimum == null ? "Unbounded" : metric(item.minimum)}; ` +
+                `maximum ${item.maximum == null ? "Unbounded" : metric(item.maximum)} (${basisText(item.basis || policy.basis)})`).join("; ") || "None",
+              (policy.required_consumers || []).join(", ") || "Objective consumers",
+              policy.allow_mixed_protocols ? "Mixed protocols explicitly admitted" : "Matching case protocols required"]);
+            detail(parent, `${key}: complete adaptive guidance policy (display only)`, policy);
+          }
+        }
       } else {
         const search = table(parent, "Fit-directed adaptive alteration search", ["Fit evaluations", "Passed flat gates",
           "Selected for consumers", "Stop reason", "Best maximum violation (mm)", "Best total violation (mm)"]);
@@ -1192,18 +1216,30 @@ function designComparison(op, parent, study, casePolicies = {}) {
         const candidate = row.consumer_comparison;
         const reading = worstCase && bounded ? row.consumer_worst_case?.reading :
           candidate?.readings?.[guidance?.objective?.metric];
-        const admitted = candidate?.eligible === true && !row.refusal &&
-          (row.consumer_cases || []).every(item => item.comparison?.eligible === true);
+        const caseDecisions = row.consumer_cases || [];
+        const attempted = matrixPareto ? caseDecisions.length > 0 : !!candidate;
+        const admitted = !row.refusal && (matrixPareto ?
+          policies.length > 0 && policies.every(policy => caseDecisions.some(item =>
+            item.key === policy.key && item.comparison?.eligible === true)) :
+          candidate?.eligible === true && caseDecisions.every(item => item.comparison?.eligible === true));
         const reasons = [row.refusal?.message, row.consumer_refusal?.message,
-          ...(candidate?.exclusions || []).map(e => e.message)]
+          ...(candidate?.exclusions || []).map(e => e.message),
+          ...(matrixPareto ? caseDecisions.flatMap(item => [
+            ...(item.comparison?.exclusions || []).map(e => `${item.key}: ${e.message}`),
+            item.refusal?.message ? `${item.key}: ${item.refusal.message}` : null]) : [])]
           .filter((message, index, all) => message && all.indexOf(message) === index).join("; ");
         cells(trials, [design.key ?? "Unknown",
           design.variables_mm ? Object.entries(design.variables_mm).map(([key, value]) => `${key}: ${metric(value)}`).join("; ") : "Unknown",
           metric(row.max_fit_band_violation_mm), metric(row.total_fit_band_violation_mm),
           passed ? "Passed declared flat gates" : "Refused",
-          ...(guidance ? [candidate ? (admitted ? "Eligible" : "Excluded") : "Not attempted",
-            pareto ? objectives.map(item => `${item.metric}: ${readingText(candidate?.readings?.[item.metric])}`).join("; ") || "Unknown" :
-              readingText(reading) + (worstCase && reading ?
+          ...(guidance ? [attempted ? (admitted ? "Eligible" : "Excluded") : "Not attempted",
+            matrixPareto ? policies.map(({ key, policy }) => {
+              const decision = caseDecisions.find(item => item.key === key);
+              return `${key} [${basisText(policy.basis)}]: ` + policy.objectives.map(item =>
+                `${item.metric} (${item.direction}): ${readingText(decision?.comparison?.readings?.[item.metric], policy.basis === "reported_bounds")}`).join("; ");
+            }).join(" | ") || "Unknown" :
+              pareto ? objectives.map(item => `${item.metric}: ${readingText(candidate?.readings?.[item.metric])}`).join("; ") || "Unknown" :
+                readingText(reading) + (worstCase && reading ?
                 limitingCases(row.consumer_case_key, row.consumer_worst_case?.reported_bound_case_keys) : ""),
             ...(pareto ? [admitted ? ((pareto.evaluated_trial_keys || []).includes(design.key) ?
               "Nondominated among evaluated trials" : "Dominated among evaluated trials") : "Not admitted"] : [])] : []),
@@ -1215,7 +1251,7 @@ function designComparison(op, parent, study, casePolicies = {}) {
           for (const item of row.consumer_cases) cells(cases, [item.key,
             item.comparison?.eligible === true ? "Eligible under declared policy" : "Excluded",
             Object.entries(item.comparison?.readings || {}).map(([key, value]) =>
-              `${key}: ${readingText(value, casePolicies[item.key] ? metricUsesBounds(casePolicies[item.key], key) :
+              `${key}: ${readingText(value, policyFor(item.key) ? metricUsesBounds(policyFor(item.key), key) :
                 bounded && objectives.some(item => item.metric === key))}`).join("; ") || "Unavailable",
             [...(item.comparison?.exclusions || []).map(reason => reason.message), item.refusal?.message]
               .filter(Boolean).join("; ") || "None"]);
@@ -1426,6 +1462,37 @@ function manufacturingComparison(op, parent, study, computed, casePolicies = {})
         const result = available(row.sewing_selection);
         cells(costs, [row.key, metric(result.selected_thread_order_cost), result.objective_currency ?? "Unknown",
           String(result.optimality_proven), metric(result.unresolved_trials)]);
+      }
+      const routedCosts = costSearches.filter(row => {
+        const result = available(row.sewing_selection);
+        return result.request?.schema === "ftx-sewing-selection/6" || result.selected_route != null;
+      });
+      if (routedCosts.length) {
+        const trials = table(parent, "Complete thread order costs by recipe and route",
+          ["Alternative", "Route", "Recipes", "Complete order cost", "Currency", "Cost availability", "Deadline admission", "Reason"]);
+        for (const row of routedCosts) {
+          const result = available(row.sewing_selection);
+          for (const trial of result.trials || []) {
+            const deadline = trial.completion_deadline;
+            const cost = trial.refusal ? "Plan refused" :
+              trial.objective_unavailable || trial.thread_order_cost == null ? "Unresolved" : "Complete order";
+            const admission = deadline ?
+              ({ feasible: "Meets deadline", excluded: "Misses deadline (proved)", unresolved: "Unresolved" }[deadline.status] || "Unknown") :
+              result.request?.completion_deadline_milliseconds != null ? "Unknown" : "Not requested";
+            const reasons = [trial.refusal?.message, trial.objective_unavailable?.message, deadline?.reason]
+              .filter((message, index, all) => message && all.indexOf(message) === index).join("; ");
+            cells(trials, [row.key, trial.route_choice ?? "Unknown",
+              Object.entries(trial.choices || {}).map(([operation, recipe]) => `${operation}: ${recipe}`).join("; ") || "Original recipes",
+              metric(trial.thread_order_cost), result.objective_currency ?? "Unknown", cost, admission,
+              reasons || "Inspect retained source-qualified order"]);
+          }
+        }
+        const scope = document.createElement("p");
+        scope.textContent = "Route costs use each authored fixed assignment's actual qualified recipe and complete thread order. " +
+          "Eligible-cell assignment searches are not admitted for this cost objective. " +
+          "A complete fixed-route order does not require proof of the shortest makespan. " +
+          "Any declared deadline is checked independently; a cheap excluded or unresolved trial does not become the selected route.";
+        parent.append(scope);
       }
       const scope = document.createElement("p");
       scope.textContent = "Recipe selection uses each complete job's source-qualified thread orders, including supplier minimums, " +

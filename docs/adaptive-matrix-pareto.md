@@ -8,9 +8,10 @@ optional restart points; omit `case_key`.
 Use the existing `ftx-design-study/1` study with `ftx-drape-scenario-matrix/1` through
 `ftx --json materials scenario-study PATTERN STUDY MATRIX BODY MODEL` or
 `ftx-materials scenario-study PATTERN STUDY MATRIX BODY MODEL`. The portable `on_model` API returns
-the same complete report. This increment targets native/portable JSON workflows: the existing
-workbench's adaptive summary assumes a nominated case and is not an all-case presentation.
-Use the structured case decisions and policies, not that summary, for this new mode.
+the same complete report. The Material Workbench runs these authored requests through its
+existing named-scenario workflow. Its multi-case adaptive view shows every case's effective
+policy and original trial readings, alongside the separate evaluated and retained frontiers.
+See [the browser workbench guide](browser-material-workbench.md#explore-adaptive-tradeoffs-across-every-named-case).
 
 Each of one to eight named cases needs an explicit effective comparison policy (its override or
 the study fallback), with one to sixteen objectives. There must be at least two case/objective
@@ -37,7 +38,7 @@ available. The original baseline remains separate from discovery.
 ## Report interpretation
 
 `consumer_guidance.case_aggregation` is `pareto`. `case_order` retains authored order and
-`case_policies` retains every effective policy. There is no common `objective`, `objectives`, `basis`,
+`case_policies` maps each case key to its complete effective policy. There is no common `objective`, `objectives`, `basis`,
 `case_key`, or synthetic aggregate protocol. Scalar `best_trial_key` and `best_reading` are null.
 Each trial's `consumer_cases` holds the unchanged original decisions and refusals. There is no
 `consumer_comparison` pretending one case represents the entire matrix.

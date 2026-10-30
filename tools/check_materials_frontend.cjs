@@ -4784,6 +4784,54 @@ test('thread-cost recipe selection displays only the canonical complete incumben
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
+test('fixed-route cost searches preserve every complete order and independent deadline admission', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const row=studyRow('<fixed routes>'),free=studyRow('zero-price complete order');
+  const deadline=(status,complete,reason)=>({schema:'ftx-sewing-completion-deadline/1',
+    limit_milliseconds:3300,status,basis:'routed_makespan/1',selected_makespan_milliseconds:complete,
+    lower_bound_makespan_milliseconds:complete,timing_optimality_proven:true,reason});
+  row.sewing_selection=outcome({schema:'ftx-sewing-selection-report/7',
+    request:{schema:'ftx-sewing-selection/6',objective:'minimize_thread_observed_order_cost',completion_deadline_milliseconds:3300},
+    selected_route:'<fast route>',selected_choices:{hem:'fast'},selected_thread_order_cost:14,objective_currency:'USD',
+    search_complete:true,budget_exhausted:false,optimality_proven:false,unresolved_trials:1,
+    trials:[{route_choice:'template',choices:{},thread_order_cost:10,
+      completion_deadline:deadline('excluded',4300,'Complete route misses the deadline')},
+      {route_choice:'<fast route>',choices:{hem:'fast'},thread_order_cost:14,
+        completion_deadline:deadline('feasible',3300,'Complete route meets the deadline')},
+      {route_choice:'unpriced',choices:{},objective_unavailable:{message:'Missing <thread> offer'},
+        completion_deadline:deadline('feasible',3200,'Complete route meets the deadline')},
+      {route_choice:'refused',choices:{hem:'invalid'},refusal:{message:'Changed cell source lock'}}]});
+  free.sewing_selection=outcome({request:{schema:'ftx-sewing-selection/6',objective:'minimize_thread_observed_order_cost'},
+    selected_route:'free order',selected_choices:{},selected_thread_order_cost:0,objective_currency:'EUR',
+    search_complete:true,budget_exhausted:false,optimality_proven:true,unresolved_trials:0,
+    trials:[{route_choice:'free order',choices:{},thread_order_cost:0}]});
+  for(const op of ['study','scenario']) {
+    await p.e[op].onclick();const report=studyReport([row,free]);
+    p.emit(op==='study'?report:{...scenarioReport(),manufacturing:report});
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+    const costs=table('Complete thread order costs by recipe and route');
+    assert.deepEqual(plain(costs.children.slice(2).map(r=>r.children.map(n=>n.textContent))),[
+      ['<fixed routes>','template','Original recipes','10','USD','Complete order','Misses deadline (proved)','Complete route misses the deadline'],
+      ['<fixed routes>','<fast route>','hem: fast','14','USD','Complete order','Meets deadline','Complete route meets the deadline'],
+      ['<fixed routes>','unpriced','Original recipes','Unknown','USD','Unresolved','Meets deadline','Missing <thread> offer; Complete route meets the deadline'],
+      ['<fixed routes>','refused','hem: invalid','Unknown','USD','Plan refused','Unknown','Changed cell source lock'],
+      ['zero-price complete order','free order','Original recipes','0','EUR','Complete order','Not requested','Inspect retained source-qualified order']]);
+    assert.deepEqual(plain(table('Thread-cost-directed recipe search').children[2].children.map(n=>n.textContent)),
+      ['<fixed routes>','14','USD','false','1']);
+    const selected=table('Material-specific sewing recipe and route search').children[2].children;
+    assert.equal(selected[2].textContent,'<fast route>');assert.equal(selected[3].textContent,'hem: fast');
+    assert.match(visibleText(s),/A complete fixed-route order does not require proof of the shortest makespan/);
+    assert.match(visibleText(s),/a cheap excluded or unresolved trial does not become the selected route/);
+    assert.match(visibleText(s),/Eligible-cell assignment searches are not admitted for this cost objective/);
+    assert.equal(table('Deadline-constrained sewing recipe search').children[2].children[5].textContent,'Misses deadline (proved)');
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  p.e.studyRequest.handlers.change();assert.equal(p.live.size,0);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
 test('deadline-constrained recipes expose feasible, excluded and unresolved complete schedules in study views', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const row=studyRow('<deadline material>');

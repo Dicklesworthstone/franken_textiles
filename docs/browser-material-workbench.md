@@ -120,6 +120,47 @@ only where an objective or constraint requires them, including named-case and ad
 readings. The ordinary Rust admission, source protocols and independent consumer refusals remain
 authoritative. Nominal constraints make no uncertainty claim.
 
+### Explore adaptive tradeoffs across every named case
+
+In an authored design study, set `design_adaptive.objective` to
+`consumer_matrix_pareto` and nominate one `material_key`. Omit `case_key`: every
+case in the named matrix guides discovery using its own effective comparison policy.
+Cases may use different metrics, directions and nominal or reported-range bases. A case
+may minimize the same signed heat metric that another case maximizes.
+
+The **Multi-case Pareto adaptive alteration search** view shows each case's complete
+objective vector, basis, inclusive constraints, required consumers and protocol policy.
+Trial readings come from the original per-case comparisons; the page creates no aggregate
+reading or weighted score. Every case must admit a retained design. The engine's dominance
+decision requires no worse outcomes across all cases and a strict improvement in at least one.
+
+Evaluated nondominated trials, retained outputs and candidates omitted by the output capacity
+remain separate. A capacity-omitted trial can still guide subsequent search. Consumer refusals,
+missing required ranges and case protocol incompatibility remain visible with their original
+reasons. The bounds and shared budgets describe the explored work; the result does not establish
+a complete continuous frontier or physical garment fit. Existing nominated-case Pareto and
+worst-case searches retain their own meanings and views.
+
+### Compare thread-order costs across fixed sewing routes
+
+A study's `sewing_selection` may use `ftx-sewing-selection/6` with
+`objective: "minimize_thread_observed_order_cost"` to compare its authored fixed routes
+and recipe choices. Each route supplies the actual qualified cell recipe, thread demand and
+complete source-qualified purchasing result. Eligible-cell assignment searches remain outside
+this cost objective.
+
+The workbench shows the chosen route and recipes, selected complete cost and currency, proof
+status and unresolved trials. **Complete thread order costs by recipe and route** also exposes
+every trial's cost availability and independent deadline admission. Missing consumption or prices
+remain unresolved; they never become zero-cost orders.
+
+An optional `completion_deadline_milliseconds` constrains complete schedules before cost
+selection. A cheaper route that misses the deadline, or whose deadline status remains unresolved,
+retains its cost for review without becoming the chosen route. Pricing a complete fixed-route
+order does not require proof of the shortest makespan. The separate deadline table retains the
+completion time, lower bound and timing proof, and downloaded reports preserve the exact inputs
+and source evidence.
+
 ### Reuse the selected body in manufacturing and scenario studies
 
 Section 4 has an explicit **Body source for body-dependent studies** choice. It applies to fresh

@@ -4616,6 +4616,25 @@ This increment is tracked by `ftx-pb2.2.15`; see [sewing-selection.md](docs/sewi
 The finite listed routes do not establish a global manufacturing optimum, measured throughput,
 physical seam quality or authority to purchase or operate equipment.
 
+### 25.138 Review multi-case design tradeoffs and fixed-route purchasing in the workbench
+
+The workbench now presents adaptive `consumer_matrix_pareto` discovery using every named case's
+own complete policy, objective directions, basis, constraints and original consumer decisions.
+Mixed nominal/range policies and opposite directions remain distinct. Trial admission uses all
+required cases; evaluated nondominated designs, retained outputs and capacity omissions stay
+separate, with exact altered-pattern downloads and no invented scalar winner.
+
+Fixed-route thread-cost studies expose every recipe/route's complete observed order and its
+independent deadline admission. Refused plans, missing prices and legitimate zero-price orders
+remain distinguishable; a cheaper late route retains its cost without becoming the winner.
+The ordinary selected recipe, route, proof scope and source-preserving downloads remain shared
+with the manufacturing and scenario paths.
+
+This workbench increment is tracked by `ftx-ds2.7`, with route-cost engine coverage under
+`ftx-pb2.2.15`. See [browser-material-workbench.md](docs/browser-material-workbench.md).
+The new views preserve the numerical engine's existing scope; they do not establish empirical
+garment fit, a complete continuous frontier or physical production qualification.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
