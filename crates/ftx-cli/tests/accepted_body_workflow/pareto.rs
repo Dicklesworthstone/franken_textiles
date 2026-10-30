@@ -1,6 +1,9 @@
 //! Real mass/steady-heat tradeoffs retain multiple designs without a fabricated scalar winner.
 use super::*;
 
+#[path = "pareto_guarded.rs"]
+mod pareto_guarded;
+
 pub(super) fn replay(
     model: &ftx_body::AnnyModel,
     digest: &str,
