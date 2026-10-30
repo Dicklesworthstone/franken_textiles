@@ -5,7 +5,7 @@
 //! a prescribed-temperature boundary, not a thermoregulating human. No overlap is inferred here.
 
 use super::exterior::{Exterior, ExteriorState};
-use super::{Boundary, SteadyConductionModel, SteadyState, surface::SteadySurface};
+use super::{Boundary, PowerRange, SteadyConductionModel, SteadyState, surface::SteadySurface};
 use crate::thermal::{
     invalid, nonnegative, positive,
     surface::{coverage::Layout, io::digest},
@@ -44,6 +44,9 @@ pub struct RegionSolution {
     pub conduction: SteadyState,
     /// Signed heat flow through the entire series path, in W.
     pub power_w: f64,
+    /// Complete conditional material endpoints with this region's exact cloth/body area factors.
+    #[serde(flatten)]
+    pub ranges: PowerRange,
 }
 
 /// Covered and bare exchange at one prescribed body-boundary triangle.
@@ -63,6 +66,9 @@ pub struct BodySolution {
     pub bridge_power_w: Option<f64>,
     /// Sum of covered and bare power, positive inside-to-outside, in W.
     pub power_w: f64,
+    /// Complete signed region intervals plus the fixed declared bare-path power.
+    #[serde(flatten)]
+    pub ranges: PowerRange,
 }
 
 /// Atomic steady solution. This is not total wearer heat loss or a warmth/safety rating.
@@ -88,6 +94,26 @@ pub struct CoverageSolution {
     pub power_w: f64,
     /// Unallocated reference cloth area, explicitly excluded from this calculation, in m².
     pub unassigned_cloth_reference_area_m2: f64,
+    /// Complete signed power interval over the declared body domain; never a partial subtotal.
+    #[serde(flatten)]
+    pub ranges: PowerRange,
+}
+
+impl CoverageSolution {
+    pub(super) fn exclude_total_reported_bounds(&mut self, reason: &str) {
+        self.ranges = PowerRange::unavailable(reason);
+        for field in &mut self.body {
+            field.ranges = PowerRange::unavailable(reason);
+        }
+    }
+
+    pub(super) fn exclude_reported_bounds(&mut self, reason: &str) {
+        self.exclude_total_reported_bounds(reason);
+        for region in &mut self.regions {
+            region.ranges = PowerRange::unavailable(reason);
+            region.conduction.exclude_reported_bounds(reason);
+        }
+    }
 }
 
 /// Covered textiles exchange with the environment only at each path's outermost physical layer.
@@ -324,6 +350,7 @@ impl SteadyCoverage {
                 baseline_power_w: None,
                 bridge_power_w: None,
                 power_w: bare,
+                ranges: PowerRange::exact(bare),
             });
         }
         let mut regions = Vec::with_capacity(self.models.len());
@@ -366,7 +393,9 @@ impl SteadyCoverage {
                 model.solve(b)?
             };
             let power = product(area, conduction.flux_w_m2)?;
+            let ranges = conduction.power_range(area);
             fields[region.body_triangle].power_w += power;
+            fields[region.body_triangle].ranges.add(&ranges);
             regions.push(RegionSolution {
                 id: region.id.clone(),
                 body_triangle: region.body_triangle,
@@ -374,13 +403,18 @@ impl SteadyCoverage {
                 layer_area_m2: layer_area,
                 conduction,
                 power_w: power,
+                ranges,
             });
         }
         let mut unassigned = 0.0;
         for (p, f) in self.source.patches.iter().zip(&self.allocated) {
             unassigned += product(p.reference_area_m2, 1.0 - f)?;
         }
-        let result = CoverageSolution {
+        let mut ranges = PowerRange::exact(0.);
+        for field in &fields {
+            ranges.add(&field.ranges);
+        }
+        let mut result = CoverageSolution {
             regions,
             body_area_m2: fields.iter().map(|f| f.area_m2).sum(),
             covered_area_m2: fields.iter().map(|f| f.covered_area_m2).sum(),
@@ -390,6 +424,7 @@ impl SteadyCoverage {
             power_w: fields.iter().map(|f| f.power_w).sum(),
             unassigned_cloth_reference_area_m2: unassigned,
             body: fields,
+            ranges,
         };
         if [
             result.body_area_m2,
@@ -403,6 +438,11 @@ impl SteadyCoverage {
             || result.body.iter().any(|f| !f.power_w.is_finite())
         {
             return Err(invalid("steady coverage accumulation overflow"));
+        }
+        if exterior.is_some() {
+            result.exclude_reported_bounds(
+                "source-reported conduction ranges do not cover coupled exterior exchange",
+            );
         }
         Ok((result, exterior_states))
     }

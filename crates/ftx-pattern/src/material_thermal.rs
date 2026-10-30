@@ -14,8 +14,8 @@ use crate::materials::{Evidence, Form, Material, Source};
 mod polynomial;
 pub use polynomial::PolynomialFit;
 mod conduction;
-pub use conduction::ConductionLaw;
 use conduction::qualified_scalar;
+pub use conduction::{ConductionLaw, ReportedConductionBounds};
 
 /// One reported mean; standard deviation is not an uncertainty of the mean or a confidence interval.
 #[derive(Clone, Debug, Serialize, Deserialize)]

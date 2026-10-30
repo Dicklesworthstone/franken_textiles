@@ -8,7 +8,7 @@ use super::{Boundary, invalid, nonnegative, positive, temperature};
 use ftx_core::Refusal;
 use ftx_pattern::{
     material_catalog::{ResolvedMaterial, Selection},
-    material_thermal::ConductionLaw,
+    material_thermal::{ConductionLaw, ReportedConductionBounds},
     materials::{CATALOG_SCHEMA, Catalog},
 };
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,83 @@ pub struct SteadyState {
     pub max_flux_residual_w_m2: f64,
     /// Largest absolute contact/film temperature-drop residual, in degrees Celsius.
     pub max_temperature_residual_c: f64,
+    /// Conditional endpoints from complete constant material ranges with fixed network inputs.
+    pub reported_bounds: Option<ReportedConductionBounds>,
+    /// Why conditional source ranges are unavailable; the nominal solution remains independent.
+    pub bounds_unavailable: Vec<String>,
+}
+
+/// Conditional signed power endpoints on the exact admitted geometry and boundary conditions.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct ReportedPowerBounds {
+    /// Increasing inside-to-outside power endpoints in watts, including signed cancellation.
+    pub power_w: [f64; 2],
+}
+
+/// Shared bounded power receipt, flattened into ordinary steady result objects.
+#[derive(Clone, Debug, Serialize)]
+pub struct PowerRange {
+    /// Complete material-source endpoints, never inferred from a nominal value or sample SD.
+    pub reported_bounds: Option<ReportedPowerBounds>,
+    /// The first missing or unsupported range in the declared accumulation order.
+    pub bounds_unavailable: Vec<String>,
+}
+
+impl PowerRange {
+    pub(super) fn exact(power: f64) -> Self {
+        Self {
+            reported_bounds: Some(ReportedPowerBounds {
+                power_w: [power; 2],
+            }),
+            bounds_unavailable: Vec::new(),
+        }
+    }
+
+    pub(super) fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            reported_bounds: None,
+            bounds_unavailable: vec![reason.into()],
+        }
+    }
+
+    pub(super) fn add(&mut self, other: &Self) {
+        let Some(current) = &mut self.reported_bounds else {
+            return;
+        };
+        let Some(next) = &other.reported_bounds else {
+            *self = other.clone();
+            return;
+        };
+        if let Err(refusal) =
+            ReportedConductionBounds::add_power_bounds(&mut current.power_w, next.power_w)
+        {
+            *self = Self::unavailable(refusal.message);
+        }
+    }
+}
+
+impl SteadyState {
+    pub(super) fn power_range(&self, area: f64) -> PowerRange {
+        let Some(bounds) = self.reported_bounds else {
+            return PowerRange {
+                reported_bounds: None,
+                bounds_unavailable: self.bounds_unavailable.clone(),
+            };
+        };
+        let power = match bounds.power_bounds(area) {
+            Ok(power) => power,
+            Err(refusal) => return PowerRange::unavailable(refusal.message),
+        };
+        PowerRange {
+            reported_bounds: Some(ReportedPowerBounds { power_w: power }),
+            bounds_unavailable: Vec::new(),
+        }
+    }
+
+    pub(super) fn exclude_reported_bounds(&mut self, reason: &str) {
+        self.reported_bounds = None;
+        self.bounds_unavailable = vec![reason.into()];
+    }
 }
 
 /// Immutable shared material selections; no cells, time steps, mass or heat capacity are invented.
@@ -320,11 +397,29 @@ impl SteadyConductionModel {
         {
             return Err(invalid("steady original-equation residual check failed"));
         }
+        let (reported_bounds, bounds_unavailable) = match ConductionLaw::reported_stack_bounds(
+            &self.laws,
+            &self.area_factors,
+            &self.interfaces,
+            [b.inside_c, b.outside_c],
+            [b.inside_resistance, b.outside_resistance],
+        ) {
+            Ok(bounds) if q >= bounds.flux_w_m2[0] && q <= bounds.flux_w_m2[1] => {
+                (Some(bounds), Vec::new())
+            }
+            Ok(_) => (
+                None,
+                vec!["nominal solver precision does not resolve the source-reported conduction interval".into()],
+            ),
+            Err(refusal) => (None, vec![refusal.message]),
+        };
         Ok(SteadyState {
             layer_faces_c: faces,
             flux_w_m2: q,
             max_flux_residual_w_m2: flux_residual,
             max_temperature_residual_c: temperature_residual,
+            reported_bounds,
+            bounds_unavailable,
         })
     }
 }

@@ -349,8 +349,11 @@ impl SteadyConductionModel {
                         ..boundary
                     };
                     if residual.abs() <= super::temperature_tolerance(b)
-                        && let Ok(conduction) = self.finish(faces, q, b)
+                        && let Ok(mut conduction) = self.finish(faces, q, b)
                     {
+                        conduction.exclude_reported_bounds(
+                            "source-reported conduction ranges do not cover coupled exterior exchange",
+                        );
                         return Ok(ExteriorState {
                             balance_residual_w_m2: conduction.flux_w_m2 - q,
                             conduction,

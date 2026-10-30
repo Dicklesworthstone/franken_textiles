@@ -87,6 +87,42 @@ are admitted. A result must satisfy the maximum principle, layer-flux residuals 
 These are numerical tolerances, not material uncertainty intervals. Unrepresentable power,
 overflow, invalid inputs, incompatible domains or nonconvergence return no partial result.
 
+## Conditional source-reported ranges
+
+Constant-property solves now propagate complete, positive `bounds` from the **same selected
+transport observations** used by the nominal solver. A selected scalar `thermal_resistance`
+uses its reported endpoints in `m2*K/W`. A selected thickness/conductivity pair requires endpoints
+for both quantities in `m` and `W/(m*K)`, and uses `[thickness_low/conductivity_high,
+thickness_high/conductivity_low]`. A missing endpoint is never replaced by its nominal value,
+another property, a sample standard deviation or a catalog-wide default. Existing source,
+unit, specimen, conditioning and estimate-consent checks still apply.
+
+`state.reported_bounds` contains `layer_resistance_m2_k_w`, `total_resistance_m2_k_w` and
+`flux_w_m2`, each an increasing `[low, high]` pair. At the request-result level,
+`reported_bounds.power_w` applies the exact authored area. Films and interfaces remain fixed
+scenario inputs. For example, a synthetic resistance of `0.4` with endpoints `[0.3, 0.5]`,
+total film resistance `0.3`, a 30 K reservoir difference and area `2 m²` gives power endpoints
+`[75, 100] W`. Reversing the reservoirs gives `[-100, -75] W`. The bounds enclose the supplied
+input combinations; they are not a probability distribution or a confidence interval.
+
+Every selected layer must supply a supported range. Missing or nonpositive endpoints,
+temperature-dependent conductivity (including a constant-valued table), coupled exterior
+exchange, unrepresentable range arithmetic, or a source interval too narrow for the admitted
+nominal solver precision produces `reported_bounds: null` and an explicit `bounds_unavailable`
+reason. The nominal solve and its numerical residuals remain available. Source-locked replay
+retains the original endpoints, and changing them without updating the material identity refuses.
+
+Independent surface results expose the same power fields on `steady` and each patch, and retain
+the full conduction endpoints on every column. Each current triangle area scales its own signed
+flux range before the interval endpoints are summed. Mixed inward and outward fluxes therefore
+retain their signs. An unbounded contributing patch makes the total range unavailable; a partial
+subtotal is never presented as the whole surface range.
+
+These are conditional material-source calculations on the admitted fixed geometry and boundaries.
+They do not propagate drape, body, temperature, film, interface, numerical-solver or general
+measurement uncertainty. The existing `uncertainty_propagated: false`, `comfort_claim: false`
+and `empirical_validation_claim: false` flags retain that broader scope.
+
 The model assumes equal conducting area, fixed geometry and fixed conditioning. It does not
 simulate moisture redistribution, evaporation, compression-dependent loft, inferred draped
 air gaps, radiative exchange, thermal bridges or human thermoregulation. Contact and film

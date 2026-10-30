@@ -218,6 +218,10 @@ impl Request {
             "not_simulated":["time-dependent heat storage","moisture transport","evaporation",
                 "human thermoregulation","wind-dependent films","compression-dependent loft",
                 "inferred air gaps","radiative exchange","thermal bridges"]});
+        let ranges = state.power_range(self.area_m2);
+        result["reported_bounds"] =
+            serde_json::to_value(ranges.reported_bounds).map_err(|e| invalid(e.to_string()))?;
+        result["bounds_unavailable"] = json!(ranges.bounds_unavailable);
         if let Some(e) = exterior {
             let enabled = e.radiation_enabled;
             describe_exterior(

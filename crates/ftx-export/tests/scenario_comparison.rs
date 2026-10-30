@@ -17,6 +17,8 @@ mod wet_film_bounds;
 
 #[path = "scenario_comparison/bending_heat.rs"]
 mod bending_heat;
+#[path = "scenario_comparison/steady_heat_bounds.rs"]
+mod steady_heat_bounds;
 
 const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-scenario-pattern.json");

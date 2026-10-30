@@ -3,6 +3,73 @@
 use super::{Law, invalid, positive};
 use crate::materials::{Form, Material};
 use ftx_core::Refusal;
+use serde::Serialize;
+
+/// Conditional constant-conduction endpoints from complete source-reported material ranges.
+/// Geometry, reservoir temperatures, films and interfaces are fixed authored inputs. These are
+/// not confidence intervals or uncertainty in the garment geometry or boundary conditions.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct ReportedConductionBounds {
+    /// Sum of material resistance endpoints after declared area scaling, m² K/W.
+    pub layer_resistance_m2_k_w: [f64; 2],
+    /// Material, interface and film resistance endpoints, m² K/W.
+    pub total_resistance_m2_k_w: [f64; 2],
+    /// Signed inside-to-outside flux endpoints in increasing order, W/m².
+    pub flux_w_m2: [f64; 2],
+}
+
+impl ReportedConductionBounds {
+    /// Convert signed flux endpoints to power on the exact positive admitted area.
+    ///
+    /// # Errors
+    /// Invalid area or flux endpoints, overflow or underflow of a nonzero endpoint.
+    pub fn power_bounds(&self, area: f64) -> Result<[f64; 2], Refusal> {
+        if !area.is_finite()
+            || area <= 0.
+            || self.flux_w_m2.iter().any(|q| !q.is_finite())
+            || self.flux_w_m2[0] > self.flux_w_m2[1]
+        {
+            return Err(invalid("invalid reported power area or flux endpoints"));
+        }
+        let power = self.flux_w_m2.map(|q| area * q);
+        if power
+            .iter()
+            .zip(self.flux_w_m2)
+            .any(|(p, q)| !p.is_finite() || (q != 0. && *p == 0.))
+        {
+            return Err(invalid("reported power area scaling is unrepresentable"));
+        }
+        Ok(power)
+    }
+
+    /// Add one complete signed power interval, preserving cancellation and endpoint order.
+    /// On failure the existing total remains unchanged; no partial range is admitted.
+    ///
+    /// # Errors
+    /// Nonfinite or reversed intervals, overflow or a nonzero contribution lost to rounding.
+    pub fn add_power_bounds(total: &mut [f64; 2], contribution: [f64; 2]) -> Result<(), Refusal> {
+        if total.iter().chain(&contribution).any(|v| !v.is_finite())
+            || total[0] > total[1]
+            || contribution[0] > contribution[1]
+        {
+            return Err(invalid("invalid reported power accumulation endpoints"));
+        }
+        let mut next = *total;
+        for endpoint in 0..2 {
+            let a = total[endpoint];
+            let b = contribution[endpoint];
+            let sum = a + b;
+            if !sum.is_finite() || (b != 0. && sum == a) || (a != 0. && sum == b) {
+                return Err(invalid(
+                    "reported power accumulation loses a nonzero endpoint",
+                ));
+            }
+            next[endpoint] = sum;
+        }
+        *total = next;
+        Ok(())
+    }
+}
 
 pub(super) fn qualified_scalar(
     material: &Material,
@@ -36,6 +103,7 @@ pub struct ConductionLaw {
     pub(super) thickness: Option<f64>,
     pub(super) transport: Law,
     pub(super) domain: Option<[f64; 2]>,
+    reported_resistance: Result<[f64; 2], &'static str>,
 }
 
 impl ConductionLaw {
@@ -75,10 +143,146 @@ impl ConductionLaw {
             Law::Constant(_) => None,
             Law::Curve(curve) => Some(curve.domain()),
         };
+        let endpoints = |key: &str| {
+            material
+                .properties
+                .get(key)?
+                .bounds
+                .filter(|[lo, hi]| lo.is_finite() && hi.is_finite() && *lo > 0.0 && *lo <= *hi)
+        };
+        let reported_resistance = if domain.is_some() {
+            Err(
+                "temperature-dependent conductivity has no supported source-reported conduction range",
+            )
+        } else if thickness.is_none() {
+            endpoints("thermal_resistance")
+                .ok_or("thermal_resistance needs complete positive source-reported endpoints")
+        } else if let (Some([tlo, thi]), Some([klo, khi])) =
+            (endpoints("thickness"), endpoints("thermal_conductivity"))
+        {
+            let range = [tlo / khi, thi / klo];
+            if range.iter().all(|v| v.is_finite() && *v > 0.) && range[0] <= range[1] {
+                Ok(range)
+            } else {
+                Err(
+                    "source-reported thickness/conductivity resistance endpoints are unrepresentable",
+                )
+            }
+        } else {
+            Err(
+                "thickness and thermal_conductivity both need complete positive source-reported endpoints",
+            )
+        };
         Ok(Self {
             thickness,
             transport,
             domain,
+            reported_resistance,
+        })
+    }
+
+    /// Complete positive reported endpoints of the exact selected constant transport observation.
+    /// The same nominal qualification and unit checks have already admitted this law. Missing
+    /// endpoints never become singleton nominal values, and sample variability is not promoted.
+    ///
+    /// # Errors
+    /// Missing/nonpositive endpoints, a temperature-dependent law, or unrepresentable conversion.
+    pub fn reported_resistance_bounds(&self) -> Result<[f64; 2], Refusal> {
+        self.reported_resistance.map_err(invalid)
+    }
+
+    /// Propagate reported constant resistance endpoints through one explicitly qualified network.
+    /// Area factors refer each material's resistance to the chosen boundary area. Complete source
+    /// intervals enclose all combinations; no statistical independence assumption is required.
+    /// This shared authority serves producer reports and decision admission without another solver.
+    ///
+    /// # Errors
+    /// Missing source bounds, unsupported laws, invalid network inputs or lost/overflowed endpoints.
+    pub fn reported_stack_bounds(
+        laws: &[Self],
+        area_factors: &[f64],
+        interfaces: &[f64],
+        temperatures_c: [f64; 2],
+        films: [f64; 2],
+    ) -> Result<ReportedConductionBounds, Refusal> {
+        if laws.is_empty()
+            || laws.len() > 256
+            || area_factors.len() != laws.len()
+            || interfaces.len() != laws.len() - 1
+            || temperatures_c
+                .iter()
+                .any(|v| !v.is_finite() || *v < -273.15)
+            || films
+                .iter()
+                .chain(interfaces)
+                .any(|v| !v.is_finite() || *v < 0.)
+            || area_factors.iter().any(|v| !v.is_finite() || *v <= 0.)
+        {
+            return Err(invalid("invalid reported-conduction network inputs"));
+        }
+        let add = |total: &mut f64, increment: f64| -> Result<(), Refusal> {
+            let next = *total + increment;
+            if !next.is_finite()
+                || (increment > 0. && next <= *total)
+                || (*total > 0. && next == increment)
+            {
+                return Err(invalid(
+                    "reported resistance accumulation loses a positive endpoint",
+                ));
+            }
+            *total = next;
+            Ok(())
+        };
+        let mut layer = [0.; 2];
+        let mut total = [0.; 2];
+        for value in films {
+            for endpoint in &mut total {
+                add(endpoint, value)?;
+            }
+        }
+        // Match the nominal constant-law seed's cold-to-hot arithmetic. Exact singleton source
+        // intervals must not become inconsistent merely because the positive terms were reordered.
+        let reverse = temperatures_c[0] < temperatures_c[1];
+        for step in 0..laws.len() {
+            let index = if reverse { step } else { laws.len() - 1 - step };
+            let range = laws[index]
+                .reported_resistance_bounds()
+                .map_err(|r| invalid(format!("layer {index}: {}", r.message)))?;
+            for endpoint in 0..2 {
+                let value = range[endpoint] * area_factors[index];
+                if !value.is_finite() || value <= 0. {
+                    return Err(invalid(
+                        "area-scaled reported resistance is unrepresentable",
+                    ));
+                }
+                add(&mut layer[endpoint], value)?;
+                add(&mut total[endpoint], value)?;
+            }
+            if step + 1 < laws.len() {
+                for endpoint in &mut total {
+                    add(
+                        endpoint,
+                        interfaces[if reverse { index } else { index - 1 }],
+                    )?;
+                }
+            }
+        }
+        let delta = temperatures_c[0] - temperatures_c[1];
+        let a = delta / total[0];
+        let b = delta / total[1];
+        if !delta.is_finite()
+            || [a, b]
+                .iter()
+                .any(|v| !v.is_finite() || (delta != 0. && *v == 0.))
+        {
+            return Err(invalid(
+                "reported conduction flux endpoints are unrepresentable",
+            ));
+        }
+        Ok(ReportedConductionBounds {
+            layer_resistance_m2_k_w: layer,
+            total_resistance_m2_k_w: total,
+            flux_w_m2: [a.min(b), a.max(b)],
         })
     }
 

@@ -1,7 +1,7 @@
 //! Transport-only admission and independent Fourier answers; no physical garment validation.
 use ftx_pattern::{
     material_catalog::Selection,
-    material_thermal::{ConductionLaw, ThermalLaw},
+    material_thermal::{ConductionLaw, ReportedConductionBounds, ThermalLaw},
     materials::{Catalog, Form, Material},
 };
 use serde_json::{Value, json};
@@ -27,6 +27,136 @@ fn near(actual: f64, expected: f64) {
         (actual - expected).abs() < 1e-11 * (1.0 + expected.abs()),
         "{actual} != {expected}"
     );
+}
+
+fn resistance(value: f64, bounds: Option<[f64; 2]>) -> Material {
+    let mut m = material();
+    m.thermal_response = None;
+    let mut quantity = m.properties["thickness"].clone();
+    quantity.value = value;
+    quantity.unit = "m2*K/W".into();
+    quantity.bounds = bounds;
+    m.properties.clear();
+    m.properties.insert("thermal_resistance".into(), quantity);
+    m
+}
+
+#[test]
+fn source_resistance_endpoints_follow_unequal_areas_films_and_signed_flux() {
+    let laws = [
+        ConductionLaw::from_material(&resistance(0.2, Some([0.1, 0.3])), true).unwrap(),
+        ConductionLaw::from_material(&resistance(0.4, Some([0.3, 0.5])), true).unwrap(),
+    ];
+    let solve = |temperatures| {
+        ConductionLaw::reported_stack_bounds(&laws, &[1., 0.5], &[0.1], temperatures, [0.1, 0.2])
+            .unwrap()
+    };
+    let forward = solve([30., 0.]);
+    for (actual, expected) in forward
+        .layer_resistance_m2_k_w
+        .into_iter()
+        .zip([0.25, 0.55])
+    {
+        near(actual, expected);
+    }
+    for (actual, expected) in forward
+        .total_resistance_m2_k_w
+        .into_iter()
+        .zip([0.65, 0.95])
+    {
+        near(actual, expected);
+    }
+    near(forward.flux_w_m2[0], 30. / 0.95);
+    near(forward.flux_w_m2[1], 30. / 0.65);
+    let reverse = solve([0., 30.]);
+    near(reverse.flux_w_m2[0], -forward.flux_w_m2[1]);
+    near(reverse.flux_w_m2[1], -forward.flux_w_m2[0]);
+    assert_eq!(solve([15., 15.]).flux_w_m2, [0., 0.]);
+    let power = forward.power_bounds(0.5).unwrap();
+    near(power[0], 15. / 0.95);
+    near(power[1], 15. / 0.65);
+    let mut combined = power;
+    ReportedConductionBounds::add_power_bounds(&mut combined, reverse.power_bounds(0.25).unwrap())
+        .unwrap();
+    near(combined[0], 15. / 0.95 - 7.5 / 0.65);
+    near(combined[1], 15. / 0.65 - 7.5 / 0.95);
+}
+
+#[test]
+fn ratio_ranges_require_both_selected_observations_and_never_override_direct_resistance() {
+    let mut m = material();
+    m.thermal_response = None;
+    let thickness = m.properties.get_mut("thickness").unwrap();
+    thickness.value = 0.002;
+    thickness.bounds = Some([0.001, 0.003]);
+    let mut conductivity = thickness.clone();
+    conductivity.value = 0.04;
+    conductivity.unit = "W/(m*K)".into();
+    conductivity.bounds = Some([0.02, 0.06]);
+    m.properties
+        .insert("thermal_conductivity".into(), conductivity);
+    let law = ConductionLaw::from_material(&m, true).unwrap();
+    let bounds = law.reported_resistance_bounds().unwrap();
+    near(bounds[0], 0.001 / 0.06);
+    near(bounds[1], 0.003 / 0.02);
+    assert!(ConductionLaw::from_material(&m, false).is_err());
+    let mut wrong_unit = m.clone();
+    wrong_unit.properties.get_mut("thickness").unwrap().unit = "mm".into();
+    assert!(ConductionLaw::from_material(&wrong_unit, true).is_err());
+    for key in ["thickness", "thermal_conductivity"] {
+        let mut missing = m.clone();
+        missing.properties.get_mut(key).unwrap().bounds = None;
+        let law = ConductionLaw::from_material(&missing, true).unwrap();
+        near(law.resistance_at(20.).unwrap(), 0.05);
+        assert!(law.reported_resistance_bounds().is_err());
+    }
+    m.properties.insert(
+        "thermal_resistance".into(),
+        resistance(0.4, Some([0.3, 0.5])).properties["thermal_resistance"].clone(),
+    );
+    let direct = ConductionLaw::from_material(&m, true).unwrap();
+    assert_eq!(direct.reported_resistance_bounds().unwrap(), [0.3, 0.5]);
+    near(direct.resistance_at(20.).unwrap(), 0.4);
+    m.properties.get_mut("thermal_resistance").unwrap().bounds = None;
+    assert!(
+        ConductionLaw::from_material(&m, true)
+            .unwrap()
+            .reported_resistance_bounds()
+            .is_err()
+    );
+}
+
+#[test]
+fn incomplete_nonpositive_and_temperature_series_ranges_stay_unavailable() {
+    for bounds in [None, Some([0., 0.5]), Some([-0.1, 0.5])] {
+        let law = ConductionLaw::from_material(&resistance(0.4, bounds), true).unwrap();
+        near(law.flux_between(30., 0.).unwrap(), 75.);
+        assert!(law.reported_resistance_bounds().is_err());
+    }
+    let mut m = material();
+    // Constant-valued series retain their source domain and never acquire scalar endpoints.
+    let law = ConductionLaw::from_material(&m, true).unwrap();
+    assert_eq!(law.domain(), Some([0., 60.]));
+    assert!(law.reported_resistance_bounds().is_err());
+    // The existing source authority refuses a conflicting scalar rather than selecting its range.
+    m.properties.insert(
+        "thermal_resistance".into(),
+        resistance(0.4, Some([0.3, 0.5])).properties["thermal_resistance"].clone(),
+    );
+    assert!(ConductionLaw::from_material(&m, true).is_err());
+}
+
+#[test]
+fn unrepresentable_range_operations_refuse_without_overwriting_totals() {
+    let law = ConductionLaw::from_material(&resistance(0.4, Some([0.1, f64::MAX])), true).unwrap();
+    near(law.resistance_at(20.).unwrap(), 0.4);
+    assert!(ConductionLaw::reported_stack_bounds(&[law], &[2.], &[], [30., 0.], [0., 0.]).is_err());
+    let mut total = [f64::MAX / 2.; 2];
+    let before = total;
+    assert!(ReportedConductionBounds::add_power_bounds(&mut total, [f64::MAX; 2]).is_err());
+    assert_eq!(total, before);
+    assert!(ReportedConductionBounds::add_power_bounds(&mut total, [1.; 2]).is_err());
+    assert_eq!(total, before);
 }
 
 #[test]

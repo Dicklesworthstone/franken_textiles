@@ -77,7 +77,7 @@ retain their original policy semantics. Per-case decisions and refusals remain i
 retained nominees reuse complete case outputs while all case callbacks share the existing cumulative
 session budgets. Probe-plus-final reservations multiply by the case count, within the ordinary
 matrix limit. Multiple guidance objectives, unsupported bounded metrics and unavailable nominees refuse
-before production callbacks. Range guidance uses only existing complete mass/vapor/final-water endpoints:
+before production callbacks. Range guidance uses only existing complete mass/steady-heat/vapor/final-water endpoints:
 missing bounds exclude while nominal values remain visible; range-based constraints admit the entire range.
 Only strict interval separation moves the poll center or replaces a retained trial. When full, the
 range cache replaces the latest retained trial strictly dominated by the newcomer, without inventing
@@ -101,6 +101,25 @@ metrics retain ordinary exclusion/preflight behavior. Signed nominal quantities 
 Exact policy/context retains each override; no synthetic singleton, extra scenario, physical failure
 threshold or uncertainty in a nominal guard is inferred. Tests: `material_study`, `scenario_comparison`,
 `design_study/adaptive` and the actual one-case mixed-basis accepted-body native/portable replay.
+
+**Conditional steady heat decisions.** `independent_surface_power_w` and `body_coverage_power_w`
+support reported-range objectives and guards through the shared
+`ConductionLaw::reported_stack_bounds` and signed power arithmetic. Every consumed constant source
+needs complete positive direct-resistance endpoints or complete thickness/conductivity endpoints;
+the selected temperature-dependent law cannot borrow scalar ranges. Admission binds the final
+alternative's frozen selections, retained solver triangle geometry, exact surface conditions or
+prescribed coverage-body identity, explicit interface policy, local area factors, all canonical
+component ranges and complete power accumulation. Coverage includes explicit film-only bare paths
+and retained unassigned-cloth accounting; material ranges do not require complete textile coverage.
+Missing bounds, unsupported nonlinear/exterior/bridge/consumed stagnant-gap coupling, stale inputs,
+changed component ranges or unrepresentable arithmetic exclude bounded decisions while the ordinary
+nominal reading remains visible. Source-dependent gap thickness cannot vary while its derived gap
+resistance is treated as fixed. Geometry, fixed authored interfaces, films and reservoir temperatures
+are conditional inputs, without propagated geometric/boundary uncertainty, confidence, comfort or
+empirical fit claims. Nominal-only decisions retain their existing behavior and incur no range
+admission. Tests: `scenario_comparison::steady_heat_bounds` plus the production pattern/drape
+conduction, surface and coverage suites; `ftx-wasm/material_scenario::steady_heat_bounds` verifies
+signed range decisions and frozen replay on actual sewn geometry and projected coverage.
 
 **Moving zero-storage bridge decisions** (`motion.transient_coverage.thermal_bridges`). Existing
 incoming-coverage energy objectives consume the complete signed baseline-plus-excess result. A

@@ -4,7 +4,7 @@
 //! contains explicitly coextensive layers; nearby sheets do not imply a stack or body coverage.
 
 use super::exterior::{Exterior, ExteriorState};
-use super::{Boundary, SteadyConductionModel, SteadyState, invalid, positive};
+use super::{Boundary, PowerRange, SteadyConductionModel, SteadyState, invalid, positive};
 use crate::{
     run::DrapeRun,
     scene::Scene,
@@ -35,6 +35,9 @@ pub struct PatchFlux {
     pub area_m2: f64,
     /// Heat flow in W, positive from the inside reservoir toward the outside.
     pub power_w: f64,
+    /// Complete conditional material ranges on this exact current patch area.
+    #[serde(flatten)]
+    pub ranges: PowerRange,
 }
 
 /// Complete steady field, with no partial result on a failed column or geometric overflow.
@@ -48,6 +51,9 @@ pub struct SurfaceSolution {
     pub area_m2: f64,
     /// Signed sum of patch powers, not an inferred whole-wearer heat loss.
     pub power_w: f64,
+    /// Signed interval sum over every retained current patch; no partial bounded subtotal.
+    #[serde(flatten)]
+    pub ranges: PowerRange,
 }
 
 /// Exposed-face exchange over the same retained cloth areas; not a body-coverage calculation.
@@ -284,6 +290,7 @@ impl SteadySurface {
         let mut patches = Vec::with_capacity(self.patches.len());
         let mut area_m2 = 0.0;
         let mut power_w = 0.0;
+        let mut ranges = PowerRange::exact(0.);
         for (patch, area) in self.patches.iter().zip(areas) {
             let flux = columns[patch.column].flux_w_m2;
             let power = area * flux;
@@ -292,10 +299,13 @@ impl SteadySurface {
             }
             area_m2 += area;
             power_w += power;
+            let patch_ranges = columns[patch.column].power_range(area);
+            ranges.add(&patch_ranges);
             patches.push(PatchFlux {
                 column: patch.column,
                 area_m2: area,
                 power_w: power,
+                ranges: patch_ranges,
             });
         }
         if !area_m2.is_finite() || !power_w.is_finite() {
@@ -306,6 +316,7 @@ impl SteadySurface {
             patches,
             area_m2,
             power_w,
+            ranges,
         })
     }
 

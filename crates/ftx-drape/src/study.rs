@@ -232,9 +232,26 @@ impl<'a, 'body> Session<'a, 'body> {
                 "vertex_count":self.body.collision.0.len(),
                 "triangles_sha256":hash(&self.body.collision.1).expect("admitted body triangles")});
         }
-        if let Some(policy) = &self.scenario.vapor_coverage {
-            let faces: Option<Vec<_>> = policy
-                .body_triangle_ids
+        for (field, ids) in [
+            (
+                "coverage_body_mesh_sha256",
+                self.scenario
+                    .coverage
+                    .as_ref()
+                    .map(|p| &p.body_triangle_ids),
+            ),
+            (
+                "vapor_coverage_body_mesh_sha256",
+                self.scenario
+                    .vapor_coverage
+                    .as_ref()
+                    .map(|p| &p.body_triangle_ids),
+            ),
+        ] {
+            let Some(ids) = ids else {
+                continue;
+            };
+            let faces: Option<Vec<_>> = ids
                 .iter()
                 .map(|&i| self.body.collision.1.get(i).copied())
                 .collect();
@@ -242,7 +259,7 @@ impl<'a, 'body> Session<'a, 'body> {
                 && let Ok(identity) = hash(&json!({"positions_m":self.body.collision.0,
                     "triangles":faces}))
             {
-                descriptor["vapor_coverage_body_mesh_sha256"] = json!(identity);
+                descriptor[field] = json!(identity);
             }
         }
         if let Some(path) = &self.motion_path {

@@ -4494,6 +4494,20 @@ policy. The workbench exposes effective bases and limits without inventing missi
 nominal guards. This increment is tracked by `ftx-ds2.4`; source intervals remain conditional on
 the declared model inputs and do not establish general uncertainty or physical garment fit.
 
+### 25.130 Compare steady dry heat over complete material-source ranges
+
+The canonical constant-conduction authority now propagates complete selected resistance endpoints,
+or thickness/conductivity endpoints, through fixed films, interfaces and actual area factors.
+Standalone stacks, independent cloth surfaces and layered body coverage retain ordered signed
+power ranges alongside nominal output. Coverage includes explicitly declared bare-film paths.
+
+Scenario comparisons and adaptive discovery can use these ranges as objectives or constraints.
+Admission reconciles final material sources, retained cloth/body geometry, component intervals and
+complete power accumulation. Missing endpoints and unsupported nonlinear, exterior, bridge or
+consumed stagnant-gap coupling preserve nominal heat with explicit range unavailability. The
+workbench displays this distinction. This increment is tracked by `ftx-tma.4`; geometry and boundary
+uncertainty, confidence levels, physical warmth and empirical material validation remain outside it.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

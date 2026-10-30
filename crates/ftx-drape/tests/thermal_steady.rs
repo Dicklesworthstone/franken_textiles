@@ -32,6 +32,18 @@ fn constant(r: f64, domain: [f64; 2]) -> Selection {
     }
     s
 }
+fn reported_resistance(r: f64, bounds: Option<[f64; 2]>) -> Selection {
+    let mut s = selection();
+    let m = s.record.as_mut().unwrap();
+    m.thermal_response = None;
+    let mut q = m.properties["thickness"].clone();
+    q.value = r;
+    q.unit = "m2*K/W".into();
+    q.bounds = bounds;
+    m.properties.clear();
+    m.properties.insert("thermal_resistance".into(), q);
+    s
+}
 fn build(selections: &[Selection], interfaces: Vec<f64>) -> SteadyConductionModel {
     let db = Catalog::builtin().unwrap();
     SteadyConductionModel::new(
@@ -58,6 +70,90 @@ fn near(a: f64, b: f64) {
 }
 
 #[test]
+fn constant_reported_ranges_preserve_nominal_and_need_every_layer() {
+    let layers = [
+        reported_resistance(0.2, Some([0.1, 0.3])),
+        reported_resistance(0.4, Some([0.3, 0.5])),
+    ];
+    let b = boundary(30., 0., 0.1, 0.2);
+    let state = build(&layers, vec![0.1]).solve(b).unwrap();
+    near(state.flux_w_m2, 30.);
+    let range = state.reported_bounds.unwrap();
+    near(range.layer_resistance_m2_k_w[0], 0.4);
+    near(range.layer_resistance_m2_k_w[1], 0.8);
+    near(range.total_resistance_m2_k_w[0], 0.8);
+    near(range.total_resistance_m2_k_w[1], 1.2);
+    near(range.flux_w_m2[0], 25.);
+    near(range.flux_w_m2[1], 37.5);
+    assert!(state.bounds_unavailable.is_empty());
+    let missing = build(
+        &[layers[0].clone(), reported_resistance(0.4, None)],
+        vec![0.1],
+    )
+    .solve(b)
+    .unwrap();
+    assert_eq!(missing.flux_w_m2, state.flux_w_m2);
+    assert_eq!(missing.layer_faces_c, state.layer_faces_c);
+    assert!(missing.reported_bounds.is_none());
+    assert!(missing.bounds_unavailable[0].contains("layer 1"));
+}
+
+#[test]
+fn singleton_source_intervals_match_existing_constant_solver_in_both_directions() {
+    let layers = [
+        reported_resistance(0.137, Some([0.137; 2])),
+        reported_resistance(0.293, Some([0.293; 2])),
+        reported_resistance(0.419, Some([0.419; 2])),
+    ];
+    let model = build(&layers, vec![0.071, 0.037]);
+    for b in [
+        boundary(31.7, -2.3, 0.083, 0.029),
+        boundary(-2.3, 31.7, 0.083, 0.029),
+    ] {
+        let state = model.solve(b).unwrap();
+        assert_eq!(
+            state.reported_bounds.unwrap().flux_w_m2,
+            [state.flux_w_m2; 2]
+        );
+    }
+}
+
+#[test]
+fn stack_request_reports_area_scaled_ranges_and_locks_source_endpoints_on_replay() {
+    use ftx_drape::thermal::steady::request::Request;
+    let catalog = Catalog::builtin().unwrap();
+    let input = json!({"schema":"ftx-thermal-steady/1",
+        "layers":[reported_resistance(0.4, Some([0.3, 0.5]))],
+        "interface_resistance_m2_k_w":[],"area_m2":2.,"inside_c":0.,"outside_c":30.,
+        "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2});
+    let result = serde_json::from_value::<Request>(input)
+        .unwrap()
+        .evaluate(&catalog)
+        .unwrap();
+    near(
+        result["reported_bounds"]["power_w"][0].as_f64().unwrap(),
+        -100.,
+    );
+    near(
+        result["reported_bounds"]["power_w"][1].as_f64().unwrap(),
+        -75.,
+    );
+    assert_eq!(result["bounds_unavailable"], json!([]));
+    assert_eq!(result["uncertainty_propagated"], false);
+    let replay: Request = serde_json::from_value(result["request"].clone()).unwrap();
+    assert_eq!(replay.evaluate(&catalog).unwrap(), result);
+    let mut changed = result["request"].clone();
+    changed["layers"][0]["record"]["properties"]["thermal_resistance"]["bounds"] =
+        json!([0.2, 0.6]);
+    assert!(
+        serde_json::from_value::<Request>(changed)
+            .unwrap()
+            .evaluate(&catalog)
+            .is_err()
+    );
+}
+
+#[test]
 fn constant_stack_contacts_and_films_match_resistance_sum_and_reverse() {
     let model = build(
         &[constant(0.2, [0.0, 100.0]), constant(0.4, [0.0, 100.0])],
@@ -65,6 +161,8 @@ fn constant_stack_contacts_and_films_match_resistance_sum_and_reverse() {
     );
     let b = boundary(90.0, 0.0, 0.05, 0.15);
     let state = model.solve(b).unwrap();
+    assert!(state.reported_bounds.is_none());
+    assert!(state.bounds_unavailable[0].contains("temperature-dependent"));
     near(state.flux_w_m2, 100.0);
     for (got, expected) in state.layer_faces_c.iter().zip([[85.0, 65.0], [55.0, 15.0]]) {
         near(got[0], expected[0]);

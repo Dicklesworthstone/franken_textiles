@@ -214,6 +214,11 @@ impl Request {
                 None,
             )
         };
+        if !projection.gap_interfaces.is_empty() {
+            solution.exclude_reported_bounds(
+                "source-reported conduction ranges do not cover thickness-dependent stagnant-gap interfaces",
+            );
+        }
         let bridges = self
             .thermal_bridges
             .as_ref()
@@ -256,6 +261,9 @@ impl Request {
             })
             .transpose()?;
         if let Some(bridges) = &bridges {
+            solution.exclude_total_reported_bounds(
+                "source-reported conduction ranges do not cover thermal-bridge qualification domains",
+            );
             solution.baseline_power_w = Some(solution.power_w);
             solution.bridge_power_w = bridges["bridge_power_w"].as_f64();
             solution.power_w = bridges["total_power_w"]

@@ -4040,6 +4040,37 @@ test('coverage presents baseline and qualified seam excess separately and invali
   p.emit({steady:{power_w:6},comfort_claim:false,empirical_validation_claim:false});
   assert.equal(descendants(s).some(n=>n.tag==='table'),false);
 });
+test('steady heat views retain signed source ranges and explicit unavailability across initial and endpoint results', async () => {
+  const p=await pageModule();await p.load();await p.bind();
+  for(const id of ['measurements','fit','body','heatConditions','coverageConditions','map'])p.select(id);
+  p.e.body.files[0].arrayBuffer=async()=>new ArrayBuffer(8);
+  await p.e.fold.onclick();p.emit({settled:true,flags:[]});
+  const ranged={steady:{power_w:-4,reported_bounds:{power_w:[-5,-3]},bounds_unavailable:[]}};
+  const missing={steady:{power_w:6,reported_bounds:null,bounds_unavailable:['Layer <shell> needs complete source endpoints']}};
+  for(const op of ['heat','coverage']) {
+    await p.e[op].onclick();p.emit(ranged);
+    const s=section(p,op),t=descendants(s).find(n=>n.tag==='table');
+    assert.deepEqual(t.children[2].children.map(n=>n.textContent),['-4','[-5, -3]','Complete selected source endpoints']);
+    await p.e[op].onclick();p.emit(missing);
+    const refusedRange=descendants(s).find(n=>n.tag==='table');
+    assert.deepEqual(refusedRange.children[2].children.map(n=>n.textContent),
+      ['6','Unknown','Layer <shell> needs complete source endpoints']);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  scenarioInputs(p);const report=scenarioReport(),initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  initial.surface=outcome(ranged);initial.coverage=outcome(missing);
+  initial.motion=outcome({duration_s:1,trials:1,samples:[],metrics:{},keyframes:[{
+    time_s:1,arm_abduction_deg:35,surface:outcome(ranged),coverage:outcome(missing)}]});
+  await p.e.scenario.onclick();p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const tables=descendants(s).filter(n=>n.tag==='table'&&n.children[0].textContent.endsWith('steady source-reported heat range'));
+  assert.equal(tables.length,4);
+  assert.equal(tables.filter(t=>t.children[2].children[1].textContent==='[-5, -3]').length,2);
+  assert.equal(tables.filter(t=>t.children[2].children[1].textContent==='Unknown').length,2);
+  assert.match(visibleText(s),/Nominal power remains available when ranges are unsupported or incomplete/);
+  p.e.scenarioRequest.handlers.change();assert.equal(s.hidden,true);
+});
+
 test('scenario endpoints use combined seam power and preserve signed bridge accounting', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const r=scenarioReport(), initial=r.simulations.find(row=>row.key==='A').evaluation.result;

@@ -330,6 +330,7 @@ function objectiveComparison(parent, r) {
     (r.policy.allow_mixed_protocols ? "Mixed source protocols explicitly admitted. " : "Reported input protocols must match. ") +
     "Each constraint uses its explicit basis or inherits the objective basis. Nominal constraints retain nominal admission. " +
     (anyBounds ? "Requested reported-range decisions use complete source-reported ranges: mass at fixed authored geometry and inventory, " +
+      "constant steady dry heat at fixed geometry, reservoirs, films and interfaces, " +
       "and vapor potential at fixed geometry, boundaries and retained sampling. " +
       "Final cumulative finite-water ranges, when requested, additionally hold the declared initial liquid and supply fixed. " +
       "Conditional on these inputs and evaluated alternatives; no general scenario uncertainty, confidence level, empirical fit or global optimum claim." :
@@ -850,6 +851,21 @@ function motionVaporComparison(op, parent, key, index, motion, dependency, reque
       text: history.replay_request_json, mime: "application/json" });
   }
 }
+function steadyHeatBounds(parent, label, result) {
+  const steady = result?.steady;
+  if (!steady || (!Object.hasOwn(steady, "reported_bounds") && !steady.bounds_unavailable?.length)) return;
+  const bounds = steady.reported_bounds?.power_w;
+  const t = table(parent, `${label}: steady source-reported heat range`,
+    ["Signed nominal power (W)", "Signed reported power range (W)", "Range availability"]);
+  cells(t, [metric(steady.power_w), bounds ? `[${bounds.map(metric).join(", ")}]` : "Unknown",
+    bounds ? "Complete selected source endpoints" :
+      (steady.bounds_unavailable || []).map(reason => reason.message || reason).join("; ") || "No complete source range"]);
+  const note = document.createElement("p");
+  note.textContent = "These conditional steady ranges retain the exact evaluated geometry, reservoir temperatures, films and fixed interfaces. " +
+    "Each consumed constant material law needs complete reported resistance endpoints or thickness and conductivity endpoints. " +
+    "Nominal power remains available when ranges are unsupported or incomplete. The ranges do not describe geometric uncertainty, transient heat or measured garment warmth.";
+  parent.append(note);
+}
 function thermalBridges(parent, label, result) {
   const bridges = result?.thermal_bridges;
   if (!bridges) return;
@@ -867,6 +883,7 @@ function thermalBridges(parent, label, result) {
     qualifications: result.request?.thermal_bridges });
 }
 function coverageResult(parent, result) {
+  steadyHeatBounds(parent, "Steady heat", result);
   thermalBridges(parent, "Coverage", result);
   return { steady: result.steady,
     ...(Object.hasOwn(result, "thermal_bridges") ? { thermal_bridges: result.thermal_bridges } : {}),
@@ -897,6 +914,8 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
     for (const endpoint of result.keyframes) {
       cells(endpoints, [metric(endpoint.time_s), metric(endpoint.arm_abduction_deg), state(endpoint.surface),
         metric(available(endpoint.surface)?.steady?.power_w), state(endpoint.coverage), metric(available(endpoint.coverage)?.steady?.power_w)]);
+      steadyHeatBounds(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s independent sheets`, available(endpoint.surface));
+      steadyHeatBounds(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s body coverage`, available(endpoint.coverage));
       thermalBridges(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s`, available(endpoint.coverage));
     }
     if (result.keyframes.some(e => e.vapor_surface && e.vapor_surface.status !== "not_requested")) {
@@ -969,6 +988,8 @@ function comparison(op, r, parent = sections.get(op).comparison, { skipManufactu
         scenario_sha256: result?.scenario_sha256, body_geometry_sha256: result?.body_geometry_sha256,
         placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
         surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
+      steadyHeatBounds(parent, `${row.key}: initial independent sheets`, available(result?.surface));
+      steadyHeatBounds(parent, `${row.key}: initial body coverage`, available(result?.coverage));
       thermalBridges(parent, `${row.key}: initial coverage`, available(result?.coverage));
       materialStrainComparison(parent, row.key, result?.material_strain, outcome, r.scenario?.scenario?.material_strain);
       contactLoadsComparison(parent, row.key, result?.contact_loads, outcome, r.scenario?.scenario?.contact_loads);

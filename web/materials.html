@@ -428,7 +428,12 @@ not stock waste, a simulated subset or a weighed finished garment. Mass and ever
 <p class="note">Add an optional <code>comparison</code> to the study request with explicit <code>basis: "nominal"</code>,
 <code>objectives</code>, inclusive <code>constraints</code> and <code>required_consumers</code>. The shared Rust engine reports
 the computed Pareto alternatives, exclusions and protocol-incomparable pairs separately from scalar screening.
-Use <code>basis: "reported_bounds"</code> for <code>assembly_mass_kg</code>, vapor-potential objectives or final cumulative finite-water outcomes.
+Use <code>basis: "reported_bounds"</code> for <code>assembly_mass_kg</code>, constant steady-heat objectives,
+vapor-potential objectives or final cumulative finite-water outcomes.
+Steady <code>independent_surface_power_w</code> and <code>body_coverage_power_w</code> ranges require complete positive
+endpoints for the selected constant resistance, or both thickness and conductivity. Geometry, reservoirs, films and fixed interfaces
+stay fixed. Nonlinear conductivity, exterior exchange, bridges and consumed thickness-dependent gas gaps leave their nominal result
+visible but cannot supply a bounded decision. Coverage includes explicitly declared bare-film paths, and reversed heat flow remains negative.
 Mass ranges retain fixed authored geometry and inventory. Vapor ranges propagate complete source-reported Ret endpoints
 with fixed geometry, boundary pressures, films, interfaces, latent heat and motion sampling. Finite-water ranges also hold
 the declared initial liquid and supply fixed. Limits must contain the

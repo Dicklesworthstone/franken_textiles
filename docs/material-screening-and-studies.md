@@ -542,8 +542,9 @@ binding and ordinary planner reports; those outputs do not change when compariso
 
 `basis` is required. `nominal` explicitly compares computed central values and preserves the existing
 behavior for every metric. The separate `reported_bounds` mode below supports complete declared
-assembly mass and vapor-potential transfer. It does not turn source ranges into intervals for cutting
-choices, sewing, cost, mechanical response or dry heat.
+assembly mass, constant steady heat, vapor-potential transfer and final finite body-water quantities.
+It does not turn source ranges into intervals for cutting choices, sewing, cost, mechanical response
+or transient heat.
 This finite-candidate frontier is conditional on upstream screening, process options, quantities,
 market date and input data. It is not optimal nesting, a global material optimum or physical validation.
 
@@ -612,13 +613,45 @@ on the frontier with an explicit unresolved-range reason. They cannot be ordered
 values. Reported methods, conditions, evidence, exact material binding and complete-inventory gates
 still apply; allowing mixed protocols never bypasses missing bounds or a failed required consumer.
 
-`assembly_mass_kg` and the vapor metrics below support this mode. Unsupported metrics refuse the
+`assembly_mass_kg`, the steady-heat metrics and the vapor metrics below support this mode. Unsupported metrics refuse the
 policy before evaluation, including mixing a nominal cost objective into a reported-bounds
 comparison. Use explicit nominal mode when comparing those other computed objectives.
 The guarantee is conditional on the reported endpoints, fixed authored geometry and additive
 pre-finishing inventory. It does not cover omitted components, finishing changes, geometric error,
 source truth or confidence levels. `uncertainty_propagated` and `physical_validation_claim` remain
 false; this is the specific mass-endpoint propagation already reported by the mass consumer.
+
+### Steady heat limits over complete material-source ranges
+
+Scenario studies support `independent_surface_power_w` and `body_coverage_power_w` in
+`reported_bounds` decisions. A material must provide complete positive endpoints for the exact
+constant observation selected by the ordinary conduction authority: direct `thermal_resistance`,
+or both `thickness` and `thermal_conductivity`. A higher-priority temperature-dependent conductivity
+curve remains the selected law and cannot borrow unrelated scalar bounds. Sample variability and
+missing endpoints never become singleton nominal intervals.
+
+The same canonical resistance network used by the producer derives each column or covered-region
+range. The comparator checks the final source-locked piece assignments, current cloth triangles,
+the prescribed body-domain identity, requested films and interfaces, every component range and the
+complete signed power accumulation. Coverage scales each layer by its actual body-to-cloth area
+ratio. An uncovered body fraction contributes its explicit film-only power to both endpoints;
+partial textile coverage therefore remains a supported heat calculation when its bare boundary is
+fully declared. No bare-body emissivity or tissue response is inferred.
+
+The ordinary results retain `steady.reported_bounds.power_w` and component source ranges.
+`readings.independent_surface_power_w.reported_bounds` or
+`readings.body_coverage_power_w.reported_bounds` contains the exact admitted signed endpoints.
+Reverse heat flow stays negative. Inclusive limits must admit the entire interval, and overlapping
+intervals cannot be ordered by their central values. These metrics work as objectives, explicitly
+bounded guards under nominal objectives, or consumer guidance in bounded design discovery; they
+reuse the already evaluated scenario without another drape session.
+
+Missing material endpoints, nonlinear conductivity, coupled exterior convection/radiation,
+thermal bridges and consumed thickness-dependent stagnant-gap interfaces leave nominal heat and
+their specific `bounds_unavailable` reasons visible. They cannot support a bounded heat decision.
+Fixed authored interface resistances are supported. Geometry, coverage partitions, reservoir
+temperatures and those fixed films/interfaces remain conditional inputs; the ranges do not cover
+uncertainty in those inputs, transient storage, wearer warmth, comfort or measured garment behavior.
 
 ### Vapor-potential limits over reported resistance bounds
 
@@ -1138,7 +1171,7 @@ missing modulus, unknown mass, failed constraint or refused callback cannot supp
 usable search value. No new physics, weighted score or inferred comfort/failure limit is added.
 
 Use `basis: "reported_bounds"` when discovery must respect the complete source-reported mass,
-vapor-potential or final finite-water ranges supported by the ordinary comparator. Every objective
+constant steady-heat, vapor-potential or final finite-water ranges supported by the ordinary comparator. Every objective
 or constraint using that basis needs its actual consumer endpoints; unsupported metrics refuse before
 callbacks. A missing range excludes the trial while preserving its available nominal reading.
 Constraints inherit this basis unless they explicitly select `nominal`; bounded guards apply to

@@ -194,6 +194,40 @@ jump across a declared interface stays explicit. Bare fractions exchange through
 films, which must have positive combined resistance for a bare path. Heat is signed positive from
 the inside reservoir to the outside; reversed conditions can produce negative power.
 
+### Conditional source ranges on the admitted coverage
+
+For supported constant-property layers, the coverage result now exposes
+`steady.reported_bounds.power_w` and the same power endpoints on each body field and covered
+region. `regions[].conduction.reported_bounds` retains the material-resistance, total-resistance
+and signed-flux endpoints. The observations and completeness rules are the same as
+[the steady stack calculation](steady-conduction.md#conditional-source-reported-ranges): selected
+direct resistance requires its own positive source endpoints, while a selected thickness/conductivity
+pair requires both. Bounds are never borrowed from a different transport observation.
+
+Each layer's resistance endpoints are multiplied by its actual `A_body/A_i` factor, with the
+already admitted interface and film inputs held fixed. Region power endpoints then multiply
+by `A_body`. Uncovered paths add their exact authored-film power once; they do not create a
+missing textile observation. Signed intervals are added in the same body/region order as the
+nominal calculation, including regions with opposite heat-flow directions. Every contributing
+material must have a supported complete range, otherwise the affected region, body field and
+total expose `reported_bounds: null` and `bounds_unavailable`.
+
+Coupled exterior exchange does not expose these fixed-boundary ranges. A qualified thermal bridge
+also makes combined body and total ranges unavailable because nominal bridge admission does not
+establish its qualification over every material endpoint combination. Its region fields remain
+the unbridged reference, including any available unbridged conduction ranges. Neither a baseline
+region range nor the existing numerical residuals are bounds on combined bridged power.
+
+A consumed `stagnant_gap` also makes coverage ranges unavailable. Its resolved gas resistance
+depends on textile face thickness, so holding that derived value fixed would omit part of the
+source-thickness effect. The existing nominal gap solve and its separate numerical quadrature
+bracket remain available. An unused gas-gap policy entry does not suppress otherwise complete
+coverage ranges; fixed authored interface resistances remain supported.
+
+The reported ranges condition on the already admitted coverage geometry and boundary inputs.
+They are not confidence intervals, propagated body/drape uncertainty, physical garment validation
+or wearer comfort predictions; the corresponding existing claim flags remain false.
+
 `steady.regions` contains per-region power, layer areas and face temperatures; its flux and flux
 residual are per **covered body area**. `steady.body` contains covered and bare contributions for
 each body triangle. `steady.power_w` includes each bare or covered body portion once, not once per

@@ -25,6 +25,21 @@ fn column(r: f64) -> SteadyConductionModel {
     )
     .unwrap()
 }
+fn bounded_column(r: f64, bounds: [f64; 2]) -> SteadyConductionModel {
+    let mut s = selection(r);
+    s.record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("thermal_resistance")
+        .unwrap()
+        .bounds = Some(bounds);
+    SteadyConductionModel::new(
+        vec![Catalog::builtin().unwrap().resolve(&s).unwrap()],
+        vec![],
+    )
+    .unwrap()
+}
 fn patch() -> Patch {
     Patch {
         vertices: [0, 1, 2],
@@ -46,6 +61,72 @@ fn boundary() -> Boundary {
 fn near(a: f64, b: f64) {
     assert!((a - b).abs() < 1e-7, "{a} != {b}");
 }
+#[test]
+fn reported_surface_ranges_keep_mixed_signs_exact_areas_and_complete_source_requirements() {
+    let surface = |second| {
+        SteadySurface::new(
+            vec![bounded_column(0.4, [0.3, 0.5]), second],
+            6,
+            vec![
+                patch(),
+                Patch {
+                    vertices: [3, 4, 5],
+                    column: 1,
+                    ..patch()
+                },
+            ],
+        )
+        .unwrap()
+    };
+    let positions = [
+        Vec3::ZERO,
+        Vec3::new(1., 0., 0.),
+        Vec3::new(0., 1., 0.),
+        Vec3::new(3., 0., 0.),
+        Vec3::new(5., 0., 0.),
+        Vec3::new(3., 1., 0.),
+    ];
+    let conditions = [
+        boundary(),
+        Boundary {
+            inside_c: 0.,
+            outside_c: 30.,
+            ..boundary()
+        },
+    ];
+    let complete = surface(bounded_column(0.8, [0.6, 1.0]));
+    let solved = complete.solve(&positions, &conditions).unwrap();
+    let range = solved.ranges.reported_bounds.unwrap().power_w;
+    near(range[0], 15. / 0.8 - 30. / 0.9);
+    near(range[1], 15. / 0.6 - 30. / 1.3);
+    assert!(range[0] < solved.power_w && solved.power_w < range[1]);
+    for (patch, expected) in solved
+        .patches
+        .iter()
+        .zip([[15. / 0.8, 15. / 0.6], [-30. / 0.9, -30. / 1.3]])
+    {
+        let bounds = patch.ranges.reported_bounds.unwrap().power_w;
+        near(bounds[0], expected[0]);
+        near(bounds[1], expected[1]);
+    }
+    let missing = surface(column(0.8)).solve(&positions, &conditions).unwrap();
+    assert_eq!(missing.power_w, solved.power_w);
+    assert!(missing.ranges.reported_bounds.is_none());
+    assert!(missing.patches[0].ranges.reported_bounds.is_some());
+    assert!(missing.patches[1].ranges.reported_bounds.is_none());
+    assert!(missing.ranges.bounds_unavailable[0].contains("thermal_resistance"));
+    let snapshot = complete.snapshot().unwrap();
+    let replay = SteadySurface::from_snapshot(&snapshot).unwrap();
+    assert_eq!(
+        serde_json::to_value(&solved).unwrap(),
+        serde_json::to_value(replay.solve(&positions, &conditions).unwrap()).unwrap()
+    );
+    let mut changed = snapshot;
+    changed["columns"][0]["layers"][0]["record"]["properties"]["thermal_resistance"]["bounds"] =
+        json!([0.2, 0.6]);
+    assert!(SteadySurface::from_snapshot(&changed).is_err());
+}
+
 #[test]
 fn no_storage_needed_area_scaling_rigid_motion_and_signed_flux() {
     let resolved = Catalog::builtin()

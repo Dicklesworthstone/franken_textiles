@@ -11,6 +11,8 @@ use ftx_pattern::Pattern;
 use ftx_wasm::materials::scenario::on_body;
 use serde_json::{Value, json};
 
+#[path = "material_scenario/steady_heat_bounds.rs"]
+mod steady_heat_bounds;
 #[path = "material_scenario/surface_water.rs"]
 mod surface_water;
 
@@ -470,6 +472,7 @@ fn named_matrix_retains_body_setup_refusals_and_valid_overrides_of_an_unused_fal
     let mut request = request();
     let mut unsupported = matrix_heat_policy("minimize");
     unsupported["basis"] = json!("reported_bounds");
+    unsupported["objectives"][0]["metric"] = json!("max_absolute_edge_strain_pct");
     request.comparison = Some(serde_json::from_value(unsupported).unwrap());
     let mut matrix = matrix_scenario();
     for case in matrix["cases"].as_array_mut().unwrap() {

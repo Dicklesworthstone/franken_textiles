@@ -18,6 +18,7 @@ mod heating_tests;
 mod material_strain;
 mod matrix;
 mod motion_bridges;
+mod steady_heat;
 mod surface_water;
 mod wet_film;
 
@@ -27,7 +28,7 @@ mod wet_film;
 pub enum Basis {
     /// Explicitly compare nominal computed results, without a propagated uncertainty claim.
     Nominal,
-    /// Require complete source-reported endpoints for assembly mass, vapor or final body water.
+    /// Require complete source-reported endpoints for assembly mass, steady heat, vapor or body water.
     /// Geometry, inventory, boundaries, initial liquid, supply and the sampled path stay fixed.
     ReportedBounds,
 }
@@ -652,6 +653,8 @@ impl Metric {
         matches!(
             self,
             Self::AssemblyMassKg
+                | Self::IndependentSurfacePowerW
+                | Self::BodyCoveragePowerW
                 | Self::VaporPotentialHeatFlowW
                 | Self::VaporPotentialMassFlowKgS
                 | Self::IndependentVaporPotentialHeatFlowW
@@ -673,9 +676,13 @@ impl Metric {
         row: &Alternative,
         derived: &BTreeMap<Consumer, TransferBounds>,
         water: &BTreeMap<Metric, [f64; 2]>,
+        heat: &BTreeMap<Consumer, [f64; 2]>,
     ) -> Option<[f64; 2]> {
         match self {
             Self::AssemblyMassKg => row.assembly_mass.value()?.assembly_mass.reported_bounds_kg,
+            Self::IndependentSurfacePowerW | Self::BodyCoveragePowerW => {
+                heat.get(&self.consumer()).copied()
+            }
             Self::VaporPotentialHeatFlowW => {
                 Some(row.vapor.value()?.reported_bounds?.potential_heat_flow_w)
             }
@@ -727,7 +734,7 @@ pub struct Constraint {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
-    /// Explicit nominal outputs or supported conditional mass/vapor/body-water source bounds.
+    /// Explicit nominal outputs or supported conditional mass/heat/vapor/body-water source bounds.
     pub basis: Basis,
     /// One to sixteen unique objective metrics. No hidden scalarization or automatic winner.
     pub objectives: Vec<Objective>,
@@ -848,7 +855,7 @@ impl Policy {
         }
         if self.bounded_metrics().iter().any(|m| !m.supports_bounds()) {
             return Err(invalid(
-                "reported_bounds comparison supports assembly_mass_kg, vapor potential and final finite-water metrics only; other computed objectives and constraints have no propagated reported bounds",
+                "reported_bounds comparison supports assembly_mass_kg, constant steady heat, vapor potential and final finite-water metrics only; other computed objectives and constraints have no propagated reported bounds",
             ));
         }
         let unique: BTreeSet<_> = self.required_consumers.iter().collect();
@@ -1087,6 +1094,14 @@ impl Policy {
         if self.consumers().contains(&Consumer::Vapor) {
             report.notes.push("Vapor objectives use the declared common-area stack, pressure boundaries, films and latent heat. They describe potential transfer, not actual evaporation, sweating, condensation or wearer comfort; source protocols must be admitted independently of other thermal consumers.");
         }
+        if self.bounded_metrics().iter().any(|metric| {
+            matches!(
+                metric,
+                Metric::IndependentSurfacePowerW | Metric::BodyCoveragePowerW
+            )
+        }) {
+            report.notes.push("Steady heat ranges require complete positive source-reported constant resistance, or both thickness and conductivity endpoints, on the exact selected materials. Canonical column/region and signed power endpoints are reconciled on the retained geometry with fixed reservoirs, films, interfaces and coverage allocation, including explicit bare-body paths. Nonlinear conductivity, coupled exterior exchange, thermal bridges, missing ranges or unrepresentable arithmetic leave nominal heat visible but cannot support a bounded decision. These conditional source ranges exclude geometric and boundary uncertainty, transient behavior and wearer warmth or comfort claims.");
+        }
         if self.consumers().contains(&Consumer::MaterialStrain)
             || self.consumers().contains(&Consumer::MotionMaterialStrain)
         {
@@ -1295,8 +1310,23 @@ impl Policy {
         }
         let mut derived_bounds = BTreeMap::new();
         let mut water_bounds = BTreeMap::new();
+        let mut heat_bounds = BTreeMap::new();
         let bounded_metrics = self.bounded_metrics();
         if !bounded_metrics.is_empty() {
+            for consumer in [Consumer::Surface, Consumer::Coverage] {
+                if bounded_metrics
+                    .iter()
+                    .any(|metric| metric.consumer() == consumer)
+                    && consumer_available(row, consumer, &admitted)
+                {
+                    match steady_heat::bounds(row, descriptor, simulation, consumer) {
+                        Ok(range) => {
+                            heat_bounds.insert(consumer, range);
+                        }
+                        Err(refusal) => result.exclusions.push(refusal),
+                    }
+                }
+            }
             for consumer in [
                 Consumer::VaporSurface,
                 Consumer::VaporCoverage,
@@ -1364,11 +1394,11 @@ impl Policy {
                     let needs_bounds = bounded_metrics.contains(&metric);
                     let reported_bounds = if needs_bounds {
                         metric
-                            .reported_bounds(row, &derived_bounds, &water_bounds)
+                            .reported_bounds(row, &derived_bounds, &water_bounds, &heat_bounds)
                             .filter(|[lo, hi]| {
                                 lo.is_finite()
                                     && hi.is_finite()
-                                    && *lo >= 0.
+                                    && (metric.signed() || *lo >= 0.)
                                     && *lo <= value
                                     && value <= *hi
                             })

@@ -21,6 +21,17 @@ fn selection(r: f64) -> Selection {
     }}))
     .unwrap()
 }
+fn bounded_selection(r: f64, bounds: [f64; 2]) -> Selection {
+    let mut s = selection(r);
+    s.record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("thermal_resistance")
+        .unwrap()
+        .bounds = Some(bounds);
+    s
+}
 fn source_with(a: Selection, b: Selection) -> SteadySurface {
     let catalog = Catalog::builtin().unwrap();
     let columns = [a, b]
@@ -96,10 +107,11 @@ fn bridge_digest(value: &Value) -> String {
 }
 
 fn bridge_input(resistance: f64) -> Value {
-    let material = Catalog::builtin()
-        .unwrap()
-        .resolve(&selection(resistance))
-        .unwrap();
+    bridge_input_with(selection(resistance))
+}
+
+fn bridge_input_with(selection: Selection) -> Value {
+    let material = Catalog::builtin().unwrap().resolve(&selection).unwrap();
     let hash = material.sha256().to_owned();
     let report = json!({"basis":"per_piece_characterization", "instances":[
         {"instance":"front","record_sha256":hash},{"instance":"back","record_sha256":hash}],
@@ -494,6 +506,203 @@ fn unequal_area_layers_match_series_resistances_without_storage() {
     near((faces[1][0] - faces[1][1]) / 0.4 * 1.0, q.power_w);
     near(faces[0][1] - faces[1][0], expected_flux * 0.1);
     assert!(Coverage::from_snapshot(&a.snapshot().unwrap()).is_err());
+}
+
+#[test]
+fn complete_reported_ranges_follow_body_cloth_areas_and_fixed_bare_paths() {
+    let bounded_source = || {
+        source_with(
+            bounded_selection(0.2, [0.1, 0.3]),
+            bounded_selection(0.4, [0.3, 0.5]),
+        )
+    };
+    let full = SteadyCoverage::new(bounded_source(), layout()).unwrap();
+    let q = full.solve(&cloth(), &body(), &[boundary()]).unwrap();
+    let range = q.ranges.reported_bounds.unwrap().power_w;
+    near(range[0], 15. / 0.95);
+    near(range[1], 15. / 0.65);
+    assert_eq!(range, q.body[0].ranges.reported_bounds.unwrap().power_w);
+    assert_eq!(range, q.regions[0].ranges.reported_bounds.unwrap().power_w);
+    let material_range = q.regions[0].conduction.reported_bounds.unwrap();
+    near(material_range.layer_resistance_m2_k_w[0], 0.1 + 0.3 * 0.5);
+    near(material_range.layer_resistance_m2_k_w[1], 0.3 + 0.5 * 0.5);
+    let mut half = layout();
+    half.regions[0].body_fraction = 0.5;
+    for layer in &mut half.regions[0].layers {
+        layer.fraction = 0.5;
+    }
+    let half = SteadyCoverage::new(bounded_source(), half).unwrap();
+    let partial = half.solve(&cloth(), &body(), &[boundary()]).unwrap();
+    let range = partial.ranges.reported_bounds.unwrap().power_w;
+    near(partial.bare_power_w, 25.);
+    near(range[0], 25. + 7.5 / 0.95);
+    near(range[1], 25. + 7.5 / 0.65);
+    let reverse = half
+        .solve(
+            &cloth(),
+            &body(),
+            &[Boundary {
+                inside_c: 0.,
+                outside_c: 30.,
+                ..boundary()
+            }],
+        )
+        .unwrap();
+    let reversed_range = reverse.ranges.reported_bounds.unwrap().power_w;
+    near(reversed_range[0], -range[1]);
+    near(reversed_range[1], -range[0]);
+    let missing = SteadyCoverage::new(
+        source_with(bounded_selection(0.2, [0.1, 0.3]), selection(0.4)),
+        layout(),
+    )
+    .unwrap()
+    .solve(&cloth(), &body(), &[boundary()])
+    .unwrap();
+    assert_eq!(missing.power_w, q.power_w);
+    assert!(missing.ranges.reported_bounds.is_none());
+    assert!(missing.ranges.bounds_unavailable[0].contains("layer 1"));
+}
+
+#[test]
+fn complete_material_ranges_do_not_claim_coupled_exterior_or_bridge_total_bounds() {
+    let assembly = SteadyCoverage::new(
+        source_with(
+            bounded_selection(0.2, [0.1, 0.3]),
+            bounded_selection(0.4, [0.3, 0.5]),
+        ),
+        layout(),
+    )
+    .unwrap();
+    assert!(
+        assembly
+            .solve(&cloth(), &body(), &[boundary()])
+            .unwrap()
+            .ranges
+            .reported_bounds
+            .is_some()
+    );
+    let exterior = assembly
+        .solve_exterior(
+            &cloth(),
+            &body(),
+            &[exterior_boundary()],
+            &[environment(false)],
+            &[],
+        )
+        .unwrap();
+    assert!(exterior.steady.ranges.reported_bounds.is_none());
+    assert!(exterior.steady.ranges.bounds_unavailable[0].contains("exterior exchange"));
+    assert!(
+        exterior.steady.regions[0]
+            .conduction
+            .reported_bounds
+            .is_none()
+    );
+    let plain = bridge_input_with(bounded_selection(0.4, [0.3, 0.5]));
+    let baseline = bridge_evaluate(&plain).unwrap();
+    assert!(baseline["steady"]["reported_bounds"]["power_w"].is_array());
+    let bridged = bridge_evaluate(&with_bridge(plain, &[0, 1], 0.2)).unwrap();
+    assert!(bridged["steady"]["reported_bounds"].is_null());
+    assert!(bridged["steady"]["body"][0]["reported_bounds"].is_null());
+    assert!(
+        bridged["steady"]["bounds_unavailable"][0]
+            .as_str()
+            .unwrap()
+            .contains("thermal-bridge")
+    );
+    assert_eq!(bridged["steady"]["regions"], baseline["steady"]["regions"]);
+    assert_eq!(bridge_evaluate(&bridged["request"]).unwrap(), bridged);
+}
+
+#[test]
+fn only_consumed_thickness_dependent_gaps_disable_reported_coverage_ranges() {
+    let mut selected = bounded_selection(0.4, [0.3, 0.5]);
+    let mut thickness = selected.record.as_ref().unwrap().properties["thermal_resistance"].clone();
+    thickness.value = 0.001;
+    thickness.unit = "m".into();
+    thickness.bounds = Some([0.0008, 0.0012]);
+    selected
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .insert("thickness".into(), thickness);
+    let mut input = bridge_input_with(selected.clone());
+    // The retained drape deduplicates identical material assignments into one source column.
+    let material = Catalog::builtin().unwrap().resolve(&selected).unwrap();
+    let source = SteadySurface::new(
+        vec![SteadyConductionModel::new(vec![material], vec![]).unwrap()],
+        6,
+        vec![
+            Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+            Patch {
+                vertices: [3, 4, 5],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+        ],
+    )
+    .unwrap();
+    let mut frame = json!({"schema":"ftx-drape-steady-thermal-surface/1","available":true,
+        "model":source.snapshot().unwrap(),"positions_m":cloth(),
+        "material_report_sha256":bridge_digest(&input["report"]["material"]),
+        "triangle_instance":[0,1],"instances":["front","back"]});
+    frame["sha256"] = json!(bridge_digest(&frame));
+    input["report"]["steady_thermal_surface"] = frame;
+    input["map"]["body_positions_m"] = json!(body());
+    input["map"]["body_triangles"] = json!([[0, 1, 2]]);
+    input["map"]["instance_layers"] = json!({"front":"lining","back":"shell"});
+    input["map"]["settings"]["max_distance_m"] = json!(0.5);
+    let fixed = json!({"inner":"lining","outer":"shell","resistance_m2_k_w":0.1,
+        "basis":"Synthetic explicitly fixed interface"});
+    input["map"]["settings"]["interfaces"] = json!([fixed]);
+    let plain = bridge_evaluate(&input).unwrap();
+    assert!(plain["steady"]["reported_bounds"]["power_w"].is_array());
+    let gap = json!({"conductivity_w_m_k":0.025,
+        "source":{"reference":"test:synthetic-gas","accessed_on":"2026-10-30",
+            "note":"Synthetic coefficient, not empirical garment qualification"},
+        "conditions":"Synthetic stagnant gas; no convection or radiation","gap_range_m":[0.001,0.2],
+        "relative_tolerance":0.000001,"allow_conduction_only_approximation":true});
+    let mut unused = input.clone();
+    let mut reverse_interface = fixed;
+    reverse_interface["inner"] = json!("shell");
+    reverse_interface["outer"] = json!("lining");
+    reverse_interface["stagnant_gap"] = gap.clone();
+    unused["map"]["settings"]["interfaces"]
+        .as_array_mut()
+        .unwrap()
+        .push(reverse_interface);
+    let unused = bridge_evaluate(&unused).unwrap();
+    assert_eq!(
+        unused["steady"]["reported_bounds"],
+        plain["steady"]["reported_bounds"]
+    );
+    input["map"]["settings"]["interfaces"][0]["stagnant_gap"] = gap;
+    let consumed = bridge_evaluate(&input).unwrap();
+    assert!(
+        !consumed["projection"]["gap_interfaces"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    near(
+        consumed["steady"]["power_w"].as_f64().unwrap(),
+        15. / (1.2 + 0.099 / 0.025),
+    );
+    assert!(consumed["steady"]["reported_bounds"].is_null());
+    assert!(consumed["steady"]["body"][0]["reported_bounds"].is_null());
+    assert!(consumed["steady"]["regions"][0]["conduction"]["reported_bounds"].is_null());
+    assert!(
+        consumed["steady"]["bounds_unavailable"][0]
+            .as_str()
+            .unwrap()
+            .contains("stagnant-gap")
+    );
+    assert_eq!(bridge_evaluate(&consumed["request"]).unwrap(), consumed);
 }
 
 #[test]
