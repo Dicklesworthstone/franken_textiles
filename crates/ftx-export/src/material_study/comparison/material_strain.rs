@@ -618,6 +618,7 @@ mod tests {
             assembly_mass: Outcome::NotRequested,
             vapor: Outcome::NotRequested,
             metrics: Metrics::default(),
+            cutting_effort: Default::default(),
         };
         let ownership = json!({"instances":["front","back"], "triangle_instance":[0,1,0]});
         let material = if per_piece {

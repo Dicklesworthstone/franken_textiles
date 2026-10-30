@@ -10,7 +10,7 @@ use ftx_pattern::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Alternative, Request, ScenarioAlternative, hash, invalid};
+use super::{Alternative, Request, ScenarioAlternative, cutting_effort, hash, invalid};
 
 mod contact_loads;
 #[cfg(test)]
@@ -39,10 +39,16 @@ pub enum Basis {
 pub enum Consumer {
     /// Production roll cutting, not hypothetical net pattern area.
     Cutting,
+    /// Complete source-qualified selected knife paths on every roll marker.
+    CuttingProgram,
     /// Complete allocation on the shared, individually identified hide/remnant inventory.
     FiniteStock,
+    /// Complete source-qualified selected knife paths on every used finite-stock item.
+    FiniteStockProgram,
     /// Complete, exactly-once physical allocation across explicitly routed roll and finite stock.
     CuttingJob,
+    /// Complete qualified knife work on every engaged, disjoint route of the complete job.
+    CuttingJobProgram,
     /// Complete observed independent order cost across both stock routes in one declared market.
     CuttingJobPurchasing,
     /// Production seam/stack/recipe admission, not physical seam qualification.
@@ -99,6 +105,24 @@ pub enum Metric {
     ExternalCutAreaM2,
     /// Complete gross stock mass, in kilograms, never a partial sum.
     StockMassKg,
+    /// Complete selected qualified roll-knife cut/travel/lift time, in seconds.
+    CuttingModeledPathSeconds,
+    /// Complete selected roll-knife cut length, including internal cuts, in metres.
+    CuttingCutLengthM,
+    /// Complete selected roll-knife raised travel, including requested return, in metres.
+    CuttingRaisedTravelLengthM,
+    /// Complete qualified knife time on used finite stock, in seconds.
+    FiniteStockModeledPathSeconds,
+    /// Complete qualified finite-stock knife cut length, in metres.
+    FiniteStockCutLengthM,
+    /// Complete qualified finite-stock raised-tool travel, in metres.
+    FiniteStockRaisedTravelLengthM,
+    /// Sum of selected qualified knife time across all engaged mixed-job routes; not makespan.
+    CuttingJobModeledPathSeconds,
+    /// Complete exactly-once knife cut length across a mixed job, in metres.
+    CuttingJobCutLengthM,
+    /// Complete selected raised-tool travel across a mixed job, in metres.
+    CuttingJobRaisedTravelLengthM,
     /// All retained physical cut pieces plus sourced extras for ONE declared assembly (kg).
     AssemblyMassKg,
     /// Individually identified finite-stock items engaged by the complete allocation.
@@ -256,6 +280,15 @@ impl Metric {
     fn consumer(self) -> Consumer {
         match self {
             Self::StockAreaM2 | Self::ExternalCutAreaM2 | Self::StockMassKg => Consumer::Cutting,
+            Self::CuttingModeledPathSeconds
+            | Self::CuttingCutLengthM
+            | Self::CuttingRaisedTravelLengthM => Consumer::CuttingProgram,
+            Self::FiniteStockModeledPathSeconds
+            | Self::FiniteStockCutLengthM
+            | Self::FiniteStockRaisedTravelLengthM => Consumer::FiniteStockProgram,
+            Self::CuttingJobModeledPathSeconds
+            | Self::CuttingJobCutLengthM
+            | Self::CuttingJobRaisedTravelLengthM => Consumer::CuttingJobProgram,
             Self::AssemblyMassKg => Consumer::AssemblyMass,
             Self::UsedStockCount
             | Self::UsedStockGrossAreaM2
@@ -362,9 +395,18 @@ impl Metric {
             | Self::CuttingJobSelectedOrderCost
             | Self::CutAndSewSelectedOrderCost
             | Self::ThreadObservedOrderCost => currency.unwrap_or("unavailable currency"),
-            Self::ThreadRequiredLengthM => "m",
+            Self::ThreadRequiredLengthM
+            | Self::CuttingCutLengthM
+            | Self::CuttingRaisedTravelLengthM
+            | Self::FiniteStockCutLengthM
+            | Self::FiniteStockRaisedTravelLengthM
+            | Self::CuttingJobCutLengthM
+            | Self::CuttingJobRaisedTravelLengthM => "m",
             Self::StitchIntervals | Self::UsedStockCount => "count",
             Self::FeedSeconds
+            | Self::CuttingModeledPathSeconds
+            | Self::FiniteStockModeledPathSeconds
+            | Self::CuttingJobModeledPathSeconds
             | Self::SewingSetupSeconds
             | Self::SewingFeedAndSetupSeconds
             | Self::SewingHandlingSeconds
@@ -418,6 +460,23 @@ impl Metric {
             Self::StockAreaM2 => row.metrics.stock_area_m2,
             Self::ExternalCutAreaM2 => row.metrics.external_cut_area_m2,
             Self::StockMassKg => row.metrics.stock_mass_kg,
+            Self::CuttingModeledPathSeconds => admitted.cutting_program.map(|r| r.totals.seconds),
+            Self::CuttingCutLengthM => admitted.cutting_program.map(|r| r.totals.cut_m),
+            Self::CuttingRaisedTravelLengthM => admitted.cutting_program.map(|r| r.totals.travel_m),
+            Self::FiniteStockModeledPathSeconds => {
+                admitted.finite_stock_program.map(|r| r.totals.seconds)
+            }
+            Self::FiniteStockCutLengthM => admitted.finite_stock_program.map(|r| r.totals.cut_m),
+            Self::FiniteStockRaisedTravelLengthM => {
+                admitted.finite_stock_program.map(|r| r.totals.travel_m)
+            }
+            Self::CuttingJobModeledPathSeconds => {
+                admitted.cutting_job_program.map(|r| r.totals.seconds)
+            }
+            Self::CuttingJobCutLengthM => admitted.cutting_job_program.map(|r| r.totals.cut_m),
+            Self::CuttingJobRaisedTravelLengthM => {
+                admitted.cutting_job_program.map(|r| r.totals.travel_m)
+            }
             Self::AssemblyMassKg => row.assembly_mass.value().and_then(|r| r.assembly_mass.kg),
             Self::UsedStockCount => row.metrics.used_stock_count.map(|n| n as f64),
             Self::UsedStockGrossAreaM2 => row.metrics.used_stock_gross_area_m2,
@@ -876,8 +935,23 @@ impl Policy {
         for consumer in self.consumers() {
             let requested = match consumer {
                 Consumer::Cutting => request.cutting.is_some(),
+                Consumer::CuttingProgram => request
+                    .cutting
+                    .as_ref()
+                    .is_some_and(|o| o.program.is_some()),
                 Consumer::FiniteStock => request.finite_stock.is_some(),
+                Consumer::FiniteStockProgram => request
+                    .finite_stock
+                    .as_ref()
+                    .is_some_and(|r| r.options.program.is_some()),
                 Consumer::CuttingJob => request.cutting_job.is_some(),
+                Consumer::CuttingJobProgram => request.cutting_job.as_ref().is_some_and(|job| {
+                    job.roll.as_ref().is_some_and(|o| o.program.is_some())
+                        || job
+                            .finite_stock
+                            .as_ref()
+                            .is_some_and(|r| r.options.program.is_some())
+                }),
                 Consumer::CuttingJobPurchasing => request
                     .cutting_job
                     .as_ref()
@@ -1175,8 +1249,19 @@ impl Policy {
         }
         if self.consumers().contains(&Consumer::CuttingJob)
             || self.consumers().contains(&Consumer::CuttingJobPurchasing)
+            || self.consumers().contains(&Consumer::CuttingJobProgram)
         {
             report.notes.push("Cutting-job objectives cover every routed physical piece exactly once. Gross stock includes roll-marker waste and entire used finite-stock items; complete same-market observed costs do not reserve inventory or include undeclared shipping/handling.");
+        }
+        if self.consumers().iter().any(|consumer| {
+            matches!(
+                consumer,
+                Consumer::CuttingProgram
+                    | Consumer::FiniteStockProgram
+                    | Consumer::CuttingJobProgram
+            )
+        }) {
+            report.notes.push("Qualified knife objectives use complete selected paths from the actual source-locked producers. Cut length includes internal cuts; raised travel includes requested returns; modeled time includes only declared constant-rate cutting, raised travel and lift/lower phases. Unused finite stock contributes no work, and complete mixed jobs require qualified programs on every engaged disjoint route. Independent roll and finite-stock plans are never added as if they were one garment job. Source-qualified rates may differ under matching machine and observation protocols. A complete selected traversal remains comparable without a shortest-path proof. These nominal values do not establish propagated uncertainty, parallel makespan, loading/acceleration/turning/inspection time, measured cycle time, physical cut quality or hardware authorization.");
         }
         if self.consumers().contains(&Consumer::Purchasing)
             || self.consumers().contains(&Consumer::CuttingJobPurchasing)
@@ -1227,6 +1312,9 @@ impl Policy {
             &Value::Null
         };
         let mut admitted = Numerical {
+            cutting_program: None,
+            finite_stock_program: None,
+            cutting_job_program: None,
             drape: simulation,
             material_strain: None,
             contact_loads: None,
@@ -1240,6 +1328,24 @@ impl Policy {
             transient_surface: None,
             transient_coverage: None,
         };
+        for (consumer, target) in [
+            (Consumer::CuttingProgram, &mut admitted.cutting_program),
+            (
+                Consumer::FiniteStockProgram,
+                &mut admitted.finite_stock_program,
+            ),
+            (
+                Consumer::CuttingJobProgram,
+                &mut admitted.cutting_job_program,
+            ),
+        ] {
+            if self.consumers().contains(&consumer) {
+                match cutting_effort::admit(row, consumer) {
+                    Ok(receipt) => *target = Some(receipt),
+                    Err(refusal) => result.exclusions.push(refusal),
+                }
+            }
+        }
         if self.consumers().contains(&Consumer::MaterialStrain) && !simulation.is_null() {
             match material_strain::admit(row, descriptor, simulation, None) {
                 Ok(strain) => admitted.material_strain = Some(strain),
@@ -1532,6 +1638,7 @@ impl Policy {
         let combined = consumers.contains(&Consumer::CutAndSewPurchasing);
         let mut keys = BTreeSet::new();
         if consumers.contains(&Consumer::Cutting)
+            || consumers.contains(&Consumer::CuttingProgram)
             || consumers.contains(&Consumer::Purchasing)
             || (combined && row.cutting.value().is_some())
         {
@@ -1636,6 +1743,7 @@ impl Policy {
             }
             if (consumers.contains(&Consumer::CuttingJob)
                 || consumers.contains(&Consumer::CuttingJobPurchasing)
+                || consumers.contains(&Consumer::CuttingJobProgram)
                 || combined)
                 && row.cutting_job.value().is_some_and(|job| {
                     job.inventory.iter().any(|entry| {
@@ -1691,6 +1799,17 @@ impl Policy {
                 Value::Null
             },
         ))?;
+        for (consumer, receipt) in [
+            (Consumer::CuttingProgram, admitted.cutting_program),
+            (Consumer::FiniteStockProgram, admitted.finite_stock_program),
+            (Consumer::CuttingJobProgram, admitted.cutting_job_program),
+        ] {
+            if consumers.contains(&consumer) {
+                let receipt =
+                    receipt.ok_or_else(|| invalid("qualified cutting protocol unavailable"))?;
+                base = hash(&(base, consumer, &receipt.protocol))?;
+            }
+        }
         if combined {
             let receipt = row
                 .cut_and_sew_purchasing
@@ -2104,6 +2223,9 @@ impl Policy {
 // Each reference is either independently admitted or null. A failed motion must not make a valid
 // static reading vanish, and an available status alone must not admit stale numerical results.
 struct Numerical<'a> {
+    cutting_program: Option<&'a cutting_effort::Receipt>,
+    finite_stock_program: Option<&'a cutting_effort::Receipt>,
+    cutting_job_program: Option<&'a cutting_effort::Receipt>,
     drape: &'a Value,
     material_strain: Option<&'a Value>,
     contact_loads: Option<&'a Value>,
@@ -2127,7 +2249,10 @@ struct Heat<'a> {
 fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerical<'_>) -> bool {
     match consumer {
         Consumer::Cutting => row.cutting.value().is_some(),
+        Consumer::CuttingProgram => admitted.cutting_program.is_some(),
         Consumer::FiniteStock => row.finite_stock.value().is_some(),
+        Consumer::FiniteStockProgram => admitted.finite_stock_program.is_some(),
+        Consumer::CuttingJobProgram => admitted.cutting_job_program.is_some(),
         Consumer::CuttingJob => row
             .cutting_job
             .value()

@@ -235,6 +235,9 @@ fn textile_water_and_maxwell_heat_share_one_conserved_decision_ledger() {
     let heat =
         admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap_or_else(|r| panic!("{r:?}"));
     let admitted = Numerical {
+        cutting_program: None,
+        finite_stock_program: None,
+        cutting_job_program: None,
         drape: &s,
         material_strain: None,
         contact_loads: None,

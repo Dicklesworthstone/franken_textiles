@@ -544,6 +544,58 @@ objective; unrelated roll-width measurements do not block a finite-stock-only co
 `finite_stock` preserves existing request identities and result fields. As with every study, choose
 and review one alternative before using its separate stock plan in a later inventory workflow.
 
+## Qualified knife effort in material and design decisions
+
+Supply a qualified `cutting.program`, `finite_stock.options.program`, or a program on every
+engaged route of `cutting_job` to compare actual selected knife work. Exact textile and machine
+locks, admitted unloaded-clearance evidence and complete internal/exterior paths are required.
+See [cutting-plans.md](cutting-plans.md) and [finite-stock-cutting.md](finite-stock-cutting.md)
+for the shared program policy and physical stock placement.
+
+| Nominal metric | Required consumer | Unit |
+| --- | --- | --- |
+| `cutting_modeled_path_seconds` | `cutting_program` | s |
+| `cutting_cut_length_m` | `cutting_program` | m |
+| `cutting_raised_travel_length_m` | `cutting_program` | m |
+| `finite_stock_modeled_path_seconds` | `finite_stock_program` | s |
+| `finite_stock_cut_length_m` | `finite_stock_program` | m |
+| `finite_stock_raised_travel_length_m` | `finite_stock_program` | m |
+| `cutting_job_modeled_path_seconds` | `cutting_job_program` | s |
+| `cutting_job_cut_length_m` | `cutting_job_program` | m |
+| `cutting_job_raised_travel_length_m` | `cutting_job_program` | m |
+
+Roll and finite-stock metrics describe their separately requested complete plans. Only the
+complete cutting-job metrics add disjoint roll and finite routes, with every physical instance
+and garment copy accounted for exactly once. Unused physical stock contributes no cutting work.
+An incomplete or refused process leaves its three metrics absent; it never supplies a winning
+zero or erases valid stock geometry, quantities or independent purchasing.
+
+For example, after supplying the complete qualified mixed job, compare modeled knife time with
+an explicitly chosen raised-travel limit:
+
+```json
+{
+  "basis": "nominal",
+  "objectives": [{"metric": "cutting_job_modeled_path_seconds", "direction": "minimize"}],
+  "constraints": [{"metric": "cutting_job_raised_travel_length_m", "maximum": 12}],
+  "required_consumers": ["cutting_job_program"],
+  "allow_mixed_protocols": false
+}
+```
+
+Independently qualified feeds and material thicknesses may differ under matching machine,
+measurement methods, operational conditions and evidence protocols. Specimen IDs identify exact
+source observations; they do not by themselves make otherwise matching protocols incomparable.
+Cached studies recheck source/output identity and the exposed totals without repeating nesting
+or path-order search. Fixed-pattern, scenario, named-case matrix and adaptive design comparisons
+use the same admission and readings.
+
+Time includes declared constant-rate cutting, raised travel and one lift/lower phase per path.
+It excludes loading, acceleration, blade turning and inspection, and is neither parallel makespan
+nor measured production cycle time. A complete selected traversal remains usable when bounded
+ordering has not proved a shortest path. `reported_bounds` is unsupported for these metrics;
+no timing uncertainty, physical cutting quality or hardware authorization is inferred.
+
 ## Computed manufacturing objectives
 
 An optional `comparison` in `ftx-material-study/1` computes a Pareto frontier from the **actual

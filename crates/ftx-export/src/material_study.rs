@@ -29,6 +29,7 @@ use crate::{
 
 pub mod combinations;
 pub mod comparison;
+mod cutting_effort;
 pub mod design;
 pub mod matrix;
 pub mod purchasing;
@@ -236,6 +237,35 @@ pub struct Metrics {
     pub external_cut_area_m2: Option<f64>,
     /// Complete purchased-stock mass only; absent if any roll lacks admitted areal density.
     pub stock_mass_kg: Option<f64>,
+    /// Complete qualified roll-knife cut, raised travel and lift/lower time, in seconds.
+    /// Excludes loading, acceleration, turning and inspection; never a measured production cycle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutting_modeled_path_seconds: Option<f64>,
+    /// Complete selected roll-knife cut paths in metres, including internal cuts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutting_cut_length_m: Option<f64>,
+    /// Complete selected raised-tool roll traversal, including any requested return, in metres.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutting_raised_travel_length_m: Option<f64>,
+    /// Complete qualified finite-stock knife time; unused stock contributes no work.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finite_stock_modeled_path_seconds: Option<f64>,
+    /// Complete selected finite-stock knife cut length in metres.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finite_stock_cut_length_m: Option<f64>,
+    /// Complete selected finite-stock raised-tool travel in metres.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finite_stock_raised_travel_length_m: Option<f64>,
+    /// Complete qualified knife time across the mixed job's disjoint engaged stock routes.
+    /// Aggregate modeled machine work, not parallel makespan or empirical throughput.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutting_job_modeled_path_seconds: Option<f64>,
+    /// Complete exactly-once knife cut length across the mixed job, in metres.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutting_job_cut_length_m: Option<f64>,
+    /// Complete raised-tool travel across independently loaded mixed-job markers, in metres.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutting_job_raised_travel_length_m: Option<f64>,
     /// Complete declared pre-finishing cut assembly, including unsimulated pieces and extras.
     /// Missing contributions or an incomplete inventory yield no value, not a subtotal.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -360,6 +390,10 @@ pub struct Alternative {
     pub vapor: Outcome<ftx_pattern::material_vapor::Report>,
     /// Selected actual-plan numbers for side-by-side comparison, never fabricated for failed cells.
     pub metrics: Metrics,
+    /// Producer-only source/output admission retained by cached alternatives. This is never
+    /// imported from report JSON or exported as another public receipt format.
+    #[serde(skip)]
+    cutting_effort: cutting_effort::Receipts,
 }
 
 /// Recomputed study. No cached body pose, preceding material or old machine feasibility is reused.
@@ -1272,6 +1306,7 @@ impl Request {
             assembly_mass: Outcome::NotRequested,
             vapor: Outcome::NotRequested,
             metrics: Metrics::default(),
+            cutting_effort: cutting_effort::Receipts::default(),
         };
         let bound = match binding {
             Ok(result) => result,
@@ -1507,6 +1542,7 @@ impl Request {
                 .map(|report| report.selected_order_cost);
         }
         row.binding = Outcome::Available { result: bound };
+        cutting_effort::capture(&mut row, &pattern);
         Ok(row)
     }
 }

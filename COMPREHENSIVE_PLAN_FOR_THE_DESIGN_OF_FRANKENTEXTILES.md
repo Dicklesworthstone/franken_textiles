@@ -4713,6 +4713,29 @@ Both native commands, portable APIs and workbench reviews consume the same repor
 qualification, physical workholding, kerf, blade dynamics, loading/inspection time, drill operations
 and interlocked machine execution remain separate capabilities and evidence requirements.
 
+### 25.143 Optimize materials and garment designs using qualified cutting effort
+
+Actual complete knife programs now supply nominal modeled path time, cut length and raised-tool
+travel to the common material/design comparison engine. Nine metrics keep ordinary roll plans,
+finite-stock plans and complete mixed jobs distinct. Only a complete mixed job aggregates its
+disjoint engaged routes; independently requested duplicate plans cannot become a combined garment
+cost. Every physical instance/copy and every internal/exterior path must be represented once.
+
+Fixed-pattern substitutions, scenario studies, named-case matrices and adaptive garment design
+reuse the actual selected producer results. A private cached admission binds the exact frozen
+pattern, source materials, selected complete process outputs and exposed totals; it does not rerun
+nesting or path-order search. Changed output or metrics cannot become a valid optimization input.
+An incomplete or refused process leaves its metrics unknown while valid geometry, quantities and
+purchasing remain useful. Matching machine/measurement protocols allow independently qualified
+material-specific feed rates to differ; source identity remains exact.
+
+This increment is tracked by `ftx-tm7.4`; see
+[material-screening-and-studies.md](docs/material-screening-and-studies.md). These objectives admit a
+complete selected traversal without a shortest-path proof. Source uncertainty, reported-bound
+decisions, parallel makespan, acceleration/loading/inspection time and empirical production quality
+are outside this model. Users can combine these explicit cutting objectives with the already
+qualified material, mass, sewing, purchasing and thermal objectives without changing simulation code.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

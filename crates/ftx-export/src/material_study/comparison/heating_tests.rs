@@ -134,6 +134,7 @@ pub(super) fn case(combined: bool) -> (Alternative, Value, Value) {
         assembly_mass: Outcome::NotRequested,
         vapor: Outcome::NotRequested,
         metrics: Metrics::default(),
+        cutting_effort: Default::default(),
     };
     (
         alternative,

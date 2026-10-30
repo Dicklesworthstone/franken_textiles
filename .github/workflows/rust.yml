@@ -55,6 +55,7 @@ jobs:
           cargo test -p ftx-export --test cutting --test cutting_job --test sewing_consumables --locked
           cargo test -p ftx-pattern --test material_catalog --locked
           cargo test -p ftx-export --test cutting_program --test finite_cutting_program --test sewing --test sewing_assembly --test sewing_pressure --locked
+          cargo test -p ftx-export --lib --locked material_study::cutting_effort::tests
           FTX_FINITE_KNIFE_REPLAY="$RUNNER_TEMP/ftx-finite-knife-replay" cargo test -p ftx-cli --test finite_stock_workflow --locked qualified_finite_and_mixed_knife_programs_replay_through_both_binaries
       - name: Test
         if: ${{ !cancelled() }}
