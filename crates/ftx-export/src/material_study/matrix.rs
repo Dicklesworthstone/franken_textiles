@@ -291,7 +291,7 @@ impl Request {
             .as_ref()
             .is_some_and(|policy| policy.worst_case())
         {
-            notes.push("Adaptive polling improves the worst admitted nominal reading of one shared objective across all named cases. Every case retains its own constraints and source-protocol admission. No case weights, cross-unit score, unrestricted optimum or physical fit is inferred.".into());
+            notes.push("Adaptive polling improves the worst admitted reading of one shared objective across all named cases under the declared nominal or reported-range basis. Every case retains its own constraints and source-protocol admission. No case weights, cross-unit score, unrestricted optimum or physical fit is inferred.".into());
             // The browser already renders these authoritative notes as text. Keep the same
             // explanation in CLI/portable reports instead of deriving another browser score.
             let guidance = match &manufacturing.design_search {
@@ -307,14 +307,29 @@ impl Request {
                 ))
             });
             notes.push(if let Some((guidance, trial, case, reading)) = incumbent {
-                format!(
+                if let (Some([lo, hi]), Some([lower_case, upper_case])) = (
+                    reading.reported_bounds,
+                    guidance.best_reported_bound_case_keys.as_ref(),
+                ) {
+                    format!(
+                        "Worst-case retained trial '{trial}' on material '{}': nominal limiting case '{case}', {} = {} {}; reported worst-case range [{lo}, {hi}] {}, with lower endpoint from '{lower_case}' and upper endpoint from '{upper_case}'. Endpoints aggregate the same metric across all admitted cases, not a single case's interval or an average. Only strictly separated ranges establish improvement; overlaps and touching endpoints remain unresolved. Source ranges are conditional enclosures, not statistical confidence or uncertain geometry. Inspect consumer_cases for all original readings and refusals.",
+                        guidance.material_key,
+                        serde_json::to_string(&guidance.objective.metric)
+                            .map_err(|error| invalid(error.to_string()))?,
+                        reading.value,
+                        reading.unit,
+                        reading.unit
+                    )
+                } else {
+                    format!(
                     "Worst-case retained trial '{trial}' on material '{}': limiting case '{case}', {} = {} {}. This is the original admitted case reading, not an average. Every named case admitted this trial; the limiting case can change between trials. Inspect consumer_cases for all readings and refusals.",
                     guidance.material_key,
                     serde_json::to_string(&guidance.objective.metric)
                         .map_err(|error| invalid(error.to_string()))?,
                     reading.value,
                     reading.unit
-                )
+                    )
+                }
             } else {
                 "No worst-case trial was admitted in every named case. No limiting case or objective value is available; inspect the retained per-case refusals. The separately retained original baseline is not a discovery incumbent.".into()
             });
@@ -379,7 +394,7 @@ impl Request {
         if adaptive.worst_case() {
             let first = policies[0].objectives.first();
             if policies.iter().any(|policy| {
-                !matches!(policy.basis, comparison::Basis::Nominal)
+                std::mem::discriminant(&policy.basis) != std::mem::discriminant(&policies[0].basis)
                     || policy.objectives.len() != 1
                     || first.is_none_or(|first| {
                         policy.objectives[0].metric != first.metric
@@ -388,7 +403,7 @@ impl Request {
                     })
             }) {
                 return Err(invalid(
-                    "worst-case guidance requires one identical nominal metric and direction in every case",
+                    "worst-case guidance requires one identical metric, direction and comparison basis in every case",
                 ));
             }
         }

@@ -328,3 +328,188 @@ fn worst_case_without_an_admitted_trial_reports_unknown_instead_of_zero() {
             .all(|row| { row.get("consumer_case_key").is_none() && row["selected"] == false })
     );
 }
+
+fn range_request(bounds: Option<[f64; 2]>, direction: &str) -> Request {
+    let mut value = serde_json::to_value(request(12, direction)).unwrap();
+    value["comparison"]["basis"] = json!("reported_bounds");
+    value["comparison"]["objectives"][0]["metric"] = json!("assembly_mass_kg");
+    value["assembly_mass"]["seam_allowance_mm"] = json!(0.0);
+    value["cutting"]["seam_allowance_mm"] = json!(0.0);
+    if let Some(bounds) = bounds {
+        for (index, factor) in [(0, 1.0), (1, 2.0)] {
+            value["variants"][index]["changes"]["default"]["record"]["properties"]["areal_density"]
+                ["bounds"] = json!(bounds.map(|bound| bound * factor));
+        }
+    }
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn worst_case_ranges_guide_real_assembly_mass_and_preserve_exact_cached_outputs() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":120}));
+    let identity = json!({"source":"test:worst-case-source-ranges"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    for (bounds, direction, coordinate) in [
+        ([0.179, 0.181], "minimize", 20.0),
+        ([0.179, 0.181], "maximize", 60.0),
+        // All in-band designs overlap: a better nominal value is not robust improvement.
+        ([0.10, 0.26], "minimize", 40.0),
+        ([0.10, 0.26], "maximize", 40.0),
+    ] {
+        let request = range_request(Some(bounds), direction);
+        let cases = cases(&request);
+        let mut calls = std::collections::BTreeMap::new();
+        let report = request
+            .evaluate_matrix_with_fit(&pattern, &cases, 32, Some(&fit), |index, key, bound| {
+                *calls.entry((index, key.to_owned())).or_insert(0) += 1;
+                Ok(output(bound, &cases[index]))
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        let search = &report["manufacturing"]["design_search"];
+        let guidance = &search["consumer_guidance"];
+        let selected = search["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["selected"] == true)
+            .unwrap();
+        assert_eq!(selected["design"]["variables_mm"]["length"], coordinate);
+        assert_eq!(guidance["basis"], "reported_bounds");
+        assert_eq!(guidance["best_case_key"], "guard");
+        assert_eq!(
+            guidance["best_reported_bound_case_keys"],
+            json!(["guard", "guard"])
+        );
+        assert_eq!(
+            guidance["best_reading"],
+            selected["consumer_worst_case"]["reading"]
+        );
+        assert!(guidance["input_protocol_sha256"].is_null());
+        let area = 2.0 * 20.0 * (100.0 + coordinate) * 1e-6;
+        for endpoint in 0..2 {
+            assert!(
+                (guidance["best_reading"]["reported_bounds"][endpoint]
+                    .as_f64()
+                    .unwrap()
+                    - area * bounds[endpoint])
+                    .abs()
+                    < 1e-15
+            );
+        }
+        assert!(calls.values().all(|&count| count == 1));
+        assert_eq!(report["planned_evaluations"], 32);
+        assert_eq!(
+            report["evaluations"].as_u64().unwrap() as usize,
+            calls.values().sum::<usize>()
+        );
+        let key =
+            serde_json::to_string(&(selected["design"]["key"].as_str().unwrap(), "light-sheet"))
+                .unwrap();
+        let manufacturing = report["manufacturing"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["key"] == key)
+            .unwrap();
+        assert_eq!(
+            guidance["best_reading"]["reported_bounds"],
+            manufacturing["assembly_mass"]["result"]["assembly_mass"]["reported_bounds_kg"]
+        );
+        let bound = Pattern::new(manufacturing["binding"]["result"]["pattern"].clone());
+        for (index, case) in cases.iter().enumerate() {
+            let replay = report["cases"][index]["simulations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["key"] == key)
+                .unwrap();
+            assert_eq!(replay["evaluation"]["result"], output(&bound, case));
+            assert_eq!(calls[&(index, key.clone())], 1);
+            assert_eq!(
+                selected["consumer_cases"][index]["comparison"]["readings"]["assembly_mass_kg"],
+                guidance["best_reading"]
+            );
+        }
+        assert!(report["notes"].as_array().unwrap().iter().any(|note| {
+            note.as_str().is_some_and(|note| {
+                note.contains("reported worst-case range")
+                    && note.contains("not statistical confidence")
+            })
+        }));
+        assert_eq!(search["global_optimum_claim"], false);
+    }
+}
+
+#[test]
+fn worst_case_ranges_retain_missing_bounds_and_full_range_constraint_failures() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":120}));
+    let identity = json!({"source":"test:worst-case-range-refusals"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    for missing in [false, true] {
+        let request = range_request((!missing).then_some([0.17, 0.19]), "minimize");
+        let mut cases = cases(&request);
+        if !missing {
+            let mut policy = serde_json::to_value(cases[0].comparison.as_ref().unwrap()).unwrap();
+            policy["constraints"] = json!([{"metric":"assembly_mass_kg","minimum":0.00084}]);
+            cases[0].comparison = Some(serde_json::from_value(policy).unwrap());
+        }
+        let report = request
+            .evaluate_matrix_with_fit(&pattern, &cases, 32, Some(&fit), |index, _, bound| {
+                Ok(output(bound, &cases[index]))
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        let search = &report["manufacturing"]["design_search"];
+        let rejected = search["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["design"]["variables_mm"]["length"] == 20.0)
+            .unwrap();
+        let reading = &rejected["consumer_cases"][0]["comparison"]["readings"]["assembly_mass_kg"];
+        assert!(reading["value"].as_f64().unwrap() > 0.00084);
+        assert_eq!(rejected["selected"], false);
+        assert_eq!(
+            rejected["consumer_cases"][0]["comparison"]["eligible"],
+            false
+        );
+        assert!(rejected.get("consumer_worst_case").is_none());
+        if missing {
+            assert!(reading.get("reported_bounds").is_none());
+            assert_eq!(search["selected_designs"], 0);
+            assert!(search["consumer_guidance"]["best_reading"].is_null());
+        } else {
+            assert!(reading["reported_bounds"][0].as_f64().unwrap() < 0.00084);
+            assert_eq!(
+                rejected["consumer_cases"][1]["comparison"]["eligible"],
+                true
+            );
+            assert_eq!(search["rows"][0]["selected"], true);
+        }
+    }
+    let request = range_request(Some([0.179, 0.181]), "minimize");
+    let mut cases = cases(&request);
+    cases[0].comparison.as_mut().unwrap().basis =
+        ftx_export::material_study::comparison::Basis::Nominal;
+    let mut calls = 0;
+    assert!(
+        request
+            .evaluate_matrix_with_fit(&pattern, &cases, 32, Some(&fit), |_, _, _| {
+                calls += 1;
+                Ok(json!({}))
+            })
+            .unwrap_err()
+            .message
+            .contains("comparison basis")
+    );
+    assert_eq!(calls, 0);
+}

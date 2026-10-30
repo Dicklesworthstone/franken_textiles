@@ -22,7 +22,7 @@ pub enum Objective {
     FitBandViolationMm,
     /// Use one admitted production comparison objective after complete flat qualification.
     ConsumerComparison,
-    /// Improve the worst admitted reading of one shared nominal objective across named cases.
+    /// Improve the worst admitted reading of one shared objective and basis across named cases.
     ConsumerWorstCase,
 }
 
@@ -102,6 +102,10 @@ pub struct Trial {
     /// Case supplying the actual worst-case reading, absent when case admission failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumer_case_key: Option<String>,
+    /// Conservative worst-case range and its endpoint witnesses, only for reported-range guidance.
+    /// The original nominal-case comparison and every per-case reading remain unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumer_worst_case: Option<WorstCaseRange>,
     /// Unrounded shared point readings, or the concrete reason they could not be admitted.
     pub raw_fit: Outcome<Vec<fit::RawReading>>,
     /// Maximum absolute distance outside the declared bands; unknown for inadmissible geometry.
@@ -123,6 +127,17 @@ pub struct CaseDecision {
     /// Original binding or scenario callback refusal, even when the policy does not require it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Refusal>,
+}
+
+/// Conditional interval enclosing the worst case of a single metric over the named case set.
+/// Maxima/minima act separately on each endpoint; no independence or statistical claim is made.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorstCaseRange {
+    /// Worst nominal value with the envelope of all admitted case intervals, in the original unit.
+    pub reading: comparison::Reading,
+    /// Cases supplying the lower and upper endpoints, respectively. They may differ from each
+    /// other and from the nominal limiting case. Authored order resolves equal endpoints.
+    pub reported_bound_case_keys: [String; 2],
 }
 
 /// Exact finite discovery history within the authored continuous parameter box.
@@ -187,11 +202,14 @@ pub struct ConsumerGuidance {
     pub evaluations: usize,
     /// Best admitted retained discovery trial, excluding the separately retained baseline.
     pub best_trial_key: Option<String>,
-    /// Existing comparator reading, never a separately computed or normalized score.
+    /// Existing nominal reading; range guidance encloses all case ranges without normalization.
     pub best_reading: Option<comparison::Reading>,
     /// Case supplying the best incumbent's worst-case reading, not a fixed guidance case.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub best_case_key: Option<String>,
+    /// Lower/upper range witnesses of the retained worst-case trial; omitted in nominal mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_reported_bound_case_keys: Option<[String; 2]>,
     /// First admitted input protocol; differing protocols cannot steer unless explicitly allowed.
     pub input_protocol_sha256: Option<String>,
 }
@@ -671,15 +689,16 @@ impl Request {
                     evaluations: guidance.evaluations,
                     best_trial_key: best.map(|index| discovery.rows[index].design.key.clone()),
                     best_reading: best
-                        .and_then(|index| discovery.rows[index].consumer_comparison.as_ref())
-                        .and_then(|candidate| {
-                            candidate
-                                .readings
-                                .get(&guidance.policy.objectives[0].metric)
+                        .and_then(|index| {
+                            discovery.rows[index]
+                                .consumer_reading(guidance.policy.objectives[0].metric)
                         })
                         .cloned(),
                     best_case_key: best
                         .and_then(|index| discovery.rows[index].consumer_case_key.clone()),
+                    best_reported_bound_case_keys: best
+                        .and_then(|index| discovery.rows[index].consumer_worst_case.as_ref())
+                        .map(|range| range.reported_bound_case_keys.clone()),
                     input_protocol_sha256: guidance.protocol.clone().flatten(),
                 })
             }),
@@ -749,6 +768,46 @@ pub(in crate::material_study) fn worst_case_index(
     worst
         .map(|(index, _)| index)
         .ok_or_else(|| invalid("worst-case guidance needs at least one named case"))
+}
+
+fn worst_case_range(
+    cases: &[CaseDecision],
+    objective: &comparison::Objective,
+) -> Result<WorstCaseRange, Refusal> {
+    let nominal = worst_case_index(cases, objective)?;
+    let mut reading = cases[nominal].comparison.readings[&objective.metric].clone();
+    let mut envelope: Option<[f64; 2]> = None;
+    let mut witnesses = [0; 2];
+    for (index, case) in cases.iter().enumerate() {
+        let source = &case.comparison.readings[&objective.metric];
+        let bounds = source
+            .reported_bounds
+            .filter(|[lo, hi]| {
+                lo.is_finite() && hi.is_finite() && *lo <= source.value && source.value <= *hi
+            })
+            .ok_or_else(|| {
+                invalid("worst-case range needs every case's complete finite reported bounds")
+            })?;
+        if let Some(current) = &mut envelope {
+            for endpoint in 0..2 {
+                let worse = match objective.direction {
+                    Direction::Minimize => bounds[endpoint] > current[endpoint],
+                    Direction::Maximize => bounds[endpoint] < current[endpoint],
+                };
+                if worse {
+                    current[endpoint] = bounds[endpoint];
+                    witnesses[endpoint] = index;
+                }
+            }
+        } else {
+            envelope = Some(bounds);
+        }
+    }
+    reading.reported_bounds = envelope;
+    Ok(WorstCaseRange {
+        reading,
+        reported_bound_case_keys: witnesses.map(|index| cases[index].key.clone()),
+    })
 }
 
 pub(in crate::material_study) struct ConsumerEvaluation<T> {
@@ -876,6 +935,7 @@ impl Evaluator<'_, '_> {
                 consumer_refusal: None,
                 consumer_cases: Vec::new(),
                 consumer_case_key: None,
+                consumer_worst_case: None,
                 raw_fit,
                 max_fit_band_violation_mm: score.map(|score| score.0),
                 total_fit_band_violation_mm: score.map(|score| score.1),
@@ -907,21 +967,25 @@ impl<T> Discovery<'_, '_, '_, T> {
                 // The matrix already checked each case against its own anchored protocol.
                 // A change of limiting case must not compare unrelated case protocol hashes.
                 let objective = &guidance.policy.objectives[0];
-                let a = &candidate
-                    .consumer_comparison
-                    .as_ref()
-                    .expect("admitted trial")
-                    .readings[&objective.metric];
-                let b = &current
-                    .consumer_comparison
-                    .as_ref()
-                    .expect("admitted incumbent")
-                    .readings[&objective.metric];
+                let a = candidate
+                    .consumer_reading(objective.metric)
+                    .expect("admitted trial");
+                let b = current
+                    .consumer_reading(objective.metric)
+                    .expect("admitted incumbent");
+                let interval = |reading: &comparison::Reading| match guidance.policy.basis {
+                    comparison::Basis::Nominal => [reading.value, reading.value],
+                    comparison::Basis::ReportedBounds => {
+                        reading.reported_bounds.expect("admitted envelope")
+                    }
+                };
+                let [al, ah] = interval(a);
+                let [bl, bh] = interval(b);
                 a.unit == b.unit
                     && a.consumer == b.consumer
                     && match objective.direction {
-                        Direction::Minimize => a.value < b.value,
-                        Direction::Maximize => a.value > b.value,
+                        Direction::Minimize => ah < bl,
+                        Direction::Maximize => al > bh,
                     }
             }
             (true, true) => guidance.policy.prefers(
@@ -983,6 +1047,12 @@ impl<T> Discovery<'_, '_, '_, T> {
                         let index =
                             worst_case_index(&row.consumer_cases, &guidance.policy.objectives[0])?;
                         row.consumer_case_key = Some(row.consumer_cases[index].key.clone());
+                        if matches!(guidance.policy.basis, comparison::Basis::ReportedBounds) {
+                            row.consumer_worst_case = Some(worst_case_range(
+                                &row.consumer_cases,
+                                &guidance.policy.objectives[0],
+                            )?);
+                        }
                         row.selected = true;
                         consumer = Some(evaluation.output);
                     } else if guidance.protocol.as_ref().is_some_and(|protocol| {
@@ -1059,6 +1129,13 @@ impl<T> Discovery<'_, '_, '_, T> {
 }
 
 impl Trial {
+    fn consumer_reading(&self, metric: comparison::Metric) -> Option<&comparison::Reading> {
+        self.consumer_worst_case
+            .as_ref()
+            .map(|range| &range.reading)
+            .or_else(|| self.consumer_comparison.as_ref()?.readings.get(&metric))
+    }
+
     fn flat_qualified(&self) -> bool {
         self.score() == Some((0.0, 0.0))
             && self
@@ -1087,5 +1164,141 @@ fn improves(candidate: &Trial, current: &Trial) -> bool {
         (Some(_), None) => true,
         (Some(a), Some(b)) => a.0 < b.0 || (a.0 == b.0 && a.1 < b.1),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod worst_case_range_tests {
+    use super::*;
+
+    fn case(key: &str, value: f64, bounds: [f64; 2]) -> CaseDecision {
+        CaseDecision {
+            key: key.into(),
+            comparison: comparison::Candidate {
+                key: "one-design".into(),
+                readings: BTreeMap::from([(
+                    comparison::Metric::AssemblyMassKg,
+                    comparison::Reading {
+                        value,
+                        reported_bounds: Some(bounds),
+                        unit: "kg".into(),
+                        consumer: comparison::Consumer::AssemblyMass,
+                    },
+                )]),
+                exclusions: Vec::new(),
+                eligible: true,
+                input_protocol_sha256: Some(key.into()),
+                dominated_by: Vec::new(),
+            },
+            refusal: None,
+        }
+    }
+
+    #[test]
+    fn worst_case_envelope_retains_independent_nominal_and_endpoint_witnesses() {
+        for (direction, mut cases, expected) in [
+            (
+                Direction::Minimize,
+                vec![
+                    case("nominal", 8.0, [6.0, 9.0]),
+                    case("lower", 7.0, [7.0, 8.0]),
+                    case("upper", 5.0, [1.0, 12.0]),
+                ],
+                [7.0, 12.0],
+            ),
+            (
+                Direction::Maximize,
+                vec![
+                    case("nominal", 6.0, [2.0, 10.0]),
+                    case("lower", 8.0, [1.0, 12.0]),
+                    case("upper", 7.0, [5.0, 8.0]),
+                ],
+                [1.0, 8.0],
+            ),
+        ] {
+            let objective = comparison::Objective {
+                metric: comparison::Metric::AssemblyMassKg,
+                direction,
+            };
+            for reverse in [false, true] {
+                if reverse {
+                    cases.reverse();
+                }
+                let before = serde_json::to_value(&cases).unwrap();
+                let nominal = worst_case_index(&cases, &objective).unwrap();
+                let envelope = worst_case_range(&cases, &objective).unwrap();
+                assert_eq!(
+                    envelope.reading.value,
+                    cases[nominal].comparison.readings[&objective.metric].value
+                );
+                assert_eq!(cases[nominal].key, "nominal");
+                assert_eq!(envelope.reading.reported_bounds, Some(expected));
+                assert_eq!(envelope.reported_bound_case_keys, ["lower", "upper"]);
+                assert_eq!(serde_json::to_value(&cases).unwrap(), before);
+                // All endpoint combinations lie inside the monotone envelope, without assuming
+                // that these combinations are jointly attainable for a shared specimen.
+                for mask in 0..8 {
+                    let values = cases.iter().enumerate().map(|(i, case)| {
+                        case.comparison.readings[&objective.metric]
+                            .reported_bounds
+                            .unwrap()[(mask >> i) & 1]
+                    });
+                    let worst = match direction {
+                        Direction::Minimize => values.fold(f64::NEG_INFINITY, f64::max),
+                        Direction::Maximize => values.fold(f64::INFINITY, f64::min),
+                    };
+                    assert!(expected[0] <= worst && worst <= expected[1]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn worst_case_range_ties_and_single_case_keep_authored_witnesses() {
+        for direction in [Direction::Minimize, Direction::Maximize] {
+            let objective = comparison::Objective {
+                metric: comparison::Metric::AssemblyMassKg,
+                direction,
+            };
+            for bounds in [[2.0, 6.0], [4.0, 4.0]] {
+                let mut cases = vec![case("first", 4.0, bounds), case("second", 4.0, bounds)];
+                for _ in 0..2 {
+                    let envelope = worst_case_range(&cases, &objective).unwrap();
+                    assert_eq!(
+                        envelope.reported_bound_case_keys,
+                        [cases[0].key.clone(), cases[0].key.clone()]
+                    );
+                    assert_eq!(envelope.reading.reported_bounds, Some(bounds));
+                    cases.reverse();
+                }
+                let envelope = worst_case_range(&cases[..1], &objective).unwrap();
+                assert_eq!(envelope.reading.reported_bounds, Some(bounds));
+            }
+        }
+    }
+
+    #[test]
+    fn worst_case_range_never_fills_or_repairs_invalid_case_readings() {
+        let objective = comparison::Objective {
+            metric: comparison::Metric::AssemblyMassKg,
+            direction: Direction::Minimize,
+        };
+        assert!(worst_case_range(&[], &objective).is_err());
+        for invalid in 0..8 {
+            let mut cases = vec![case("first", 4.0, [2.0, 6.0]), case("bad", 5.0, [3.0, 7.0])];
+            let candidate = &mut cases[1].comparison;
+            let reading = candidate.readings.get_mut(&objective.metric).unwrap();
+            match invalid {
+                0 => reading.reported_bounds = None,
+                1 => reading.reported_bounds = Some([3.0, f64::INFINITY]),
+                2 => reading.reported_bounds = Some([6.0, 4.0]),
+                3 => reading.reported_bounds = Some([6.0, 7.0]),
+                4 => reading.unit = "g".into(),
+                5 => reading.consumer = comparison::Consumer::Drape,
+                6 => candidate.eligible = false,
+                _ => candidate.readings.clear(),
+            }
+            assert!(worst_case_range(&cases, &objective).is_err());
+        }
     }
 }
