@@ -1120,6 +1120,13 @@ impl Request {
             notes.push("Each material alternative reruns the declared finite qualified sewing recipe search. Sewing metrics describe its complete selected incumbent, including when the search budget stops before an optimum is proven. No selected plan keeps sewing unavailable; independent consumers are preserved. Recipe qualification and manufacturing hardware permission remain separate.");
         }
         if self
+            .sewing_selection
+            .as_ref()
+            .is_some_and(|selection| selection.completion_deadline_milliseconds.is_some())
+        {
+            notes.push("The declared inclusive sewing completion deadline admits only complete source-qualified schedules before the original recipe objective selects a winner. A feasible incumbent does not require timing optimality; a late incumbent remains unresolved unless the canonical lower bound or timing proof excludes the deadline. Original objective readings, complete timing and refusals remain visible in each trial. Feed-only timing cannot establish completion, and modeled scheduling is not empirical factory throughput.");
+        }
+        if self
             .sewing_options()
             .is_some_and(|s| s.consumables.is_some())
         {
@@ -1142,7 +1149,9 @@ impl Request {
             notes.push("Explicit fit targets use the fixed caller-supplied body authority through canonical flat validation before binding or any production consumer. Model-derived measurements retain MODEL_FIT provenance; missing points or out-of-band raw values refuse the design even when a rounded residual is zero. Passing a declared ease band is not empirical garment fit or a safe-fit certification.");
         }
         if self.design_adaptive.is_some() {
-            notes.push(if self.consumer_guided() {
+            notes.push(if self.design_adaptive.as_ref().is_some_and(|request| request.pareto()) {
+                "Pareto-guided adaptive alterations use one nominated material and every declared comparison objective with its original direction and nominal or reported-range basis. Ordinary geometry, body-fit, required-consumer, constraint and protocol gates admit each trial. All currently observed nondominated coordinates can guide bounded polling even when their full outputs do not fit the retention capacity. The receipt distinguishes evaluated, retained and unretained tradeoffs; no weighted score or single best design is inferred. Retained complete outputs are reused exactly in the final material cross-product. Search, callback and cumulative work limits remain shared, and the observed frontier is not an exhaustive frontier, a global optimum or empirical garment fit."
+            } else if self.consumer_guided() {
                 "Consumer-guided adaptive alterations use one nominated material and one existing comparison objective with its declared nominal or reported-range basis after canonical flat/body-fit admission. Ordinary constraints, required consumers and protocol compatibility govern every probe. Polling continues within its declared evaluation/step limits, retaining a bounded set of admitted designs and reusing their exact production results in the final material cross-product. Other material alternatives do not steer discovery. Callback slots are reserved conservatively; the caller's shared scenario session still admits each probe's actual numerical work. Neither the continuous domain nor other material/design optima are proven."
             } else {
                 "Adaptive linked alterations use explicitly bounded coordinate polling and step refinement. Their declared fit-band objective compares unrounded canonical maximum violation, then total violation, solely to discover candidates. Every selected design still requires complete flat admission and independently reruns the requested material and production consumers. Stopping at the candidate allowance, evaluation budget or minimum steps leaves the continuous domain unresolved; no global optimum, infeasibility or empirical fit is inferred."

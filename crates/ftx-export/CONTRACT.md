@@ -90,6 +90,22 @@ continuous/global optimality claim. Tests: real mass/constraint/source/reservati
 `design_study/adaptive` and real selected-body sewn-scenario guidance/cache replay through both CLIs
 and the portable authority in `accepted_body_workflow/consumer_adaptive`.
 
+**Pareto-guided adaptive discovery** (`design_adaptive.objective: consumer_pareto`, `ftx-ds2.6`).
+Two to sixteen existing comparison objectives guide one nominated material and, for a named matrix,
+one explicit case. Every case still admits geometry, fit, required consumers, constraints and its own
+source protocol. Existing nominal or reported-range dominance identifies the observed nondominated
+coordinates, including those whose full outputs exceed retention capacity. All current frontier
+centers are polled before shared steps refine; explicit restart seeds can explore another region
+under the same unique-trial cache, budgets and protocol anchors. New dominating candidates remove
+all dominated cached outputs; earlier incomparable outputs retain available slots. Omitted full
+outputs are neither rerun nor backfilled, while their coordinates still guide discovery. Receipts
+separate evaluated, retained and unretained frontier keys and contain every objective; scalar best
+fields stay null. Final material/case outputs reuse exact retained consumer results. Scalar and
+single-objective worst-case modes preserve their contracts. Tests: `design_pareto`, `design_restarts`,
+existing design/worst-case regressions and actual selected-body native/portable replay. See
+`docs/material-screening-and-studies.md`; no exhaustive frontier, weighted score, global optimum or
+empirical garment fit is inferred.
+
 **Explicit comparison guard bases** (`comparison.constraints[].basis`). An optional nominal or
 reported-bounds basis overrides only that constraint; omission inherits the objective policy and
 preserves prior serialization. Objective dominance is unchanged. A metric needs complete endpoints

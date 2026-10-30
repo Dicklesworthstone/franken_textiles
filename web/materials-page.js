@@ -1119,6 +1119,8 @@ function designComparison(op, parent, study, casePolicies = {}) {
   if (grid) {
     if (grid.schema === "ftx-design-adaptive-search/1") {
       const guidance = grid.consumer_guidance;
+      const pareto = guidance?.pareto_frontier;
+      const objectives = pareto ? guidance.objectives || [] : guidance?.objective ? [guidance.objective] : [];
       const bounded = guidance?.basis === "reported_bounds";
       const worstCase = guidance?.case_aggregation === "worst_case";
       const limitingCases = (nominal, endpoints) => nominal ?
@@ -1132,22 +1134,32 @@ function designComparison(op, parent, study, casePolicies = {}) {
         return `${metric(reading.value)} ${reading.unit || ""}${range}`;
       };
       if (guidance) {
-        const search = table(parent, "Consumer-guided adaptive alteration search", ["Fit evaluations", "Consumer probes",
+        const search = table(parent, pareto ? "Pareto-guided adaptive alteration search" : "Consumer-guided adaptive alteration search", ["Fit evaluations", "Consumer probes",
           "Planned callback slots (upper bound)", "Selected geometries", "Stop reason",
-          bounded ? "Retained trial" : "Best trial", bounded ? "Retained objective" : "Best objective"]);
+          ...(pareto ? ["Evaluated nondominated trials", "Retained trials", "Omitted by capacity"] :
+            [bounded ? "Retained trial" : "Best trial", bounded ? "Retained objective" : "Best objective"])]);
         const reading = guidance.best_reading;
         cells(search, [metric(grid.evaluations), metric(guidance.evaluations), metric(guidance.reserved_evaluations),
           metric(grid.selected_designs), grid.stop_reason?.replaceAll("_", " ") ?? "Unknown",
-          guidance.best_trial_key ?? "Unknown", readingText(reading) +
-            (worstCase && reading ? limitingCases(guidance.best_case_key, guidance.best_reported_bound_case_keys) : "")]);
+          ...(pareto ? [(pareto.evaluated_trial_keys || []).join(", ") || "None admitted",
+            (pareto.retained_trial_keys || []).join(", ") || "None selected",
+            (pareto.unretained_trial_keys || []).join(", ") || "None"] :
+            [guidance.best_trial_key ?? "Unknown", readingText(reading) +
+              (worstCase && reading ? limitingCases(guidance.best_case_key, guidance.best_reported_bound_case_keys) : "")])]);
         const objective = document.createElement("p");
         objective.textContent = `Guidance material: ${guidance.material_key ?? "Unknown"}. ` +
           (guidance.case_key ? `Guidance case: ${guidance.case_key}. Every declared case must admit a selected trial: ${(guidance.case_order || []).join(", ")}. ` : "") +
           (worstCase ? `Case aggregation: worst case. Every declared case must admit a selected trial: ${(guidance.case_order || []).join(", ")}. ` +
             (bounded ? "Reported lower and upper endpoints each retain their own limiting case; they may differ from the nominal limiting case. " : "") : "") +
-          `Declared objective: ${guidance.objective?.metric ?? "Unknown"} (${guidance.objective?.direction ?? "Unknown"}). ` +
+          (pareto ? `Declared objectives: ${objectives.map(item => `${item.metric} (${item.direction})`).join("; ") || "Unknown"}. ` :
+            `Declared objective: ${guidance.objective?.metric ?? "Unknown"} (${guidance.objective?.direction ?? "Unknown"}). `) +
+          (pareto ? `Retention capacity: ${metric(pareto.retention_capacity)} geometries. ` +
+            "Polling also explores incomparable admitted designs, including those omitted from the output cache. " +
+            "The displayed frontier covers evaluated trials only; the retained subset is not a complete frontier or a single winner. " +
+            "No weighted score is introduced. " : "") +
           (bounded ? "Objective basis: source-reported ranges. Bounded constraints admit the entire reported range; missing required ranges cannot qualify. " +
-            "Search advances only when one range is strictly preferred. Overlapping, touching or equal ranges remain unresolved; retained trials do not form a total ranking. " :
+            (pareto ? "Range comparisons retain every declared objective and direction; incomparable ranges do not acquire a total ranking. " :
+              "Search advances only when one range is strictly preferred. Overlapping, touching or equal ranges remain unresolved; retained trials do not form a total ranking. ") :
             "Objective basis: nominal values. ") +
           "Each constraint uses its explicit basis or inherits its case policy; nominal guards do not acquire uncertainty bounds. " +
           "Rust evaluates the nominated material with the ordinary manufacturing and requested scenario consumers. " +
@@ -1172,7 +1184,8 @@ function designComparison(op, parent, study, casePolicies = {}) {
       parent.append(scope);
       const trials = table(parent, "Adaptive alteration trials", ["Pattern design", "Variables (mm)",
         "Maximum violation (mm)", "Total violation (mm)", "Flat admission",
-        ...(guidance ? ["Consumer admission", "Declared objective"] : []), "Downstream selection", "Reason"]);
+        ...(guidance ? ["Consumer admission", pareto ? "Declared objectives" : "Declared objective",
+          ...(pareto ? ["Evaluated frontier"] : [])] : []), "Downstream selection", "Reason"]);
       for (const [i, row] of (grid.rows || []).entries()) {
         const design = row.design || {}, fit = available(design.fit);
         const passed = design.validation?.passed === true && fit?.passed === true;
@@ -1189,8 +1202,11 @@ function designComparison(op, parent, study, casePolicies = {}) {
           metric(row.max_fit_band_violation_mm), metric(row.total_fit_band_violation_mm),
           passed ? "Passed declared flat gates" : "Refused",
           ...(guidance ? [candidate ? (admitted ? "Eligible" : "Excluded") : "Not attempted",
-            readingText(reading) + (worstCase && reading ?
-              limitingCases(row.consumer_case_key, row.consumer_worst_case?.reported_bound_case_keys) : "")] : []),
+            pareto ? objectives.map(item => `${item.metric}: ${readingText(candidate?.readings?.[item.metric])}`).join("; ") || "Unknown" :
+              readingText(reading) + (worstCase && reading ?
+                limitingCases(row.consumer_case_key, row.consumer_worst_case?.reported_bound_case_keys) : ""),
+            ...(pareto ? [admitted ? ((pareto.evaluated_trial_keys || []).includes(design.key) ?
+              "Nondominated among evaluated trials" : "Dominated among evaluated trials") : "Not admitted"] : [])] : []),
           row.selected === true ? "Selected" : "Not selected",
           reasons || (passed ? "Passed declared targets" : "Inspect retained validation")]);
         if (row.consumer_cases?.length) {
@@ -1200,7 +1216,7 @@ function designComparison(op, parent, study, casePolicies = {}) {
             item.comparison?.eligible === true ? "Eligible under declared policy" : "Excluded",
             Object.entries(item.comparison?.readings || {}).map(([key, value]) =>
               `${key}: ${readingText(value, casePolicies[item.key] ? metricUsesBounds(casePolicies[item.key], key) :
-                bounded && key === guidance?.objective?.metric)}`).join("; ") || "Unavailable",
+                bounded && objectives.some(item => item.metric === key))}`).join("; ") || "Unavailable",
             [...(item.comparison?.exclusions || []).map(reason => reason.message), item.refusal?.message]
               .filter(Boolean).join("; ") || "None"]);
         }
@@ -1416,6 +1432,46 @@ function manufacturingComparison(op, parent, study, computed, casePolicies = {})
         "increments and applicable price tiers. Trials with incomplete consumption or prices remain unresolved. " +
         "A retained order can be usable before the search is complete; the proof applies only to the declared recipes and dated observations. " +
         "Cutting costs, setup time and undeclared supplier bundles are outside this objective.";
+      parent.append(scope);
+    }
+    const deadlineSearches = study.alternatives.filter(row => {
+      const result = available(row.sewing_selection);
+      return result?.request?.completion_deadline_milliseconds != null ||
+        result?.trials?.some(trial => trial.completion_deadline);
+    });
+    if (deadlineSearches.length) {
+      const deadlines = table(parent, "Deadline-constrained sewing recipe search", ["Alternative", "Recipe and route",
+        "Inclusive deadline (s)", "Complete schedule (s)", "Completion lower bound (s)", "Deadline admission",
+        "Minimum completion proved", "Reason"]);
+      const seconds = (milliseconds, fallback) => {
+        if (!Number.isSafeInteger(milliseconds) || milliseconds < 0) return metric(fallback);
+        // Preserve the exact integer clock even where adjacent milliseconds have identical f64 seconds.
+        const digits = String(milliseconds).padStart(4, "0");
+        const fraction = digits.slice(-3).replace(/0+$/, "");
+        return digits.slice(0, -3) + (fraction ? `.${fraction}` : "");
+      };
+      for (const row of deadlineSearches) {
+        const result = available(row.sewing_selection);
+        for (const trial of result.trials || []) {
+          const deadline = trial.completion_deadline;
+          const recipe = Object.entries(trial.choices || {}).map(([operation, choice]) => `${operation}: ${choice}`).join("; ");
+          const admission = trial.refusal ? "Plan refused" :
+            ({ feasible: "Meets deadline", excluded: "Misses deadline (proved)", unresolved: "Unresolved" }[deadline?.status] || "Unknown");
+          const reasons = [deadline?.reason, trial.refusal?.message, trial.objective_unavailable?.message]
+            .filter((message, index, all) => message && all.indexOf(message) === index).join("; ");
+          cells(deadlines, [row.key,
+            [trial.route_choice, recipe || "Original recipes"].filter(Boolean).join("; "),
+            seconds(deadline?.limit_milliseconds ?? result.request?.completion_deadline_milliseconds),
+            seconds(deadline?.selected_makespan_milliseconds, deadline?.selected_completion_seconds),
+            seconds(deadline?.lower_bound_makespan_milliseconds, deadline?.lower_bound_completion_seconds),
+            admission, deadline?.timing_optimality_proven == null ? "Unknown" : String(deadline.timing_optimality_proven),
+            reasons || "Inspect retained completion timing"]);
+        }
+      }
+      const scope = document.createElement("p");
+      scope.textContent = "Only complete schedules meeting the inclusive deadline compete for recipe selection. " +
+        "A feasible schedule can qualify before its minimum time is proved. A late incumbent remains unresolved unless a valid lower bound " +
+        "or proved minimum rules out the deadline. Feed and setup alone do not establish complete production time.";
       parent.append(scope);
     }
   }

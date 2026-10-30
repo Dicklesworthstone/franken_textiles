@@ -22,6 +22,8 @@ pub enum Objective {
     FitBandViolationMm,
     /// Use one admitted production comparison objective after complete flat qualification.
     ConsumerComparison,
+    /// Explore the admitted tradeoffs of several ordinary objectives without a scalar score.
+    ConsumerPareto,
     /// Improve the worst admitted reading of one shared objective and basis across named cases.
     ConsumerWorstCase,
 }
@@ -48,13 +50,13 @@ pub struct Variable {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// Raw fit-band discovery or one existing production comparison; never an inferred fit score.
+    /// Raw fit-band discovery or an explicit production comparison; never an inferred fit score.
     pub objective: Objective,
     /// Exact material variant used to guide consumer polling. Required only for consumer guidance;
     /// selected geometries still cross every authored material alternative after discovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_key: Option<String>,
-    /// Named scenario whose sole comparison objective guides matrix polling. Every case must still
+    /// Named scenario whose comparison objectives guide matrix polling. Every case must still
     /// admit the trial. Required for nominated-case matrices; forbidden for worst-case guidance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case_key: Option<String>,
@@ -81,7 +83,8 @@ pub enum StopReason {
     QualifiedDesignLimit,
     /// The unique-trial allowance was exhausted; remaining feasibility is unknown.
     EvaluationBudget,
-    /// No strictly better poll remained at the declared final steps; other points remain unknown.
+    /// Scalar polling found no improvement, or every current Pareto center was polled at the final
+    /// steps. Other coordinates and consumers of unretained trials remain unknown.
     MinimumSteps,
 }
 
@@ -182,7 +185,8 @@ pub struct Receipt {
     pub complete_search: bool,
     /// Always false, including a zero fit-band violation or a step-limited stop.
     pub global_optimum_claim: bool,
-    /// Best admitted discovery trial, which can still be out of band; never an automatic winner.
+    /// Best admitted scalar discovery trial, which can still be out of band; never an automatic
+    /// winner. Pareto discovery has no single best trial and serializes this as null.
     pub best_trial_key: Option<String>,
     /// Best discovery maximum residual, not a manufacturing comparison metric.
     pub best_max_fit_band_violation_mm: Option<f64>,
@@ -215,8 +219,15 @@ pub struct ConsumerGuidance {
     /// Explicit worst-case aggregation; omitted for the existing nominated-case behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub case_aggregation: Option<&'static str>,
-    /// The sole objective from the ordinary comparison policy.
-    pub objective: comparison::Objective,
+    /// The sole objective for scalar guidance; omitted for an explicit Pareto search.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objective: Option<comparison::Objective>,
+    /// Complete ordinary objectives for Pareto guidance, without cross-unit normalization.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub objectives: Vec<comparison::Objective>,
+    /// Nondominated evaluated trials and the separate bounded cache of actual consumer outputs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pareto_frontier: Option<ParetoFrontier>,
     /// Explicit range ordering when requested; absent preserves existing nominal receipts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub basis: Option<comparison::Basis>,
@@ -225,9 +236,10 @@ pub struct ConsumerGuidance {
     pub reserved_evaluations: usize,
     /// Actual nominated-material probes, after full canonical geometry and fit admission.
     pub evaluations: usize,
-    /// Best admitted retained discovery trial, excluding the separately retained baseline.
+    /// Best admitted retained scalar discovery trial, excluding baseline; none for Pareto mode.
     pub best_trial_key: Option<String>,
-    /// Existing nominal reading; range guidance encloses all case ranges without normalization.
+    /// Scalar objective reading; none for Pareto mode. Worst-case range guidance encloses all case
+    /// ranges without normalization.
     pub best_reading: Option<comparison::Reading>,
     /// Case supplying the best incumbent's worst-case reading, not a fixed guidance case.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -239,12 +251,33 @@ pub struct ConsumerGuidance {
     pub input_protocol_sha256: Option<String>,
 }
 
+/// Conditional frontier of admitted discovery trials, excluding the separately retained baseline.
+/// An unretained frontier trial still guides polling; its full consumer output is not replayed.
+#[derive(Clone, Debug, Serialize)]
+pub struct ParetoFrontier {
+    /// All nondominated admitted trials among the evaluated coordinates, in evaluation order.
+    pub evaluated_trial_keys: Vec<String>,
+    /// Frontier trials whose exact full outputs enter the final material cross-product.
+    pub retained_trial_keys: Vec<String>,
+    /// Evaluated frontier trials omitted when the output cache was full. Later freed slots do not
+    /// reconstruct or rerun their earlier outputs; this list does not imply a consumer refusal.
+    pub unretained_trial_keys: Vec<String>,
+    /// Maximum cached discovery designs, excluding baseline; not a limit on frontier polling.
+    pub retention_capacity: usize,
+}
+
 impl Request {
     pub(in crate::material_study) fn consumer_guided(&self) -> bool {
         matches!(
             self.objective,
-            Objective::ConsumerComparison | Objective::ConsumerWorstCase
+            Objective::ConsumerComparison
+                | Objective::ConsumerPareto
+                | Objective::ConsumerWorstCase
         )
+    }
+
+    pub(in crate::material_study) fn pareto(&self) -> bool {
+        matches!(self.objective, Objective::ConsumerPareto)
     }
 
     pub(in crate::material_study) fn worst_case(&self) -> bool {
@@ -263,12 +296,14 @@ impl Request {
             ));
         }
         if self.case_key.as_ref().is_some_and(|key| {
-            !matches!(self.objective, Objective::ConsumerComparison)
-                || key.trim().is_empty()
+            !matches!(
+                self.objective,
+                Objective::ConsumerComparison | Objective::ConsumerPareto
+            ) || key.trim().is_empty()
                 || key.len() > 128
         }) {
             return Err(invalid(
-                "adaptive case_key needs consumer_comparison and a nonempty case name of at most 128 bytes",
+                "adaptive case_key needs consumer_comparison or consumer_pareto and a nonempty case name of at most 128 bytes",
             ));
         }
         if serde_json::to_vec(self)
@@ -633,6 +668,7 @@ impl Request {
             }],
             seen: BTreeMap::new(),
             coordinates: Vec::new(),
+            pareto_frontier: Vec::new(),
         };
         let mut current = discovery
             .inspect(
@@ -651,78 +687,89 @@ impl Request {
             .iter()
             .map(|variable| variable.initial_step_mm)
             .collect();
-        let stop_reason = 'search: loop {
-            if !self.consumer_guided() && discovery.chosen.len() > self.max_designs {
-                break StopReason::QualifiedDesignLimit;
-            }
-            if discovery.rows.len() >= self.max_evaluations {
-                break StopReason::EvaluationBudget;
-            }
-            let center = discovery.coordinates[current].clone();
-            let mut best = current;
-            for (axis, variable) in self.variables.iter().enumerate() {
-                for positive in [false, true] {
-                    let bound = variable.bounds_mm[usize::from(positive)];
-                    let distance = (bound - center[axis]).abs();
-                    // Boundary points are actual declared coordinates, not repaired user inputs.
-                    let next = if steps[axis] >= distance {
-                        bound
-                    } else if positive {
-                        center[axis] + steps[axis]
-                    } else {
-                        center[axis] - steps[axis]
-                    };
-                    if next == center[axis] {
+        let stop_reason = loop {
+            let local_stop = if self.pareto() {
+                discovery.poll_pareto(&mut current, &mut steps, start_index > 0)?
+            } else {
+                'search: loop {
+                    if !self.consumer_guided() && discovery.chosen.len() > self.max_designs {
+                        break StopReason::QualifiedDesignLimit;
+                    }
+                    if discovery.rows.len() >= self.max_evaluations {
+                        break StopReason::EvaluationBudget;
+                    }
+                    let center = discovery.coordinates[current].clone();
+                    let mut best = current;
+                    for (axis, variable) in self.variables.iter().enumerate() {
+                        for positive in [false, true] {
+                            let bound = variable.bounds_mm[usize::from(positive)];
+                            let distance = (bound - center[axis]).abs();
+                            // Boundary points are actual declared coordinates, not repaired user inputs.
+                            let next = if steps[axis] >= distance {
+                                bound
+                            } else if positive {
+                                center[axis] + steps[axis]
+                            } else {
+                                center[axis] - steps[axis]
+                            };
+                            if next == center[axis] {
+                                continue;
+                            }
+                            let mut point = center.clone();
+                            point[axis] = next;
+                            let Some(index) = discovery.inspect(point)? else {
+                                break 'search StopReason::EvaluationBudget;
+                            };
+                            if discovery.improves(&discovery.rows[index], &discovery.rows[best]) {
+                                best = index;
+                            }
+                            if !self.consumer_guided() && discovery.chosen.len() > self.max_designs
+                            {
+                                break 'search StopReason::QualifiedDesignLimit;
+                            }
+                        }
+                    }
+                    if best != current {
+                        current = best;
                         continue;
                     }
-                    let mut point = center.clone();
-                    point[axis] = next;
-                    let Some(index) = discovery.inspect(point)? else {
-                        break 'search StopReason::EvaluationBudget;
-                    };
-                    if discovery.improves(&discovery.rows[index], &discovery.rows[best]) {
-                        best = index;
+                    let mut refined = false;
+                    for (step, variable) in steps.iter_mut().zip(&self.variables) {
+                        if *step > variable.minimum_step_mm {
+                            *step = (*step * 0.5).max(variable.minimum_step_mm);
+                            refined = true;
+                        }
                     }
-                    if !self.consumer_guided() && discovery.chosen.len() > self.max_designs {
-                        break 'search StopReason::QualifiedDesignLimit;
+                    if !refined {
+                        break StopReason::MinimumSteps;
                     }
                 }
+            };
+            if !matches!(local_stop, StopReason::MinimumSteps) {
+                break local_stop;
             }
-            if best != current {
-                current = best;
-                continue;
-            }
-            let mut refined = false;
+            let Some(point) = self.restart_points_mm.get(start_index) else {
+                break StopReason::MinimumSteps;
+            };
+            search_starts.push(discovery.record_start(
+                start_index,
+                start_initial.expect("active start"),
+                current,
+                start_evaluations,
+                &steps,
+                StopReason::MinimumSteps,
+            ));
+            let point = self.variables.iter().map(|v| point[&v.key]).collect();
+            start_evaluations = discovery.rows.len();
+            let Some(index) = discovery.inspect(point)? else {
+                start_initial = None;
+                break StopReason::EvaluationBudget;
+            };
+            current = index;
+            start_initial = Some(index);
+            start_index += 1;
             for (step, variable) in steps.iter_mut().zip(&self.variables) {
-                if *step > variable.minimum_step_mm {
-                    *step = (*step * 0.5).max(variable.minimum_step_mm);
-                    refined = true;
-                }
-            }
-            if !refined {
-                let Some(point) = self.restart_points_mm.get(start_index) else {
-                    break StopReason::MinimumSteps;
-                };
-                search_starts.push(discovery.record_start(
-                    start_index,
-                    start_initial.expect("active start"),
-                    current,
-                    start_evaluations,
-                    &steps,
-                    StopReason::MinimumSteps,
-                ));
-                let point = self.variables.iter().map(|v| point[&v.key]).collect();
-                start_evaluations = discovery.rows.len();
-                let Some(index) = discovery.inspect(point)? else {
-                    start_initial = None;
-                    break StopReason::EvaluationBudget;
-                };
-                current = index;
-                start_initial = Some(index);
-                start_index += 1;
-                for (step, variable) in steps.iter_mut().zip(&self.variables) {
-                    *step = variable.initial_step_mm;
-                }
+                *step = variable.initial_step_mm;
             }
         };
         if !self.restart_points_mm.is_empty()
@@ -744,7 +791,8 @@ impl Request {
             } else {
                 row.score().is_some()
             };
-            if admitted
+            if !self.pareto()
+                && admitted
                 && best.is_none_or(|previous| discovery.improves(row, &discovery.rows[previous]))
             {
                 best = Some(index);
@@ -782,7 +830,30 @@ impl Request {
                     case_key: self.case_key.clone(),
                     case_order: guidance.case_order.clone(),
                     case_aggregation: self.worst_case().then_some("worst_case"),
-                    objective: guidance.policy.objectives[0].clone(),
+                    objective: (!self.pareto()).then(|| guidance.policy.objectives[0].clone()),
+                    objectives: if self.pareto() {
+                        guidance.policy.objectives.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    pareto_frontier: self.pareto().then(|| {
+                        let mut frontier = ParetoFrontier {
+                            evaluated_trial_keys: Vec::new(),
+                            retained_trial_keys: Vec::new(),
+                            unretained_trial_keys: Vec::new(),
+                            retention_capacity: self.max_designs,
+                        };
+                        for &index in &discovery.pareto_frontier {
+                            let row = &discovery.rows[index];
+                            frontier.evaluated_trial_keys.push(row.design.key.clone());
+                            if row.selected {
+                                frontier.retained_trial_keys.push(row.design.key.clone());
+                            } else {
+                                frontier.unretained_trial_keys.push(row.design.key.clone());
+                            }
+                        }
+                        frontier
+                    }),
                     basis: matches!(guidance.policy.basis, comparison::Basis::ReportedBounds)
                         .then_some(guidance.policy.basis),
                     reserved_evaluations: guidance.reserved_evaluations,
@@ -1054,6 +1125,8 @@ struct Discovery<'request, 'body, 'consumer, T> {
     chosen: Vec<Chosen<T>>,
     seen: BTreeMap<Vec<u64>, usize>,
     coordinates: Vec<Vec<f64>>,
+    // Lightweight decisions remain available even when their full outputs exceed retention.
+    pareto_frontier: Vec<usize>,
 }
 
 impl<T> Discovery<'_, '_, '_, T> {
@@ -1080,6 +1153,113 @@ impl<T> Discovery<'_, '_, '_, T> {
                 .map(|(variable, &step)| (variable.key.clone(), step))
                 .collect(),
         }
+    }
+
+    fn poll_pareto(
+        &mut self,
+        current: &mut usize,
+        steps: &mut [f64],
+        explore_seed: bool,
+    ) -> Result<StopReason, Refusal> {
+        let request = self.request;
+        let mut fit_center = *current;
+        let mut polled = BTreeSet::new();
+        loop {
+            if self.rows.len() >= request.max_evaluations {
+                return Ok(StopReason::EvaluationBudget);
+            }
+            // Every current nondominated coordinate is a center, including those whose large
+            // outputs did not fit the cache. A strict scalar improvement is not required to
+            // explore an admitted tradeoff. Shared step rounds keep refinement deterministic.
+            // An authored restart is explored even if its seed is dominated or inadmissible.
+            // Otherwise a retained frontier in another region could silently erase that start.
+            let center_index = if (explore_seed || self.pareto_frontier.is_empty())
+                && !polled.contains(&fit_center)
+            {
+                Some(fit_center)
+            } else {
+                self.pareto_frontier
+                    .iter()
+                    .copied()
+                    .find(|index| !polled.contains(index))
+            };
+            let Some(center_index) = center_index else {
+                let mut refined = false;
+                for (step, variable) in steps.iter_mut().zip(&request.variables) {
+                    if *step > variable.minimum_step_mm {
+                        *step = (*step * 0.5).max(variable.minimum_step_mm);
+                        refined = true;
+                    }
+                }
+                if !refined {
+                    return Ok(StopReason::MinimumSteps);
+                }
+                polled.clear();
+                continue;
+            };
+            polled.insert(center_index);
+            *current = center_index;
+            let center = self.coordinates[center_index].clone();
+            let mut best_fit = fit_center;
+            for (axis, variable) in request.variables.iter().enumerate() {
+                for positive in [false, true] {
+                    let bound = variable.bounds_mm[usize::from(positive)];
+                    let distance = (bound - center[axis]).abs();
+                    let next = if steps[axis] >= distance {
+                        bound
+                    } else if positive {
+                        center[axis] + steps[axis]
+                    } else {
+                        center[axis] - steps[axis]
+                    };
+                    if next == center[axis] {
+                        continue;
+                    }
+                    let mut point = center.clone();
+                    point[axis] = next;
+                    let Some(index) = self.inspect(point)? else {
+                        return Ok(StopReason::EvaluationBudget);
+                    };
+                    if improves(&self.rows[index], &self.rows[best_fit]) {
+                        best_fit = index;
+                    }
+                }
+            }
+            // Each start can approach the admissible region through its own raw fit readings.
+            // Polling another frontier center cannot redirect that local fit search. An admitted
+            // center has zero residual; fit never ranks admitted tradeoffs or missing consumers.
+            if center_index == fit_center {
+                fit_center = best_fit;
+            }
+        }
+    }
+
+    fn retain_pareto(&mut self, index: usize, row: &mut Trial) {
+        if self
+            .pareto_frontier
+            .iter()
+            .any(|&previous| self.improves(&self.rows[previous], row))
+        {
+            row.selected = false;
+            return;
+        }
+        let displaced: BTreeSet<_> = self
+            .pareto_frontier
+            .iter()
+            .copied()
+            .filter(|&previous| self.improves(row, &self.rows[previous]))
+            .collect();
+        for &previous in &displaced {
+            self.rows[previous].selected = false;
+        }
+        self.chosen
+            .retain(|chosen| chosen.index.is_none_or(|index| !displaced.contains(&index)));
+        self.pareto_frontier
+            .retain(|index| !displaced.contains(index));
+        self.pareto_frontier.push(index);
+        // Earlier incomparable results retain their exact outputs. The new decision still
+        // joins the search frontier when full, and may reveal a later dominating geometry.
+        row.selected = self.chosen.len() <= self.request.max_designs;
     }
 
     fn improves(&self, candidate: &Trial, current: &Trial) -> bool {
@@ -1197,7 +1377,14 @@ impl<T> Discovery<'_, '_, '_, T> {
                 row.consumer_comparison = Some(candidate);
             }
         }
-        if row.selected && self.guidance.is_some() && self.chosen.len() > self.request.max_designs {
+        if self.request.pareto() && row.consumer_admitted() {
+            self.retain_pareto(index, &mut row);
+        }
+        if row.selected
+            && self.guidance.is_some()
+            && !self.request.pareto()
+            && self.chosen.len() > self.request.max_designs
+        {
             let replaced = if self.guidance.as_ref().is_some_and(|guidance| {
                 matches!(guidance.policy.basis, comparison::Basis::ReportedBounds)
             }) {

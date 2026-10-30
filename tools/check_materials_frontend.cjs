@@ -4784,6 +4784,58 @@ test('thread-cost recipe selection displays only the canonical complete incumben
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
+test('deadline-constrained recipes expose feasible, excluded and unresolved complete schedules in study views', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const row=studyRow('<deadline material>');
+  const receipt=(status,complete,lower,proved,reason)=>({schema:'ftx-sewing-completion-deadline/1',
+    limit_milliseconds:25000,status,basis:'routed_makespan/1',selected_makespan_milliseconds:complete,
+    lower_bound_makespan_milliseconds:lower,timing_optimality_proven:proved,reason});
+  row.sewing_selection=outcome({schema:'ftx-material-study-sewing-selection/1',
+    request:{schema:'ftx-sewing-selection/3',objective:'minimize_thread_observed_order_cost',completion_deadline_milliseconds:25000},
+    selected_choices:{hem:'fast'},objective_currency:'USD',selected_thread_order_cost:12,
+    trials:[{choices:{hem:'cheap'},thread_order_cost:10,
+        completion_deadline:receipt('excluded',30000,28000,true,'Qualified minimum exceeds deadline')},
+      {choices:{hem:'fast'},thread_order_cost:12,
+        completion_deadline:receipt('feasible',25000,20000,false,'Complete incumbent meets inclusive deadline')},
+      {choices:{hem:'unfinished'},route_choice:'<alternate route>',thread_order_cost:8,
+        completion_deadline:receipt('unresolved',30000,22000,false,'A better unvisited schedule could fit')},
+      {choices:{hem:'untimed'},thread_order_cost:9,completion_deadline:{status:'unresolved',
+        limit_milliseconds:25000,reason:'Missing <handling> evidence'}}],
+    search_complete:true,budget_exhausted:false,optimality_proven:false,unresolved_trials:2});
+  const highClock=studyRow('large exact clock');
+  highClock.sewing_selection=outcome({schema:'ftx-material-study-sewing-selection/1',
+    request:{schema:'ftx-sewing-selection/3',objective:'minimize_thread_observed_order_cost',
+      completion_deadline_milliseconds:9007199254740990},
+    trials:[{choices:{hem:'late'},completion_deadline:{
+      ...receipt('unresolved',9007199254740991,9007199254740990,false,'One millisecond beyond the deadline; search incomplete'),
+      limit_milliseconds:9007199254740990}}],
+    search_complete:false,budget_exhausted:true,optimality_proven:false,unresolved_trials:1});
+  for(const op of ['study','scenario']) {
+    await p.e[op].onclick(); const report=studyReport([row,highClock]);
+    p.emit(op==='study'?report:{...scenarioReport(),manufacturing:report});
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=title=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===title);
+    const deadlines=table('Deadline-constrained sewing recipe search');
+    assert.deepEqual(plain(deadlines.children.slice(2).map(r=>r.children.map(n=>n.textContent))),[
+      ['<deadline material>','hem: cheap','25','30','28','Misses deadline (proved)','true','Qualified minimum exceeds deadline'],
+      ['<deadline material>','hem: fast','25','25','20','Meets deadline','false','Complete incumbent meets inclusive deadline'],
+      ['<deadline material>','<alternate route>; hem: unfinished','25','30','22','Unresolved','false','A better unvisited schedule could fit'],
+      ['<deadline material>','hem: untimed','25','Unknown','Unknown','Unresolved','Unknown','Missing <handling> evidence'],
+      ['large exact clock','hem: late','9007199254740.99','9007199254740.991','9007199254740.99',
+        'Unresolved','false','One millisecond beyond the deadline; search incomplete']]);
+    assert.deepEqual(plain(table('Thread-cost-directed recipe search').children[2].children.map(n=>n.textContent)),
+      ['<deadline material>','12','USD','false','2']);
+    assert.match(visibleText(s),/A feasible schedule can qualify before its minimum time is proved/);
+    assert.match(visibleText(s),/Feed and setup alone do not establish complete production time/);
+    const detail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('<deadline material>: sewing recipe choices'));
+    detail.open=true;detail.handlers.toggle();assert.match(visibleText(detail),/"completion_deadline_milliseconds": 25000/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  p.e.studyRequest.handlers.change();assert.equal(p.live.size,0);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
 test('compiled WASM thread-cost recipe and study results equal both native commands with incomplete orders retained',
   {skip:process.env.FTX_REAL_WASM!=='1' || !process.env.FTX_THREAD_COST_REPLAY}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
@@ -4801,6 +4853,68 @@ test('compiled WASM thread-cost recipe and study results equal both native comma
       assert.equal(search.optimality_proven,name==='priced');
       assert.equal(result.files.find(file=>file.name==='study-request.json').text,input(`${name}-study.json`));
     }
+  });
+
+test('compiled WASM completion deadlines replay native choices and complete jobs through worker and page',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_ROUTED_FIXTURE_REPLAY},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const input=name=>fs.readFileSync(path.join(process.env.FTX_ROUTED_FIXTURE_REPLAY,'deadline-cost',name),'utf8');
+    const pattern=input('pattern.json'),selection=input('selection.json'),options=input('options.json');
+    const selected=JSON.parse(ftx.sew_select(pattern,selection));
+    assert.deepEqual(selected,JSON.parse(input('selection-report.json')));
+    assert.equal(selected.selected_options_json,options);
+    assert.equal(selected.report.selected_thread_order_cost,14);
+    assert.deepEqual(selected.report.trials.map(trial=>[trial.thread_order_cost,trial.completion_deadline.status]),
+      [[10,'excluded'],[14,'feasible']]);
+    const programText=ftx.sew_stitches(pattern,options),program=JSON.parse(programText);
+    assert.deepEqual(program,JSON.parse(input('program.json')));
+    assert.deepEqual(program.plan,selected.report.selected_plan);
+    const worker=await workerModule({bindings:ftx});
+    const sewing=await worker.send({type:'sew',request:260,pattern,options});
+    assert.equal(sewing.type,'result',sewing.message);
+    assert.deepEqual(sewing.result,program);
+    assert.equal(sewing.files.find(file=>file.name==='sewing-program.json').text,programText);
+    const studyRequest=input('study.json'),raw=ftx.material_study(pattern,studyRequest);
+    const result=await worker.send({type:'study',request:261,pattern,studyRequest});
+    assert.equal(result.type,'result',result.message);
+    assert.deepEqual(result.result,JSON.parse(input('study-report.json')));
+    assert.equal(result.files.find(file=>file.name==='material-study.json').text,raw);
+    assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
+    assert.equal(result.files.find(file=>file.name==='original-pattern.json').text,pattern);
+    const p=await pageModule();p.select('patternFile',pattern);await p.e.patternFile.onchange();
+    p.select('studyRequest',studyRequest);await p.e.study.onclick();
+    assert.equal(p.current().messages.at(-1).studyRequest,studyRequest);
+    p.emit(result.result,result.files,raw);
+    const s=section(p,'Fixed-pattern manufacturing alternatives');
+    const table=caption=>descendants(s).find(node=>node.tag==='table'&&node.children[0].textContent===caption);
+    assert.deepEqual(plain(table('Deadline-constrained sewing recipe search').children.slice(2)
+      .map(row=>[1,2,3,5,6].map(column=>row.children[column].textContent))),[
+        ['side: template','3.3','4.3','Misses deadline (proved)','true'],
+        ['side: faster-qualified','3.3','3.3','Meets deadline','true']]);
+    assert.deepEqual(plain(table('Thread-cost-directed recipe search').children[2].children.map(node=>node.textContent)),
+      ['retained','14','USD','true','0']);
+    const download=descendants(s).find(node=>node.download==='material-study.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    const priorWorker=p.current(),priorRequest=priorWorker.messages.at(-1).request;
+    p.e.studyRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+    priorWorker.emit({type:'result',request:priorRequest,result:result.result,files:result.files,reportText:raw});
+    assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+    // The real selector keeps feed/cost readings but cannot infer complete timing without handling.
+    const unknown=JSON.parse(studyRequest);delete unknown.sewing_selection.options.production;
+    const unresolved=await worker.send({type:'study',request:262,pattern,studyRequest:JSON.stringify(unknown)});
+    assert.equal(unresolved.type,'result',unresolved.message);
+    const row=unresolved.result.alternatives[0],search=row.sewing_selection.result;
+    assert.equal(row.assembly_mass.status,'available');assert.equal(row.sewing.status,'refused');
+    assert.equal(search.no_feasible_listed_recipe,false);assert.equal(search.optimality_proven,false);
+    assert.equal(search.unresolved_trials,2);
+    assert.ok(search.trials.every(trial=>trial.completion_deadline.status==='unresolved'
+      &&trial.completion_deadline.selected_completion_seconds===undefined));
+    p.select('studyRequest',JSON.stringify(unknown));await p.e.study.onclick();
+    p.emit(unresolved.result,unresolved.files);
+    assert.ok(table('Deadline-constrained sewing recipe search').children.slice(2)
+      .every(row=>row.children[3].textContent==='Unknown'&&row.children[5].textContent==='Unresolved'));
   });
 
 test('finite sewing fixtures retain capacities, operation lifecycles and source locks across all result views', async function finiteFixtureViews() {
@@ -8113,6 +8227,62 @@ test('consumer-guided adaptive search shows authoritative readings, displaced tr
   assert.deepEqual(plain(table('Consumer-guided adaptive alteration search').children[2].children.slice(-2).map(n=>n.textContent)),
     ['Unknown','Unknown']);
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('Pareto adaptive design shows every objective and distinguishes evaluated tradeoffs from retained capacity', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const report=designReport(),source=' {"schema":"fabric-pattern/1","label":"<pareto geometry>"}\n';
+  const candidate=(mass,heat)=>({eligible:true,exclusions:[],readings:{
+    assembly_mass_kg:{value:mass,reported_bounds:[mass-0.01,mass+0.01],unit:'kg',consumer:'assembly_mass'},
+    independent_surface_power_w:{value:heat,reported_bounds:[heat-0.5,heat+0.5],unit:'W',consumer:'surface'}},
+    input_protocol_sha256:'<source protocol>'});
+  const trial=(key,mass,heat,selected)=>({selected,consumer_comparison:candidate(mass,heat),
+    max_fit_band_violation_mm:0,total_fit_band_violation_mm:0,design:{key,variables_mm:{length:10},
+      altered_pattern_json:source,validation:{passed:true},fit:outcome({passed:true})}});
+  const rows=[trial('adaptive:0000',0.2,4,false),trial('adaptive:0001',0.08,5,true),
+    trial('adaptive:0002',0.12,8,false),trial('adaptive:0003',0.1,6,true),trial('adaptive:0004',0.06,10,false)];
+  rows[3].consumer_comparison.readings.assembly_mass_kg.reported_bounds=[0.09,0.11];
+  rows[4].consumer_cases=[{key:'<cold>',comparison:{...candidate(0.06,10),eligible:false,
+    exclusions:[{message:'Cold case guard excludes this design'}]}}];
+  rows[4].refusal={message:'Cold case guard excludes this design'};
+  report.design_search={schema:'ftx-design-adaptive-search/1',evaluations:5,qualified_designs:5,selected_designs:2,
+    stop_reason:'evaluation_budget',budget_exhausted:true,complete_search:false,global_optimum_claim:false,
+    best_trial_key:null,best_max_fit_band_violation_mm:null,best_total_fit_band_violation_mm:null,
+    consumer_guidance:{material_key:'<linen>',case_key:'<warm>',case_order:['<warm>','<cold>'],basis:'reported_bounds',
+      objectives:[{metric:'assembly_mass_kg',direction:'minimize'},{metric:'independent_surface_power_w',direction:'maximize'}],
+      evaluations:5,reserved_evaluations:18,best_trial_key:null,best_reading:null,
+      pareto_frontier:{evaluated_trial_keys:['adaptive:0001','adaptive:0002','adaptive:0003'],
+        retained_trial_keys:['adaptive:0001','adaptive:0003'],unretained_trial_keys:['adaptive:0002'],retention_capacity:2}},rows};
+  for(const op of ['study','scenario']) {
+    await p.e[op].onclick();p.emit(op==='study'?report:{...scenarioReport(),manufacturing:report});
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+    const summary=table('Pareto-guided adaptive alteration search');
+    assert.deepEqual(plain(summary.children[2].children.map(n=>n.textContent)),
+      ['5','5','18','2','evaluation budget','adaptive:0001, adaptive:0002, adaptive:0003',
+        'adaptive:0001, adaptive:0003','adaptive:0002']);
+    assert.doesNotMatch(visibleText(summary),/Best trial|Best objective|Retained objective/);
+    assert.equal(table('Consumer-guided adaptive alteration search'),undefined);
+    const trials=table('Adaptive alteration trials').children.slice(2);
+    assert.equal(trials[0].children[7].textContent,'Dominated among evaluated trials');
+    assert.equal(trials[2].children[7].textContent,'Nondominated among evaluated trials');
+    assert.equal(trials[2].children[8].textContent,'Not selected');
+    assert.equal(trials[3].children[8].textContent,'Selected');
+    assert.equal(trials[4].children[5].textContent,'Excluded');
+    assert.equal(trials[4].children[7].textContent,'Not admitted');
+    assert.match(trials[3].children[6].textContent,/assembly_mass_kg: 0.1 kg; reported range \[0.09, 0.11\] kg/);
+    assert.match(trials[3].children[6].textContent,/independent_surface_power_w: 6 W; reported range \[5.5, 6.5\] W/);
+    assert.match(visibleText(s),/assembly_mass_kg \(minimize\); independent_surface_power_w \(maximize\)/);
+    assert.match(visibleText(s),/including those omitted from the output cache/);
+    assert.match(visibleText(s),/retained subset is not a complete frontier or a single winner/);
+    assert.match(visibleText(s),/Every declared case must admit a selected trial/);
+    const download=descendants(s).find(n=>n.download==='adaptive-design-3-pattern.json');
+    assert.equal(await p.blobs.get(download.href).text(),source);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  p.e.studyRequest.handlers.change();assert.equal(p.live.size,0);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
 test('design search retains incomplete domains and failed fit status even when residual rounds to zero', async () => {

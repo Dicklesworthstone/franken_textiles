@@ -1295,10 +1295,171 @@ matrix limit. Case sessions retain their cumulative geometry/motion/thermal budg
 Missing or unknown case keys, missing effective policies, an inadmissible guidance objective or an
 insufficient aggregate reservation refuse before callbacks. Single-case and manufacturing-only
 guidance omit `case_key`; original `fit_band_violation_mm` requests reject it and retain their
-previous serialization. Multiple guidance objectives, unsupported bounded metrics and unknown
-material keys remain unsupported.
+previous serialization. The scalar `consumer_comparison` mode requires exactly one guidance
+objective; use the explicit `consumer_pareto` mode below to explore several. Unsupported bounded
+metrics and unknown material keys still refuse.
 Both modes retain `complete_search: false` and `global_optimum_claim: false`; neither an empty
 result nor a local improvement establishes empirical garment fit or a global optimum.
+
+### Discover adaptive tradeoffs with several real objectives
+
+Use `objective: "consumer_pareto"` when improving one admitted outcome may worsen another and the
+search should explore both alternatives. Its effective ordinary comparison policy must contain
+**2–16 unique objective metrics**, each with its own minimize/maximize direction. The engine uses
+the ordinary comparator directly; it does not add weights, convert unlike units into one score,
+or choose a single winning design. `consumer_comparison` remains the separate single-objective
+mode, and `consumer_worst_case` retains its existing single-objective aggregation across cases.
+
+The following valid JSON is a study fragment for an existing two-panel pattern. It nominates the
+`cooling` case to explore complete assembly mass against independent-sheet dry heat transfer:
+
+```json
+{
+  "design_adaptive": {
+    "objective": "consumer_pareto",
+    "material_key": "light-sheet",
+    "case_key": "cooling",
+    "variables": [{
+      "key": "length",
+      "bounds_mm": [0, 60],
+      "initial_mm": 20,
+      "initial_step_mm": 20,
+      "minimum_step_mm": 5,
+      "sites": [
+        {"piece": "front", "axis": "y", "at_mm": 50, "multiplier": 1},
+        {"piece": "back", "axis": "y", "at_mm": 50, "multiplier": 1}
+      ]
+    }],
+    "max_evaluations": 12,
+    "max_designs": 2
+  },
+  "assembly_mass": {
+    "schema": "ftx-assembly-mass/1",
+    "inventory_complete": true,
+    "extras": []
+  },
+  "comparison": {
+    "basis": "nominal",
+    "objectives": [
+      {"metric": "assembly_mass_kg", "direction": "minimize"},
+      {"metric": "independent_surface_power_w", "direction": "maximize"}
+    ],
+    "required_consumers": ["drape"]
+  }
+}
+```
+
+Add this fragment to a complete design study with the original pattern, the `light-sheet`
+material alternative and explicit selected-body `design_fit` bands. The named scenario matrix
+must contain `cooling`; its effective policy is the study's `comparison` unless that case supplies
+its own. The scenario must request ordinary steady surface heat transfer with explicit boundary
+conditions, and the material must supply the required qualified mass, mechanics and thermal
+properties. A larger admitted area can increase both mass and heat transfer, leaving a meaningful
+tradeoff. Heat remains signed: maximizing this quantity is appropriate only for the declared
+boundary direction and design goal. It is not a comfort or sweating prediction. The dimensions
+above are illustrative software inputs, not wearer-ease or manufacturing recommendations.
+
+Manufacturing-only and single-scenario studies use the same mode without `case_key`. A
+manufacturing-only policy must use available manufacturing metrics, such as assembly mass and
+feed or qualified production time; a scenario-only metric cannot be evaluated on that route.
+Exactly one `material_key` guides discovery. Selected geometries still cross all authored material
+alternatives afterward, but those other materials do not steer this search. A design best suited
+to an unnominated material can remain undiscovered.
+
+**Admission precedes every tradeoff decision.** Each coordinate starts from the original pattern,
+applies its linked canonical operations, and passes complete geometry, seam, truing, outline and
+selected-body fit gates before production consumers run. The policy's ordinary constraints,
+required consumers, source qualifications and descriptor checks must all admit the trial. In a
+named matrix, every case needs an effective policy and must independently admit the candidate;
+only the nominated case's objectives guide the Pareto search. Other cases can impose their own
+objectives and guards. Protocols remain anchored separately for each case across trials. Distinct
+case protocols are not compared against one another, and a changed protocol cannot guide discovery
+unless that case's policy explicitly allows mixed protocols. A missing metric, source range,
+required consumer or callback result cannot enter the frontier as zero. Optional consumer failures
+remain inspectable under the ordinary policy's admission rules.
+
+The comparison basis applies to all guidance objectives. Under `nominal`, a candidate dominates
+another only when it is no worse in every declared direction and strictly better in at least one.
+Equal vectors and opposing tradeoffs remain nondominated. Under supported `reported_bounds`, each
+objective needs its actual complete consumer range. For a minimized objective, the candidate's
+upper endpoint must be at most the other trial's lower endpoint; maximized objectives reverse that
+ordering. At least one objective must satisfy a strict inequality. An overlapping objective
+prevents dominance, and touching on every objective supplies no strict improvement. This is the
+same conservative multi-objective rule used in final comparisons, without midpoint ranking or
+invented probability. Constraints can independently select nominal or reported-range admission;
+their basis does not change objective ordering. Source ranges retain their existing fixed-geometry
+and declared-input assumptions.
+
+Polling follows the evaluated frontier. Before a consumer-admitted trial exists, the original
+unrounded, same-unit fit residuals can guide discovery toward the declared fit bands. Once admitted
+tradeoffs exist, every current nondominated coordinate becomes a poll center, including coordinates
+whose full outputs did not fit the retention allowance. Frontier centers follow evaluation order; variables
+follow authored order, with negative then positive polls inside their bounds. Shared polling steps
+halve only after every current frontier center has been polled at that step. New incomparable
+points can therefore lead to further alterations even when no point strictly improves every
+objective. Repeated exact coordinates reuse their existing trial instead of consuming another
+evaluation. The global `final_steps_mm` records the shared steps at termination.
+
+Optional [`restart_points_mm`](adaptive-restarts.md) also works with Pareto discovery. Each
+declared restart begins only after a minimum-step stop and resets polling steps while preserving
+the evaluated frontier, exact coordinate cache, retained outputs, source-protocol anchors and all
+global work allowances. Its authored seed is explored even if an earlier frontier point dominates
+it or a gate refuses it; this can expose an admitted tradeoff in a separated neighborhood. The seed
+can approach its fit bands through its own raw fit readings, then the existing frontier centers
+continue to be polled as well. A cached restart does not rerun its consumers. When restarts are
+requested, `search_starts` records their actual new evaluations and termination details; its
+`final_trial_key` identifies the last polling center and does not select a Pareto winner.
+
+`max_designs` bounds the stored full consumer outputs, independently of the lightweight evaluated
+frontier. A new nondominated trial removes every retained result that it strictly dominates. When
+the cache is full, earlier incomparable results keep their exact outputs and the new trial remains
+in the evaluated frontier with `selected: false`. It still guides polling. Omission for capacity
+does not fabricate a refusal or mean the candidate lost a scalar comparison. Previously omitted
+outputs are not rerun or reconstructed if later dominance frees a slot, so the retained subset may
+use fewer than all available slots. Neither capacity nor a full cache stops discovery.
+
+The existing `ftx-design-adaptive-search/1` receipt exposes both sets under `consumer_guidance`:
+
+| Field | Meaning |
+|---|---|
+| `objectives` | Complete ordinary objective list, preserving metric names and directions |
+| `pareto_frontier.evaluated_trial_keys` | Every nondominated admitted trial among the evaluated coordinates, in evaluation order |
+| `pareto_frontier.retained_trial_keys` | The subset whose exact full outputs enter the final material cross-product |
+| `pareto_frontier.unretained_trial_keys` | Evaluated frontier members whose full outputs were omitted when the cache was full |
+| `pareto_frontier.retention_capacity` | `max_designs`, excluding the separately retained original baseline |
+
+These lists exclude baseline and contain discovery trial keys, not combined design/material row
+keys. Every trial retains its unchanged `consumer_comparison`, all objective and guard readings,
+original refusals, and any `consumer_cases`. Previously dominated trials remain in the history with
+`selected: false`. Pareto guidance omits the scalar `objective` field and leaves its `best_trial_key`
+and `best_reading` null; the outer scalar `best_*` fields are also null. There is no automatic single
+best design. The workbench displays the supplied objective vectors and evaluated/retained frontier
+identities without computing a second browser ranking. Existing scalar modes keep their previous
+serialization.
+
+All existing adaptive work limits apply: one to three variables, 1–256 unique coordinate trials,
+1–31 retained designs, and at most 32 reserved baseline-plus-design/material rows. Invalid and
+refused trials consume their executed coordinate allowance; the original baseline is additional.
+The conservative consumer-slot reservation remains
+`(max_evaluations + (max_designs + 1) * material_alternatives) * cases`, taking `cases` as one for a
+single-scenario or manufacturing-only study. Named matrices remain within their 64-slot limit.
+For the fragment above, two materials and two named cases reserve `(12 + 3 * 2) * 2 = 36` slots.
+Actual counts can be smaller because flat refusals skip consumers and retained probes are reused.
+
+The nominated material's retained manufacturing and complete scenario outputs are reused exactly
+in the final cross-product, including source evidence, bound geometry and all original case
+decisions. Baseline and other material alternatives receive fresh ordinary evaluations. Shared
+manufacturing counters and cumulative scenario mesh, motion and heat budgets still govern actual
+work; a slot reservation does not guarantee numerical capacity. Later callback refusals preserve
+already retained successful results. Structural errors or global manufacturing hard-budget
+failures still refuse the whole request.
+
+The evaluated frontier is conditional on the admitted coordinates that were actually visited.
+The final comparison covers only baseline and the retained design/material rows, and can differ
+from that discovery frontier. A minimum-step stop, exhausted evaluation allowance, omitted output
+or empty frontier establishes neither full-domain infeasibility nor an exhaustive Pareto set.
+`complete_search` and `global_optimum_claim` remain false. These numerical decisions do not establish
+measured garment fit, comfort, material calibration or physical sewing performance.
 
 ## Constrain material-direction strain on selected garment regions
 

@@ -227,15 +227,22 @@ pub(super) fn validate_request(request: &Request) -> Result<(), Refusal> {
                 "design_adaptive requires an explicit design_fit contract",
             ));
         }
-        if adaptive.consumer_guided()
-            && request
+        if adaptive.consumer_guided() {
+            let count = request
                 .comparison
                 .as_ref()
-                .is_none_or(|policy| policy.objectives.len() != 1)
-        {
-            return Err(invalid(
-                "consumer-guided adaptive design requires one comparison objective with explicit ordinary constraints and required consumers",
-            ));
+                .map(|policy| policy.objectives.len());
+            if adaptive.pareto() {
+                if count.is_none_or(|count| !(2..=16).contains(&count)) {
+                    return Err(invalid(
+                        "consumer_pareto requires 2..16 ordinary comparison objectives with explicit constraints and required consumers",
+                    ));
+                }
+            } else if count != Some(1) {
+                return Err(invalid(
+                    "consumer-guided adaptive design requires one comparison objective with explicit ordinary constraints and required consumers",
+                ));
+            }
         }
     }
     if let Some(grid) = &request.design_grid {

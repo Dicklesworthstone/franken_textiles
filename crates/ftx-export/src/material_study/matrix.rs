@@ -304,9 +304,10 @@ impl Request {
                     guidance.best_trial_key.as_ref()?,
                     guidance.best_case_key.as_ref()?,
                     guidance.best_reading.as_ref()?,
+                    guidance.objective.as_ref()?,
                 ))
             });
-            notes.push(if let Some((guidance, trial, case, reading)) = incumbent {
+            notes.push(if let Some((guidance, trial, case, reading, objective)) = incumbent {
                 if let (Some([lo, hi]), Some([lower_case, upper_case])) = (
                     reading.reported_bounds,
                     guidance.best_reported_bound_case_keys.as_ref(),
@@ -314,7 +315,7 @@ impl Request {
                     format!(
                         "Worst-case retained trial '{trial}' on material '{}': nominal limiting case '{case}', {} = {} {}; reported worst-case range [{lo}, {hi}] {}, with lower endpoint from '{lower_case}' and upper endpoint from '{upper_case}'. Endpoints aggregate the same metric across all admitted cases, not a single case's interval or an average. Only strictly separated ranges establish improvement; overlaps and touching endpoints remain unresolved. Source ranges are conditional enclosures, not statistical confidence or uncertain geometry. Inspect consumer_cases for all original readings and refusals.",
                         guidance.material_key,
-                        serde_json::to_string(&guidance.objective.metric)
+                        serde_json::to_string(&objective.metric)
                             .map_err(|error| invalid(error.to_string()))?,
                         reading.value,
                         reading.unit,
@@ -324,7 +325,7 @@ impl Request {
                     format!(
                     "Worst-case retained trial '{trial}' on material '{}': limiting case '{case}', {} = {} {}. This is the original admitted case reading, not an average. Every named case admitted this trial; the limiting case can change between trials. Inspect consumer_cases for all readings and refusals.",
                     guidance.material_key,
-                    serde_json::to_string(&guidance.objective.metric)
+                    serde_json::to_string(&objective.metric)
                         .map_err(|error| invalid(error.to_string()))?,
                     reading.value,
                     reading.unit
@@ -333,6 +334,12 @@ impl Request {
             } else {
                 "No worst-case trial was admitted in every named case. No limiting case or objective value is available; inspect the retained per-case refusals. The separately retained original baseline is not a discovery incumbent.".into()
             });
+        } else if self
+            .design_adaptive
+            .as_ref()
+            .is_some_and(|policy| policy.pareto())
+        {
+            notes.push("Adaptive Pareto polling follows the explicitly nominated case's complete comparison objectives under their declared nominal or reported-range basis. Every named case independently admits each trial under its own constraints and anchored source protocol. The evaluated nondominated frontier and bounded retained output subset are separate; capacity-omitted frontier points still guide polling. No case weights, scalar winner, exhaustive frontier or physical fit is inferred.".into());
         } else if self.consumer_guided() {
             notes.push("Adaptive polling follows only the explicitly nominated case's sole comparison objective and declared nominal or reported-range basis. Every named case must independently admit each selected trial under its own policy and source protocol. Complete successful probe outputs are reused exactly for final rows; no cross-case score, unrestricted optimum or physical fit is inferred.".into());
         }
@@ -407,7 +414,7 @@ impl Request {
                 ));
             }
         }
-        // Resolve the sole guidance policy before the ordinary design/material admission. An
+        // Resolve the guidance policy before the ordinary design/material admission. An
         // unused fallback is not the nominated case's objective and cannot silently steer search.
         let mut guided = self.clone();
         guided.comparison = Some(policies[nominated.unwrap_or(0)].clone());

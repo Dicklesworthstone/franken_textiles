@@ -2,6 +2,8 @@
 //! The body and source properties are synthetic software fixtures, not measured garment evidence.
 use super::*;
 
+#[path = "pareto.rs"]
+mod pareto;
 #[path = "worst_case.rs"]
 mod worst_case;
 
@@ -447,6 +449,13 @@ fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_b
                 }
             }
             worst_case::replay(
+                &model,
+                &digest,
+                [&pattern, &study, &scenario, &body],
+                &dir,
+                capture.as_deref(),
+            );
+            pareto::replay(
                 &model,
                 &digest,
                 [&pattern, &study, &scenario, &body],

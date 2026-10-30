@@ -4564,6 +4564,21 @@ their objective readings and timing evidence. This increment is tracked by `ftx-
 [sewing-selection.md](docs/sewing-selection.md). Declared-domain optimization and modeled timing
 remain separate from unrestricted process search and empirical factory throughput.
 
+### 25.135 Explore garment tradeoffs across multiple production objectives
+
+Adaptive discovery now has an explicit Pareto mode using two to sixteen ordinary comparison
+objectives for a nominated material and scenario. Every named case retains its own admission,
+constraints and source protocols. Deterministic polling explores all observed nondominated
+coordinates even when only a bounded subset of their complete outputs can be retained. Explicit
+restart seeds compose with the same global work limits and coordinate cache.
+
+The receipt separates observed tradeoffs, retained outputs and capacity-omitted coordinates;
+the workbench presents every declared direction and reading without inventing one best design.
+Final material/case comparisons reuse exact cached consumer results. This increment is tracked by
+`ftx-ds2.6`; see [material-screening-and-studies.md](docs/material-screening-and-studies.md).
+Neither finite polling nor a successful numerical replay establishes a complete continuous
+frontier, global optimum or empirical garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

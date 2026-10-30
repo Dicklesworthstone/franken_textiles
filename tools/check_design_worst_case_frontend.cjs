@@ -25,6 +25,28 @@ function displayedNotes(report) {
   return parent.children.map(child => child.textContent);
 }
 
+// Run the existing design renderer without inventing frontend objective or frontier arithmetic.
+function displayedDesign(study) {
+  const source = fs.readFileSync(path.join(__dirname, '../web/materials-page.js'), 'utf8');
+  const start = source.indexOf('function designComparison(');
+  const end = source.indexOf('\nfunction useStudyPattern(', start);
+  assert.ok(start >= 0 && end > start);
+  const node = () => ({ textContent: '', children: [], append(...items) { this.children.push(...items); },
+    set innerHTML(_) { assert.fail('Design identities must be displayed as text'); } });
+  const parent = node(), tables = new Map(), downloads = new Map();
+  const context = vm.createContext({ document: { createElement: node },
+    available: item => item?.status === 'available' ? item.result : null,
+    state: item => item?.status || 'Unknown', metric: value => value == null ? 'Unknown' : String(value),
+    table: (_parent, caption, headings) => {
+      const table = { headings, rows: [] }; tables.set(caption, table); return table;
+    }, cells: (table, values) => table.rows.push(Array.from(values, String)),
+    detail() {}, designTreatments() {}, metricUsesBounds: policy => policy?.basis === 'reported_bounds',
+    link: (_op, _parent, file) => downloads.set(file.name, file.text) });
+  vm.runInContext(source.slice(start, end), context);
+  context.designComparison('scenario', parent, study);
+  return { tables, downloads, text: parent.children.map(child => child.textContent).join('\n') };
+}
+
 test('matrix page displays authoritative limiting-case notes without recomputing a score', () => {
   const note = "Worst-case retained trial 'adaptive:0003' on material 'light': limiting case '<guard>', simulated_cloth_mass_kg = 31 kg. This is the original admitted case reading, not an average.";
   const report = { schema: 'ftx-design-scenario-matrix-study/1', cases: [], notes: [note],
@@ -54,6 +76,91 @@ test('matrix page keeps distinct nominal and interval witnesses in authoritative
     } } } };
   assert.ok(displayedNotes(report).includes(note));
 });
+
+test('Pareto renderer preserves the evaluated frontier separately from retained geometry', () => {
+  const study = { alternatives: [{key:'bound',design:{key:'first'}}], design_search: {
+    schema:'ftx-design-adaptive-search/1',evaluations:2,selected_designs:1,stop_reason:'minimum_steps',
+    consumer_guidance:{material_key:'<material>',evaluations:2,reserved_evaluations:4,
+      objectives:[{metric:'assembly_mass_kg',direction:'minimize'},{metric:'independent_surface_power_w',direction:'maximize'}],
+      pareto_frontier:{evaluated_trial_keys:['first','<omitted>'],retained_trial_keys:['first'],
+        unretained_trial_keys:['<omitted>'],retention_capacity:1}},rows:[] } };
+  const rendered=displayedDesign(study),summary=rendered.tables.get('Pareto-guided adaptive alteration search');
+  assert.deepEqual(summary.rows[0].slice(5),['first, <omitted>','first','<omitted>']);
+  assert.equal(rendered.tables.has('Consumer-guided adaptive alteration search'),false);
+  assert.match(rendered.text,/assembly_mass_kg \(minimize\); independent_surface_power_w \(maximize\)/);
+  assert.match(rendered.text,/retained subset is not a complete frontier or a single winner/);
+});
+
+test('compiled WASM Pareto mass and cooling tradeoffs replay native results through the worker and renderer',
+  { skip: process.env.FTX_REAL_WASM !== '1' || !process.env.FTX_CONSUMER_ADAPTIVE_REPLAY }, async () => {
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const input=name=>fs.readFileSync(path.join(process.env.FTX_CONSUMER_ADAPTIVE_REPLAY,name),'utf8');
+    const bytes=fs.readFileSync(path.join(process.env.FTX_CONSUMER_ADAPTIVE_REPLAY,'model.ftxbody'));
+    const sent=[],context=vm.createContext({Uint8Array,TextEncoder,WebAssembly,JSON,Error,self:{},postMessage:message=>sent.push(message)});
+    const bindings=new vm.SyntheticModule(Object.keys(ftx),function(){
+      for(const [name,value] of Object.entries(ftx))this.setExport(name,value);
+    },{context});
+    const worker=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../web/materials-worker.js'),'utf8'),{context});
+    await worker.link(()=>bindings);await worker.evaluate();
+    const previous=globalThis.ftxProgress;
+    globalThis.ftxProgress=line=>context.self.ftxProgress(line);
+    try {
+      for(const [index,label] of ['pareto','pareto-budget'].entries()) {
+        const studyRequest=input(`${label}-study.json`),scenarioRequest=input(`${label}-scenario.json`);
+        await context.self.onmessage({data:{type:'scenario',request:270+index,pattern:input('pattern.json'),
+          studyRequest,scenarioRequest,measurements:input('body-input.json'),
+          bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)}});
+        const result=sent.at(-1);assert.equal(result.type,'result',result.message);
+        assert.deepEqual(result.result,JSON.parse(input(`${label}-report.json`)));
+        const search=result.result.manufacturing.design_search,guidance=search.consumer_guidance,
+          frontier=guidance.pareto_frontier,limited=label.endsWith('budget');
+        assert.deepEqual(guidance.objectives,JSON.parse(studyRequest).comparison.objectives);
+        assert.equal(guidance.objective,undefined);assert.equal(guidance.best_reading,null);
+        assert.equal(guidance.best_trial_key,null);assert.equal(search.global_optimum_claim,false);
+        assert.equal(frontier.retained_trial_keys.length,limited?1:2);
+        assert.equal(frontier.evaluated_trial_keys.length,frontier.retained_trial_keys.length+frontier.unretained_trial_keys.length);
+        if(limited) assert.ok(search.rows.some(row=>row.consumer_refusal?.code==='budget_exceeded'&&!row.selected));
+        else {
+          const shortest=search.rows.find(row=>row.design.variables_mm.length===-30);
+          assert.ok(frontier.unretained_trial_keys.includes(shortest.design.key));
+          const initial=search.rows[0].consumer_comparison.readings;
+          for(const metric of ['assembly_mass_kg','independent_surface_power_w'])
+            assert.ok(shortest.consumer_comparison.readings[metric].value<initial[metric].value);
+        }
+        const rendered=displayedDesign(result.result.manufacturing);
+        const summary=rendered.tables.get('Pareto-guided adaptive alteration search');
+        assert.deepEqual(summary.rows[0].slice(5),[frontier.evaluated_trial_keys.join(', '),
+          frontier.retained_trial_keys.join(', '),frontier.unretained_trial_keys.join(', ')||'None']);
+        assert.equal(rendered.tables.has('Consumer-guided adaptive alteration search'),false);
+        assert.match(rendered.text,/assembly_mass_kg \(minimize\); independent_surface_power_w \(maximize\)/);
+        const rows=rendered.tables.get('Adaptive alteration trials').rows;
+        for(const [index,trial] of search.rows.entries()) {
+          const displayed=rows.find(row=>row[0]===trial.design.key);
+          assert.equal(displayed[8],trial.selected?'Selected':'Not selected');
+          assert.match(displayed[6],/assembly_mass_kg:/);assert.match(displayed[6],/independent_surface_power_w:/);
+          if(frontier.evaluated_trial_keys.includes(trial.design.key))assert.equal(displayed[7],'Nondominated among evaluated trials');
+          assert.equal(rendered.downloads.get(`adaptive-design-${index+1}-pattern.json`),trial.design.altered_pattern_json);
+          if(!trial.selected)continue;
+          const key=JSON.stringify([trial.design.key,'light']);
+          const simulation=result.result.cases[0].simulations.find(row=>row.key===key).evaluation;
+          assert.equal(simulation.status,'available');assert.equal(simulation.result.surface.status,'available');
+          const heat=simulation.result.surface.result.steady;
+          assert.equal(heat.power_w,trial.consumer_comparison.readings.independent_surface_power_w.value);
+          assert.ok(Math.abs(heat.power_w-heat.area_m2*30/(0.1+0.2+0.0004/0.05))<1e-10);
+        }
+        assert.equal(result.result.evaluations,guidance.evaluations+
+          result.result.manufacturing.alternatives.length-frontier.retained_trial_keys.length);
+        assert.deepEqual(JSON.parse(result.files.find(file=>file.name==='design-scenario-matrix-study.json').text),result.result);
+        assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
+        assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
+        assert.equal(result.files.find(file=>file.name==='body-input.json').text,input('body-input.json'));
+      }
+    } finally {
+      if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;
+    }
+  });
 
 test('compiled WASM worst-case sewn-body studies reproduce native constraints and cumulative budget refusals',
   { skip: process.env.FTX_REAL_WASM !== '1' || !process.env.FTX_CONSUMER_ADAPTIVE_REPLAY }, async () => {
