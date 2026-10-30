@@ -4579,6 +4579,25 @@ Final material/case comparisons reuse exact cached consumer results. This increm
 Neither finite polling nor a successful numerical replay establishes a complete continuous
 frontier, global optimum or empirical garment fit.
 
+### 25.136 Expose the complete released production-knit cohort through ordinary consumers
+
+The existing pinned Sperl production-fabric adapter now exposes all 33 released specimens,
+adding 30 exact constructions and 238 source observations to the shared catalog. Single jersey,
+all-needle, links, double-knit pique and interlock keep their reported yarn, finish and specimen
+identities. The original three records retain their frozen identities. Original additional force
+histories and the MIT notice remain available for acquisition and independent source replay;
+the normal binary embeds only the compact source summary.
+
+Mass, condition-qualified grip-force screening, frozen selection and source inspection use the
+existing material authority. Exact missing extension rows remain absent, and observations above
+the paper's modeling force range retain that limitation. A grip-force observation is not a local
+sheet constitutive law, and reported gauge without pressure does not establish contact thickness.
+This increment is tracked by `ftx-tm2.5`; see [measured-knit-strips.md](docs/measured-knit-strips.md).
+The complete directional mechanics, thermal, interface and unchanged-jacket empirical gates in
+`ftx-tm2` and `ftx-tm8` remain open. New data must continue to extend this shared path rather than
+create a separate database or silently substitute chemistry, brand labels or estimated coefficients
+for missing measured properties.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

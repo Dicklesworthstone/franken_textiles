@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::materials::{Component, Evidence, Form, Material, Quantity, Source};
 
+mod expanded;
 mod transverse;
 pub use transverse::{AcquisitionDocument, TransverseCurve, TransverseObservation};
 
@@ -343,23 +344,23 @@ fn observations(curve: &Curve) -> Result<Vec<Observation>, Refusal> {
 ///
 /// # Errors
 /// Malformed/oversized input, unknown source revision or curve, changed original bytes, duplicate
-/// specimen/cut identity, or invalid branch/row ordering. Input is limited to 2 MiB, nine force
+/// specimen/cut identity, or invalid branch/row ordering. Input is limited to 4 MiB, 99 force
 /// histories and nine optional transverse curves. Transverse observations have their own retrieval
 /// date and retain unreported sampling details; they are never silently converted to solver widths.
 pub fn parse_acquisition(data: &str) -> Result<StripAcquisition, Refusal> {
-    if data.len() > 2 * 1024 * 1024 {
-        return Err(invalid("knit strip acquisition exceeds 2 MiB"));
+    if data.len() > 4 * 1024 * 1024 {
+        return Err(invalid("knit strip acquisition exceeds 4 MiB"));
     }
     let acquisition: Acquisition = serde_json::from_str(data)
         .map_err(|e| invalid(format!("measured knit acquisition: {e}")))?;
     if acquisition.archive_url != ARCHIVE
-        || acquisition.retrieved_on != RETRIEVED
+        || ![RETRIEVED, expanded::RETRIEVED].contains(&acquisition.retrieved_on.as_str())
         || acquisition.metadata_entry != "dataset/data/fabrics.json"
         || acquisition.metadata_sha256 != METADATA_SHA256
         || sha256_hex(acquisition.metadata_json.as_bytes()) != METADATA_SHA256
         || sha256_hex(acquisition.license.as_bytes()) != LICENSE_SHA256
         || acquisition.curves.is_empty()
-        || acquisition.curves.len() > CURVE_PINS.len()
+        || acquisition.curves.len() > 99
     {
         return Err(invalid(
             "knit strip acquisition does not match the retained primary source",
@@ -367,6 +368,11 @@ pub fn parse_acquisition(data: &str) -> Result<StripAcquisition, Refusal> {
     }
     let metadata: BTreeMap<String, Fabric> = serde_json::from_str(&acquisition.metadata_json)
         .map_err(|e| invalid(format!("measured knit metadata: {e}")))?;
+    let expanded_pins = if acquisition.retrieved_on == expanded::RETRIEVED {
+        expanded::pins()?
+    } else {
+        BTreeMap::new()
+    };
     let (transverse_curves, transverse_readme) = transverse::parse(
         &acquisition.transverse_curves,
         acquisition.transverse_readme.as_ref(),
@@ -384,11 +390,18 @@ pub fn parse_acquisition(data: &str) -> Result<StripAcquisition, Refusal> {
         if !identities.insert((&curve.specimen, direction)) {
             return Err(invalid("knit strip specimen/cut identity is duplicated"));
         }
-        let (_, _, expected_hash) = CURVE_PINS
+        let expected_hash = CURVE_PINS
             .iter()
             .find(|(specimen, cut, _)| *specimen == curve.specimen && *cut == direction)
+            .map(|(_, _, hash)| *hash)
+            .or_else(|| {
+                expanded_pins
+                    .get(&curve.specimen)
+                    .and_then(|cuts| cuts.get(&direction))
+                    .map(String::as_str)
+            })
             .ok_or_else(|| invalid("knit strip specimen/cut has no acquired source pin"))?;
-        if curve.sha256 != *expected_hash
+        if curve.sha256 != expected_hash
             || metadata
                 .get(&curve.specimen)
                 .and_then(|f| f.stretch.get(direction.as_str()))
@@ -410,6 +423,7 @@ pub fn parse_acquisition(data: &str) -> Result<StripAcquisition, Refusal> {
             },
         });
     }
+    let retrieved_on = acquisition.retrieved_on.clone();
     Ok(StripAcquisition {
         acquisition_sha256: sha256_hex(data.as_bytes()), archive_url: acquisition.archive_url,
         retrieved_on: acquisition.retrieved_on, license: acquisition.license,
@@ -419,7 +433,7 @@ pub fn parse_acquisition(data: &str) -> Result<StripAcquisition, Refusal> {
             free_gauge_length_m: 0.100, reference_width_m: 0.060,
             paper_working_force_limit_n: 5.0,
             source: Source {
-                reference: ARTICLE.into(), accessed_on: RETRIEVED.into(),
+                reference: ARTICLE.into(), accessed_on: retrieved_on,
                 note: "Sperl et al. (2022), section 4.3 and Figure 4; 100 mm free gauge excluding clamps, 60 mm width; horizontal displacement-controlled clamped stretch with measured force. Source angular origin is weft (0 degrees), bias (45 degrees), warp (90 degrees).".into(),
             },
             conditions: BTreeMap::from([
@@ -451,7 +465,7 @@ fn loading_observations(curve: &Curve) -> Result<[f64; 2], Refusal> {
     Ok([exact(0.1)?, exact(0.3)?])
 }
 
-fn record(specimen: &str, fabric: &Fabric, curves: &[(&str, &str, [f64; 2])]) -> Material {
+fn record(specimen: &str, fabric: &Fabric, curves: &[(&str, &str, [Option<f64>; 2])]) -> Material {
     let conditions = BTreeMap::from([
         ("specimen".into(), format!("Sperl2022:{specimen}")),
         (
@@ -503,6 +517,9 @@ fn record(specimen: &str, fabric: &Fabric, curves: &[(&str, &str, [f64; 2])]) ->
                 note: format!("Original source CSV SHA-256 {hash}; specimen {specimen}; retained losslessly with its loading and unloading tags under MIT. Direction means the paper's {direction} cut. Signed source values are preserved; this import adds no smoothing or interpolation. Author preprocessing and instrument rawness are unspecified."),
             });
         for (percent, force) in [10, 30].into_iter().zip(forces) {
+            let Some(force) = force else {
+                continue;
+            };
             let mut force_q = q(
                 force,
                 "N",
@@ -539,23 +556,28 @@ fn record(specimen: &str, fabric: &Fabric, curves: &[(&str, &str, [f64; 2])]) ->
     let composition = fabric
         .composition
         .iter()
-        .map(|y| Component {
-            fiber: if y.name.contains("Spandex") {
-                "elastane"
+        .filter_map(|y| {
+            let fiber = if y.name.contains("Spandex") {
+                Some("elastane")
             } else if y.name.contains("Celliant") {
-                "polyester (Celliant-labelled yarn)"
+                Some("polyester (Celliant-labelled yarn)")
+            } else if y.name.contains("Polyester") {
+                Some("polyester")
             } else {
-                "polyester"
-            }
-            .into(),
-            fraction: y.percentage,
-            source: "metadata".into(),
+                None
+            }?;
+            Some(Component {
+                fiber: fiber.into(),
+                fraction: y.percentage,
+                source: "metadata".into(),
+            })
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let composition_complete = composition.len() == fabric.composition.len();
     Material {
             id: format!("sperl2022/{specimen}"),
             name: format!("Sperl 2022 {} {specimen}", if specimen.starts_with("SJ") { "single jersey" } else { "double-knit interlock" }),
-            form: Form::Knit, composition, composition_complete: true,
+            form: Form::Knit, composition, composition_complete,
             structure: BTreeMap::from([
                 ("construction".into(), if specimen.starts_with("SJ") { "single jersey" } else { "double-knit interlock" }.into()),
                 ("finish".into(), fabric.finishes.join("; ")),
@@ -571,7 +593,7 @@ fn record(specimen: &str, fabric: &Fabric, curves: &[(&str, &str, [f64; 2])]) ->
         }
 }
 
-pub(super) fn records() -> Vec<Material> {
+pub(super) fn records() -> Result<Vec<Material>, Refusal> {
     // Compact transcriptions keep raw acquisitions out of normal catalog/browser construction.
     // The test below rebuilds these exact records independently from the retained original files.
     let fabric = |mass, gauge, finish: &str, yarns: &[(&str, f64, u32)]| Fabric {
@@ -589,7 +611,7 @@ pub(super) fn records() -> Vec<Material> {
         stretch: BTreeMap::new(),
         poisson: BTreeMap::new(),
     };
-    vec![
+    let mut records = vec![
         record(
             "SJ1",
             &fabric(
@@ -602,17 +624,17 @@ pub(super) fn records() -> Vec<Material> {
                 (
                     "warp",
                     "0f60fa0dbc3f99bcd0f0ba19c41f6988d7e8931bbfc6790003e12b326bddf0b6",
-                    [0.40, 1.94],
+                    [Some(0.40), Some(1.94)],
                 ),
                 (
                     "weft",
                     "0fe20ce39b5632ccf2437abc2646d70b5f65406fb5b19f8ea3fb804a26a26249",
-                    [0.04, 0.84],
+                    [Some(0.04), Some(0.84)],
                 ),
                 (
                     "bias",
                     "3a2abad579ebc91afbb2ae801365d69bc266b197ff5f11a9d737b63a38c55c1b",
-                    [0.27, 1.12],
+                    [Some(0.27), Some(1.12)],
                 ),
             ],
         ),
@@ -628,17 +650,17 @@ pub(super) fn records() -> Vec<Material> {
                 (
                     "warp",
                     "38332753d6bf437b5294f99e07c7cda87e1898c57d0be236891b17f662235688",
-                    [0.71, 2.11],
+                    [Some(0.71), Some(2.11)],
                 ),
                 (
                     "weft",
                     "ad9fa8d6a07a700348684813d5bf87212de2dba43a2577d2930922aec57780f9",
-                    [0.80, 2.48],
+                    [Some(0.80), Some(2.48)],
                 ),
                 (
                     "bias",
                     "fcb93afd8c919d3a6189f6622cb8fe8573a90afd09a04bb90b78b762dda327bf",
-                    [0.53, 1.78],
+                    [Some(0.53), Some(1.78)],
                 ),
             ],
         ),
@@ -658,21 +680,23 @@ pub(super) fn records() -> Vec<Material> {
                 (
                     "warp",
                     "2e1e6c775fb40ac69df48eac521c6926463799753cf1d35a7e8bbf8999d34f59",
-                    [1.21, 3.39],
+                    [Some(1.21), Some(3.39)],
                 ),
                 (
                     "weft",
                     "491b997ec5ce460c9f2018d7a791b63a3b656fa5654efb316212888cd3c3d10f",
-                    [1.56, 5.00],
+                    [Some(1.56), Some(5.00)],
                 ),
                 (
                     "bias",
                     "d6b48f9f457932ffec430546f1660f4819fd316106b8bfc42aee3421e9f20365",
-                    [1.15, 3.39],
+                    [Some(1.15), Some(3.39)],
                 ),
             ],
         ),
-    ]
+    ];
+    records.extend(expanded::records()?);
+    Ok(records)
 }
 
 #[cfg(test)]
@@ -725,7 +749,7 @@ mod tests {
                 observations.push((
                     direction,
                     curve.sha256.as_str(),
-                    loading_observations(curve)?,
+                    loading_observations(curve)?.map(Some),
                 ));
             }
             records.push(record(specimen, fabric, &observations));
@@ -736,7 +760,7 @@ mod tests {
     #[test]
     fn compact_catalog_replays_exactly_from_original_source_acquisitions() {
         assert_eq!(
-            serde_json::to_value(records()).unwrap(),
+            serde_json::to_value(&records().unwrap()[..3]).unwrap(),
             serde_json::to_value(records_from(DATA).unwrap()).unwrap()
         );
     }

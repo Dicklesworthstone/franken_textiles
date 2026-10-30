@@ -6588,7 +6588,8 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
     assert.equal(screened.type, 'result', screened.message);
     assert.deepEqual(screened.result, JSON.parse(ftx.material_screen(screenRequest)));
     assert.equal(screened.files[1].text, screenRequest);
-    const knitRequest = JSON.stringify({ schema:'ftx-material-screen/1', basis:'nominal', query:'sperl2022/',
+    const knitRequest = JSON.stringify({ schema:'ftx-material-screen/1', basis:'nominal',
+      candidates:['sperl2022/SJ1','sperl2022/SJ3','sperl2022/DKIN8'].map(id => ({key:id,selection:{id}})),
       forms:['knit'], allow_mixed_protocols:true,
       constraints:[{attribute:{key:'strip_force_30pct_weft',unit:'N',conditions:{branch:'loading',
         free_gauge_length_mm:'100',reference_strip_width_mm:'60'}},minimum:2}],
@@ -6604,6 +6605,16 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
     assert.equal(knitInspection.capabilities.mechanical_coefficients.ready,false);
     assert.equal(knitInspection.capabilities.steady_conduction.ready,false);
     assert.equal(knitInspection.capabilities.sewing_thickness_m.ready,false);
+    const expandedKnitRequest = JSON.parse(knitRequest);
+    delete expandedKnitRequest.candidates;
+    expandedKnitRequest.query = 'sperl2022/';
+    const expandedKnits = await w.send({type:'screen',screenRequest:JSON.stringify(expandedKnitRequest)});
+    assert.equal(expandedKnits.type,'result',expandedKnits.message);
+    assert.deepEqual(expandedKnits.result.frontier,['sperl2022/SJ11']);
+    assert.equal(expandedKnits.result.alternatives.filter(row => row.key.startsWith('sperl2022/')).length,33);
+    const expandedWinner = expandedKnits.result.alternatives.find(row => row.key === 'sperl2022/SJ11');
+    assert.equal(expandedWinner.readings.areal_density.value,0.105);
+    assert.equal(expandedWinner.readings.strip_force_30pct_weft.value,3.67);
     const pattern = fixture('synthetic-sewing-pattern.json');
     const pressureChanges = `{"schema":"ftx-material-bindings/1","default":${prepared.result.selection_json}}`;
     const pressureBinding = await w.send({ type: 'bind', pattern, changes: pressureChanges });

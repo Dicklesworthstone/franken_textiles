@@ -16,8 +16,8 @@ fn matched_knits_retain_exact_directional_acquisitions_and_mass() {
         .iter()
         .filter(|m| m.id.starts_with("sperl2022/"))
         .collect();
-    assert_eq!(rows.len(), 3);
-    assert_eq!(rows.iter().map(|m| m.properties.len()).sum::<usize>(), 24);
+    assert_eq!(rows.len(), 33);
+    assert_eq!(rows.iter().map(|m| m.properties.len()).sum::<usize>(), 262);
     // Independently transcribed exact loading rows: warp, weft, bias at 10%, then 30%.
     for (code, mass, gauge, forces) in [
         ("SJ1", 0.159, 0.43, [[0.40, 0.04, 0.27], [1.94, 0.84, 1.12]]),
@@ -173,7 +173,12 @@ fn original_source_bytes_and_license_replay_without_resampling() {
 fn real_grip_forces_reach_existing_condition_qualified_screening() {
     let catalog = Catalog::builtin().unwrap();
     let mut request: Request = serde_json::from_value(json!({
-        "schema":"ftx-material-screen/1", "basis":"nominal", "query":"sperl2022/",
+        "schema":"ftx-material-screen/1", "basis":"nominal",
+        "candidates":[
+            {"key":"sperl2022/SJ1","selection":{"id":"sperl2022/SJ1"}},
+            {"key":"sperl2022/SJ3","selection":{"id":"sperl2022/SJ3"}},
+            {"key":"sperl2022/DKIN8","selection":{"id":"sperl2022/DKIN8"}}
+        ],
         "forms":["knit"], "allow_mixed_protocols":true,
         "constraints":[{"attribute":{"key":"strip_force_30pct_weft","unit":"N",
             "conditions":{"branch":"loading","free_gauge_length_mm":"100","reference_strip_width_mm":"60"}},
@@ -209,4 +214,108 @@ fn real_grip_forces_reach_existing_condition_qualified_screening() {
         .conditions
         .insert("conditioning".into(), "20 C, 65% RH".into());
     assert!(request.evaluate(&catalog).unwrap().frontier.is_empty());
+}
+
+#[test]
+fn expanded_constructions_and_partial_source_rows_remain_exact() {
+    let catalog = Catalog::builtin().unwrap();
+    let get = |code: &str| {
+        catalog
+            .resolve(&Selection {
+                id: format!("sperl2022/{code}"),
+                ..Selection::default()
+            })
+            .unwrap()
+    };
+    for (code, construction) in [
+        ("A1", "all needle"),
+        ("L2", "links"),
+        ("DKP", "double-knit pique"),
+        ("DKIN1", "double-knit interlock"),
+        ("SJ11", "single jersey"),
+    ] {
+        let resolved = get(code);
+        let material = resolved.material();
+        assert_eq!(material.structure["construction"], construction);
+        assert_eq!(material.sources["metadata"].accessed_on, "2026-10-30");
+        assert!(material.sources["supplement"].note.contains(code));
+        assert!(resolved.mechanics().is_err());
+        assert!(resolved.thermal_resistance().is_err());
+        assert!(material.membrane_response.is_none());
+        assert!(!material.properties.contains_key("thickness"));
+        let empty = Catalog {
+            schema: "ftx-textile-catalog/1".into(),
+            materials: Vec::new(),
+        };
+        let frozen = resolved.frozen_selection();
+        assert_eq!(empty.resolve(&frozen).unwrap().sha256(), resolved.sha256());
+        let mut changed = frozen;
+        changed
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("areal_density")
+            .unwrap()
+            .value += 1.0;
+        assert!(empty.resolve(&changed).is_err());
+    }
+    for (code, force) in [("DKIN4", 1.77), ("DKIN5", 1.41)] {
+        let resolved = get(code);
+        let properties = &resolved.material().properties;
+        assert_eq!(properties["strip_force_10pct_warp"].value, force);
+        assert!(!properties.contains_key("strip_force_30pct_warp"));
+        assert!(properties.contains_key("strip_force_30pct_weft"));
+    }
+    let interlock = get("DKIN1");
+    let outside = &interlock.material().properties["strip_force_30pct_warp"];
+    assert_eq!(outside.value, 7.22);
+    assert_eq!(outside.conditions["paper_working_force_limit_n"], "5");
+    assert_eq!(
+        outside.conditions["within_paper_working_force_range"],
+        "false"
+    );
+    // Source yarn labels with no explicit constituent identity never become polyester by default.
+    let cd = get("DKIN7");
+    assert!(cd.material().composition.is_empty());
+    assert!(!cd.material().composition_complete);
+    assert!(cd.material().structure["yarn_mass_fractions"].contains("75D/72F CD: 1"));
+    let t400 = get("SJ10");
+    assert!(!t400.material().composition_complete);
+    assert_eq!(t400.material().composition.len(), 1);
+    assert_eq!(t400.material().composition[0].fiber, "polyester");
+    assert_eq!(t400.material().composition[0].fraction, 0.6);
+    assert!(t400.material().structure["yarn_mass_fractions"].contains("Lycra T400: 0.4"));
+}
+
+#[test]
+fn the_expanded_measured_cohort_changes_the_actual_source_qualified_choice() {
+    let catalog = Catalog::builtin().unwrap();
+    let request: Request = serde_json::from_value(json!({
+        "schema":"ftx-material-screen/1", "basis":"nominal", "query":"sperl2022/",
+        "forms":["knit"], "allow_mixed_protocols":true,
+        "constraints":[{"attribute":{"key":"strip_force_30pct_weft","unit":"N",
+            "conditions":{"branch":"loading","free_gauge_length_mm":"100","reference_strip_width_mm":"60"}},
+            "minimum":2.0}],
+        "objectives":[{"attribute":{"key":"areal_density","unit":"kg/m2"},"direction":"minimize"}]
+    })).unwrap();
+    let report = request.evaluate(&catalog).unwrap();
+    assert_eq!(
+        report
+            .alternatives
+            .iter()
+            .filter(|row| row.key.starts_with("sperl2022/"))
+            .count(),
+        33
+    );
+    assert_eq!(report.frontier, ["sperl2022/SJ11"]);
+    let selected = report
+        .alternatives
+        .iter()
+        .find(|row| row.key == "sperl2022/SJ11")
+        .unwrap();
+    assert_eq!(selected.readings["strip_force_30pct_weft"].value, 3.67);
+    assert!((selected.readings["areal_density"].value - 0.105).abs() < 1e-15);
+    assert!(!report.physical_validation_claim);
+    assert!(!selected.selection.as_ref().unwrap().allow_estimates);
 }

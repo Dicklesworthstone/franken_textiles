@@ -1,5 +1,15 @@
 # ftx-pattern contract
 
+**Released production-knit cohort** (`material_catalog::knit_strips`). All 33 Sperl2022 source
+fabrics retain construction, yarn/finish identity, mass, reported gauge and exact 10%/30% directional
+grip-force observations. The original three records remain unchanged; 30 additional records add 238
+scalar observations and 90 separately retained, source-pinned force histories. Missing exact rows
+remain missing, ambiguous yarn identities do not become known fibers, and observations beyond the
+paper's 5 N model-working range are explicitly qualified. The ordinary source-aware screen, mass,
+selection and frozen replay consume them; mechanics, thermal and physical-fit readiness are not
+inferred. Source details: `docs/measured-knit-strips.md`; checks: `knit_strip_catalog`,
+`knit_strip_acquisition` and the compact-summary/original-source replay unit tests.
+
 **Released bovine tensile specimens** (`material_catalog::leather_tensile`). Ten exact source trials
 retain 40 direct caliper, force and instrument-displacement observations. Ordinary unit normalization,
 condition-qualified screening and frozen selections consume them. Conflicting source gauge/stress

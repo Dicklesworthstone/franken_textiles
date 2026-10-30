@@ -243,7 +243,7 @@ impl Catalog {
         catalog.materials.extend(laundered_denim::records());
         catalog.materials.extend(fabric101::records());
         catalog.materials.extend(thermal_apparel::records());
-        catalog.materials.extend(knit_strips::records());
+        catalog.materials.extend(knit_strips::records()?);
         let woven = Self::from_json(include_str!("material_catalog/woven-measurements.json"))?;
         catalog.materials.extend(woven.materials);
         let supplier = Self::from_json(include_str!("material_catalog/supplier-apparel.json"))?;

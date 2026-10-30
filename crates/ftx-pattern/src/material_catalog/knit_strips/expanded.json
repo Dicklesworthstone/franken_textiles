@@ -1,0 +1,1351 @@
+[
+  {
+    "specimen": "A1",
+    "construction": "all needle",
+    "fabric": {
+      "composition": [
+        {
+          "name": "150D/72F Polyester",
+          "percentage": 1.0,
+          "count": 2
+        }
+      ],
+      "density_g_m2": 231.0,
+      "thickness_mm": 1.02,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "5d93a88759fc553439e5e978d583c8f0bd0cc9fe5266271537c7a7cd8a74cc2e",
+        "force_n": [
+          0.35,
+          2.59
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "469c9a0ed2bf5fe753da0bd1c929af56af0c9617939b2841e9340dcd1a6a1771",
+        "force_n": [
+          0.09,
+          0.2
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "53560ede231dd037f3fe042745d775188d70f2ab3c7159f4c5a6a1255874bf85",
+        "force_n": [
+          0.17,
+          0.5
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "A2",
+    "construction": "all needle",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 1.0,
+          "count": 3
+        }
+      ],
+      "density_g_m2": 214.0,
+      "thickness_mm": 0.67,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "5a541de5bd367d90b7530efe9394523a9db6de1a35f2207e016e1c0e45c24c08",
+        "force_n": [
+          0.18,
+          0.63
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "f5f75c90b943a55c7806372a8d5b5c02dd8d92508c52456cd1721ad8ee9a4238",
+        "force_n": [
+          0.05,
+          0.14
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "166feb65038878f64f71143b162625a14af16f9521ef3431ef0f08278314b312",
+        "force_n": [
+          0.1,
+          0.26
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "A3",
+    "construction": "all needle",
+    "fabric": {
+      "composition": [
+        {
+          "name": "167D/72F Polyester",
+          "percentage": 1.0,
+          "count": 2
+        }
+      ],
+      "density_g_m2": 259.0,
+      "thickness_mm": 1.2,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "62e04cab7cd45035a6c522c5e082df667d39ed76b8ec7dd27a073180da81bbc1",
+        "force_n": [
+          1.06,
+          3.93
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "79a3b4cbc2ea5983c8dfa025eae38259e912614d3cb305f7cd05b47d5d22ae6a",
+        "force_n": [
+          0.18,
+          0.44
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "4d6b495a888e80cd987437e2f80dd56dd0dcc42c8a65a481be99301c802cf946",
+        "force_n": [
+          0.01,
+          0.25
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "DKIN1",
+    "construction": "double-knit interlock",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 1.0,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 126.0,
+      "thickness_mm": 0.41,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "d867d7ee66305852b186d6d1a73fa4495852ddd6d6894a8dbdaf36d44fcddf84",
+        "force_n": [
+          0.71,
+          7.22
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "21c6c0dce8b23c6991b06bc21d36979cf3b90208311f259c77fc3b580ab03095",
+        "force_n": [
+          0.09,
+          1.06
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "399763431003311438822bd4662f5069cf6babae1b3f398ea659334fd94730b7",
+        "force_n": [
+          0.19,
+          2.78
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "DKIN2",
+    "construction": "double-knit interlock",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 1.0,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 124.0,
+      "thickness_mm": 0.47,
+      "finishes": [
+        "Anti-microbial"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "3250c5c7dff2368ebdd977ae6397da6e7168053b338d3eec2d92f9819e4b5577",
+        "force_n": [
+          0.49,
+          7.14
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "ce99e7e01d0e4caae0597216211ac3c8665d94ba07d5425e138e35ff04b2e6fc",
+        "force_n": [
+          0.11,
+          1.06
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "38f3a1bd655c28196958816e3c7f483c27d75dbb3343776ce805cc4606e2af94",
+        "force_n": [
+          0.09,
+          1.87
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "DKIN3",
+    "construction": "double-knit interlock",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 1.0,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 132.0,
+      "thickness_mm": 0.49,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "c466b93db28885373bba2aa742443b5179df1ac63f872e4e6aae3eea7050d284",
+        "force_n": [
+          1.56,
+          12.75
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "fda08894998de90c90090e097f6675001c7462ad44562fce1a66b234c866d655",
+        "force_n": [
+          0.39,
+          2.04
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "d27a98a227f52093a8eb5357c55a351d904cbe7508a648c2b3968133f049a0ce",
+        "force_n": [
+          0.58,
+          4.25
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "DKIN4",
+    "construction": "double-knit interlock",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 1.0,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 132.0,
+      "thickness_mm": 0.36000000000000004,
+      "finishes": [
+        "Print"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "dc7b1af2a11bc22a7bc90524b7d55d242976aa7585492d0335126a9e27ba79fb",
+        "force_n": [
+          1.77,
+          null
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "1ae4301ed12b93f96c1102c11d28e7d6da0a95002938c105e81c1f3ea4a64bc9",
+        "force_n": [
+          0.43,
+          2.23
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "edc905f7986368244f9bce353c4f9a6386ac51cb974f275fb2764430aafaff56",
+        "force_n": [
+          0.72,
+          5.01
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "DKIN5",
+    "construction": "double-knit interlock",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 1.0,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 132.0,
+      "thickness_mm": 0.44,
+      "finishes": [
+        "Anti-microbial"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "3cd0aad18ffafef51fa1504cb940629a601662b0295b33963d7433e449aa9de4",
+        "force_n": [
+          1.41,
+          null
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "b5378f2dea406d2eee5d064f12c220746091855627970d46811303b536ecc7e2",
+        "force_n": [
+          0.37,
+          1.89
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "8ed37c10b5b97ef139405eb31f74ea14ea4e60eb68d584df852bc083af75b009",
+        "force_n": [
+          0.35,
+          4.53
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "DKIN6",
+    "construction": "double-knit interlock",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F CD Polyester",
+          "percentage": 1.0,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 128.0,
+      "thickness_mm": 0.44,
+      "finishes": [
+        "Anti-microbial"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "25fde603e9056786968038d043b5e3cb3ecafff240659ca07be5e8ef6196e32e",
+        "force_n": [
+          0.63,
+          6.81
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "5df0fba3e96a3bdf5cc67db509615c0463794c425a88c3115685ee9bbc43a131",
+        "force_n": [
+          0.05,
+          0.64
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "4fa8c1a00916d3cfd403e62e011e1de81aa5a6edf73138fbde51b54e87253c20",
+        "force_n": [
+          0.15,
+          1.91
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "DKIN7",
+    "construction": "double-knit interlock",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F CD",
+          "percentage": 1.0,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 127.0,
+      "thickness_mm": 0.42000000000000004,
+      "finishes": [
+        "Anti-microbial"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "c1fb8bd5f50f53a674b8ac4a48df73f07549b6fb15a65742e0188ba70145708f",
+        "force_n": [
+          1.38,
+          11.44
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "10fa3d9cebff00795f5f3e8ec1b07586e5728ced99dc6afcd377421f2586762d",
+        "force_n": [
+          0.23,
+          1.67
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "2acff607fc6feb94fe45870ebba76ef2622e2dfcd0683b4bf1c6bfaa0b4ff090",
+        "force_n": [
+          0.32,
+          3.14
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "DKIN9",
+    "construction": "double-knit interlock",
+    "fabric": {
+      "composition": [
+        {
+          "name": "150D/72F Polyester",
+          "percentage": 1.0,
+          "count": 2
+        }
+      ],
+      "density_g_m2": 280.0,
+      "thickness_mm": 1.01,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "f679c1310ba939796636d9b481fd7574f6d139789db7efb41d8701544a788319",
+        "force_n": [
+          0.7,
+          4.45
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "1197cd3d8fd4005e1ab3b06748475f2dc3b34e5a89921e362593f395881a5d14",
+        "force_n": [
+          0.25,
+          0.81
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "4925d10fec12a7c26a1968b15b71282cf560a4bc94b6cb94fce6e49bca7da4c3",
+        "force_n": [
+          0.38,
+          2.05
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "DKIN10",
+    "construction": "double-knit interlock",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 1.0,
+          "count": 3
+        }
+      ],
+      "density_g_m2": 248.0,
+      "thickness_mm": 0.78,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "68f040636e4ba1fb9e2ea790c69aaec38e750e006d704785fb59ee9a31941221",
+        "force_n": [
+          0.49,
+          2.21
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "233a975c80d70d14e49b25b98d6b8bf44425b51e541419749d23dcb1136944a2",
+        "force_n": [
+          0.12,
+          0.33
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "c3d6fe01a71561cf96e7ef7ed4103f3166a39f2df20fdc1ed7a190323e1db703",
+        "force_n": [
+          0.22,
+          1.18
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "DKIN11",
+    "construction": "double-knit interlock",
+    "fabric": {
+      "composition": [
+        {
+          "name": "150D/72F Polyester",
+          "percentage": 1.0,
+          "count": 2
+        }
+      ],
+      "density_g_m2": 357.0,
+      "thickness_mm": 1.2,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "a12556caa83bd9d9775d0e408ef88f06db289589e2be692510e41f7cd1810bf6",
+        "force_n": [
+          2.54,
+          7.95
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "16abc6c71dcfb9e3a70e6b555e64ba0971bd611d95ca789a7dd6e860f5c3aa23",
+        "force_n": [
+          1.18,
+          3.57
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "437d2f7d52a3db0354e15ea1ef3a69e937530cc48c4063a677037c963ad1b742",
+        "force_n": [
+          1.53,
+          6.19
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "DKP",
+    "construction": "double-knit pique",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 0.96,
+          "count": 1
+        },
+        {
+          "name": "20D Spandex",
+          "percentage": 0.04,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 185.0,
+      "thickness_mm": 0.5199999999999999,
+      "finishes": [
+        "Anti-microbial"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "e22be16f4d9ada809778ee68eb81064a6e4c3ca919fc3c07236801c38aea2bbb",
+        "force_n": [
+          0.46,
+          4.11
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "a3d2f6e41353bda295c6e8a7b6c1f3b0fc9d19483731b8e9ee0fa7780c4807bb",
+        "force_n": [
+          0.3,
+          1.53
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "3c683ff5eaf2f3889b9875968e11077a8360b1f23ddd57e21511888f95bbb442",
+        "force_n": [
+          0.26,
+          1.85
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "L1",
+    "construction": "links",
+    "fabric": {
+      "composition": [
+        {
+          "name": "150D/72F Polyester",
+          "percentage": 1.0,
+          "count": 3
+        }
+      ],
+      "density_g_m2": 317.0,
+      "thickness_mm": 1.0,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "deeca7e0afe56694e4a5498ac9715e6822593c58a7c479bbbb75016892d096de",
+        "force_n": [
+          0.08,
+          0.25
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "a63a0379e3fdb8e7f0abcbd4396b240c830b14964870df168d291458c043fb31",
+        "force_n": [
+          0.39,
+          1.48
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "2a593c1da77708f1208e8ffda7265d0aa8f5d35aede3a5f8fae2480bba733239",
+        "force_n": [
+          0.11,
+          0.46
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "L2",
+    "construction": "links",
+    "fabric": {
+      "composition": [
+        {
+          "name": "150D/72F Polyester",
+          "percentage": 1.0,
+          "count": 3
+        }
+      ],
+      "density_g_m2": 372.0,
+      "thickness_mm": 1.7,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "8282d53ebc68506c4dcdc1b8003d7fd54693abb0c0f708e4573bc69f78212354",
+        "force_n": [
+          0.25,
+          0.9
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "3eaeac2ff63e9afe471b0941d9f85edef1f8f2becccc7633cf914be8fdb92689",
+        "force_n": [
+          0.96,
+          3.1
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "38fd80190e9fd62487f31abef605e0e8acb5d250b422a4d655c87992d68e6992",
+        "force_n": [
+          0.42,
+          1.47
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "L3",
+    "construction": "links",
+    "fabric": {
+      "composition": [
+        {
+          "name": "150D/72F Polyester",
+          "percentage": 1.0,
+          "count": 3
+        }
+      ],
+      "density_g_m2": 284.00000000000006,
+      "thickness_mm": 1.45,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "743ab89818b234f6259a45dd719c860b8edf79b4da01b4aef86fbdb698f0599d",
+        "force_n": [
+          0.11,
+          0.35
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "249a9373b1ba3187c6b98b15dbe84def651f886be8a448ed817645a564409b70",
+        "force_n": [
+          0.61,
+          2.49
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "dd65589ced6e97e3796173470437a71522ff36e31e003e0d4f1118c81717af55",
+        "force_n": [
+          0.25,
+          0.97
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ2",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "20D Spandex",
+          "percentage": 0.16,
+          "count": 2
+        },
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 0.84,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 176.0,
+      "thickness_mm": 0.48000000000000004,
+      "finishes": [
+        "Anti-microbial"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "d8593891dca2d1fe836db52d3944025d8fb2cd67b9fb90b3891fac1ba79f234a",
+        "force_n": [
+          0.3,
+          1.16
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "2667cffa1ded1e9552bcbdfcb76da877fdc95490b79168225ddd8c3ec5ca9abb",
+        "force_n": [
+          0.47,
+          1.46
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "0ed46272674cc442f58fa034407d7f5daddfb6eca0449c7ea44bc00f3423c8e6",
+        "force_n": [
+          0.17,
+          0.97
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ4",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "55D Spandex",
+          "percentage": 0.13,
+          "count": 1
+        },
+        {
+          "name": "50D/72F Polyester",
+          "percentage": 0.87,
+          "count": 3
+        }
+      ],
+      "density_g_m2": 240.0,
+      "thickness_mm": 0.63,
+      "finishes": [
+        "Water Repellent",
+        "Functional Print"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "4ebdbda7ec1dde40c0cd1f0f8e405d6bf0a836e6d1eb9528d96d0ab5ea70c0f5",
+        "force_n": [
+          0.89,
+          2.68
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "a43fee8f2bb47bd5da2f9d32c6c6c208492bca969a47056fde7479e95e167989",
+        "force_n": [
+          0.97,
+          3.06
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "a5c9c696e000e71e3f9e154a19be97b8d9aa3d3666408935df3cef52a87a0785",
+        "force_n": [
+          0.6,
+          2.08
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ5",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "55D Spandex",
+          "percentage": 0.13,
+          "count": 1
+        },
+        {
+          "name": "50D/72F Polyester",
+          "percentage": 0.87,
+          "count": 3
+        }
+      ],
+      "density_g_m2": 250.0,
+      "thickness_mm": 0.5900000000000001,
+      "finishes": [
+        "Water Repellent",
+        "Functional Print"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "0d270487eaa39af8e8a9cd699247a8d5371ff46fac7495b8c42ebbb8cd4eddff",
+        "force_n": [
+          0.69,
+          2.63
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "0104c0f1d203dd112d4521ef52411816c45cfc38a4f2302649054075429fe41f",
+        "force_n": [
+          0.67,
+          3.56
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "5a361eecd159520d87a51cdf2b66ff4e4d0fb7040e40bd80dcabdcba2c23165e",
+        "force_n": [
+          0.0,
+          1.14
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ6",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 0.9,
+          "count": 1
+        },
+        {
+          "name": "20D Spandex",
+          "percentage": 0.1,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 168.0,
+      "thickness_mm": 0.44,
+      "finishes": [
+        "Anti-microbial"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "6aac69843765ad15513d7d1d1d020ffee6667ba55601da139bb591e4e5a003cb",
+        "force_n": [
+          0.53,
+          1.88
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "904860389646dddf50d4951630d8735f7b083ee47d7a5c18125cfd892edacb29",
+        "force_n": [
+          0.41,
+          1.34
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "c366777e8d52a4f2f61280aaaf37bec1eb78febc7f6bdf7c0f387ed0d726e499",
+        "force_n": [
+          0.25,
+          1.07
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ7",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 0.9,
+          "count": 1
+        },
+        {
+          "name": "20D Spandex",
+          "percentage": 0.1,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 166.0,
+      "thickness_mm": 0.44,
+      "finishes": [
+        "Anti-microbial",
+        "Functional Print"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "fa88fbc881c93c83afc06ba984b0ca97cb86654a19f33d545ee313f69188306d",
+        "force_n": [
+          0.64,
+          2.64
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "cb99d8daf0389ccbe40a3dd8c994eef5d88fdde656c992fae973c375047b15f8",
+        "force_n": [
+          0.64,
+          2.21
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "46a216cd9321be2f4e4bd2d85fb36b4ddef76bc160230641c8d4ba140068855e",
+        "force_n": [
+          0.1,
+          1.11
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ8",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "20D Spandex",
+          "percentage": 0.1,
+          "count": 1
+        },
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 0.9,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 140.0,
+      "thickness_mm": 0.39,
+      "finishes": [
+        "Anti-microbial",
+        "Print"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "fd38c6c28739d9baf05968254c155341a8aeb1ff6612451a4cadafb75335ba27",
+        "force_n": [
+          0.18,
+          1.53
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "2146c3657ce2c8d7d1f29a68db683db76561f7b47b10aabc34550019c84be0d2",
+        "force_n": [
+          0.36,
+          1.43
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "7c1e632d1b6667332e41157530f5071de722940cdf3cc95acaeee4f5c31398bf",
+        "force_n": [
+          0.23,
+          1.03
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ9",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "20D Spandex",
+          "percentage": 0.1,
+          "count": 1
+        },
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 0.9,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 158.0,
+      "thickness_mm": 0.45,
+      "finishes": [
+        "Anti-microbial"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "07d5c42728c23213f1614fad2c77584f4064c876514aa3746824337bc730422e",
+        "force_n": [
+          0.29,
+          1.63
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "2d4fb130368cee38738c34397d2dd380203f9aa44cd3a0773ed745ac794aa390",
+        "force_n": [
+          0.39,
+          1.39
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "a95a945b3c4d11188fa858b6ab8b7aeca02227b2fa4657cee76519fbf0fe38d3",
+        "force_n": [
+          0.15,
+          0.92
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ10",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "50D/34F Lycra T400",
+          "percentage": 0.4,
+          "count": 1
+        },
+        {
+          "name": "75D/96F Polyester",
+          "percentage": 0.6,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 144.00000000000003,
+      "thickness_mm": 0.41,
+      "finishes": [
+        "Anti-microbial"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "799dfd8983924775be63443e0d1ddab875a1a5fe06b51c3a8751131b981b57d8",
+        "force_n": [
+          0.75,
+          3.18
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "7f0da3a23a29f1427a02b0e0d5731ba3e07640b810a0760284ca948178b48001",
+        "force_n": [
+          0.73,
+          3.22
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "ce29eac3851107a9fbfa0003ef57b9363899cd46d557db203e7f917ebaebdbea",
+        "force_n": [
+          0.54,
+          2.66
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ11",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "100D/72F Polyester Celliant",
+          "percentage": 0.63,
+          "count": 1
+        },
+        {
+          "name": "50D/72F Polyester",
+          "percentage": 0.37,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 105.0,
+      "thickness_mm": 0.41,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "2d55f5d54cca7217b4b5e1c0016e10997322e24b0707c5ea38b96646d73a815d",
+        "force_n": [
+          0.42,
+          2.9
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "d7ed7ca7e30bbc06c94636db2a2d4ecbf1650594fb8710c4da6e44f4170b4ece",
+        "force_n": [
+          0.65,
+          3.67
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "a6114b12e4e7048c8936c36f151c0ec61d6837a2ac1122b8758abefc7c0bd01e",
+        "force_n": [
+          0.41,
+          3.7
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ12",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "100D/144F Polyester",
+          "percentage": 0.88,
+          "count": 1
+        },
+        {
+          "name": "40D Spandex",
+          "percentage": 0.12,
+          "count": 1
+        }
+      ],
+      "density_g_m2": 182.0,
+      "thickness_mm": 0.53,
+      "finishes": [
+        "Anti-microbial"
+      ]
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "b566a7289df30b653b66994dba5c457be154b0696c91ad9f14fac527383db5b6",
+        "force_n": [
+          0.45,
+          1.71
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "7941ea1f345d076e7eb7ce12622e14caf6a06484735cd647d2a1b788cc51764e",
+        "force_n": [
+          0.33,
+          1.31
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "da9e904b2ca7628a08b64c783e36eec09e67778e2dd6bb8ebe13e957512e5f72",
+        "force_n": [
+          0.26,
+          1.19
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ13",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "150D/72F Polyester",
+          "percentage": 1.0,
+          "count": 2
+        }
+      ],
+      "density_g_m2": 112.0,
+      "thickness_mm": 0.45,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "363f5f5c6c3f4d73757316d3bfd2a9822a958339159a8f284cb164d3cff7a311",
+        "force_n": [
+          0.37,
+          1.74
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "a817c0dfc18e2b05a73c87f0bf0502520f8980e512d009764c07d9dfdf8e5088",
+        "force_n": [
+          0.2,
+          0.78
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "1a0239f019a431eb9249f812c2c94e0a124009a30ded1cf169c7af44ae09c6a9",
+        "force_n": [
+          0.31,
+          1.77
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ14",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "75D/72F Polyester",
+          "percentage": 1.0,
+          "count": 4
+        }
+      ],
+      "density_g_m2": 93.0,
+      "thickness_mm": 0.43,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "cf4e0a2f811736b61d592cb26a17ceb16ecbc044022f30c4b97cc00f4c8de742",
+        "force_n": [
+          0.08,
+          0.55
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "ed92b245d62b8a89e5dbf0a0a32db22a495bbe0a12fbee572e9b667550c426ae",
+        "force_n": [
+          0.13,
+          0.24
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "bbd5c108afd92ada5a8bbf97058d60c2b1429d11ddef39efe4f1a5f1da886216",
+        "force_n": [
+          0.13,
+          0.92
+        ]
+      }
+    ]
+  },
+  {
+    "specimen": "SJ15",
+    "construction": "single jersey",
+    "fabric": {
+      "composition": [
+        {
+          "name": "150D/72F Polyester",
+          "percentage": 1.0,
+          "count": 3
+        }
+      ],
+      "density_g_m2": 160.0,
+      "thickness_mm": 0.66,
+      "finishes": []
+    },
+    "curves": [
+      {
+        "direction": "warp",
+        "sha256": "7625dd0ac74cf1d0341099d47b2aea623e55c44eac38a0fe3fa22ad87eedc38b",
+        "force_n": [
+          0.62,
+          2.36
+        ]
+      },
+      {
+        "direction": "weft",
+        "sha256": "7e781d4a7377ad0c9e3c9e9feabc2f0b118ce4ce3e7c7c83bbf66833d51b24bd",
+        "force_n": [
+          0.3,
+          1.14
+        ]
+      },
+      {
+        "direction": "bias",
+        "sha256": "78da7b993dd8576354aa13a72225a42059c8b838c8325195afb7ef0f33e94c3d",
+        "force_n": [
+          0.29,
+          1.26
+        ]
+      }
+    ]
+  }
+]

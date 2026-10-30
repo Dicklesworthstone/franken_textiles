@@ -1,6 +1,6 @@
 # Measured production-knit strip screening
 
-The built-in catalog contains three matched knit specimens from Sperl, Sánchez-Banderas,
+The built-in catalog contains all 33 released knit specimens from Sperl, Sánchez-Banderas,
 Li, Wojtan and Otaduy, *Estimation of Yarn-Level Simulation Models for Production Fabrics*
 (SIGGRAPH 2022). These records let the existing material screener compare measured mass
 and directional grip force without granting an unsupported simulation capability.
@@ -13,7 +13,10 @@ Primary sources:
   `README.md`, `data/fabrics.json`, `data/{specimen}/stretch-{direction}.csv`, and
   `data/{specimen}/poisson-{direction}.csv`
 
-## Specimens and usable observations
+## Original three specimens and usable observations
+
+The original three records and their frozen-source identities remain unchanged. The
+additional 30 specimens are described below; they use the same catalog and screening path.
 
 | Catalog ID | Construction and reported yarn fractions | Areal mass (g/m²) | Reported gauge (mm) | Finish |
 | --- | --- | ---: | ---: | --- |
@@ -59,7 +62,11 @@ at 30% extension is at least 2 N on the declared strip geometry:
 {
   "schema": "ftx-material-screen/1",
   "basis": "nominal",
-  "query": "sperl2022/",
+  "candidates": [
+    {"key": "sperl2022/SJ1", "selection": {"id": "sperl2022/SJ1"}},
+    {"key": "sperl2022/SJ3", "selection": {"id": "sperl2022/SJ3"}},
+    {"key": "sperl2022/DKIN8", "selection": {"id": "sperl2022/DKIN8"}}
+  ],
   "forms": ["knit"],
   "allow_mixed_protocols": true,
   "constraints": [{
@@ -187,3 +194,78 @@ loading rows, and compare the complete records. Separate checks preserve all tra
 source bytes, metadata links and 66 observation nodes without changing the existing
 catalog records. The source fixture is excluded from the normal native/browser catalog
 binary.
+
+## Complete released construction cohort
+
+The 2026-10-30 acquisition adds the remaining **30 records**, with **238 scalar
+observations**. The complete cohort has 33 fabrics and 262 observations: source areal
+mass and gauge thickness for every fabric, and 196 exact directional loading-force
+readings. The two missing readings remain absent. A specimen is one source fabric
+identity, not an independently sampled supplier, a distinct fiber or a retail SKU.
+
+| Construction from the author supplement | Source specimens | Records |
+| --- | --- | ---: |
+| All needle | A1–A3 | 3 |
+| Double-knit interlock | DKIN1–DKIN11 | 11 |
+| Double-knit pique | DKP | 1 |
+| Links | L1–L3 | 3 |
+| Single jersey | SJ1–SJ15 | 15 |
+
+Construction names come from the named sections of the
+[author supplementary document](https://mslab.es/projects/YarnLevelFabrics/contents/sperl2022eylsmpf_supplementary.pdf),
+not from a specimen-prefix guess. Original yarn names, denier/filament labels, yarn
+counts, mass fractions and finishes remain attached to each record. The source-only
+`75D/72F CD` label in DKIN7 and `50D/34F Lycra T400` in SJ10 do not independently name
+constituent fibers. Their unresolved fractions are preserved in source yarn metadata;
+they are not silently reclassified as polyester or elastane. DKIN7 consequently has
+unknown fiber composition, and SJ10 has a known 60% polyester fraction with incomplete
+whole-fabric composition.
+
+All three original source directions are retained for every fabric. DKIN4 and DKIN5
+have no exact loading row at 30% warp extension. Their `strip_force_30pct_warp` property
+is absent; their 10% warp values and measured weft/bias values remain usable. No
+neighboring row, unloading row, interpolation or extrapolation fills that gap.
+
+Some additional exact loading rows exceed the paper's stated 5 N test/working range.
+The disagreement between that description and the released source rows stays visible.
+For example,
+DKIN1 reports 7.22 N at 30% warp extension. The observation is retained with
+`paper_working_force_limit_n: "5"` and
+`within_paper_working_force_range: "false"`. The same fields mark readings within the
+range. These qualifiers apply to the additional records; the original three records
+retain their previous content locks. A retained measurement beyond the paper's working
+range does not expand the validity of its model or qualify a canonical material law.
+
+To compare all 33 specimens, replace the preceding example's explicit `candidates`
+with `"query": "sperl2022/"`. With the same minimum 2 N weft-force condition and
+minimum-mass objective, the frontier becomes **SJ11**: 105 g/m² and 3.67 N at 30%
+weft grip extension. This is a useful change in a measured tradeoff, not a claim that
+SJ11 predicts the best garment fit. Missing mechanics, transport, gauges, supplier
+quotes and physical validation remain separate capabilities and still refuse.
+
+The fresh complete archive is 142,552,558 bytes with SHA-256
+`4ef059e1a33844fbd082c3662ac2df4444ab9b5280b0f1be49f66b11c44d7b8d`, identical to the
+previous source pin. Metadata and the dataset MIT license are unchanged. The separate
+`tests/fixtures/materials/knit-strip-expanded.json` retention preserves all **90 additional
+force CSVs and 103,242 ordered observations**, complete original metadata and the MIT
+copyright/permission notice. SHA-256 of this retention is
+`d5aa7b247a84dc2158d91e7e2c859cfa331876bd54849b7e8f128753da432a9d`. Original byte strings,
+signed forces and loading/unloading order survive intact. Photos, yarn geometry,
+supplementary pages and plots are not redistributed.
+
+The existing `parse_acquisition` API now also admits this exact 2026-10-30 acquisition
+or subsets of its pinned curves. It accepts at most 99 histories and 4 MiB. A new-curve
+request cannot adopt the earlier retrieval date; renamed specimens, paths, cuts or
+altered-and-rehashed observations refuse. The previous nine-force and nine-transverse
+acquisition continues unchanged. No extra transverse observations or unknown width
+measurement operators are inferred.
+
+Normal catalog construction loads only the compact 29,337-byte factual summary, with
+SHA-256 `675b7217773a7cc7e0f0e08a90213141b2d9a5466e9efd925c6c0888c94ffd68`; the 2.6 MB
+original acquisition is excluded from normal native/browser binaries. Focused regressions
+replay every compact force from its original CSV, verify all source metadata and the two
+missing rows, exercise the actual 33-candidate screen, preserve incomplete composition,
+and check offline frozen selection and absent-physics refusals. The supplementary PDF
+used for construction labels is 10,226,857 bytes, SHA-256
+`b12a6771a72120111c092273ecfddfa293cd427ec53ea07255ec91bd328edf6d`; its copyright remains
+with the source, and it is not bundled.
