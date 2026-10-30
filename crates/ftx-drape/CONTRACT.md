@@ -524,8 +524,10 @@ multiply-adds, which its correctly rounded functions need.
 
 **Error model.** `Refusal`: `degenerate_geometry` (bad triangles, non-manifold edges), `out_of_range`
 (non-positive density or step), `non_finite` (state blew up), `not_converged` (symbolic analysis failed),
-`intersecting_start` (the cloth starts on or through the body or another cloth layer). A step that does not converge is reported
-(`SolveReport`), not refused.
+`intersecting_start` (the cloth starts on or through the body or another cloth layer). A stalled
+Newton step refuses with `not_converged` and leaves the accepted geometry, velocity, contact and
+material history unchanged. Accepted `SolveReport` diagnostics remain in the phase report;
+the separate numerical settling gate is described above.
 
 Self-contact's digest (the folded strip after twelve steps, `tests/self_contact.rs`) is identical native
 debug, native release and wasm32-wasip1.
