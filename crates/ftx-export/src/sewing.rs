@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_pattern::material_catalog::{ResolvedMaterial, Selection};
-use ftx_pattern::materials::{Evidence, Form, Source};
+use ftx_pattern::materials::{Evidence, Source};
 use ftx_pattern::textile_import::{piece_fabric, resolve_fabric};
 use ftx_pattern::{Pattern, SeamPairs};
 use serde::{Deserialize, Serialize};
@@ -1247,23 +1247,13 @@ impl SewPlan {
 fn sheet(pattern: &Pattern, piece_index: usize) -> Result<(ResolvedMaterial, f64, bool), Refusal> {
     let selected = resolve_fabric(piece_fabric(pattern, piece_index)?)?
         .ok_or_else(|| bad("sewing needs a source-bearing material selection"))?;
-    let material = selected.material();
-    if material.structure.contains_key("compression_model") {
+    let thickness = selected.unloaded_thickness()?;
+    let bounds = thickness.bounds;
+    let thickness_mm = bounds.map_or(thickness.value, |v| v[1]) * 1000.0;
+    if !positive(thickness_mm) {
         return Err(bad(
-            "sewing requires qualified uncompressed sheet thickness; a pressure-conditioned selection cannot establish unloaded stack clearance or presser-foot feasibility",
+            "unloaded thickness must be representable in millimetres",
         ));
-    }
-    if matches!(material.form, Form::Fiber | Form::Yarn | Form::Fill) {
-        return Err(bad(
-            "sewing requires an identified sheet/hide, not loose fill or yarn",
-        ));
-    }
-    let thickness = material.require("thickness", "m", selected.allows_estimates())?;
-    material.qualify_retained_liquid_property("thickness", selected.allows_estimates())?;
-    let bounds = material.properties["thickness"].bounds;
-    let thickness_mm = bounds.map_or(thickness, |v| v[1]) * 1000.0;
-    if !positive(thickness) || !positive(thickness_mm) || bounds.is_some_and(|v| !positive(v[0])) {
-        return Err(bad("thickness must be finite and positive"));
     }
     Ok((selected, thickness_mm, bounds.is_some()))
 }

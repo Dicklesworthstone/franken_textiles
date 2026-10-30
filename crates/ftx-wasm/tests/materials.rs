@@ -128,6 +128,49 @@ fn fixed_liquid_inspection_qualifies_wet_thickness_and_keeps_capabilities_indepe
 }
 
 #[test]
+fn unloaded_thickness_inspection_and_actual_sewing_share_one_clearance_authority() {
+    let inspect = |selected: &Value| -> Value {
+        serde_json::from_str(&materials::inspect(&selected.to_string()).unwrap()).unwrap()
+    };
+    let mut s = selection(1.6, 0.4);
+    s["record"]["properties"]["thickness"]["conditions"]["pressure_pa"] = json!("500");
+    let before = inspect(&s);
+    assert_eq!(before["capabilities"]["sewing_thickness_m"]["ready"], false);
+    assert_eq!(before["capabilities"]["steady_conduction"]["ready"], true);
+    s["record"]["properties"]["unloaded_thickness"] = json!({
+        "value":0.6,"bounds":[0.5,0.7],"unit":"mm","source":"test","evidence":"estimate",
+        "method":"Separate synthetic unloaded observation",
+        "conditions":{"specimen_id":"synthetic-sewing-sheet","conditioning":"synthetic dry","thickness_state":"unloaded"}});
+    let detail = inspect(&s);
+    assert_eq!(
+        detail["capabilities"]["sewing_thickness_m"],
+        json!({"ready":true,"value":0.0006})
+    );
+    assert_eq!(
+        detail["capabilities"]["steady_conduction"],
+        before["capabilities"]["steady_conduction"]
+    );
+    assert_eq!(
+        detail["capabilities"]["mechanical_coefficients"],
+        before["capabilities"]["mechanical_coefficients"]
+    );
+    assert_eq!(detail, inspect(&detail["selection"]));
+    let bound: Value =
+        serde_json::from_str(&materials::bind(PATTERN, &changes(s.clone()).to_string()).unwrap())
+            .unwrap();
+    let sewn: Value = serde_json::from_str(
+        &manufacturing::sew_plan(bound["pattern_json"].as_str().unwrap(), SEW).unwrap(),
+    )
+    .unwrap();
+    assert!((sewn["seams"][0]["stack_mm"].as_f64().unwrap() - 1.4).abs() < 1e-12);
+    s["record"]["properties"]["unloaded_thickness"]["conditions"]["pressure_pa"] = json!("0");
+    assert_eq!(
+        inspect(&s)["capabilities"]["sewing_thickness_m"]["ready"],
+        false
+    );
+}
+
+#[test]
 fn linear_and_bending_identification_reach_the_actual_material_binding() {
     let linear = include_str!("../../../tests/fixtures/materials/synthetic-swatch.json");
     let bending = include_str!("../../../tests/fixtures/materials/synthetic-bending-coupons.json");

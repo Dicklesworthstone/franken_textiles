@@ -54,18 +54,7 @@ fn detail(m: &ResolvedMaterial) -> Result<Value, Refusal> {
         .map(|law| law.domain());
     let transient = ftx_pattern::material_thermal::ThermalLaw::from_material(material, policy)
         .map(|law| law.domain());
-    let sewing = if material.structure.contains_key("compression_model") {
-        Err(invalid(
-            "Pressure-conditioned thickness does not establish uncompressed sewing-stack clearance.",
-        ))
-    } else {
-        material
-            .require("thickness", "m", policy)
-            .and_then(|thickness| {
-                material.qualify_retained_liquid_property("thickness", policy)?;
-                Ok(thickness)
-            })
-    };
+    let sewing = m.unloaded_thickness().map(|q| q.value);
     let selection = m.frozen_selection();
     let selection_json = serde_json::to_string(&selection).map_err(invalid)?;
     Ok(

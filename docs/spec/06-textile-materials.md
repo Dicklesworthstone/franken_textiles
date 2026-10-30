@@ -49,7 +49,56 @@ with original kgf normalized by exactly 9.80665 N/kgf. `tensile_displacement_at_
 reported instrument displacement in m, not local strain. Source-axis labels and specimen geometry
 stay in conditions; neither force becomes a warp/weft stiffness or strength per unit width.
 `reported_thickness` is inspectable gauge thickness in m and does not supply the separately
-qualified `thickness` required for contact or sewing clearance.
+qualified `thickness` required for contact or the unloaded clearance required by manufacturing.
+
+## Unloaded manufacturing clearance
+
+`Material::unloaded_thickness(allow_estimates)` and `ResolvedMaterial::unloaded_thickness()`
+are the shared admission boundary for sewing stacks, folded plies, knife programs and browser
+capability inspection. They prefer the separate canonical `unloaded_thickness` property, in m,
+with the same dimensional conversion, source, evidence, method and optional bounds as other
+quantities. An explicit observation requires nonempty `conditions.specimen_id` and
+`conditions.conditioning`, plus exactly `conditions.thickness_state: "unloaded"`.
+
+For example, this is an **invented software-test observation**, not a textile recommendation:
+
+```json
+"unloaded_thickness": {
+  "value": 0.8, "unit": "mm", "bounds": [0.7, 1.0],
+  "evidence": "estimate", "source": "synthetic",
+  "method": "Independent synthetic unloaded observation",
+  "conditions": {
+    "specimen_id": "synthetic-sheet",
+    "conditioning": "synthetic dry state",
+    "thickness_state": "unloaded"
+  }
+}
+```
+
+The source key must resolve to a complete source record, estimates require the selection's
+explicit consent, and the nominal value and every supplied bound must be positive and finite.
+Manufacturing uses the reported upper endpoint when present; absent bounds remain absent and
+the nominal value carries no invented tolerance. A selected retained-liquid state requires this
+particular observation to qualify the same wet specimen, conditioning and liquid loading.
+
+An explicit unloaded observation may coexist with pressure-conditioned `thickness`. It neither
+replaces that gauge in heat/contact consumers nor recovers unloaded loft by a guessed law.
+Pressure, force or gauge qualifiers on the explicit observation contradict unloaded admission;
+zero or unknown pressure alone is not proof of recovery. Recorded unloading history may accompany
+an independent unloaded measurement, but does not supply a recovery law or extrapolation.
+
+For compatibility, an ordinary `thickness` remains usable when it has no structured pressure,
+force, gauge or loading-state qualifier and the selection has no compression/selected-load
+marker. Recognized qualifier families include `pressure_*`, `gauge_*`, `compression_*`, and the
+existing `thickness_test_pressure`, `measurement_pressure`, `measurement_force_n`, contact/load
+and history keys. Presence blocks that fallback even when its value is unknown or zero; method,
+conditioning and source prose are never parsed into a physical law. This compatibility path is
+not new empirical clearance evidence. `reported_thickness` is never a fallback. An invalid explicit
+`unloaded_thickness` refuses instead of reviving an older ordinary thickness.
+
+Unknown clearance blocks only the consuming manufacturing operation. The original thermal/gauge
+observation, independent marker geometry and purchasing remain useful. This admission rule does
+not establish measured machine clearance, workholding, cutting quality, sewn fit or safety.
 
 ## Fixed retained-liquid mechanical state
 
@@ -129,8 +178,9 @@ and `*_model` selectors are removed and named in the receipt; missing consumer i
 
 The report's `selection_json` is the exact portable selection text; display-layer numeric
 reserialization must not replace it. Reserved `compression_` structure markers identify the prescribed
-state and prevent reconditioning its incomplete result. Existing unloaded-stack sewing checks refuse
-these selections until an appropriate pressure-qualified process path exists. This establishes neither
+state and prevent reconditioning its incomplete result. These selections do not by themselves
+establish unloaded manufacturing clearance: a separately qualified `unloaded_thickness` is needed.
+The existing pressure-qualified sewing path retains its independent loaded-stack checks. This establishes neither
 dynamic pressure/loft coupling nor moisture, recovery or empirical garment performance.
 See [Pressure-conditioned materials](../pressure-conditioned-materials.md) for the runnable native and
 browser workflow, full qualification rules and synthetic known answers.

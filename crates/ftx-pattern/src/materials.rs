@@ -187,6 +187,34 @@ fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
 }
 
+// Structured acquisition qualifiers, never an interpretation of method/source prose. Even a
+// zero or unknown gauge pressure does not by itself establish an unloaded/recovered state.
+fn thickness_load_qualifier(conditions: &BTreeMap<String, String>) -> Option<&str> {
+    conditions
+        .keys()
+        .find(|key| {
+            key.as_str() == "pressure"
+                || key.starts_with("pressure_")
+                || key.starts_with("gauge_")
+                || key.starts_with("compression_")
+                || matches!(
+                    key.as_str(),
+                    "thickness_test_pressure"
+                        | "measurement_pressure"
+                        | "test_pressure"
+                        | "contact_pressure"
+                        | "measurement_force_n"
+                        | "normal_force_n"
+                        | "applied_force_n"
+                        | "force_n"
+                        | "load_n"
+                        | "preload_n"
+                        | "loaded_contact_area"
+                )
+        })
+        .map(String::as_str)
+}
+
 impl Catalog {
     /// Parses and validates a complete catalog without inventing missing fields.
     ///
@@ -356,6 +384,79 @@ impl Material {
             )));
         }
         Ok(q.value)
+    }
+
+    /// Admit source-qualified unloaded sheet clearance for cutting and sewing, in metres.
+    /// An explicit `unloaded_thickness` takes precedence and must identify `specimen_id`,
+    /// `conditioning` and `thickness_state: unloaded`. It is independent of the ordinary
+    /// `thickness` used by thermal/mechanical consumers; no recovery/compression law is inferred.
+    /// Existing `thickness` remains a fallback only without structured load/gauge conditioning.
+    /// Consumers use the upper reported bound when present, otherwise the nominal value.
+    ///
+    /// # Errors
+    /// Non-sheet form, missing/unapproved/invalid observation or bounds, contradictory loading,
+    /// incomplete explicit unloaded qualification, or stale retained-liquid conditioning.
+    pub fn unloaded_thickness(&self, allow_estimates: bool) -> Result<&Quantity, Refusal> {
+        self.validate()?;
+        if matches!(self.form, Form::Fiber | Form::Yarn | Form::Fill) {
+            return Err(invalid(
+                "manufacturing clearance requires an identified sheet/hide, not loose fill or yarn",
+            ));
+        }
+        let explicit = self.properties.contains_key("unloaded_thickness");
+        let key = if explicit {
+            "unloaded_thickness"
+        } else {
+            "thickness"
+        };
+        self.require(key, "m", allow_estimates)?;
+        let observation = &self.properties[key];
+        if explicit
+            && (observation
+                .conditions
+                .get("thickness_state")
+                .map(String::as_str)
+                != Some("unloaded")
+                || ["specimen_id", "conditioning"].iter().any(|key| {
+                    observation
+                        .conditions
+                        .get(*key)
+                        .is_none_or(|s| s.trim().is_empty())
+                }))
+        {
+            return Err(invalid(format!(
+                "{}: unloaded_thickness requires explicit specimen_id, conditioning and thickness_state: unloaded",
+                self.id
+            )));
+        }
+        let selection_loaded = [
+            "compression_model",
+            "compression_pressure_pa",
+            "selected_pressure_pa",
+            "selected_force_n",
+        ]
+        .iter()
+        .any(|key| self.structure.contains_key(*key));
+        if thickness_load_qualifier(&observation.conditions).is_some()
+            || observation
+                .conditions
+                .get("thickness_state")
+                .is_some_and(|state| state != "unloaded")
+            || (!explicit
+                && (selection_loaded || observation.conditions.contains_key("loading_history")))
+        {
+            return Err(invalid(format!(
+                "{}: manufacturing requires qualified uncompressed sheet thickness; pressure, force or gauge conditioning cannot establish unloaded stack clearance",
+                self.id
+            )).repair("supply a separately sourced unloaded_thickness observation for the selected specimen and conditioning"));
+        }
+        if observation.value <= 0.0 || observation.bounds.is_some_and(|bounds| bounds[0] <= 0.0) {
+            return Err(invalid(
+                "unloaded thickness and all supplied bounds must be positive",
+            ));
+        }
+        self.qualify_retained_liquid_property(key, allow_estimates)?;
+        Ok(observation)
     }
 
     /// Lists mechanical coverage gaps in a stable order without manufacturing fake defaults.

@@ -1,5 +1,17 @@
 # ftx-pattern contract
 
+**Unloaded manufacturing thickness** (`materials::Material::unloaded_thickness`,
+`material_catalog::ResolvedMaterial::unloaded_thickness`). Source-qualified
+`unloaded_thickness` observations normalize to m while retaining specimen/conditioning,
+explicit unloaded state, evidence and bounds. The shared helper rejects contradictory gauge/load
+qualifiers and validates the exact selected wet state. Legacy `thickness` is a fallback only
+without structured loading qualifiers; `reported_thickness` never qualifies clearance. Sewing,
+folded assemblies, knife planning and browser capability inspection share this admission boundary.
+Gauge/thermal/contact observations remain unchanged, and no recovery, process qualification or
+empirical machine-clearance guarantee is inferred. See `docs/spec/06-textile-materials.md`;
+regressions: `material_catalog`, export `sewing`, `sewing_assembly`, `sewing_pressure`,
+`cutting_program`, and browser `materials`.
+
 **Released production-knit cohort** (`material_catalog::knit_strips`). All 33 Sperl2022 source
 fabrics retain construction, yarn/finish identity, mass, reported gauge and exact 10%/30% directional
 grip-force observations. The original three records remain unchanged; 30 additional records add 238

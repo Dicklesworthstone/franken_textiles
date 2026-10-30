@@ -100,7 +100,7 @@ fn fixed_liquid_sewing_requires_wet_thickness_without_requiring_unrelated_membra
     );
     raw["fabric"]["material"]["record"]["properties"]["thickness"]["conditions"] = json!({
         "specimen_id":"synthetic-wet-sewing","conditioning":"closed numerical test","retained_liquid_kg_m2":"0.1"});
-    let result = plan(raw, options()).unwrap();
+    let result = plan(raw.clone(), options()).unwrap();
     assert!((result.seams[0].stack_mm - 0.8).abs() < 1e-12);
     assert!(
         result
@@ -108,6 +108,73 @@ fn fixed_liquid_sewing_requires_wet_thickness_without_requiring_unrelated_membra
             .values()
             .all(|s| s.record.as_ref().unwrap().missing_mechanics().len() > 1)
     );
+
+    // The separate unloaded dimension must qualify the wet state itself; a valid old thickness
+    // cannot excuse a stale explicit observation or silently replace it.
+    let mut unloaded = raw["fabric"]["material"]["record"]["properties"]["thickness"].clone();
+    unloaded["conditions"]["thickness_state"] = json!("unloaded");
+    unloaded["conditions"]["retained_liquid_kg_m2"] = json!("0");
+    raw["fabric"]["material"]["record"]["properties"]["unloaded_thickness"] = unloaded;
+    assert!(
+        plan(raw.clone(), options())
+            .unwrap_err()
+            .message
+            .contains("wet mechanics")
+    );
+    raw["fabric"]["material"]["record"]["properties"]["unloaded_thickness"]["conditions"]["retained_liquid_kg_m2"] =
+        json!("0.1");
+    assert!((plan(raw, options()).unwrap().seams[0].stack_mm - 0.8).abs() < 1e-12);
+}
+
+#[test]
+fn explicit_unloaded_clearance_uses_its_upper_bound_instead_of_loaded_gauge() {
+    let mut p = pattern();
+    let baseline = plan(p.clone(), options()).unwrap();
+    p["fabric"]["material"]["record"]["properties"]["thickness"]["conditions"]["pressure_kpa"] =
+        json!("0.5");
+    assert!(
+        plan(p.clone(), options())
+            .unwrap_err()
+            .message
+            .contains("uncompressed sheet thickness")
+    );
+    p["fabric"]["material"]["record"]["properties"]["unloaded_thickness"] = json!({
+        "value":0.8,"bounds":[0.7,1.0],"unit":"mm","source":"t","evidence":"estimate",
+        "method":"Separate synthetic unloaded measurement",
+        "conditions":{"specimen_id":"thin","conditioning":"synthetic dry","thickness_state":"unloaded"}});
+    let actual = plan(p.clone(), options()).unwrap();
+    assert_eq!(actual.seams[0].stations, baseline.seams[0].stations);
+    assert!((actual.seams[0].stack_mm - 2.0).abs() < 1e-12);
+    assert!(
+        actual.seams[0]
+            .sides
+            .iter()
+            .all(|s| s.uses_thickness_upper_bound)
+    );
+    let source = actual
+        .materials
+        .values()
+        .next()
+        .unwrap()
+        .record
+        .as_ref()
+        .unwrap();
+    assert_eq!(source.properties["thickness"].value, 0.4);
+    assert_eq!(
+        source.properties["thickness"].conditions["pressure_kpa"],
+        "0.5"
+    );
+    let mut tight = options();
+    tight["machine"]["max_stack_mm"] = json!(1.8);
+    assert!(
+        plan(p.clone(), tight)
+            .unwrap_err()
+            .message
+            .contains("stack thickness")
+    );
+    p["fabric"]["material"]["record"]["properties"]["unloaded_thickness"]["conditions"]["measurement_force_n"] =
+        json!("0.95");
+    assert!(plan(p, options()).is_err());
 }
 
 #[test]

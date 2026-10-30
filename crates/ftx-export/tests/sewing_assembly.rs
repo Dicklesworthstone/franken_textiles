@@ -150,6 +150,43 @@ fn partial_operations_sew_a_local_reinforcement_without_changing_the_source_seam
 }
 
 #[test]
+fn every_folded_ply_uses_independent_unloaded_thickness_and_its_reported_bound() {
+    let mut p = pattern(100.);
+    let baseline = plan(p.clone(), options(true)).unwrap();
+    let properties = &mut p["pieces"][1]["fabric"]["material"]["record"]["properties"];
+    properties["thickness"]["conditions"]["measurement_pressure"] =
+        json!("Gauge pressure not specified");
+    assert!(plan(p.clone(), options(true)).is_err());
+    p["pieces"][1]["fabric"]["material"]["record"]["properties"]["unloaded_thickness"] = json!({
+        "value":0.3,"bounds":[0.25,0.4],"unit":"mm","source":"t","evidence":"estimate",
+        "method":"Independent synthetic unloaded lining",
+        "conditions":{"specimen_id":"lining","conditioning":"synthetic dry","thickness_state":"unloaded"}});
+    let got = plan(p.clone(), options(true)).unwrap();
+    let assembly = got.seams[0].assembly.as_ref().unwrap();
+    assert_eq!(
+        assembly
+            .layers
+            .iter()
+            .map(|l| l.instance.as_str())
+            .collect::<Vec<_>>(),
+        ["front", "back", "back"]
+    );
+    close(assembly.stack_mm, 1.2);
+    assert!(
+        assembly.layers[1..]
+            .iter()
+            .all(|l| l.uses_thickness_upper_bound)
+    );
+    assert_eq!(
+        assembly.needle_mm,
+        baseline.seams[0].assembly.as_ref().unwrap().needle_mm
+    );
+    let mut o = options(true);
+    o["machine"]["max_stack_mm"] = json!(1.1);
+    assert!(plan(p, o).unwrap_err().message.contains("stack thickness"));
+}
+
+#[test]
 fn adjacent_source_spans_can_use_different_declared_fold_recipes() {
     let p = pattern(100.);
     let mut o = options(false);

@@ -4672,6 +4672,26 @@ for clearance, measured workholding and cutting quality. Finite-hide toolpaths, 
 corner/blade dynamics, thermal cutting, sensing/interlocks and explicit device execution remain
 future capabilities. A reviewable program and modeled duration grant no hardware authorization.
 
+### 25.141 Keep unloaded manufacturing clearance separate from measured gauge
+
+Cutting and sewing now share one source-qualified unloaded-sheet admission. A separately sourced
+`unloaded_thickness` observation identifies its specimen, conditioning and unloaded state, retains
+its own evidence and reported interval, and takes precedence over ordinary gauge thickness.
+Invalid explicit data refuses without fallback. Existing unconditioned `thickness` remains a
+compatibility path; structured pressure, force, gauge or compression qualifiers cannot silently
+establish unloaded clearance, even when the recorded load is unknown or zero.
+
+Ordinary seams, each folded/lining ply and material inspection use the same authority. Machine
+clearance uses the full reported interval, with the upper endpoint governing entry height; the
+pressure-qualified sewing model separately retains its acquired loaded-thickness curve. Thermal,
+mass and mechanical consumers keep their own original observations. Retained-liquid selections
+must independently qualify whichever clearance observation is selected.
+
+This software increment is tracked by `ftx-tm7.2`; see [06-textile-materials.md](docs/spec/06-textile-materials.md)
+and [material-sewing-plans.md](docs/material-sewing-plans.md). It does not infer recovered loft,
+parse source prose into a pressure state, or turn catalog gauge measurements into empirical machine
+qualification. Independent unloaded/specimen and machine-coupon measurements remain required.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

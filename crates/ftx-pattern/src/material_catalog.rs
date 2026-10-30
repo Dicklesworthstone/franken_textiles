@@ -66,6 +66,7 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
     Some(match key {
         "areal_density" | "retained_liquid_areal_density" => "kg/m2",
         "thickness"
+        | "unloaded_thickness"
         | "reported_thickness"
         | "width"
         | "fiber_diameter"
@@ -328,6 +329,15 @@ impl ResolvedMaterial {
     #[must_use]
     pub fn sha256(&self) -> &str {
         &self.sha256
+    }
+
+    /// Admitted unloaded sheet clearance in metres under this selection's evidence policy.
+    /// The returned observation retains its original source, conditions and reported bounds.
+    ///
+    /// # Errors
+    /// The shared source/form/loading/bounds and retained-liquid qualification refusals.
+    pub fn unloaded_thickness(&self) -> Result<&Quantity, Refusal> {
+        self.normalized.unloaded_thickness(self.allow_estimates)
     }
 
     /// Source-qualified nominal yarn mass per length under this selection's evidence policy.

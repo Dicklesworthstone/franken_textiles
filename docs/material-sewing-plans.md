@@ -54,13 +54,25 @@ material and process checks, keeps source geometry once, and emits actual repeat
 
 Each seam side resolves `piece.fabric` or the inherited global selection through
 `ftx_pattern::textile_import`, including its evidence policy and digest lock. Sourced
-sheet or hide thickness is normalized to millimetres. The reported upper thickness
+sheet or hide clearance comes from the shared `unloaded_thickness()` admission helper,
+then is normalized to millimetres. An explicit source-qualified `unloaded_thickness`
+observation takes precedence over an ordinary `thickness`. Pressure/force gauge
+observations cannot establish unloaded staging clearance; an ordinary unconditioned
+thickness retains its compatibility fallback. The separate gauge remains available
+to thermal consumers. The [material contract](spec/06-textile-materials.md#unloaded-manufacturing-clearance)
+specifies source, conditioning, wet-state and contradiction checks. The reported upper thickness
 bound is used when present (without relabeling its statistical meaning); otherwise
 the central value is used and no unreported tolerance is invented. Thickness is
 multiplied by the explicit side ply counts, then summed at the needle. Thus changing
 a thin linen selection to a thick hide can refuse a stack that previously passed,
 without modifying the pattern geometry or sewing code. No compression law is guessed.
 Loose fill, fiber and yarn records cannot substitute for a characterized sheet.
+
+Every actual folded/lining ply uses this same unloaded authority. A separately qualified
+presser-foot pressure or clearance calculation still consumes its acquired loaded-thickness
+curve and checks the machine's loaded envelope. Passing that loaded check does not relax
+unloaded staging clearance, and adding an unloaded observation changes the frozen material
+identity used by existing recipe qualifications.
 
 The output retains portable material snapshots keyed by their resolved SHA-256 and
 a digest of the complete input pattern. A prior JSON plan is an immutable result,

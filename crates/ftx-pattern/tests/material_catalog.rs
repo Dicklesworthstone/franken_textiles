@@ -91,6 +91,214 @@ fn normalized_units_feed_existing_mechanics_and_thermal_consumers() {
 }
 
 #[test]
+fn unloaded_thickness_has_its_own_units_bounds_evidence_and_frozen_authority() {
+    let mut db = full();
+    let properties = &mut db.materials[0].properties;
+    properties
+        .get_mut("thickness")
+        .unwrap()
+        .conditions
+        .insert("pressure_kpa".into(), "0.5".into());
+    let mut conductivity = properties["thickness"].clone();
+    conductivity.value = 0.04;
+    conductivity.unit = "W/(m*K)".into();
+    properties.insert("thermal_conductivity".into(), conductivity);
+    let before = db.resolve(&selection()).unwrap();
+    assert!(before.unloaded_thickness().is_err());
+    let resistance = before.thermal_resistance().unwrap();
+    let gauge = before.mechanics().unwrap().thickness_m;
+
+    let unloaded = serde_json::from_value(json!({
+        "value":2.0,"unit":"mm","bounds":[1.5,2.5],"source":"test","evidence":"estimate",
+        "method":"Independent synthetic unloaded observation, not a recovery inference",
+        "conditions":{"specimen_id":"test","conditioning":"synthetic dry",
+            "thickness_state":"unloaded","loading_history":"Independently observed after unloading"}
+    }))
+    .unwrap();
+    db.materials[0]
+        .properties
+        .insert("unloaded_thickness".into(), unloaded);
+    let selected = db.resolve(&selection()).unwrap();
+    let admitted = selected.unloaded_thickness().unwrap();
+    assert_eq!(admitted.unit, "m");
+    assert_eq!(admitted.value, 0.002);
+    assert_eq!(admitted.bounds, Some([0.0015, 0.0025]));
+    assert_eq!(
+        selected.authored().properties["unloaded_thickness"].unit,
+        "mm"
+    );
+    assert_eq!(selected.material().properties["thickness"].value, gauge);
+    assert_eq!(selected.mechanics().unwrap().thickness_m, gauge);
+    assert_eq!(selected.thermal_resistance().unwrap(), resistance);
+    assert!((resistance - 0.025).abs() < 1e-15);
+    assert_ne!(selected.sha256(), before.sha256());
+    let frozen = selected.frozen_selection();
+    let replay = db.resolve(&frozen).unwrap();
+    assert_eq!(replay.sha256(), selected.sha256());
+    assert_eq!(replay.unloaded_thickness().unwrap().bounds, admitted.bounds);
+
+    // A conditioned selection can retain a separately observed unloaded dimension, without
+    // relabeling its original pressure-dependent thickness or recovering it by a formula.
+    db.materials[0].structure.insert(
+        "compression_model".into(),
+        "fixed_pressure_observation/1".into(),
+    );
+    assert_eq!(
+        db.resolve(&selection())
+            .unwrap()
+            .unloaded_thickness()
+            .unwrap()
+            .value,
+        0.002
+    );
+}
+
+#[test]
+fn unloaded_thickness_refuses_ambiguous_gauge_and_never_falls_back_from_invalid_explicit_data() {
+    for key in [
+        "pressure_pa",
+        "pressure_kpa",
+        "pressure_gf_cm2",
+        "pressure",
+        "gauge_scope",
+        "thickness_test_pressure",
+        "measurement_pressure",
+        "measurement_force_n",
+        "loading_history",
+    ] {
+        let mut db = full();
+        db.materials[0]
+            .properties
+            .get_mut("thickness")
+            .unwrap()
+            .conditions
+            .insert(key.into(), "0".into());
+        assert!(
+            db.resolve(&selection())
+                .unwrap()
+                .unloaded_thickness()
+                .is_err(),
+            "{key}"
+        );
+    }
+    let mut baseline = full();
+    for q in baseline.materials[0].properties.values_mut() {
+        q.evidence = Evidence::Published;
+    }
+    let mut unloaded = baseline.materials[0].properties["thickness"].clone();
+    unloaded.conditions = std::collections::BTreeMap::from([
+        ("specimen_id".into(), "test".into()),
+        ("conditioning".into(), "synthetic dry".into()),
+        ("thickness_state".into(), "unloaded".into()),
+    ]);
+    baseline.materials[0]
+        .properties
+        .insert("unloaded_thickness".into(), unloaded);
+    for mutation in 0..12 {
+        let mut db = baseline.clone();
+        let q = db.materials[0]
+            .properties
+            .get_mut("unloaded_thickness")
+            .unwrap();
+        match mutation {
+            0 => {
+                q.conditions.remove("specimen_id");
+            }
+            1 => {
+                q.conditions.insert("conditioning".into(), " ".into());
+            }
+            2 => {
+                q.conditions
+                    .insert("thickness_state".into(), "compressed".into());
+            }
+            3 => {
+                q.conditions.insert("pressure_pa".into(), "0".into());
+            }
+            4 => {
+                q.conditions
+                    .insert("measurement_force_n".into(), "unknown".into());
+            }
+            5 => q.bounds = Some([0.0, 2.0]),
+            6 => q.value = 0.0,
+            7 => q.unit = "N".into(),
+            8 => q.source = "missing".into(),
+            9 => q.evidence = Evidence::Estimate,
+            10 => q.bounds = Some([0.5, f64::INFINITY]),
+            _ => q.method.clear(),
+        }
+        let selected = Selection {
+            allow_estimates: false,
+            ..selection()
+        };
+        assert!(
+            db.resolve(&selected)
+                .and_then(|m| m.unloaded_thickness().map(|_| ()))
+                .is_err(),
+            "mutation {mutation}"
+        );
+    }
+    let mut reported_only = full();
+    let gauge = reported_only.materials[0]
+        .properties
+        .remove("thickness")
+        .unwrap();
+    reported_only.materials[0]
+        .properties
+        .insert("reported_thickness".into(), gauge);
+    assert!(
+        reported_only
+            .resolve(&selection())
+            .unwrap()
+            .unloaded_thickness()
+            .is_err()
+    );
+}
+
+#[test]
+fn catalog_pressure_and_force_gauges_remain_thermal_observations_without_unloaded_clearance() {
+    let db = Catalog::builtin().unwrap();
+    for id in [
+        "demey/2025/linen65-cotton35-woven",
+        "3m_thinsulate_c100_2020",
+        "zagreb/rogale-2023/m1/force-0.95n",
+        "zagreb/leather-2022/syn-d-neck",
+    ] {
+        let selected = db
+            .resolve(&Selection {
+                id: id.into(),
+                ..Selection::default()
+            })
+            .unwrap();
+        assert!(
+            !selected
+                .material()
+                .structure
+                .contains_key("compression_model")
+        );
+        assert!(
+            selected
+                .material()
+                .require("thickness", "m", false)
+                .unwrap()
+                > 0.0
+        );
+        let thermal = selected.thermal_resistance().unwrap();
+        assert!(
+            selected
+                .unloaded_thickness()
+                .unwrap_err()
+                .message
+                .contains("uncompressed sheet thickness"),
+            "{id}"
+        );
+        assert_eq!(selected.thermal_resistance().unwrap(), thermal);
+        let frozen = db.resolve(&selected.frozen_selection()).unwrap();
+        assert!(frozen.unloaded_thickness().is_err());
+        assert_eq!(frozen.thermal_resistance().unwrap(), thermal);
+    }
+}
+
+#[test]
 fn overrides_preserve_originals_and_fingerprint_conditions_sources_and_policy() {
     let db = full();
     let before = serde_json::to_value(&db).unwrap();

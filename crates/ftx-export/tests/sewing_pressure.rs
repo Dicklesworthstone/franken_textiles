@@ -119,6 +119,49 @@ fn clearance_infers_force_and_work_through_the_same_stack_authority() {
 }
 
 #[test]
+fn explicit_unloaded_staging_and_pressure_acquired_loaded_stack_stay_separate() {
+    let mut p = pattern();
+    p["fabric"]["material"]["record"]["properties"]["thickness"]["conditions"] =
+        json!({"pressure_pa":"500"});
+    assert!(plan(&p, &options()).is_err());
+    p["fabric"]["material"]["record"]["properties"]["unloaded_thickness"] = json!({
+        "value":0.6,"unit":"mm","evidence":"estimate","source":"test",
+        "method":"Separate synthetic unloaded staging measurement",
+        "conditions":{"specimen_id":"synthetic-sewing-sheet","conditioning":"synthetic dry","thickness_state":"unloaded"}});
+    let mut o = pressure(&p, options(), 250.0);
+    for acquired in o["passes"][0]["presser_foot"]["materials"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        for (row, value) in [(0, 0.6), (1, 0.4)] {
+            let q = &mut acquired["samples"][row]["properties"]["thickness"];
+            q["value"] = json!(value);
+            q["bounds"] = json!([0.9 * value, 1.1 * value]);
+        }
+    }
+    o["machine"]["presser_foot"]["max_loaded_stack_mm"] = json!(1.2);
+    let actual = plan(&p, &o).unwrap();
+    close(actual.seams[0].stack_mm, 1.2);
+    let loaded = actual.seams[0].presser_foot.as_ref().unwrap();
+    close(loaded.nominal_stack_mm, 1.0);
+    close(loaded.stack_mm, 1.1);
+    for selected in actual.materials.values() {
+        assert_eq!(
+            selected.record.as_ref().unwrap().properties["thickness"].value,
+            0.4
+        );
+    }
+    o["machine"]["max_stack_mm"] = json!(1.1);
+    assert!(
+        plan(&p, &o)
+            .unwrap_err()
+            .message
+            .contains("stack thickness")
+    );
+}
+
+#[test]
 fn explicit_area_scales_force_and_work_without_changing_pressure_or_geometry() {
     let p = pattern();
     let a = plan(&p, &clearance(&p, options(), 0.6, 200.0)).unwrap();
