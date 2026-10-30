@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, curve::OUTLINE_DENSE};
-use ftx_pattern::Pattern;
+use ftx_pattern::{Pattern, material_screen::Direction};
 use serde::{Deserialize, Serialize};
 
 use super::super::{Outcome, PreparedVariant, Request as StudyRequest, comparison};
@@ -22,6 +22,8 @@ pub enum Objective {
     FitBandViolationMm,
     /// Use one admitted production comparison objective after complete flat qualification.
     ConsumerComparison,
+    /// Improve the worst admitted reading of one shared nominal objective across named cases.
+    ConsumerWorstCase,
 }
 
 /// One bounded scalar, applied to its authored linked alteration sites in order.
@@ -53,7 +55,7 @@ pub struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_key: Option<String>,
     /// Named scenario whose sole comparison objective guides matrix polling. Every case must still
-    /// admit the trial. Required for consumer-guided matrices and forbidden in single-case work.
+    /// admit the trial. Required for nominated-case matrices; forbidden for worst-case guidance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case_key: Option<String>,
     /// One to three variables, polled in authored order and negative then positive direction.
@@ -97,6 +99,9 @@ pub struct Trial {
     /// cannot select a trial that another case excludes; independent callback refusals stay visible.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub consumer_cases: Vec<CaseDecision>,
+    /// Case supplying the actual worst-case reading, absent when case admission failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumer_case_key: Option<String>,
     /// Unrounded shared point readings, or the concrete reason they could not be admitted.
     pub raw_fit: Outcome<Vec<fit::RawReading>>,
     /// Maximum absolute distance outside the declared bands; unknown for inadmissible geometry.
@@ -167,6 +172,9 @@ pub struct ConsumerGuidance {
     /// Every case whose ordinary policy must admit a selected trial, in authored order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub case_order: Vec<String>,
+    /// Explicit worst-case aggregation; omitted for the existing nominated-case behavior.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub case_aggregation: Option<&'static str>,
     /// The sole objective from the ordinary comparison policy.
     pub objective: comparison::Objective,
     /// Explicit range ordering when requested; absent preserves existing nominal receipts.
@@ -181,13 +189,23 @@ pub struct ConsumerGuidance {
     pub best_trial_key: Option<String>,
     /// Existing comparator reading, never a separately computed or normalized score.
     pub best_reading: Option<comparison::Reading>,
+    /// Case supplying the best incumbent's worst-case reading, not a fixed guidance case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_case_key: Option<String>,
     /// First admitted input protocol; differing protocols cannot steer unless explicitly allowed.
     pub input_protocol_sha256: Option<String>,
 }
 
 impl Request {
     pub(in crate::material_study) fn consumer_guided(&self) -> bool {
-        matches!(self.objective, Objective::ConsumerComparison)
+        matches!(
+            self.objective,
+            Objective::ConsumerComparison | Objective::ConsumerWorstCase
+        )
+    }
+
+    pub(in crate::material_study) fn worst_case(&self) -> bool {
+        matches!(self.objective, Objective::ConsumerWorstCase)
     }
 
     pub(super) fn validate(&self) -> Result<(), Refusal> {
@@ -198,14 +216,14 @@ impl Request {
                 .is_some_and(|key| key.trim().is_empty())
         {
             return Err(invalid(
-                "consumer_comparison needs one nonempty material_key; fit_band_violation_mm does not accept material_key",
+                "consumer guidance needs one nonempty material_key; fit_band_violation_mm does not accept material_key",
             ));
         }
-        if self
-            .case_key
-            .as_ref()
-            .is_some_and(|key| !self.consumer_guided() || key.trim().is_empty() || key.len() > 128)
-        {
+        if self.case_key.as_ref().is_some_and(|key| {
+            !matches!(self.objective, Objective::ConsumerComparison)
+                || key.trim().is_empty()
+                || key.len() > 128
+        }) {
             return Err(invalid(
                 "adaptive case_key needs consumer_comparison and a nonempty case name of at most 128 bytes",
             ));
@@ -459,6 +477,11 @@ impl Request {
         case_order: &[String],
     ) -> Result<Expansion<T>, Refusal> {
         self.validate()?;
+        if self.worst_case() && case_order.is_empty() {
+            return Err(invalid(
+                "consumer_worst_case requires a named scenario matrix",
+            ));
+        }
         let context = context.ok_or_else(|| {
             invalid("design_adaptive needs the selected scenario's fitted-body measurement context")
         })?;
@@ -640,6 +663,7 @@ impl Request {
                     material_key: guidance.material.variant.key.clone(),
                     case_key: self.case_key.clone(),
                     case_order: guidance.case_order.clone(),
+                    case_aggregation: self.worst_case().then_some("worst_case"),
                     objective: guidance.policy.objectives[0].clone(),
                     basis: matches!(guidance.policy.basis, comparison::Basis::ReportedBounds)
                         .then_some(guidance.policy.basis),
@@ -654,6 +678,8 @@ impl Request {
                                 .get(&guidance.policy.objectives[0].metric)
                         })
                         .cloned(),
+                    best_case_key: best
+                        .and_then(|index| discovery.rows[index].consumer_case_key.clone()),
                     input_protocol_sha256: guidance.protocol.clone().flatten(),
                 })
             }),
@@ -688,6 +714,41 @@ impl Request {
         }
         Ok((expanded, receipt, retained))
     }
+}
+
+/// Select an original case reading, not a synthetic score. All cases must already be admitted;
+/// their protocols are compared across trials by the matrix, not against a different case.
+pub(in crate::material_study) fn worst_case_index(
+    cases: &[CaseDecision],
+    objective: &comparison::Objective,
+) -> Result<usize, Refusal> {
+    let mut worst: Option<(usize, &comparison::Reading)> = None;
+    for (index, case) in cases.iter().enumerate() {
+        let reading = case
+            .comparison
+            .readings
+            .get(&objective.metric)
+            .filter(|reading| case.comparison.eligible && reading.value.is_finite())
+            .ok_or_else(|| invalid("worst-case guidance needs every case's admitted reading"))?;
+        if let Some((_, previous)) = worst {
+            if reading.unit != previous.unit || reading.consumer != previous.consumer {
+                return Err(invalid(
+                    "worst-case readings must have identical units and consumers",
+                ));
+            }
+            let worse = match objective.direction {
+                Direction::Minimize => reading.value > previous.value,
+                Direction::Maximize => reading.value < previous.value,
+            };
+            if !worse {
+                continue;
+            }
+        }
+        worst = Some((index, reading));
+    }
+    worst
+        .map(|(index, _)| index)
+        .ok_or_else(|| invalid("worst-case guidance needs at least one named case"))
 }
 
 pub(in crate::material_study) struct ConsumerEvaluation<T> {
@@ -814,6 +875,7 @@ impl Evaluator<'_, '_> {
                 consumer_comparison: None,
                 consumer_refusal: None,
                 consumer_cases: Vec::new(),
+                consumer_case_key: None,
                 raw_fit,
                 max_fit_band_violation_mm: score.map(|score| score.0),
                 total_fit_band_violation_mm: score.map(|score| score.1),
@@ -841,6 +903,27 @@ impl<T> Discovery<'_, '_, '_, T> {
         };
         match (candidate.consumer_admitted(), current.consumer_admitted()) {
             (true, false) => true,
+            (true, true) if self.request.worst_case() => {
+                // The matrix already checked each case against its own anchored protocol.
+                // A change of limiting case must not compare unrelated case protocol hashes.
+                let objective = &guidance.policy.objectives[0];
+                let a = &candidate
+                    .consumer_comparison
+                    .as_ref()
+                    .expect("admitted trial")
+                    .readings[&objective.metric];
+                let b = &current
+                    .consumer_comparison
+                    .as_ref()
+                    .expect("admitted incumbent")
+                    .readings[&objective.metric];
+                a.unit == b.unit
+                    && a.consumer == b.consumer
+                    && match objective.direction {
+                        Direction::Minimize => a.value < b.value,
+                        Direction::Maximize => a.value > b.value,
+                    }
+            }
             (true, true) => guidance.policy.prefers(
                 candidate
                     .consumer_comparison
@@ -896,7 +979,13 @@ impl<T> Discovery<'_, '_, '_, T> {
                 if let Some(refusal) = evaluation.admission_refusal {
                     row.refusal = Some(refusal);
                 } else if candidate.eligible {
-                    if guidance.protocol.as_ref().is_some_and(|protocol| {
+                    if self.request.worst_case() {
+                        let index =
+                            worst_case_index(&row.consumer_cases, &guidance.policy.objectives[0])?;
+                        row.consumer_case_key = Some(row.consumer_cases[index].key.clone());
+                        row.selected = true;
+                        consumer = Some(evaluation.output);
+                    } else if guidance.protocol.as_ref().is_some_and(|protocol| {
                         !guidance.policy.allow_mixed_protocols
                             && *protocol != candidate.input_protocol_sha256
                     }) {

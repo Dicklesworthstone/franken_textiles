@@ -286,7 +286,13 @@ impl Request {
         if comparison.is_none() {
             notes.push("At least one case has no explicit effective comparison policy. Requested per-case comparisons remain available; no all-cases policy or frontier is synthesized.");
         }
-        if self.consumer_guided() {
+        if self
+            .design_adaptive
+            .as_ref()
+            .is_some_and(|policy| policy.worst_case())
+        {
+            notes.push("Adaptive polling improves the worst admitted nominal reading of one shared objective across all named cases. Every case retains its own constraints and source-protocol admission. No case weights, cross-unit score, unrestricted optimum or physical fit is inferred.");
+        } else if self.consumer_guided() {
             notes.push("Adaptive polling follows only the explicitly nominated case's sole comparison objective and declared nominal or reported-range basis. Every named case must independently admit each selected trial under its own policy and source protocol. Complete successful probe outputs are reused exactly for final rows; no cross-case score, unrestricted optimum or physical fit is inferred.");
         }
         Ok(Report {
@@ -318,13 +324,21 @@ impl Request {
             .design_adaptive
             .as_ref()
             .expect("consumer-guided matrix");
-        let case_key = adaptive.case_key.as_ref().ok_or_else(|| {
-            invalid("consumer-guided named matrices require an explicit adaptive case_key")
-        })?;
-        let nominated = cases
-            .iter()
-            .position(|case| case.key == *case_key)
-            .ok_or_else(|| invalid("adaptive case_key must identify an authored named case"))?;
+        let nominated = if adaptive.worst_case() {
+            None
+        } else {
+            let case_key = adaptive.case_key.as_ref().ok_or_else(|| {
+                invalid("consumer-guided named matrices require an explicit adaptive case_key")
+            })?;
+            Some(
+                cases
+                    .iter()
+                    .position(|case| case.key == *case_key)
+                    .ok_or_else(|| {
+                        invalid("adaptive case_key must identify an authored named case")
+                    })?,
+            )
+        };
         let policies = cases
             .iter()
             .map(|case| {
@@ -336,10 +350,26 @@ impl Request {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if adaptive.worst_case() {
+            let first = policies[0].objectives.first();
+            if policies.iter().any(|policy| {
+                !matches!(policy.basis, comparison::Basis::Nominal)
+                    || policy.objectives.len() != 1
+                    || first.is_none_or(|first| {
+                        policy.objectives[0].metric != first.metric
+                            || std::mem::discriminant(&policy.objectives[0].direction)
+                                != std::mem::discriminant(&first.direction)
+                    })
+            }) {
+                return Err(invalid(
+                    "worst-case guidance requires one identical nominal metric and direction in every case",
+                ));
+            }
+        }
         // Resolve the sole guidance policy before the ordinary design/material admission. An
         // unused fallback is not the nominated case's objective and cannot silently steer search.
         let mut guided = self.clone();
-        guided.comparison = Some(policies[nominated].clone());
+        guided.comparison = Some(policies[nominated.unwrap_or(0)].clone());
         let materials = guided.material_variants(pattern, true)?;
         let slots = adaptive
             .max_evaluations
@@ -409,6 +439,13 @@ impl Request {
                             )
                         ))
                     });
+                let mut guiding = nominated.unwrap_or(0);
+                if adaptive.worst_case() && admission_refusal.is_none() {
+                    match design::adaptive::worst_case_index(&decisions, &policies[0].objectives[0]) {
+                        Ok(index) => guiding = index,
+                        Err(refusal) => admission_refusal = Some(refusal),
+                    }
+                }
                 if admission_refusal.is_none() {
                     let current: Vec<_> = decisions
                         .iter()
@@ -428,8 +465,8 @@ impl Request {
                     }
                 }
                 Ok(design::adaptive::ConsumerEvaluation {
-                    comparison: decisions[nominated].comparison.clone(),
-                    refusal: decisions[nominated].refusal.clone(),
+                    comparison: decisions[guiding].comparison.clone(),
+                    refusal: decisions[guiding].refusal.clone(),
                     cases: decisions,
                     admission_refusal,
                     output: GuidedProbe {
