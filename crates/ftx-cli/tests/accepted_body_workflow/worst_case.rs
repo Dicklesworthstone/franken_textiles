@@ -8,19 +8,39 @@ pub(super) fn replay(
     dir: &Path,
     capture: Option<&Path>,
 ) {
-    let mut study = study.clone();
-    study["design_adaptive"]["objective"] = json!("consumer_worst_case");
-    study["design_adaptive"]
-        .as_object_mut()
-        .unwrap()
-        .remove("case_key");
-    for limited in [false, true] {
-        let label = if limited { "worst-budget" } else { "worst" };
+    for (bounded, limited, label) in [
+        (false, false, "worst"),
+        (false, true, "worst-budget"),
+        (true, false, "worst-bounds"),
+        (true, true, "worst-bounds-budget"),
+    ] {
+        let mut study = study.clone();
+        study["design_adaptive"]["objective"] = json!("consumer_worst_case");
+        study["design_adaptive"]
+            .as_object_mut()
+            .unwrap()
+            .remove("case_key");
         let mut matrix = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":24,
             "cases":[{"key":"weight","scenario":scenario},
                 {"key":"guard","scenario":scenario,"comparison":{"basis":"nominal",
                     "objectives":[{"metric":"simulated_cloth_mass_kg","direction":"minimize"}],
                     "constraints":[{"metric":"simulated_cloth_mass_kg","minimum":0.017}]}}]});
+        if bounded {
+            // Real manufacturing endpoints from explicit synthetic density sources. The drape
+            // remains a required consumer in both cases, including the independently limited one.
+            study["assembly_mass"] = json!({"schema":"ftx-assembly-mass/1",
+                "inventory_complete":true,"seam_allowance_mm":0,"extras":[]});
+            for (index, bounds) in [(0, [0.19, 0.21]), (1, [0.39, 0.41])] {
+                study["variants"][index]["changes"]["default"]["record"]["properties"]["areal_density"]
+                    ["bounds"] = json!(bounds);
+            }
+            study["comparison"] = json!({"basis":"reported_bounds",
+                "objectives":[{"metric":"assembly_mass_kg","direction":"minimize"}],
+                "required_consumers":["drape"]});
+            matrix["cases"][1]["comparison"] = study["comparison"].clone();
+            matrix["cases"][1]["comparison"]["constraints"] = json!([
+                {"metric":"assembly_mass_kg","minimum":0.0155}]);
+        }
         if limited {
             matrix["cases"][1]["scenario"]["max_vertex_frames"] = json!(25000);
         }
@@ -55,11 +75,45 @@ pub(super) fn replay(
         assert_eq!(guidance["reserved_evaluations"], 24);
         assert_eq!(search["selected_designs"], 1);
         assert_eq!(search["global_optimum_claim"], false);
-        let expected = std::f64::consts::TAU * 180.0 * (100.0 + length) * 1e-6 * 0.2;
+        let area = std::f64::consts::TAU * 180.0 * (100.0 + length) * 1e-6;
         let mass = guidance["best_reading"]["value"].as_f64().unwrap();
-        assert!((mass - expected).abs() < 1e-6);
+        assert!((mass - area * 0.2).abs() < 1e-6);
         let selected_key =
             serde_json::to_string(&json!([selected["design"]["key"], "light"])).unwrap();
+        if bounded {
+            assert_eq!(guidance["basis"], "reported_bounds");
+            assert_eq!(
+                guidance["best_reported_bound_case_keys"],
+                json!(["weight", "weight"])
+            );
+            assert_eq!(
+                selected["consumer_worst_case"]["reading"],
+                guidance["best_reading"]
+            );
+            for (endpoint, density) in [0.19, 0.21].into_iter().enumerate() {
+                assert!(
+                    (guidance["best_reading"]["reported_bounds"][endpoint]
+                        .as_f64()
+                        .unwrap()
+                        - area * density)
+                        .abs()
+                        < 1e-6
+                );
+            }
+            let manufacture = report["manufacturing"]["alternatives"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["key"] == selected_key)
+                .unwrap();
+            assert_eq!(
+                manufacture["assembly_mass"]["result"]["assembly_mass"]["reported_bounds_kg"],
+                guidance["best_reading"]["reported_bounds"]
+            );
+        } else {
+            assert!(selected.get("consumer_worst_case").is_none());
+            assert!(guidance.get("best_reported_bound_case_keys").is_none());
+        }
         for (index, case) in report["cases"].as_array().unwrap().iter().enumerate() {
             let simulation = case["simulations"]
                 .as_array()
@@ -69,7 +123,18 @@ pub(super) fn replay(
                 .unwrap();
             assert_eq!(simulation["evaluation"]["status"], "available");
             assert_eq!(simulation["evaluation"]["result"]["drape"]["settled"], true);
-            assert_eq!(simulation["evaluation"]["result"]["drape"]["mass_kg"], mass);
+            if bounded {
+                assert!(
+                    (simulation["evaluation"]["result"]["drape"]["mass_kg"]
+                        .as_f64()
+                        .unwrap()
+                        - mass)
+                        .abs()
+                        < 1e-12
+                );
+            } else {
+                assert_eq!(simulation["evaluation"]["result"]["drape"]["mass_kg"], mass);
+            }
             let candidate = case["comparison"]["alternatives"]
                 .as_array()
                 .unwrap()
@@ -100,11 +165,17 @@ pub(super) fn replay(
         assert_eq!(failed["consumer_cases"][0]["comparison"]["eligible"], true);
         assert_eq!(failed["consumer_cases"][1]["comparison"]["eligible"], false);
         assert!(failed.get("consumer_case_key").is_none());
+        assert!(failed.get("consumer_worst_case").is_none());
         if limited {
             assert_eq!(
                 failed["consumer_cases"][1]["refusal"]["code"],
                 "budget_exceeded"
             );
+        } else if bounded {
+            let reading =
+                &failed["consumer_cases"][1]["comparison"]["readings"]["assembly_mass_kg"];
+            assert!(reading["value"].as_f64().unwrap() > 0.0155);
+            assert!(reading["reported_bounds"][0].as_f64().unwrap() < 0.0155);
         }
         let summary = report["notes"]
             .as_array()
@@ -115,7 +186,13 @@ pub(super) fn replay(
             .unwrap();
         assert!(summary.contains("limiting case 'weight'"));
         assert!(summary.contains(selected["design"]["key"].as_str().unwrap()));
-        assert!(summary.contains("not an average"));
+        if bounded {
+            assert!(summary.contains("lower endpoint from 'weight'"));
+            assert!(summary.contains("upper endpoint from 'weight'"));
+            assert!(summary.contains("overlaps and touching endpoints remain unresolved"));
+        } else {
+            assert!(summary.contains("not an average"));
+        }
         let rows = report["manufacturing"]["alternatives"]
             .as_array()
             .unwrap()

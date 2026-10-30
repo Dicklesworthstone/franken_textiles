@@ -45,6 +45,16 @@ test('matrix page preserves no-incumbent explanation without a zero or invented 
   assert.ok(displayedNotes(report).includes(note));
 });
 
+test('matrix page keeps distinct nominal and interval witnesses in authoritative range notes', () => {
+  const note = "Worst-case retained trial 'adaptive:0003': nominal limiting case '<nominal>', assembly_mass_kg = 8 kg; reported worst-case range [7, 12] kg, with lower endpoint from '<lower>' and upper endpoint from '<upper>'. Only strictly separated ranges establish improvement; overlaps and touching endpoints remain unresolved.";
+  const report = { schema: 'ftx-design-scenario-matrix-study/1', cases: [], notes: [note],
+    manufacturing: { design_search: { consumer_guidance: {
+      basis: 'reported_bounds', best_case_key: '<nominal>', best_reported_bound_case_keys: ['<lower>', '<upper>'],
+      best_reading: { value: 8, reported_bounds: [7, 12], unit: 'kg' }
+    } } } };
+  assert.ok(displayedNotes(report).includes(note));
+});
+
 test('compiled WASM worst-case sewn-body studies reproduce native constraints and cumulative budget refusals',
   { skip: process.env.FTX_REAL_WASM !== '1' || !process.env.FTX_CONSUMER_ADAPTIVE_REPLAY }, async () => {
     const pkg = process.env.FTX_WASM_PKG ? path.resolve(process.env.FTX_WASM_PKG) : path.join(__dirname, '../web/pkg');
@@ -55,7 +65,8 @@ test('compiled WASM worst-case sewn-body studies reproduce native constraints an
     const previous = globalThis.ftxProgress;
     globalThis.ftxProgress = () => {};
     try {
-      for (const label of ['worst', 'worst-budget']) {
+      for (const label of ['worst', 'worst-budget', 'worst-bounds', 'worst-bounds-budget']) {
+        const bounded = label.includes('bounds'), limited = label.endsWith('budget');
         const model = new ftx.WebBody(new Uint8Array(bytes));
         let report;
         try {
@@ -65,14 +76,29 @@ test('compiled WASM worst-case sewn-body studies reproduce native constraints an
         assert.deepEqual(report, JSON.parse(read(`${label}-report.json`)));
         const search = report.manufacturing.design_search;
         const selected = search.rows.find(row => row.selected);
-        assert.equal(search.consumer_guidance.case_aggregation, 'worst_case');
-        assert.equal(search.consumer_guidance.best_case_key, 'weight');
-        assert.equal(selected.design.variables_mm.length, label === 'worst' ? -20 : 0);
+        const guidance = search.consumer_guidance;
+        assert.equal(guidance.case_aggregation, 'worst_case');
+        assert.equal(guidance.best_case_key, 'weight');
+        assert.equal(selected.design.variables_mm.length, limited ? 0 : -20);
         assert.equal(search.global_optimum_claim, false);
+        if (bounded) {
+          assert.equal(guidance.basis, 'reported_bounds');
+          assert.deepEqual(guidance.best_reported_bound_case_keys, ['weight', 'weight']);
+          assert.deepEqual(guidance.best_reading, selected.consumer_worst_case.reading);
+          assert.ok(guidance.best_reading.reported_bounds[0] < guidance.best_reading.value);
+          assert.ok(guidance.best_reading.value < guidance.best_reading.reported_bounds[1]);
+        } else {
+          assert.equal(selected.consumer_worst_case, undefined);
+        }
         const note = report.notes.find(text => text.startsWith('Worst-case retained trial'));
         assert.ok(note.includes("limiting case 'weight'"));
         assert.ok(displayedNotes(report).includes(note));
-        if (label === 'worst-budget') assert.ok(search.rows.some(row =>
+        if (bounded) {
+          assert.ok(note.includes("lower endpoint from 'weight'"));
+          assert.ok(note.includes("upper endpoint from 'weight'"));
+          assert.ok(note.includes('overlaps and touching endpoints remain unresolved'));
+        }
+        if (limited) assert.ok(search.rows.some(row =>
           row.consumer_cases?.some(item => item.refusal?.code === 'budget_exceeded')));
       }
     } finally { globalThis.ftxProgress = previous; }
