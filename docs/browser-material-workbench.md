@@ -86,6 +86,31 @@ association. Report or pose changes withdraw drape, heat, vapor and coverage res
 pending work. The independent measurement/export readiness gate is unchanged. Numerical acceptance
 and a completed drape do not establish physical garment fit.
 
+### Reuse the selected body in manufacturing and scenario studies
+
+Section 4 has an explicit **Body source for body-dependent studies** choice. It applies to fresh
+single-scenario and named-matrix comparisons and, when **Constrain manufacturing to the selected body**
+is checked, manufacturing studies with an explicit `design_fit` contract. Every mode uses the
+section-3 model. Ordinary manufacturing with that checkbox clear needs no body input.
+
+- **Fit section-3 measurements at 35°** uses the current measurements through the existing tape-fit authority.
+- **Reuse the accepted shape and pose selected above** uses the original accepted report, current ordinary
+  arm angle and explicit wearer association already selected for the preview. Pattern-to-material handoffs
+  support this choice directly. Optional current measurements are compared with the accepted shape without
+  refitting; an absent measurement file is allowed. The page embeds the original report and measurement
+  text in the existing `ftx-scenario-body/1` request without reserializing source-bound numbers.
+- **Use the separate body-source request below** reads only that request's measurements, accepted report
+  and pose. Its body source is independent of the preview report, angle and section-3 measurement file.
+
+An absent or invalid selected source refuses; the page never substitutes another mode or tape-fits a
+refused accepted shape. Clearing an accepted report or a separate request requires explicitly choosing a
+different study source before using one. Changing a consumed model, measurement, report, pose, wearer
+association or source choice withdraws affected results and cancels pending work, including delayed file
+reads. Inputs that the selected mode does not consume leave its studies intact. The original model stays
+local, and each body-dependent result downloads its exact `body-input.json` alongside the original study
+and scenario inputs for native replay. The Rust body/fit authority and all ordinary qualification gates
+remain authoritative; selecting an accepted numerical shape does not establish physical garment fit.
+
 Material and source data requirements are unchanged. See `material-sewing-plans.md`,
 `material-platform-progress.md`, `steady-conduction.md`, `steady-thermal-coverage.md`,
 `exterior-thermal-exchange.md`, and `textile-price-refresh.md` for their input semantics and limitations.

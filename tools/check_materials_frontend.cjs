@@ -1129,6 +1129,12 @@ test('material body handoff retains exact model, report and pose until explicit 
   const msg=p.current().messages.at(-1);
   assert.equal(msg.bodyFit,raw);assert.equal(msg.bodyFitConsent,true);assert.equal(msg.armDeg,50);
   assert.deepEqual([...new Uint8Array(msg.bytes)],[3,5,7]);p.emit({});
+  p.select('studyRequest');p.select('scenarioRequest');
+  p.e.studyBodySource.value='accepted';p.e.studyBodySource.handlers.change();
+  await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).measurements,
+    '{"schema":"ftx-scenario-body/1","measurements":{},"accepted_body_fit":'+raw+',"arm_abduction_deg":50}');
+  assert.deepEqual([...new Uint8Array(p.current().messages.at(-1).bytes)],[3,5,7]);p.emit(scenarioReport());
   p.e.body.files=[new Blob([new Uint8Array([11])])];p.e.body.handlers.change();
   assert.equal(p.e.bodyFitConsent.checked,false);assert.equal(p.e.fold.disabled,true);
   assert.equal(p.e.receivedBodyFiles.children.some(a=>a.download==='body-model.ftxbody'),false);
@@ -1430,6 +1436,7 @@ test('selected-body manufacturing is opt-in and invalidates only current body-de
   p.select('body');p.e.body.files[0].arrayBuffer=async()=>new Uint8Array([1,2,3]).buffer;
   p.e.body.handlers.change();assert.equal(p.e.study.disabled,true);
   p.select('scenarioBody',' {"schema":"ftx-scenario-body/1","n":-0.0}');p.e.scenarioBody.handlers.change();
+  p.e.studyBodySource.value='request';p.e.studyBodySource.handlers.change();
   p.ready();assert.equal(p.e.study.disabled,false);assert.equal(p.e.scenario.disabled,true); // no scenario required
   await p.e.study.onclick();const msg=p.current().messages.at(-1);
   assert.equal(msg.onBody,true);assert.equal(msg.measurements,' {"schema":"ftx-scenario-body/1","n":-0.0}');
@@ -1438,13 +1445,121 @@ test('selected-body manufacturing is opt-in and invalidates only current body-de
   assert.equal(p.live.size,1);
   p.e.scenarioRequest.handlers.change();assert.equal(p.live.size,1);
   p.e.measurements.handlers.change();assert.equal(p.live.size,1); // separate selected-body request owns evidence
+  p.e.bodyFitFile.handlers.change();p.e.bodyArmDeg.handlers.input();p.e.bodyFitConsent.handlers.change();
+  assert.equal(p.live.size,1);
   p.e.body.handlers.change();assert.equal(p.live.size,0);
   p.ready();await p.e.study.onclick();const old=p.current(),request=old.messages.at(-1).request;
+  for(const id of ['measurements','fit','bodyFitFile','bodyFitConsent']) p.e[id].handlers.change();
+  p.e.bodyArmDeg.handlers.input();assert.equal(old.dead,false,'Separate request owns its tapes, report and pose');
   p.e.scenarioBody.handlers.change();assert.equal(old.dead,true);
   old.emit({type:'result',request,result:{alternatives:[]},files:[{name:'stale.json',text:'{}'}]});assert.equal(p.live.size,0);
   p.ready();p.e.studyOnBody.checked=false;p.e.studyOnBody.handlers.change();p.ready();
   await p.e.study.onclick();assert.equal(p.current().messages.at(-1).onBody,false);
   assert.equal(p.current().messages.at(-1).measurements,undefined);
+  const independent=p.current();
+  p.e.studyBodySource.value='accepted';p.e.studyBodySource.handlers.change();
+  for(const id of ['body','measurements','scenarioBody','bodyFitFile','bodyFitConsent']) p.e[id].handlers.change();
+  p.e.bodyArmDeg.handlers.input();assert.equal(independent.dead,false);
+  p.emit({alternatives:[]},[{name:'study.json',text:'{}'}]);assert.equal(p.live.size,1);
+  p.e.bodyFitFile.handlers.change();p.e.body.handlers.change();assert.equal(p.live.size,1);
+});
+
+test('selected accepted body supplies the same exact source to manufacturing, single and named scenario studies', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const fit=' \r\n{"schema":"ftx-body-fit/1","probe":-0.0,"seed":18446744073709551615}\r\n',
+    measurements=' {"wearer":{"stature_mm":1111.0},"probe":-0.0,"seed":18446744073709551615}\n';
+  p.select('measurements',measurements);p.e.measurements.handlers.change();
+  p.e.body.files=[new Blob([new Uint8Array([3,5,7])])];p.e.body.handlers.change();
+  p.e.bodyFitFile.files=[new Blob([fit])];p.e.bodyFitFile.handlers.change();
+  p.e.studyBodySource.value='accepted';p.e.studyBodySource.handlers.change();
+  p.e.studyOnBody.checked=true;p.e.studyOnBody.handlers.change();
+  assert.equal(p.e.study.disabled,true);assert.equal(p.e.scenario.disabled,true);
+  p.e.bodyArmDeg.value='50';p.e.bodyArmDeg.handlers.input();
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();
+  assert.equal(p.e.study.disabled,false);assert.equal(p.e.scenario.disabled,false);
+  p.select('scenarioBody','{}');p.e.scenarioBody.files[0].text=()=>{throw Error('unused request read');};
+  const expected='{"schema":"ftx-scenario-body/1","measurements":'+measurements+
+    ',"accepted_body_fit":'+fit+',"arm_abduction_deg":50}',calls=[],freed=[];
+  let result;
+  const w=await workerModule({bindings:{default:async()=>{},
+    WebBody:class {constructor(bytes){assert.deepEqual([...bytes],[3,5,7]);}free(){freed.push('body');}},
+    material_study:()=>{throw Error('No unselected tape or no-body fallback');},
+    material_study_on_body:(_body,pattern,request,body)=>{calls.push(body);return JSON.stringify(result);},
+    material_scenario_study:(_body,pattern,request,scenario,body)=>{calls.push(body);return JSON.stringify(result);}}});
+  for(const mode of ['manufacturing','single','matrix']) {
+    const op=mode==='manufacturing'?'study':'scenario';
+    result=mode==='manufacturing'?{alternatives:[]}:mode==='single'?scenarioReport():scenarioMatrixReport();
+    if(mode==='matrix') {p.select('scenarioRequest',' {"schema":"ftx-drape-scenario-matrix/1","cases":[]}\n');p.e.scenarioRequest.handlers.change();}
+    await p.e[op].onclick();const msg=p.current().messages.at(-1);
+    assert.equal(msg.measurements,expected,mode);
+    const reply=await w.send(msg);assert.equal(reply.type,'result',reply.message);
+    assert.equal(reply.files.find(f=>f.name==='body-input.json').text,expected,mode);
+    p.current().emit(reply);
+  }
+  assert.deepEqual(calls,[expected,expected,expected]);assert.deepEqual(freed,['body','body','body']);
+  p.e.measurements.files=[];p.e.measurements.handlers.change();
+  assert.equal(p.e.bodyFitConsent.checked,false);assert.equal(p.e.scenario.disabled,true);
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();
+  await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).measurements,
+    '{"schema":"ftx-scenario-body/1","measurements":{},"accepted_body_fit":'+fit+',"arm_abduction_deg":50}');
+});
+
+test('selected accepted studies refuse missing association, malformed sources and invalid pose without falling back', async () => {
+  for(const op of ['study','scenario']) {
+    const p=await pageModule();await p.load();scenarioInputs(p);
+    p.select('scenarioBody','{"schema":"ftx-scenario-body/1"}');
+    p.e.studyOnBody.checked=true;p.e.studyOnBody.handlers.change();
+    p.e.studyBodySource.value='accepted';p.e.studyBodySource.handlers.change();
+    assert.equal(p.e[op].disabled,true);await p.e[op].onclick();assert.match(p.e.error.textContent,/accepted body-fit report/);
+    p.e.bodyFitFile.files=[new Blob(['{}'])];p.e.bodyFitFile.handlers.change();
+    assert.equal(p.e[op].disabled,true);await p.e[op].onclick();assert.match(p.e.error.textContent,/Associate the accepted fit/);
+    for(const raw of ['{malformed','\ufeff{}',new Uint8Array([0xff])]) {
+      p.e.bodyFitFile.files=[new Blob([raw])];p.e.bodyFitFile.handlers.change();
+      p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();p.e.bodyArmDeg.value='50';
+      await p.e[op].onclick();assert.equal(p.e.error.hidden,false);assert.equal(p.current().messages.length,0);
+    }
+    p.e.bodyFitFile.files=[new Blob(['{}'])];p.e.bodyFitFile.handlers.change();
+    p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();
+    for(const angle of ['','-1','181','Infinity']) {
+      p.e.bodyArmDeg.value=angle;await p.e[op].onclick();assert.match(p.e.error.textContent,/finite drape arm angle/);
+      assert.equal(p.current().messages.length,0);
+    }
+    assert.equal(p.live.size,0);assert.equal(p.e.studyBodySource.value,'accepted');
+    p.e.bodyArmDeg.value='50';await p.e[op].onclick();
+    const request=p.current().messages.at(-1).request;
+    p.current().emit({type:'error',request,message:'accepted fit/model mismatch'});
+    assert.match(p.e.error.textContent,/accepted fit\/model mismatch/);
+    assert.equal(p.current().messages.length,1);assert.equal(p.live.size,0);assert.equal(p.e.bodyFitFile.files.length,1);
+  }
+});
+
+test('selected accepted study dependencies withdraw results and cancel delayed inputs before transfer', async () => {
+  for(const op of ['study','scenario']) for(const id of ['bodyFitFile','bodyFitConsent','bodyArmDeg','measurements','body','studyBodySource','clearBodyFit']) {
+    const p=await pageModule();await p.load();scenarioInputs(p);
+    p.e.studyBodySource.value='accepted';p.e.studyBodySource.handlers.change();
+    p.e.studyOnBody.checked=true;p.e.studyOnBody.handlers.change();
+    p.e.bodyFitFile.files=[new Blob(['{}'])];p.e.bodyFitFile.handlers.change();
+    p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();p.e.bodyArmDeg.value='50';
+    await p.e[op].onclick();p.emit(op==='study'?{alternatives:[]}:scenarioReport(),[{name:'body-input.json',text:'{}'}]);
+    const change=()=>{
+      if(id==='clearBodyFit') {p.e.bodyFitFile.files=[];p.e.clearBodyFit.onclick();}
+      else if(id==='studyBodySource') {p.e.studyBodySource.value='measurements';p.e.studyBodySource.handlers.change();}
+      else if(id==='bodyArmDeg') {p.e.bodyArmDeg.value='35';p.e.bodyArmDeg.handlers.input();}
+      else {if(id==='bodyFitConsent')p.e.bodyFitConsent.checked=false;p.e[id].handlers.change();}
+    };
+    const urls=[...p.live];change();assert.ok(urls.every(url=>!p.live.has(url)),`${op}: ${id} withdraws published results`);
+    p.e.studyBodySource.value='accepted';p.e.studyBodySource.handlers.change();
+    p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();p.e.bodyArmDeg.value='50';
+    const delay=deferred(),reading=deferred();
+    p.e.bodyFitFile.files=[{size:2,arrayBuffer:()=>{reading.resolve();return delay.promise;}}];
+    const old=p.current(),running=p.e[op].onclick();await reading.promise;
+    change();assert.equal(old.dead,true,`${op}: ${id}`);
+    p.ready();delay.resolve(new TextEncoder().encode('{}').buffer);await running;
+    assert.equal(old.messages.length,1,`${op}: ${id} must not post delayed work`);
+    old.emit({type:'result',request:old.messages[0].request+1,result:op==='study'?{alternatives:[]}:scenarioReport(),files:[]});
+    assert.equal(p.live.size,0);assert.equal(section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives').hidden,true);
+  }
 });
 
 test('material page freezes named assignments, withdraws dependent outputs and ignores stale worker replies', async () => {
@@ -3919,6 +4034,8 @@ test('named scenario matrices share manufacturing, retain native case decisions 
 
 test('matrix policies remain optional per case and replacement cancels every stale case result and replay', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
+  p.select('scenarioBody','{"schema":"ftx-scenario-body/1"}');
+  p.e.studyBodySource.value='request';p.e.studyBodySource.handlers.change();
   const report=scenarioMatrixReport(); delete report.comparison; delete report.cases[0].comparison;
   report.notes=['Case <cold> has no effective comparison policy.'];
   await p.e.scenario.onclick(); p.emit(report);
@@ -6406,6 +6523,7 @@ test('explicit body sources replace only scenario evidence and retain exact repl
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   const raw = '{"schema":"ftx-scenario-body/1","arm_abduction_deg":50.0,"accepted_body_fit":{"test":-0.0}}';
   p.select('scenarioBody', raw); p.e.measurements.files = [];
+  p.e.studyBodySource.value='request';p.e.studyBodySource.handlers.change();
   p.e.scenarioBody.handlers.change(); assert.equal(p.e.scenario.disabled, false);
   await p.e.scenario.onclick();
   assert.equal(p.current().messages.at(-1).measurements, raw);
@@ -6414,6 +6532,8 @@ test('explicit body sources replace only scenario evidence and retain exact repl
   assert.equal(p.live.size, 2); // overridden tapes are not a dependency of this result
   p.e.scenarioBody.handlers.change(); assert.equal(p.live.size, 0);
   p.e.scenarioBody.files = []; p.e.scenarioBody.handlers.change();
+  assert.equal(p.e.scenario.disabled,true,'Missing selected request cannot silently use available tapes');
+  p.e.studyBodySource.value='measurements';p.e.studyBodySource.handlers.change();
   await p.e.scenario.onclick();
   assert.equal(p.current().messages.at(-1).measurements, '{"wearer":{"stature_mm":1000.0}}');
   const w = await workerModule();
@@ -6425,6 +6545,7 @@ test('explicit body sources replace only scenario evidence and retain exact repl
 
 test('invalid or superseded body-source files cannot fall back to tapes or publish stale outcomes', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
+  p.e.studyBodySource.value='request';p.e.studyBodySource.handlers.change();
   p.select('scenarioBody', '{malformed'); p.e.scenarioBody.handlers.change();
   const oldCount = p.current().messages.length;
   await p.e.scenario.onclick();

@@ -247,7 +247,7 @@ It does not replace the inspected material selection. Freeze selections &amp; bi
 <p class="note">The original accepted shape must match the selected model. It is reused without tape refitting;
 image-frame poses are not garment poses. A refused report or start never falls back to tape fitting.
 Current measurements remain the independent export and readiness evidence. Model predictions and a successful
-drape do not establish physical fit. Scenario studies below keep their explicit body-source request.</p>
+drape do not establish physical fit. Body-dependent studies below have an explicit source choice.</p>
 </details>
 <label><input id="selfContact" type="checkbox" checked> Enable cloth self-contact (requires unlike-material pair evidence)</label>
 <button id="fold" data-command="fold" disabled>Re-drape on this body</button>
@@ -375,9 +375,16 @@ It must omit <code>variants</code>, <code>screened</code> and <code>combinations
 missing friction evidence stays missing. Omitting the pool preserves the original pattern's interfaces. An empty list clears them.
 Up to eight groups may target disjoint source pieces, with at most one default group. Up to 32 complete combinations are evaluated.</p>
 </details>
+<label>Body source for body-dependent studies <select id="studyBodySource">
+<option value="measurements">Fit section-3 measurements at 35°</option>
+<option value="accepted">Reuse the accepted shape and pose selected above</option>
+<option value="request">Use the separate body-source request below</option>
+</select></label>
 <label><input id="studyOnBody" type="checkbox"> Constrain manufacturing to the selected body</label>
-<p class="note">Requires <code>design_fit</code> in the study, the section-3 local model and the body-source request below
-  (or section-3 measurements). Uses the selected shape's MODEL_FIT readings without running cloth or heat.
+<p class="note">Requires <code>design_fit</code> in the study, the section-3 local model and the selected body source.
+  The same source choice applies to fresh single-scenario and named-matrix studies. Reusing an accepted shape requires
+  the wearer association above; any current section-3 measurements are compared without refitting.
+  Uses the selected shape's MODEL_FIT readings without running cloth or heat.
   Fit refusals remain visible and cannot rank; no physical fit or safe-ease claim is made.</p>
 <button id="study" data-command="study" disabled>Compare manufacturing alternatives</button>
 <p class="note">The study request contains explicit <code>variants</code>, a <code>screened</code> request, or grouped <code>combinations</code>, and its own shared roll cutting,
@@ -449,7 +456,7 @@ and an exhausted search retains a complete incumbent without claiming the least 
 </div><div>
 <h3>Fresh body, drape and heat studies</h3>
 <label>Scenario or named matrix JSON (<code>ftx-drape-scenario/1</code> or <code>ftx-drape-scenario-matrix/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>
-<label>Optional body-source request JSON (<code>ftx-scenario-body/1</code>) <input id="scenarioBody" type="file" accept=".json,application/json"></label>
+<label>Separate body-source request JSON (<code>ftx-scenario-body/1</code>; select its source mode above) <input id="scenarioBody" type="file" accept=".json,application/json"></label>
 <button id="scenario" data-command="scenario" disabled>Recompute every alternative in the requested scenarios</button>
 <p class="note">A named matrix evaluates the same design and material alternatives and body under 1–8 declared scenarios.
 Use <code>{"schema":"ftx-drape-scenario-matrix/1","max_evaluations":16,"cases":[{"key":"case name","scenario":{…}}]}</code>,
@@ -459,10 +466,14 @@ Manufacturing is shared once. Per-case outcomes and refusals remain separate, an
 comparison policies for every case. Motion, conditions and consumer requests belong to each case. For joint outfits,
 every case must explicitly enable <code>options.self_contact</code>. Download the original matrix and full report to replay it.</p>
 <p class="note">Uses the same study request and the <strong>local body model</strong> selected in section 3.
-Without a body-source request it fits the section-3 measurements at 35°. A body-source request instead owns the
-measurements, optional <code>accepted_body_fit</code> report and <code>arm_abduction_deg</code> (0–180°, default 35°).
+The selected <strong>Body source for body-dependent studies</strong> governs every study. Measurement mode fits
+section-3 measurements at 35°. Accepted-shape mode uses the original report and ordinary arm angle above,
+with explicit wearer association and optional current measurements. It needs no separately authored request file.
+Separate-request mode instead owns its measurements, optional <code>accepted_body_fit</code> report and
+<code>arm_abduction_deg</code> (0–180°, default 35°); section-3 report, pose and measurement edits do not alter that request.
 Accepted shapes must match the exact model and are never refitted; optional tapes report residuals only.
-Clear this file to return to section-3 measurements. A malformed request refuses rather than falling back.
+An absent or malformed selected source refuses without switching to another source. Choose measurement mode explicitly
+to return to tape fitting. Original source text is retained in the downloaded <code>body-input.json</code> for replay.
 The scenario itself owns the fit specification, numerical options, surface conditions and body-coverage policy;
 the single-preview fit, self-contact checkbox and thermal files above do not override it. Shape selection runs once;
 the chosen standing straight-arm pose does not change that shape. Each alternative gets a fresh production drape and

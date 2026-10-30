@@ -937,6 +937,49 @@ async function offlineViewer(browser, file) {
       assert.equal(await received.isVisible("#error"),false,await received.textContent("#error"));
       assert.deepEqual(JSON.parse(await receivedBytes("sim_report.json")),materialReport);
       assert.ok((await receivedBytes("body_fit.json")).equals(raw));
+      // Exercise the selected report/pose through the existing native study authorities.
+      const original=JSON.parse(fs.readFileSync(path.join(dir,"pattern.json"))),piece=original.pieces[0];
+      const unchanged={key:"same-geometry",operations:[{op:"move",piece:piece.id,vertex:Object.keys(piece.vertices)[0],dx_mm:0,dy_mm:0}]};
+      const fitText=fs.readFileSync(path.join(dir,"fit_spec.json"),"utf8");
+      const studyText='{"schema":"ftx-design-study/1","designs":['+JSON.stringify(unchanged)+
+        '],"variants":[{"key":"original","changes":{"schema":"ftx-material-bindings/1"}}],"design_fit":{"fit_spec":'+fitText+'}}';
+      const bodyText='{"schema":"ftx-scenario-body/1","measurements":'+fs.readFileSync(path.join(dir,"measurements.json"),"utf8")+
+        ',"accepted_body_fit":'+raw.toString("utf8")+',"arm_abduction_deg":50}';
+      fs.writeFileSync(path.join(dir,"selected-study.json"),studyText,{flag:"wx"});
+      fs.writeFileSync(path.join(dir,"selected-body.json"),bodyText,{flag:"wx"});
+      await received.setInputFiles("#studyRequest",path.join(dir,"selected-study.json"));
+      await received.selectOption("#studyBodySource","accepted");await received.check("#studyOnBody");
+      const scenario={schema:"ftx-drape-scenario/1",options:{spacing:100,sew_steps:3,drape_steps:3,step:0.001},
+        fit_spec:{},max_mesh_points:4096,max_vertex_frames:1000000};
+      for(const mode of ["manufacturing","single","matrix"]) {
+        const op=mode==="manufacturing"?"study":"scenario",args=["--json","materials",
+          mode==="manufacturing"?"study-on-body":"scenario-study","pattern.json","selected-study.json"];
+        if(op==="scenario") {
+          const request=mode==="single"?scenario:{schema:"ftx-drape-scenario-matrix/1",max_evaluations:4,
+            cases:[{key:"first",scenario},{key:"second",scenario}]};
+          const name=`selected-${mode}.json`;fs.writeFileSync(path.join(dir,name),JSON.stringify(request),{flag:"wx"});
+          await received.setInputFiles("#scenarioRequest",path.join(dir,name));args.push(name);
+        }
+        args.push("selected-body.json",model);
+        await received.click(`#${op}`);await received.waitForFunction(op=>new RegExp(`^${op} (complete|refused)`).test(
+          document.getElementById("status").textContent),op,{timeout:900000});
+        assert.equal(await received.isVisible("#error"),false,await received.textContent("#error"));
+        // Manufacturing and scenario sections each retain their own exact body-input download.
+        const bodyLinks=received.locator("#outputs a[download='body-input.json']");
+        const event=received.waitForEvent("download");await bodyLinks.last().click();const downloaded=await event;
+        assert.equal(await downloaded.failure(),null);assert.equal(fs.readFileSync(await downloaded.path(),"utf8"),bodyText);
+        const reportName=mode==="manufacturing"?"design-study.json":mode==="single"?"design-scenario-study.json":"design-scenario-matrix-study.json";
+        const actual=JSON.parse(await receivedBytes(reportName));
+        const replay=spawnSync(ftx,args,{cwd:dir,encoding:"utf8",stdio:["ignore","pipe","inherit"]});
+        assert.equal(replay.status,0,replay.stdout);const expected=JSON.parse(replay.stdout);
+        assert.deepEqual(actual,expected.result||expected);
+        if(op==="scenario") for(const row of actual.cases||[{scenario:actual.scenario}]) {
+          assert.equal(row.scenario.body_fit.shape_source.refitted,false);
+          assert.equal(row.scenario.body_fit.shape_source.image_poses_reused,false);
+          assert.deepEqual(row.scenario.body_fit.source_fit,saved);
+        }
+      }
+      check(true,"accepted study source: exact imported report, measurements and ordinary pose replay identically through native manufacturing, single and named scenarios");
       await received.click("#clearRoundImport");
       assert.equal(await received.locator("#receivedBodyFiles a").count(),0);
       assert.equal(await received.locator("#outputs a").count(),0);assert.equal(await received.isEnabled("#fold"),false);

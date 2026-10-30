@@ -4413,6 +4413,26 @@ The browser material preview also retains accepted image-fit shapes and exact mo
 context from a pattern round, with fresh wearer association and no automatic execution (`ftx-onn.22`).
 Independent camera/anatomical and physical garment acceptance remain separate.
 
+### 25.125 Reuse the selected accepted body throughout material studies
+
+The material workbench now selects one explicit body source for body-constrained manufacturing and
+fresh single or named scenario studies. It can reuse the accepted report, ordinary pose, local model
+and wearer association already selected for preview, including an imported pattern-round context.
+The page embeds original report and optional measurement text in the existing `ftx-scenario-body/1`
+request. Existing Rust shape admission, comparison without refitting and canonical fit gates remain
+authoritative; the browser creates no body estimates or new fitting authority.
+
+The other explicit modes retain ordinary measurement fitting and independently authored body requests.
+Missing, malformed or refused selected sources never switch modes. Consumed source, pose, model and
+association changes withdraw affected results and pending work; unrelated inputs leave independent
+studies and ordinary manufacturing intact. Exact body input remains downloadable for replay.
+
+This software integration is tracked by `ftx-onn.23`. Focused selection/handoff checks and the complete
+default browser-state suite pass. The model-backed actual-browser/native lane now covers preview,
+manufacturing, single scenarios and named matrices, but its conditional execution remains a separate
+gate. Numerical body acceptance and computed design admission do not establish physical garment fit.
+See [browser-material-workbench.md](docs/browser-material-workbench.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -37,6 +37,20 @@ for (const op of operations) {
 }
 const text = value => JSON.stringify(value, null, 2);
 const has = id => roundFiles.has(id) || !!$(id).files.length;
+const studyBodyMode = () => $("studyBodySource").value || "measurements";
+function studyBodyReady() {
+  const mode = studyBodyMode();
+  if (mode === "accepted") return has("bodyFitFile") && $("bodyFitConsent").checked;
+  if (mode === "request") return has("scenarioBody");
+  return mode === "measurements" && has("measurements");
+}
+function bodyDependentStudies(id) {
+  const mode = studyBodyMode();
+  const used = id === "body" || (id === "scenarioBody" && mode === "request") ||
+    (id === "measurements" && (mode === "measurements" || mode === "accepted")) ||
+    (["bodyFitFile", "bodyFitConsent", "bodyArmDeg"].includes(id) && mode === "accepted");
+  return used ? ["scenario", ...($("studyOnBody").checked ? ["study"] : [])] : [];
+}
 function controls() {
   for (const el of commands) el.disabled = !ready || !!pending;
   $("bind").disabled ||= !source || !interfaceReady;
@@ -66,8 +80,8 @@ function controls() {
   $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
   for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
   $("study").disabled ||= !source || !has("studyRequest");
-  if ($("studyOnBody").checked) $("study").disabled ||= !has("body") || (!has("scenarioBody") && !has("measurements"));
-  $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || (!has("scenarioBody") && !has("measurements"));
+  if ($("studyOnBody").checked) $("study").disabled ||= !has("body") || !studyBodyReady();
+  $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || !studyBodyReady();
   if ($("combinationMode").checked && !combinationGroups.size) {
     $("study").disabled = true; $("scenario").disabled = true;
   }
@@ -139,8 +153,8 @@ function start() {
     error(e.message || "The worker failed; reload the page."); controls();
   };
 }
-function invalidate(keys) {
-  if (pending) start(); // terminate synchronous Rust work; never wait for its stale success
+function invalidate(keys, dependentOnly = false) {
+  if (pending && (!dependentOnly || keys.includes(pending.op))) start(); // terminate affected Rust work; never wait for its stale success
   clear(keys); $("error").hidden = true; $("progress").textContent = ""; controls();
 }
 function link(key, parent, f) {
@@ -2891,6 +2905,26 @@ async function read(id, binary = false) {
   if (!binary) JSON.parse(data);
   return data;
 }
+function acceptedBodyAngle() {
+  const angle = $("bodyArmDeg").value.trim();
+  if (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180) {
+    throw Error("Supply a finite drape arm angle from 0 to 180 degrees.");
+  }
+  return Number(angle);
+}
+async function studyBodyInput() {
+  const mode = studyBodyMode();
+  if (mode === "measurements") return read("measurements");
+  if (mode === "request") return read("scenarioBody");
+  if (mode !== "accepted") throw Error("Choose a supported study body source.");
+  if (!has("bodyFitFile")) throw Error("Choose an accepted body-fit report for the selected study body source.");
+  if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before running body-dependent studies.");
+  const angle = acceptedBodyAngle(), fit = await read("bodyFitFile");
+  const measurements = has("measurements") ? await read("measurements") : "{}";
+  // The existing Rust request is the authority. Embed validated source text without rounding its numbers.
+  return '{"schema":"ftx-scenario-body/1","measurements":' + measurements +
+    ',"accepted_body_fit":' + fit + ',"arm_abduction_deg":' + angle + '}';
+}
 async function readGarmentcode(id) {
   const f = $(id).files[0]; if (!f) throw Error(`Choose ${id} first.`);
   if (f.size > 4 * 1024 * 1024) throw Error("Each GarmentCode input is limited to 4 MiB.");
@@ -3029,7 +3063,7 @@ async function execute(op) {
       if (op === "study") msg.onBody = $("studyOnBody").checked;
       if (op === "scenario" || msg.onBody) {
         if (op === "scenario") msg.scenarioRequest = await read("scenarioRequest");
-        msg.measurements = await read(has("scenarioBody") ? "scenarioBody" : "measurements");
+        msg.measurements = await studyBodyInput();
         msg.bytes = await read("body", true);
       }
     }
@@ -3040,11 +3074,8 @@ async function execute(op) {
       if (op === "fold") {
         if (has("bodyFitFile")) {
           if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before draping.");
-          const angle = $("bodyArmDeg").value.trim();
-          if (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180) {
-            throw Error("Supply a finite drape arm angle from 0 to 180 degrees.");
-          }
-          msg.bodyFit = await read("bodyFitFile"); msg.bodyFitConsent = true; msg.armDeg = Number(angle);
+          const angle = acceptedBodyAngle();
+          msg.bodyFit = await read("bodyFitFile"); msg.bodyFitConsent = true; msg.armDeg = angle;
         }
         msg.bytes = await read("body", true); msg.selfContactMm = $("selfContact").checked ? 2 : 0;
       }
@@ -3244,42 +3275,41 @@ for (const [id, operation] of [["compressionRequest", "pressure"], ["compression
     invalidate([operation]);
   });
 }
-for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","vaporSurface","coverage","scenario"], fit:["exports","fold","heat","vaporSurface","coverage"],
-  body:["fold","heat","vaporSurface","coverage","scenario"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
+for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
+  body:["fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   stockRequest:["stock"], sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
-  treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:["scenario"] })) {
+  treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
     if (id === "measurements" || id === "fit" || id === "body") {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
       if (id === "body") showReceivedBody();
     }
-    const affected = id === "measurements" && has("scenarioBody") ? keys.filter(k => k !== "scenario") : [...keys];
-    if ($("studyOnBody").checked && (id === "body" || id === "scenarioBody" || (id === "measurements" && !has("scenarioBody")))) affected.push("study");
-    invalidate(affected);
+    invalidate([...keys, ...bodyDependentStudies(id)], ["measurements", "fit", "body", "selfContact", "scenarioBody"].includes(id));
   });
 }
 $("bodyFitFile").addEventListener("change", () => {
   ++roundRead; roundToken = null; window.opener = null; roundFiles.delete("bodyFitFile");
   showReceivedBody();
   $("bodyFitConsent").checked = false;
-  invalidate(["fold", "heat", "vaporSurface", "coverage"]);
+  invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies("bodyFitFile")], true);
 });
 for (const id of ["bodyFitConsent", "bodyArmDeg"]) {
   $(id).addEventListener(id === "bodyArmDeg" ? "input" : "change", () => {
     ++roundRead; roundToken = null; window.opener = null;
-    invalidate(["fold", "heat", "vaporSurface", "coverage"]);
+    invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
   });
 }
 $("clearBodyFit").onclick = () => {
   ++roundRead; roundToken = null; window.opener = null;
   $("bodyFitFile").value = ""; roundFiles.delete("bodyFitFile"); $("bodyFitConsent").checked = false;
   showReceivedBody();
-  invalidate(["fold", "heat", "vaporSurface", "coverage"]);
+  invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies("bodyFitFile")], true);
 };
-$("studyOnBody").addEventListener("change", () => invalidate(["study"]));
+$("studyOnBody").addEventListener("change", () => invalidate(["study"], true));
+$("studyBodySource").addEventListener("change", () => invalidate(["scenario", ...($("studyOnBody").checked ? ["study"] : [])], true));
 $("thermalPointTemperature").addEventListener("input", invalidateThermalPoint);
 $("thermalRequest").addEventListener("change", () => invalidate(["thermalHistory"]));
 $("clearCoverageBridges").onclick = () => { $("coverageBridges").value = ""; invalidate(["coverage"]); };
