@@ -65,7 +65,8 @@ test('compiled WASM worst-case sewn-body studies reproduce native constraints an
     const previous = globalThis.ftxProgress;
     globalThis.ftxProgress = () => {};
     try {
-      for (const label of ['worst', 'worst-budget', 'worst-bounds', 'worst-bounds-budget']) {
+      for (const label of ['worst', 'worst-budget', 'worst-bounds', 'worst-bounds-budget',
+        'restart-single', 'restart-complete', 'restart-budget']) {
         const bounded = label.includes('bounds'), limited = label.endsWith('budget');
         const model = new ftx.WebBody(new Uint8Array(bytes));
         let report;
@@ -78,6 +79,32 @@ test('compiled WASM worst-case sewn-body studies reproduce native constraints an
         const selected = search.rows.find(row => row.selected);
         const guidance = search.consumer_guidance;
         assert.equal(guidance.case_aggregation, 'worst_case');
+        if (label.startsWith('restart-')) {
+          assert.equal(search.global_optimum_claim, false);
+          assert.equal(search.complete_search, false);
+          assert.equal(guidance.reserved_evaluations, 24);
+          if (label === 'restart-single') {
+            assert.equal(search.search_starts, undefined);
+            assert.equal(search.evaluations, 2);
+          } else {
+            assert.equal(search.search_starts.length, 3);
+            assert.equal(search.search_starts.reduce((n, start) => n + start.evaluations, 0), search.evaluations);
+            assert.equal(search.search_starts[0].stop_reason, 'minimum_steps');
+          }
+          if (label === 'restart-complete') {
+            assert.equal(search.evaluations, 5);
+            assert.equal(selected.design.variables_mm.length, -5);
+            assert.equal(search.search_starts[2].evaluations, 0);
+            assert.equal(search.rows[4].design.variables_mm.length, -10);
+            assert.equal(search.rows[4].consumer_cases[0].comparison.eligible, false);
+            assert.match(search.rows[4].refusal.message, /geometrically settled/);
+          } else {
+            assert.equal(selected, undefined);
+            assert.equal(guidance.best_reading, null);
+            if (limited) assert.equal(search.rows[2].consumer_cases[1].refusal.code, 'budget_exceeded');
+          }
+          continue;
+        }
         assert.equal(guidance.best_case_key, 'weight');
         assert.equal(selected.design.variables_mm.length, limited ? 0 : -20);
         assert.equal(search.global_optimum_claim, false);

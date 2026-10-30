@@ -1,6 +1,9 @@
 //! Actual sewn-body worst-case execution; no synthetic substitute for a simulation result.
 use super::*;
 
+#[path = "restarts.rs"]
+mod restarts;
+
 pub(super) fn replay(
     model: &ftx_body::AnnyModel,
     digest: &str,
@@ -8,6 +11,13 @@ pub(super) fn replay(
     dir: &Path,
     capture: Option<&Path>,
 ) {
+    restarts::replay(
+        model,
+        digest,
+        [pattern, study, scenario, body],
+        dir,
+        capture,
+    );
     for (bounded, limited, label) in [
         (false, false, "worst"),
         (false, true, "worst-budget"),
