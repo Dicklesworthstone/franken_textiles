@@ -1,6 +1,6 @@
 # FrankenTextiles reality check — 2026-10-20
 
-**Latest comprehensive assessment:** [2026-10-23, source `2bc8b402`](#2026-10-23-comprehensive-reality-check).
+**Latest comprehensive assessment:** [2026-10-30, source `d58ba010`](#2026-10-30-comprehensive-reality-check).
 Earlier findings and follow-through below are retained as dated evidence; the latest assessment
 states which are resolved, current, failed or still unverified.
 
