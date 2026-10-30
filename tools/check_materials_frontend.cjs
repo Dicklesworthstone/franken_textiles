@@ -4449,6 +4449,69 @@ test('marker selection forwards a zero-based index and withdraws stale preview r
   }
 });
 
+test('qualified knife programs retain exact process scope and independent refusals in standalone and study routes', async () => {
+  const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);p.select('cutOptions');
+  const selected={runs:[{path:{placement:0,internal_cut:0}},{path:{placement:0}}],
+    cut_length_mm:480,travel_length_mm:120,cutting_seconds:4.8,travel_seconds:0.6,
+    lift_lower_seconds:0.4,modeled_path_seconds:5.8};
+  // Synthetic renderer data; source and geometry admission are exercised in native integration tests.
+  const program={schema:'ftx-knife-cut-program/1',machine_sha256:'<exact machine configuration>',
+    markers:[{marker:1,qualification:'<independent knife observation>',material_sha256:'<exact textile>',
+      geometry_sha256:'<exact marker>',thickness_mm:[0.8,1.1],baseline:selected,selected,improved:false}],
+    budget_exhausted:true,optimality_proven:false,physical_cutting_validated:false,hardware_execution_authorized:false};
+  for(const [op,routed] of [['cut',false],['study',false],['scenario',false],['study',true],['scenario',true]]) {
+    const plan={schema:'ftx-roll-cut-plan/1',pattern_sha256:'pattern-lock',rolls:[{},{}],program};
+    const row=studyRow('qualified'),study=studyReport([row]);
+    if(routed) {
+      row.cutting=omitted();
+      row.cutting_job=outcome({complete_inventory:true,inventory:[{piece:'front',stock:'roll'}],roll:plan});
+    } else row.cutting=outcome(plan);
+    row.purchasing=outcome({currency:'USD',complete_offer_coverage:true});
+    row.metrics.least_observed_independent_order_total=12.5;
+    const report=op==='cut'?plan:op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const label=op==='cut'?'Cutting plan':routed?'qualified: roll route':'qualified';
+    await p.e[op].onclick();
+    const raw=JSON.stringify(report);
+    p.emit(report,[{name:'knife-program-report.json',text:raw,mime:'application/json'}],raw);
+    const s=section(p,op==='cut'?'cut':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+    assert.deepEqual(plain(table(`${label}: material-qualified knife paths`).children[2].children.map(n=>n.textContent)),
+      ['2','<independent knife observation>','2','480','120','4.8','0.6','0.4','5.8','Complete authored traversal']);
+    assert.match(visibleText(s),/Internal cuts finish before exterior pieces are released/);
+    assert.match(visibleText(s),/Loading, acceleration, blade turning and inspection are outside this model/);
+    assert.match(visibleText(s),/ordering budget ended; complete authored traversals remain available/);
+    assert.match(visibleText(s),/does not establish physical cut quality, an optimal route or permission to run a machine/);
+    const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===`${label}: exact knife paths, material locks and process limits (display only)`);
+    source.open=true;source.handlers.toggle();
+    assert.match(visibleText(source),/<exact machine configuration>/);
+    assert.match(visibleText(source),/<exact textile>/);
+    const download=descendants(s).find(n=>n.download==='knife-program-report.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+
+    delete plan.program;
+    plan.program_refusal={code:'MISSING_DATA',message:'No qualified knife observation for <changed textile>'};
+    await p.e[op].onclick();p.emit(report);
+    assert.equal(table(`${label}: material-qualified knife paths`),undefined);
+    assert.match(visibleText(s),/knife process unavailable — No qualified knife observation for <changed textile>/);
+    assert.match(visibleText(s),/Valid marker geometry and independent purchasing remain available/);
+    assert.doesNotMatch(visibleText(s),/Modeled path time|5\.8|exact knife paths, material locks/);
+    assert.equal(p.live.has(download.href),false);
+    if(op==='cut') assert.equal(JSON.parse(s.children[1].textContent).rolls.length,2);
+    else {
+      const manufacturing=table('Independent manufacturing outcomes').children[2].children.map(n=>n.textContent);
+      assert.equal(manufacturing[2],routed?'Not requested':'Available');
+      assert.equal(manufacturing[4],'Available');
+      assert.equal(manufacturing[8],'12.5 USD');
+      if(routed) assert.equal(table('Complete cutting jobs — rolls, hides and remnants').children[2].children[1].textContent,'Available');
+    }
+  }
+  p.e.cutOptions.handlers.change();p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'cut').hidden,true);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
 test('grouped marker purchasing displays each whole material order once without per-marker samples', async () => {
   const p=await pageModule(); await p.load(); await p.bind();
   p.select('cutOptions'); p.select('quotes'); p.select('market'); await p.e.price.onclick();
@@ -7246,10 +7309,30 @@ test('evaporation and incoming liquid mechanics expose separate mass and bulk tr
   assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
   const download=descendants(s).find(n=>n.download==='coupled-exchange.json');
   assert.equal(await p.blobs.get(download.href).text(),raw);
+  assert.equal(table('A: liquid exchange momentum and energy residuals').children[1].children.length,3);
+  assert.doesNotMatch(visibleText(s),/Inelastic mixing loss/);
+  const thermalBefore=visibleText(table('A: textile evaporation and sensible energy'));
+  mechanics.schema='ftx-coupled-liquid-mechanics-result/2';
+  mechanics.exchange.incoming_momentum_kg_m_s=[0.002,0.001,-0.005];
+  mechanics.exchange.incoming_kinetic_energy_j=0.0015;
+  mechanics.exchange.mixing_dissipation_j=0.001;
+  await p.e.scenario.onclick();p.emit(report);
+  assert.equal(table('A: co-moving liquid transfer — separate from thermal energy'),undefined);
+  assert.deepEqual(plain(table('A: prescribed incoming liquid transfer — separate from thermal energy').children[3].children.map(n=>n.textContent)),
+    ['Incoming liquid and condensed vapor','0.01','0.002, 0.001, -0.005','0.0015','-0.02']);
+  const residual=table('A: liquid exchange momentum and energy residuals');
+  assert.equal(residual.children[1].children[3].textContent,'Inelastic mixing loss (J)');
+  assert.deepEqual(plain(residual.children[2].children.map(n=>n.textContent)),['0, 0, 0','0','0','0.001']);
+  assert.equal(visibleText(table('A: textile evaporation and sensible energy')),thermalBefore,
+    'Mechanical mixing loss must not be relabeled as sensible or latent thermal input');
+  assert.match(visibleText(s),/explicitly prescribed world-frame momentum/);
+  assert.doesNotMatch(visibleText(s),/Incoming liquid, condensed vapor and outgoing vapor share the local endpoint cloth velocity/);
   evaluation.motion=refused('coupled liquid mechanics left its source domain');
   await p.e.scenario.onclick(); p.emit(report);
   assert.equal(table('A: evaporation changes moving cloth mass'),undefined);
   assert.equal(table('A: liquid exchange changes moving cloth mass'),undefined);
+  assert.equal(table('A: prescribed incoming liquid transfer — separate from thermal energy'),undefined);
+  assert.equal(table('A: liquid exchange momentum and energy residuals'),undefined);
   assert.match(visibleText(s),/coupled liquid mechanics left its source domain/);
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
@@ -9016,8 +9099,8 @@ test('compiled WASM routed shared fixtures and attending workers replay exact na
     }
   });
 
-test('compiled WASM evaporating, supplied and condensing textile-water objectives and moving mass replay native commands and named scenarios',
-  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY)}, async()=>{
+test('compiled WASM evaporating, supplied and condensing textile-water objectives, moving mass and incoming momentum replay native commands and named scenarios',
+  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY)}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
@@ -9027,7 +9110,10 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
       for(const [dir,kind] of [[process.env.FTX_COUPLED_WATER_REPLAY,'initial'],[process.env.FTX_SUPPLIED_WATER_REPLAY,'supplied'],
         [process.env.FTX_CONDENSED_WATER_REPLAY,'condensed'],[process.env.FTX_VARIABLE_WATER_REPLAY,'variable'],
         [process.env.FTX_EVAPORATING_MECHANICS_REPLAY,'mechanics'],[process.env.FTX_MECHANICAL_WATER_REPLAY,'supplied-mechanics'],
-        [process.env.FTX_CONDENSING_MECHANICS_REPLAY,'condensing-mechanics']].filter(([dir])=>dir)) {
+        [process.env.FTX_CONDENSING_MECHANICS_REPLAY,'condensing-mechanics'],
+        [process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY,'supplied-impulse-mechanics'],
+        [process.env.FTX_CONDENSING_IMPULSE_REPLAY,'condensing-impulse-mechanics']].filter(([dir])=>dir)) {
+        const prescribed=kind.includes('impulse');
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8');
         const bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
         for(const name of ['single','matrix']) {
@@ -9041,8 +9127,8 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
         for(const report of name==='single'?[result.result]:result.result.cases) {
           assert.deepEqual(report.comparison.frontier,['qualified']);
           const readings=report.comparison.alternatives.find(row=>row.key==='qualified').readings;
-          if(kind==='supplied'||kind==='supplied-mechanics') assert.ok(readings.textile_water_supplied_mass_kg.value>0);
-          else if(kind==='condensed'||kind==='condensing-mechanics') {
+          if(kind.startsWith('supplied')) assert.ok(readings.textile_water_supplied_mass_kg.value>0);
+          else if(kind==='condensed'||kind.startsWith('condensing')) {
             assert.ok(readings.textile_water_condensed_mass_kg.value>0);
             if(kind==='condensed') assert.ok(readings.textile_water_condensation_latent_energy_j.value>0);
           }
@@ -9053,7 +9139,7 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
           assert.ok(readings.textile_water_evaporated_mass_kg.value>0);
           const motion=report.simulations.find(row=>row.key==='qualified').evaluation.result.motion.result;
           const heat=motion.transient_surface.result;
-          if(kind==='condensing-mechanics') assert.ok(heat.surface_water.condensation_latent_energy_j>0);
+          if(kind.startsWith('condensing')) assert.ok(heat.surface_water.condensation_latent_energy_j>0);
           if(kind==='variable') {
             assert.ok(heat.model.columns.length>0);
             for(const column of heat.model.columns) {
@@ -9071,11 +9157,26 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
               assert.equal(mechanics.remaining_liquid_mass_kg,0);
               assert.ok(mechanics.initial_liquid_mass_kg>0);
             } else {
-              assert.equal(mechanics.schema,'ftx-coupled-liquid-mechanics-result/1');
+              assert.equal(mechanics.schema,prescribed?'ftx-coupled-liquid-mechanics-result/2':'ftx-coupled-liquid-mechanics-result/1');
               assert.ok(mechanics.exchange.incoming_mass_kg>0);
               assert.equal(mechanics.exchange.outgoing_mass_kg,mechanics.evaporated_liquid_mass_kg);
               assert.ok(Math.abs(mechanics.remaining_liquid_mass_kg-heat.surface_water.remaining_liquid_kg)<1e-14);
               assert.ok(mechanics.exchange.incoming_kinetic_energy_j>=0);
+              if(prescribed) {
+                const exchange=mechanics.exchange,velocity=[0.2,0.1,-0.5];
+                assert.deepEqual(mechanics.qualification.bindings.band.incoming_velocity_world_m_s,velocity);
+                assert.ok(exchange.mixing_dissipation_j>0);
+                assert.equal(motion.initial_sample.liquid_mechanics.exchange.mixing_dissipation_j,0);
+                assert.ok(Math.abs(exchange.incoming_mass_kg-heat.surface_water.supplied_liquid_kg-
+                  (heat.surface_water.condensed_liquid_kg||0))<1e-14);
+                for(const [axis,speed] of velocity.entries()) {
+                  assert.ok(Math.abs(exchange.incoming_momentum_kg_m_s[axis]-exchange.incoming_mass_kg*speed)<1e-12);
+                  assert.ok(Math.abs(mechanics.transfer_momentum_residual_kg_m_s[axis])<1e-12);
+                }
+                assert.ok(Math.abs(exchange.incoming_kinetic_energy_j-
+                  0.5*exchange.incoming_mass_kg*velocity.reduce((sum,speed)=>sum+speed*speed,0))<1e-12);
+                assert.ok(Math.abs(mechanics.transfer_kinetic_residual_j)<1e-12);
+              } else assert.equal(mechanics.exchange.mixing_dissipation_j,undefined);
             }
             assert.ok(mechanics.exported_kinetic_energy_j>0);
             assert.ok(Math.abs(mechanics.mass_balance_residual_kg)<1e-14);

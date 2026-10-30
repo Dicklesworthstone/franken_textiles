@@ -16,6 +16,7 @@ pub mod job;
 pub mod nesting;
 pub mod preview;
 pub mod procurement;
+pub mod program;
 pub mod stock;
 
 /// Source-width admission for placement, separate from nominal purchase-unit conversion.
@@ -61,6 +62,10 @@ pub struct CutOptions {
     /// Optional shape-aware placement search; omission retains the original one-way shelf layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nesting: Option<nesting::NestingOptions>,
+    /// Optional source-qualified cold-knife traversal of the final marker geometry.
+    /// Modeled feed/travel time is not a machine command or measured production cycle time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<program::Policy>,
 }
 
 /// One physical cut piece in marker coordinates (mm, y along the stock's authored cutting axis).
@@ -144,6 +149,13 @@ pub struct CutPlan {
     pub options: CutOptions,
     /// Hash-ordered material-specific markers; one material may occupy several bounded markers.
     pub rolls: Vec<RollMarker>,
+    /// Complete material-qualified knife paths, referencing the exact final marker coordinates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program: Option<program::Report>,
+    /// Independent requested-process refusal. Valid marker geometry and purchasing remain usable;
+    /// absence of a qualified program never implies permission to cut.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program_refusal: Option<Refusal>,
     /// Fixed planning assumptions and unsupported process effects.
     pub limitations: Vec<&'static str>,
 }
@@ -462,7 +474,7 @@ impl CutPlan {
             rolls.extend(pack(material, &shapes, options)?);
         }
         let pattern_sha256 = sha256_hex(&serde_json::to_vec(raw).map_err(|e| bad(e.to_string()))?);
-        Ok(Self {
+        let mut plan = Self {
             schema: if options.maximum_marker_length_m.is_some() {
                 "ftx-roll-cut-plan/2"
             } else {
@@ -472,6 +484,8 @@ impl CutPlan {
             source_piece_ids: scope.map(|_| scope_names(pattern, &indices)),
             options: options.clone(),
             rolls,
+            program: None,
+            program_refusal: None,
             limitations: {
                 let mut limits = vec![
                     "Single-ply rectangular roll stock; on-fold pieces are physically unfolded.",
@@ -490,7 +504,16 @@ impl CutPlan {
                 }
                 limits
             },
-        })
+        };
+        if let Some(policy) = &options.program {
+            match program::validate_source(pattern, &indices)
+                .and_then(|()| program::build(&plan, policy))
+            {
+                Ok(report) => plan.program = Some(report),
+                Err(refusal) => plan.program_refusal = Some(refusal),
+            }
+        }
+        Ok(plan)
     }
 }
 

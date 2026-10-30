@@ -855,6 +855,20 @@ whole/split supplier orders, mixed-job roll routes and material studies consume 
 markers; finite-stock polygons remain independent. Omission or explicit `nominal` preserves existing
 schemas and nominal serialization. See `docs/cutting-plans.md` and `tests/{cutting,cutting_job}.rs`.
 
+**Material-qualified cold-knife paths.** Optional `CutOptions.program` supplies exact material and
+complete machine/source qualifications for the final ordinary roll markers. The full admitted
+thickness interval, physical stock width and marker length fit the process/bed envelope. Strict raw
+annotation checks prevent permissive export from dropping incomplete cuts or drills. Simple disjoint
+internal paths finish before exterior releases; source coordinates, direction, instance and copy
+identity remain unchanged. Bounded nearest-path search retains a complete authored baseline whenever
+the candidate is unfinished or longer. Separate geometry and search budgets apply across all markers
+and are reserved across study alternatives/design probes. A structured `program_refusal` preserves
+valid marker geometry, quantities and independent purchasing when process admission fails.
+The report retains exact path references, material/machine/geometry hashes and separate constant-rate
+cut, raised-travel and lift/lower times. It supplies no device commands, physical cutting validation
+or hardware authorization. Native, portable, mixed-job roll and material-study consumers share this
+boundary; see `docs/cutting-plans.md`, `tests/cutting_program.rs` and the CLI cutting workflow.
+
 **Bounded split supplier orders.** Optional `market.split_orders` produces `ftx-cut-procurement/3`
 by assigning indivisible markers to current exact-material-locked offers. Each aggregated order
 reuses canonical quote rounding, capacity, continuous-cut and quantity-price evaluation. Connected

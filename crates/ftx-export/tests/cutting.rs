@@ -38,6 +38,7 @@ fn options() -> CutOptions {
         seam_allowance_mm: None,
         maximum_marker_length_m: None,
         nesting: None,
+        program: None,
     }
 }
 fn check_marker(plan: &CutPlan) {

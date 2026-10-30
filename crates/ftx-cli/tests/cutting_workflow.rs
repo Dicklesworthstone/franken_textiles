@@ -99,6 +99,133 @@ const PRICE: &[&str] = &[
 ];
 
 #[test]
+fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_studies() {
+    use ftx_export::cutting::program::{Machine, machine_sha256};
+
+    let w = Workspace::new();
+    let mut p = pattern();
+    for path in ["/fabric", "/pieces/1/fabric"] {
+        p.pointer_mut(path).unwrap()["material"]["record"]["properties"]["thickness"] = json!({"value":0.4,"unit":"mm","source":"t","evidence":"estimate",
+                "method":"Synthetic clearance for software replay, not measured knife applicability"});
+    }
+    p["pieces"][0]["internal"] = json!([
+        {"kind":"cut","closed":false,"pts":[[15.,20.],[25.,20.]]}
+    ]);
+    let mut options = options();
+    let baseline: Value = serde_json::from_str(
+        &ftx_wasm::manufacturing::cut_plan(&p.to_string(), &options.to_string()).unwrap(),
+    )
+    .unwrap();
+    let machine: Machine = serde_json::from_value(json!({"id":"synthetic-table",
+        "blade":"synthetic-cold-knife","bed_mm":[500.,500.],"maximum_thickness_mm":2.,
+        "maximum_feed_mm_s":100.,"travel_mm_s":200.,"lift_lower_seconds":0.25,
+        "start_mm":[0.,0.],"return_to_start":true}))
+    .unwrap();
+    let machine_hash = machine_sha256(&machine).unwrap();
+    let qualifications: Vec<_> = baseline["rolls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(i, roll)| {
+            json!({"id":format!("synthetic-knife-{i}"),"material_sha256":roll["material"]["sha256"],
+            "machine_sha256":machine_hash,"thickness_mm":[0.2,0.8],"feed_mm_s":20.,
+            "directions":"all_in_plane","evidence":"estimate","allow_estimates":true,
+            "source":{"reference":"test:knife-workflow","accessed_on":"2026-10-30",
+                "note":"Artificial process inputs for deterministic consumer equality"},
+            "method":"Synthetic constant-rate cut, raised travel and lift/lower phases"})
+        })
+        .collect();
+    options["program"] = json!({"model":"qualified_cold_knife_paths/1","machine":machine,
+        "qualifications":qualifications,"ordering":"nearest_path","work_limit":1000});
+    w.write("pattern.json", &p);
+    w.write("options.json", &options);
+    let portable: Value = serde_json::from_str(
+        &ftx_wasm::manufacturing::cut_plan(&p.to_string(), &options.to_string()).unwrap(),
+    )
+    .unwrap();
+    let workbench = w.ok(PLAN);
+    assert_eq!(workbench, portable);
+    let primary = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&w.0)
+        .arg("materials")
+        .args(PLAN)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        primary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&primary.stderr)
+    );
+    let primary: Value = serde_json::from_slice(&primary.stdout).unwrap();
+    assert_eq!(primary["result"], portable);
+    assert_eq!(portable["rolls"], baseline["rolls"]);
+    let program = &portable["program"];
+    assert_eq!(program["schema"], "ftx-knife-cut-program/1");
+    assert_eq!(program["markers"].as_array().unwrap().len(), 2);
+    assert_eq!(program["hardware_execution_authorized"], false);
+    for marker in program["markers"].as_array().unwrap() {
+        let run = &marker["selected"];
+        assert!(run["modeled_path_seconds"].as_f64().unwrap() > 0.);
+        assert!(
+            run["travel_length_mm"].as_f64().unwrap()
+                <= marker["baseline"]["travel_length_mm"].as_f64().unwrap()
+        );
+    }
+    let mut changed = p["fabric"]["material"].clone();
+    changed["record"]["structure"] =
+        json!({"finish":"Synthetic different finish requiring a new process observation"});
+    let study = json!({"schema":"ftx-material-study/1","cutting":options,
+    "variants":[
+        {"key":"qualified","changes":{"schema":"ftx-material-bindings/1","default":p["fabric"]["material"]}},
+        {"key":"changed-finish","changes":{"schema":"ftx-material-bindings/1","default":changed}}
+    ]});
+    let report: Value = serde_json::from_str(
+        &ftx_wasm::materials::study(&p.to_string(), &study.to_string()).unwrap(),
+    )
+    .unwrap();
+    let rows = report["alternatives"].as_array().unwrap();
+    let qualified = rows.iter().find(|row| row["key"] == "qualified").unwrap();
+    let changed = rows
+        .iter()
+        .find(|row| row["key"] == "changed-finish")
+        .unwrap();
+    assert_eq!(qualified["cutting"]["status"], "available");
+    for roll in qualified["cutting"]["result"]["rolls"].as_array().unwrap() {
+        let original = baseline["rolls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|original| {
+                original["material"]["authored"]["id"] == roll["material"]["authored"]["id"]
+            })
+            .unwrap();
+        assert_eq!(roll["material"], original["material"]);
+    }
+    assert!(
+        qualified["cutting"]["result"]
+            .get("program_refusal")
+            .is_none(),
+        "{}",
+        qualified["cutting"]["result"]["program_refusal"]
+    );
+    assert_eq!(qualified["cutting"]["result"]["program"], *program);
+    assert_eq!(changed["cutting"]["status"], "available");
+    assert!(changed["cutting"]["result"].get("program").is_none());
+    assert!(
+        changed["cutting"]["result"]["program_refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("qualification")
+    );
+    assert_eq!(
+        changed["metrics"]["stock_area_m2"],
+        qualified["metrics"]["stock_area_m2"]
+    );
+}
+
+#[test]
 fn bounded_markers_and_combined_orders_reach_both_native_commands() {
     let w = setup();
     let mut policy = options();

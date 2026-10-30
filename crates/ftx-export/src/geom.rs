@@ -818,7 +818,7 @@ fn polyline_dist(p: Vec2, pts: &[Vec2], closed: bool) -> f64 {
         return norm(p - pts[0]);
     }
     let n = pts.len();
-    let segs = if closed { n } else { n - 1 };
+    let segs = if closed { n } else { n.saturating_sub(1) };
     (0..segs)
         .map(|i| seg_dist(p, pts[i], pts[(i + 1) % n]))
         .fold(f64::INFINITY, f64::min)

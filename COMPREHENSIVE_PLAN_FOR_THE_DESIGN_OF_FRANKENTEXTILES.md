@@ -4635,6 +4635,43 @@ This workbench increment is tracked by `ftx-ds2.7`, with route-cost engine cover
 The new views preserve the numerical engine's existing scope; they do not establish empirical
 garment fit, a complete continuous frontier or physical production qualification.
 
+### 25.139 Transfer declared incoming water momentum into the moving garment
+
+Source-qualified wet mechanics can now prescribe one incoming world-frame velocity per retained
+instance. Accepted mechanical intervals mix gross supplied and condensed water with the actual
+welded textile, accessory and retained-liquid inertia, then export evaporated water at the mixed
+velocity. Equal incoming and outgoing masses can therefore change the garment's momentum without
+changing its final mass. Exact material/interface locks and the entire admitted loading and
+temperature domains remain prerequisites; missing qualification never creates a default wet law.
+
+The ordinary motion, thermal, material-study, native and portable paths retain the same mass,
+momentum and bulk-energy accounting. Inelastic mixing loss remains explicit and separate from
+sensible/latent heat. Existing co-moving requests retain their original semantics. This increment
+is tracked by `ftx-vc2.3.2`; see [textile-surface-water.md](docs/textile-surface-water.md).
+Independent conservation and step-refinement checks establish the numerical closure; measured wet
+response, rain interception, drainage, time-varying or phase-specific flow velocities, mixing-heat
+partition and empirical garment agreement remain separate work.
+
+### 25.140 Turn material-aware markers into qualified cold-knife path plans
+
+The ordinary roll-cutting request now supports a material-qualified knife-program consumer over
+its final grain-aware marker geometry. Exact material and complete machine/source locks determine
+admissible thickness, stock/bed dimensions and feed. Internal cuts precede exterior releases;
+authored path coordinates, directions, instances and garment copies remain authoritative. Bounded
+nearest-path ordering retains a complete authored traversal when it is unfinished or longer.
+Complete path lengths and declared feed, raised-travel and lift/lower phases supply modeled time.
+Shared study reservations bound geometry and ordering work across alternatives and design probes.
+
+A missing or invalid knife qualification refuses that process consumer while preserving valid
+nesting, stock requirements and independent purchasing. Malformed source cut points, ambiguous
+closure and unsupported drills cannot disappear through permissive geometric export and become a
+qualified program. Native, portable, study and mixed-job roll consumers use this same boundary.
+This increment is tracked by `ftx-tm7.1`; see [cutting-plans.md](docs/cutting-plans.md).
+Independent machine/process qualification still needs appropriate pressure/conditioning semantics
+for clearance, measured workholding and cutting quality. Finite-hide toolpaths, acceleration and
+corner/blade dynamics, thermal cutting, sensing/interlocks and explicit device execution remain
+future capabilities. A reviewable program and modeled duration grant no hardware authorization.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -608,19 +608,22 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         (h.mechanical_coupling?.exchange ? "Qualified supplied liquid, condensed vapor and evaporation update cloth inertia and gravity after every accepted interval. " :
           h.mechanical_coupling ? "Qualified evaporation updates cloth inertia and gravity after every accepted interval; co-moving vapor removes its own momentum without accelerating the remaining cloth. " :
           "The liquid adds no mechanical water mass. ") +
+        (h.mechanical_coupling?.schema === "ftx-coupled-liquid-mechanics-result/2" ?
+          "Incoming water also transfers its explicitly prescribed world-frame momentum. Inelastic mixing loss is reported separately from sensible and latent heat. " : "") +
         "It does not infer absorbed moisture, wicking, body sweat or wet material properties. Comparison admission checks the complete liquid and vapor ledger, " +
         "including exact material bindings and canonical vapor paths, before temperature, energy or textile-water objectives can qualify.";
       parent.append(scope);
       detail(parent, `${key}: textile liquid source, exact patches and canonical vapor paths (display only)`, water);
       if (h.mechanical_coupling) {
         const m = h.mechanical_coupling, exchange = m.exchange;
+        const prescribed = m.schema === "ftx-coupled-liquid-mechanics-result/2";
         const inertia = table(parent, `${key}: ${exchange ? "liquid exchange" : "evaporation"} changes moving cloth mass`,
           ["Dry cloth + accessories (kg)", "Initial water (kg)", "Remaining water (kg)", "Current inertial mass (kg)", "Mass residual (kg)"]);
         cells(inertia, [metric(m.substrate_and_attached_mass_kg), metric(m.initial_liquid_mass_kg),
           metric(m.remaining_liquid_mass_kg), metric(m.total_inertial_mass_kg), metric(m.mass_balance_residual_kg)]);
         const vector = value => Array.isArray(value) ? value.map(metric).join(", ") : "Unknown";
         if (exchange) {
-          const transfer = table(parent, `${key}: co-moving liquid transfer — separate from thermal energy`,
+          const transfer = table(parent, `${key}: ${prescribed ? "prescribed incoming" : "co-moving"} liquid transfer — separate from thermal energy`,
             ["Transfer", "Mass (kg)", "Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)"]);
           cells(transfer, ["Initial admission", metric(m.initial_liquid_mass_kg), vector(exchange.initial_momentum_kg_m_s),
             metric(exchange.initial_kinetic_energy_j), metric(exchange.initial_gravitational_energy_j)]);
@@ -629,9 +632,10 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
           cells(transfer, ["Outgoing vapor", metric(exchange.outgoing_mass_kg), vector(m.exported_momentum_kg_m_s),
             metric(m.exported_kinetic_energy_j), metric(m.exported_gravitational_energy_j)]);
           const residual = table(parent, `${key}: liquid exchange momentum and energy residuals`,
-            ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)"]);
+            ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)",
+              ...(prescribed ? ["Inelastic mixing loss (J)"] : [])]);
           cells(residual, [vector(m.transfer_momentum_residual_kg_m_s), metric(m.transfer_kinetic_residual_j),
-            metric(m.transfer_gravitational_residual_j)]);
+            metric(m.transfer_gravitational_residual_j), ...(prescribed ? [metric(exchange.mixing_dissipation_j)] : [])]);
         } else {
           const transfer = table(parent, `${key}: mechanical energy carried away by vapor`,
             ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)", "Kinetic transfer residual (J)"]);
@@ -641,9 +645,12 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         const couplingScope = document.createElement("p");
         couplingScope.textContent = "Initial liquid is added co-moving after the dry drape; it is not a wet equilibrium. Each mechanical step uses its starting water mass, then accepted heat and liquid exchange update the next step. " +
           "Refine the mechanical time step to assess this first-order coupling. The thermal latent/sensible ledger remains separate from transferred bulk mechanical energy. " +
-          (exchange ? "Incoming liquid, condensed vapor and outgoing vapor share the local endpoint cloth velocity under the independent source qualification. Equal incoming and outgoing mass retain both transfer ledgers. Signed gravitational energies keep the declared world frame. These residuals check mass transfer, not the complete motion energy balance. " :
+          (exchange ? (prescribed ?
+            "Incoming liquid and condensed vapor use the prescribed world-frame velocities; outgoing vapor leaves at the mixed cloth velocity. Inelastic mixing loss is separate from thermal heat. " :
+            "Incoming liquid, condensed vapor and outgoing vapor share the local endpoint cloth velocity under the independent source qualification. ") +
+            "Equal incoming and outgoing mass retain both transfer ledgers. Signed gravitational energies keep the declared world frame. These residuals check mass transfer, not the complete motion energy balance. " :
             "Supply and condensation are unsupported in this evaporation-only mode. ") +
-          "A coupled heat or source-domain failure refuses the motion. Drainage, relative flow impact and inferred wet material properties remain unsupported.";
+          "A coupled heat or source-domain failure refuses the motion. Drainage, resolved fluid impact and inferred wet material properties remain unsupported.";
         parent.append(couplingScope);
         detail(parent, `${key}: ${exchange ? "liquid exchange" : "evaporation"} mechanics qualification and complete transfer ledger (display only)`, m);
       }
@@ -1417,6 +1424,7 @@ function manufacturingComparison(op, parent, study, computed, casePolicies = {})
     sewingParallel(parent, available(row.sewing), row.key);
     sewingRouting(parent, available(row.sewing), row.key);
     sewingAccess(parent, available(row.sewing), row.key);
+    knifeProgramResult(parent, available(row.cutting)?.program, row.key, available(row.cutting)?.program_refusal);
   }
   if (study.alternatives.some(row => row.finite_stock && row.finite_stock.status !== "not_requested")) {
     const stock = table(parent, "Finite hides and remnants — used physical inventory", ["Alternative", "Finite stock",
@@ -1678,6 +1686,35 @@ function cutAndSewPurchasingComparison(parent, alternatives, computed) {
     "A refused combined total leaves the independent fabric and thread results available for review.";
   parent.append(note);
 }
+function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
+  if (!program) {
+    if (refusal) {
+      const note = document.createElement("p");
+      note.textContent = `${label}: knife process unavailable — ${refusal.message}. Valid marker geometry and independent purchasing remain available.`;
+      parent.append(note);
+      detail(parent, `${label}: knife process refusal (display only)`, refusal);
+    }
+    return;
+  }
+  const t = table(parent, `${label}: material-qualified knife paths`,
+    ["Marker", "Process observation", "Cut paths", "Cut length (mm)", "Raised travel (mm)",
+      "Cutting (s)", "Travel (s)", "Lift / lower (s)", "Modeled path time (s)", "Travel ordering"]);
+  for (const marker of program.markers || []) {
+    const route = marker.selected;
+    cells(t, [String(marker.marker + 1), marker.qualification, metric(route?.runs?.length),
+      metric(route?.cut_length_mm), metric(route?.travel_length_mm), metric(route?.cutting_seconds),
+      metric(route?.travel_seconds), metric(route?.lift_lower_seconds), metric(route?.modeled_path_seconds),
+      marker.improved ? "Shorter complete traversal" : "Complete authored traversal"]);
+  }
+  const note = document.createElement("p");
+  note.textContent = "Internal cuts finish before exterior pieces are released. Every path retains its authored geometry and direction; " +
+    "the process observation is locked to the exact textile and full machine configuration. " +
+    "Times cover declared constant-rate cutting, raised travel and lift/lower phases. Loading, acceleration, blade turning and inspection are outside this model. " +
+    (program.budget_exhausted ? "The ordering budget ended; complete authored traversals remain available. " : "") +
+    "This reviewable plan does not establish physical cut quality, an optimal route or permission to run a machine.";
+  parent.append(note);
+  detail(parent, `${label}: exact knife paths, material locks and process limits (display only)`, program);
+}
 function cuttingJobComparison(op, parent, alternatives) {
   if (!alternatives.some(row => row.cutting_job && row.cutting_job.status !== "not_requested")) return;
   const note = document.createElement("p");
@@ -1700,6 +1737,7 @@ function cuttingJobComparison(op, parent, alternatives) {
     detail(parent, `${row.key}: routed physical inventory, source materials and purchasing outcomes (display only)`,
       r || { refusal: row.cutting_job?.refusal });
     if (!r) continue;
+    knifeProgramResult(parent, r.roll?.program, `${row.key}: roll route`, r.roll?.program_refusal);
     if (r.resolved_routes?.length) {
       const routes = table(parent, `${row.key}: cutting routes for the selected materials`,
         ["Source piece", "Stock route", "Material snapshot"]);
@@ -3116,6 +3154,7 @@ function show(op, msg) {
       }
     }
     const s = sections.get(op); s.section.hidden = false;
+    if (op === "cut") knifeProgramResult(s.comparison, r.program, "Cutting plan", r.program_refusal);
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
       op === "calibrate" ? calibrationResult(s.comparison, r) :
       op === "stripHistory" ? stripHistoryResult(s.comparison, r) :

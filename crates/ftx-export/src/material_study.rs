@@ -932,6 +932,24 @@ impl Request {
                 "material study exceeds 20000000 aggregate finite-stock work units; reduce alternatives or the per-plan work limit",
             ));
         }
+        let (knife_search, knife_geometry) = [
+            self.cutting.as_ref(),
+            self.cutting_job.as_ref().and_then(|job| job.roll.as_ref()),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|options| options.program.as_ref())
+        .fold((0usize, 0usize), |(search, geometry), program| {
+            (
+                search.saturating_add(program.work_limit.saturating_mul(alternatives)),
+                geometry.saturating_add(program.geometry_work_limit.saturating_mul(alternatives)),
+            )
+        });
+        if knife_search > 2_000_000 || knife_geometry > 20_000_000 {
+            return Err(budget(
+                "material study exceeds aggregate knife-program search or geometry work; reduce alternatives or the declared program limits",
+            ));
+        }
         if let Some(selection) = &self.sewing_selection {
             recipes::check_budget(selection, alternatives, self.sewing_copies())?;
         }

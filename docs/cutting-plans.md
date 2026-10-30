@@ -47,6 +47,96 @@ garment sets using the pattern's own physical instances, not extra mirroring. Mi
 and on-fold pieces use the existing cutter's expansion; on-fold pieces are unfolded onto single-ply
 stock. `sim:false`, simulation-only scaling and missing body placements never discard or resize cut parts.
 
+## Material-qualified cold-knife programs
+
+Add `program` to the same cutting options to obtain a complete traversal and modeled feed/travel
+time from the **final** nested or partitioned marker. Both CLIs, the portable/WASM cut planner,
+material studies and the roll side of mixed cutting jobs use the same optional consumer. Omission
+preserves ordinary marker output and needs no process or thickness data.
+
+Process admission is independent of valid marker geometry. If the requested program lacks matching
+evidence or cannot admit its paths, the result retains every ordinary marker and adds a structured
+`program_refusal`; `program` is absent. Stock requirements and purchasing remain usable, but no
+qualified cutting traversal is implied. A complete accepted program instead supplies `program` and
+omits `program_refusal`. Invalid basic geometry, scale, width, grain or cutting options still refuse
+the cut plan itself. Material studies keep these same independent outcomes after each substitution.
+
+The model is `qualified_cold_knife_paths/1`. Its `machine` declares a cold blade, rectangular bed,
+maximum sheet thickness and cutting feed, raised-tool travel speed, complete lift/lower-cycle
+duration, starting head coordinate and whether to return there. These are explicit planning inputs,
+not recommended settings. For example, this is a **synthetic software fixture**, not a qualified
+real machine:
+
+```json
+{
+  "model": "qualified_cold_knife_paths/1",
+  "machine": {
+    "id": "synthetic-table",
+    "blade": "synthetic-cold-knife",
+    "bed_mm": [500, 500],
+    "maximum_thickness_mm": 2,
+    "maximum_feed_mm_s": 100,
+    "travel_mm_s": 100,
+    "lift_lower_seconds": 0.25,
+    "start_mm": [0, 0],
+    "return_to_start": true
+  },
+  "qualifications": [],
+  "ordering": "nearest_path",
+  "work_limit": 10000
+}
+```
+
+The empty `qualifications` list intentionally refuses. Supply independently obtained records for
+the exact material snapshots being cut. Each record needs `id`, `material_sha256`, the complete
+`machine_sha256`, a positive `thickness_mm` interval, a qualified selected `feed_mm_s`,
+`directions: "all_in_plane"`, `source`, `method`, `conditions` and `evidence`. Estimated records
+also require their own `allow_estimates: true`; material estimate consent does not authorize
+estimated process evidence. `cutting::program::machine_sha256` computes the lock from the complete
+typed configuration. Reusing a machine name after changing its blade, bed, feed, travel or lift
+timing does not preserve applicability. Exactly one recipe per material is admitted, so no recipe
+is silently selected from ambiguous alternatives.
+
+The selected material supplies its ordinary source-qualified uncompressed thickness, including the
+**entire** reported interval when present. Both ends must fit the recipe, and the upper end must fit
+the machine. Missing thickness and pressure-conditioned sheet thickness refuse. Retained-liquid
+materials use the existing conditioned-property admission. Changing the textile, its finish or its
+source record invalidates the old material lock; a newly applicable recipe can then supply a different
+cutting feed while all geometry and planning code stay unchanged. An all-direction recipe is required
+because a closed outline cuts across more than one grain direction.
+
+Every internal cut finishes before any exterior outline releases a piece. The program references
+`rolls[marker].placements[placement].internal_cut_mm[index]` or that placement's `cut_mm`; it never
+regenerates, rounds, reverses, rotates the start of or compensates those paths. It preserves source
+piece, instance and physical copy IDs. Explicitly closed cutouts and open slits must be simple,
+strictly enclosed and mutually disjoint. Nested cutouts, slits in removed regions, crossing cuts,
+ambiguous closure and drills refuse instead of disappearing from the output. Drill marks are not
+silently converted to knife circles. The complete marker must fit the declared bed.
+The loaded stock uses its reported upper width when present; choosing a lower-width layout does
+not make the physical roll narrower or authorize an overhanging stock envelope.
+
+`program.markers` retains the complete authored two-phase baseline and selected traversal, material
+and geometry hashes, applied recipe, thickness interval and every raised-tool travel segment.
+`ordering: "nearest_path"` compares unchanged path starts within each phase under one shared bounded
+candidate budget. An unfinished candidate or a candidate with longer travel retains the complete
+baseline; the heuristic never claims a shortest-path proof. `ordering: "authored"` performs no
+search. Optional `geometry_work_limit` bounds validation separately (one million by default,
+at most twenty million); exhausting validation refuses instead of emitting an unchecked path.
+Both budgets are shared by every marker. Material/design studies reserve the complete configured
+limits across all alternatives or adaptive probe slots, capped at two million search comparisons and
+twenty million geometry checks in total. Material width and nesting still determine purchasing
+independently of this traversal.
+
+For each traversal, `cutting_seconds` is complete path length divided by the qualified feed rate;
+`travel_seconds` uses raised-tool distance and the locked travel rate; `lift_lower_seconds` counts
+one complete declared cycle per cut. `modeled_path_seconds` is their sum. It excludes acceleration,
+corner slowing, blade turning, loading, inspection and workholding changes, so it is **not a measured
+production cycle time**. The output always reports false physical-cutting validation and hardware
+authorization. It contains no G-code, laser/hot-wire processing, kerf compensation, collision or
+interlock approval. Numerical source admission and synthetic tests do not establish real cut quality.
+
+## Dated purchasing observations
+
 `market.json` defines a comparable price sample, not a user-entered fabric requirement:
 
 ```json
