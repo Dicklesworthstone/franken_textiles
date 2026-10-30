@@ -56,13 +56,13 @@ global optimality, empirical fit, or unavailable uncertainty. Tests: `design_stu
 canonical `validate::raw_point_tests`, and native/portable accepted-body adaptive workflow.
 
 **Consumer-guided adaptive design** (`design_adaptive.objective: consumer_comparison`, `ftx-ds2`).
-One exact nominated `material_key` and one existing nominal comparison objective guide production
-polling after the same canonical geometry/body-fit admission. Ordinary comparison constraints,
+One exact nominated `material_key` and one existing nominal or supported reported-range comparison
+objective guide production polling after the same canonical geometry/body-fit admission. Ordinary comparison constraints,
 required consumers, source/protocol checks and dominance remain the only numerical authority;
 missing or failed consumers cannot become zero scores. Polling continues after the retention
 allowance fills, replaces worse incumbents, and retains every trial's comparison/exclusions plus
 original binding/callback refusals. The first admitted protocol anchors ordering unless explicit
-mixed-protocol permission applies. Only the best bounded set of full production outputs is cached;
+mixed-protocol permission applies. A bounded set of full production outputs is cached;
 final retained geometry crosses all material alternatives and reuses the nominated material's exact
 manufacturing/scenario output. Probe-plus-final slots, repeated source documents and ordinary
 manufacturing aggregate counts are reserved up front; mass/outline/station counters and the caller's
@@ -70,14 +70,21 @@ scenario Session remain shared. A slot count is not a promise that each physical
 its per-callback work reservation. Search/step limits and later callback refusals preserve successful
 incumbents; structural/global manufacturing hard-budget errors still refuse the complete request.
 Manufacturing and single scenarios omit `case_key`. Named matrices require an explicit guidance
-case with one nominal objective and effective comparison policies for every case. Each case's
-ordinary required-consumer, constraint and protocol checks must admit a selected trial; the
+case with one nominal or supported range objective and effective comparison policies for every case.
+Each case's ordinary required-consumer, constraint and protocol checks must admit a selected trial; the
 nominated objective cannot bypass another case's exclusion. Optional independent consumer failures
 retain their original policy semantics. Per-case decisions and refusals remain in `consumer_cases`;
 retained nominees reuse complete case outputs while all case callbacks share the existing cumulative
 session budgets. Probe-plus-final reservations multiply by the case count, within the ordinary
-matrix limit. Multiple guidance objectives, reported-bounds guidance and unavailable nominees refuse
-before production callbacks. Optional receipt fields keep fit-only serialization unchanged.
+matrix limit. Multiple guidance objectives, unsupported bounded metrics and unavailable nominees refuse
+before production callbacks. Range guidance uses only existing complete mass/vapor/final-water endpoints:
+missing bounds exclude while nominal values remain visible; constraints admit the entire range.
+Only strict interval separation moves the poll center or replaces a retained trial. When full, the
+range cache replaces the latest retained trial strictly dominated by the newcomer, without inventing
+a worst incomparable interval. Overlapping/touching ranges stay unresolved; all omitted trials remain
+visible and the bounded cache is not a complete Pareto set. `consumer_guidance.basis` is present only
+for `reported_bounds`; nominal and fit-only receipt shapes stay unchanged. Existing range uncertainty
+limitations remain in force on each trial's actual geometry and fixed declared inputs.
 No new surrogate score, physical law, empirical validation or
 continuous/global optimality claim. Tests: real mass/constraint/source/reservation checks in
 `design_study/adaptive` and real selected-body sewn-scenario guidance/cache replay through both CLIs

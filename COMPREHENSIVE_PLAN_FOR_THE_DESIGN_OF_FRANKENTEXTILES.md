@@ -4433,6 +4433,24 @@ manufacturing, single scenarios and named matrices, but its conditional executio
 gate. Numerical body acceptance and computed design admission do not establish physical garment fit.
 See [browser-material-workbench.md](docs/browser-material-workbench.md).
 
+### 25.126 Guide adaptive alterations with complete reported material ranges
+
+Consumer-guided alteration discovery now accepts the ordinary comparator's supported
+`reported_bounds` objectives and constraints. Actual manufacturing or scenario consumers supply
+every endpoint; absent ranges exclude a trial without discarding its available nominal result.
+The complete range must meet each inclusive constraint, including every named operating case.
+
+Strict interval dominance drives polling and bounded incumbent replacement. Overlapping, touching
+or equal ranges remain unresolved; no midpoint or manufactured total order decides between them.
+An incoming range can replace only an incumbent it strictly dominates. Exact source protocols,
+selected consumer outputs and cumulative work reservations retain their existing authority.
+The workbench exposes the actual endpoints, objective basis and each case's admission decision.
+
+This software increment is tracked by `ftx-ds2.3`; see
+[material-screening-and-studies.md](docs/material-screening-and-studies.md). Reported material
+ranges do not establish uncertainty in geometry or empirical fit, and bounded discovery does not
+prove a complete frontier or global optimum.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

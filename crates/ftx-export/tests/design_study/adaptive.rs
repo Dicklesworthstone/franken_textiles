@@ -47,6 +47,16 @@ fn consumer_request(evaluations: usize) -> Request {
     serde_json::from_value(value).unwrap()
 }
 
+fn bounded_consumer_request(evaluations: usize, density_bounds: [f64; 2]) -> Request {
+    let mut value = serde_json::to_value(consumer_request(evaluations)).unwrap();
+    value["comparison"]["basis"] = json!("reported_bounds");
+    for (index, scale) in [(0, 1.0), (1, 2.0)] {
+        value["variants"][index]["changes"]["default"]["record"]["properties"]["areal_density"]["bounds"] =
+            json!(density_bounds.map(|bound| bound * scale));
+    }
+    serde_json::from_value(value).unwrap()
+}
+
 fn matrix_request(evaluations: usize) -> Request {
     let mut request = consumer_request(evaluations);
     request.design_adaptive.as_mut().unwrap().case_key = Some("guide".into());
@@ -314,11 +324,13 @@ fn named_consumer_search_preflights_case_selection_all_policies_and_every_callba
     let mut missing = request.clone();
     missing.comparison = None;
     invalids.push((missing, cases.clone()));
-    let mut bounds = cases.clone();
+    let mut unsupported_bounds = cases.clone();
     let mut policy = request.comparison.clone().unwrap();
     policy.basis = ftx_export::material_study::comparison::Basis::ReportedBounds;
-    bounds[1].comparison = Some(policy);
-    invalids.push((request.clone(), bounds));
+    policy.objectives[0].metric =
+        ftx_export::material_study::comparison::Metric::SimulatedClothMassKg;
+    unsupported_bounds[1].comparison = Some(policy);
+    invalids.push((request.clone(), unsupported_bounds));
     let mut multiple = cases.clone();
     let mut policy = request.comparison.clone().unwrap();
     policy.objectives.push(
@@ -499,6 +511,321 @@ fn consumer_constraints_admit_only_real_feasible_metrics_and_unknown_mass_is_not
 }
 
 #[test]
+fn bounded_consumer_guidance_uses_complete_mass_ranges_and_preserves_missing_endpoints() {
+    use ftx_export::material_study::comparison::Basis;
+    let body = Measurements(json!({"desired_length":120}));
+    let mut request = bounded_consumer_request(24, [0.17, 0.19]);
+    request.comparison.as_mut().unwrap().constraints.push(
+        serde_json::from_value(json!({"metric":"assembly_mass_kg","maximum":0.00235})).unwrap(),
+    );
+    let report = run(&request, &body);
+    assert_eq!(report, run(&request, &body));
+    let search = &report["design_search"];
+    assert_eq!(search["consumer_guidance"]["basis"], "reported_bounds");
+    let trials = search["rows"].as_array().unwrap();
+    let initial = &trials[0]["consumer_comparison"];
+    let initial_mass = &initial["readings"]["assembly_mass_kg"];
+    assert!(initial_mass["value"].as_f64().unwrap() < 0.00235);
+    assert!(initial_mass["reported_bounds"][1].as_f64().unwrap() > 0.00235);
+    assert_eq!(initial["eligible"], false);
+    let selected = trials
+        .iter()
+        .find(|trial| trial["selected"] == true)
+        .unwrap();
+    assert_eq!(selected["design"]["variables_mm"]["length"], 20.0);
+    let reading = &selected["consumer_comparison"]["readings"]["assembly_mass_kg"];
+    for (endpoint, density) in [0.17, 0.19].into_iter().enumerate() {
+        let expected = 2.0 * 40.0 * 140.0 * 1e-6 * density;
+        assert!((reading["reported_bounds"][endpoint].as_f64().unwrap() - expected).abs() < 1e-12);
+    }
+    let actual = row(
+        &report,
+        selected["design"]["key"].as_str().unwrap(),
+        "light-sheet",
+    );
+    assert_eq!(
+        reading["reported_bounds"],
+        actual["assembly_mass"]["result"]["assembly_mass"]["reported_bounds_kg"]
+    );
+    assert_eq!(search["consumer_guidance"]["best_reading"], *reading);
+    assert_eq!(report["comparison"]["uncertainty_propagated"], false);
+    assert_eq!(report["comparison"]["physical_validation_claim"], false);
+
+    let mut nominal = request.clone();
+    nominal.comparison.as_mut().unwrap().basis = Basis::Nominal;
+    let nominal = run(&nominal, &body);
+    assert_eq!(
+        nominal["design_search"]["rows"][0]["consumer_comparison"]["eligible"],
+        true
+    );
+    assert!(
+        nominal["design_search"]["consumer_guidance"]
+            .get("basis")
+            .is_none()
+    );
+
+    let mut maximize = bounded_consumer_request(12, [0.179, 0.181]);
+    maximize.comparison.as_mut().unwrap().objectives[0].direction =
+        ftx_pattern::material_screen::Direction::Maximize;
+    let maximized = run(&maximize, &body);
+    let selected = maximized["design_search"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|trial| trial["selected"] == true)
+        .unwrap();
+    assert_eq!(selected["design"]["variables_mm"]["length"], 60.0);
+
+    request.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("areal_density")
+        .unwrap()
+        .bounds = None;
+    let missing = run(&request, &body);
+    assert_eq!(missing["design_search"]["selected_designs"], 0);
+    for trial in missing["design_search"]["rows"].as_array().unwrap() {
+        if let Some(comparison) = trial.get("consumer_comparison") {
+            assert_eq!(comparison["eligible"], false);
+            assert!(comparison["readings"]["assembly_mass_kg"]["value"].is_number());
+            assert!(
+                comparison["readings"]["assembly_mass_kg"]
+                    .get("reported_bounds")
+                    .is_none()
+            );
+            assert!(
+                comparison["exclusions"]
+                    .to_string()
+                    .contains("no complete valid reported bounds")
+            );
+        }
+    }
+}
+
+#[test]
+fn bounded_consumer_retention_replaces_only_a_strictly_dominated_range() {
+    let mut value = serde_json::to_value(bounded_consumer_request(4, [0.16, 0.192])).unwrap();
+    value["design_adaptive"]["max_designs"] = json!(2);
+    let mut length = value["design_adaptive"]["variables"][0].clone();
+    length["initial_step_mm"] = json!(40);
+    length["minimum_step_mm"] = json!(40);
+    value["design_adaptive"]["variables"] = json!([
+        {"key":"width","bounds_mm":[-5,5],"initial_mm":0,
+         "initial_step_mm":5,"minimum_step_mm":5,
+         "sites":[{"piece":"front","axis":"x","at_mm":10,"multiplier":1},
+                  {"piece":"back","axis":"x","at_mm":10,"multiplier":1}]}, length]);
+    value["design_fit"]["fit_spec"]["points"][0]["target_mm"] = json!([0, 20, 60]);
+    let request: Request = serde_json::from_value(value).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let report = run(&request, &body);
+    assert_eq!(report, run(&request, &body));
+    let search = &report["design_search"];
+    let trials = search["rows"].as_array().unwrap();
+    assert_eq!(trials.len(), 4);
+    assert_eq!(search["selected_designs"], 2);
+    assert_eq!(search["stop_reason"], "evaluation_budget");
+    assert_eq!(trials[0]["selected"], false);
+    assert_eq!(trials[1]["selected"], true);
+    assert_eq!(trials[2]["selected"], false);
+    assert_eq!(trials[3]["selected"], true);
+    assert_eq!(
+        trials[1]["design"]["variables_mm"],
+        json!({"width":-5.0,"length":40.0})
+    );
+    assert_eq!(
+        trials[3]["design"]["variables_mm"],
+        json!({"width":0.0,"length":0.0})
+    );
+    let bounds = |index: usize| -> [f64; 2] {
+        serde_json::from_value(
+            trials[index]["consumer_comparison"]["readings"]["assembly_mass_kg"]["reported_bounds"]
+                .clone(),
+        )
+        .unwrap()
+    };
+    // The last trial strictly improves the initial range but overlaps the later width trial.
+    // There is no single "worst" range: evicting or retaining by midpoint would give a false order.
+    assert!(bounds(3)[1] < bounds(0)[0]);
+    assert!(bounds(3)[1] > bounds(1)[0] && bounds(3)[0] < bounds(1)[1]);
+    assert_eq!(
+        search["consumer_guidance"]["best_trial_key"],
+        trials[3]["design"]["key"]
+    );
+    assert_eq!(search["global_optimum_claim"], false);
+}
+
+#[test]
+fn bounded_consumer_polling_keeps_overlapping_and_exactly_touching_ranges_unordered() {
+    let body = Measurements(json!({"desired_length":120}));
+    for maximum in [1, 2] {
+        let mut request = bounded_consumer_request(16, [0.16, 0.20]);
+        request.design_adaptive.as_mut().unwrap().max_designs = maximum;
+        let report = run(&request, &body);
+        let search = &report["design_search"];
+        let trials = search["rows"].as_array().unwrap();
+        assert_eq!(search["selected_designs"], maximum);
+        assert_eq!(trials[0]["selected"], true);
+        assert_eq!(trials[1]["selected"], maximum == 2);
+        assert_eq!(trials[1]["design"]["variables_mm"]["length"], 20.0);
+        assert_eq!(
+            search["consumer_guidance"]["best_trial_key"],
+            trials[0]["design"]["key"]
+        );
+        assert!(
+            trials[1]["consumer_comparison"]["readings"]["assembly_mass_kg"]["value"]
+                .as_f64()
+                .unwrap()
+                < trials[0]["consumer_comparison"]["readings"]["assembly_mass_kg"]["value"]
+                    .as_f64()
+                    .unwrap()
+        );
+    }
+
+    let mut source: Value = serde_json::from_str(PATTERN).unwrap();
+    source["meta"]["sa_mm"] = json!(0);
+    for piece in source["pieces"].as_array_mut().unwrap() {
+        piece["vertices"] = json!({"a":[0,0],"b":[125,0],"c":[125,125],"d":[0,125]});
+    }
+    let mut value = serde_json::to_value(bounded_consumer_request(2, [0.125, 0.25])).unwrap();
+    value["cutting"] = Value::Null;
+    value["sewing"] = Value::Null;
+    value["comparison"]["required_consumers"] = json!([]);
+    value["variants"].as_array_mut().unwrap().truncate(1);
+    value["design_fit"]["fit_spec"]["points"][0]["target_mm"] = json!([0, 60, 125]);
+    let variable = &mut value["design_adaptive"]["variables"][0];
+    variable["bounds_mm"] = json!([0, 125]);
+    variable["initial_mm"] = json!(125);
+    variable["initial_step_mm"] = json!(125);
+    variable["minimum_step_mm"] = json!(125);
+    let request: Request = serde_json::from_value(value).unwrap();
+    let body = Measurements(json!({"desired_length":125}));
+    let report = serde_json::to_value(
+        request
+            .evaluate_with_fit_body(
+                &Pattern::new(source),
+                Some(&Context {
+                    body: &body,
+                    identity: &json!({"source":"test:exact-touching-mass-ranges"}),
+                }),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    let trials = report["design_search"]["rows"].as_array().unwrap();
+    // These power-of-two areas/densities yield exactly equal endpoints, without a tolerance.
+    assert_eq!(
+        trials[0]["consumer_comparison"]["readings"]["assembly_mass_kg"]["reported_bounds"][0],
+        json!(0.0078125)
+    );
+    assert_eq!(
+        trials[1]["consumer_comparison"]["readings"]["assembly_mass_kg"]["reported_bounds"][1],
+        json!(0.0078125)
+    );
+    assert_eq!(trials[0]["selected"], true);
+    assert_eq!(trials[1]["selected"], false);
+    assert_eq!(trials[1]["consumer_comparison"]["eligible"], true);
+    assert!(
+        !report["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn named_bounded_guidance_keeps_range_guards_and_exact_cached_case_decisions() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":120}));
+    let mut request = bounded_consumer_request(20, [0.179, 0.181]);
+    request.design_adaptive.as_mut().unwrap().case_key = Some("guide".into());
+    let mut cases = consumer_cases();
+    let mut guard = request.comparison.clone().unwrap();
+    guard.constraints.push(
+        serde_json::from_value(json!({
+        "metric":"assembly_mass_kg","minimum":0.002012}))
+        .unwrap(),
+    );
+    cases[0].comparison = Some(guard);
+    let mut calls = std::collections::BTreeMap::new();
+    let report = serde_json::to_value(
+        request
+            .evaluate_matrix_with_fit(
+                &pattern,
+                &cases,
+                48,
+                Some(&Context {
+                    body: &body,
+                    identity: &json!({"source":"test:range-guided-cases"}),
+                }),
+                |index, key, bound| {
+                    *calls.entry((index, key.to_owned())).or_insert(0) += 1;
+                    Ok(case_output(bound, &cases[index]))
+                },
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    let search = &report["manufacturing"]["design_search"];
+    assert_eq!(search["consumer_guidance"]["basis"], "reported_bounds");
+    assert_eq!(search["consumer_guidance"]["reserved_evaluations"], 48);
+    assert_eq!(report["planned_evaluations"], 48);
+    assert_eq!(
+        report["evaluations"].as_u64().unwrap() as usize,
+        calls.values().sum::<usize>()
+    );
+    assert!(calls.values().all(|&count| count == 1));
+    let trials = search["rows"].as_array().unwrap();
+    let excluded = trials
+        .iter()
+        .find(|trial| trial["design"]["variables_mm"]["length"] == 20.0)
+        .unwrap();
+    let mass = &excluded["consumer_comparison"]["readings"]["assembly_mass_kg"];
+    assert!(mass["value"].as_f64().unwrap() > 0.002012);
+    assert!(mass["reported_bounds"][0].as_f64().unwrap() < 0.002012);
+    assert_eq!(excluded["consumer_comparison"]["eligible"], true);
+    assert_eq!(
+        excluded["consumer_cases"][0]["comparison"]["eligible"],
+        false
+    );
+    assert_eq!(excluded["selected"], false);
+    let selected = trials
+        .iter()
+        .find(|trial| trial["selected"] == true)
+        .unwrap();
+    assert_eq!(selected["design"]["variables_mm"]["length"], 25.0);
+    let selected_key = key(selected["design"]["key"].as_str().unwrap(), "light-sheet");
+    for index in 0..cases.len() {
+        let decision = report["cases"][index]["comparison"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate["key"] == selected_key)
+            .unwrap();
+        for field in [
+            "readings",
+            "eligible",
+            "exclusions",
+            "input_protocol_sha256",
+        ] {
+            assert_eq!(
+                selected["consumer_cases"][index]["comparison"][field],
+                decision[field]
+            );
+        }
+        assert_eq!(
+            calls[&(index, selected_key.as_str().unwrap().to_owned())],
+            1
+        );
+    }
+}
+
+#[test]
 fn consumer_search_preflights_all_probe_work_and_requires_explicit_single_case_policy() {
     let pattern = Pattern::from_json(PATTERN).unwrap();
     let body = Measurements(json!({"desired_length":120}));
@@ -537,6 +864,8 @@ fn consumer_search_preflights_all_probe_work_and_requires_explicit_single_case_p
     let mut bounds = consumer_request(8);
     bounds.comparison.as_mut().unwrap().basis =
         ftx_export::material_study::comparison::Basis::ReportedBounds;
+    bounds.comparison.as_mut().unwrap().objectives[0].metric =
+        ftx_export::material_study::comparison::Metric::FeedSeconds;
     invalids.push(bounds);
     for request in invalids {
         assert!(

@@ -7781,6 +7781,30 @@ test('consumer-guided adaptive search shows authoritative readings, displaced tr
       '<required consumer>: source qualification missing; <cold-only consumer refusal>']);
   assert.equal(table('adaptive:0002: operating-case admission').children[3].children[1].textContent,
     'Eligible under declared policy');
+  report.design_search.consumer_guidance.basis='reported_bounds';
+  report.design_search.consumer_guidance.best_reading.reported_bounds=[0.07,0.09];
+  report.design_search.rows[2].consumer_comparison.readings.assembly_mass_kg.reported_bounds=[0.07,0.09];
+  report.design_search.rows[0].consumer_comparison.readings.assembly_mass_kg.reported_bounds=[0.09,0.11];
+  const guard=report.design_search.rows[0].consumer_cases[0];
+  guard.comparison.readings.assembly_mass_kg.reported_bounds=[0.09,0.11];
+  guard.comparison.exclusions=[{message:'Reported lower bound misses the inclusive guard minimum'}];
+  await p.e.study.onclick();p.emit(report);
+  const guided=table('Consumer-guided adaptive alteration search');
+  assert.deepEqual(plain(guided.children[1].children.slice(-2).map(n=>n.textContent)),
+    ['Retained trial','Retained objective']);
+  assert.deepEqual(plain(guided.children[2].children.slice(-2).map(n=>n.textContent)),
+    ['adaptive:0002','0.08 kg; reported range [0.07, 0.09] kg']);
+  const boundedRows=table('Adaptive alteration trials').children.slice(2);
+  assert.equal(boundedRows[0].children[6].textContent,'0.1 kg; reported range [0.09, 0.11] kg');
+  assert.equal(boundedRows[0].children[7].textContent,'Not selected');
+  assert.equal(boundedRows[1].children[6].textContent,'0.01 kg; reported range unknown');
+  assert.equal(boundedRows[2].children[7].textContent,'Selected');
+  assert.deepEqual(plain(table('adaptive:0000: operating-case admission').children[2].children.map(n=>n.textContent)),
+    ['<cold>','Excluded','assembly_mass_kg: 0.1 kg; reported range [0.09, 0.11] kg',
+      'Reported lower bound misses the inclusive guard minimum; <cold-only consumer refusal>']);
+  assert.match(visibleText(s),/Objective basis: source-reported ranges/);
+  assert.match(visibleText(s),/Overlapping, touching or equal ranges remain unresolved/);
+  assert.match(visibleText(s),/retained trials do not form a total ranking/);
   report.design_search.consumer_guidance.best_trial_key=null;
   report.design_search.consumer_guidance.best_reading=null;
   await p.e.study.onclick(); p.emit(report);
@@ -8233,6 +8257,28 @@ test('compiled WASM consumer-guided alterations optimize real cloth mass and pre
       assert.equal(matrix.result.cases.length,2);
       assert.equal(matrix.files.find(file=>file.name==='study-request.json').text,matrixStudy);
       assert.equal(matrix.files.find(file=>file.name==='scenario-request.json').text,matrixScenario);
+      const boundsStudy=input('bounds-study.json'),boundsScenario=input('bounds-scenario.json');
+      const bounds=await w.send({type:'scenario',request:223,pattern:input('pattern.json'),studyRequest:boundsStudy,
+        scenarioRequest:boundsScenario,measurements:input('body-input.json'),
+        bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+      assert.equal(bounds.type,'result',bounds.message);
+      assert.deepEqual(bounds.result,JSON.parse(input('bounds-report.json')));
+      const boundedSearch=bounds.result.manufacturing.design_search,guidance=boundedSearch.consumer_guidance;
+      assert.equal(guidance.basis,'reported_bounds');
+      assert.equal(guidance.objective.metric,'assembly_mass_kg');
+      assert.equal(guidance.case_key,'weight');
+      assert.equal(boundedSearch.rows.find(row=>row.selected).design.variables_mm.length,-20);
+      assert.equal(bounds.result.cases.length,2);
+      const shorter=boundedSearch.rows.find(row=>row.design.variables_mm.length===-30);
+      assert.equal(shorter.consumer_comparison.eligible,true);
+      assert.equal(shorter.consumer_cases.find(row=>row.key==='weight').comparison.eligible,true);
+      assert.equal(shorter.consumer_cases.find(row=>row.key==='guard').comparison.eligible,false);
+      assert.equal(shorter.selected,false);
+      assert.ok(shorter.consumer_comparison.readings.assembly_mass_kg.value>0.0155);
+      assert.ok(shorter.consumer_comparison.readings.assembly_mass_kg.reported_bounds[0]<0.0155);
+      assert.equal(bounds.files.find(file=>file.name==='study-request.json').text,boundsStudy);
+      assert.equal(bounds.files.find(file=>file.name==='scenario-request.json').text,boundsScenario);
+      assert.equal(bounds.files.find(file=>file.name==='body-input.json').text,input('body-input.json'));
     } finally {globalThis.ftxProgress=previousProgress;}
   });
 

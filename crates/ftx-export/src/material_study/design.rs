@@ -228,13 +228,13 @@ pub(super) fn validate_request(request: &Request) -> Result<(), Refusal> {
             ));
         }
         if adaptive.consumer_guided()
-            && request.comparison.as_ref().is_none_or(|policy| {
-                !matches!(policy.basis, super::comparison::Basis::Nominal)
-                    || policy.objectives.len() != 1
-            })
+            && request
+                .comparison
+                .as_ref()
+                .is_none_or(|policy| policy.objectives.len() != 1)
         {
             return Err(invalid(
-                "consumer-guided adaptive design requires one nominal comparison objective with explicit ordinary constraints and required consumers",
+                "consumer-guided adaptive design requires one comparison objective with explicit ordinary constraints and required consumers",
             ));
         }
     }

@@ -20,7 +20,7 @@ use crate::cutting::geometry::Work;
 pub enum Objective {
     /// Minimize maximum absolute raw out-of-band residual, then their sum, both in millimetres.
     FitBandViolationMm,
-    /// Use one admitted nominal production comparison objective after complete flat qualification.
+    /// Use one admitted production comparison objective after complete flat qualification.
     ConsumerComparison,
 }
 
@@ -52,7 +52,7 @@ pub struct Request {
     /// selected geometries still cross every authored material alternative after discovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_key: Option<String>,
-    /// Named scenario whose sole nominal objective guides matrix polling. Every case must still
+    /// Named scenario whose sole comparison objective guides matrix polling. Every case must still
     /// admit the trial. Required for consumer-guided matrices and forbidden in single-case work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case_key: Option<String>,
@@ -167,8 +167,11 @@ pub struct ConsumerGuidance {
     /// Every case whose ordinary policy must admit a selected trial, in authored order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub case_order: Vec<String>,
-    /// The sole objective from the ordinary nominal comparison policy.
+    /// The sole objective from the ordinary comparison policy.
     pub objective: comparison::Objective,
+    /// Explicit range ordering when requested; absent preserves existing nominal receipts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub basis: Option<comparison::Basis>,
     /// Conservative upper bound on probe plus final consumer slots. Scenario work is still
     /// admitted per callback by the caller's shared production-session budgets.
     pub reserved_evaluations: usize,
@@ -638,6 +641,8 @@ impl Request {
                     case_key: self.case_key.clone(),
                     case_order: guidance.case_order.clone(),
                     objective: guidance.policy.objectives[0].clone(),
+                    basis: matches!(guidance.policy.basis, comparison::Basis::ReportedBounds)
+                        .then_some(guidance.policy.basis),
                     reserved_evaluations: guidance.reserved_evaluations,
                     evaluations: guidance.evaluations,
                     best_trial_key: best.map(|index| discovery.rows[index].design.key.clone()),
@@ -912,19 +917,38 @@ impl<T> Discovery<'_, '_, '_, T> {
             }
         }
         if row.selected && self.guidance.is_some() && self.chosen.len() > self.request.max_designs {
-            let mut worst = 1;
-            for position in 2..self.chosen.len() {
-                let previous = &self.rows[self.chosen[worst].index.expect("trial index")];
-                let next = &self.rows[self.chosen[position].index.expect("trial index")];
-                // Evict the latest of equally bad retained trials, preserving earlier ties.
-                if !self.improves(next, previous) {
-                    worst = position;
+            let replaced = if self.guidance.as_ref().is_some_and(|guidance| {
+                matches!(guidance.policy.basis, comparison::Basis::ReportedBounds)
+            }) {
+                // Ranges are only partially ordered. Keep earlier incomparable incumbents and
+                // replace the latest retained trial that this actual range strictly dominates.
+                // A midpoint improvement or touching endpoints cannot evict a retained result.
+                (1..self.chosen.len()).rev().find(|&position| {
+                    self.improves(
+                        &row,
+                        &self.rows[self.chosen[position].index.expect("trial index")],
+                    )
+                })
+            } else {
+                let mut worst = 1;
+                for position in 2..self.chosen.len() {
+                    let previous = &self.rows[self.chosen[worst].index.expect("trial index")];
+                    let next = &self.rows[self.chosen[position].index.expect("trial index")];
+                    // Preserve the original single nominal objective's ordering and earlier ties.
+                    if !self.improves(next, previous) {
+                        worst = position;
+                    }
                 }
-            }
-            let previous = self.chosen[worst].index.expect("trial index");
-            if self.improves(&row, &self.rows[previous]) {
+                self.improves(
+                    &row,
+                    &self.rows[self.chosen[worst].index.expect("trial index")],
+                )
+                .then_some(worst)
+            };
+            if let Some(position) = replaced {
+                let previous = self.chosen[position].index.expect("trial index");
                 self.rows[previous].selected = false;
-                self.chosen.remove(worst);
+                self.chosen.remove(position);
             } else {
                 row.selected = false;
             }

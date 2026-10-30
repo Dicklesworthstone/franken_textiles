@@ -287,7 +287,7 @@ impl Request {
             notes.push("At least one case has no explicit effective comparison policy. Requested per-case comparisons remain available; no all-cases policy or frontier is synthesized.");
         }
         if self.consumer_guided() {
-            notes.push("Adaptive polling follows only the explicitly nominated case's sole nominal objective. Every named case must independently admit each selected trial under its own policy and source protocol. Complete successful probe outputs are reused exactly for final rows; no cross-case score, unrestricted optimum or physical fit is inferred.");
+            notes.push("Adaptive polling follows only the explicitly nominated case's sole comparison objective and declared nominal or reported-range basis. Every named case must independently admit each selected trial under its own policy and source protocol. Complete successful probe outputs are reused exactly for final rows; no cross-case score, unrestricted optimum or physical fit is inferred.");
         }
         Ok(Report {
             schema: if self.is_design() {

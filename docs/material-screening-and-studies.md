@@ -1058,8 +1058,9 @@ inspectable without invoking their production or simulation callbacks.
 Use `objective: "consumer_comparison"` when a passing flat target is only the admission gate and
 the next alteration should improve a real production result. Nominate exactly one existing
 material alternative with `material_key`, and supply an ordinary `comparison` with exactly one
-nominal objective. Its existing constraints, required consumers, source qualifications and
-protocol rules also govern every search probe. For example, a broad declared length band can
+objective under `nominal` or a supported `reported_bounds` policy. Its existing constraints,
+required consumers, source qualifications and protocol rules also govern every search probe.
+For example, a broad declared length band can
 admit several designs while the production assembly-mass consumer guides the search toward a
 lighter complete assembly:
 
@@ -1105,25 +1106,44 @@ settledness, gating, source and descriptor checks as a normal comparison; an unf
 missing modulus, unknown mass, failed constraint or refused callback cannot supply a zero or
 usable search value. No new physics, weighted score or inferred comfort/failure limit is added.
 
+Use `basis: "reported_bounds"` when discovery must respect the complete source-reported mass,
+vapor-potential or final finite-water ranges supported by the ordinary comparator. Every requested
+objective and constraint needs its actual consumer endpoints; unsupported metrics refuse before
+callbacks. A missing range excludes the trial while preserving its available nominal reading.
+Inclusive constraints apply to the whole range. For example, a nominally lighter garment whose
+lower mass endpoint crosses a declared minimum cannot replace an incumbent. These are conditional
+source ranges on each trial's actual fixed geometry and declared inputs, not confidence intervals
+or uncertainty in geometry, physical fit or missing material laws.
+
 Every coordinate starts from the original pattern and passes complete canonical geometry and
 selected-body fit checks before binding the nominated material or calling production consumers.
 Outside the declared fit bands, the original raw residuals can guide the search toward admission.
 Once a production-admitted incumbent exists, flat-only or consumer-excluded candidates cannot
-replace it. Inside the admissible region the existing comparator's nominal dominance rule chooses
-strict improvements. The first admitted probe fixes the relevant input protocol; a different
-protocol remains visible but cannot guide replacement unless `allow_mixed_protocols` was explicitly
+replace it. Inside the admissible region the existing comparator chooses strict improvements.
+For range minimization the new upper endpoint must be strictly below the current lower endpoint;
+maximization reverses the ordering. Overlapping, touching and equal intervals cannot move the poll
+center by their central values, endpoint averages or a manufactured total order. The first admitted
+probe fixes the relevant input protocol; a different protocol remains visible but cannot guide
+replacement unless `allow_mixed_protocols` was explicitly
 enabled. The search never silently combines material models or scenario environments.
 
 `max_designs` limits the retained geometries; reaching it does **not** stop consumer-guided
 polling. Better admitted trials replace earlier incumbents until the unique-evaluation allowance
-or minimum steps stop discovery. Ties retain earlier trials. The original baseline and each
-retained geometry then cross all authored material alternatives. The nominated material's
+or minimum steps stop discovery. Nominal ties retain earlier trials. In range mode, available slots
+first retain admitted trials in evaluation order; once full, a trial replaces the latest retained
+trial it strictly dominates. It cannot evict an incomparable trial. Other eligible trials remain
+visible with `selected: false`; this bounded cache is not a complete Pareto set. The original
+baseline and each retained geometry then cross all authored material alternatives. The nominated material's
 retained production outputs are reused exactly, including its bound pattern, source evidence and
 scenario result; other material alternatives receive fresh ordinary evaluations. The final
 comparison still determines the conditional frontier over those evaluated design/material pairs.
 
 The optional `consumer_guidance` object in the existing `ftx-design-adaptive-search/1` receipt
 identifies the material, sole objective, best trial, existing reading with units and input protocol.
+Range guidance additionally records `basis: "reported_bounds"` and the reading's exact
+`reported_bounds`; nominal receipts omit that new field. In range mode `best_trial_key` identifies
+the first admitted trial followed by strict improvements in evaluation order, not a unique winner
+among overlapping ranges. A small-step stop can leave a more distant separated range undiscovered.
 Its `evaluations` counts actual nominated-material probes after flat qualification;
 `reserved_evaluations` is the conservative probe-plus-final consumer-slot upper bound. Each probe
 retains the unchanged `consumer_comparison` candidate, including all readings and exclusions, and
@@ -1140,8 +1160,8 @@ and global manufacturing hard-budget failures still refuse the whole request. On
 `max_designs` full probe outputs are retained; rejected probes keep bounded decision evidence.
 
 For a named scenario matrix, set `design_adaptive.case_key` to the authored case that guides
-polling. Its effective comparison policy must declare exactly one nominal objective. Every case
-must have an explicit effective policy, either its own `comparison` or the study fallback, and
+polling. Its effective comparison policy must declare exactly one nominal or supported range
+objective. Every case must have an explicit effective policy, either its own `comparison` or the study fallback, and
 every case must admit a trial before it can become an incumbent. A better guidance-case objective
 cannot bypass another case's constraint or protocol rule. Other cases may use their own ordinary
 multi-objective policies; the engine never combines unlike quantities into a weighted score.
@@ -1165,8 +1185,8 @@ matrix limit. Case sessions retain their cumulative geometry/motion/thermal budg
 Missing or unknown case keys, missing effective policies, an inadmissible guidance objective or an
 insufficient aggregate reservation refuse before callbacks. Single-case and manufacturing-only
 guidance omit `case_key`; original `fit_band_violation_mm` requests reject it and retain their
-previous serialization. Multiple guidance objectives, reported-bounds guidance and unknown material
-keys remain unsupported.
+previous serialization. Multiple guidance objectives, unsupported bounded metrics and unknown
+material keys remain unsupported.
 Both modes retain `complete_search: false` and `global_optimum_claim: false`; neither an empty
 result nor a local improvement establishes empirical garment fit or a global optimum.
 

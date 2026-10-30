@@ -1076,17 +1076,29 @@ function designComparison(op, parent, study) {
   if (grid) {
     if (grid.schema === "ftx-design-adaptive-search/1") {
       const guidance = grid.consumer_guidance;
+      const bounded = guidance?.basis === "reported_bounds";
+      const readingText = reading => {
+        if (!reading) return "Unknown";
+        const range = reading.reported_bounds ?
+          `; reported range [${reading.reported_bounds.map(metric).join(", ")}] ${reading.unit || ""}` :
+          bounded ? "; reported range unknown" : "";
+        return `${metric(reading.value)} ${reading.unit || ""}${range}`;
+      };
       if (guidance) {
         const search = table(parent, "Consumer-guided adaptive alteration search", ["Fit evaluations", "Consumer probes",
-          "Planned callback slots (upper bound)", "Selected geometries", "Stop reason", "Best trial", "Best objective"]);
+          "Planned callback slots (upper bound)", "Selected geometries", "Stop reason",
+          bounded ? "Retained trial" : "Best trial", bounded ? "Retained objective" : "Best objective"]);
         const reading = guidance.best_reading;
         cells(search, [metric(grid.evaluations), metric(guidance.evaluations), metric(guidance.reserved_evaluations),
           metric(grid.selected_designs), grid.stop_reason?.replaceAll("_", " ") ?? "Unknown",
-          guidance.best_trial_key ?? "Unknown", reading ? `${metric(reading.value)} ${reading.unit}` : "Unknown"]);
+          guidance.best_trial_key ?? "Unknown", readingText(reading)]);
         const objective = document.createElement("p");
         objective.textContent = `Guidance material: ${guidance.material_key ?? "Unknown"}. ` +
           (guidance.case_key ? `Guidance case: ${guidance.case_key}. Every declared case must admit a selected trial: ${(guidance.case_order || []).join(", ")}. ` : "") +
           `Declared objective: ${guidance.objective?.metric ?? "Unknown"} (${guidance.objective?.direction ?? "Unknown"}). ` +
+          (bounded ? "Objective basis: source-reported ranges. Constraints admit the entire reported range; missing ranges cannot qualify. " +
+            "Search advances only when one range is strictly preferred. Overlapping, touching or equal ranges remain unresolved; retained trials do not form a total ranking. " :
+            "Objective basis: nominal values. ") +
           "Rust evaluates the nominated material with the ordinary manufacturing and requested scenario consumers. " +
           "Existing source admission, required consumers, protocol rules and inclusive constraints govern each probe. " +
           "Callback slots are an upper bound on attempted work, not a preapproved simulation allowance; cumulative consumer budgets still apply.";
@@ -1124,7 +1136,7 @@ function designComparison(op, parent, study) {
           metric(row.max_fit_band_violation_mm), metric(row.total_fit_band_violation_mm),
           passed ? "Passed declared flat gates" : "Refused",
           ...(guidance ? [candidate ? (admitted ? "Eligible" : "Excluded") : "Not attempted",
-            reading ? `${metric(reading.value)} ${reading.unit}` : "Unknown"] : []),
+            readingText(reading)] : []),
           row.selected === true ? "Selected" : "Not selected",
           reasons || (passed ? "Passed declared targets" : "Inspect retained validation")]);
         if (row.consumer_cases?.length) {
@@ -1133,7 +1145,7 @@ function designComparison(op, parent, study) {
           for (const item of row.consumer_cases) cells(cases, [item.key,
             item.comparison?.eligible === true ? "Eligible under declared policy" : "Excluded",
             Object.entries(item.comparison?.readings || {}).map(([key, value]) =>
-              `${key}: ${metric(value.value)} ${value.unit || ""}`).join("; ") || "Unavailable",
+              `${key}: ${readingText(value)}`).join("; ") || "Unavailable",
             [...(item.comparison?.exclusions || []).map(reason => reason.message), item.refusal?.message]
               .filter(Boolean).join("; ") || "None"]);
         }
