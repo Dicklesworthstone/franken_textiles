@@ -286,12 +286,20 @@ An eligible policy additionally searches the explicitly qualified cell choices f
 copy and operation. Machine eligibility must be authored and independently qualified; it is never
 inferred from a machine name or from another candidate's evidence.
 
-The outer selector compares makespan for both routing models. Eligible assignment also changes the
-actual recipe, stitch intervals and yarn demand, so feed-only or thread-cost selection cannot claim
-to optimize that inner makespan-driven assignment. Such objectives are refused whenever the template
-or any route candidate uses eligible cells. Material comparisons may still report the selected
-batch's feed and thread quantities, retaining the complete eligible policy and outer route-search
-request, including its evaluation cap, in their protocol identity.
+The outer selector compares makespan for both routing models. When the template and every candidate
+use fixed operation routes, version 6 also accepts `minimize_thread_observed_order_cost`. It minimizes
+the complete canonical thread orders for each route's actual stitch intervals and qualified channel
+quantities. Supplier minimums, increments, price tiers and stock checks apply to the full order;
+unknown or incomplete orders remain unresolved. The thread market stays shared across routes.
+Because fixed assignment makes these quantities independent of dispatch order, a complete priced
+plan can establish its cost without proving the minimum makespan. An optional inclusive
+`completion_deadline_milliseconds` still requires an admitted complete schedule before selection.
+
+Eligible assignment changes the actual recipe, stitch intervals and yarn demand while optimizing
+makespan. Feed-only or thread-cost selection therefore remains refused whenever the template or
+any candidate uses eligible cells. Material comparisons may still report that selected batch's
+actual feed and thread quantities. The full eligible-route or fixed-route cost-search request,
+including unused candidates and its evaluation cap, participates in the relevant study protocol.
 
 Recipe `alternatives` may be empty in version 6. When supplied, their Cartesian product is searched
 within each route: the template route first, then route IDs in lexical order, with the existing
@@ -303,8 +311,11 @@ alternatives. No candidate may increase a hidden inner work allowance.
 Version-6 reports retain `route_choice` on each trial and `selected_route` for the complete
 incumbent; material studies keep the same identities beside their ordinary selected sewing plan.
 `selected_options_json` freezes the winning route for ordinary plan, stitch and cell-preview replay.
-Exact makespan ties retain the first admitted candidate. An incomplete inner schedule or unresolved
-route remains visible and prevents an optimum claim even after all listed combinations are visited.
+Exact objective ties retain the first admitted candidate. Cost-mode reports retain
+`selected_thread_order_cost`, `objective_currency` and per-trial `thread_order_cost`; they do not
+label money as elapsed seconds. An incomplete schedule, missing order or unresolved deadline remains
+visible and prevents an optimum claim even after all listed combinations are visited. In makespan
+mode, an unproved inner timing optimum also prevents an outer optimum claim.
 Route-specific timing admission runs on each actual attempt. Missing timing retains the original
 refusal plus `objective_unavailable`, so another qualified route remains usable without claiming
 the unscored route is slower or infeasible. Existing recipe-only timing preflight is unchanged.

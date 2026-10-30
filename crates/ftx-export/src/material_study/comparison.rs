@@ -1968,6 +1968,16 @@ impl Policy {
         if (consumers.contains(&Consumer::Sewing) || thread)
             && let Some(selection) = row.sewing_selection.value()
             && selection.request.schema == "ftx-sewing-selection/6"
+            && selection.request.objective
+                == crate::sewing_selection::Objective::MinimizeThreadObservedOrderCost
+        {
+            // Fixed routes have order-independent quantities, but the complete candidate domain
+            // and work cap still determine which qualified plan supplies these cost readings.
+            base = hash(&(base, ("fixed_route_cost_selection", &selection.request)))?;
+        }
+        if (consumers.contains(&Consumer::Sewing) || thread)
+            && let Some(selection) = row.sewing_selection.value()
+            && selection.request.schema == "ftx-sewing-selection/6"
             && (selection
                 .request
                 .options

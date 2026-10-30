@@ -4598,6 +4598,24 @@ The complete directional mechanics, thermal, interface and unchanged-jacket empi
 create a separate database or silently substitute chemistry, brand labels or estimated coefficients
 for missing measured properties.
 
+### 25.137 Choose specialist routes by complete thread order cost
+
+The existing authored-route selector can now minimize complete observed thread orders across
+independently qualified fixed specialist routes, with optional recipe choices and an inclusive
+completion deadline. Every attempted route supplies its own actual stitch intervals, source-qualified
+channel demand and canonical rounded supplier orders. A slower, cheaper route can therefore remain
+selected until the declared deadline requires a different complete job.
+
+Fixed assignment keeps thread demand independent of dispatch order, so an unproved minimum
+makespan does not erase a complete cost result. Unknown orders and unresolved deadline admission
+still prevent optimum claims. Flexible eligible-cell assignments retain their separate makespan
+objective and cannot claim a cost minimum. Exact winning options and the complete search domain
+reach downstream studies, stitch replay and source-protocol identity.
+
+This increment is tracked by `ftx-pb2.2.15`; see [sewing-selection.md](docs/sewing-selection.md).
+The finite listed routes do not establish a global manufacturing optimum, measured throughput,
+physical seam quality or authority to purchase or operate equipment.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

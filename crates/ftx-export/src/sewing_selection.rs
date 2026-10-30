@@ -92,7 +92,7 @@ pub enum Objective {
 #[serde(deny_unknown_fields)]
 pub struct Request {
     /// `/1` feed; `/2` feed plus setup; `/3` thread cost; `/4` serial time; `/5` parallel makespan;
-    /// `/6` makespan across complete authored specialist routes.
+    /// `/6` makespan or complete thread cost across authored specialist routes.
     pub schema: String,
     /// Complete template job. `require_qualification` must be true; it is never silently enabled.
     pub options: SewOptions,
@@ -392,11 +392,12 @@ impl Request {
             Objective::MinimizeModeledProductionSeconds => "ftx-sewing-selection/4",
             Objective::MinimizeParallelMakespan if route_search => "ftx-sewing-selection/6",
             Objective::MinimizeParallelMakespan => "ftx-sewing-selection/5",
+            Objective::MinimizeThreadObservedOrderCost if route_search => "ftx-sewing-selection/6",
             Objective::MinimizeThreadObservedOrderCost => "ftx-sewing-selection/3",
         };
         if self.schema != schema || !self.options.require_qualification {
             return Err(invalid(
-                "sewing selection needs schema /1 for feed, /2 for feed plus setup, /3 for thread cost, /4 for serial production time, /5 for parallel makespan or /6 for authored routes, and explicit require_qualification=true",
+                "sewing selection needs schema /1 for feed, /2 for feed plus setup, /3 for thread cost, /4 for serial production time, /5 for parallel makespan or /6 for authored-route makespan or fixed-route thread cost, and explicit require_qualification=true",
             ));
         }
         if route_search == self.route_candidates.is_empty() {
@@ -819,7 +820,9 @@ impl Request {
             budget_exhausted: !search_complete,
             optimality_proven: search_complete && has_plan && unresolved_trials == 0,
             no_feasible_listed_recipe: search_complete && !has_plan && unresolved_trials == 0,
-            tie_break: if route_search {
+            tie_break: if route_search && cost {
+                "template route first, then route ID, operation ID and recipe ID lexicographic; retain first equal complete thread order cost"
+            } else if route_search {
                 "template route first, then route ID, operation ID and recipe ID lexicographic; retain first equal declared routed dispatch makespan"
             } else if cost {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal complete thread order cost"

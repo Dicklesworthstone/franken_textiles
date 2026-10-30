@@ -181,6 +181,18 @@ comparison ranges do not establish per-interval water bounds, general water-stat
 confidence intervals. The consumer shares the ordinary single-case and matrix decision rules and
 preserves independent outputs on refusal. It introduces no wet-textile law or textile-temperature feedback.
 
+**Cost-directed fixed specialist routes** (`ftx-sewing-selection/6`, `ftx-pb2.2.15`).
+The explicit thread-order-cost objective enumerates the existing complete fixed-route/recipe domain
+and consumes canonical source-qualified actual channel quantities and whole supplier orders. Optional
+completion deadlines filter candidates through the existing complete timing authority. Fixed cell
+assignment makes consumption independent of dispatch order, so feasible cost results do not require
+minimum-makespan proof; unknown orders or unresolved deadline feasibility still prevent an optimum
+claim. Eligible-cell routes and heterogeneous whole-garment allocation remain excluded from cost
+optimization. The complete request, including unused routes and work limits, participates in relevant
+study protocols. Selected source options replay actual plans, stitches and thread purchasing.
+Tests: `sewing_routing` and both native commands in `sewing_production_workflow`.
+Finite-domain software decisions do not qualify physical production or authorize hardware execution.
+
 **Routed availability calendars** (`production.routing.availability_calendars`, `ftx-pb2.2.13`).
 Source-qualified finite windows constrain complete cell, worker and transfer occupancy in fixed and
 eligible specialist routes. Each named resource has 1–16 strictly separated inclusive windows inside

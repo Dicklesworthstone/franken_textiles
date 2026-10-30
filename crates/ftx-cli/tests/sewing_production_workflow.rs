@@ -912,6 +912,15 @@ fn routed_specialists_replay_actual_native_stitches_inventory_previews_and_mater
 
 #[test]
 fn authored_route_selection_replays_native_portable_stitches_yarn_orders_and_material_studies() {
+    replay_authored_route_selection(false);
+}
+
+#[test]
+fn fixed_route_cost_selection_respects_deadlines_and_replays_actual_native_orders() {
+    replay_authored_route_selection(true);
+}
+
+fn replay_authored_route_selection(cost: bool) {
     let mut original = routed_specialist_options();
     original["production"]["routing"]["cells"][1]["available_at_milliseconds"] = json!(18000);
     refresh_routed_locks(&mut original);
@@ -923,9 +932,76 @@ fn authored_route_selection_replays_native_portable_stitches_yarn_orders_and_mat
     route["route"][1]["cell"] = json!("cell-c");
     route["transfer"]["transfers"][0]["to"] = json!("cell-c");
     refresh_routed_locks(&mut alternative);
-    let request = json!({"schema":"ftx-sewing-selection/6","options":original,
-        "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+    if cost {
+        // Independent synthetic consumption makes the late template cheaper. Source locks
+        // change with the authored coefficients; no material or machine qualification is relaxed.
+        for (options, coefficient) in [(&mut original, 0.01), (&mut alternative, 0.02)] {
+            let cells = options["production"]["routing"]["cells"]
+                .as_array_mut()
+                .unwrap();
+            for cell in cells {
+                let mut hashes = std::collections::BTreeMap::new();
+                for qualification in cell["configuration"]["qualifications"]
+                    .as_array_mut()
+                    .unwrap()
+                {
+                    for channel in qualification["thread_consumption"]["channels"]
+                        .as_array_mut()
+                        .unwrap()
+                    {
+                        channel["metres_per_traversal"] = json!(coefficient);
+                        channel["start_allowance_m"] = json!(0);
+                        channel["end_allowance_m"] = json!(0);
+                    }
+                    let typed = serde_json::from_value(qualification.clone()).unwrap();
+                    hashes.insert(
+                        qualification["id"].as_str().unwrap().to_owned(),
+                        ftx_export::sewing::production::workholding::qualification_sha256(&typed)
+                            .unwrap(),
+                    );
+                }
+                for path in [
+                    "/configuration/qualification_refs",
+                    "/handling/qualifications",
+                ] {
+                    for references in cell
+                        .pointer_mut(path)
+                        .unwrap()
+                        .as_object_mut()
+                        .unwrap()
+                        .values_mut()
+                    {
+                        for reference in references.as_array_mut().unwrap() {
+                            reference["sha256"] = json!(hashes[reference["id"].as_str().unwrap()]);
+                        }
+                    }
+                }
+            }
+            refresh_routed_locks(options);
+        }
+    }
+    let mut request = json!({"schema":"ftx-sewing-selection/6","options":original,
+        "objective":if cost {"minimize_thread_observed_order_cost"} else {"minimize_parallel_makespan"},
+        "max_plan_evaluations":2,
         "route_candidates":[{"id":"available-specialists","routing":alternative["production"]["routing"]}]});
+    if cost {
+        let unconstrained = portable(ftx_wasm::sew_select(PATTERN, &request.to_string()).unwrap());
+        assert_eq!(
+            unconstrained["report"]["schema"],
+            "ftx-sewing-selection-report/6"
+        );
+        assert_eq!(unconstrained["report"]["selected_route"], "template");
+        assert_eq!(unconstrained["report"]["selected_thread_order_cost"], 10.0);
+        assert_eq!(unconstrained["report"]["optimality_proven"], true);
+        assert!(unconstrained["report"]["selected_objective_seconds"].is_null());
+        let fast_plan =
+            portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &alternative.to_string()).unwrap());
+        let deadline = fast_plan["production"]["routing"]["selected"]["makespan_milliseconds"]
+            .as_u64()
+            .unwrap();
+        assert!(deadline < 18000);
+        request["completion_deadline_milliseconds"] = json!(deadline);
+    }
     let selected_text = ftx_wasm::sew_select(PATTERN, &request.to_string()).unwrap();
     assert_eq!(
         selected_text,
@@ -937,6 +1013,28 @@ fn authored_route_selection_replays_native_portable_stitches_yarn_orders_and_mat
         "available-specialists"
     );
     assert_eq!(selected["report"]["candidate_combinations"], 2);
+    if cost {
+        let report = &selected["report"];
+        assert_eq!(report["schema"], "ftx-sewing-selection-report/7");
+        assert_eq!(report["selected_thread_order_cost"], 14.0);
+        assert_eq!(report["optimality_proven"], true);
+        assert_eq!(report["unresolved_trials"], 0);
+        assert_eq!(report["trials"][0]["thread_order_cost"], 10.0);
+        assert_eq!(
+            report["trials"][0]["completion_deadline"]["status"],
+            "excluded"
+        );
+        assert_eq!(report["trials"][1]["thread_order_cost"], 14.0);
+        assert_eq!(
+            report["trials"][1]["completion_deadline"]["status"],
+            "feasible"
+        );
+        assert_eq!(
+            report["trials"][1]["completion_deadline"]["selected_makespan_milliseconds"],
+            request["completion_deadline_milliseconds"]
+        );
+        assert!(report["selected_objective_seconds"].is_null());
+    }
     let options = selected["selected_options_json"].as_str().unwrap();
     let plan = &selected["report"]["selected_plan"];
     assert_eq!(
@@ -967,7 +1065,8 @@ fn authored_route_selection_replays_native_portable_stitches_yarn_orders_and_mat
         "variants":[{"key":"specialists","changes":{"schema":"ftx-material-bindings/1","default":pattern["fabric"]["material"]}}],
         "sewing_selection":request,
         "comparison":{"basis":"nominal","required_consumers":["sewing","sewing_consumables","sewing_purchasing"],
-            "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"}]}});
+            "objectives":[{"metric":if cost {"thread_observed_order_cost"} else {"sewing_parallel_makespan_seconds"},
+                "direction":"minimize"}]}});
     let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
     let row = &report["alternatives"][0];
     assert_eq!(
