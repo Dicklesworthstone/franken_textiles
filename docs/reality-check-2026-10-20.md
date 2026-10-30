@@ -3055,6 +3055,14 @@ corrected to the actual `ftx-drape/tests/materials.rs` and native binding/study 
 exercise synthetic material changes through real sewn-band dynamics. They do not establish the
 claimed matched-material jacket gate. `ftx-tm8` retains this distinction explicitly.
 
+Direct execution of the `d58ba010` binary on its RCH build worker adds a useful quantitative
+check: `ftx materials list --json` reports **433 catalogue entries, zero with an empty
+`mechanics_missing` list**. None therefore supplies the complete required scalar mechanical
+property set without additional observations. This is a property-coverage check, not a new
+empirical readiness score. Partial records remain useful for supported mass, thermal, vapor or
+screening consumers; explicit characterized user selections and legacy UNCERTAIN drapes remain
+separate paths. Catalogue breadth is not matched linen/leather/knit drape readiness.
+
 Keyword and AST scans found no production `todo!()` or `unimplemented!()` function bodies.
 Manual inspection of CLI dispatch, immutable round/status policy, body-model trait and fitter,
 material resolution, cloth acceptance, coverage and cutting/sewing consumers corroborates real
@@ -3178,8 +3186,11 @@ The pinned nightly was already installed. For each remote command below, the env
 | `cargo fmt --check` | PASS, exit 0 |
 | `python3 -m unittest discover -s scripts -p 'test*.py'` | PASS: 112 tests on Python 3.14.4. Historical invalid-clock failure is not reproduced. ResourceWarnings remain visible. |
 | `node --experimental-vm-modules --test tools/check_trace_frontend.cjs` | PASS: 263 passed, 49 skipped, 0 failed (312 total), Node 26.3.0. This entry imports the other frontend suites; no duplicate counting. |
+| `ftx materials list --json` on the remote-built `d58ba010` binary | PASS, exit 0: 433 entries; all retain at least one `mechanics_missing` item. Direct read-only execution on worker `vmi1152480`, not an installed local release. |
+| `ftx-materials thermal-transient tests/fixtures/materials/synthetic-transient-exterior.json` on that worker | PASS, exit 0: 40 × 0.5 s; incoming 958.6302629119017 J, outgoing 476.0776984865126 J, storage change 482.55256442538973 J; total balance discrepancy −6.25e−13 J. Both comfort and empirical-validation claims remain false. |
 | `RCH_REQUIRE_REMOTE=1 RCH_VISIBILITY=summary rch exec -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx" cargo clippy --all-targets --locked -- -D warnings` | PASS, exit 0, worker `vmi1293453`; artifacts/terminal completion returned. |
 | `RCH_REQUIRE_REMOTE=1 RCH_VISIBILITY=summary rch exec -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx" cargo build --target wasm32-unknown-unknown -p ftx-wasm --locked` | PASS, exit 0, worker `vmi1153651`; debug WASM artifacts retrieved. Compilation is not browser execution or a release benchmark. |
+| Existing prebuilt native test executables on `vmi1152480`, each with `--format terse`: CLI `draft_workflow`; conformance `export_all`, `measurements`; shared Rust `ftx-wasm/page` | PASS, exit 0 for each: respectively 4, 2, 3 and 8 tests. These independently complete core draft/validate/export, captured export/measurement and page checks while the broad suite continues; the page target executes natively, not in a browser. |
 | `RCH_REQUIRE_REMOTE=1 RCH_VISIBILITY=summary rch exec -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx" cargo test --workspace --all-targets --locked` | Running when this section was drafted; final outcome recorded below before handoff. |
 | `ast-grep run --lang Rust --pattern 'fn $NAME($$$) { todo!() }' crates` | No matches, exit 1; keyword/control-flow inspection qualified above. |
 | `bv --robot-triage`, `bv --robot-insights`, `bv --robot-plan` | PASS; current graph has no cycles and retains the material-data critical path. |
@@ -3191,6 +3202,12 @@ full fitted G1/G2 lanes, actual Chromium/offline candidate workflows, current-so
 measurements and private physical experiments have not been established by the checks above.
 No `web/pkg`, installed `ftx`, verified local production Anny asset, hosted deployment or remote
 release was verified. Local Git has no tags; that is not a remote-release query.
+
+The first optional direct worker invocation used the default SSH identity and failed authentication
+before running `ftx`; its downstream summary had no JSON to parse. Using the existing RCH-configured
+identity succeeded for the two runtime checks above. This environment failure is not a candidate
+failure. During the assessment, documentation/backlog-only commits advanced `main` through `dca6c5f`;
+the compiler/test commands still identify `d58ba010`, and no Rust implementation changed between them.
 
 This pass changes existing assessment/contract evidence and Beads only. It does not alter Rust
 implementation, oracle fixtures, model pins or physical data, and does not complete G5.
