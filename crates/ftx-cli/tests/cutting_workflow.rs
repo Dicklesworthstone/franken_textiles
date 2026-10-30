@@ -223,6 +223,19 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
         changed["metrics"]["stock_area_m2"],
         qualified["metrics"]["stock_area_m2"]
     );
+    if let Some(capture) = std::env::var_os("FTX_KNIFE_PROGRAM_REPLAY") {
+        let capture = PathBuf::from(capture);
+        fs::create_dir_all(&capture).unwrap();
+        for (name, value) in [
+            ("pattern.json", &p),
+            ("options.json", &options),
+            ("plan-report.json", &workbench),
+            ("study.json", &study),
+            ("study-report.json", &report),
+        ] {
+            fs::write(capture.join(name), serde_json::to_vec(value).unwrap()).unwrap();
+        }
+    }
 }
 
 #[test]

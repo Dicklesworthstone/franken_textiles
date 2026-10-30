@@ -66,6 +66,7 @@ jobs:
           FTX_CONDENSING_MECHANICS_REPLAY: ${{ runner.temp }}/ftx-condensing-mechanics-replay
           FTX_INCOMING_WATER_IMPULSE_REPLAY: ${{ runner.temp }}/ftx-incoming-water-impulse-replay
           FTX_CONDENSING_IMPULSE_REPLAY: ${{ runner.temp }}/ftx-condensing-impulse-replay
+          FTX_KNIFE_PROGRAM_REPLAY: ${{ runner.temp }}/ftx-knife-program-replay
           FTX_ROUTED_FIXTURE_REPLAY: ${{ runner.temp }}/ftx-routed-fixture-replay
           FTX_CONSUMER_ADAPTIVE_CAPTURE_DIR: ${{ runner.temp }}/ftx-consumer-adaptive-replay
           FTX_CUT_AND_SEW_REPLAY: ${{ runner.temp }}/ftx-cut-and-sew-replay
@@ -93,6 +94,7 @@ jobs:
           FTX_CONDENSING_MECHANICS_REPLAY: ${{ runner.temp }}/ftx-condensing-mechanics-replay
           FTX_INCOMING_WATER_IMPULSE_REPLAY: ${{ runner.temp }}/ftx-incoming-water-impulse-replay
           FTX_CONDENSING_IMPULSE_REPLAY: ${{ runner.temp }}/ftx-condensing-impulse-replay
+          FTX_KNIFE_PROGRAM_REPLAY: ${{ runner.temp }}/ftx-knife-program-replay
           FTX_ROUTED_FIXTURE_REPLAY: ${{ runner.temp }}/ftx-routed-fixture-replay
           FTX_CONSUMER_ADAPTIVE_REPLAY: ${{ runner.temp }}/ftx-consumer-adaptive-replay
           FTX_CUT_AND_SEW_REPLAY: ${{ runner.temp }}/ftx-cut-and-sew-replay

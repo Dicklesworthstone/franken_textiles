@@ -7554,6 +7554,66 @@ test('compiled WASM outfit import reaches exact material binding and complete as
     assert.equal(refused.type,'error');assert.match(refused.message,/options.self_contact/);
   });
 
+test('compiled WASM qualified knife paths and changed-material process refusals replay native cut and study captures',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_KNIFE_PROGRAM_REPLAY},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const input=name=>fs.readFileSync(path.join(process.env.FTX_KNIFE_PROGRAM_REPLAY,name),'utf8');
+    const pattern=input('pattern.json'),options=input('options.json'),studyRequest=input('study.json');
+    const w=await workerModule({bindings:ftx});
+    const cut=await w.send({type:'cut',request:251,pattern,options});
+    assert.equal(cut.type,'result',cut.message);
+    assert.deepEqual(cut.result,JSON.parse(input('plan-report.json')));
+    assert.equal(cut.files.find(file=>file.name==='cut-plan.json').text,ftx.cut_plan(pattern,options));
+    assert.equal(cut.files.find(file=>file.name==='roll-0.svg').text,cut.picture);
+    assert.equal(cut.files.find(file=>file.name==='roll-0.svg').mime,'image/svg+xml');
+    const program=cut.result.program,processOptions=JSON.parse(options).program;
+    assert.equal(program.schema,'ftx-knife-cut-program/1');
+    assert.equal(program.markers.length,2);
+    assert.equal(program.optimality_proven,false);
+    assert.equal(program.physical_cutting_validated,false);
+    assert.equal(program.hardware_execution_authorized,false);
+    assert.match(program.limitations.join('\n'),/Single-ply cold-knife planning/);
+    assert.match(program.limitations.join('\n'),/Acceleration, corner slowing, blade turning/);
+    assert.match(program.limitations.join('\n'),/No kerf compensation, common-line cutting/);
+    for(const marker of program.markers) {
+      const qualification=processOptions.qualifications.find(row=>row.id===marker.qualification);
+      assert.ok(qualification);
+      assert.equal(qualification.machine_sha256,program.machine_sha256);
+      assert.equal(qualification.material_sha256,marker.material_sha256);
+      assert.equal(marker.material_sha256,cut.result.rolls[marker.marker].material.sha256);
+      const route=marker.selected;
+      assert.ok(route.runs.length>0);assert.ok(route.cut_length_mm>0);assert.ok(route.modeled_path_seconds>0);
+      assert.ok(route.travel_length_mm<=marker.baseline.travel_length_mm);
+      assert.ok(Math.abs(route.modeled_path_seconds-route.cutting_seconds-route.travel_seconds-route.lift_lower_seconds)<1e-12);
+      let exteriorStarted=false;
+      for(const run of route.runs) {
+        if(run.path.internal_cut!==undefined) assert.equal(exteriorStarted,false,'Internal cuts precede exterior release');
+        else exteriorStarted=true;
+      }
+    }
+    assert.ok(program.markers.some(marker=>marker.selected.runs.some(run=>run.path.internal_cut!==undefined)));
+    const study=await w.send({type:'study',request:252,pattern,studyRequest});
+    assert.equal(study.type,'result',study.message);
+    assert.deepEqual(study.result,JSON.parse(input('study-report.json')));
+    assert.equal(study.files.find(file=>file.name==='material-study.json').text,ftx.material_study(pattern,studyRequest));
+    assert.equal(study.files.find(file=>file.name==='original-pattern.json').text,pattern);
+    assert.equal(study.files.find(file=>file.name==='study-request.json').text,studyRequest);
+    const qualified=study.result.alternatives.find(row=>row.key==='qualified');
+    const changed=study.result.alternatives.find(row=>row.key==='changed-finish');
+    assert.ok(qualified);assert.ok(changed);
+    assert.equal(qualified.cutting.status,'available');
+    assert.deepEqual(qualified.cutting.result.program,program);
+    assert.equal(qualified.cutting.result.program_refusal,undefined);
+    assert.equal(changed.cutting.status,'available');
+    assert.equal(changed.cutting.result.program,undefined);
+    assert.match(changed.cutting.result.program_refusal.message,/qualification/);
+    assert.ok(qualified.metrics.stock_area_m2>0);
+    assert.equal(changed.metrics.stock_area_m2,qualified.metrics.stock_area_m2);
+    assert.equal(changed.cutting.result.rolls.length,qualified.cutting.result.rolls.length);
+  });
+
 test('compiled WASM bounded markers retain whole geometry, selected SVG and one finite-stock order through the worker',
   {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
