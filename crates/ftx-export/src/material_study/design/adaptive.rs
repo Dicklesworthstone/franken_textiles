@@ -60,6 +60,10 @@ pub struct Request {
     pub case_key: Option<String>,
     /// One to three variables, polled in authored order and negative then positive direction.
     pub variables: Vec<Variable>,
+    /// Optional additional starts after local minimum-step stops. Each point names every variable.
+    /// All starts share the same unique-trial, consumer, protocol and retention allowances.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub restart_points_mm: Vec<BTreeMap<String, f64>>,
     /// Explicit canonical operations after each trial's linked alterations, such as seam truing.
     #[serde(default)]
     pub after: Vec<Operation>,
@@ -79,6 +83,23 @@ pub enum StopReason {
     EvaluationBudget,
     /// No strictly better poll remained at the declared final steps; other points remain unknown.
     MinimumSteps,
+}
+
+/// One attempted local search within an explicitly requested multi-start discovery.
+#[derive(Clone, Debug, Serialize)]
+pub struct SearchStart {
+    /// Zero is the variables' initial point; n > 0 is restart_points_mm[n - 1].
+    pub start_index: usize,
+    /// Original trial at this start, possibly reused from the shared coordinate cache.
+    pub initial_trial_key: String,
+    /// Last polling centre; it need not satisfy the production or flat-fit gates.
+    pub final_trial_key: String,
+    /// New unique trials spent here, including the start when it was not previously visited.
+    pub evaluations: usize,
+    /// Local termination reason. Only minimum_steps permits another declared start.
+    pub stop_reason: StopReason,
+    /// Actual polling steps at this local stop, keyed by the authored variables.
+    pub final_steps_mm: BTreeMap<String, f64>,
 }
 
 /// One actual canonical trial, including geometry, body identity and refusal evidence.
@@ -169,6 +190,10 @@ pub struct Receipt {
     pub best_total_fit_band_violation_mm: Option<f64>,
     /// Polling steps at termination, indexed by the original variable identities.
     pub final_steps_mm: BTreeMap<String, f64>,
+    /// Attempted starts, including the initial point, only when restart points were requested.
+    /// Remaining declared starts were not explored. Budgets, caches and protocols never reset.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub search_starts: Vec<SearchStart>,
     /// Actual production guidance and its bounded callback-slot reservation, when requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumer_guidance: Option<Box<ConsumerGuidance>>,
@@ -297,6 +322,42 @@ impl Request {
             }
             for site in &variable.sites {
                 site.validate(&[lo, hi, variable.initial_mm])?;
+            }
+        }
+        if self.restart_points_mm.len() > 31 {
+            return Err(budget(
+                "adaptive design accepts at most 31 additional start points",
+            ));
+        }
+        let initial: Vec<_> = self.variables.iter().map(|v| v.initial_mm).collect();
+        let mut starts = BTreeSet::from([coordinate_identity(&initial)]);
+        for point in &self.restart_points_mm {
+            if point.len() != self.variables.len() {
+                return Err(invalid(
+                    "each adaptive restart must name every variable exactly once",
+                ));
+            }
+            let mut values = Vec::with_capacity(self.variables.len());
+            for variable in &self.variables {
+                let value = point.get(&variable.key).ok_or_else(|| {
+                    invalid("each adaptive restart must name every variable exactly once")
+                })?;
+                if !value.is_finite()
+                    || !(variable.bounds_mm[0]..=variable.bounds_mm[1]).contains(value)
+                {
+                    return Err(invalid(
+                        "adaptive restart coordinates must be finite and inside their declared bounds",
+                    ));
+                }
+                for site in &variable.sites {
+                    site.validate(&[*value])?;
+                }
+                values.push(*value);
+            }
+            if !starts.insert(coordinate_identity(&values)) {
+                return Err(invalid(
+                    "adaptive starts must be distinct, including the initial point",
+                ));
             }
         }
         Ok(())
@@ -581,6 +642,10 @@ impl Request {
                     .collect(),
             )?
             .expect("positive trial allowance");
+        let mut search_starts = Vec::new();
+        let mut start_index = 0;
+        let mut start_initial = Some(current);
+        let mut start_evaluations = 0;
         let mut steps: Vec<_> = self
             .variables
             .iter()
@@ -635,9 +700,43 @@ impl Request {
                 }
             }
             if !refined {
-                break StopReason::MinimumSteps;
+                let Some(point) = self.restart_points_mm.get(start_index) else {
+                    break StopReason::MinimumSteps;
+                };
+                search_starts.push(discovery.record_start(
+                    start_index,
+                    start_initial.expect("active start"),
+                    current,
+                    start_evaluations,
+                    &steps,
+                    StopReason::MinimumSteps,
+                ));
+                let point = self.variables.iter().map(|v| point[&v.key]).collect();
+                start_evaluations = discovery.rows.len();
+                let Some(index) = discovery.inspect(point)? else {
+                    start_initial = None;
+                    break StopReason::EvaluationBudget;
+                };
+                current = index;
+                start_initial = Some(index);
+                start_index += 1;
+                for (step, variable) in steps.iter_mut().zip(&self.variables) {
+                    *step = variable.initial_step_mm;
+                }
             }
         };
+        if !self.restart_points_mm.is_empty()
+            && let Some(initial) = start_initial
+        {
+            search_starts.push(discovery.record_start(
+                start_index,
+                initial,
+                current,
+                start_evaluations,
+                &steps,
+                stop_reason,
+            ));
+        }
         let mut best: Option<usize> = None;
         for (index, row) in discovery.rows.iter().enumerate() {
             let admitted = if self.consumer_guided() {
@@ -676,6 +775,7 @@ impl Request {
                 .zip(steps)
                 .map(|(variable, step)| (variable.key.clone(), step))
                 .collect(),
+            search_starts,
             consumer_guidance: discovery.guidance.as_ref().map(|guidance| {
                 Box::new(ConsumerGuidance {
                     material_key: guidance.material.variant.key.clone(),
@@ -957,6 +1057,31 @@ struct Discovery<'request, 'body, 'consumer, T> {
 }
 
 impl<T> Discovery<'_, '_, '_, T> {
+    fn record_start(
+        &self,
+        start_index: usize,
+        initial: usize,
+        current: usize,
+        before: usize,
+        steps: &[f64],
+        stop_reason: StopReason,
+    ) -> SearchStart {
+        SearchStart {
+            start_index,
+            initial_trial_key: self.rows[initial].design.key.clone(),
+            final_trial_key: self.rows[current].design.key.clone(),
+            evaluations: self.rows.len() - before,
+            stop_reason,
+            final_steps_mm: self
+                .request
+                .variables
+                .iter()
+                .zip(steps)
+                .map(|(variable, &step)| (variable.key.clone(), step))
+                .collect(),
+        }
+    }
+
     fn improves(&self, candidate: &Trial, current: &Trial) -> bool {
         let Some(guidance) = &self.guidance else {
             return improves(candidate, current);
@@ -1006,10 +1131,7 @@ impl<T> Discovery<'_, '_, '_, T> {
     }
 
     fn inspect(&mut self, point: Vec<f64>) -> Result<Option<usize>, Refusal> {
-        let identity: Vec<_> = point
-            .iter()
-            .map(|value| if *value == 0.0 { 0 } else { value.to_bits() })
-            .collect();
+        let identity = coordinate_identity(&point);
         if let Some(&index) = self.seen.get(&identity) {
             return Ok(Some(index));
         }
@@ -1165,6 +1287,13 @@ fn improves(candidate: &Trial, current: &Trial) -> bool {
         (Some(a), Some(b)) => a.0 < b.0 || (a.0 == b.0 && a.1 < b.1),
         _ => false,
     }
+}
+
+fn coordinate_identity(point: &[f64]) -> Vec<u64> {
+    point
+        .iter()
+        .map(|value| if *value == 0.0 { 0 } else { value.to_bits() })
+        .collect()
 }
 
 #[cfg(test)]
