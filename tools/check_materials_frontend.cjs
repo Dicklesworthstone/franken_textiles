@@ -3887,6 +3887,88 @@ const studyRow = (key = 'A', pattern = '{"pieces":[],"x":-0.0,"value":1.0}') => 
 });
 const studyReport = (rows = [studyRow()]) => ({ schema: 'ftx-material-study/1', alternatives: rows,
   source_pattern_sha256: 'original-lock', geometry_changed: false, physical_validation_claim: false, hardware_execution_authorized: false });
+test('evaluated study candidates become the exact current pattern across manufacturing, single and named scenarios', async () => {
+  const raw=' \r\n{"schema":"fabric-pattern/1","pieces":[{"id":"chosen"}],"material":{"value":1.0,"x":-0.0,"seed":18446744073709551615}}\r\n';
+  for (const mode of ['study','scenario','matrix']) {
+    const p=await pageModule(); await p.load(); await p.inspect('old-selection');
+    p.e.target.value='front';p.e.assign.onclick();await p.bind();scenarioInputs(p);p.select('fit');
+    p.e.patternFile.value='source.json';
+    const op=mode==='study'?'study':'scenario';
+    const report=mode==='study'?studyReport([studyRow('A'),studyRow('B')]):
+      mode==='scenario'?scenarioReport():scenarioMatrixReport();
+    const study=report.manufacturing||report;
+    study.alternatives[0].binding.result.pattern_json=raw;
+    study.alternatives[1].binding=refused('No available pattern');
+    await p.e[op].onclick();p.emit(report);
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const buttons=descendants(s).filter(n=>n.tag==='button'&&n.textContent.startsWith('Use '));
+    assert.deepEqual(buttons.map(b=>b.textContent),['Use A pattern']);
+    assert.equal(buttons[0].disabled,false);assert.match(visibleText(s),/missing stock width/);
+    const before=p.current().messages.length;buttons[0].onclick();
+    assert.equal(p.current().messages.length,before,'Adoption never runs a consumer automatically');
+    assert.equal(s.hidden,true);assert.equal(p.e.cut.disabled,true);assert.equal(p.e.fold.disabled,true);
+    assert.match(p.e.patternName.textContent,/Study candidate A: 1 source pieces/);
+    assert.equal(p.e.patternFile.value,'');
+    await p.e.bind.onclick();const binding=p.current().messages.at(-1);
+    assert.equal(binding.pattern,raw);assert.equal(JSON.parse(binding.changes).default,null);
+    assert.deepEqual(Object.keys(JSON.parse(binding.changes).pieces||{}),[]);
+    p.emit({pattern_json:raw,pieces:[],pattern_sha256:'chosen-lock'});
+    await p.e.exports.onclick();const exported=p.current().messages.at(-1);
+    assert.equal(exported.pattern,raw);assert.equal(exported.measurements,'{"length":10.0}');
+    p.emit({});await p.e.study.onclick();assert.equal(p.current().messages.at(-1).pattern,raw);
+  }
+});
+test('stale or busy candidate actions cannot replace the current pattern', async () => {
+  const raw='{"pieces":[{"id":"candidate"}],"x":-0.0}';
+  for (const change of ['request','source','replacement','busy']) {
+    const p=await pageModule();await p.load();p.select('studyRequest');await p.e.study.onclick();p.emit(studyReport([studyRow('A',raw)]));
+    const s=section(p,'Fixed-pattern manufacturing alternatives');
+    const button=descendants(s).find(n=>n.tag==='button'&&n.textContent==='Use A pattern');
+    if(change==='request')p.e.studyRequest.handlers.change();
+    if(change==='source'){p.select('patternFile','{"pieces":[{"id":"new-source"}]}');await p.e.patternFile.onchange();}
+    if(change==='replacement'){await p.e.study.onclick();p.emit(studyReport([studyRow('new')]));}
+    if(change==='busy'){
+      p.e.selection.value='{"id":"other"}';await p.e.inspect.onclick();assert.equal(button.disabled,true);
+    }
+    const name=p.e.patternName.textContent;button.onclick();assert.equal(p.e.patternName.textContent,name,change);
+    if(change==='busy'){
+      p.emit({selection:{id:'other'},capabilities:{},snapshot:{id:'other'}});
+      assert.equal(button.disabled,false);button.onclick();assert.match(p.e.patternName.textContent,/Study candidate A/);
+    }
+  }
+  const p=await pageModule();await p.load();scenarioInputs(p);await p.e.scenario.onclick();p.emit(scenarioReport());
+  const button=descendants(section(p,'Fresh drape and heat alternatives')).find(n=>n.tag==='button'&&n.textContent==='Use A pattern');
+  const name=p.e.patternName.textContent;p.e.body.handlers.change();button.onclick();assert.equal(p.e.patternName.textContent,name);
+});
+test('candidate adoption keeps received body sources and requires fresh association', async () => {
+  const token='a'.repeat(32),p=await pageModule({roundToken:token});
+  const model=new Blob([new Uint8Array([4,6,8])]),body=' {"schema":"ftx-body-fit/1","x":-0.0}\r\n';
+  const measurements=' {"length":1.0}\r\n',fit=' {"points":[],"x":-0.0}\r\n';
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-round-sources',token,
+    files:{pattern:new Blob(['{"pieces":[{"id":"front"}]}']),measurements:new Blob([measurements]),fit:new Blob([fit])},
+    bodySource:{model,fit:new Blob([body]),armDeg:48}}});
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();p.select('studyRequest');
+  await p.e.study.onclick();const raw=' {"pieces":[{"id":"adopted"}],"x":-0.0}\n';p.emit(studyReport([studyRow('A',raw)]));
+  descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(n=>n.tag==='button'&&n.textContent==='Use A pattern').onclick();
+  assert.equal(p.e.bodyFitConsent.checked,false);assert.equal(p.e.bodyArmDeg.value,'48');
+  assert.match(p.e.roundImportText.textContent,/measurement, fit and body snapshots remain selected/);
+  await p.e.bind.onclick();assert.equal(p.current().messages.at(-1).pattern,raw);
+  p.emit({pattern_json:raw,pieces:[],pattern_sha256:'adopted-lock'});assert.equal(p.e.fold.disabled,true);
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();await p.e.fold.onclick();
+  const folded=p.current().messages.at(-1);assert.equal(folded.pattern,raw);assert.equal(folded.bodyFit,body);
+  assert.equal(folded.measurements,measurements);assert.equal(folded.fit,fit);assert.equal(folded.armDeg,48);
+  assert.deepEqual([...new Uint8Array(folded.bytes)],[4,6,8]);
+});
+test('candidate adoption preserves joint outfit correspondence and required self-contact', async () => {
+  const p=await pageModule(),imported=outfitImport();p.select('patternFile',imported.request_json);
+  await p.e.patternFile.onchange();p.emit(imported);p.select('studyRequest');await p.e.study.onclick();
+  const raw=imported.pattern_json.replace('1.0','2.0');p.emit(studyReport([studyRow('outfit candidate',raw)]));
+  descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(n=>n.tag==='button'&&n.textContent==='Use outfit candidate pattern').onclick();
+  assert.equal(p.e.selfContact.checked,true);assert.equal(p.e.selfContact.disabled,true);
+  assert.deepEqual(p.e.target.children.slice(1).map(c=>c.value),['@outfit','@garment:0','@garment:1','inner::band','outer::band']);
+  await p.e.bind.onclick();const binding=p.current().messages.at(-1);assert.equal(binding.pattern,raw);
+  assert.deepEqual(plain(binding.outfit),{request_json:imported.request_json,composition_json:imported.composition_json});
+});
 function designReport() {
   const designs = ['baseline', '<wider & longer>', 'invalid'];
   const rows = designs.map((key, i) => {
@@ -5766,6 +5848,22 @@ test('compiled WASM authored designs replay real stock and sewing while excludin
       }
       assert.equal(row('more-ease').metrics.feed_seconds,row('baseline').metrics.feed_seconds);
       assert.ok(row('longer').metrics.feed_seconds>row('baseline').metrics.feed_seconds);
+      if (width===0.100) {
+        const p=await pageModule(),chosen=row('more-ease'),bound=chosen.binding.result.pattern_json;
+        p.select('patternFile',pattern);await p.e.patternFile.onchange();
+        p.select('studyRequest',request);await p.e.study.onclick();p.emit(report,[],raw);
+        const action=descendants(section(p,'Fixed-pattern manufacturing alternatives'))
+          .find(n=>n.tag==='button'&&n.textContent===`Use ${chosen.key} pattern`);
+        assert.ok(action);action.onclick();await p.e.bind.onclick();
+        const sent=p.current().messages.at(-1);assert.equal(sent.pattern,bound);
+        const worker=await workerModule({bindings:ftx}),rebound=await worker.send(sent);
+        assert.equal(rebound.type,'result',rebound.message);
+        assert.deepEqual(rebound.result,JSON.parse(ftx.material_bind(bound,sent.changes)));
+        assert.equal(rebound.result.pattern_json,bound);
+        assert.deepEqual(JSON.parse(ftx.cut_plan(rebound.result.pattern_json,JSON.stringify(input.cutting))),chosen.cutting.result);
+        p.select('cutOptions',JSON.stringify(input.cutting));
+        p.emit(rebound.result,rebound.files,rebound.reportText);assert.equal(p.e.cut.disabled,false);
+      }
       const fixed={...input,schema:'ftx-material-study/1'};delete fixed.designs;
       for (const prior of JSON.parse(ftx.material_study(pattern,JSON.stringify(fixed))).alternatives) {
         const baseline=structuredClone(report.alternatives.find(r=>r.design.key==='baseline'&&r.design.material_key===prior.key));

@@ -33,7 +33,7 @@ for (const op of operations) {
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
   section.append(title, summary, comparison, links); $("outputs").append(section);
-  sections.set(op, { section, summary, comparison, links });
+  sections.set(op, { section, summary, comparison, links, study: null, adoptions: [] });
 }
 const text = value => JSON.stringify(value, null, 2);
 const has = id => roundFiles.has(id) || !!$(id).files.length;
@@ -53,6 +53,9 @@ function bodyDependentStudies(id) {
 }
 function controls() {
   for (const el of commands) el.disabled = !ready || !!pending;
+  for (const section of sections.values()) {
+    for (const button of section.adoptions) button.disabled = !ready || !!pending;
+  }
   $("bind").disabled ||= !source || !interfaceReady;
   $("assign").disabled = !!pending || !source || !inspected;
   $("reset").disabled = !!pending || !source;
@@ -106,7 +109,10 @@ function clear(keys) {
   for (const key of keys) {
     for (const url of urls.get(key) || []) URL.revokeObjectURL(url);
     urls.delete(key);
-    if (sections.has(key)) { const s = sections.get(key); s.section.hidden = true; s.links.replaceChildren(); s.comparison.replaceChildren(); s.summary.textContent = ""; }
+    if (sections.has(key)) {
+      const s = sections.get(key); s.section.hidden = true; s.links.replaceChildren();
+      s.comparison.replaceChildren(); s.summary.textContent = ""; s.study = null; s.adoptions = [];
+    }
     if (key === "fold") { drape = null; $("viewer").hidden = true; $("viewer").removeAttribute("src"); }
     if (key === "cut") { $("marker").hidden = true; $("marker").removeAttribute("src"); }
     if (key === "stock") { $("stockMarker").hidden = true; $("stockMarker").removeAttribute("src"); }
@@ -1246,8 +1252,34 @@ function designComparison(op, parent, study) {
       refusal: row.binding?.refusal });
   }
 }
+function useStudyPattern(op, study, row) {
+  if (!ready || pending || sections.get(op).study !== study) return;
+  const raw = available(row.binding)?.pattern_json;
+  if (typeof raw !== "string") return;
+  try {
+    const data = parsePattern(raw), retainedOutfit = outfit;
+    const garments = retainedOutfit ? JSON.parse(retainedOutfit.composition_json).garments : [];
+    resetPatternInput();
+    ++roundRead; roundToken = null; window.opener = null;
+    roundFiles.delete("patternFile"); $("patternFile").value = "";
+    installPattern(raw, `Study candidate ${row.key}`, garments, data);
+    outfit = retainedOutfit;
+    if (outfit) $("selfContact").checked = true;
+    if (roundFiles.size) $("roundImportText").textContent =
+      "A study candidate is now the current pattern. Received measurement, fit and body snapshots remain selected. Review them before recomputing this candidate.";
+    $("status").textContent = "Candidate pattern loaded with its exact material selections. Review the current body, fit and process inputs, then Freeze selections and bind to recompute consumers. Study alterations now start from this candidate.";
+    controls();
+  } catch (e) { error(String(e.message || e)); controls(); }
+}
 function manufacturingComparison(op, parent, study, computed) {
+  sections.get(op).study = study;
   designComparison(op, parent, study);
+  if (study.alternatives.some(row => typeof available(row.binding)?.pattern_json === "string")) {
+    const note = document.createElement("p");
+    note.textContent = "Use a candidate pattern to continue with its exact evaluated geometry and material assignments. " +
+      "Review its refusals and current body, fit and process inputs before binding and recomputing consumers. Selection does not carry forward a fit verdict or choose a comparison winner.";
+    parent.append(note);
+  }
   if (study.alternatives.some(row => row.choices)) {
     const choices = table(parent, "Material combinations evaluated by the study", ["Alternative", "Group choices"]);
     for (const row of study.alternatives) cells(choices, [row.key,
@@ -1267,6 +1299,10 @@ function manufacturingComparison(op, parent, study, computed) {
     const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
     if (typeof binding?.pattern_json === "string") {
       link(op, actions, { name: `alternative-${i + 1}-pattern.json`, text: binding.pattern_json, mime: "application/json" });
+      const button = document.createElement("button"); button.type = "button";
+      button.textContent = `Use ${row.key} pattern`;
+      button.onclick = () => useStudyPattern(op, study, row);
+      sections.get(op).adoptions.push(button); actions.append(button);
     }
     detail(parent, `${row.key}: frozen assignments and source observations (display only)`, {
       pattern_sha256: binding?.pattern_sha256, choices: row.choices, frozen_changes: row.frozen_changes, pieces: binding?.pieces,
@@ -3161,9 +3197,12 @@ $("selectionFile").onchange = async () => {
     invalidateThermalPoint(); $("selection").value = data; controls(); }
   catch (e) { if (rev === selectionRead) error(String(e.message || e)); }
 };
-function installPattern(raw, label, garments = []) {
+function parsePattern(raw) {
   const data = JSON.parse(raw);
-  if (!Array.isArray(data.pieces) || data.pieces.length > 4096) throw Error("Pattern needs at most 4096 source pieces.");
+  if (!Array.isArray(data?.pieces) || data.pieces.length > 4096) throw Error("Pattern needs at most 4096 source pieces.");
+  return data;
+}
+function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
   source = data; sourceText = raw;
   $("patternName").textContent = `${label}: ${data.pieces.length} source pieces. Original retained.`;
   const group = (key, label, ids) => {

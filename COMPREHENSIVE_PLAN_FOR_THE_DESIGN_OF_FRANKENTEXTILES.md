@@ -4468,6 +4468,19 @@ bounds omit optional handoffs and unused workers.
 This software increment is tracked by `ftx-pb2.2.12`; see [sewing-production.md](docs/sewing-production.md).
 Occupied-fixture transport, cooperative handling and empirical factory qualification remain open.
 
+### 25.128 Continue from an evaluated garment candidate
+
+An available final binding in a manufacturing, single-scenario or named-case study can now become
+the Material Workbench's current pattern. Adoption preserves the exact evaluated geometry and
+material source text, including authored alterations, and retains joint-outfit correspondence.
+Old edits, bindings and consumer results are withdrawn; the user reviews the retained body and
+process inputs, binds the candidate, and explicitly recomputes the desired consumers. Accepted-body
+association is renewed, and no old scenario admission or physical-fit verdict accompanies adoption.
+
+This increment is tracked by `ftx-onn.24`; see
+[browser-material-workbench.md](docs/browser-material-workbench.md). Stale or pending operations
+cannot replace the source through an obsolete candidate action.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

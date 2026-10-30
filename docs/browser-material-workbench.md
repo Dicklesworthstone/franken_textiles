@@ -86,6 +86,26 @@ association. Report or pose changes withdraw drape, heat, vapor and coverage res
 pending work. The independent measurement/export readiness gate is unchanged. Numerical acceptance
 and a completed drape do not establish physical garment fit.
 
+### Continue from an evaluated study candidate
+
+Each available final binding in a manufacturing, single-scenario or named-matrix study offers
+**Use … pattern**. This makes that candidate's exact `pattern_json` the new workbench source,
+including its evaluated alterations, treatment effects and frozen material/interface selections.
+The original numeric text is retained for the next binding and consumers. No candidate is chosen
+automatically, and a refused binding has no adoption action. Independent consumer refusals remain
+visible for review before choosing an otherwise available pattern.
+
+Adoption clears pending material edits, combination choices, old bindings, previews and study results.
+Choose **Freeze selections and bind**, then explicitly run the desired consumers against the current
+body, fit specification and process inputs. Received measurement/fit/model snapshots remain selected;
+accepted-body association requires fresh confirmation. Study alterations now start from the adopted
+candidate, so review the study request before running it again. A selected pattern carries no old
+measurement-readiness, scenario-admission or physical-fit verdict.
+
+Joint outfits retain their original source request, composition correspondence and required
+self-contact. Cleared, replaced or invalidated study results cannot later replace the current
+pattern through a stale action. Adoption is unavailable while a worker operation is pending.
+
 ### Reuse the selected body in manufacturing and scenario studies
 
 Section 4 has an explicit **Body source for body-dependent studies** choice. It applies to fresh
