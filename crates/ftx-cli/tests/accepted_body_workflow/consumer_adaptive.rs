@@ -2,6 +2,9 @@
 //! The body and source properties are synthetic software fixtures, not measured garment evidence.
 use super::*;
 
+#[path = "worst_case.rs"]
+mod worst_case;
+
 #[test]
 fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_budget_refusal() {
     use ftx_wasm::materials::scenario::on_model;
@@ -395,6 +398,13 @@ fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_b
                     );
                 }
             }
+            worst_case::replay(
+                &model,
+                &digest,
+                [&pattern, &study, &scenario, &body],
+                &dir,
+                capture.as_deref(),
+            );
         }
     }
 }

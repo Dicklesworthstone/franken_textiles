@@ -99,6 +99,13 @@ fn worst_case_search_balances_opposing_cases_and_replays_cached_manufacturing() 
             assert_eq!(selected["consumer_case_key"], cases[0].key);
             assert_eq!(guidance["best_case_key"], cases[0].key);
             assert_eq!(guidance["best_reading"]["value"], 31.0);
+            assert!(report["notes"].as_array().unwrap().iter().any(|note| {
+                note.as_str().is_some_and(|note| {
+                    note.contains(&format!("limiting case '{}'", cases[0].key))
+                        && note.contains("31 kg")
+                        && note.contains("not an average")
+                })
+            }));
             assert_eq!(guidance["case_aggregation"], "worst_case");
             assert!(guidance.get("case_key").is_none());
             assert!(guidance["input_protocol_sha256"].is_null());
@@ -283,4 +290,41 @@ fn worst_case_search_preflights_modes_policies_and_complete_callback_reservation
         );
     }
     assert_eq!(calls, 0);
+}
+
+#[test]
+fn worst_case_without_an_admitted_trial_reports_unknown_instead_of_zero() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":120}));
+    let identity = json!({"source":"test:no-admitted-worst-case"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let request = request(4, "minimize");
+    let report = request
+        .evaluate_matrix_with_fit::<Value>(&pattern, &cases(&request), 16, Some(&fit), |_, _, _| {
+            Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "no scenario allowance",
+            ))
+        })
+        .unwrap();
+    let report = serde_json::to_value(report).unwrap();
+    let search = &report["manufacturing"]["design_search"];
+    assert_eq!(search["selected_designs"], 0);
+    assert!(search["consumer_guidance"]["best_reading"].is_null());
+    assert!(search["consumer_guidance"]["best_trial_key"].is_null());
+    assert!(search["consumer_guidance"].get("best_case_key").is_none());
+    assert!(report["notes"].as_array().unwrap().iter().any(|note| {
+        note.as_str()
+            .is_some_and(|note| note.starts_with("No worst-case trial was admitted"))
+    }));
+    assert!(
+        search["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| { row.get("consumer_case_key").is_none() && row["selected"] == false })
+    );
 }

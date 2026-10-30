@@ -127,7 +127,7 @@ pub struct Report<T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison: Option<Comparison>,
     /// Missing comparisons and physical-scope limitations, without hiding available case results.
-    pub notes: Vec<&'static str>,
+    pub notes: Vec<String>,
 }
 
 impl Request {
@@ -280,20 +280,46 @@ impl Request {
             &reports,
         );
         let mut notes = vec![
-            "One source-locked material and manufacturing study is shared by every named case. Each additional production evaluation starts fresh; a preceding case or material does not supply a cached physical state.",
-            "The finite case set is an explicit sensitivity study, not a probability distribution, exhaustive operating envelope, comfort prediction or measured garment validation.",
+            "One source-locked material and manufacturing study is shared by every named case. Each additional production evaluation starts fresh; a preceding case or material does not supply a cached physical state.".into(),
+            "The finite case set is an explicit sensitivity study, not a probability distribution, exhaustive operating envelope, comfort prediction or measured garment validation.".into(),
         ];
         if comparison.is_none() {
-            notes.push("At least one case has no explicit effective comparison policy. Requested per-case comparisons remain available; no all-cases policy or frontier is synthesized.");
+            notes.push("At least one case has no explicit effective comparison policy. Requested per-case comparisons remain available; no all-cases policy or frontier is synthesized.".into());
         }
         if self
             .design_adaptive
             .as_ref()
             .is_some_and(|policy| policy.worst_case())
         {
-            notes.push("Adaptive polling improves the worst admitted nominal reading of one shared objective across all named cases. Every case retains its own constraints and source-protocol admission. No case weights, cross-unit score, unrestricted optimum or physical fit is inferred.");
+            notes.push("Adaptive polling improves the worst admitted nominal reading of one shared objective across all named cases. Every case retains its own constraints and source-protocol admission. No case weights, cross-unit score, unrestricted optimum or physical fit is inferred.".into());
+            // The browser already renders these authoritative notes as text. Keep the same
+            // explanation in CLI/portable reports instead of deriving another browser score.
+            let guidance = match &manufacturing.design_search {
+                Some(design::SearchReceipt::Adaptive(search)) => search.consumer_guidance.as_ref(),
+                _ => None,
+            };
+            let incumbent = guidance.and_then(|guidance| {
+                Some((
+                    guidance,
+                    guidance.best_trial_key.as_ref()?,
+                    guidance.best_case_key.as_ref()?,
+                    guidance.best_reading.as_ref()?,
+                ))
+            });
+            notes.push(if let Some((guidance, trial, case, reading)) = incumbent {
+                format!(
+                    "Worst-case retained trial '{trial}' on material '{}': limiting case '{case}', {} = {} {}. This is the original admitted case reading, not an average. Every named case admitted this trial; the limiting case can change between trials. Inspect consumer_cases for all readings and refusals.",
+                    guidance.material_key,
+                    serde_json::to_string(&guidance.objective.metric)
+                        .map_err(|error| invalid(error.to_string()))?,
+                    reading.value,
+                    reading.unit
+                )
+            } else {
+                "No worst-case trial was admitted in every named case. No limiting case or objective value is available; inspect the retained per-case refusals. The separately retained original baseline is not a discovery incumbent.".into()
+            });
         } else if self.consumer_guided() {
-            notes.push("Adaptive polling follows only the explicitly nominated case's sole comparison objective and declared nominal or reported-range basis. Every named case must independently admit each selected trial under its own policy and source protocol. Complete successful probe outputs are reused exactly for final rows; no cross-case score, unrestricted optimum or physical fit is inferred.");
+            notes.push("Adaptive polling follows only the explicitly nominated case's sole comparison objective and declared nominal or reported-range basis. Every named case must independently admit each selected trial under its own policy and source protocol. Complete successful probe outputs are reused exactly for final rows; no cross-case score, unrestricted optimum or physical fit is inferred.".into());
         }
         Ok(Report {
             schema: if self.is_design() {

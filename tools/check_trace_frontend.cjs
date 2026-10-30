@@ -2,6 +2,7 @@
 // This is NOT a browser-rendering or WASM-execution test.
 // node --experimental-vm-modules --test tools/check_trace_frontend.cjs
 require('./check_materials_frontend.cjs');
+require('./check_design_worst_case_frontend.cjs');
 require('./check_stock_job_frontend.cjs');
 require('./check_compression_frontend.cjs');
 require('./check_photo_frontend.cjs');

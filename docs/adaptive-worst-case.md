@@ -35,6 +35,12 @@ The search receipt identifies `consumer_guidance.case_aggregation: "worst_case"`
 original case decisions and refusals. The aggregate single `input_protocol_sha256` is null:
 per-case protocols remain authoritative rather than inventing a joint protocol.
 
+The matrix report's ordinary `notes` also identify the retained trial, limiting case, original
+metric value and unit. The existing workbench displays those Rust-authored notes as text; neither
+the browser nor the CLI computes a second score. When no trial is admitted in every case, the
+note explicitly reports that no limiting case or objective value is available, not a zero. Every
+trial's structured per-case results remain inspectable alongside this summary.
+
 Manufacturing runs once per probe. Selected complete probe outputs are reused, without rerunning
 callbacks or resetting their cumulative budgets. The existing probe-plus-final reservation still
 multiplies by the case count. Single-scenario/manufacturing entry points, `case_key`, missing case
