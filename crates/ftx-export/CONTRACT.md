@@ -78,7 +78,7 @@ retained nominees reuse complete case outputs while all case callbacks share the
 session budgets. Probe-plus-final reservations multiply by the case count, within the ordinary
 matrix limit. Multiple guidance objectives, unsupported bounded metrics and unavailable nominees refuse
 before production callbacks. Range guidance uses only existing complete mass/vapor/final-water endpoints:
-missing bounds exclude while nominal values remain visible; constraints admit the entire range.
+missing bounds exclude while nominal values remain visible; range-based constraints admit the entire range.
 Only strict interval separation moves the poll center or replaces a retained trial. When full, the
 range cache replaces the latest retained trial strictly dominated by the newcomer, without inventing
 a worst incomparable interval. Overlapping/touching ranges stay unresolved; all omitted trials remain
@@ -89,6 +89,18 @@ No new surrogate score, physical law, empirical validation or
 continuous/global optimality claim. Tests: real mass/constraint/source/reservation checks in
 `design_study/adaptive` and real selected-body sewn-scenario guidance/cache replay through both CLIs
 and the portable authority in `accepted_body_workflow/consumer_adaptive`.
+
+**Explicit comparison guard bases** (`comparison.constraints[].basis`). An optional nominal or
+reported-bounds basis overrides only that constraint; omission inherits the objective policy and
+preserves prior serialization. Objective dominance is unchanged. A metric needs complete endpoints
+whenever any objective or constraint requires them, including when another guard uses its nominal
+value. Only those metrics trigger canonical range derivation. Explicit nominal strain, contact-load,
+thermal or manufacturing guards therefore compose with supported bounded objectives in one ordinary
+consumer evaluation. Missing/refused consumers, invalid source identities and unsupported bounded
+metrics retain ordinary exclusion/preflight behavior. Signed nominal quantities remain signed.
+Exact policy/context retains each override; no synthetic singleton, extra scenario, physical failure
+threshold or uncertainty in a nominal guard is inferred. Tests: `material_study`, `scenario_comparison`,
+`design_study/adaptive` and the actual one-case mixed-basis accepted-body native/portable replay.
 
 **Moving zero-storage bridge decisions** (`motion.transient_coverage.thermal_bridges`). Existing
 incoming-coverage energy objectives consume the complete signed baseline-plus-excess result. A

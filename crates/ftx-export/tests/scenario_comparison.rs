@@ -94,6 +94,113 @@ fn signed_heat_and_mass_tradeoffs_are_not_absolute_values_or_a_weighted_score() 
 }
 
 #[test]
+fn bounded_mass_and_explicit_nominal_strain_heat_guards_share_one_scenario() {
+    use ftx_export::material_study::comparison::Basis;
+    let mut request = request();
+    request.cutting = None;
+    request.assembly_mass = Some(serde_json::from_value(json!({
+        "schema":"ftx-assembly-mass/1","inventory_complete":true,"seam_allowance_mm":0,"extras":[]})).unwrap());
+    for variant in &mut request.variants {
+        let density = variant
+            .changes
+            .default
+            .as_mut()
+            .unwrap()
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("areal_density")
+            .unwrap();
+        density.bounds = Some([density.value * 0.9, density.value * 1.1]);
+    }
+    request.comparison = Some(
+        serde_json::from_value(json!({"basis":"reported_bounds",
+        "objectives":[{"metric":"assembly_mass_kg","direction":"minimize"}],
+        "constraints":[{"metric":"max_absolute_edge_strain_pct","basis":"nominal","maximum":12},
+            {"metric":"independent_surface_power_w","basis":"nominal","minimum":-8,"maximum":-4}]}))
+        .unwrap(),
+    );
+    let mut calls = 0;
+    let report = run(&request, |key, pattern| {
+        calls += 1;
+        let mut result = synthetic(pattern, if key == "a" { -8. } else { -4. }, 0.2);
+        if key == "b" {
+            result["drape"]["global_strain_pct"]["min"] = json!(-13.);
+        }
+        Ok(result)
+    });
+    assert_eq!(calls, 2, "each material uses exactly one scenario callback");
+    assert_eq!(report["comparison"]["frontier"], json!(["a"]));
+    let candidates = report["comparison"]["alternatives"].as_array().unwrap();
+    assert_eq!(
+        candidates[0]["readings"]["max_absolute_edge_strain_pct"]["value"],
+        12.
+    );
+    assert_eq!(
+        candidates[0]["readings"]["independent_surface_power_w"]["value"],
+        -8.
+    );
+    for candidate in candidates {
+        assert!(candidate["readings"]["assembly_mass_kg"]["reported_bounds"].is_array());
+        for metric in [
+            "max_absolute_edge_strain_pct",
+            "independent_surface_power_w",
+        ] {
+            assert!(
+                candidate["readings"][metric]
+                    .get("reported_bounds")
+                    .is_none()
+            );
+        }
+    }
+    assert_eq!(candidates[1]["eligible"], false);
+    assert!(
+        candidates[1]["exclusions"]
+            .to_string()
+            .contains("MaxAbsoluteEdgeStrainPct")
+    );
+    assert_eq!(report["comparison"]["uncertainty_propagated"], false);
+    assert_eq!(report["comparison"]["physical_validation_claim"], false);
+
+    let stale = run(&request, |_, pattern| {
+        let mut result = synthetic(pattern, -8., 0.2);
+        result["pattern_sha256"] = json!("0".repeat(64));
+        Ok(result)
+    });
+    assert!(
+        stale["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        stale["manufacturing"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|candidate| candidate["assembly_mass"]["status"] == "available")
+    );
+
+    for basis in [None, Some(Basis::ReportedBounds)] {
+        request.comparison.as_mut().unwrap().constraints[0].basis = basis;
+        assert!(
+            request
+                .evaluate_with(
+                    &Pattern::from_json(PATTERN).unwrap(),
+                    &descriptor(),
+                    |_, _| -> Result<Value, Refusal> {
+                        panic!("unsupported strain ranges must refuse before callbacks")
+                    }
+                )
+                .unwrap_err()
+                .message
+                .contains("no propagated reported bounds")
+        );
+    }
+}
+
+#[test]
 fn coverage_frontier_uses_total_bridge_power_and_only_consumed_source_protocols() {
     let mut request = request();
     request.comparison.as_mut().unwrap().objectives = serde_json::from_value(json!([

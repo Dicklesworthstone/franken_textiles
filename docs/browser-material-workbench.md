@@ -106,6 +106,20 @@ Joint outfits retain their original source request, composition correspondence a
 self-contact. Cleared, replaced or invalidated study results cannot later replace the current
 pattern through a stale action. Adoption is unavailable while a worker operation is pending.
 
+### Combine reported-range objectives with nominal constraints
+
+The comparison policy's `basis` governs its objectives. Each constraint can explicitly declare
+`basis: "nominal"` or `basis: "reported_bounds"`; omission inherits the policy basis. This lets a
+source-bounded mass or vapor objective retain a nominal strain, contact or production limit without
+inventing uncertainty endpoints for that limit. Conversely, a nominal objective may require a
+bounded constraint. Every declared use of a metric must qualify: a nominal constraint cannot
+relax a bounded objective on the same metric.
+
+The workbench shows each constraint's effective basis and inclusive limits. Missing ranges appear
+only where an objective or constraint requires them, including named-case and adaptive-trial
+readings. The ordinary Rust admission, source protocols and independent consumer refusals remain
+authoritative. Nominal constraints make no uncertainty claim.
+
 ### Reuse the selected body in manufacturing and scenario studies
 
 Section 4 has an explicit **Body source for body-dependent studies** choice. It applies to fresh

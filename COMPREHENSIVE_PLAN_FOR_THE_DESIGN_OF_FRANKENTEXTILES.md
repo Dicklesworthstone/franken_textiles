@@ -4481,6 +4481,19 @@ This increment is tracked by `ftx-onn.24`; see
 [browser-material-workbench.md](docs/browser-material-workbench.md). Stale or pending operations
 cannot replace the source through an obsolete candidate action.
 
+### 25.129 Declare each comparison constraint's basis
+
+Each computed constraint can now explicitly select nominal values or complete source-reported
+ranges, while omission inherits the objective policy. A bounded material objective can therefore
+retain a nominal mechanical or production guard. The reverse combination is supported, and a
+nominal guard never weakens a bounded objective on the same metric. Every decision still requires
+its ordinary source, geometry, consumer and protocol admission.
+
+Manufacturing, single scenarios, named cases and consumer-guided alteration discovery use the same
+policy. The workbench exposes effective bases and limits without inventing missing ranges for
+nominal guards. This increment is tracked by `ftx-ds2.4`; source intervals remain conditional on
+the declared model inputs and do not establish general uncertainty or physical garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

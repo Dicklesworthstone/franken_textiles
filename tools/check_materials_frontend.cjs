@@ -5419,6 +5419,63 @@ test('reported mass comparisons display admitted ranges and unresolved alternati
   }
 });
 
+test('comparison displays each constraint basis without relaxing bounded objectives or inventing nominal guard ranges', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const policy={basis:'reported_bounds',objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
+    constraints:[{metric:'assembly_mass_kg',maximum:1,basis:'nominal'},
+      {metric:'feed_seconds',maximum:40,basis:'nominal'},{metric:'stock_mass_kg',minimum:0.1}]};
+  const candidate={key:'A',eligible:false,dominated_by:[],exclusions:[{message:'Objective range missing'}],
+    readings:{assembly_mass_kg:{value:0.2,unit:'kg'},feed_seconds:{value:30,unit:'s'},stock_mass_kg:{value:0.3,unit:'kg'}}};
+  const comparison={policy,alternatives:[candidate],frontier:[],incomparable:[]};
+  for(const op of ['study','scenario']) {
+    await p.e[op].onclick();p.emit(op==='study'?{...studyReport(),comparison}:{...scenarioReport(),comparison});
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const tables=descendants(s).filter(n=>n.tag==='table');
+    const values=tables.find(t=>t.children[0].textContent.startsWith('Declared computed objectives'));
+    assert.deepEqual(values.children[2].children.slice(3).map(n=>n.textContent),
+      ['0.2 kg; reported range unknown','30 s','0.3 kg; reported range unknown']);
+    const limits=tables.find(t=>t.children[0].textContent==='Declared constraints — basis and inclusive limits');
+    assert.deepEqual(limits.children.slice(2).map(row=>row.children.map(n=>n.textContent)),[
+      ['assembly_mass_kg','nominal (explicit)','None','1'],['feed_seconds','nominal (explicit)','None','40'],
+      ['stock_mass_kg','reported_bounds (inherited)','0.1','None']]);
+  }
+  policy.basis='nominal';policy.constraints[0].basis='reported_bounds';
+  await p.e.scenario.onclick();p.emit({...scenarioReport(),comparison});
+  const t=descendants(section(p,'Fresh drape and heat alternatives'))
+    .find(n=>n.tag==='table'&&n.children[0].textContent.startsWith('Declared computed objectives'));
+  assert.deepEqual(t.children[2].children.slice(3).map(n=>n.textContent),
+    ['0.2 kg; reported range unknown','30 s','0.3 kg']);
+});
+
+test('named adaptive trials apply each case constraint basis to retained readings', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const report=scenarioMatrixReport(),study=designReport();
+  const policy={basis:'reported_bounds',objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
+    constraints:[{metric:'max_absolute_edge_strain_pct',maximum:100,basis:'nominal'}]};
+  const reading={value:0.2,unit:'kg',reported_bounds:[0.19,0.21]};
+  const candidate={key:'A',eligible:true,dominated_by:[],exclusions:[],readings:{assembly_mass_kg:reading,
+    max_absolute_edge_strain_pct:{value:12,unit:'%'}}};
+  report.cases=[{...report.cases[0],key:'weight',comparison:{policy,alternatives:[candidate],frontier:['A'],incomparable:[]}}];
+  report.comparison={case_order:['weight'],policies:{weight:policy},frontier:['A'],incomparable:[],
+    alternatives:[{key:'A',eligible:true,dominated_by:[],cases:{weight:candidate}}]};
+  study.design_search={schema:'ftx-design-adaptive-search/1',evaluations:1,selected_designs:1,stop_reason:'evaluation_budget',
+    consumer_guidance:{basis:'reported_bounds',material_key:'light',case_key:'weight',case_order:['weight'],
+      objective:policy.objectives[0],evaluations:1,reserved_evaluations:3,best_trial_key:'adaptive:0',best_reading:reading},
+    rows:[{selected:true,max_fit_band_violation_mm:0,total_fit_band_violation_mm:0,
+      design:{key:'adaptive:0',variables_mm:{length:0},validation:{passed:true},fit:outcome({passed:true})},
+      consumer_comparison:candidate,consumer_cases:[{key:'weight',comparison:candidate}]}]};
+  report.manufacturing=study;report.schema='ftx-design-scenario-matrix-study/1';
+  await p.e.scenario.onclick();p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives'),tables=descendants(s).filter(n=>n.tag==='table');
+  for(const title of ['Named scenario decisions — authoritative Rust comparison','adaptive:0: operating-case admission']) {
+    const t=tables.find(n=>n.children[0].textContent===title);assert.ok(t,title);
+    assert.match(visibleText(t),/assembly_mass_kg: 0.2 kg; reported range \[0.19, 0.21\] kg/);
+    assert.match(visibleText(t),/max_absolute_edge_strain_pct: 12 %/);
+    assert.doesNotMatch(visibleText(t),/reported range unknown/);
+  }
+  assert.match(visibleText(s),/nominal \(explicit\)/);
+});
+
 test('assembly mass and finite stock retain independent totals and refusals in manufacturing and scenario studies', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   const a = studyRow('complete'), b = studyRow('unknown'), c = studyRow('refused');
@@ -8416,6 +8473,28 @@ test('compiled WASM consumer-guided alterations optimize real cloth mass and pre
       assert.equal(bounds.files.find(file=>file.name==='study-request.json').text,boundsStudy);
       assert.equal(bounds.files.find(file=>file.name==='scenario-request.json').text,boundsScenario);
       assert.equal(bounds.files.find(file=>file.name==='body-input.json').text,input('body-input.json'));
+      const mixedStudy=input('mixed-study.json'),mixedScenario=input('mixed-scenario.json');
+      const mixed=await w.send({type:'scenario',request:224,pattern:input('pattern.json'),studyRequest:mixedStudy,
+        scenarioRequest:mixedScenario,measurements:input('body-input.json'),
+        bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+      assert.equal(mixed.type,'result',mixed.message);
+      assert.deepEqual(mixed.result,JSON.parse(input('mixed-report.json')));
+      const search=mixed.result.manufacturing.design_search;
+      assert.equal(search.consumer_guidance.basis,'reported_bounds');
+      assert.equal(search.consumer_guidance.case_key,'weight');assert.equal(mixed.result.cases.length,1);
+      assert.equal(search.consumer_guidance.reserved_evaluations,12);
+      assert.equal(search.rows.find(row=>row.selected).design.variables_mm.length,-20);
+      const excluded=search.rows.find(row=>row.design.variables_mm.length===-30);
+      assert.equal(excluded.consumer_comparison.eligible,false);assert.equal(excluded.selected,false);
+      const policy=mixed.result.cases[0].comparison.policy;
+      assert.ok(policy.constraints.every(guard=>guard.basis==='nominal'));
+      const selected=search.rows.find(row=>row.selected).consumer_comparison.readings;
+      assert.ok(selected.assembly_mass_kg.reported_bounds);
+      assert.equal(selected.simulated_cloth_mass_kg.reported_bounds,undefined);
+      assert.equal(selected.max_absolute_edge_strain_pct.reported_bounds,undefined);
+      assert.equal(mixed.files.find(file=>file.name==='study-request.json').text,mixedStudy);
+      assert.equal(mixed.files.find(file=>file.name==='scenario-request.json').text,mixedScenario);
+      assert.equal(mixed.files.find(file=>file.name==='body-input.json').text,input('body-input.json'));
     } finally {globalThis.ftxProgress=previousProgress;}
   });
 

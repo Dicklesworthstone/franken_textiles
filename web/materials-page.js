@@ -317,13 +317,19 @@ function screening(parent, r) {
       material_id: row.material_id, readings: row.readings, exclusions: row.exclusions, selection: row.selection });
   }
 }
+function metricUsesBounds(policy, name) {
+  return (policy?.basis === "reported_bounds" && policy.objectives.some(o => o.metric === name)) ||
+    (policy?.constraints || []).some(c => c.metric === name && (c.basis ?? policy.basis) === "reported_bounds");
+}
 function objectiveComparison(parent, r) {
   const motionQualified = r.motion_required === true;
   const reportedBounds = r.policy.basis === "reported_bounds";
+  const anyBounds = reportedBounds || r.policy.constraints.some(c => c.basis === "reported_bounds");
   const note = document.createElement("p");
   note.textContent = `Computed ${r.policy.basis} frontier: ${r.frontier.length ? r.frontier.join(", ") : "No eligible non-dominated alternatives"}. ` +
     (r.policy.allow_mixed_protocols ? "Mixed source protocols explicitly admitted. " : "Reported input protocols must match. ") +
-    (reportedBounds ? "Limits and dominance use complete source-reported ranges: mass at fixed authored geometry and inventory, " +
+    "Each constraint uses its explicit basis or inherits the objective basis. Nominal constraints retain nominal admission. " +
+    (anyBounds ? "Requested reported-range decisions use complete source-reported ranges: mass at fixed authored geometry and inventory, " +
       "and vapor potential at fixed geometry, boundaries and retained sampling. " +
       "Final cumulative finite-water ranges, when requested, additionally hold the declared initial liquid and supply fixed. " +
       "Conditional on these inputs and evaluated alternatives; no general scenario uncertainty, confidence level, empirical fit or global optimum claim." :
@@ -409,7 +415,7 @@ function objectiveComparison(parent, r) {
     const water = document.createElement("p");
     water.textContent = "Finite body water comparison requires complete covered motion and the exact declared film policy. " +
       "Modeled evaporation is limited by each triangle's initial liquid and prescribed supply; water is not pooled between triangles. " +
-      (reportedBounds && waterMetrics.length ?
+      (waterMetrics.some(o => metricUsesBounds(r.policy, o.metric)) ?
         (waterMetrics.some(o => o.metric !== "motion_wet_film_supplied_mass_kg") ?
           "Final cumulative source ranges replay low- and high-demand Ret endpoints with geometry, boundaries, initial liquid, supply and integration fixed. " +
           "Remaining liquid reverses the demand endpoint order; evaporation, unmet demand and latent energy follow low to high demand. " +
@@ -431,12 +437,19 @@ function objectiveComparison(parent, r) {
         const q = row.readings[o.metric];
         if (!q) return "Unknown";
         const range = q.reported_bounds ? `; reported range [${q.reported_bounds.map(metric).join(", ")}] ${q.unit}` :
-          reportedBounds ? "; reported range unknown" : "";
+          metricUsesBounds(r.policy, o.metric) ? "; reported range unknown" : "";
         return `${metric(q.value)} ${q.unit}${range}`;
       })]);
   }
   for (const pair of r.incomparable) {
     const p = document.createElement("p"); p.textContent = `${pair.alternatives.join(" / ")}: ${pair.reason}`; parent.append(p);
+  }
+  if (r.policy.constraints.length) {
+    const limits = table(parent, "Declared constraints — basis and inclusive limits",
+      ["Metric", "Basis", "Minimum", "Maximum"]);
+    for (const c of r.policy.constraints) cells(limits, [c.metric,
+      `${c.basis ?? r.policy.basis}${c.basis ? " (explicit)" : " (inherited)"}`,
+      c.minimum == null ? "None" : metric(c.minimum), c.maximum == null ? "None" : metric(c.maximum)]);
   }
   detail(parent, "Computed comparison policy, context and exclusions (display only)", r);
 }
@@ -930,7 +943,7 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
     motionSamples(parent, row.key, result);
   }
 }
-function comparison(op, r, parent = sections.get(op).comparison, { skipManufacturing = false, filePrefix = "" } = {}) {
+function comparison(op, r, parent = sections.get(op).comparison, { skipManufacturing = false, filePrefix = "", casePolicies = {} } = {}) {
   if (op === "screen") {
     screening(parent, r);
     return { schema: r.schema, basis: r.basis, allow_mixed_protocols: r.allow_mixed_protocols,
@@ -941,7 +954,7 @@ function comparison(op, r, parent = sections.get(op).comparison, { skipManufactu
   }
   if (r.comparison) objectiveComparison(parent, r.comparison);
   const study = r.manufacturing || r;
-  if (!skipManufacturing) manufacturingComparison(op, parent, study, r.comparison);
+  if (!skipManufacturing) manufacturingComparison(op, parent, study, r.comparison, casePolicies);
   if (r.manufacturing) {
     const simulations = new Map(r.simulations.map(row => [row.key, row.evaluation]));
     const sim = table(parent, "Initial static-drape results — review drape flags before interpreting heat", ["Alternative", "Drape",
@@ -1011,7 +1024,7 @@ function scenarioMatrixComparison(op, parent, r) {
           const q = candidate?.readings?.[name];
           if (!q) return `${name}: Unknown`;
           const bounds = q.reported_bounds ? `; reported range [${q.reported_bounds.map(metric).join(", ")}] ${q.unit}` :
-            policy.basis === "reported_bounds" ? "; reported range unknown" : "";
+            metricUsesBounds(policy, name) ? "; reported range unknown" : "";
           return `${name}: ${metric(q.value)} ${q.unit}${bounds}`;
         });
         cells(t, [row.key, row.eligible ? "Eligible" : "Excluded", row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
@@ -1036,7 +1049,9 @@ function scenarioMatrixComparison(op, parent, r) {
   }
   const shared = document.createElement("section"), heading = document.createElement("h4");
   heading.textContent = "Shared manufacturing — evaluated once"; shared.append(heading); parent.append(shared);
-  comparison(op, r.manufacturing, shared);
+  const casePolicies = r.comparison?.policies || Object.fromEntries(r.cases
+    .filter(item => item.comparison?.policy).map(item => [item.key, item.comparison.policy]));
+  comparison(op, r.manufacturing, shared, { casePolicies });
   for (const [index, item] of r.cases.entries()) {
     const group = document.createElement("section"), heading = document.createElement("h4");
     heading.textContent = `Case ${index + 1}: ${item.key}`; group.append(heading); parent.append(group);
@@ -1071,7 +1086,7 @@ function designTreatments(op, parent, design, prefix, label) {
     }
   }
 }
-function designComparison(op, parent, study) {
+function designComparison(op, parent, study, casePolicies = {}) {
   if (!study.alternatives.some(row => row.design)) return;
   const note = document.createElement("p");
   note.textContent = "Each pattern design starts from the original source, then applies its explicit alterations and material choices. " +
@@ -1083,11 +1098,11 @@ function designComparison(op, parent, study) {
     if (grid.schema === "ftx-design-adaptive-search/1") {
       const guidance = grid.consumer_guidance;
       const bounded = guidance?.basis === "reported_bounds";
-      const readingText = reading => {
+      const readingText = (reading, needsBounds = bounded) => {
         if (!reading) return "Unknown";
         const range = reading.reported_bounds ?
           `; reported range [${reading.reported_bounds.map(metric).join(", ")}] ${reading.unit || ""}` :
-          bounded ? "; reported range unknown" : "";
+          needsBounds ? "; reported range unknown" : "";
         return `${metric(reading.value)} ${reading.unit || ""}${range}`;
       };
       if (guidance) {
@@ -1102,9 +1117,10 @@ function designComparison(op, parent, study) {
         objective.textContent = `Guidance material: ${guidance.material_key ?? "Unknown"}. ` +
           (guidance.case_key ? `Guidance case: ${guidance.case_key}. Every declared case must admit a selected trial: ${(guidance.case_order || []).join(", ")}. ` : "") +
           `Declared objective: ${guidance.objective?.metric ?? "Unknown"} (${guidance.objective?.direction ?? "Unknown"}). ` +
-          (bounded ? "Objective basis: source-reported ranges. Constraints admit the entire reported range; missing ranges cannot qualify. " +
+          (bounded ? "Objective basis: source-reported ranges. Bounded constraints admit the entire reported range; missing required ranges cannot qualify. " +
             "Search advances only when one range is strictly preferred. Overlapping, touching or equal ranges remain unresolved; retained trials do not form a total ranking. " :
             "Objective basis: nominal values. ") +
+          "Each constraint uses its explicit basis or inherits its case policy; nominal guards do not acquire uncertainty bounds. " +
           "Rust evaluates the nominated material with the ordinary manufacturing and requested scenario consumers. " +
           "Existing source admission, required consumers, protocol rules and inclusive constraints govern each probe. " +
           "Callback slots are an upper bound on attempted work, not a preapproved simulation allowance; cumulative consumer budgets still apply.";
@@ -1151,7 +1167,8 @@ function designComparison(op, parent, study) {
           for (const item of row.consumer_cases) cells(cases, [item.key,
             item.comparison?.eligible === true ? "Eligible under declared policy" : "Excluded",
             Object.entries(item.comparison?.readings || {}).map(([key, value]) =>
-              `${key}: ${readingText(value)}`).join("; ") || "Unavailable",
+              `${key}: ${readingText(value, casePolicies[item.key] ? metricUsesBounds(casePolicies[item.key], key) :
+                bounded && key === guidance?.objective?.metric)}`).join("; ") || "Unavailable",
             [...(item.comparison?.exclusions || []).map(reason => reason.message), item.refusal?.message]
               .filter(Boolean).join("; ") || "None"]);
         }
@@ -1271,9 +1288,9 @@ function useStudyPattern(op, study, row) {
     controls();
   } catch (e) { error(String(e.message || e)); controls(); }
 }
-function manufacturingComparison(op, parent, study, computed) {
+function manufacturingComparison(op, parent, study, computed, casePolicies = {}) {
   sections.get(op).study = study;
-  designComparison(op, parent, study);
+  designComparison(op, parent, study, casePolicies);
   if (study.alternatives.some(row => typeof available(row.binding)?.pattern_json === "string")) {
     const note = document.createElement("p");
     note.textContent = "Use a candidate pattern to continue with its exact evaluated geometry and material assignments. " +

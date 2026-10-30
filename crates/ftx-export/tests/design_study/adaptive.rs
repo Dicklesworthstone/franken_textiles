@@ -511,6 +511,82 @@ fn consumer_constraints_admit_only_real_feasible_metrics_and_unknown_mass_is_not
 }
 
 #[test]
+fn bounded_consumer_search_respects_nominal_manufacturing_guards_without_extra_probes() {
+    let body = Measurements(json!({"desired_length":120}));
+    let mut request = bounded_consumer_request(24, [0.179, 0.181]);
+    request.comparison.as_mut().unwrap().constraints.push(
+        serde_json::from_value(json!({
+        "metric":"feed_seconds","basis":"nominal","minimum":0}))
+        .unwrap(),
+    );
+    let unrestricted = run(&request, &body);
+    let initial = &unrestricted["design_search"]["rows"][0]["consumer_comparison"];
+    let minimum_feed = initial["readings"]["feed_seconds"]["value"]
+        .as_f64()
+        .unwrap();
+    assert!(minimum_feed > 0.);
+    assert_eq!(initial["eligible"], true);
+    request.comparison.as_mut().unwrap().constraints[0].minimum = Some(minimum_feed);
+    let report = run(&request, &body);
+    let search = &report["design_search"];
+    assert_eq!(search["consumer_guidance"]["basis"], "reported_bounds");
+    assert_eq!(
+        report["comparison"]["policy"]["constraints"][0]["basis"],
+        "nominal"
+    );
+    let trials = search["rows"].as_array().unwrap();
+    let shorter = trials
+        .iter()
+        .find(|trial| trial["design"]["variables_mm"]["length"] == 20.)
+        .unwrap();
+    assert_eq!(shorter["design"]["validation"]["passed"], true);
+    assert_eq!(shorter["consumer_comparison"]["eligible"], false);
+    assert_eq!(shorter["selected"], false);
+    assert!(
+        shorter["consumer_comparison"]["readings"]["feed_seconds"]["value"]
+            .as_f64()
+            .unwrap()
+            < minimum_feed
+    );
+    assert!(
+        shorter["consumer_comparison"]["exclusions"]
+            .to_string()
+            .contains("FeedSeconds")
+    );
+    let selected = trials
+        .iter()
+        .find(|trial| trial["selected"] == true)
+        .unwrap();
+    assert_eq!(selected["design"]["variables_mm"]["length"], 40.);
+    assert_eq!(
+        selected["consumer_comparison"]["readings"]["feed_seconds"]["value"],
+        minimum_feed
+    );
+    assert!(
+        selected["consumer_comparison"]["readings"]["feed_seconds"]
+            .get("reported_bounds")
+            .is_none()
+    );
+    assert!(
+        selected["consumer_comparison"]["readings"]["assembly_mass_kg"]["reported_bounds"]
+            .is_array()
+    );
+    let retained = row(
+        &report,
+        selected["design"]["key"].as_str().unwrap(),
+        "light-sheet",
+    );
+    assert_eq!(retained["metrics"]["feed_seconds"], minimum_feed);
+    assert_eq!(
+        search["consumer_guidance"]["evaluations"].as_u64().unwrap() as usize,
+        trials
+            .iter()
+            .filter(|trial| trial.get("consumer_comparison").is_some())
+            .count()
+    );
+}
+
+#[test]
 fn bounded_consumer_guidance_uses_complete_mass_ranges_and_preserves_missing_endpoints() {
     use ftx_export::material_study::comparison::Basis;
     let body = Measurements(json!({"desired_length":120}));

@@ -547,6 +547,37 @@ choices, sewing, cost, mechanical response or dry heat.
 This finite-candidate frontier is conditional on upstream screening, process options, quantities,
 market date and input data. It is not optimal nesting, a global material optimum or physical validation.
 
+### Combine reported-range objectives with explicit nominal guards
+
+A study comparison constraint may supply its own `basis`; omission inherits `comparison.basis`.
+Objectives retain the comparison's original basis. This lets one actual scenario support a robust
+material-range objective alongside explicitly nominal mechanical or production requirements:
+
+```json
+{
+  "basis": "reported_bounds",
+  "objectives": [{"metric": "assembly_mass_kg", "direction": "minimize"}],
+  "constraints": [
+    {"metric": "max_absolute_edge_strain_pct", "basis": "nominal", "maximum": 12},
+    {"metric": "feed_seconds", "basis": "nominal", "maximum": 120}
+  ]
+}
+```
+
+These example thresholds are authored design requirements, not qualified comfort, failure or
+factory limits. Ordinary source, consumer, protocol and geometry admission still applies; the
+constraint needs its corresponding requested consumer. No extra scenario session is created.
+Nominal guards use their finite computed values without demanding or inventing source ranges.
+An explicit `reported_bounds` guard under a nominal objective instead requires the entire supported
+range to pass. Unsupported bounded metrics refuse before callbacks, and missing required endpoints
+exclude the candidate while retaining nominal readings and independent consumer outputs.
+
+When a metric supplies both an objective and a guard, all their requirements apply: a nominal guard
+cannot relax a bounded objective's endpoint requirement, and a bounded guard does not change nominal
+objective ordering. The exact policy, explicit overrides and ordinary source ranges remain in the
+comparison report and replay. This applies to fixed, authored, grid and adaptive studies and each
+named case. It does not change the separate catalog-level `ftx-material-screen/1` contract.
+
 ### Assembly-mass limits over the complete reported range
 
 Use `basis: "reported_bounds"` when a mass requirement must hold throughout the source-reported
@@ -1107,10 +1138,11 @@ missing modulus, unknown mass, failed constraint or refused callback cannot supp
 usable search value. No new physics, weighted score or inferred comfort/failure limit is added.
 
 Use `basis: "reported_bounds"` when discovery must respect the complete source-reported mass,
-vapor-potential or final finite-water ranges supported by the ordinary comparator. Every requested
-objective and constraint needs its actual consumer endpoints; unsupported metrics refuse before
+vapor-potential or final finite-water ranges supported by the ordinary comparator. Every objective
+or constraint using that basis needs its actual consumer endpoints; unsupported metrics refuse before
 callbacks. A missing range excludes the trial while preserving its available nominal reading.
-Inclusive constraints apply to the whole range. For example, a nominally lighter garment whose
+Constraints inherit this basis unless they explicitly select `nominal`; bounded guards apply to
+the whole range while nominal guards use their actual computed value. For example, a nominally lighter garment whose
 lower mass endpoint crosses a declared minimum cannot replace an incumbent. These are conditional
 source ranges on each trial's actual fixed geometry and declared inputs, not confidence intervals
 or uncertainty in geometry, physical fit or missing material laws.

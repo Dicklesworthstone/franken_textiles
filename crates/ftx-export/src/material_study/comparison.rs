@@ -22,7 +22,7 @@ mod surface_water;
 mod wet_film;
 
 /// Uncertainty admission. Source intervals cannot be propagated through planners by relabeling them.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Basis {
     /// Explicitly compare nominal computed results, without a propagated uncertainty claim.
@@ -714,6 +714,9 @@ pub struct Objective {
 pub struct Constraint {
     /// Actual consumer output to constrain.
     pub metric: Metric,
+    /// Explicit decision basis for this guard; omission inherits the objective policy's basis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basis: Option<Basis>,
     /// Inclusive lower bound; at least one bound is required.
     pub minimum: Option<f64>,
     /// Inclusive upper bound; no unit inference or clamping is performed.
@@ -745,8 +748,8 @@ pub struct Policy {
 pub struct Reading {
     /// Finite computed value, including genuine zero; unknown values have no reading.
     pub value: f64,
-    /// Complete conditional endpoints in `unit`, only under a reported-bounds policy. An absent
-    /// range excludes that candidate; it never implies an exact nominal observation.
+    /// Complete conditional endpoints in `unit` when an objective or guard requires them. An
+    /// absent required range excludes that candidate; it never implies an exact nominal observation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reported_bounds: Option<[f64; 2]>,
     /// Fixed physical unit or exact currency; no conversions occur in the comparator.
@@ -843,9 +846,7 @@ impl Policy {
                 ));
             }
         }
-        if matches!(self.basis, Basis::ReportedBounds)
-            && self.metrics().iter().any(|m| !m.supports_bounds())
-        {
+        if self.bounded_metrics().iter().any(|m| !m.supports_bounds()) {
             return Err(invalid(
                 "reported_bounds comparison supports assembly_mass_kg, vapor potential and final finite-water metrics only; other computed objectives and constraints have no propagated reported bounds",
             ));
@@ -903,6 +904,24 @@ impl Policy {
             .iter()
             .map(|o| o.metric)
             .chain(self.constraints.iter().map(|c| c.metric))
+            .collect()
+    }
+    fn bounded_metrics(&self) -> BTreeSet<Metric> {
+        self.objectives
+            .iter()
+            .filter(|_| matches!(self.basis, Basis::ReportedBounds))
+            .map(|objective| objective.metric)
+            .chain(
+                self.constraints
+                    .iter()
+                    .filter(|constraint| {
+                        matches!(
+                            constraint.basis.unwrap_or(self.basis),
+                            Basis::ReportedBounds
+                        )
+                    })
+                    .map(|constraint| constraint.metric),
+            )
             .collect()
     }
     fn consumers(&self) -> BTreeSet<Consumer> {
@@ -1058,6 +1077,13 @@ impl Policy {
                 "Sample temperature extrema include the declared initial state and retained mechanical sample endpoints; final temperature extrema use only the final accepted sample. Neither is a continuous-time bound or the extrema of unreported thermal substeps. Net boundary energy excludes remap residual and cancelling bare-body paths. Numerical energy/remap residuals remain in source reports; nominal admission is not empirical accuracy, a comfort threshold, or propagated uncertainty.",
             ],
         };
+        if self
+            .constraints
+            .iter()
+            .any(|constraint| constraint.basis.is_some_and(|basis| basis != self.basis))
+        {
+            report.notes[0] = "Objectives retain the declared comparison basis. Every constraint uses its explicit basis or inherits that objective basis: nominal guards test computed values only, while reported-bounds guards must contain the entire supported source range. A nominal guard never supplies or relaxes the ranges required by another decision on the same metric. Source ranges keep geometry, inventory, boundary conditions and sampled history fixed; they are not confidence intervals, uncertainty in unmodeled inputs or measured garment performance. Estimate permission stays with each source selection.";
+        }
         if self.consumers().contains(&Consumer::Vapor) {
             report.notes.push("Vapor objectives use the declared common-area stack, pressure boundaries, films and latent heat. They describe potential transfer, not actual evaporation, sweating, condensation or wearer comfort; source protocols must be admitted independently of other thermal consumers.");
         }
@@ -1095,11 +1121,10 @@ impl Policy {
         }
         if self.consumers().contains(&Consumer::MotionWetFilm) {
             report.notes.push("Finite-water objectives require complete declared body coverage throughout the admitted motion and the exact sourced initial liquid and supply on its stable body triangles. Each retained step and cumulative ledger is checked against canonical regional demand, the declared quadrature and finite liquid. Evaporation is modeled covered transfer; latent energy comes from the prescribed body reservoir and does not cool textile storage. No wearer physiology, physical garment performance, unsampled-motion accuracy or physiological supply model is inferred.");
-            if matches!(self.basis, Basis::ReportedBounds)
-                && self
-                    .metrics()
-                    .iter()
-                    .any(|metric| metric.consumer() == Consumer::MotionWetFilm)
+            if self
+                .bounded_metrics()
+                .iter()
+                .any(|metric| metric.consumer() == Consumer::MotionWetFilm)
             {
                 report.notes.push("Final finite-water ranges replay complete canonical source Ret endpoints separately on every body triangle through the same liquid reducer, with fixed initial liquid, constant supply, geometry, boundaries, latent heat and integration rule. Cumulative evaporation, unmet demand and prescribed-reservoir latent energy increase with covered demand; remaining liquid reverses endpoint order. Fixed supplied mass has a singleton range independently of Ret bounds. These are conditional final ranges only: nominal per-interval ledgers remain unchanged, and interval evaporation may reverse after prior depletion. Missing or unrepresentable response endpoints stay unavailable rather than becoming nominal singletons.");
             }
@@ -1270,13 +1295,14 @@ impl Policy {
         }
         let mut derived_bounds = BTreeMap::new();
         let mut water_bounds = BTreeMap::new();
-        if matches!(self.basis, Basis::ReportedBounds) {
+        let bounded_metrics = self.bounded_metrics();
+        if !bounded_metrics.is_empty() {
             for consumer in [
                 Consumer::VaporSurface,
                 Consumer::VaporCoverage,
                 Consumer::MotionVaporCoverage,
             ] {
-                if !self.metrics().iter().any(|m| m.consumer() == consumer)
+                if !bounded_metrics.iter().any(|m| m.consumer() == consumer)
                     || !consumer_available(row, consumer, &admitted)
                 {
                     continue;
@@ -1302,8 +1328,7 @@ impl Policy {
                     Err(e) => result.exclusions.push(e),
                 }
             }
-            if self
-                .metrics()
+            if bounded_metrics
                 .iter()
                 .any(|metric| metric.consumer() == Consumer::MotionWetFilm)
                 && let Some(water) = admitted.motion_wet_film
@@ -1313,7 +1338,7 @@ impl Policy {
                 {
                     water_bounds.insert(Metric::MotionWetFilmSuppliedMassKg, [supplied, supplied]);
                 }
-                if self.metrics().iter().any(|metric| {
+                if bounded_metrics.iter().any(|metric| {
                     metric.consumer() == Consumer::MotionWetFilm
                         && *metric != Metric::MotionWetFilmSuppliedMassKg
                 }) {
@@ -1336,9 +1361,9 @@ impl Policy {
                 .filter(|v| v.is_finite() && (metric.signed() || *v >= 0.))
             {
                 Some(value) if consumer_available(row, metric.consumer(), &admitted) => {
-                    let reported_bounds = match self.basis {
-                        Basis::Nominal => None,
-                        Basis::ReportedBounds => metric
+                    let needs_bounds = bounded_metrics.contains(&metric);
+                    let reported_bounds = if needs_bounds {
+                        metric
                             .reported_bounds(row, &derived_bounds, &water_bounds)
                             .filter(|[lo, hi]| {
                                 lo.is_finite()
@@ -1346,7 +1371,9 @@ impl Policy {
                                     && *lo >= 0.
                                     && *lo <= value
                                     && value <= *hi
-                            }),
+                            })
+                    } else {
+                        None
                     };
                     result.readings.insert(
                         metric,
@@ -1357,23 +1384,24 @@ impl Policy {
                             consumer: metric.consumer(),
                         },
                     );
-                    let [lo, hi] = match self.basis {
-                        Basis::Nominal => [value, value],
-                        Basis::ReportedBounds => {
-                            let Some(bounds) = reported_bounds else {
-                                result.exclusions.push(invalid(format!(
-                                    "{metric:?} has no complete valid reported bounds; its nominal value remains visible but no exact range is substituted"
-                                )));
-                                continue;
-                            };
-                            bounds
-                        }
-                    };
+                    if needs_bounds && reported_bounds.is_none() {
+                        result.exclusions.push(invalid(format!(
+                            "{metric:?} has no complete valid reported bounds; its nominal value remains visible but no exact range is substituted"
+                        )));
+                    }
                     for c in self.constraints.iter().filter(|c| c.metric == metric) {
+                        let basis = c.basis.unwrap_or(self.basis);
+                        let interval = match basis {
+                            Basis::Nominal => Some([value, value]),
+                            Basis::ReportedBounds => reported_bounds,
+                        };
+                        let Some([lo, hi]) = interval else {
+                            continue;
+                        };
                         if c.minimum.is_some_and(|min| lo < min)
                             || c.maximum.is_some_and(|max| hi > max)
                         {
-                            let observed = match self.basis {
+                            let observed = match basis {
                                 Basis::Nominal => value.to_string(),
                                 Basis::ReportedBounds => format!("reported range [{lo}, {hi}]"),
                             };

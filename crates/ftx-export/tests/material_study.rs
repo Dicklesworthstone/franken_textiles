@@ -1065,6 +1065,161 @@ fn reported_mass_constraints_admit_the_whole_range_instead_of_only_nominal_mass(
 }
 
 #[test]
+fn explicit_constraint_basis_preserves_objective_ranges_and_inherited_wire_shape() {
+    use ftx_export::material_study::comparison::Basis;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let mut request = reported_mass_study();
+    request.variants.retain(|variant| variant.key == "light");
+    let original = evaluate(&request, &pattern);
+    let mass = &row(&original["comparison"], "light")["readings"]["assembly_mass_kg"];
+    let nominal = mass["value"].as_f64().unwrap();
+    let upper = mass["reported_bounds"][1].as_f64().unwrap();
+    request.comparison.as_mut().unwrap().constraints = vec![
+        serde_json::from_value(json!({
+        "metric":"assembly_mass_kg","basis":"nominal","maximum":nominal}))
+        .unwrap(),
+    ];
+    let mixed = evaluate(&request, &pattern);
+    assert_eq!(mixed["comparison"]["frontier"], json!(["light"]));
+    assert_eq!(
+        row(&mixed["comparison"], "light")["readings"]["assembly_mass_kg"],
+        *mass
+    );
+    assert_eq!(mixed["comparison"]["policy"]["basis"], "reported_bounds");
+    assert_eq!(
+        mixed["comparison"]["policy"]["constraints"][0]["basis"],
+        "nominal"
+    );
+    assert_ne!(
+        mixed["comparison"]["context_sha256"],
+        original["comparison"]["context_sha256"]
+    );
+    assert_eq!(mixed["alternatives"], original["alternatives"]);
+    let replay: Request = serde_json::from_value(serde_json::to_value(&request).unwrap()).unwrap();
+    assert_eq!(mixed, evaluate(&replay, &pattern));
+
+    request.comparison.as_mut().unwrap().constraints[0].basis = None;
+    let inherited = evaluate(&request, &pattern);
+    assert_eq!(inherited["comparison"]["frontier"], json!([]));
+    assert!(
+        inherited["comparison"]["policy"]["constraints"][0]
+            .get("basis")
+            .is_none()
+    );
+    assert!(
+        row(&inherited["comparison"], "light")["exclusions"]
+            .to_string()
+            .contains("reported range")
+    );
+
+    request.comparison.as_mut().unwrap().basis = Basis::Nominal;
+    request.comparison.as_mut().unwrap().constraints[0].basis = Some(Basis::ReportedBounds);
+    let bounded_guard = evaluate(&request, &pattern);
+    assert_eq!(bounded_guard["comparison"]["frontier"], json!([]));
+    assert_eq!(
+        row(&bounded_guard["comparison"], "light")["readings"]["assembly_mass_kg"],
+        *mass
+    );
+    request.comparison.as_mut().unwrap().constraints[0].maximum = Some(upper);
+    assert_eq!(
+        evaluate(&request, &pattern)["comparison"]["frontier"],
+        json!(["light"])
+    );
+
+    request.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("areal_density")
+        .unwrap()
+        .bounds = None;
+    for (objective, guard) in [
+        (Basis::Nominal, Basis::ReportedBounds),
+        (Basis::ReportedBounds, Basis::Nominal),
+    ] {
+        let policy = request.comparison.as_mut().unwrap();
+        policy.basis = objective;
+        policy.constraints[0].basis = Some(guard);
+        let missing = evaluate(&request, &pattern);
+        let candidate = row(&missing["comparison"], "light");
+        assert_eq!(candidate["eligible"], false);
+        assert!(candidate["readings"]["assembly_mass_kg"]["value"].is_number());
+        assert!(
+            candidate["readings"]["assembly_mass_kg"]
+                .get("reported_bounds")
+                .is_none()
+        );
+        assert!(
+            candidate["exclusions"]
+                .to_string()
+                .contains("no complete valid reported bounds")
+        );
+    }
+    request.comparison.as_mut().unwrap().basis = Basis::Nominal;
+    assert_eq!(
+        evaluate(&request, &pattern)["comparison"]["frontier"],
+        json!(["light"])
+    );
+}
+
+#[test]
+fn reported_mass_objective_admits_explicit_nominal_actual_sewing_guards() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let mut request = reported_mass_study();
+    request.variants.retain(|variant| variant.key == "light");
+    request.sewing = Some(serde_json::from_str(SEW).unwrap());
+    request.comparison.as_mut().unwrap().constraints = vec![
+        serde_json::from_value(json!({
+        "metric":"feed_seconds","basis":"nominal","minimum":0}))
+        .unwrap(),
+    ];
+    let report = evaluate(&request, &pattern);
+    let candidate = row(&report["comparison"], "light");
+    assert_eq!(candidate["eligible"], true);
+    let feed = candidate["readings"]["feed_seconds"]["value"]
+        .as_f64()
+        .unwrap();
+    assert!(feed > 0.);
+    assert_eq!(
+        candidate["readings"]["feed_seconds"]["value"],
+        row(&report, "light")["metrics"]["feed_seconds"]
+    );
+    assert!(
+        candidate["readings"]["feed_seconds"]
+            .get("reported_bounds")
+            .is_none()
+    );
+    assert!(candidate["readings"]["assembly_mass_kg"]["reported_bounds"].is_array());
+    request.comparison.as_mut().unwrap().constraints[0].maximum = Some(feed);
+    assert_eq!(
+        evaluate(&request, &pattern)["comparison"]["frontier"],
+        json!(["light"])
+    );
+    request.comparison.as_mut().unwrap().constraints[0].maximum = Some(feed / 2.);
+    let rejected = evaluate(&request, &pattern);
+    assert_eq!(rejected["comparison"]["frontier"], json!([]));
+    assert_eq!(rejected["alternatives"], report["alternatives"]);
+    assert!(
+        row(&rejected["comparison"], "light")["exclusions"]
+            .to_string()
+            .contains("FeedSeconds")
+    );
+    request.sewing = None;
+    assert!(
+        request
+            .evaluate(&pattern)
+            .unwrap_err()
+            .message
+            .contains("unrequested Sewing")
+    );
+}
+
+#[test]
 fn reported_mass_overlap_and_absent_sheet_or_extra_bounds_never_imply_certainty() {
     let p = Pattern::from_json(PATTERN).unwrap();
     let mut r = reported_mass_study();

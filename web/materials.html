@@ -352,12 +352,18 @@ Every trial retains its exact alterations, body identity and fit result. A work 
 leaves unvisited alteration values unknown; the downstream comparison remains conditional on the designs found.</p>
 <p class="note">To guide that adaptive search with actual manufacturing or simulation results, set
 <code>design_adaptive.objective: "consumer_comparison"</code> and <code>design_adaptive.material_key</code> to
-one exact authored material alternative key. The study's <code>comparison</code> must declare nominal comparison
-and one objective with an explicit minimize/maximize direction. Its constraints, required consumers and source rules
+one exact authored material alternative key. The study's <code>comparison</code> must declare
+<code>nominal</code> or a supported <code>reported_bounds</code> basis and one objective with an explicit
+minimize/maximize direction. Each constraint inherits that basis unless it declares its own
+<code>basis</code>; for example, a bounded mass objective may retain an explicitly nominal strain guard.
+Its constraints, required consumers and source rules
 also gate every probe, after the ordinary flat geometry and selected-body fit checks. The search keeps better admitted
 geometries instead of stopping at the first passing designs; each retained geometry is then crossed with all material
-alternatives. A single body scenario can supply the objective; named-case matrices require a declared aggregation rule
-and currently refuse this mode. The trial report retains objective readings, exclusions and exact patterns. Search
+alternatives. A single body scenario can supply the objective. In named-case matrices, declare
+<code>design_adaptive.case_key</code> to choose the guidance case; every case must still admit a retained trial.
+Reported ranges must be strictly preferred to advance the search; overlapping ranges remain unresolved.
+For one identical nominal objective across all cases, <code>consumer_worst_case</code> guides the limiting case
+without a <code>case_key</code>. The trial report retains objective readings, exclusions and exact patterns. Search
 allowances do not override cumulative simulation budgets or establish a global optimum.</p>
 <details><summary>Build combinations of shell, lining, cuffs and other material choices</summary>
 <p>Inspect a material in section 1, select the source pieces that share a choice, and add it to a named group.

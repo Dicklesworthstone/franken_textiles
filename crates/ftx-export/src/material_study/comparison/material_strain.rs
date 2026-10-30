@@ -811,6 +811,7 @@ mod tests {
                 .iter()
                 .map(|&(metric, value)| Constraint {
                     metric,
+                    basis: None,
                     minimum: Some(value),
                     maximum: Some(value),
                 })

@@ -192,8 +192,11 @@ fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_b
             save(&capture.join(format!("{name}-report.json")), &report);
         }
         if name == "complete" {
-            for bounded in [false, true] {
-                let label = if bounded { "bounds" } else { "matrix" };
+            for (label, bounded, mixed) in [
+                ("matrix", false, false),
+                ("bounds", true, false),
+                ("mixed", true, true),
+            ] {
                 let metric = if bounded {
                     "assembly_mass_kg"
                 } else {
@@ -224,6 +227,20 @@ fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_b
                     matrix["cases"][1]["comparison"]["constraints"] = json!([
                     {"metric":"assembly_mass_kg","minimum":0.0155}]);
                 }
+                if mixed {
+                    // One actual scenario supplies both bounded manufacturing mass and nominal
+                    // cloth/strain guards. These authored synthetic limits are not physical fit.
+                    matrix_study["comparison"]["constraints"] = json!([
+                        {"metric":"simulated_cloth_mass_kg","basis":"nominal","minimum":0.017},
+                        {"metric":"max_absolute_edge_strain_pct","basis":"nominal","maximum":100}]);
+                    matrix["cases"] = json!([{"key":"weight","scenario":scenario}]);
+                    matrix["max_evaluations"] = json!(12);
+                }
+                let case_keys: &[&str] = if mixed {
+                    &["weight"]
+                } else {
+                    &["weight", "guard"]
+                };
                 let matrix_report: Value = serde_json::from_str(
                     &on_model(
                         &model,
@@ -246,9 +263,9 @@ fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_b
                 } else {
                     assert!(guidance.get("basis").is_none());
                 }
-                assert_eq!(guidance["case_order"], json!(["weight", "guard"]));
-                assert_eq!(guidance["reserved_evaluations"], 24);
-                assert_eq!(matrix_report["planned_evaluations"], 24);
+                assert_eq!(guidance["case_order"], json!(case_keys));
+                assert_eq!(guidance["reserved_evaluations"], 12 * case_keys.len());
+                assert_eq!(matrix_report["planned_evaluations"], 12 * case_keys.len());
                 assert_eq!(search["selected_designs"], 1);
                 let trials = search["rows"].as_array().unwrap();
                 let selected = trials
@@ -260,18 +277,23 @@ fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_b
                     .iter()
                     .find(|trial| trial["design"]["variables_mm"]["length"] == -30.0)
                     .unwrap();
-                assert_eq!(shorter["consumer_comparison"]["eligible"], true);
-                assert_eq!(shorter["consumer_cases"][0]["comparison"]["eligible"], true);
+                assert_eq!(shorter["consumer_comparison"]["eligible"], !mixed);
                 assert_eq!(
-                    shorter["consumer_cases"][1]["comparison"]["eligible"],
-                    false
+                    shorter["consumer_cases"][0]["comparison"]["eligible"],
+                    !mixed
                 );
+                if !mixed {
+                    assert_eq!(
+                        shorter["consumer_cases"][1]["comparison"]["eligible"],
+                        false
+                    );
+                }
                 assert_eq!(shorter["selected"], false);
                 assert!(
                     shorter["refusal"]["message"]
                         .as_str()
                         .unwrap()
-                        .contains("guard")
+                        .contains(if mixed { "weight" } else { "guard" })
                 );
                 let mass = guidance["best_reading"]["value"].as_f64().unwrap();
                 assert!((mass - width * 80.0 * 1e-6 * 0.2).abs() < 1e-6);
@@ -292,6 +314,27 @@ fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_b
                         );
                     }
                 }
+                if mixed {
+                    assert_eq!(matrix_report["cases"].as_array().unwrap().len(), 1);
+                    let rejected = &shorter["consumer_comparison"]["readings"];
+                    assert!(
+                        rejected["simulated_cloth_mass_kg"]["value"]
+                            .as_f64()
+                            .unwrap()
+                            < 0.017
+                    );
+                    for candidate in [selected, shorter] {
+                        let readings = &candidate["consumer_comparison"]["readings"];
+                        for name in ["simulated_cloth_mass_kg", "max_absolute_edge_strain_pct"] {
+                            assert!(readings[name]["value"].is_number());
+                            assert!(readings[name].get("reported_bounds").is_none());
+                        }
+                    }
+                    assert_eq!(
+                        matrix_report["cases"][0]["comparison"]["policy"]["constraints"][0]["basis"],
+                        "nominal"
+                    );
+                }
                 let selected_key =
                     serde_json::to_string(&json!([selected["design"]["key"], "light"])).unwrap();
                 assert_eq!(
@@ -310,7 +353,7 @@ fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_b
                         manufacture["assembly_mass"]["result"]["assembly_mass"]["reported_bounds_kg"]
                     );
                 }
-                for (index, key) in ["weight", "guard"].iter().enumerate() {
+                for (index, key) in case_keys.iter().enumerate() {
                     let case = &matrix_report["cases"][index];
                     assert_eq!(case["key"], *key);
                     assert_eq!(selected["consumer_cases"][index]["key"], *key);
@@ -348,15 +391,20 @@ fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_b
                             < 1e-12
                     );
                 }
-                // Every admitted trial calls both actual sessions once. The retained light-material
-                // pair is reused for both cases instead of spending another two callback slots.
+                // Every probe calls each actual case session once. Adding nominal guards does not
+                // add cases/callbacks; selected light-material outputs are reused in every case.
                 let rows = matrix_report["manufacturing"]["alternatives"]
                     .as_array()
                     .unwrap()
                     .len();
                 let probes = guidance["evaluations"].as_u64().unwrap() as usize;
-                assert_eq!(matrix_report["evaluations"], 2 * (probes + rows - 1));
-                assert!(matrix_report["evaluations"].as_u64().unwrap() <= 24);
+                assert_eq!(
+                    matrix_report["evaluations"],
+                    case_keys.len() * (probes + rows - 1)
+                );
+                assert!(
+                    matrix_report["evaluations"].as_u64().unwrap() <= (12 * case_keys.len()) as u64
+                );
                 let study_file = format!("{label}-study.json");
                 let scenario_file = format!("{label}-scenario.json");
                 save(&dir.join(&study_file), &matrix_study);
