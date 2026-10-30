@@ -6,6 +6,60 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { pathToFileURL } = require('node:url');
 
+test('compiled WASM retains signed Pareto tradeoffs under independent case guards and quotas',
+  { skip: process.env.FTX_REAL_WASM !== '1' || !process.env.FTX_CONSUMER_ADAPTIVE_REPLAY }, async () => {
+    const pkg = process.env.FTX_WASM_PKG ? path.resolve(process.env.FTX_WASM_PKG) : path.join(__dirname, '../web/pkg');
+    const ftx = await import(pathToFileURL(path.join(pkg, 'ftx_wasm.js')).href);
+    ftx.initSync({ module: fs.readFileSync(path.join(pkg, 'ftx_wasm_bg.wasm')) });
+    const dir = path.join(process.env.FTX_CONSUMER_ADAPTIVE_REPLAY, 'guarded');
+    const read = name => fs.readFileSync(path.join(dir, name), 'utf8');
+    const bytes = fs.readFileSync(path.join(dir, 'model.ftxbody'));
+    const previous = globalThis.ftxProgress;
+    globalThis.ftxProgress = () => {};
+    try {
+      for (const label of ['pareto-guarded', 'pareto-guarded-budget',
+        'matrix-pareto-guarded', 'matrix-pareto-guarded-budget']) {
+        const limited = label.endsWith('budget'), allCases = label.startsWith('matrix-');
+        const model = new ftx.WebBody(new Uint8Array(bytes));
+        let report;
+        try {
+          report = JSON.parse(ftx.material_scenario_study(model, read('pattern.json'),
+            read(`${label}-study.json`), read(`${label}-scenario.json`), read('body-input.json')));
+        } finally { model.free(); }
+        assert.deepEqual(report, JSON.parse(read(`${label}-report.json`)));
+        const search = report.manufacturing.design_search, guidance = search.consumer_guidance;
+        const selected = search.rows.filter(row => row.selected);
+        assert.equal(selected.length, limited ? 1 : 2);
+        assert.equal(guidance.objective, undefined);
+        assert.equal(guidance.best_trial_key, null);
+        assert.equal(guidance.best_reading, null);
+        if (allCases) {
+          assert.equal(guidance.case_aggregation, 'pareto');
+          assert.equal(guidance.case_key, undefined);
+          assert.equal(guidance.objectives, undefined);
+          assert.deepEqual(guidance.case_policies.guide.objectives,
+            JSON.parse(read(`${label}-study.json`)).comparison.objectives);
+        } else assert.deepEqual(guidance.objectives, JSON.parse(read(`${label}-study.json`)).comparison.objectives);
+        assert.deepEqual(guidance.pareto_frontier.retained_trial_keys, selected.map(row => row.design.key));
+        assert.deepEqual(guidance.pareto_frontier.unretained_trial_keys, []);
+        for (const row of selected) {
+          const key = JSON.stringify([row.design.key, 'light']);
+          const result = report.cases[0].simulations.find(item => item.key === key).evaluation.result;
+          assert.equal(result.drape.settled, true);
+          assert.ok(result.surface.result.steady.power_w < 0);
+          assert.equal(row.consumer_cases[1].comparison.readings.independent_surface_power_w.value,
+            result.surface.result.steady.power_w);
+          if (allCases) assert.equal(row.consumer_comparison, undefined);
+        }
+        const rejected = search.rows.find(row => row.design.variables_mm.length === (limited ? -20 : -30));
+        assert.equal(rejected.selected, false);
+        assert.equal(rejected.consumer_cases[0].comparison.eligible, true);
+        assert.equal(rejected.consumer_cases[1].comparison.eligible, false);
+        if (limited) assert.equal(rejected.consumer_cases[1].refusal.code, 'budget_exceeded');
+      }
+    } finally { globalThis.ftxProgress = previous; }
+  });
+
 function displayedNotes(report) {
   const source = fs.readFileSync(path.join(__dirname, '../web/materials-page.js'), 'utf8');
   const start = source.indexOf('function scenarioMatrixComparison(');

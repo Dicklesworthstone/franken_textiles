@@ -6,6 +6,28 @@ use super::Policy;
 use crate::material_study::matrix::{Candidate, CaseReport, Comparison, Incomparable};
 
 impl Policy {
+    /// The same admitted all-case relation for discovery and the final matrix frontier.
+    /// Each coordinate keeps its own units, basis and source-protocol permission.
+    pub(in crate::material_study) fn prefers_cases<'a>(
+        cases: impl IntoIterator<Item = (&'a Self, &'a super::Candidate, &'a super::Candidate)>,
+    ) -> bool {
+        let mut strict = false;
+        for (policy, a, b) in cases {
+            if !a.eligible
+                || !b.eligible
+                || (!policy.allow_mixed_protocols
+                    && a.input_protocol_sha256 != b.input_protocol_sha256)
+            {
+                return false;
+            }
+            let Some(better) = policy.relation(a, b) else {
+                return false;
+            };
+            strict |= better;
+        }
+        strict
+    }
+
     pub(in crate::material_study) fn evaluate_matrix<T>(
         source: &str,
         context: &str,
@@ -37,15 +59,12 @@ impl Policy {
                 }
             })
             .collect();
-        let relation = |a: &Candidate, b: &Candidate| {
-            let mut strict = false;
-            for (case, report) in cases.iter().zip(&reports) {
-                strict |= report
-                    .policy
-                    .relation(&a.cases[&case.key], &b.cases[&case.key])?;
-            }
-            Some(strict)
-        };
+        let relation =
+            |a: &Candidate, b: &Candidate| {
+                Self::prefers_cases(cases.iter().zip(&reports).map(|(case, report)| {
+                    (&report.policy, &a.cases[&case.key], &b.cases[&case.key])
+                }))
+            };
         let mut incomparable = Vec::new();
         for i in 0..alternatives.len() {
             for j in i + 1..alternatives.len() {
@@ -68,10 +87,10 @@ impl Policy {
                         cases: incompatible,
                         reason: "Relevant source protocols differ within the listed cases; no all-cases dominance inferred.",
                     });
-                } else if relation(&alternatives[i], &alternatives[j]) == Some(true) {
+                } else if relation(&alternatives[i], &alternatives[j]) {
                     let key = alternatives[i].key.clone();
                     alternatives[j].dominated_by.push(key);
-                } else if relation(&alternatives[j], &alternatives[i]) == Some(true) {
+                } else if relation(&alternatives[j], &alternatives[i]) {
                     let key = alternatives[j].key.clone();
                     alternatives[i].dominated_by.push(key);
                 } else {

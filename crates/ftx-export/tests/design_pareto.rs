@@ -82,6 +82,233 @@ fn output(pattern: &Pattern, scenario: &Value, mass: f64) -> Value {
         "drape":{"settled":true,"gating":[],"mass_kg":mass}})
 }
 
+fn matrix_request() -> (Request, Vec<Case>) {
+    let mut value = request(16, 2);
+    value["design_adaptive"]["objective"] = json!("consumer_matrix_pareto");
+    value["comparison"]["objectives"] = json!([
+        {"metric":"assembly_mass_kg","direction":"minimize"}]);
+    let mut other = value["comparison"].clone();
+    other["objectives"] = json!([{"metric":"feed_seconds","direction":"maximize"}]);
+    let cases = vec![
+        Case {
+            key: "mass".into(),
+            scenario: scenario("mass"),
+            comparison: None,
+        },
+        Case {
+            key: "feed".into(),
+            scenario: scenario("feed"),
+            comparison: Some(serde_json::from_value(other).unwrap()),
+        },
+    ];
+    (serde_json::from_value(value).unwrap(), cases)
+}
+
+#[test]
+fn all_case_pareto_discovers_real_cross_case_tradeoffs_without_a_nominated_case() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let identity = json!({"source":"test:all-case-pareto"});
+    let context = Context {
+        body: &body,
+        identity: &identity,
+    };
+    for reverse in [false, true] {
+        let (request, mut cases) = matrix_request();
+        if reverse {
+            cases.reverse();
+        }
+        let mut calls = BTreeMap::new();
+        let report = request
+            .evaluate_matrix_with_fit(&pattern, &cases, 44, Some(&context), |index, key, _| {
+                *calls.entry((index, key.to_owned())).or_insert(0) += 1;
+                Ok(json!({"case":cases[index].key, "trial":key}))
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        let search = &report["manufacturing"]["design_search"];
+        let guidance = &search["consumer_guidance"];
+        let frontier = &guidance["pareto_frontier"];
+        assert_eq!(
+            rows(search).iter().map(spread).collect::<Vec<_>>(),
+            [20., 0., 40., 60.]
+        );
+        assert_eq!(guidance["case_aggregation"], "pareto");
+        assert!(guidance.get("case_key").is_none());
+        assert!(guidance.get("objective").is_none());
+        assert!(guidance.get("objectives").is_none());
+        assert!(guidance["best_trial_key"].is_null());
+        assert!(guidance["best_reading"].is_null());
+        assert!(guidance["input_protocol_sha256"].is_null());
+        assert_eq!(
+            guidance["case_policies"]["mass"]["objectives"][0]["direction"],
+            "minimize"
+        );
+        assert_eq!(
+            guidance["case_policies"]["feed"]["objectives"][0]["metric"],
+            "feed_seconds"
+        );
+        assert_eq!(frontier["evaluated_trial_keys"], keys(rows(search)));
+        assert_eq!(frontier["retained_trial_keys"], keys(&rows(search)[..2]));
+        assert_eq!(frontier["unretained_trial_keys"], keys(&rows(search)[2..]));
+        assert_eq!(report["planned_evaluations"], 44);
+        assert!(calls.values().all(|&count| count == 1));
+        assert_eq!(report["evaluations"], calls.len());
+        for trial in rows(search) {
+            assert!(trial.get("consumer_comparison").is_none());
+            assert!(trial.get("refusal").is_none());
+            for (index, case) in cases.iter().enumerate() {
+                let decision = &trial["consumer_cases"][index];
+                assert_eq!(decision["key"], case.key);
+                assert_eq!(decision["comparison"]["eligible"], true);
+                if trial["selected"] != true {
+                    continue;
+                }
+                let key = serde_json::to_string(&(
+                    trial["design"]["key"].as_str().unwrap(),
+                    "light-sheet",
+                ))
+                .unwrap();
+                let final_case = &report["cases"][index];
+                let final_decision = final_case["comparison"]["alternatives"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["key"] == key)
+                    .unwrap();
+                for field in [
+                    "readings",
+                    "eligible",
+                    "exclusions",
+                    "input_protocol_sha256",
+                ] {
+                    assert_eq!(decision["comparison"][field], final_decision[field]);
+                }
+                let cached = final_case["simulations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["key"] == key)
+                    .unwrap();
+                assert_eq!(
+                    cached["evaluation"]["result"],
+                    json!({"case":case.key,"trial":key})
+                );
+                assert!(
+                    report["comparison"]["frontier"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!(key))
+                );
+            }
+        }
+        assert_eq!(search["global_optimum_claim"], false);
+        assert_eq!(search["complete_search"], false);
+    }
+}
+
+#[test]
+fn all_case_pareto_composes_different_bases_and_preserves_missing_ranges() {
+    let (request, cases) = matrix_request();
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let identity = json!({"source":"test:mixed-case-bases"});
+    for missing in [false, true] {
+        let mut value = serde_json::to_value(&request).unwrap();
+        value["comparison"]["basis"] = json!("reported_bounds");
+        if !missing {
+            value["variants"][0]["changes"]["default"]["record"]["properties"]["areal_density"]["bounds"] =
+                json!([0.17, 0.19]);
+        }
+        let request: Request = serde_json::from_value(value).unwrap();
+        let report = request
+            .evaluate_matrix_with_fit(
+                &pattern,
+                &cases,
+                44,
+                Some(&Context {
+                    body: &body,
+                    identity: &identity,
+                }),
+                |_, _, _| Ok(json!({})),
+            )
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        let search = &report["manufacturing"]["design_search"];
+        let guidance = &search["consumer_guidance"];
+        assert!(guidance.get("basis").is_none(), "no invented common basis");
+        assert_eq!(
+            guidance["case_policies"]["mass"]["basis"],
+            "reported_bounds"
+        );
+        assert_eq!(guidance["case_policies"]["feed"]["basis"], "nominal");
+        assert_eq!(search["selected_designs"], if missing { 0 } else { 2 });
+        for row in rows(search) {
+            let mass = &row["consumer_cases"][0]["comparison"];
+            let feed = &row["consumer_cases"][1]["comparison"];
+            assert_eq!(mass["eligible"], !missing);
+            assert_eq!(feed["eligible"], true);
+            assert_eq!(
+                mass["readings"]["assembly_mass_kg"]["reported_bounds"].is_array(),
+                !missing
+            );
+            assert!(
+                feed["readings"]["feed_seconds"]
+                    .get("reported_bounds")
+                    .is_none()
+            );
+            if missing {
+                assert!(row["refusal"]["message"].as_str().unwrap().contains("mass"));
+            }
+        }
+    }
+}
+
+#[test]
+fn all_case_pareto_rejects_incomplete_policy_context_before_callbacks() {
+    let (request, cases) = matrix_request();
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let identity = json!({"source":"test:all-case-preflight"});
+    let context = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let mut calls = 0;
+    assert!(
+        request
+            .evaluate_with_fit(&pattern, &json!({}), Some(&context), |_, _| {
+                calls += 1;
+                Ok(json!({}))
+            })
+            .unwrap_err()
+            .message
+            .contains("named scenario matrix")
+    );
+    for bad in 0..4 {
+        let mut request = request.clone();
+        let mut cases = cases.clone();
+        let allowance = if bad == 0 { 43 } else { 44 };
+        match bad {
+            1 => request.design_adaptive.as_mut().unwrap().case_key = Some("mass".into()),
+            2 => request.comparison = None,
+            3 => {
+                cases.truncate(1);
+            }
+            _ => {}
+        }
+        assert!(
+            request
+                .evaluate_matrix_with_fit(&pattern, &cases, allowance, Some(&context), |_, _, _| {
+                    calls += 1;
+                    Ok(json!({}))
+                })
+                .is_err()
+        );
+    }
+    assert_eq!(calls, 0);
+}
+
 #[test]
 fn incomparable_actual_centers_continue_beyond_the_retained_output_capacity() {
     let report = run(request(16, 2));

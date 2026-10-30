@@ -232,7 +232,15 @@ pub(super) fn validate_request(request: &Request) -> Result<(), Refusal> {
                 .comparison
                 .as_ref()
                 .map(|policy| policy.objectives.len());
-            if adaptive.pareto() {
+            if adaptive.matrix_pareto() {
+                // This is the first effective case policy, not a combined or nominated score.
+                // The matrix validates every policy and the total objective count before probing.
+                if count.is_none_or(|count| !(1..=16).contains(&count)) {
+                    return Err(invalid(
+                        "consumer_matrix_pareto requires an explicit policy in every named case",
+                    ));
+                }
+            } else if adaptive.pareto() {
                 if count.is_none_or(|count| !(2..=16).contains(&count)) {
                     return Err(invalid(
                         "consumer_pareto requires 2..16 ordinary comparison objectives with explicit constraints and required consumers",

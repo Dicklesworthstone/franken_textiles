@@ -24,6 +24,8 @@ pub enum Objective {
     ConsumerComparison,
     /// Explore the admitted tradeoffs of several ordinary objectives without a scalar score.
     ConsumerPareto,
+    /// Explore tradeoffs across every named case's own objectives, without nominating one case.
+    ConsumerMatrixPareto,
     /// Improve the worst admitted reading of one shared objective and basis across named cases.
     ConsumerWorstCase,
 }
@@ -57,7 +59,7 @@ pub struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_key: Option<String>,
     /// Named scenario whose comparison objectives guide matrix polling. Every case must still
-    /// admit the trial. Required for nominated-case matrices; forbidden for worst-case guidance.
+    /// admit the trial. Forbidden for worst-case and all-case Pareto guidance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case_key: Option<String>,
     /// One to three variables, polled in authored order and negative then positive direction.
@@ -112,7 +114,8 @@ pub struct Trial {
     pub design: super::Receipt,
     /// Retained for the final material cross-product; removed consumer incumbents remain visible.
     pub selected: bool,
-    /// Unmodified production comparator decision for the nominated material, after flat admission.
+    /// Unmodified nominated-case comparator decision after flat admission. All-case Pareto mode
+    /// omits this field: consumer_cases retains every original decision without a nominee.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumer_comparison: Option<comparison::Candidate>,
     /// Original binding or additional-consumer refusal, kept even when comparison admission
@@ -216,7 +219,10 @@ pub struct ConsumerGuidance {
     /// Every case whose ordinary policy must admit a selected trial, in authored order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub case_order: Vec<String>,
-    /// Explicit worst-case aggregation; omitted for the existing nominated-case behavior.
+    /// All-case Pareto policies in original units and bases; absent in nominated/scalar modes.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub case_policies: BTreeMap<String, comparison::Policy>,
+    /// Explicit worst-case or all-case Pareto aggregation; omitted for nominated-case behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub case_aggregation: Option<&'static str>,
     /// The sole objective for scalar guidance; omitted for an explicit Pareto search.
@@ -272,12 +278,20 @@ impl Request {
             self.objective,
             Objective::ConsumerComparison
                 | Objective::ConsumerPareto
+                | Objective::ConsumerMatrixPareto
                 | Objective::ConsumerWorstCase
         )
     }
 
     pub(in crate::material_study) fn pareto(&self) -> bool {
-        matches!(self.objective, Objective::ConsumerPareto)
+        matches!(
+            self.objective,
+            Objective::ConsumerPareto | Objective::ConsumerMatrixPareto
+        )
+    }
+
+    pub(in crate::material_study) fn matrix_pareto(&self) -> bool {
+        matches!(self.objective, Objective::ConsumerMatrixPareto)
     }
 
     pub(in crate::material_study) fn worst_case(&self) -> bool {
@@ -588,12 +602,12 @@ impl Request {
         materials: Vec<PreparedVariant>,
         context: Option<&fit::Context<'_>>,
         evaluate: Option<&mut ConsumerEvaluator<'_, T>>,
-        case_order: &[String],
+        cases: &[(String, comparison::Policy)],
     ) -> Result<Expansion<T>, Refusal> {
         self.validate()?;
-        if self.worst_case() && case_order.is_empty() {
+        if (self.worst_case() || self.matrix_pareto()) && cases.is_empty() {
             return Err(invalid(
-                "consumer_worst_case requires a named scenario matrix",
+                "all-case consumer guidance requires a named scenario matrix",
             ));
         }
         let context = context.ok_or_else(|| {
@@ -631,11 +645,16 @@ impl Request {
                 })?,
                 protocol: None,
                 evaluations: 0,
-                case_order: case_order.to_vec(),
+                case_order: cases.iter().map(|(key, _)| key.clone()).collect(),
+                case_policies: if self.matrix_pareto() {
+                    cases.iter().map(|(_, policy)| policy.clone()).collect()
+                } else {
+                    Vec::new()
+                },
                 reserved_evaluations: self
                     .max_evaluations
                     .saturating_add((self.max_designs + 1).saturating_mul(materials.len()))
-                    .saturating_mul(case_order.len().max(1)),
+                    .saturating_mul(cases.len().max(1)),
             })
         } else {
             None
@@ -829,9 +848,19 @@ impl Request {
                     material_key: guidance.material.variant.key.clone(),
                     case_key: self.case_key.clone(),
                     case_order: guidance.case_order.clone(),
-                    case_aggregation: self.worst_case().then_some("worst_case"),
+                    case_policies: guidance
+                        .case_order
+                        .iter()
+                        .cloned()
+                        .zip(guidance.case_policies.iter().cloned())
+                        .collect(),
+                    case_aggregation: if self.matrix_pareto() {
+                        Some("pareto")
+                    } else {
+                        self.worst_case().then_some("worst_case")
+                    },
                     objective: (!self.pareto()).then(|| guidance.policy.objectives[0].clone()),
-                    objectives: if self.pareto() {
+                    objectives: if self.pareto() && !self.matrix_pareto() {
                         guidance.policy.objectives.clone()
                     } else {
                         Vec::new()
@@ -854,8 +883,9 @@ impl Request {
                         }
                         frontier
                     }),
-                    basis: matches!(guidance.policy.basis, comparison::Basis::ReportedBounds)
-                        .then_some(guidance.policy.basis),
+                    basis: (!self.matrix_pareto()
+                        && matches!(guidance.policy.basis, comparison::Basis::ReportedBounds))
+                    .then_some(guidance.policy.basis),
                     reserved_evaluations: guidance.reserved_evaluations,
                     evaluations: guidance.evaluations,
                     best_trial_key: best.map(|index| discovery.rows[index].design.key.clone()),
@@ -1000,6 +1030,7 @@ struct Guidance<'a, T> {
     protocol: Option<Option<String>>,
     evaluations: usize,
     case_order: Vec<String>,
+    case_policies: Vec<comparison::Policy>,
     reserved_evaluations: usize,
 }
 
@@ -1268,6 +1299,28 @@ impl<T> Discovery<'_, '_, '_, T> {
         };
         match (candidate.consumer_admitted(), current.consumer_admitted()) {
             (true, false) => true,
+            (true, true) if self.request.matrix_pareto() => {
+                let cases = &guidance.case_policies;
+                if candidate.consumer_cases.len() != cases.len()
+                    || current.consumer_cases.len() != cases.len()
+                    || cases.is_empty()
+                    || candidate
+                        .consumer_cases
+                        .iter()
+                        .zip(&current.consumer_cases)
+                        .zip(&guidance.case_order)
+                        .any(|((a, b), key)| a.key != *key || b.key != *key)
+                {
+                    return false;
+                }
+                comparison::Policy::prefers_cases(
+                    cases
+                        .iter()
+                        .zip(&candidate.consumer_cases)
+                        .zip(&current.consumer_cases)
+                        .map(|((policy, a), b)| (policy, &a.comparison, &b.comparison)),
+                )
+            }
             (true, true) if self.request.worst_case() => {
                 // The matrix already checked each case against its own anchored protocol.
                 // A change of limiting case must not compare unrelated case protocol hashes.
@@ -1357,6 +1410,11 @@ impl<T> Discovery<'_, '_, '_, T> {
                         }
                         row.selected = true;
                         consumer = Some(evaluation.output);
+                    } else if self.request.matrix_pareto() {
+                        // Every case was independently admitted and protocol-anchored by the
+                        // matrix. No first-case or synthetic aggregate protocol replaces that.
+                        row.selected = true;
+                        consumer = Some(evaluation.output);
                     } else if guidance.protocol.as_ref().is_some_and(|protocol| {
                         !guidance.policy.allow_mixed_protocols
                             && *protocol != candidate.input_protocol_sha256
@@ -1374,7 +1432,8 @@ impl<T> Discovery<'_, '_, '_, T> {
                 } else {
                     row.refusal = candidate.exclusions.first().cloned();
                 }
-                row.consumer_comparison = Some(candidate);
+                // All-case mode has no nominated decision. Original decisions remain in cases.
+                row.consumer_comparison = (!self.request.matrix_pareto()).then_some(candidate);
             }
         }
         if self.request.pareto() && row.consumer_admitted() {
@@ -1456,10 +1515,15 @@ impl Trial {
 
     fn consumer_admitted(&self) -> bool {
         self.refusal.is_none()
-            && self
+            && (self
                 .consumer_comparison
                 .as_ref()
                 .is_some_and(|candidate| candidate.eligible)
+                || (!self.consumer_cases.is_empty()
+                    && self
+                        .consumer_cases
+                        .iter()
+                        .all(|case| case.comparison.eligible)))
     }
 
     fn score(&self) -> Option<(f64, f64)> {

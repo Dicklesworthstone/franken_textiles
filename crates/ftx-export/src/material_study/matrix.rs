@@ -337,6 +337,12 @@ impl Request {
         } else if self
             .design_adaptive
             .as_ref()
+            .is_some_and(|policy| policy.matrix_pareto())
+        {
+            notes.push("Adaptive all-case Pareto polling uses every named case's own objectives, units and nominal or reported-range basis. It reuses the final matrix dominance rule: no worse in every objective of every case, strictly better somewhere, with independent case admission and source protocols. There is no nominated case, scalar score or single winner. Evaluated tradeoffs and retained outputs are distinct; omitted frontier coordinates still guide bounded polling.".into());
+        } else if self
+            .design_adaptive
+            .as_ref()
             .is_some_and(|policy| policy.pareto())
         {
             notes.push("Adaptive Pareto polling follows the explicitly nominated case's complete comparison objectives under their declared nominal or reported-range basis. Every named case independently admits each trial under its own constraints and anchored source protocol. The evaluated nondominated frontier and bounded retained output subset are separate; capacity-omitted frontier points still guide polling. No case weights, scalar winner, exhaustive frontier or physical fit is inferred.".into());
@@ -372,7 +378,7 @@ impl Request {
             .design_adaptive
             .as_ref()
             .expect("consumer-guided matrix");
-        let nominated = if adaptive.worst_case() {
+        let nominated = if adaptive.worst_case() || adaptive.matrix_pareto() {
             None
         } else {
             let case_key = adaptive.case_key.as_ref().ok_or_else(|| {
@@ -398,6 +404,17 @@ impl Request {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if adaptive.matrix_pareto()
+            && policies
+                .iter()
+                .map(|policy| policy.objectives.len())
+                .sum::<usize>()
+                < 2
+        {
+            return Err(invalid(
+                "consumer_matrix_pareto requires at least two case/objective coordinates",
+            ));
+        }
         if adaptive.worst_case() {
             let first = policies[0].objectives.first();
             if policies.iter().any(|policy| {
@@ -439,7 +456,11 @@ impl Request {
                 effective.scenario_identity(pattern, &case.scenario, fit)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let case_order: Vec<_> = cases.iter().map(|case| case.key.clone()).collect();
+        let case_policies: Vec<_> = cases
+            .iter()
+            .zip(&policies)
+            .map(|(case, policy)| (case.key.clone(), (*policy).clone()))
+            .collect();
         let mut work = ManufacturingWork::new();
         let mut evaluations = 0;
         let mut protocols: Option<Vec<Option<String>>> = None;
@@ -523,7 +544,7 @@ impl Request {
                     },
                 })
             }),
-            &case_order,
+            &case_policies,
         )?;
         variants.sort_by(|a, b| a.variant.key.cmp(&b.variant.key));
         let mut alternatives = Vec::with_capacity(variants.len());

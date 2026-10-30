@@ -61,15 +61,32 @@ fn independent_case_gates_preserve_signed_heat_tradeoffs_and_exact_native_output
         save(&capture.join("pattern.json"), &pattern);
         save(&capture.join("body-input.json"), &body);
     }
-    for limited in [false, true] {
-        let label = if limited {
-            "pareto-guarded-budget"
-        } else {
-            "pareto-guarded"
-        };
+    for (all_cases, limited, label) in [
+        (false, false, "pareto-guarded"),
+        (false, true, "pareto-guarded-budget"),
+        (true, false, "matrix-pareto-guarded"),
+        (true, true, "matrix-pareto-guarded-budget"),
+    ] {
+        let mut study = study.clone();
         let mut matrix = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":32,
             "cases":[{"key":"guide","scenario":scenario},{"key":"guard","scenario":scenario,
                 "comparison":study["comparison"]}]});
+        if all_cases {
+            study["design_adaptive"]["objective"] = json!("consumer_matrix_pareto");
+            study["design_adaptive"]
+                .as_object_mut()
+                .unwrap()
+                .remove("case_key");
+            // The tradeoff exists across cases, not within a nominated two-objective case.
+            study["comparison"]["objectives"]
+                .as_array_mut()
+                .unwrap()
+                .truncate(1);
+            matrix["cases"][1]["comparison"]["objectives"]
+                .as_array_mut()
+                .unwrap()
+                .remove(0);
+        }
         matrix["cases"][1]["comparison"]["constraints"] = json!([
             {"metric":"assembly_mass_kg","minimum":0.017}]);
         if limited {
@@ -97,7 +114,21 @@ fn independent_case_gates_preserve_signed_heat_tradeoffs_and_exact_native_output
         assert!(guidance.get("objective").is_none());
         assert!(guidance["best_reading"].is_null());
         assert!(guidance["best_trial_key"].is_null());
-        assert_eq!(guidance["objectives"], study["comparison"]["objectives"]);
+        if all_cases {
+            assert_eq!(guidance["case_aggregation"], "pareto");
+            assert!(guidance.get("case_key").is_none());
+            assert!(guidance.get("objectives").is_none());
+            assert_eq!(
+                guidance["case_policies"]["guide"]["objectives"],
+                study["comparison"]["objectives"]
+            );
+            assert_eq!(
+                guidance["case_policies"]["guard"]["objectives"],
+                matrix["cases"][1]["comparison"]["objectives"]
+            );
+        } else {
+            assert_eq!(guidance["objectives"], study["comparison"]["objectives"]);
+        }
         assert_eq!(frontier["retention_capacity"], 3);
         assert_eq!(frontier["unretained_trial_keys"], json!([]));
         assert_eq!(
@@ -120,13 +151,18 @@ fn independent_case_gates_preserve_signed_heat_tradeoffs_and_exact_native_output
                 .as_f64()
                 .unwrap();
             let expected_mass = width * (100. + length) * 1e-6 * 0.2;
-            let readings = &selected["consumer_comparison"]["readings"];
-            let mass = readings["assembly_mass_kg"]["value"].as_f64().unwrap();
-            let power = readings["independent_surface_power_w"]["value"]
+            let mass = selected["consumer_cases"][0]["comparison"]["readings"]["assembly_mass_kg"]
+                ["value"]
+                .as_f64()
+                .unwrap();
+            let power = selected["consumer_cases"][1]["comparison"]["readings"]["independent_surface_power_w"]["value"]
                 .as_f64()
                 .unwrap();
             assert!((mass - expected_mass).abs() < 1e-6);
             assert!(power < 0.);
+            if all_cases {
+                assert!(selected.get("consumer_comparison").is_none());
+            }
             let key = serde_json::to_string(&json!([selected["design"]["key"], "light"])).unwrap();
             let manufacture = report["manufacturing"]["alternatives"]
                 .as_array()
@@ -174,17 +210,17 @@ fn independent_case_gates_preserve_signed_heat_tradeoffs_and_exact_native_output
             }
         }
         if !limited {
-            let initial = &selected[0]["consumer_comparison"]["readings"];
-            let shorter = &selected[1]["consumer_comparison"]["readings"];
+            let initial = &selected[0]["consumer_cases"][0]["comparison"]["readings"];
+            let shorter = &selected[1]["consumer_cases"][0]["comparison"]["readings"];
             assert!(
                 initial["assembly_mass_kg"]["value"].as_f64().unwrap()
                     > shorter["assembly_mass_kg"]["value"].as_f64().unwrap()
             );
             assert!(
-                initial["independent_surface_power_w"]["value"]
+                selected[0]["consumer_cases"][1]["comparison"]["readings"]["independent_surface_power_w"]["value"]
                     .as_f64()
                     .unwrap()
-                    < shorter["independent_surface_power_w"]["value"]
+                    < selected[1]["consumer_cases"][1]["comparison"]["readings"]["independent_surface_power_w"]["value"]
                         .as_f64()
                         .unwrap()
             );
