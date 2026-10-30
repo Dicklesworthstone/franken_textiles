@@ -46,7 +46,7 @@ pub struct MotionSample {
     pub cloth: Vec<Vec3>,
     /// Prescribed body positions (m), in the original vertex order.
     pub body: Vec<Vec3>,
-    /// Converged implicit solve at this substep.
+    /// Converged implicit solve at this substep, before any qualified endpoint mass/impulse transfer.
     pub solve: SolveReport,
     /// Cumulative accepted irreversible membrane work in retained triangle order, joules.
     /// Present only when explicitly captured and a permanent membrane law is bound. This includes
@@ -207,7 +207,8 @@ fn advance_body_impl(
 
 // A coupled consumer runs only after the geometric/contact checks have accepted a trial. Its
 // private state and the solver commit together at the end of the entire segment. The consumer
-// may update mass/history, never the already checked geometry or its co-moving velocity.
+// may update mass, velocity and history through a source-qualified endpoint transfer. It must not
+// change already checked geometry; the next mechanical interval sees the accepted transfer impulse.
 pub(crate) fn advance_body_coupled<S: Clone>(
     solver: &mut Solver,
     target: &[Vec3],

@@ -117,7 +117,9 @@ fn admit_mechanics(
     let water = &request["surface_water"];
     let bindings = qualification["bindings"].as_object().ok_or_else(fail)?;
     let water_bindings = water["bindings"].as_object().ok_or_else(fail)?;
-    let exchange = qualification["schema"] == "ftx-coupled-liquid-mechanics/1";
+    let prescribed_velocity = qualification["schema"] == "ftx-coupled-liquid-mechanics/2";
+    let exchange =
+        prescribed_velocity || qualification["schema"] == "ftx-coupled-liquid-mechanics/1";
     let compatible_policy = if exchange {
         matches!(
             water["schema"].as_str(),
@@ -126,7 +128,12 @@ fn admit_mechanics(
                     | "ftx-textile-surface-water/2"
                     | "ftx-textile-surface-water/3"
             )
-        ) && qualification["model"] == "co_moving_mass_exchange_frozen_mechanics/1"
+        ) && qualification["model"]
+            == if prescribed_velocity {
+                "prescribed_incoming_velocity_mass_exchange_frozen_mechanics/1"
+            } else {
+                "co_moving_mass_exchange_frozen_mechanics/1"
+            }
     } else {
         water["schema"] == "ftx-textile-surface-water/1"
             && qualification["schema"] == "ftx-evaporating-liquid-mechanics/1"
@@ -152,6 +159,14 @@ fn admit_mechanics(
     for (instance, binding) in bindings {
         let range = array(binding, "temperature_range_c")?;
         let maximum = number(binding, "maximum_liquid_loading_kg_m2")?;
+        if prescribed_velocity {
+            let velocity = array(binding, "incoming_velocity_world_m_s")?;
+            if velocity.len() != 3 || velocity.iter().any(|v| finite(v).is_none()) {
+                return Err(fail());
+            }
+        } else if binding.get("incoming_velocity_world_m_s").is_some() {
+            return Err(fail());
+        }
         if range.len() != 2
             || binding["material_sha256"] != water_bindings[instance]["material_sha256"]
             || maximum <= 0.
@@ -164,7 +179,9 @@ fn admit_mechanics(
     }
     let summary = |report: &Value| -> Result<Value, Refusal> {
         if report["schema"]
-            != if exchange {
+            != if prescribed_velocity {
+                "ftx-coupled-liquid-mechanics-result/2"
+            } else if exchange {
                 "ftx-coupled-liquid-mechanics-result/1"
             } else {
                 "ftx-evaporating-liquid-mechanics-result/1"
@@ -208,6 +225,7 @@ fn admit_mechanics(
     let mut previous_incoming = 0.;
     let mut previous_outgoing = 0.;
     let mut previous_incoming_energy = 0.;
+    let mut previous_mixing_dissipation = 0.;
     let mut previous_incoming_potential = 0.;
     let mut previous_incoming_momentum = [0.; 3];
     for (index, row) in std::iter::once(&initial)
@@ -229,6 +247,20 @@ fn admit_mechanics(
             let incoming = nonnegative(flow, "incoming_mass_kg")?;
             let outgoing = nonnegative(flow, "outgoing_mass_kg")?;
             let incoming_energy = nonnegative(flow, "incoming_kinetic_energy_j")?;
+            if prescribed_velocity {
+                // Inelastic capture dissipates bulk kinetic energy. It is not an extra thermal
+                // source: the thermal producer retains its independent sensible/latent ledger.
+                let mixing = nonnegative(flow, "mixing_dissipation_j")?;
+                if mixing < previous_mixing_dissipation
+                    || (index == 0 && mixing != 0.)
+                    || (incoming == previous_incoming && mixing != previous_mixing_dissipation)
+                {
+                    return Err(fail());
+                }
+                previous_mixing_dissipation = mixing;
+            } else if flow.get("mixing_dissipation_j").is_some() {
+                return Err(fail());
+            }
             let thermal_incoming = if index == 0 {
                 0.
             } else {

@@ -24,15 +24,20 @@ impl PartFrames for Form {
 
 #[test]
 fn late_evaporation_budget_failure_restores_whole_solver_and_replays_identically() {
-    rollback_after_liquid_transfer(false);
+    rollback_after_liquid_transfer(false, false);
 }
 
 #[test]
 fn late_supply_budget_failure_rolls_back_liquid_and_attached_mass_together() {
-    rollback_after_liquid_transfer(true);
+    rollback_after_liquid_transfer(true, false);
 }
 
-fn rollback_after_liquid_transfer(exchange: bool) {
+#[test]
+fn prescribed_supply_impulse_and_mixing_roll_back_and_replay_with_attached_mass() {
+    rollback_after_liquid_transfer(true, true);
+}
+
+fn rollback_after_liquid_transfer(exchange: bool, prescribed: bool) {
     let mut raw: Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
     ))
@@ -139,6 +144,15 @@ fn rollback_after_liquid_transfer(exchange: bool) {
         q.schema = "ftx-coupled-liquid-mechanics/1".into();
         q.model = "co_moving_mass_exchange_frozen_mechanics/1".into();
         q.qualification = "Exact synthetic mechanics with co-moving incoming/outgoing flow over the declared domain".into();
+        if prescribed {
+            q.schema = "ftx-coupled-liquid-mechanics/2".into();
+            q.model = "prescribed_incoming_velocity_mass_exchange_frozen_mechanics/1".into();
+            q.bindings
+                .get_mut("band")
+                .unwrap()
+                .incoming_velocity_world_m_s = Some(Vec3::new(0.1, -0.2, 0.05));
+            q.qualification = "Synthetic prescribed incoming velocity and inelastic mixing with invariant mechanical laws over the declared domain".into();
+        }
         let mut water = serde_json::to_value(heat.surface_water.as_ref().unwrap()).unwrap();
         water["schema"] = json!("ftx-textile-surface-water/2");
         water
@@ -194,6 +208,16 @@ fn rollback_after_liquid_transfer(exchange: bool) {
         assert!(
             (current.total_inertial_mass_kg - old.total_inertial_mass_kg - remaining).abs() < 1e-15
         );
+        if prescribed {
+            let report = &complete["liquid_mechanics"];
+            assert_eq!(report["schema"], "ftx-coupled-liquid-mechanics-result/2");
+            let flow = &report["exchange"];
+            assert!(flow["mixing_dissipation_j"].as_f64().unwrap() > 0.);
+            let incoming = flow["incoming_mass_kg"].as_f64().unwrap();
+            let momentum: Vec3 =
+                serde_json::from_value(flow["incoming_momentum_kg_m_s"].clone()).unwrap();
+            assert!((momentum - Vec3::new(0.1, -0.2, 0.05) * incoming).norm() < 1e-15);
+        }
     }
     let thermal = &complete["transient_surface"]["result"];
     let trace = thermal["trace"].as_array().unwrap();

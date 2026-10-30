@@ -21,10 +21,10 @@ mechanical interval uses the resulting inertia and gravitational load. Source-tr
 own water, and the real seam weld map distributes its lumped mass exactly once. Attached
 accessory mass remains separate and unchanged.
 
-The admitted mean velocity of both incoming and outgoing mass equals the local accepted cloth
+For these version-1 mechanical qualifications, the admitted mean velocity of both incoming and outgoing mass equals the local accepted cloth
 velocity. This explicit co-moving boundary condition leaves cloth velocity unchanged during
-mass transfer; a liquid jet, falling rain or vapor with a different mean velocity needs a different
-qualified momentum model. Incoming and exported momentum, bulk kinetic energy and signed
+mass transfer. The separately qualified version-2 momentum model below accepts prescribed incoming
+velocities. Incoming and exported momentum, bulk kinetic energy and signed
 gravitational potential energy are mechanical boundary terms,
 separate from the thermal model's latent and sensible enthalpy. This is a first-order
 sequential coupling: mechanical step refinement is required, especially near dryout, even
@@ -83,6 +83,48 @@ manufacturing coexistence. A sewn-motion regression confirms that liquid acquire
 accepted solve changes the next solve. Kernel tests independently check shared-vertex mass,
 momentum and bulk energy, and growing-mass oscillator convergence. None qualifies an actual wet
 fabric or an unspecified incoming-flow velocity.
+
+### Prescribed incoming velocity and mechanical mixing work
+
+`ftx-coupled-liquid-mechanics/2` with model
+`prescribed_incoming_velocity_mass_exchange_frozen_mechanics/1` adds an independently qualified
+world-frame `incoming_velocity_world_m_s: [x, y, z]` to **every** instance binding. Each vector
+is constant over the motion request and applies to both supplied liquid and condensed vapor for
+that instance. Different pieces may have different incoming velocities. All existing material,
+interface, loading, temperature, source and estimate-consent requirements still apply. Missing,
+null or nonfinite vectors refuse; older mechanical versions cannot accept this field.
+
+At a welded vertex, let `m, v` be the previous total mass and velocity, and `a_i, u_i` each
+incoming stream's lumped mass and qualified velocity. All incoming streams first mix perfectly
+inelastically with the retained dry textile, accessories and liquid:
+
+```text
+v_new = (m v + sum(a_i u_i)) / (m + sum(a_i))
+D_mix = 0.5 m |v - v_new|² + sum(0.5 a_i |u_i - v_new|²)
+```
+
+Outgoing evaporation then leaves at `v_new`. The thermal inventory still owns the final mass;
+equal incoming/outgoing mass therefore changes momentum even when no liquid remains. Stable
+relative-momentum arithmetic preserves an exactly co-moving stream without creating an impulse,
+and squared relative speeds make mixing dissipation nonnegative without cancellation or clipping.
+Every transfer is staged before changing solver mass or velocity. Pinned coordinates remain
+unsupported; accessory mass contributes to inertia without being relabeled as water.
+
+The result schema is `ftx-coupled-liquid-mechanics-result/2`. Its `exchange` ledger additionally
+retains cumulative `mixing_dissipation_j`; incoming momentum and kinetic energy use the prescribed
+stream velocities, and outgoing quantities use the mixed endpoint velocity. The existing kinetic
+transfer residual is `K_after - K_before - K_in + K_out + D_mix`. Mixing work is **not** deposited
+as thermal heat: no conversion fraction, physical deposition profile or empirical qualification is
+inferred. Sensible/latent enthalpy and bulk mechanical energy retain their separate authorities.
+
+Known-answer tests cover multiple streams sharing welded vertices, equal-net throughflow,
+Galilean invariance, exact co-moving behavior and overflow rollback. Constant-rate accretion
+reproduces the independent control-volume momentum solution and converges to its logarithmic
+position history under mechanical-step refinement. Actual sewn motion with attached accessories
+checks a late thermal failure restores the complete pre-motion state and that replay is identical.
+These are software and numerical guarantees, not rain interception, drainage, measured wet laws,
+damage or real garment validation. A changing source velocity or different supplied-liquid and
+condensed-vapor velocities require a separately supported qualification.
 
 ## Thermal water model
 

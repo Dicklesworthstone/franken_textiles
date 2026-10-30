@@ -158,6 +158,19 @@ late failure with attached trim, and actual native/portable named-case objective
 Drainage, relative flow velocity, noninvariant wet laws and measured wet-garment qualification
 remain outside this bounded coupling.
 
+`ftx-coupled-liquid-mechanics/2` additionally qualifies one finite incoming world velocity per
+retained instance. The same accepted thermal flows mix inelastically with previous welded mass
+before outgoing evaporation leaves at the mixed velocity. Actual solver velocity and inertia
+therefore change even for equal-net throughflow. Incoming momentum/kinetic energy, outgoing bulk
+energy and nonnegative `mixing_dissipation_j` remain separately conserved; no mixing work is
+deposited into the thermal sensible/latent ledger. Initial liquid stays co-moving after dry drape,
+and dry/accessory ownership, exact source laws, domain checks and whole-motion rollback remain
+mandatory. Older models reject the velocity field and preserve their existing behavior.
+Independent control-volume accretion/refinement, welded multiple-stream conservation, Galilean
+invariance and sewn/accessory replay tests cover this bounded numerical capability. Prescribed
+velocity applies to all incoming phases for an instance; phase-specific or time-varying streams,
+drainage, pinned-coordinate impulses, heat deposition and empirical wet-garment claims remain open.
+
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
 and conservative Frame/remap APIs. Time-zero temperatures and spatially uniform interval films are

@@ -764,6 +764,113 @@ fn exchanging_case(condensation: bool) -> (Alternative, Value, Value, Value) {
     (a, d, s, m)
 }
 
+fn prescribe_incoming_velocity(d: &mut Value, m: &mut Value) {
+    let mut qualification = m["liquid_mechanics"]["qualification"].clone();
+    qualification["schema"] = json!("ftx-coupled-liquid-mechanics/2");
+    qualification["model"] = json!("prescribed_incoming_velocity_mass_exchange_frozen_mechanics/1");
+    for binding in qualification["bindings"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        // The independent accounting fixture already carries unit-x incoming momentum per kg.
+        binding["incoming_velocity_world_m_s"] = json!([1., 0., 0.]);
+    }
+    for path in [
+        "/initial_sample/liquid_mechanics",
+        "/liquid_mechanics",
+        "/transient_surface/result/mechanical_coupling",
+    ] {
+        let report = m.pointer_mut(path).unwrap();
+        report["schema"] = json!("ftx-coupled-liquid-mechanics-result/2");
+        report["qualification"] = qualification.clone();
+        report["exchange"]["mixing_dissipation_j"] = json!(0.);
+    }
+    let heat = &mut m["transient_surface"]["result"];
+    heat["request"]["mechanical_coupling"] = qualification;
+    heat["trace"][0]["mechanical_coupling"]["exchange"]["mixing_dissipation_j"] = json!(0.);
+    d["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+}
+
+#[test]
+fn prescribed_incoming_velocity_keeps_thermal_objectives_independent_of_bulk_mixing() {
+    for condensation in [false, true] {
+        let (a, mut d, s, mut m) = exchanging_case(condensation);
+        let heat = &m["transient_surface"]["result"];
+        let expected = admit(&a, &s, &m, heat, &heat["request"], false, &[3., 3.]).unwrap();
+        prescribe_incoming_velocity(&mut d, &mut m);
+        assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+        let heat = &m["transient_surface"]["result"];
+        let actual = admit(&a, &s, &m, heat, &heat["request"], false, &[3., 3.]).unwrap();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn incomplete_velocity_qualification_and_mixing_accounting_refuse_decision_admission() {
+    for fault in 0..8 {
+        let (a, mut d, s, mut m) = exchanging_case(true);
+        prescribe_incoming_velocity(&mut d, &mut m);
+        if fault < 3 || fault == 7 {
+            let mut qualification = m["liquid_mechanics"]["qualification"].clone();
+            for binding in qualification["bindings"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+            {
+                match fault {
+                    0 => {
+                        binding
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("incoming_velocity_world_m_s");
+                    }
+                    1 => binding["incoming_velocity_world_m_s"] = json!([1., 0.]),
+                    2 => binding["incoming_velocity_world_m_s"] = json!([1., null, 0.]),
+                    _ => {}
+                }
+            }
+            if fault == 7 {
+                qualification["schema"] = json!("ftx-coupled-liquid-mechanics/1");
+                qualification["model"] = json!("co_moving_mass_exchange_frozen_mechanics/1");
+            }
+            for path in [
+                "/initial_sample/liquid_mechanics",
+                "/liquid_mechanics",
+                "/transient_surface/result/mechanical_coupling",
+            ] {
+                m.pointer_mut(path).unwrap()["qualification"] = qualification.clone();
+            }
+            let heat = &mut m["transient_surface"]["result"];
+            heat["request"]["mechanical_coupling"] = qualification;
+            d["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+        } else if fault == 3 {
+            m["liquid_mechanics"]["schema"] = json!("ftx-coupled-liquid-mechanics-result/1");
+            m["transient_surface"]["result"]["mechanical_coupling"]["schema"] =
+                json!("ftx-coupled-liquid-mechanics-result/1");
+        } else if fault == 6 {
+            m["initial_sample"]["liquid_mechanics"]["exchange"]["mixing_dissipation_j"] = json!(1.);
+        } else {
+            for path in [
+                "/liquid_mechanics/exchange",
+                "/transient_surface/result/mechanical_coupling/exchange",
+                "/transient_surface/result/trace/0/mechanical_coupling/exchange",
+            ] {
+                let flow = m.pointer_mut(path).unwrap();
+                if fault == 4 {
+                    flow.as_object_mut().unwrap().remove("mixing_dissipation_j");
+                } else {
+                    flow["mixing_dissipation_j"] = json!(-1.);
+                }
+            }
+        }
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
 #[test]
 fn supplied_and_condensed_mechanical_mass_admit_the_same_independent_thermal_objectives() {
     for condensation in [false, true] {
@@ -849,6 +956,16 @@ fn no_incoming_mass_cannot_carry_invented_momentum_or_bulk_energy() {
             "invented {key}"
         );
     }
+    prescribe_incoming_velocity(&mut d, &mut m);
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+    for path in [
+        "/liquid_mechanics/exchange",
+        "/transient_surface/result/mechanical_coupling/exchange",
+        "/transient_surface/result/trace/0/mechanical_coupling/exchange",
+    ] {
+        m.pointer_mut(path).unwrap()["mixing_dissipation_j"] = json!(1.);
+    }
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err());
 }
 
 #[test]

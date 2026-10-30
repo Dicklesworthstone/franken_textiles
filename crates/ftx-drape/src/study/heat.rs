@@ -223,7 +223,7 @@ impl SurfaceRequest {
             water.validate(intervals)?;
         }
         if let Some(coupling) = &self.mechanical_coupling {
-            let exchange = coupling.schema == "ftx-coupled-liquid-mechanics/1";
+            let exchange = coupling.is_exchange();
             if exchange {
                 coupling.validate_exchange()?;
             } else {
@@ -369,7 +369,7 @@ impl SurfaceHistory {
             .water
             .as_ref()
             .ok_or_else(|| invalid("missing admitted textile-water history"))?;
-        let report = if qualification.schema == "ftx-coupled-liquid-mechanics/1" {
+        let report = if qualification.is_exchange() {
             crate::liquid_mass::bind_exchange(
                 run,
                 qualification,
@@ -401,7 +401,7 @@ impl SurfaceHistory {
             .request
             .mechanical_coupling
             .as_ref()
-            .is_some_and(|q| q.schema == "ftx-coupled-liquid-mechanics/1");
+            .is_some_and(crate::liquid_mass::Qualification::is_exchange);
         if exchange {
             self.water
                 .as_mut()
@@ -880,6 +880,7 @@ impl SurfaceHistory {
         }
         if let Some(coupling) = self.mechanical_coupling {
             let exchange = !coupling["exchange"].is_null();
+            let prescribed = coupling["schema"] == "ftx-coupled-liquid-mechanics-result/2";
             result["mechanical_coupling"] = coupling;
             result["scope"] = json!(
                 "First-order accepted-step evaporation coupling: cloth and contact use interval-start liquid mass, then the qualified thermal/water solver uses accepted geometry and removes co-moving vapor for the next mechanical interval. Initial liquid is a post-drape co-moving condition, not a wet equilibrium. Frozen mechanical laws are source-qualified over the complete loading and temperature domain. Thermal latent/sensible enthalpy and mechanical exported momentum/bulk energy have separate ledgers. Mechanical step refinement remains necessary. No supply, condensation, drainage, inferred wet laws, body-water transfer or empirical garment/comfort claim."
@@ -893,6 +894,14 @@ impl SurfaceHistory {
                 );
                 result["surface_water"]["scope"] = json!(
                     "The enclosing mechanical_coupling uses these exact reference-owned remaining, supplied, condensed and evaporated masses. The shared thermal authority retains their conservative sensible/latent ledger; the mechanical authority separately retains co-moving momentum and bulk energy. No water is counted twice and no relative flow velocity, drainage or wet constitutive change is inferred."
+                );
+            }
+            if prescribed {
+                result["scope"] = json!(
+                    "First-order accepted-step liquid exchange with source-qualified incoming world velocity: cloth/contact advances with interval-start mass and velocity, then thermal/water transport uses accepted geometry. Incoming streams mix inelastically with the previous welded mass before evaporation leaves at the mixed velocity. The resulting mass and impulse drive the next mechanical interval. Frozen laws require the full loading and temperature qualification. Bulk kinetic/gravitational energy and nonnegative mixing dissipation remain separate from thermal sensible/latent heat. Mixing work is not deposited as heat. Whole-motion failure rolls back every history. Mechanical and thermal refinement remain necessary. No drainage, pinned-coordinate impulse, unmeasured wet law or empirical garment/comfort claim."
+                );
+                result["surface_water"]["scope"] = json!(
+                    "The mechanical_coupling uses these exact reference-owned remaining and incoming/outgoing masses. Its independent prescribed-velocity model retains momentum, bulk energy and inelastic mixing dissipation. This thermal ledger contains sensible and latent enthalpy only; it receives no inferred mixing heat or wet-property change."
                 );
             }
         }
