@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::sewing::{SewOptions, SewPlan, SewingPass, consumables, ordering, production::routing};
 
+pub mod deadline;
 mod thread_cost;
 
 const MAX_TRIALS: usize = 64;
@@ -105,6 +106,10 @@ pub struct Request {
     pub objective: Objective,
     /// Maximum complete-plan evaluations, including refused trials and the original template, 1..64.
     pub max_plan_evaluations: usize,
+    /// Optional inclusive completion limit for the complete declared production job, measured from
+    /// its modeled time origin. Unknown handling or an unproved miss cannot establish infeasibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_deadline_milliseconds: Option<u64>,
 }
 
 /// Compact outcome of one complete job trial; refused jobs are never omitted from the count.
@@ -134,13 +139,17 @@ pub struct Trial {
     /// fail before production; this is unresolved objective evidence, never a zero or infeasibility.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub objective_unavailable: Option<Refusal>,
+    /// Independent completion constraint using the shared planner's timing and proof authority.
+    /// An excluded or unresolved trial retains its original objective values for inspection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_deadline: Option<deadline::Report>,
 }
 
 /// Complete incumbent plus explicit finite-search status. A refused template does not stop repair.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
     /// `/1` feed; `/2` feed/setup time; `/3` thread cost; `/4` serial time; `/5` parallel time;
-    /// `/6` complete authored route and recipe selection.
+    /// `/6` complete authored route and recipe selection; `/7` a completion-constrained search.
     pub schema: &'static str,
     /// Original request, including all candidate settings and independent qualification evidence.
     pub request: Request,
@@ -166,7 +175,8 @@ pub struct Report {
     /// Exact common thread market currency for cost mode, including when no incumbent exists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub objective_currency: Option<String>,
-    /// Resource/convergence limits, unproved timed schedules, or unavailable complete cost evidence.
+    /// Resource/convergence limits, unresolved deadlines, unproved timed schedules, or unavailable
+    /// complete cost evidence among trials not independently excluded by the completion constraint.
     /// They are not infeasible recipes; a complete admitted incumbent may still be retained.
     pub unresolved_trials: usize,
     /// Every supplied combination was examined; no assertion about unlisted process recipes.
@@ -174,10 +184,12 @@ pub struct Report {
     /// Work stopped before exhausting the supplied combinations, with or without an incumbent.
     pub budget_exhausted: bool,
     /// True only with a feasible plan, exhaustive recipe search and no unresolved plan trials.
-    /// Timed mode additionally requires every admitted trial's inner schedule to be proved optimal.
+    /// Timed mode additionally requires every deadline-eligible trial's inner schedule to be proved
+    /// optimal; a complete feasible schedule alone suffices to meet a deadline in feed/cost mode.
     /// Feed-only mode remains independent of the ordering optimizer's separate proof.
     pub optimality_proven: bool,
-    /// All listed combinations were definitively refused, without resource/convergence exhaustion;
+    /// All listed combinations were definitively refused or excluded by the completion constraint,
+    /// without resource/convergence exhaustion;
     /// does not establish physical or global infeasibility.
     pub no_feasible_listed_recipe: bool,
     /// Equal objective values retain the first admitted combination, preferring the original job.
@@ -577,6 +589,14 @@ impl Request {
     /// and resource refusals instead remain in `trials`, consuming one evaluation each. No incumbent
     /// after interrupted search is not a proof that all listed choices fail.
     pub fn select(&self, pattern: &Pattern) -> Result<Report, Refusal> {
+        if self
+            .completion_deadline_milliseconds
+            .is_some_and(|limit| limit > deadline::MAX_MILLISECONDS)
+        {
+            return Err(invalid(
+                "completion deadline exceeds the exact native/browser millisecond clock",
+            ));
+        }
         let groups = self.groups()?;
         let mut routes: Vec<_> = self.route_candidates.iter().collect();
         routes.sort_by(|a, b| a.id.cmp(&b.id));
@@ -648,6 +668,9 @@ impl Request {
                 ordering_optimality_proven: None,
                 thread_order_cost: None,
                 objective_unavailable: None,
+                completion_deadline: self
+                    .completion_deadline_milliseconds
+                    .map(deadline::Report::unavailable),
             };
             // A route owns its timing evidence. An unavailable alternative cannot suppress an
             // independently qualified incumbent or be treated as a proved inferior schedule.
@@ -703,7 +726,15 @@ impl Request {
                     if score.is_some_and(|score| !score.is_finite()) {
                         return Err(invalid("nonrepresentable sewing selection objective"));
                     }
+                    trial.completion_deadline = self
+                        .completion_deadline_milliseconds
+                        .map(|limit| deadline::Report::evaluate(&plan, limit));
+                    let meets_deadline = trial
+                        .completion_deadline
+                        .as_ref()
+                        .is_none_or(|receipt| receipt.status == deadline::Status::Feasible);
                     if let Some(score) = score
+                        && meets_deadline
                         && selected_score.is_none_or(|old| score < old)
                     {
                         selected_score = Some(score);
@@ -737,6 +768,17 @@ impl Request {
         let unresolved_trials = trials
             .iter()
             .filter(|trial| {
+                // A definitive shared-planner refusal needs no timing proof. Unavailable route
+                // timing remains unresolved, just as it does without a completion constraint.
+                if trial.refusal.is_none()
+                    && let Some(receipt) = &trial.completion_deadline
+                {
+                    match receipt.status {
+                        deadline::Status::Excluded => return false,
+                        deadline::Status::Unresolved => return true,
+                        deadline::Status::Feasible => {}
+                    }
+                }
                 trial.refusal.as_ref().is_some_and(|r| {
                     matches!(
                         r.code,
@@ -747,7 +789,9 @@ impl Request {
             })
             .count();
         Ok(Report {
-            schema: if route_search {
+            schema: if self.completion_deadline_milliseconds.is_some() {
+                "ftx-sewing-selection-report/7"
+            } else if route_search {
                 "ftx-sewing-selection-report/6"
             } else if cost {
                 "ftx-sewing-selection-report/3"

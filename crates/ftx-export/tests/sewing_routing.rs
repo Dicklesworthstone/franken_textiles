@@ -1950,6 +1950,121 @@ fn route_selection_compares_actual_complete_schedules_and_replays_winning_geomet
 }
 
 #[test]
+fn completion_deadline_filters_authored_routes_and_preserves_original_makespan_scores() {
+    use ftx_export::sewing_selection::{
+        Request,
+        deadline::{Basis, Status},
+    };
+
+    let (pattern, mut raw) = route_selection();
+    raw["completion_deadline_milliseconds"] = json!(13100);
+    let result = serde_json::from_value::<Request>(raw)
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(result.schema, "ftx-sewing-selection-report/7");
+    assert_eq!(
+        result.selected_route.as_deref(),
+        Some("available-specialists")
+    );
+    assert_eq!(result.trials[0].objective_seconds, Some(23.1));
+    assert_eq!(result.trials[1].objective_seconds, Some(13.1));
+    let excluded = result.trials[0].completion_deadline.as_ref().unwrap();
+    assert_eq!(excluded.status, Status::Excluded);
+    assert!(excluded.lower_bound_makespan_milliseconds.unwrap() > 13100);
+    let feasible = result.trials[1].completion_deadline.as_ref().unwrap();
+    assert_eq!(feasible.status, Status::Feasible);
+    assert_eq!(feasible.basis, Some(Basis::RoutedMakespan));
+    assert_eq!(feasible.selected_makespan_milliseconds, Some(13100));
+    assert_eq!(result.selected_objective_seconds, Some(13.1));
+}
+
+#[test]
+fn eligible_route_deadline_does_not_turn_an_unproved_miss_into_infeasibility() {
+    use ftx_export::sewing_selection::{Request, deadline::Status};
+
+    let (pattern, options) = eligible_fixture(2);
+    let pass = &options["passes"][1];
+    let mut raw = json!({"schema":"ftx-sewing-selection/5","options":options,
+        "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+        "completion_deadline_milliseconds":9299,
+        "alternatives":[{"operation":"reinforce","recipes":[{"id":"same-authored-pass",
+            "needle":pass["needle"],"thread":pass["thread"],"max_stitch_mm":pass["max_stitch_mm"],
+            "stitches_per_minute":pass["stitches_per_minute"]}]}]});
+    let missed = serde_json::from_value::<Request>(raw.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert!(missed.selected_plan.is_none() && !missed.no_feasible_listed_recipe);
+    assert!(missed.search_complete && !missed.optimality_proven);
+    assert_eq!(missed.unresolved_trials, 2);
+    for trial in &missed.trials {
+        assert_eq!(trial.objective_seconds, Some(9.3));
+        let receipt = trial.completion_deadline.as_ref().unwrap();
+        assert_eq!(receipt.status, Status::Unresolved);
+        assert_eq!(receipt.selected_makespan_milliseconds, Some(9300));
+        assert!(receipt.lower_bound_makespan_milliseconds.unwrap() <= 9299);
+        assert_eq!(receipt.timing_optimality_proven, Some(false));
+    }
+    raw["completion_deadline_milliseconds"] = json!(9300);
+    let feasible = serde_json::from_value::<Request>(raw.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(feasible.selected_objective_seconds, Some(9.3));
+    assert!(!feasible.optimality_proven && feasible.unresolved_trials == 2);
+    assert_eq!(
+        feasible.trials[0]
+            .completion_deadline
+            .as_ref()
+            .unwrap()
+            .status,
+        Status::Feasible
+    );
+    raw["completion_deadline_milliseconds"] = json!(0);
+    let excluded = serde_json::from_value::<Request>(raw)
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert!(excluded.no_feasible_listed_recipe && excluded.unresolved_trials == 0);
+}
+
+#[test]
+fn routed_calendar_deadline_uses_exact_milliseconds_when_float_seconds_coincide() {
+    use ftx_export::sewing_selection::{Request, deadline::Status};
+
+    const FINISH: u64 = 9_007_199_254_740_991;
+    let (pattern, options) = fixture(1);
+    let options = availability_calendars(
+        options,
+        json!({"cell-b":[{
+        "start_milliseconds":FINISH - 2800,"end_milliseconds":FINISH}]}),
+    );
+    let pass = &options["passes"][1];
+    let mut request: Request = serde_json::from_value(json!({
+        "schema":"ftx-sewing-selection/5","options":options,
+        "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+        "completion_deadline_milliseconds":FINISH - 1,
+        "alternatives":[{"operation":"reinforce","recipes":[{"id":"same-authored-pass",
+            "needle":pass["needle"],"thread":pass["thread"],"max_stitch_mm":pass["max_stitch_mm"],
+            "stitches_per_minute":pass["stitches_per_minute"]}]}]}))
+    .unwrap();
+    assert_eq!(FINISH as f64 / 1000.0, (FINISH - 1) as f64 / 1000.0);
+    let missed = request.select(&pattern).unwrap();
+    assert!(missed.selected_plan.is_none() && !missed.no_feasible_listed_recipe);
+    let receipt = missed.trials[0].completion_deadline.as_ref().unwrap();
+    assert_eq!(receipt.selected_makespan_milliseconds, Some(FINISH));
+    assert_eq!(receipt.status, Status::Unresolved);
+    request.completion_deadline_milliseconds = Some(FINISH);
+    let exact = request.select(&pattern).unwrap();
+    assert!(exact.selected_plan.is_some());
+    assert_eq!(
+        exact.trials[0].completion_deadline.as_ref().unwrap().status,
+        Status::Feasible
+    );
+}
+
+#[test]
 fn route_and_recipe_search_share_one_cap_and_preserve_complete_incumbents() {
     use ftx_export::sewing_selection::Request;
 

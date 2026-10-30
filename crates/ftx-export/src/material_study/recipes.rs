@@ -202,9 +202,9 @@ pub(super) fn evaluate(
                     RefusalCode::InvalidDocument
                 },
                 if no_feasible_listed_recipe {
-                    "Every listed sewing recipe combination was refused by the production planner; inspect sewing_selection.trials for source qualification and machine limits"
+                    "Every listed sewing recipe combination was excluded by production admission or its completion deadline; inspect sewing_selection.trials for source qualification, machine limits and completion_deadline evidence"
                 } else {
-                    "No complete sewing plan with an available requested objective was selected; inspect production refusals and objective_unavailable in the recipe trials. This does not establish infeasibility"
+                    "No complete sewing plan with an available requested objective and admitted completion constraints was selected; inspect production refusals, objective_unavailable and completion_deadline evidence in the recipe trials. This does not establish infeasibility"
                 },
             ),
         },

@@ -4550,6 +4550,20 @@ effective windows, and retained requests replay through native and portable cons
 increment is tracked by `ftx-pb2.2.13`; see [sewing-production.md](docs/sewing-production.md).
 Live factory reservations, occupied-fixture transport and empirical throughput remain separate.
 
+### 25.134 Choose a qualified sewing recipe that meets a completion deadline
+
+Recipe and route selection now accepts an inclusive complete-job deadline independently of its
+existing feed, elapsed-time or observed thread-cost objective. The ordinary planner's complete
+serial, parallel or routed schedule establishes feasibility. A late incumbent remains unresolved
+unless the shared lower bound or timing proof rules out meeting the deadline; incomplete handling
+evidence cannot turn feed time into a completion promise.
+
+The feasible winner supplies the same exact options, stitches, yarn demand and combined purchasing
+used by downstream studies and native/portable replay. Rejected or unresolved alternatives retain
+their objective readings and timing evidence. This increment is tracked by `ftx-pb2.2.14`; see
+[sewing-selection.md](docs/sewing-selection.md). Declared-domain optimization and modeled timing
+remain separate from unrestricted process search and empirical factory throughput.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

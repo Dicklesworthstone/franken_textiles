@@ -346,6 +346,58 @@ fn heterogeneous_cells_use_actual_machine_recipe_geometry_feed_and_global_copy_s
 }
 
 #[test]
+fn completion_deadline_uses_complete_parallel_allocation_for_both_source_models() {
+    use ftx_export::sewing_selection::{
+        Request,
+        deadline::{Basis, Status},
+    };
+
+    for ((pattern, options), finish) in [(fixture(3), 25500), (heterogeneous(), 9900)] {
+        let pass = &options["passes"][0];
+        let mut request: Request = serde_json::from_value(json!({
+            "schema":"ftx-sewing-selection/5","options":options,
+            "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+            "completion_deadline_milliseconds":finish,
+            "alternatives":[{"operation":"join","recipes":[{"id":"same-authored-pass",
+                "needle":pass["needle"],"thread":pass["thread"],
+                "max_stitch_mm":pass["max_stitch_mm"],
+                "stitches_per_minute":pass["stitches_per_minute"]}]}]}))
+        .unwrap();
+        let exact = request.select(&pattern).unwrap();
+        assert!(exact.optimality_proven && exact.unresolved_trials == 0);
+        assert_eq!(
+            exact.selected_objective_seconds,
+            Some(f64::from(finish) / 1000.0)
+        );
+        let timing = exact.trials[0].completion_deadline.as_ref().unwrap();
+        assert_eq!(timing.status, Status::Feasible);
+        assert_eq!(timing.basis, Some(Basis::ParallelMakespan));
+        assert_eq!(timing.selected_makespan_milliseconds, Some(finish as u64));
+        assert_eq!(
+            timing.lower_bound_makespan_milliseconds,
+            Some(finish as u64)
+        );
+        assert_eq!(timing.timing_optimality_proven, Some(true));
+        request.completion_deadline_milliseconds = Some(finish as u64 - 1);
+        let excluded = request.select(&pattern).unwrap();
+        assert!(excluded.selected_plan.is_none() && excluded.no_feasible_listed_recipe);
+        assert_eq!(excluded.unresolved_trials, 0);
+        assert_eq!(
+            excluded.trials[0].objective_seconds,
+            Some(f64::from(finish) / 1000.0)
+        );
+        assert_eq!(
+            excluded.trials[0]
+                .completion_deadline
+                .as_ref()
+                .unwrap()
+                .status,
+            Status::Excluded
+        );
+    }
+}
+
+#[test]
 fn explicit_cell_preview_uses_actual_spacing_feed_and_full_job_source_admission() {
     let (pattern, raw) = heterogeneous();
     let options: SewOptions = serde_json::from_value(raw.clone()).unwrap();

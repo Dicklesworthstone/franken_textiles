@@ -75,7 +75,8 @@ The report retains every attempted choice and its original refusal or actual gen
 out. `budget_exhausted` describes the outer recipe-evaluation cap. Inner resource/convergence failures
 are counted separately as `unresolved_trials`; neither category supports an infeasibility or optimality
 claim. `optimality_proven` requires an admitted plan, exhaustive enumeration and no unresolved trial.
-`no_feasible_listed_recipe` requires exhaustive, definitive refusals; it is not physical impossibility.
+`no_feasible_listed_recipe` requires exhaustive, definitive refusals or proved deadline exclusions;
+it is not physical impossibility.
 The best **complete** incumbent remains available after interruption. No partial garment plan is saved.
 
 ## Directed setup durations and the joint objective
@@ -205,6 +206,68 @@ It does not combine thread with fabric cutting costs, value worker time, or opti
 shipping bundle or cross-garment execution schedule. Production quality and hardware permission retain their
 independent gates. Material-study comparisons continue applying their explicit source-protocol
 policy to each actual selected plan.
+
+## Choose a complete recipe that meets a deadline
+
+Any existing selection request can include an explicit inclusive
+`completion_deadline_milliseconds`. For example, this fragment makes complete thread cost the
+objective while requiring the selected job to finish within 25 seconds:
+
+```json
+{
+  "schema": "ftx-sewing-selection/3",
+  "objective": "minimize_thread_observed_order_cost",
+  "completion_deadline_milliseconds": 25000,
+  "max_plan_evaluations": 32
+}
+```
+
+Keep the complete qualified `options` and `alternatives` alongside these fields. The deadline does
+not supply missing timing observations: serial jobs need the existing source-qualified setup and
+handling policy, while parallel and routed jobs use their complete retained schedules. Feed-only or
+feed-plus-setup time cannot establish complete production time. The deadline is an exact integer
+from zero through 9007199254740991 milliseconds, measured from the existing job origin. Routed and
+parallel decisions compare their integer clocks directly; serial decisions retain the canonical
+continuous-seconds accounting without rounding a late schedule into compliance.
+
+Selection filters complete plans by the deadline **before** choosing the least objective value.
+A cheap, late recipe therefore cannot hide a more expensive recipe that meets the requirement.
+The original objective values remain visible on excluded and unresolved trials. The same path
+works with fixed specialist routes, qualified calendars, fixtures, attending workers and transfers.
+Existing eligibility and allocation restrictions on cost/feed objectives still apply: this constraint
+does not turn a makespan-selected cell assignment into a joint cost/assignment optimizer.
+
+Each trial retains `completion_deadline` with its limit, timing basis, available selected completion,
+valid lower bound, timing proof and reason:
+
+| Status | Meaning |
+|---|---|
+| `feasible` | A complete incumbent finishes on or before the deadline, even if its minimum time is unproved. |
+| `excluded` | A valid completion lower bound or proved minimum places every admitted schedule after the deadline. |
+| `unresolved` | Full timing is unavailable, or the retained schedule is late without a proof ruling out a better one. |
+
+A trial whose deadline status is `unresolved` cannot compete and prevents an outer optimality or
+all-recipes-infeasible claim unless the production planner independently refused it definitively.
+A definitively excluded candidate cannot win, even if its independent cost is unknown. A
+feasible cost-directed incumbent does not need a separate timing-optimality proof when ordering
+cannot change its thread demand; time-directed objectives retain their existing inner proof rules.
+A production-planner refusal remains independently visible, and the ordinary resource/refusal
+classification continues to govern it.
+
+The standalone result uses `ftx-sewing-selection-report/7` when a deadline is supplied. Its retained
+request, every trial and exact selected plan preserve the decision. Ordinary selected-options replay
+reproduces that complete plan, while rerunning the retained selection request rechecks the deadline
+and listed alternatives. Material/design/scenario studies consume the same selected plan for sewing,
+thread orders and combined fabric-plus-thread purchasing. Their sewing/thread comparison protocol
+includes the complete constrained selection request, including unused candidates and work limits.
+An outer study timing constraint does not silently become a recipe-selection deadline; declare it
+in the selector when the search must find a feasible alternative. The workbench shows each trial's
+complete time, lower bound and admission beside its cost-search outcome.
+
+The synthetic integration case changes the choice from a USD 10 job completing at 4.3 seconds to a
+USD 14 job completing at exactly 3.3 seconds under a 3300-millisecond deadline. A 3299-millisecond
+limit admits neither job and leaves independent manufacturing outcomes available. These fixture
+timings and prices establish software behavior, not measured throughput or purchasing authorization.
 
 ## Compare independently qualified specialist routes
 

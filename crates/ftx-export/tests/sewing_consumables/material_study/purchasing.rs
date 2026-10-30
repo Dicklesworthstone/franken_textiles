@@ -414,3 +414,127 @@ fn common_history_alias_work_is_reserved_before_any_material_or_scenario_evaluat
     assert_eq!(refusal.code, ftx_core::RefusalCode::BudgetExceeded);
     assert!(refusal.message.contains("thread-purchasing/composite"));
 }
+
+fn deadline_study() -> (Value, Value) {
+    let (pattern, mut request) = combined();
+    super::use_recipe_search(&mut request);
+    let selection = &mut request["sewing_selection"];
+    selection["schema"] = json!("ftx-sewing-selection/3");
+    selection["objective"] = json!("minimize_thread_observed_order_cost");
+    selection["completion_deadline_milliseconds"] = json!(7000);
+    crate::selection::completion_timing(&mut selection["options"]);
+    same_book(&mut request);
+    (pattern, request)
+}
+
+#[test]
+fn complete_cut_and_sew_orders_follow_the_deadline_feasible_recipe_and_keep_independent_results() {
+    let (pattern, mut request) = deadline_study();
+    let report = run(&pattern, &request);
+    let selected = row(&report, "base");
+    assert_eq!(selected["sewing"]["status"], "available");
+    assert_eq!(
+        selected["sewing_selection"]["result"]["selected_choices"],
+        json!({"join":"faster","reinforce":"template"})
+    );
+    assert_eq!(
+        selected["sewing_selection"]["result"]["selected_thread_order_cost"],
+        21.0
+    );
+    assert_eq!(
+        selected["sewing_selection"]["result"]["optimality_proven"],
+        true
+    );
+    let complete = receipt(&report, "base");
+    close(
+        complete["fabric_selected_order_cost"].as_f64().unwrap(),
+        10.0,
+    );
+    close(
+        complete["thread_selected_order_cost"].as_f64().unwrap(),
+        21.0,
+    );
+    close(complete["selected_order_cost"].as_f64().unwrap(), 31.0);
+    close(
+        selected["metrics"]["cut_and_sew_selected_order_cost"]
+            .as_f64()
+            .unwrap(),
+        31.0,
+    );
+    let typed: ftx_export::material_study::Request =
+        serde_json::from_value(request.clone()).unwrap();
+    let direct = typed
+        .sewing_selection
+        .unwrap()
+        .select(&Pattern::new(
+            selected["binding"]["result"]["pattern"].clone(),
+        ))
+        .unwrap();
+    assert_eq!(
+        selected["sewing"]["result"],
+        serde_json::to_value(direct.selected_plan).unwrap()
+    );
+    assert_eq!(
+        selected["sewing_selection"]["result"]["trials"],
+        serde_json::to_value(direct.trials).unwrap()
+    );
+
+    request["sewing_selection"]["completion_deadline_milliseconds"] = json!(3999);
+    let missed = run(&pattern, &request);
+    let refused = row(&missed, "base");
+    assert_eq!(refused["sewing"]["status"], "refused");
+    assert_eq!(
+        refused["sewing_selection"]["result"]["no_feasible_listed_recipe"],
+        true
+    );
+    assert_eq!(refused["cut_and_sew_purchasing"]["status"], "refused");
+    assert!(refused["metrics"]["cut_and_sew_selected_order_cost"].is_null());
+    assert!(selected["metrics"]["stock_mass_kg"].as_f64().unwrap() > 0.0);
+    assert_eq!(
+        refused["metrics"]["stock_mass_kg"],
+        selected["metrics"]["stock_mass_kg"]
+    );
+    assert_eq!(refused["cutting"], selected["cutting"]);
+    assert_eq!(refused["purchasing"], selected["purchasing"]);
+}
+
+#[test]
+fn deadline_and_candidate_domain_belong_to_sewing_and_thread_comparison_protocols() {
+    for (consumer, metric) in [
+        ("sewing", "feed_seconds"),
+        ("sewing_purchasing", "thread_observed_order_cost"),
+    ] {
+        let (pattern, mut request) = deadline_study();
+        request["comparison"] = json!({"basis":"nominal","required_consumers":[consumer],
+            "objectives":[{"metric":metric,"direction":"minimize"}]});
+        let original = run(&pattern, &request);
+        assert_eq!(original["comparison"]["frontier"], json!(["base"]));
+        let protocol = row(&original["comparison"], "base")["input_protocol_sha256"].clone();
+        assert!(protocol.is_string());
+        let metrics = row(&original, "base")["metrics"].clone();
+        let choices =
+            row(&original, "base")["sewing_selection"]["result"]["selected_choices"].clone();
+        for field in ["deadline", "unused_candidate", "work_limit"] {
+            let mut changed = request.clone();
+            let selection = &mut changed["sewing_selection"];
+            match field {
+                "deadline" => selection["completion_deadline_milliseconds"] = json!(7100),
+                "unused_candidate" => {
+                    selection["alternatives"][1]["recipes"][0]["id"] = json!("same-unused-recipe")
+                }
+                _ => selection["max_plan_evaluations"] = json!(5),
+            }
+            let changed = run(&pattern, &changed);
+            assert_eq!(row(&changed, "base")["metrics"], metrics);
+            assert_eq!(
+                row(&changed, "base")["sewing_selection"]["result"]["selected_choices"],
+                choices
+            );
+            assert_ne!(
+                row(&changed["comparison"], "base")["input_protocol_sha256"],
+                protocol,
+                "{consumer}: {field} must retain the complete constrained search protocol"
+            );
+        }
+    }
+}

@@ -1956,6 +1956,17 @@ impl Policy {
         }
         if (consumers.contains(&Consumer::Sewing) || thread)
             && let Some(selection) = row.sewing_selection.value()
+            && selection.request.completion_deadline_milliseconds.is_some()
+        {
+            // The deadline and complete candidate domain determine which otherwise usable
+            // recipe can supply these readings. A changed search must not inherit its protocol.
+            base = hash(&(
+                base,
+                ("deadline_constrained_sewing_selection", &selection.request),
+            ))?;
+        }
+        if (consumers.contains(&Consumer::Sewing) || thread)
+            && let Some(selection) = row.sewing_selection.value()
             && selection.request.schema == "ftx-sewing-selection/6"
             && (selection
                 .request

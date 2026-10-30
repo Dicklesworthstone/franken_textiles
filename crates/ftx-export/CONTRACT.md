@@ -468,6 +468,20 @@ receipts. Versions 1 and 2 retain their wire output and time objectives. Thread 
 independent of cutting copies, labor, supplier bundles and hardware permission. Tests:
 `sewing_consumables::selection`, native/portable selection replay. See `docs/sewing-selection.md`.
 
+**Deadline-constrained sewing selection** (`completion_deadline_milliseconds`, `ftx-pb2.2.14`).
+An optional inclusive exact JSON millisecond limit filters complete recipe/route plans before the
+existing objective chooses a winner. Shared serial feed/setup/handling or exact parallel/routed
+makespans remain the timing authority; feed alone cannot establish completion. A complete feasible
+incumbent needs no timing optimum. A missed incumbent is excluded only by a valid completion lower
+bound or proved minimum; otherwise deadline feasibility remains unresolved. Original objective
+readings, refusals and timing bounds remain in each trial, and unresolved contenders prohibit an
+optimum claim. Source qualification, finite work and heterogeneous cost/feed restrictions remain
+unchanged. Opted-in reports use `/7`; omission preserves the old wire shape. Exact selected options,
+stitches, yarn orders and combined fabric/thread purchasing follow the feasible winner. Comparisons
+retain the deadline and complete candidate/search domain even if the winner stays unchanged. Tests:
+`sewing_consumables`, `sewing_routing`, `sewing_parallel` and actual two-CLI/portable production replay.
+See `docs/sewing-selection.md`; modeled completion does not establish measured factory throughput.
+
 **Qualified sewing consumables** (`sewing::consumables`, `ftx-tm6` / `ftx-tm7`). Optional
 `SewOptions.consumables` produces `ftx-sewing-plan/11` from the actual selected operation traversals.
 Independently sourced consumption models require a complete channel declaration, frozen yarn

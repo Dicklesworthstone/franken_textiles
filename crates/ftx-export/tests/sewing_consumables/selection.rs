@@ -7,6 +7,9 @@ use ftx_export::sewing_selection::{Objective, Request, select_json};
 use ftx_pattern::Pattern;
 use serde_json::{Value, json};
 
+#[path = "selection_deadline.rs"]
+mod deadline;
+
 fn request() -> (Pattern, Value) {
     let (pattern, mut options, yarn) = fixture();
     options["require_qualification"] = json!(true);
@@ -31,6 +34,48 @@ fn request() -> (Pattern, Value) {
         json!({"schema":"ftx-sewing-selection/3","objective":"minimize_thread_observed_order_cost",
             "options":options,"max_plan_evaluations":4,"alternatives":alternatives}),
     )
+}
+
+pub(super) fn completion_timing(options: &mut Value) {
+    use ftx_export::sewing::{SewOptions, production::workholding};
+
+    let typed: SewOptions = serde_json::from_value(options.clone()).unwrap();
+    let locks: Vec<_> = typed
+        .qualifications
+        .iter()
+        .map(|qualification| {
+            json!({"id":qualification.id,
+                "sha256":workholding::qualification_sha256(qualification).unwrap()})
+        })
+        .collect();
+    let original = json!({"needle":typed.passes[0].needle,"thread":typed.passes[0].thread});
+    let fast = json!({"needle":"fast-needle","thread":"fast-thread"});
+    let source = json!({"reference":"test:deadline-selection-timing","accessed_on":"2026-10-30",
+        "note":"Synthetic software timing fixture; not measured factory throughput"});
+    options["production"] = json!({"production_copies":1,
+        "ordering":{"objective":"minimize_production_time","max_search_nodes":100,
+            "initial_setup":original,
+            "setup_times":{"machine":typed.machine.id,"source":source,
+                "method":"Explicit synthetic zero setup transitions, separate from feed and handling",
+                "evidence":"estimate","allow_estimates":true,
+                "transitions":[{"from":original,"to":fast,"milliseconds":0},
+                    {"from":fast,"to":original,"milliseconds":0}]}},
+        "handling":{"model":"serial_operation_transitions/1",
+            "machine_sha256":workholding::machine_sha256(&typed.machine).unwrap(),
+            "qualifications":{"join":locks,"reinforce":locks},
+            "initial_milliseconds":{"join":200,"reinforce":200},
+            "final_milliseconds":{"join":500,"reinforce":500},
+            "transitions":[{"from":"join","to":"reinforce","relation":"same_copy","milliseconds":300},
+                {"from":"reinforce","to":"join","relation":"same_copy","milliseconds":300}],
+            "source":source,"method":"Synthetic initial load, operation transition and final unload",
+            "evidence":"estimate","allow_estimates":true}});
+}
+
+pub(super) fn deadline_request() -> (Pattern, Value) {
+    let (pattern, mut request) = request();
+    completion_timing(&mut request["options"]);
+    request["completion_deadline_milliseconds"] = json!(7000);
+    (pattern, request)
 }
 
 #[test]
