@@ -272,15 +272,20 @@ fn evaporating_mechanical_water_replays_in_native_portable_and_named_case_decisi
 
 #[test]
 fn incoming_mechanical_water_replays_actual_native_portable_and_named_case_decisions() {
-    replay_incoming_mechanical_water(false);
+    replay_incoming_mechanical_water(false, false);
 }
 
 #[test]
 fn incoming_water_impulse_replays_actual_native_portable_and_named_case_decisions() {
-    replay_incoming_mechanical_water(true);
+    replay_incoming_mechanical_water(true, false);
 }
 
-fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
+#[test]
+fn separate_water_phase_impulses_replay_native_portable_and_named_case_decisions() {
+    replay_incoming_mechanical_water(true, true);
+}
+
+fn replay_incoming_mechanical_water(prescribed_velocity: bool, phase_specific: bool) {
     for condensation in [false, true] {
         let (pattern, mut study, mut single) = inputs();
         single["motion"]["keyframes"] = json!([
@@ -308,7 +313,7 @@ fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
             [1000., 1000.]
         });
         water["supply"] = json!({"schema":"ftx-textile-liquid-supply/1",
-            "bindings":{"band":{"rate_kg_m2_s":if condensation { [0.,0.] } else { [100.,100.] },
+            "bindings":{"band":{"rate_kg_m2_s":if phase_specific && condensation { [0.1,0.1] } else if condensation { [0.,0.] } else { [100.,100.] },
                 "temperature_c":[20.,20.]}},
             "source":{"reference":"test:mechanical-water-delivery","accessed_on":"2026-10-28",
                 "note":"Artificial feed for numerical feedback; not measured weather or wearer data"},
@@ -333,12 +338,25 @@ fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
             json!({"metric":"textile_water_remaining_mass_kg","minimum":0.});
         qualify_mechanics(&pattern, &study, &mut single, true);
         let velocity = [0.2, 0.1, -0.5];
+        let vapor_velocity = [-0.1, 0.3, 0.4];
         if prescribed_velocity {
             let qualification = &mut single["motion"]["transient_surface"]["mechanical_coupling"];
             qualification["schema"] = json!("ftx-coupled-liquid-mechanics/2");
             qualification["model"] =
                 json!("prescribed_incoming_velocity_mass_exchange_frozen_mechanics/1");
             qualification["bindings"]["band"]["incoming_velocity_world_m_s"] = json!(velocity);
+            if phase_specific {
+                qualification["schema"] = json!("ftx-coupled-liquid-mechanics/3");
+                qualification["model"] =
+                    json!("phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1");
+                let binding = &mut qualification["bindings"]["band"];
+                binding
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("incoming_velocity_world_m_s");
+                binding["incoming_stream_velocities_world_m_s"] =
+                    json!({"supply":velocity,"condensation":vapor_velocity});
+            }
             qualification["method"] =
                 json!("Synthetic prescribed incoming world velocity with inelastic capture");
             qualification["qualification"] = json!(
@@ -349,7 +367,11 @@ fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
             &pattern,
             &study,
             single,
-            if prescribed_velocity && condensation {
+            if phase_specific && condensation {
+                "FTX_PHASE_SPECIFIC_CONDENSING_REPLAY"
+            } else if phase_specific {
+                "FTX_PHASE_SPECIFIC_SUPPLY_REPLAY"
+            } else if prescribed_velocity && condensation {
                 "FTX_CONDENSING_IMPULSE_REPLAY"
             } else if prescribed_velocity {
                 "FTX_INCOMING_WATER_IMPULSE_REPLAY"
@@ -366,7 +388,9 @@ fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
                 let mechanics = &motion["liquid_mechanics"];
                 assert_eq!(
                     mechanics["schema"],
-                    if prescribed_velocity {
+                    if phase_specific {
+                        "ftx-coupled-liquid-mechanics-result/3"
+                    } else if prescribed_velocity {
                         "ftx-coupled-liquid-mechanics-result/2"
                     } else {
                         "ftx-coupled-liquid-mechanics-result/1"
@@ -382,6 +406,9 @@ fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
                 };
                 let incoming = mechanics["exchange"]["incoming_mass_kg"].as_f64().unwrap();
                 assert!(incoming > 0.);
+                if phase_specific && condensation {
+                    assert!(supplied > 0. && condensed > 0.);
+                }
                 assert!((incoming - supplied - condensed).abs() < 1e-14);
                 assert!(
                     (mechanics["remaining_liquid_mass_kg"].as_f64().unwrap()
@@ -399,14 +426,23 @@ fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
                     let flow = &mechanics["exchange"];
                     assert!(flow["mixing_dissipation_j"].as_f64().unwrap() > 0.);
                     for (axis, speed) in velocity.iter().enumerate() {
+                        let momentum = if phase_specific {
+                            supplied * speed + condensed * vapor_velocity[axis]
+                        } else {
+                            incoming * speed
+                        };
                         assert!(
-                            (flow["incoming_momentum_kg_m_s"][axis].as_f64().unwrap()
-                                - incoming * speed)
+                            (flow["incoming_momentum_kg_m_s"][axis].as_f64().unwrap() - momentum)
                                 .abs()
                                 < 1e-12
                         );
                     }
-                    let kinetic = 0.5 * incoming * velocity.iter().map(|v| v * v).sum::<f64>();
+                    let kinetic = if phase_specific {
+                        0.5 * supplied * velocity.iter().map(|v| v * v).sum::<f64>()
+                            + 0.5 * condensed * vapor_velocity.iter().map(|v| v * v).sum::<f64>()
+                    } else {
+                        0.5 * incoming * velocity.iter().map(|v| v * v).sum::<f64>()
+                    };
                     assert!(
                         (flow["incoming_kinetic_energy_j"].as_f64().unwrap() - kinetic).abs()
                             < 1e-12

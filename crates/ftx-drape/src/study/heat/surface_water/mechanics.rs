@@ -8,12 +8,16 @@ use super::*;
 #[derive(Clone)]
 pub(super) struct IntervalFlow {
     pub(super) incoming: Vec<f64>,
+    pub(super) supplied: Vec<f64>,
+    pub(super) condensed: Vec<f64>,
     pub(super) outgoing: Vec<f64>,
 }
 
 impl IntervalFlow {
     pub(super) fn accept(&mut self, plan: &Plan) -> Result<(), Refusal> {
         if self.incoming.len() != plan.remaining.len()
+            || self.supplied.len() != plan.remaining.len()
+            || self.condensed.len() != plan.remaining.len()
             || self.outgoing.len() != plan.remaining.len()
         {
             return Err(invalid(
@@ -23,6 +27,8 @@ impl IntervalFlow {
         for i in 0..self.incoming.len() {
             add_positive(&mut self.incoming[i], plan.supplied[i])?;
             add_positive(&mut self.incoming[i], plan.condensed[i])?;
+            add_positive(&mut self.supplied[i], plan.supplied[i])?;
+            add_positive(&mut self.condensed[i], plan.condensed[i])?;
             add_positive(&mut self.outgoing[i], plan.evaporated[i])?;
         }
         Ok(())
@@ -33,6 +39,8 @@ impl Water {
     pub(in crate::study::heat) fn begin_mechanical_interval(&mut self) {
         self.mechanical_flow = Some(IntervalFlow {
             incoming: vec![0.; self.remaining.len()],
+            supplied: vec![0.; self.remaining.len()],
+            condensed: vec![0.; self.remaining.len()],
             outgoing: vec![0.; self.remaining.len()],
         });
     }
@@ -46,9 +54,11 @@ impl Water {
             .mechanical_flow
             .as_ref()
             .ok_or_else(|| invalid("missing accepted thermal interval flows"))?;
-        solver.exchange_liquid(
+        solver.exchange_liquid_streams(
             &self.remaining,
             &flow.incoming,
+            &flow.supplied,
+            &flow.condensed,
             &flow.outgoing,
             temperatures,
         )

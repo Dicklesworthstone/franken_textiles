@@ -24,20 +24,25 @@ impl PartFrames for Form {
 
 #[test]
 fn late_evaporation_budget_failure_restores_whole_solver_and_replays_identically() {
-    rollback_after_liquid_transfer(false, false);
+    rollback_after_liquid_transfer(false, false, false);
 }
 
 #[test]
 fn late_supply_budget_failure_rolls_back_liquid_and_attached_mass_together() {
-    rollback_after_liquid_transfer(true, false);
+    rollback_after_liquid_transfer(true, false, false);
 }
 
 #[test]
 fn prescribed_supply_impulse_and_mixing_roll_back_and_replay_with_attached_mass() {
-    rollback_after_liquid_transfer(true, true);
+    rollback_after_liquid_transfer(true, true, false);
 }
 
-fn rollback_after_liquid_transfer(exchange: bool, prescribed: bool) {
+#[test]
+fn phase_specific_supply_impulse_rolls_back_and_replays_with_attached_mass() {
+    rollback_after_liquid_transfer(true, true, true);
+}
+
+fn rollback_after_liquid_transfer(exchange: bool, prescribed: bool, phase_specific: bool) {
     let mut raw: Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
     ))
@@ -152,6 +157,18 @@ fn rollback_after_liquid_transfer(exchange: bool, prescribed: bool) {
                 .unwrap()
                 .incoming_velocity_world_m_s = Some(Vec3::new(0.1, -0.2, 0.05));
             q.qualification = "Synthetic prescribed incoming velocity and inelastic mixing with invariant mechanical laws over the declared domain".into();
+            if phase_specific {
+                q.schema = "ftx-coupled-liquid-mechanics/3".into();
+                q.model =
+                    "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1".into();
+                let binding = q.bindings.get_mut("band").unwrap();
+                binding.incoming_velocity_world_m_s = None;
+                binding.incoming_stream_velocities_world_m_s =
+                    Some(crate::liquid_mass::IncomingVelocities {
+                        supply: Vec3::new(0.1, -0.2, 0.05),
+                        condensation: Vec3::new(-0.3, 0.2, 0.1),
+                    });
+            }
         }
         let mut water = serde_json::to_value(heat.surface_water.as_ref().unwrap()).unwrap();
         water["schema"] = json!("ftx-textile-surface-water/2");
@@ -210,7 +227,14 @@ fn rollback_after_liquid_transfer(exchange: bool, prescribed: bool) {
         );
         if prescribed {
             let report = &complete["liquid_mechanics"];
-            assert_eq!(report["schema"], "ftx-coupled-liquid-mechanics-result/2");
+            assert_eq!(
+                report["schema"],
+                if phase_specific {
+                    "ftx-coupled-liquid-mechanics-result/3"
+                } else {
+                    "ftx-coupled-liquid-mechanics-result/2"
+                }
+            );
             let flow = &report["exchange"];
             assert!(flow["mixing_dissipation_j"].as_f64().unwrap() > 0.);
             let incoming = flow["incoming_mass_kg"].as_f64().unwrap();

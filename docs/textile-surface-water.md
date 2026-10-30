@@ -123,8 +123,36 @@ reproduces the independent control-volume momentum solution and converges to its
 position history under mechanical-step refinement. Actual sewn motion with attached accessories
 checks a late thermal failure restores the complete pre-motion state and that replay is identical.
 These are software and numerical guarantees, not rain interception, drainage, measured wet laws,
-damage or real garment validation. A changing source velocity or different supplied-liquid and
-condensed-vapor velocities require a separately supported qualification.
+damage or real garment validation. A changing source velocity requires a separately supported
+qualification.
+
+### Separate supplied-liquid and condensed-vapor velocities
+
+`ftx-coupled-liquid-mechanics/3` with model
+`phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1` qualifies two constant world
+velocities per instance through `incoming_stream_velocities_world_m_s`:
+
+```json
+{"supply": [0.2, 0.1, -0.5], "condensation": [-0.1, 0.3, 0.4]}
+```
+
+These example values are synthetic. Both finite vectors are required, including for an inactive
+phase; the older `incoming_velocity_world_m_s` field is forbidden. Older mechanical versions
+reject the new field. All material, source, domain and consent requirements above still apply.
+
+The thermal adapter retains the accepted supplied and condensed increments separately, then
+lumps each through the real weld map. Their sum must reconcile to aggregate incoming mass before
+any state changes. Both phase streams enter the same vertex mixing equation above, together with
+all neighboring material instances; evaporation leaves only after that single mixing operation.
+Opposing stream momenta can cancel while their kinetic energies and mixing dissipation remain
+positive. No averaged source velocity replaces these separate energy terms.
+
+Results use `ftx-coupled-liquid-mechanics-result/3`, retain both qualified velocities, and use the
+same cumulative mechanical ledger as version 2. Thermal reports retain separate supplied and
+condensed mass. Mixing work remains separate from thermal enthalpy. Independent welded-vertex,
+opposing-stream, Galilean and rollback tests, plus native/portable named-case replay, exercise this
+numerical capability. Time-varying source velocities, drainage and empirical wet-fabric behavior
+remain unsupported.
 
 ## Thermal water model
 

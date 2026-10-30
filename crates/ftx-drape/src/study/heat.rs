@@ -880,7 +880,13 @@ impl SurfaceHistory {
         }
         if let Some(coupling) = self.mechanical_coupling {
             let exchange = !coupling["exchange"].is_null();
-            let prescribed = coupling["schema"] == "ftx-coupled-liquid-mechanics-result/2";
+            let prescribed = matches!(
+                coupling["schema"].as_str(),
+                Some(
+                    "ftx-coupled-liquid-mechanics-result/2"
+                        | "ftx-coupled-liquid-mechanics-result/3"
+                )
+            );
             result["mechanical_coupling"] = coupling;
             result["scope"] = json!(
                 "First-order accepted-step evaporation coupling: cloth and contact use interval-start liquid mass, then the qualified thermal/water solver uses accepted geometry and removes co-moving vapor for the next mechanical interval. Initial liquid is a post-drape co-moving condition, not a wet equilibrium. Frozen mechanical laws are source-qualified over the complete loading and temperature domain. Thermal latent/sensible enthalpy and mechanical exported momentum/bulk energy have separate ledgers. Mechanical step refinement remains necessary. No supply, condensation, drainage, inferred wet laws, body-water transfer or empirical garment/comfort claim."

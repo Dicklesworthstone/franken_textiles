@@ -168,8 +168,19 @@ and dry/accessory ownership, exact source laws, domain checks and whole-motion r
 mandatory. Older models reject the velocity field and preserve their existing behavior.
 Independent control-volume accretion/refinement, welded multiple-stream conservation, Galilean
 invariance and sewn/accessory replay tests cover this bounded numerical capability. Prescribed
-velocity applies to all incoming phases for an instance; phase-specific or time-varying streams,
-drainage, pinned-coordinate impulses, heat deposition and empirical wet-garment claims remain open.
+velocity applies to all incoming phases for an instance.
+
+`ftx-coupled-liquid-mechanics/3` instead requires separate constant finite `supply` and
+`condensation` world velocities in each binding's `incoming_stream_velocities_world_m_s`.
+The shared version-2 velocity field is forbidden, and older versions reject the new field.
+Accepted thermal increments retain their phase identities until lumped at welded vertices; both
+streams mix once with all previous dry/accessory/liquid inertia before evaporation leaves.
+Phase mass must reconcile to aggregate incoming mass before mutation. Opposing momentum does
+not cancel incoming kinetic energy or nonnegative mixing loss. Result schema `/3` retains the
+qualification and existing separate mechanical ledger. Independent known answers, Galilean and
+whole-motion rollback tests and native/portable named-case replay cover this numerical closure.
+Time-varying streams, drainage, pinned-coordinate impulses, heat deposition and empirical
+wet-garment claims remain open.
 
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
