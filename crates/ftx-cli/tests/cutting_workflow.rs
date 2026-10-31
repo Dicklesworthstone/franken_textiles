@@ -236,6 +236,64 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
             fs::write(capture.join(name), serde_json::to_vec(value).unwrap()).unwrap();
         }
     }
+    // The same optional source-qualified fixture policy crosses both real binaries and the
+    // portable boundary; obstruction withdraws only the process, never the ordinary markers.
+    for blocked in [false, true] {
+        let fixture = if blocked {
+            json!([[7.9, 11.9], [8.1, 11.9], [8.1, 12.1], [7.9, 12.1]])
+        } else {
+            json!([[400., 400.], [410., 400.], [410., 410.], [400., 410.]])
+        };
+        options["program"]["machine"]["fixture_clearance"] = json!({
+            "model":"planar_disk_sweep/1","cutting_radius_mm":0.2,"raised_radius_mm":0.2,
+            "fixtures":[{"id":"test-fixture","outline_mm":fixture}],
+            "source":{"reference":"test:knife-fixture-workflow","accessed_on":"2026-10-30",
+                "note":"Synthetic machine-frame fixture and circular envelopes"},
+            "method":"Independent known geometry at both tool elevations",
+            "conditions":{},"evidence":"estimate","allow_estimates":true
+        });
+        let machine: Machine =
+            serde_json::from_value(options["program"]["machine"].clone()).unwrap();
+        let lock = machine_sha256(&machine).unwrap();
+        for q in options["program"]["qualifications"].as_array_mut().unwrap() {
+            q["machine_sha256"] = json!(lock);
+        }
+        w.write("options.json", &options);
+        let portable: Value = serde_json::from_str(
+            &ftx_wasm::manufacturing::cut_plan(&p.to_string(), &options.to_string()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(w.ok(PLAN), portable);
+        let primary = Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&w.0)
+            .arg("materials")
+            .args(PLAN)
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert!(
+            primary.status.success(),
+            "{}",
+            String::from_utf8_lossy(&primary.stderr)
+        );
+        let primary: Value = serde_json::from_slice(&primary.stdout).unwrap();
+        assert_eq!(primary["result"], portable);
+        assert_eq!(portable["rolls"], baseline["rolls"]);
+        if blocked {
+            assert!(portable.get("program").is_none());
+            assert!(
+                portable["program_refusal"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("fixture")
+            );
+        } else {
+            assert_eq!(
+                portable["program"]["fixture_clearance"],
+                options["program"]["machine"]["fixture_clearance"]
+            );
+        }
+    }
 }
 
 #[test]

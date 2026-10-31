@@ -875,6 +875,16 @@ cut, raised-travel and lift/lower times. It supplies no device commands, physica
 or hardware authorization. Native, portable, mixed-job roll and material-study consumers share this
 boundary; see `docs/cutting-plans.md`, `tests/cutting_program.rs` and the CLI cutting workflow.
 
+Optional `machine.fixture_clearance` independently qualifies stationary machine-frame polygons and
+cutting/raised circular tool envelopes. Complete cut chords, travel and final returns must strictly
+clear every filled footprint after any finite-stock loading translation. Exact endpoint predicates
+and outward-rounded line-distance bounds refuse contact or unresolved separation without adding a
+physical tolerance. The complete policy joins the machine lock and the geometry work budget. A
+blocked nearest-path candidate retains the checked authored baseline with its refusal; a blocked
+baseline, cut or exhausted check refuses only the process. This is planar geometry, with no inferred
+registration, grip, obstacle routing or three-dimensional machine clearance. Direct geometry,
+roll/finite-stock and native/portable material-study regressions cover this boundary.
+
 **Bounded split supplier orders.** Optional `market.split_orders` produces `ftx-cut-procurement/3`
 by assigning indivisible markers to current exact-material-locked offers. Each aggregated order
 reuses canonical quote rounding, capacity, continuous-cut and quantity-price evaluation. Connected

@@ -3,7 +3,7 @@
 
 use ftx_core::{
     Vec2,
-    exact::{Sign, orient2d},
+    exact::{Sign, circle_diameter_margin, orient2d},
 };
 
 pub(crate) struct Work {
@@ -139,6 +139,98 @@ pub(crate) fn clear_paths(a: &[Vec2], b: &[Vec2], gap: f64, work: &mut Work) -> 
     }
     Some(!inside(a[0], b, work)? && !inside(b[0], a, work)?)
 }
+// Certify strict separation without a rounded projected point or square root. Outward-rounded
+// intervals enclose every operation on the authored f64 coordinates; an inconclusive comparison
+// refuses clearance rather than adding an arbitrary physical tolerance. Endpoint distances use
+// the core exact circle predicate. This stricter comparison belongs only to the tool sweep.
+fn sweep_point_clear(p: Vec2, a: Vec2, b: Vec2, radius: f64) -> bool {
+    type Bounds = [f64; 2];
+    fn sub(a: Bounds, b: Bounds) -> Bounds {
+        [(a[0] - b[1]).next_down(), (a[1] - b[0]).next_up()]
+    }
+    fn add(a: Bounds, b: Bounds) -> Bounds {
+        [(a[0] + b[0]).next_down(), (a[1] + b[1]).next_up()]
+    }
+    fn mul(a: Bounds, b: Bounds) -> Bounds {
+        let products = [a[0] * b[0], a[0] * b[1], a[1] * b[0], a[1] * b[1]];
+        if products.iter().any(|v| !v.is_finite()) {
+            return [f64::NEG_INFINITY, f64::INFINITY];
+        }
+        [
+            products
+                .into_iter()
+                .fold(f64::INFINITY, f64::min)
+                .next_down(),
+            products
+                .into_iter()
+                .fold(f64::NEG_INFINITY, f64::max)
+                .next_up(),
+        ]
+    }
+    fn square(a: Bounds) -> Bounds {
+        if a.iter().any(|v| !v.is_finite()) {
+            return [0.0, f64::INFINITY];
+        }
+        let nearest = if a[0] > 0.0 {
+            a[0]
+        } else if a[1] < 0.0 {
+            a[1]
+        } else {
+            0.0
+        };
+        let farthest = a[0].abs().max(a[1].abs());
+        [
+            (nearest * nearest).next_down().max(0.0),
+            (farthest * farthest).next_up(),
+        ]
+    }
+    let difference = |u: Vec2, v: Vec2| [sub([u.x; 2], [v.x; 2]), sub([u.y; 2], [v.y; 2])];
+    let dot = |u: [Bounds; 2], v: [Bounds; 2]| add(mul(u[0], v[0]), mul(u[1], v[1]));
+    let edge = difference(b, a);
+    let delta = difference(p, a);
+    let endpoint = if a == b || dot(delta, edge)[1] <= 0.0 {
+        Some(a)
+    } else if dot(difference(p, b), edge)[0] >= 0.0 {
+        Some(b)
+    } else {
+        None
+    };
+    if let Some(endpoint) = endpoint {
+        return circle_diameter_margin([p.x, p.y], [endpoint.x, endpoint.y], radius * 0.5)
+            .is_some_and(|(sign, _)| sign == Sign::Negative);
+    }
+    // The infinite line also gives a conservative lower bound if the projection's interval
+    // straddles an endpoint. Only a proved exterior projection uses an endpoint distance.
+    let cross2 = square(sub(mul(delta[0], edge[1]), mul(delta[1], edge[0])));
+    let length2 = add(square(edge[0]), square(edge[1]));
+    let limit2 = mul(square([radius; 2]), length2);
+    cross2[0].is_finite() && limit2[1].is_finite() && cross2[0] > limit2[1]
+}
+// Full circular tool sweep against a filled fixture, including stationary heads. Touching the
+// envelope is not clearance. Checking endpoints alone would miss crossings between safe endpoints.
+pub(super) fn swept_disk_clear(
+    a: Vec2,
+    b: Vec2,
+    radius: f64,
+    fixture: &[Vec2],
+    work: &mut Work,
+) -> Option<bool> {
+    if inside(a, fixture, work)? || inside(b, fixture, work)? {
+        return Some(false);
+    }
+    for (c, d) in edges(fixture) {
+        work.tick()?;
+        if intersects(a, b, c, d) {
+            return Some(false);
+        }
+        for (p, u, v) in [(a, c, d), (b, c, d), (c, a, b), (d, a, b)] {
+            if !sweep_point_clear(p, u, v, radius) {
+                return Some(false);
+            }
+        }
+    }
+    Some(true)
+}
 // No edge may cross a concavity or touch the stock boundary. Vertices-inside alone is insufficient.
 // Zero requested margin still forbids contact; search anchors include a numerical guard, not a clamp.
 pub(crate) fn enclosed(
@@ -219,6 +311,77 @@ mod tests {
     use super::*;
     fn poly(p: &[[f64; 2]]) -> Vec<Vec2> {
         p.iter().map(|p| Vec2::new(p[0], p[1])).collect()
+    }
+    #[test]
+    fn swept_disk_refuses_exact_oblique_tangency_after_scaling_and_translation() {
+        // |(42,56)| = 70 and cross((42,56),(23,39)) = 350: the closest corner is
+        // exactly 5 mm from the segment, with an interior projection. Rounded projection
+        // previously returned 5.000000000000003 and incorrectly admitted this fixture.
+        let fixture = poly(&[[22., 39.], [23., 39.], [23., 40.], [22., 40.]]);
+        for (scale, offset) in [
+            (1.0 / 1024.0, Vec2::new(0., 0.)),
+            (1.0, Vec2::new(1.0 / 1024.0, -1.0 / 2048.0)),
+            (1.0, Vec2::new(524288., -524288.)),
+            (1024.0, Vec2::new(-262144., 262144.)),
+        ] {
+            let transform = |p: Vec2| p * scale + offset;
+            let obstacle: Vec<_> = fixture.iter().copied().map(transform).collect();
+            let a = transform(Vec2::new(0., 0.));
+            let b = transform(Vec2::new(42., 56.));
+            for (start, end) in [(a, b), (b, a)] {
+                for (radius, clear) in [
+                    (5.0, false),
+                    (5.0 - 1.0 / 16777216.0, true),
+                    (5.0 + 1.0 / 16777216.0, false),
+                ] {
+                    assert_eq!(
+                        swept_disk_clear(
+                            start,
+                            end,
+                            radius * scale,
+                            &obstacle,
+                            &mut Work::new(1000)
+                        ),
+                        Some(clear),
+                        "scale={scale}, offset={offset:?}, radius={radius}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn swept_disk_endpoint_and_stationary_clearance_use_the_finite_segment() {
+        for (a, b, fixture) in [
+            (
+                Vec2::new(0., 0.),
+                Vec2::new(0., 0.),
+                poly(&[[3., 4.], [4., 4.], [4., 5.], [3., 5.]]),
+            ),
+            (
+                Vec2::new(0., 0.),
+                Vec2::new(4., 0.),
+                poly(&[[7., 4.], [8., 4.], [8., 5.], [7., 5.]]),
+            ),
+        ] {
+            // The 3-4-5 corner is nearest the stationary head or the segment's end.
+            // In the latter case the infinite line is only 4 mm away and is insufficient.
+            for (start, end) in [(a, b), (b, a)] {
+                assert_eq!(
+                    swept_disk_clear(start, end, 5.0, &fixture, &mut Work::new(1000)),
+                    Some(false)
+                );
+                assert_eq!(
+                    swept_disk_clear(
+                        start,
+                        end,
+                        5.0 - 1.0 / 16777216.0,
+                        &fixture,
+                        &mut Work::new(1000)
+                    ),
+                    Some(true)
+                );
+            }
+        }
     }
     #[test]
     fn concave_stock_does_not_admit_edges_that_leave_stock_between_inside_vertices() {

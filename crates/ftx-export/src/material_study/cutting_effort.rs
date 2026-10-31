@@ -324,6 +324,7 @@ fn summarize<'a>(
         || report.physical_cutting_validated
         || report.optimality_proven
         || report.machine_sha256 != program::machine_sha256(&policy.machine)?
+        || hash(&report.fixture_clearance)? != hash(&policy.machine.fixture_clearance)?
         || markers.is_empty()
         || markers.len() != report.markers.len()
     {

@@ -74,13 +74,260 @@ fn value<T: serde::Serialize>(v: &T) -> Value {
 }
 fn process_refusal(pattern: &Pattern, options: &CutOptions) -> ftx_core::Refusal {
     let plan = CutPlan::build(pattern, options).unwrap();
-    assert!(plan.program.is_none());
+    assert!(
+        plan.program.is_none(),
+        "expected independent process refusal, got {:?}",
+        plan.program
+    );
     let mut ordinary_options = options.clone();
     ordinary_options.program = None;
     let ordinary = CutPlan::build(pattern, &ordinary_options).unwrap();
     assert_eq!(value(&plan.rolls), value(&ordinary.rolls));
     assert_eq!(plan.pattern_sha256, ordinary.pattern_sha256);
     plan.program_refusal.expect("independent process refusal")
+}
+
+fn fixture_policy(opts: &mut CutOptions, corners: [[f64; 2]; 4]) {
+    let policy = opts.program.as_mut().unwrap();
+    policy.machine.fixture_clearance = Some(serde_json::from_value(json!({
+        "model":"planar_disk_sweep/1","cutting_radius_mm":0.2,"raised_radius_mm":0.2,
+        "fixtures":[{"id":"declared-clamp","outline_mm":corners}],
+        "source":{"reference":"test:knife-fixtures","accessed_on":"2026-10-30",
+            "note":"Synthetic stationary envelopes at both elevations; no physical machine claim"},
+        "method":"Independently authored machine-frame polygon and full circular tool envelopes",
+        "evidence":"estimate","allow_estimates":true
+    })).unwrap());
+    relock(opts);
+}
+
+fn relock(opts: &mut CutOptions) {
+    let policy = opts.program.as_mut().unwrap();
+    let lock = program::machine_sha256(&policy.machine).unwrap();
+    for q in &mut policy.qualifications {
+        q.machine_sha256.clone_from(&lock);
+    }
+}
+
+#[test]
+fn fixture_clearance_checks_complete_cut_and_raised_sweeps_independently() {
+    let p = pattern(vec![piece("front", 40., 60.)]);
+    let mut opts = qualified_options(&p);
+    let original_lock = program::machine_sha256(&opts.program.as_ref().unwrap().machine).unwrap();
+    assert!(
+        value(&opts.program.as_ref().unwrap().machine)
+            .get("fixture_clearance")
+            .is_none()
+    );
+    // Both vertices of the bottom cut are outside this clamp; the complete chord crosses it.
+    fixture_policy(&mut opts, [[24., 4.], [26., 4.], [26., 6.], [24., 6.]]);
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("cutting tool envelope")
+    );
+    // Every cutting path clears this clamp, but the initial raised motion crosses it.
+    fixture_policy(&mut opts, [[20., 2.], [25., 2.], [25., 3.], [20., 3.]]);
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("raised-travel tool envelope")
+    );
+    fixture_policy(
+        &mut opts,
+        [[200., 200.], [210., 200.], [210., 210.], [200., 210.]],
+    );
+    let clear = CutPlan::build(&p, &opts).unwrap();
+    let report = clear.program.as_ref().unwrap();
+    assert_eq!(
+        value(&report.fixture_clearance),
+        value(&opts.program.as_ref().unwrap().machine.fixture_clearance)
+    );
+    assert_ne!(report.machine_sha256, original_lock);
+    assert_eq!(value(&clear), value(&CutPlan::build(&p, &opts).unwrap()));
+    // A new envelope or footprint cannot reuse a formerly qualified machine lock.
+    opts.program
+        .as_mut()
+        .unwrap()
+        .machine
+        .fixture_clearance
+        .as_mut()
+        .unwrap()
+        .cutting_radius_mm = 0.3;
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("exact machine/material locks")
+    );
+}
+
+#[test]
+fn fixture_tool_envelopes_include_tangency_stationary_heads_and_internal_cuts() {
+    let p = pattern(vec![piece("front", 40., 60.)]);
+    let mut opts = qualified_options(&p);
+    // The emitted exterior starts at the lower-right corner, so this removes unrelated travel.
+    opts.program.as_mut().unwrap().machine.start_mm = Vec2::new(45., 5.);
+    fixture_policy(&mut opts, [[20., 2.], [25., 2.], [25., 3.], [20., 3.]]);
+    opts.program
+        .as_mut()
+        .unwrap()
+        .machine
+        .fixture_clearance
+        .as_mut()
+        .unwrap()
+        .cutting_radius_mm = 2.;
+    relock(&mut opts);
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("cutting tool envelope")
+    );
+    opts.program
+        .as_mut()
+        .unwrap()
+        .machine
+        .fixture_clearance
+        .as_mut()
+        .unwrap()
+        .cutting_radius_mm = 1.9;
+    relock(&mut opts);
+    assert!(CutPlan::build(&p, &opts).unwrap().program.is_some());
+
+    fixture_policy(&mut opts, [[44., 3.], [46., 3.], [46., 4.], [44., 4.]]);
+    opts.program
+        .as_mut()
+        .unwrap()
+        .machine
+        .fixture_clearance
+        .as_mut()
+        .unwrap()
+        .raised_radius_mm = 1.;
+    relock(&mut opts);
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("raised-travel tool envelope")
+    );
+
+    let mut sheet = piece("front", 40., 60.);
+    sheet["internal"] = json!([{"kind":"cut","closed":false,"pts":[[10,10],[30,10]]}]);
+    let p = pattern(vec![sheet]);
+    opts = qualified_options(&p);
+    fixture_policy(&mut opts, [[24., 14.], [26., 14.], [26., 16.], [24., 16.]]);
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("cutting tool envelope")
+    );
+}
+
+#[test]
+fn blocked_nearest_travel_keeps_the_complete_checked_authored_baseline() {
+    let mut sheet = piece("front", 100., 100.);
+    sheet["internal"] = json!([
+        {"kind":"cut","closed":false,"pts":[[10,10],[11,10]]},
+        {"kind":"cut","closed":false,"pts":[[70,10],[71,10]]},
+        {"kind":"cut","closed":false,"pts":[[10,70],[11,70]]}
+    ]);
+    let p = pattern(vec![sheet]);
+    let mut opts = qualified_options(&p);
+    let policy = opts.program.as_mut().unwrap();
+    policy.machine.start_mm = Vec2::new(100., 90.);
+    policy.machine.return_to_start = false;
+    policy.ordering = Ordering::NearestPath;
+    relock(&mut opts);
+    assert!(CutPlan::build(&p, &opts).unwrap().program.unwrap().markers[0].improved);
+    fixture_policy(&mut opts, [[87., 52.], [88., 52.], [88., 53.], [87., 53.]]);
+    let report = CutPlan::build(&p, &opts).unwrap().program.unwrap();
+    let marker = &report.markers[0];
+    assert!(!marker.improved);
+    assert_eq!(value(&marker.selected), value(&marker.baseline));
+    assert!(
+        marker
+            .candidate_clearance_refusal
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("declared-clamp")
+    );
+    assert!(!report.budget_exhausted);
+}
+
+#[test]
+fn declared_final_return_and_geometry_budgets_cannot_skip_fixture_checks() {
+    let p = pattern(vec![piece("a", 20., 20.), piece("b", 20., 20.)]);
+    let mut opts = qualified_options(&p);
+    opts.program.as_mut().unwrap().machine.start_mm = Vec2::new(0., 50.);
+    opts.program.as_mut().unwrap().machine.return_to_start = false;
+    fixture_policy(
+        &mut opts,
+        [[24.9, 27.4], [25.1, 27.4], [25.1, 27.6], [24.9, 27.6]],
+    );
+    assert!(CutPlan::build(&p, &opts).unwrap().program.is_some());
+    opts.program.as_mut().unwrap().machine.return_to_start = true;
+    relock(&mut opts);
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("raised-travel tool envelope")
+    );
+    fixture_policy(
+        &mut opts,
+        [[200., 200.], [210., 200.], [210., 210.], [200., 210.]],
+    );
+    opts.program.as_mut().unwrap().geometry_work_limit = 1;
+    assert_eq!(
+        process_refusal(&p, &opts).code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
+fn fixture_geometry_requires_independent_estimate_consent_and_valid_polygons() {
+    let p = pattern(vec![piece("front", 40., 60.)]);
+    let mut opts = qualified_options(&p);
+    fixture_policy(
+        &mut opts,
+        [[200., 200.], [210., 200.], [210., 210.], [200., 210.]],
+    );
+    opts.program
+        .as_mut()
+        .unwrap()
+        .machine
+        .fixture_clearance
+        .as_mut()
+        .unwrap()
+        .allow_estimates = false;
+    relock(&mut opts);
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("its own explicit consent")
+    );
+    fixture_policy(
+        &mut opts,
+        [[200., 200.], [210., 210.], [200., 210.], [210., 200.]],
+    );
+    assert!(process_refusal(&p, &opts).message.contains("fixture"));
+    fixture_policy(
+        &mut opts,
+        [[200., 200.], [210., 200.], [210., 210.], [200., 210.]],
+    );
+    opts.program
+        .as_mut()
+        .unwrap()
+        .machine
+        .fixture_clearance
+        .as_mut()
+        .unwrap()
+        .source
+        .note
+        .clear();
+    relock(&mut opts);
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("source geometry")
+    );
 }
 
 #[test]
@@ -574,5 +821,18 @@ fn unavailable_process_preserves_study_geometry_and_independent_purchasing() {
         b["purchasing"]["result"]["least_observed_independent_order_total"],
         1.0
     );
-    assert_eq!(b["metrics"], a["metrics"]);
+    for (metric, expected) in a["metrics"].as_object().unwrap() {
+        if metric.starts_with("cutting_") {
+            assert!(expected.is_number());
+            assert!(
+                b["metrics"].get(metric).is_none(),
+                "unavailable knife effort must not survive as {metric}"
+            );
+        } else {
+            assert_eq!(
+                &b["metrics"][metric], expected,
+                "independent metric {metric} changed"
+            );
+        }
+    }
 }
