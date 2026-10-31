@@ -352,15 +352,21 @@ fn body_json(w: &Wearer, fit: &TapeFit) -> serde_json::Map<String, Value> {
             &mut TAPE_FIELDS
                 .iter()
                 .zip(fit.readings)
-                .map(|(n, v)| ((*n).to_string(), json!(mm(v)))),
+                .filter_map(|(n, v)| v.map(|v| ((*n).to_string(), json!(mm(v))))),
         )),
+    );
+    let unavailable = fit.unavailable_fields();
+    m.insert(
+        "tape_evaluation".into(),
+        json!({"status":if unavailable.is_empty() { "AVAILABLE" } else { "PARTIAL" },
+            "pose":"a_pose_35","provenance":"MODEL_FIT","unavailable_fields":unavailable}),
     );
     m.insert("mass_kg".into(), json!(kg(fit.mass_kg)));
     m.insert("model_fit".into(), Value::Array(model_fit_records(w, fit)));
     m
 }
 
-/// The body's readings of every [`TAPE_FIELDS`] measurement the fit was not given, as `fabric-measurements/1`
+/// The body's available readings of [`TAPE_FIELDS`] measurements the fit was not given, as `fabric-measurements/1`
 /// records with provenance `MODEL_FIT` (plan §9.4: read off the fitted body, never passed off as measured)
 /// and the population spread as σ: the chart prior's σ at the wearer's stature and age, or the catalogue's
 /// `MODEL_FIT` default (12 mm) outside the charts.
@@ -382,6 +388,7 @@ fn model_fit_records(w: &Wearer, fit: &TapeFit) -> Vec<Value> {
         .zip(fit.readings)
         .filter(|(n, _)| !fit.residuals.iter().any(|r| r.name == **n))
         .filter_map(|(n, v)| {
+            let v = v?;
             let chart = priors.as_ref().and_then(|p| p[*n]["sigma_mm"].as_f64());
             let (sigma, note) = match chart {
                 Some(s) => (
@@ -474,7 +481,7 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     )?;
     let text = format!(
         "{} mm, {:.2} kg, {} tape measurements fitted (largest residual {:.1} mm); pose {pose_name}\nwrote {}",
-        (fit.readings[0] * 10.0).round() / 10.0,
+        (fit.readings[0].expect("stature is always fitted") * 10.0).round() / 10.0,
         fit.mass_kg,
         fit.residuals.len(),
         fit.residuals
@@ -1051,7 +1058,7 @@ mod tests {
                 phenotype: Default::default(),
                 local_changes: vec![],
             },
-            readings: [100.0004; ftx_body::N_TAPE],
+            readings: std::array::from_fn(|i| if i == 16 { None } else { Some(100.0004) }),
             mass_kg: 10.0,
             residuals: vec![ftx_body::TapeResidual {
                 name: "waist".into(),
@@ -1070,13 +1077,17 @@ mod tests {
         assert_eq!(row["sigma_mm"], 17.0);
         assert_eq!(row["effective_sigma_mm"], 17.0);
         assert_eq!(row["normalized_residual"], (100.0004 - 100.0) / 17.0);
-        assert!(
-            body["model_fit"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|record| { record["name"] != "waist" && record["provenance"] == "MODEL_FIT" })
+        assert_eq!(body["tape_evaluation"]["status"], "PARTIAL");
+        assert_eq!(
+            body["tape_evaluation"]["unavailable_fields"],
+            json!(["head"])
         );
+        assert!(body["readings_mm"].get("head").is_none());
+        assert!(body["model_fit"].as_array().unwrap().iter().all(|record| {
+            record["name"] != "waist"
+                && record["name"] != "head"
+                && record["provenance"] == "MODEL_FIT"
+        }));
     }
 
     fn drape_scratch() -> PathBuf {

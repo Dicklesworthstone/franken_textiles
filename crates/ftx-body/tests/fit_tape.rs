@@ -239,15 +239,18 @@ fn stature_and_weight_alone() {
         .unwrap();
         println!(
             "{years} y {stature} mm {kg} kg: body {:.1} mm {:.2} kg, waist {:.1} mm, free {:?}",
-            fit.readings[0],
+            fit.readings[0].unwrap(),
             fit.mass_kg,
-            fit.readings[2],
+            fit.readings[2].unwrap(),
             &fit.free[..4]
         );
-        assert!((fit.readings[0] - stature).abs() < 2.0, "{years} y stature");
+        assert!(
+            (fit.readings[0].unwrap() - stature).abs() < 2.0,
+            "{years} y stature"
+        );
         assert!((fit.mass_kg / kg - 1.0).abs() < 0.01, "{years} y weight");
         if years == 2.5 {
-            waists.push(fit.readings[2]);
+            waists.push(fit.readings[2].unwrap());
         }
     }
     assert!(

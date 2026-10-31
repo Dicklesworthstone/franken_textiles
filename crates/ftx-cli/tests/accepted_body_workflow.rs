@@ -31,6 +31,154 @@ fn model_bytes() -> Vec<u8> {
 }
 
 #[test]
+fn partial_tape_targets_reach_native_portable_and_study_workflows() {
+    use ftx_body::{Pose, Wearer, fit_tape, tape_targets};
+    use ftx_drape::study::fitted::{BodyRequest, FittedBody};
+    use ftx_pattern::validate::BodyMeasure;
+
+    let bytes = model_bytes_with_locals(true, &ftx_body::FREE[ftx_body::N_PHENOTYPE..]);
+    let digest = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    // Independent analytic circumference of the regular 16-gon prism (100 mm radius).
+    let waist_mm = 3200.0 * ftx_core::det::sin_cos(std::f64::consts::PI / 16.0).0;
+    let mut measurements = json!({"wearer":{"age_months":30,"stature_mm":1300.0},
+        "fused":{"waist":{"value_mm":waist_mm,"sigma_mm":10.0}}});
+    let wearer = Wearer::from_measurements(&measurements).unwrap();
+    let fit = fit_tape(
+        &model,
+        &wearer,
+        &tape_targets(&measurements).unwrap(),
+        &Pose::drape(),
+    )
+    .unwrap();
+    assert!((fit.readings[0].unwrap() - 1300.0).abs() < 0.01);
+    assert!((fit.readings[2].unwrap() - waist_mm).abs() < 1e-8);
+    assert_eq!(fit.readings[16], None, "the prism has no head surface");
+    assert_eq!(fit.residuals.len(), 2);
+    assert_eq!(fit.residuals[1].name, "waist");
+    assert_eq!(fit.residuals[1].sigma_mm, Some(10.0));
+    let unavailable = fit.unavailable_fields();
+
+    let check =
+        ftx_wasm::fold::inspect_body(&model, &digest, &measurements.to_string(), None).unwrap();
+    let portable = &check["body"];
+    assert_eq!(check["cloth_simulated"], false);
+    assert_eq!(portable["tape_evaluation"]["status"], "PARTIAL");
+    assert_eq!(
+        portable["tape_evaluation"]["unavailable_fields"],
+        json!(unavailable)
+    );
+    assert_eq!(portable["fit"]["tape"].as_object().unwrap().len(), 2);
+    assert_eq!(portable["readings_mm"]["waist"], fit.readings[2].unwrap());
+    for name in &unavailable {
+        assert!(portable["readings_mm"].get(name).is_none());
+        assert!(portable["fit"]["tape"].get(name).is_none());
+    }
+
+    let dir = setup();
+    std::fs::write(dir.join("partial.ftxbody"), &bytes).unwrap();
+    save(&dir.join("m.json"), &measurements);
+    let native = invoke(
+        &dir,
+        &[
+            "body",
+            "--measurements",
+            "m.json",
+            "--model",
+            "partial.ftxbody",
+            "--pose",
+            "rest",
+            "--out",
+            "partial-body",
+        ],
+        0,
+    );
+    let native: Value = serde_json::from_slice(&native.stdout).unwrap();
+    let body = &native["result"]["body"];
+    assert_eq!(body["tape_evaluation"], portable["tape_evaluation"]);
+    assert_eq!(body["fit"]["tape"]["waist"]["sigma_mm"], 10.0);
+    assert_eq!(
+        body["readings_mm"]["waist"],
+        (waist_mm * 10.0).round() / 10.0
+    );
+    assert!(dir.join("partial-body/body.obj").is_file());
+    assert_eq!(read(&dir.join("partial-body/body.json")), *body);
+    for name in &unavailable {
+        assert!(body["readings_mm"].get(name).is_none());
+        assert!(
+            body["model_fit"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["name"] != *name)
+        );
+    }
+
+    let request = BodyRequest::read(&json!({"schema":"ftx-scenario-body/1",
+        "measurements":measurements,"arm_abduction_deg":50.0}))
+    .unwrap();
+    let study = FittedBody::prepare(&model, &digest, &request).unwrap();
+    assert_eq!(study.report["tape_evaluation"], portable["tape_evaluation"]);
+    assert_eq!(study.report["readings_mm"], portable["readings_mm"]);
+    assert_eq!(study.report["residuals"].as_array().unwrap().len(), 2);
+    let flat = study.flat_fit_body(&model, &digest).unwrap();
+    assert!((flat.value("waist").unwrap() - waist_mm).abs() < 1e-8);
+    assert!(flat.value("head").is_err());
+    assert_eq!(flat.identity()["complete_tape_sections"], false);
+
+    // Asking for the missing section must refuse every fitting entry point, without publishing
+    // a body or converting the target into a fabricated model prediction.
+    measurements["fused"]["head"] = json!({"value_mm":500.0,"sigma_mm":5.0});
+    let error = fit_tape(
+        &model,
+        &wearer,
+        &tape_targets(&measurements).unwrap(),
+        &Pose::drape(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ftx_core::RefusalCode::DegenerateGeometry);
+    assert!(error.message.contains("head"));
+    assert!(
+        ftx_wasm::fold::inspect_body(&model, &digest, &measurements.to_string(), None)
+            .unwrap_err()
+            .contains("head")
+    );
+    let mut request = request;
+    request.measurements = measurements.clone();
+    assert!(
+        FittedBody::prepare(&model, &digest, &request)
+            .err()
+            .unwrap()
+            .message
+            .contains("head")
+    );
+    save(&dir.join("unavailable.json"), &measurements);
+    let refused = invoke(
+        &dir,
+        &[
+            "body",
+            "--measurements",
+            "unavailable.json",
+            "--model",
+            "partial.ftxbody",
+            "--out",
+            "unavailable-body",
+        ],
+        3,
+    );
+    let refused: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(refused["refusal"]["code"], "degenerate_geometry");
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("head")
+    );
+    assert!(!dir.join("unavailable-body/body.json").exists());
+    assert!(!dir.join("unavailable-body/body.obj").exists());
+}
+
+#[test]
 fn fit_driven_design_grid_uses_one_selected_reference_body_in_native_and_portable_scenarios() {
     use ftx_drape::study::fitted::{BodyRequest, FittedBody};
     use ftx_wasm::materials::scenario::{on_body, on_model};
@@ -815,6 +963,10 @@ fn finite_body_water_for_quadrature(integration: &str) {
 }
 
 fn model_bytes_with_rig(articulated: bool) -> Vec<u8> {
+    model_bytes_with_locals(articulated, &[])
+}
+
+fn model_bytes_with_locals(articulated: bool, local_changes: &[&str]) -> Vec<u8> {
     // The placement case is an articulated closed prism; the original image-fit case is a box.
     // Both are synthetic analytic geometry, never a stand-in for anatomical acceptance.
     let mut bones = vec!["root"];
@@ -855,8 +1007,11 @@ fn model_bytes_with_rig(articulated: bool) -> Vec<u8> {
                 tails.extend([sign * 0.06, 0.0, z - 0.05]);
             }
         }
-        heads.extend([0.0, 0.0, 0.9, 0.0, 0.0, 1.0]);
-        tails.extend([0.0, 0.0, 1.0, 0.0, 0.0, 1.1]);
+        // The tape-fitting control deliberately has no neck/head surface. Its valid waist and
+        // stature must remain usable; the empty local targets only provide the ordinary model API.
+        let neck_z = if local_changes.is_empty() { 0.9 } else { 2.0 };
+        heads.extend([0.0, 0.0, neck_z, 0.0, 0.0, neck_z + 0.1]);
+        tails.extend([0.0, 0.0, neck_z + 0.1, 0.0, 0.0, neck_z + 0.2]);
     }
     let bone_count = bones.len();
     let mut arrays = BTreeMap::new();
@@ -915,6 +1070,7 @@ fn model_bytes_with_rig(articulated: bool) -> Vec<u8> {
     }
     let n = vertices.len() / 3;
     let nfaces = faces.len() / 3;
+    let nblend = 1 + 2 * local_changes.len();
     let delta = vertices
         .as_chunks::<3>()
         .0
@@ -926,8 +1082,12 @@ fn model_bytes_with_rig(articulated: bool) -> Vec<u8> {
     add(
         "blendshape_row_ptr",
         "u32",
-        vec![2],
-        u32s(vec![0, n as u32]),
+        vec![nblend + 1],
+        u32s(
+            std::iter::once(0)
+                .chain(std::iter::repeat_n(n as u32, nblend))
+                .collect(),
+        ),
     );
     add(
         "blendshape_vertex",
@@ -954,14 +1114,14 @@ fn model_bytes_with_rig(articulated: bool) -> Vec<u8> {
     add(
         "bone_heads_blendshapes",
         "f64",
-        vec![1, bone_count, 3],
-        f64s(vec![0.0; 3 * bone_count]),
+        vec![nblend, bone_count, 3],
+        f64s(vec![0.0; nblend * 3 * bone_count]),
     );
     add(
         "bone_tails_blendshapes",
         "f64",
-        vec![1, bone_count, 3],
-        f64s(vec![0.0; 3 * bone_count]),
+        vec![nblend, bone_count, 3],
+        f64s(vec![0.0; nblend * 3 * bone_count]),
     );
     add(
         "bone_rolls",
@@ -984,10 +1144,17 @@ fn model_bytes_with_rig(articulated: bool) -> Vec<u8> {
     } else {
         vec![]
     };
+    let blendshape_names: Vec<_> = std::iter::once("height-high".to_string())
+        .chain(
+            local_changes
+                .iter()
+                .flat_map(|name| [format!("{name}-incr"), format!("{name}-decr")]),
+        )
+        .collect();
     let header = json!({"schema":"ftxbody/1","model":"anny","anny_version":"0.6.1","configuration":"synthetic interchange test",
-        "licence":"synthetic","package_sha256":{},"counts":{"vertices":n,"faces":nfaces,"bones":bone_count,"blendshapes":1,"phenotype_blendshapes":1,"local_changes":0,"influences":1},
+        "licence":"synthetic","package_sha256":{},"counts":{"vertices":n,"faces":nfaces,"bones":bone_count,"blendshapes":nblend,"phenotype_blendshapes":1,"local_changes":local_changes.len(),"influences":1},
         "phenotype":{"features":["height","race"],"components":components,"anchors":{"height":[0,1]},"exposed":["height"],"fixed_value":0.5},
-        "y_axis":[0,1,0],"degenerate_rotation":[[1,0,0],[0,1,0],[0,0,1]],"labels":{"blendshapes":["height-high"],"bones":bones,"bone_parents":parents,"local_changes":[]},"waist_loop_final":waist_loop,"arrays":arrays});
+        "y_axis":[0,1,0],"degenerate_rotation":[[1,0,0],[0,1,0],[0,0,1]],"labels":{"blendshapes":blendshape_names,"bones":bones,"bone_parents":parents,"local_changes":local_changes},"waist_loop_final":waist_loop,"arrays":arrays});
     let mut h = serde_json::to_vec(&header).unwrap();
     while !h.len().is_multiple_of(8) {
         h.push(b' ');

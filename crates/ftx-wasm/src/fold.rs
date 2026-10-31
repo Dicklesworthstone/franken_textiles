@@ -59,10 +59,13 @@ fn body_report(wearer: &Wearer, fit: &TapeFit) -> Value {
     let readings: Map<String, Value> = TAPE_FIELDS
         .iter()
         .zip(fit.readings)
-        .map(|(name, value)| (name.to_string(), json!(value)))
+        .filter_map(|(name, value)| value.map(|value| (name.to_string(), json!(value))))
         .collect();
+    let unavailable = fit.unavailable_fields();
     json!({"model":"anny 0.6.1", "provenance":"MODEL_FIT",
         "age_years":wearer.years,"gender":wearer.gender,"mass_kg":fit.mass_kg,
+        "tape_evaluation":{"status":if unavailable.is_empty() { "AVAILABLE" } else { "PARTIAL" },
+            "pose":"a_pose_35","provenance":"MODEL_FIT","unavailable_fields":unavailable},
         "readings_mm":readings,"fit":{"iterations":fit.iterations,"tape":tape,
             "weight_kg":wearer.weight_kg.map(|target| json!({"target_kg":target,
                 "body_kg":fit.mass_kg,"residual_kg":fit.mass_kg-target}))},
@@ -311,7 +314,13 @@ mod tests {
                 phenotype: Default::default(),
                 local_changes: vec![],
             },
-            readings: std::array::from_fn(|i| 100.0004 + i as f64),
+            readings: std::array::from_fn(|i| {
+                if i == 16 {
+                    None
+                } else {
+                    Some(100.0004 + i as f64)
+                }
+            }),
             mass_kg: 10.0003,
             residuals: vec![
                 TapeResidual {
@@ -356,10 +365,19 @@ mod tests {
         );
         assert_eq!(
             got["readings_mm"].as_object().unwrap().len(),
-            TAPE_FIELDS.len()
+            TAPE_FIELDS.len() - 1
+        );
+        assert_eq!(got["tape_evaluation"]["status"], "PARTIAL");
+        assert_eq!(
+            got["tape_evaluation"]["unavailable_fields"],
+            json!(["head"])
         );
         for (name, value) in TAPE_FIELDS.iter().zip(fit.readings) {
-            assert_eq!(got["readings_mm"][name], value);
+            if let Some(value) = value {
+                assert_eq!(got["readings_mm"][name], value);
+            } else {
+                assert!(got["readings_mm"].get(name).is_none());
+            }
         }
         assert_eq!(
             got["fit"]["weight_kg"]["residual_kg"],

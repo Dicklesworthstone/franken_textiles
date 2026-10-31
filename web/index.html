@@ -492,9 +492,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       + (imported ? "" : `<td>${number(r?.effective_sigma_mm)}</td><td>${number(r?.normalized_residual, true)}</td>`)
       + "</tr>").join("");
     const weight = body.fit?.weight_kg;
+    const unavailable = Array.isArray(body.tape_evaluation?.unavailable_fields)
+      ? body.tape_evaluation.unavailable_fields.filter(name => typeof name === "string") : [];
     return `<details open><summary>Body-fitting residuals (MODEL_FIT)</summary>`
       + (imported ? "<p>Accepted image-fit shape reused without refitting. Image poses are not reused. Original image residuals remain in the saved report; the table compares current supplied targets.</p>" : "")
       + `<p>Body predictions are model estimates. Supplied targets may include chart priors; these differences do not establish measurement readiness or physical fit.</p>`
+      + (unavailable.length ? `<p>Unavailable model predictions: ${unavailable.map(name => esc(human(name))).join(", ")}. No value is inferred for a missing section.</p>` : "")
       + (rows ? `<div class="scroll"><table><tr><th>Supplied target</th><th>Target mm</th><th>Body mm (MODEL_FIT)</th><th>Body − target mm</th><th>Supplied σ mm</th>`
         + (imported ? "" : "<th>Fit scale mm</th><th>Residual / fit scale</th>")
         + `</tr>${rows}</table></div>` : "<p>No supplied tape targets.</p>")

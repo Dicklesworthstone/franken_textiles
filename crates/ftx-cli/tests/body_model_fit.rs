@@ -129,7 +129,7 @@ fn unmeasured_readings_come_back_as_model_fit() {
     assert_eq!(check["measurements_sha256"], sha256_hex(saved));
     assert_eq!(check["body"]["fit"]["iterations"], fit.iterations);
     for (name, value) in ftx_body::TAPE_FIELDS.iter().zip(fit.readings) {
-        assert_eq!(check["body"]["readings_mm"][name], value);
+        assert_eq!(check["body"]["readings_mm"][name], value.unwrap());
     }
     for residual in &fit.residuals {
         assert_eq!(
