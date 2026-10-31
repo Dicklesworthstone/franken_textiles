@@ -3,7 +3,7 @@
 
 use ftx_core::{Refusal, RefusalCode, Vec2};
 
-use super::CutPlan;
+use super::{CutPlan, program};
 use crate::{fnum, xml_escape};
 
 fn reversal_attribute(reversed: bool) -> &'static str {
@@ -30,6 +30,91 @@ fn path(points: &[Vec2], closed: bool) -> String {
     d
 }
 
+struct RoutedPreview<'a> {
+    marker: &'a program::Marker,
+    machine: &'a program::Machine,
+    fixtures: &'a program::FixtureClearance,
+}
+
+fn routed_preview<'a>(
+    report: Option<&'a program::Report>,
+    policy: Option<&'a program::Policy>,
+    index: usize,
+) -> Result<Option<RoutedPreview<'a>>, Refusal> {
+    let Some(report) = report.filter(|r| r.travel_routing.is_some()) else {
+        return Ok(None);
+    };
+    let bad = || Refusal::new(RefusalCode::InvalidDocument, "invalid routed knife preview");
+    let policy = policy.ok_or_else(bad)?;
+    let machine = &policy.machine;
+    let fixtures = machine.fixture_clearance.as_ref().ok_or_else(bad)?;
+    let mut markers = report.markers.iter().filter(|m| m.marker == index);
+    let marker = markers.next().ok_or_else(bad)?;
+    if markers.next().is_some()
+        || report.travel_routing != policy.travel_routing
+        || report.machine_sha256 != program::machine_sha256(machine)?
+        || machine.bed_mm.iter().any(|v| !v.is_finite() || *v <= 0.)
+    {
+        return Err(bad());
+    }
+    let route = &marker.selected;
+    let points = route
+        .runs
+        .iter()
+        .fold(route.return_waypoints_mm.len() + 2, |n, run| {
+            n.saturating_add(run.travel_waypoints_mm.len().saturating_add(2))
+        });
+    if points > 1_000_000 {
+        return Err(preview_budget());
+    }
+    route.checked_travel_length()?;
+    if route
+        .runs
+        .iter()
+        .flat_map(program::Run::travel_points)
+        .chain(route.return_points())
+        .any(|p| p.x < 0. || p.y < 0. || p.x > machine.bed_mm[0] || p.y > machine.bed_mm[1])
+    {
+        return Err(bad());
+    }
+    Ok(Some(RoutedPreview {
+        marker,
+        machine,
+        fixtures,
+    }))
+}
+
+fn knife_overlay(preview: &RoutedPreview<'_>) -> String {
+    let mut out = String::from(
+        "<g id=\"knife-fixtures\" fill=\"#fce4dd\" fill-opacity=\"0.6\" stroke=\"#9b3525\"><title>Qualified stationary fixture footprints; not cutting paths</title>\n",
+    );
+    for fixture in &preview.fixtures.fixtures {
+        out.push_str(&format!(
+            "<path data-fixture=\"{}\" d=\"{}\"/>\n",
+            xml_escape(&fixture.id),
+            path(&fixture.outline_mm, true)
+        ));
+    }
+    out.push_str("</g>\n<g id=\"knife-raised-travel\" fill=\"none\" stroke=\"#185cbb\" stroke-dasharray=\"1 1\"><title>Complete selected raised-tool centreline, including checked detours and final return; no hardware execution authorization</title>\n");
+    for (i, run) in preview.marker.selected.runs.iter().enumerate() {
+        out.push_str(&format!(
+            "<path data-run=\"{i}\" data-phase=\"raised-travel\" d=\"{}\"/>\n",
+            path(&run.travel_points().collect::<Vec<_>>(), false)
+        ));
+    }
+    if preview.marker.selected.return_mm.is_some() {
+        out.push_str(&format!(
+            "<path data-phase=\"raised-return\" d=\"{}\"/>\n",
+            path(
+                &preview.marker.selected.return_points().collect::<Vec<_>>(),
+                false
+            )
+        ));
+    }
+    out.push_str("</g>\n");
+    out
+}
+
 /// Render one marker with exactly its planned stock dimensions and six-decimal millimetre paths.
 /// The input is the computed cut plan, not a new geometry pass or a separately re-resolved material.
 /// It contains no script, external resources or machine-specific settings. All labels are escaped.
@@ -49,14 +134,38 @@ pub fn svg(plan: &CutPlan, roll_index: usize) -> Result<String, Refusal> {
     if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
         return Err(bad());
     }
+    let routed = routed_preview(
+        plan.program.as_ref(),
+        plan.options.program.as_ref(),
+        roll_index,
+    )?;
+    let [view_w, view_h] = routed.as_ref().map_or([w, h], |p| p.machine.bed_mm);
     let (ws, hs) = (fnum(w, 6), fnum(h, 6));
+    let (view_ws, view_hs) = (fnum(view_w, 6), fnum(view_h, 6));
+    let stock_y = if routed.is_some() {
+        format!(" y=\"{}\"", fnum(view_h - h, 6))
+    } else {
+        String::new()
+    };
+    let bed = if routed.is_some() {
+        format!(
+            "<rect id=\"machine-bed\" width=\"{view_ws}\" height=\"{view_hs}\" fill=\"white\" stroke=\"#aaa\" stroke-width=\"0.2\"/>\n"
+        )
+    } else {
+        String::new()
+    };
     let grain_policy = if roll.placements.iter().any(|p| p.grain_reversed) {
         "grain-constrained (including explicitly permitted half-turns)"
     } else {
         "one-way-grain"
     };
+    let scope = if routed.is_some() {
+        "Blue paths show selected raised-tool motion in the declared machine frame. No hardware execution authorization."
+    } else {
+        "Not machine-qualified toolpaths."
+    };
     let mut out = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{ws}mm\" height=\"{hs}mm\" viewBox=\"0 0 {ws} {hs}\">\n<title>{}</title>\n<desc>Single-ply {grain_policy} planning preview. Not machine-qualified toolpaths.</desc>\n<metadata>pattern_sha256={}; material_sha256={}</metadata>\n<rect id=\"stock\" width=\"{ws}\" height=\"{hs}\" fill=\"white\" stroke=\"black\" stroke-width=\"0.2\"/>\n<defs><marker id=\"grain-arrow\" markerWidth=\"4\" markerHeight=\"4\" refX=\"4\" refY=\"2\" orient=\"auto\" markerUnits=\"userSpaceOnUse\"><path d=\"M0 0 L4 2 L0 4 Z\"/></marker></defs>\n<g transform=\"translate(0 {hs}) scale(1 -1)\" fill=\"none\" stroke=\"black\" stroke-width=\"0.15\">\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{view_ws}mm\" height=\"{view_hs}mm\" viewBox=\"0 0 {view_ws} {view_hs}\">\n<title>{}</title>\n<desc>Single-ply {grain_policy} planning preview. {scope}</desc>\n<metadata>pattern_sha256={}; material_sha256={}</metadata>\n{bed}<rect id=\"stock\"{stock_y} width=\"{ws}\" height=\"{hs}\" fill=\"white\" stroke=\"black\" stroke-width=\"0.2\"/>\n<defs><marker id=\"grain-arrow\" markerWidth=\"4\" markerHeight=\"4\" refX=\"4\" refY=\"2\" orient=\"auto\" markerUnits=\"userSpaceOnUse\"><path d=\"M0 0 L4 2 L0 4 Z\"/></marker></defs>\n<g transform=\"translate(0 {view_hs}) scale(1 -1)\" fill=\"none\" stroke=\"black\" stroke-width=\"0.15\">\n",
         xml_escape(&roll.material.material().name),
         xml_escape(&plan.pattern_sha256),
         xml_escape(roll.material.sha256())
@@ -114,12 +223,15 @@ pub fn svg(plan: &CutPlan, roll_index: usize) -> Result<String, Refusal> {
         out.push_str(&format!("<path class=\"grain\" d=\"{}\" stroke-dasharray=\"2 1\" marker-end=\"url(#grain-arrow)\"/></g>\n",
             path(&p.grain_mm, false)));
     }
+    if let Some(preview) = &routed {
+        out.push_str(&knife_overlay(preview));
+    }
     out.push_str("</g>\n<g id=\"labels\" font-family=\"sans-serif\" font-size=\"3\">\n");
     for p in &roll.placements {
         out.push_str(&format!(
             "<text x=\"{}\" y=\"{}\">{} / copy {}</text>\n",
             fnum(p.bounds_mm[0] + 1.0, 6),
-            fnum(h - p.bounds_mm[3] + 4.0, 6),
+            fnum(view_h - p.bounds_mm[3] + 4.0, 6),
             xml_escape(&p.instance),
             p.copy
         ));
@@ -160,16 +272,68 @@ pub fn stock_svg(plan: &super::stock::Plan, index: usize) -> Result<String, Refu
         return Err(preview_budget());
     }
     let b = super::bbox(&marker.outline_mm)?;
-    let (w, h) = (fnum(b[2] - b[0], 6), fnum(b[3] - b[1], 6));
+    let routed = if marker.placements.is_empty() {
+        None
+    } else {
+        routed_preview(
+            plan.program(),
+            plan.request().options.program.as_ref(),
+            index,
+        )?
+    };
+    let (view, transform, offset, stock_frame, bed) = if let Some(preview) = &routed {
+        let offset = preview
+            .marker
+            .finite_stock
+            .as_ref()
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "missing finite-stock knife loading frame",
+                )
+            })?
+            .marker_to_machine_offset_mm;
+        if offset != Vec2::new(-b[0], -b[1]) {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "changed finite-stock knife loading frame",
+            ));
+        }
+        let [width, height] = preview.machine.bed_mm;
+        (
+            [0., 0., width, height],
+            format!("translate(0 {}) scale(1 -1)", fnum(height, 6)),
+            offset,
+            format!(
+                "<g transform=\"translate({} {})\">\n",
+                fnum(offset.x, 6),
+                fnum(offset.y, 6)
+            ),
+            format!(
+                "<rect id=\"machine-bed\" width=\"{}\" height=\"{}\" fill=\"white\" stroke=\"#aaa\" stroke-width=\"0.2\"/>\n",
+                fnum(width, 6),
+                fnum(height, 6)
+            ),
+        )
+    } else {
+        (
+            [b[0], -b[3], b[2] - b[0], b[3] - b[1]],
+            "scale(1 -1)".into(),
+            Vec2::ZERO,
+            String::new(),
+            String::new(),
+        )
+    };
+    let (w, h) = (fnum(view[2], 6), fnum(view[3], 6));
     let grain_policy = if marker.placements.iter().any(|p| p.grain_reversed) {
         "cutting axis +y with explicitly permitted -y half-turns"
     } else {
         "one-way cutting axis +y"
     };
     let mut out = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}mm\" height=\"{h}mm\" viewBox=\"{} {} {w} {h}\">\n<title>{}</title>\n<desc>Finite single-ply stock review. Stock boundary and defects are NOT cut paths. No machine calibration or execution authorization. Coordinate units: mm; {grain_policy}.</desc>\n<metadata>material_sha256={}; stock_index={index}</metadata>\n<defs><marker id=\"grain-arrow\" markerWidth=\"4\" markerHeight=\"4\" refX=\"4\" refY=\"2\" orient=\"auto\" markerUnits=\"userSpaceOnUse\"><path d=\"M0 0 L4 2 L0 4 Z\"/></marker></defs>\n<g transform=\"scale(1 -1)\" stroke-width=\"0.15\">\n<path id=\"stock-boundary\" d=\"{}\" fill=\"white\" stroke=\"black\"/>\n<g id=\"stock-defects\" fill=\"#ddd\" stroke=\"#666\" stroke-dasharray=\"2 1\">\n",
-        fnum(b[0], 6),
-        fnum(-b[3], 6),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}mm\" height=\"{h}mm\" viewBox=\"{} {} {w} {h}\">\n<title>{}</title>\n<desc>Finite single-ply stock review. Stock boundary and defects are NOT cut paths. No machine calibration or execution authorization. Coordinate units: mm; {grain_policy}.</desc>\n<metadata>material_sha256={}; stock_index={index}</metadata>\n{bed}<defs><marker id=\"grain-arrow\" markerWidth=\"4\" markerHeight=\"4\" refX=\"4\" refY=\"2\" orient=\"auto\" markerUnits=\"userSpaceOnUse\"><path d=\"M0 0 L4 2 L0 4 Z\"/></marker></defs>\n<g transform=\"{transform}\" stroke-width=\"0.15\">\n{stock_frame}<path id=\"stock-boundary\" d=\"{}\" fill=\"white\" stroke=\"black\"/>\n<g id=\"stock-defects\" fill=\"#ddd\" stroke=\"#666\" stroke-dasharray=\"2 1\">\n",
+        fnum(view[0], 6),
+        fnum(view[1], 6),
         xml_escape(&format!(
             "{} — {}",
             marker.id,
@@ -244,12 +408,21 @@ pub fn stock_svg(plan: &super::stock::Plan, index: usize) -> Result<String, Refu
             return Err(preview_budget());
         }
     }
-    out.push_str("</g></g>\n<g id=\"labels\" font-family=\"sans-serif\" font-size=\"3\">\n");
+    out.push_str("</g>");
+    if let Some(preview) = &routed {
+        out.push_str("</g>\n");
+        out.push_str(&knife_overlay(preview));
+    }
+    out.push_str("</g>\n<g id=\"labels\" font-family=\"sans-serif\" font-size=\"3\">\n");
     for p in &marker.placements {
         out.push_str(&format!(
             "<text x=\"{}\" y=\"{}\">{} / copy {}</text>\n",
-            fnum(p.bounds_mm[0] + 1.0, 6),
-            fnum(-p.bounds_mm[3] + 4.0, 6),
+            fnum(p.bounds_mm[0] + offset.x + 1.0, 6),
+            fnum(
+                routed.as_ref().map_or(0., |p| p.machine.bed_mm[1]) - (p.bounds_mm[3] + offset.y)
+                    + 4.0,
+                6
+            ),
             xml_escape(&p.instance),
             p.copy
         ));

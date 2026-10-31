@@ -5037,6 +5037,7 @@ test('qualified knife programs retain exact process scope and independent refusa
     const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
     assert.deepEqual(plain(table(`${label}: material-qualified knife paths`).children[2].children.map(n=>n.textContent)),
       ['2','<independent knife observation>','2','480','120','4.8','0.6','0.4','5.8','Complete authored traversal']);
+    assert.equal(table(`${label}: raised-tool fixture routing`),undefined);
     if(finite) {
       assert.deepEqual(plain(table(`${label}: physical stock and machine placement`).children[2].children.map(n=>n.textContent)),
         ['2','<exact hide>','<exact physical stock>','-10, 25']);
@@ -5078,6 +5079,59 @@ test('qualified knife programs retain exact process scope and independent refusa
   assert.equal(section(p,'stock').hidden,true);
   assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
+test('fixture detours retain actual travel totals, intermediate points and source downloads until inputs or admission change', async () => {
+  for (const op of ['cut','stock','study']) {
+    const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);
+    const options=' {"program":{"travel_routing":{"model":"fixture_box_visibility/1","waypoint_offset_mm":0.3750}}}\n';
+    p.select('cutOptions',options);p.select('stockRequest');
+    // Renderer doubles deliberately retain producer totals; JavaScript must not replace detours
+    // with endpoint chords or re-derive geometry/clearance from this display-only input.
+    const selected={runs:[
+      {travel_mm:[[10,30],[90,30]],travel_waypoints_mm:[[20,45],[80,45]]},
+      {travel_mm:[[90,30],[90,40]]},
+      {travel_mm:[[90,40],[10,40]],travel_waypoints_mm:[[50,70]]}],
+      return_mm:[[10,40],[10,30]],return_waypoints_mm:[[5,45],[5,25]],
+      cut_length_mm:480,travel_length_mm:123.456,cutting_seconds:4.8,travel_seconds:1.23456,
+      lift_lower_seconds:0.6,modeled_path_seconds:6.63456};
+    const program={schema:'ftx-knife-cut-program/1',
+      travel_routing:{model:'fixture_box_visibility/1',waypoint_offset_mm:0.375},
+      markers:[{marker:0,qualification:'<retained fixture recipe>',selected,baseline:selected,improved:false}]};
+    const plan=op==='stock'?{schema:'ftx-finite-stock-plan/1',used_stock_count:1,
+      markers:[{id:'<hide>',placements:[{}]}],program}:
+      {schema:'ftx-roll-cut-plan/1',rolls:[{}],program};
+    const row=studyRow('detoured');row.cutting=outcome(plan);
+    const report=op==='study'?studyReport([row]):plan;
+    await p.e[op].onclick();
+    if(op==='cut')assert.equal(p.current().messages.at(-1).options,options);
+    const raw=` ${JSON.stringify(report).replace('"waypoint_offset_mm":0.375','"waypoint_offset_mm":0.3750')}\n`;
+    p.emit(report,[{name:'detoured-plan.json',text:raw,mime:'application/json'}],raw);
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':op);
+    const label=op==='cut'?'Cutting plan':op==='stock'?'Finite-stock plan':'detoured';
+    const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+    assert.deepEqual(plain(table(`${label}: raised-tool fixture routing`).children[2].children.map(n=>n.textContent)),
+      ['1','0.375','2','3','2']);
+    const totals=table(`${label}: material-qualified knife paths`).children[2].children.map(n=>n.textContent);
+    assert.equal(totals[4],'123.456');assert.equal(totals[9],'Complete authored cut order');
+    assert.match(visibleText(s),/times include every detour and requested return/);
+    assert.match(visibleText(s),/does not add measured clearance evidence/);
+    const details=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===`${label}: exact knife paths, material locks and process limits (display only)`);
+    details.open=true;details.handlers.toggle();
+    assert.match(visibleText(details),/travel_waypoints_mm/);
+    assert.match(visibleText(details),/return_waypoints_mm/);
+    const download=descendants(s).find(n=>n.download==='detoured-plan.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    delete plan.program;plan.program_refusal={message:'No complete checked fixture route'};
+    await p.e[op].onclick();p.emit(report);
+    assert.equal(table(`${label}: raised-tool fixture routing`),undefined);
+    assert.equal(table(`${label}: material-qualified knife paths`),undefined);
+    assert.match(visibleText(s),/No complete checked fixture route/);
+    assert.equal(p.live.has(download.href),false);
+    p.e[op==='cut'?'cutOptions':op==='stock'?'stockRequest':'studyRequest'].handlers.change();
+    assert.equal(s.hidden,true);
+  }
 });
 
 test('cutting objectives retain roll finite and complete-job scope without converting refusal to zero', async () => {

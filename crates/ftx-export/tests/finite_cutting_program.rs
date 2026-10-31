@@ -221,6 +221,79 @@ fn fixtures_are_checked_in_the_loaded_machine_frame_for_translated_hides() {
 }
 
 #[test]
+fn translated_hide_detours_and_return_are_visible_beyond_the_stock_in_the_full_bed() {
+    let p = pattern(vec![piece("front", 40., 60.)]);
+    let mut r = request(vec![stock(
+        "hide-001",
+        material("hide", "hide"),
+        -150.,
+        80.,
+        110.,
+        140.,
+    )]);
+    qualify(&p, &mut r);
+    let original = r.build(&p).unwrap();
+    let policy = r.options.program.as_mut().unwrap();
+    policy.machine.start_mm = Vec2::new(150., 30.);
+    policy.machine.fixture_clearance = Some(
+        serde_json::from_value(json!({
+            "model":"planar_disk_sweep/1","cutting_radius_mm":0.2,"raised_radius_mm":0.2,
+            "fixtures":[{"id":"raised-wall","outline_mm":[[100,0],[110,0],[110,145],[100,145]]}],
+            "source":{"reference":"test:finite-detour","accessed_on":"2026-10-30",
+                "note":"Synthetic planar wall and tool envelopes"},
+            "method":"Known loaded machine-frame geometry at both declared elevations",
+            "evidence":"estimate","allow_estimates":true
+        }))
+        .unwrap(),
+    );
+    relock(policy);
+    assert!(r.build(&p).unwrap().program().is_none());
+    r.options.program.as_mut().unwrap().travel_routing = Some(program::TravelRouting {
+        model: "fixture_box_visibility/1".into(),
+        waypoint_offset_mm: 1.,
+    });
+    let plan = r.build(&p).unwrap();
+    assert_eq!(value(&plan.markers()), value(&original.markers()));
+    let report = plan.program().unwrap();
+    let marker = &report.markers[0];
+    assert_eq!(
+        marker
+            .finite_stock
+            .as_ref()
+            .unwrap()
+            .marker_to_machine_offset_mm,
+        Vec2::new(150., -80.)
+    );
+    assert_eq!(
+        marker.finite_stock.as_ref().unwrap().stock_sha256,
+        original.program().unwrap().markers[0]
+            .finite_stock
+            .as_ref()
+            .unwrap()
+            .stock_sha256
+    );
+    assert!(
+        marker.selected.runs[0]
+            .travel_waypoints_mm
+            .iter()
+            .all(|p| p.y > 140. && p.y < 160.)
+    );
+    assert_eq!(marker.selected.runs[0].travel_waypoints_mm.len(), 2);
+    assert_eq!(marker.selected.return_waypoints_mm.len(), 2);
+    near(
+        marker.selected.checked_travel_length().unwrap(),
+        marker.selected.travel_length_mm,
+    );
+    let svg = ftx_export::cutting::preview::stock_svg(&plan, 0).unwrap();
+    assert!(svg.contains("viewBox=\"0 0 160 160\""));
+    assert!(svg.contains("translate(0 160) scale(1 -1)"));
+    assert!(svg.contains("translate(150 -80)"));
+    assert!(svg.contains("L111.2 146.2 L98.8 146.2"));
+    assert!(svg.contains("data-phase=\"raised-return\""));
+    assert_eq!(value(&plan), value(&plan.request().build(&p).unwrap()));
+}
+
+#[test]
 fn stock_identity_defects_and_rotated_source_frame_remain_bound_to_the_program() {
     let (p, mut r) = inputs();
     qualify(&p, &mut r);

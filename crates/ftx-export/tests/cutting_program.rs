@@ -108,6 +108,141 @@ fn relock(opts: &mut CutOptions) {
     }
 }
 
+fn routed_fixture() -> (Pattern, CutOptions) {
+    let p = pattern(vec![piece("front", 40., 60.)]);
+    let mut opts = qualified_options(&p);
+    opts.program.as_mut().unwrap().machine.start_mm = Vec2::new(150., 30.);
+    fixture_policy(
+        &mut opts,
+        [[100., 0.], [110., 0.], [110., 90.], [100., 90.]],
+    );
+    opts.program.as_mut().unwrap().travel_routing = Some(program::TravelRouting {
+        model: "fixture_box_visibility/1".into(),
+        waypoint_offset_mm: 1.,
+    });
+    (p, opts)
+}
+
+#[test]
+fn checked_detours_enable_a_blocked_job_and_retain_the_return_and_full_bed_preview() {
+    let (p, opts) = routed_fixture();
+    let mut straight = opts.clone();
+    straight.program.as_mut().unwrap().travel_routing = None;
+    assert!(
+        process_refusal(&p, &straight)
+            .message
+            .contains("raised-travel")
+    );
+    let plan = CutPlan::build(&p, &opts).unwrap();
+    let report = plan.program.as_ref().unwrap();
+    assert_eq!(
+        report.machine_sha256,
+        straight.program.as_ref().unwrap().qualifications[0].machine_sha256
+    );
+    assert_eq!(
+        value(&report.travel_routing),
+        value(&opts.program.as_ref().unwrap().travel_routing)
+    );
+    assert_eq!(value(&plan), value(&CutPlan::build(&p, &opts).unwrap()));
+    let route = &report.markers[0].selected;
+    assert_eq!(route.runs.len(), 1);
+    let run = &route.runs[0];
+    assert_eq!(run.travel_mm, [Vec2::new(150., 30.), Vec2::new(45., 5.)]);
+    assert_eq!(run.cut_endpoints_mm, [Vec2::new(45., 5.); 2]);
+    let known = [Vec2::new(111.2, 91.2), Vec2::new(98.8, 91.2)];
+    assert_eq!(run.travel_waypoints_mm.len(), known.len());
+    assert_eq!(route.return_waypoints_mm.len(), known.len());
+    for (got, expected) in run.travel_waypoints_mm.iter().zip(known) {
+        near(got.dist(expected), 0.);
+    }
+    for (got, expected) in route
+        .return_waypoints_mm
+        .iter()
+        .zip(known.into_iter().rev())
+    {
+        near(got.dist(expected), 0.);
+    }
+    // The bottom corners are outside the bed. Both upper corners are needed to clear this wall.
+    let one_way = Vec2::new(150., 30.).dist(known[0]) + 12.4 + known[1].dist(Vec2::new(45., 5.));
+    near(route.cut_length_mm, 200.);
+    near(route.travel_length_mm, 2. * one_way);
+    near(route.checked_travel_length().unwrap(), 2. * one_way);
+    near(route.modeled_path_seconds, 10.25 + 2. * one_way / 100.);
+    assert!(known[0].y > plan.rolls[0].length_m * 1000.);
+    let svg = ftx_export::cutting::preview::svg(&plan, 0).unwrap();
+    assert!(svg.contains("viewBox=\"0 0 500 500\""));
+    assert!(svg.contains("L111.2 91.2 L98.8 91.2"));
+    assert!(svg.contains("data-phase=\"raised-return\""));
+    assert!(svg.contains("data-fixture=\"declared-clamp\""));
+    assert!(
+        !report.optimality_proven
+            && !report.physical_cutting_validated
+            && !report.hardware_execution_authorized
+    );
+}
+
+#[test]
+fn routing_refuses_blocked_cuts_unreachable_graphs_and_incomplete_budgeted_routes() {
+    let (p, original) = routed_fixture();
+    let complete = CutPlan::build(&p, &original).unwrap();
+    let report = complete.program.as_ref().unwrap();
+    let mut opts = original.clone();
+    opts.program.as_mut().unwrap().work_limit = report.search_work - 1;
+    assert_eq!(
+        process_refusal(&p, &opts).code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    opts = original.clone();
+    opts.program.as_mut().unwrap().geometry_work_limit = report.geometry_work - 1;
+    assert_eq!(
+        process_refusal(&p, &opts).code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    opts = original.clone();
+    opts.program.as_mut().unwrap().work_limit = 1;
+    assert_eq!(
+        process_refusal(&p, &opts).code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    opts = original.clone();
+    fixture_policy(
+        &mut opts,
+        [[100., -10.], [110., -10.], [110., 510.], [100., 510.]],
+    );
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("no complete checked raised-travel route")
+    );
+    opts = original.clone();
+    fixture_policy(&mut opts, [[20., 4.], [25., 4.], [25., 6.], [20., 6.]]);
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("cutting tool envelope")
+    );
+    // The authored traversal is complete. Only the optional ordering candidate exhausts search.
+    opts = original;
+    let policy = opts.program.as_mut().unwrap();
+    policy.ordering = Ordering::NearestPath;
+    policy.work_limit = report.search_work + 1;
+    let bounded = CutPlan::build(&p, &opts).unwrap();
+    let bounded = bounded.program.as_ref().unwrap();
+    assert!(bounded.budget_exhausted);
+    assert_eq!(
+        value(&bounded.markers[0].selected),
+        value(&report.markers[0].selected)
+    );
+    assert_eq!(
+        bounded.markers[0]
+            .candidate_clearance_refusal
+            .as_ref()
+            .unwrap()
+            .code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+}
+
 #[test]
 fn fixture_clearance_checks_complete_cut_and_raised_sweeps_independently() {
     let p = pattern(vec![piece("front", 40., 60.)]);

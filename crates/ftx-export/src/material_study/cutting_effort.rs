@@ -325,6 +325,7 @@ fn summarize<'a>(
         || report.optimality_proven
         || report.machine_sha256 != program::machine_sha256(&policy.machine)?
         || hash(&report.fixture_clearance)? != hash(&policy.machine.fixture_clearance)?
+        || hash(&report.travel_routing)? != hash(&policy.travel_routing)?
         || markers.is_empty()
         || markers.len() != report.markers.len()
     {
@@ -372,10 +373,14 @@ fn summarize<'a>(
             .iter()
             .filter(|(key, _)| key.as_str() != "specimen_id")
             .collect();
-        let protocol = hash(&json!({"model":policy.model,"machine":policy.machine,
+        let mut protocol = json!({"model":policy.model,"machine":policy.machine,
             "method":qualification.method,"conditions":process_conditions,"directions":qualification.directions,
             "evidence":qualification.evidence,"clearance":{"unit":thickness.unit,"method":thickness.method,
-            "conditions":conditions,"evidence":thickness.evidence}}))?;
+            "conditions":conditions,"evidence":thickness.evidence}});
+        if let Some(routing) = &policy.travel_routing {
+            protocol["travel_routing"] = json!(routing);
+        }
+        let protocol = hash(&protocol)?;
         let expected: BTreeSet<_> = placements
             .iter()
             .enumerate()
@@ -407,16 +412,17 @@ fn summarize<'a>(
             exterior_started |= run.path.internal_cut.is_none();
         }
         let cut = finite_sum(route.runs.iter().map(|run| run.cut_length_mm))?;
-        let travel = finite_sum(
-            route
-                .runs
-                .iter()
-                .map(|run| run.travel_mm[0].dist(run.travel_mm[1]))
-                .chain(route.return_mm.iter().map(|[a, b]| a.dist(*b))),
-        )?;
+        let travel = route.checked_travel_length()?;
         if paths != expected
             || paths.is_empty()
+            || route.runs.first().map(|run| run.travel_mm[0]) != Some(policy.machine.start_mm)
             || route.return_mm.is_some() != policy.machine.return_to_start
+            || (policy.travel_routing.is_none()
+                && (!route.return_waypoints_mm.is_empty()
+                    || route
+                        .runs
+                        .iter()
+                        .any(|run| !run.travel_waypoints_mm.is_empty())))
             || !near(cut, route.cut_length_mm)
             || !near(travel, route.travel_length_mm)
             || !near(cut / qualification.feed_mm_s, route.cutting_seconds)

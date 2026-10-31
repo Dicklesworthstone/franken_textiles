@@ -1815,7 +1815,25 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
     cells(t, [String(marker.marker + 1), marker.qualification, metric(route?.runs?.length),
       metric(route?.cut_length_mm), metric(route?.travel_length_mm), metric(route?.cutting_seconds),
       metric(route?.travel_seconds), metric(route?.lift_lower_seconds), metric(route?.modeled_path_seconds),
-      marker.improved ? "Shorter complete traversal" : "Complete authored traversal"]);
+      marker.improved ? "Shorter complete traversal" :
+        program.travel_routing ? "Complete authored cut order" : "Complete authored traversal"]);
+  }
+  if (program.travel_routing) {
+    const routes = table(parent, `${label}: raised-tool fixture routing`,
+      ["Marker", "Waypoint offset (mm)", "Detoured moves before cuts", "Intermediate travel points", "Return points"]);
+    for (const marker of program.markers || []) {
+      const route = marker.selected;
+      const waypoints = (route?.runs || []).map(run => run.travel_waypoints_mm?.length || 0);
+      cells(routes, [String(marker.marker + 1), metric(program.travel_routing.waypoint_offset_mm),
+        metric(waypoints.filter(count => count > 0).length), metric(waypoints.reduce((sum, count) => sum + count, 0)),
+        metric(route?.return_waypoints_mm?.length || 0)]);
+    }
+    const routing = document.createElement("p");
+    routing.textContent = "Raised-tool routes retain every intermediate point in the machine frame and use the qualified tool and fixture geometry. " +
+      "The SVG preview shows the complete bed and selected travel routes. Reported travel distances and times include every detour and requested return. " +
+      "The waypoint offset controls the bounded candidate search; it does not add measured clearance evidence or establish a globally shortest route. " +
+      "Cutting paths, their directions and the internal-before-exterior phases remain unchanged.";
+    parent.append(routing);
   }
   const finite = (program.markers || []).filter(marker => marker.finite_stock);
   if (finite.length) {

@@ -266,6 +266,11 @@ drape do not establish physical fit. Body-dependent studies below have an explic
 <h3>Cutting, purchasing and sewing</h3>
 <label>Roll-planning options JSON <input id="cutOptions" type="file" accept=".json,application/json"></label>
 <p class="note">Set <code>maximum_marker_length_m</code> in the options to place complete pieces across separate markers within a cutting-table or continuous-cut limit. Purchasing normally combines markers of the same material into one order; optional supplier allocation can distribute whole markers across qualified offers.</p>
+<p class="note">For a qualified knife program with declared fixtures, add
+<code>program.travel_routing: {"model":"fixture_box_visibility/1","waypoint_offset_mm":1.0}</code>
+to allow checked raised-tool detours. The positive offset places candidate waypoints around fixture bounds;
+the supplied tool envelopes still determine clearance. Previews and modeled travel times include the selected
+detours and return. A bounded search can refuse without proving that every possible route is blocked.</p>
 <p class="note">Set <code>width_basis: "reported_lower_bound"</code> to plan inside the lower endpoint of each roll material's
 source-reported width range. Missing bounds refuse this option. The preview and report retain the narrower layout boundary;
 marker length and purchasing are recomputed. Nominal purchase width, invoiced area and nominal stock mass keep their original

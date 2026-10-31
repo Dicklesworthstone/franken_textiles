@@ -194,10 +194,15 @@ there is no separate hide toolpath implementation in an adapter.
 
 Geometry validation and ordering work are shared across all used items in one program. An unfinished
 nearest-path candidate retains the complete authored baseline. Reported durations include only
-declared constant-rate cutting, raised-tool straight travel and lift/lower phases; loading,
+declared constant-rate cutting, every retained raised-travel chord and lift/lower phases; loading,
 registration, workholding, acceleration, corner/blade dynamics and inspection are not modeled.
 The emitted placement is not a measured machine registration. No cutter command is transmitted,
 no empirical cycle-time or cut-quality claim is made, and hardware execution remains unauthorized.
+
+Optional `program.travel_routing` uses the shared [checked detour policy](cutting-plans.md#checked-detours-for-raised-moves).
+Reported intermediate points and final returns use the loaded machine frame. In this mode the SVG
+shows the full bed, applies the retained stock translation once, and includes every selected raised
+leg and fixture; travel outside the stock footprint is not clipped from review.
 
 ## Browser integration
 

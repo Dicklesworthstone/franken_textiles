@@ -238,7 +238,7 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
     }
     // The same optional source-qualified fixture policy crosses both real binaries and the
     // portable boundary; obstruction withdraws only the process, never the ordinary markers.
-    for blocked in [false, true] {
+    for (blocked, routed) in [(false, false), (true, false), (true, true)] {
         let fixture = if blocked {
             json!([[7.9, 11.9], [8.1, 11.9], [8.1, 12.1], [7.9, 12.1]])
         } else {
@@ -257,6 +257,11 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
         let lock = machine_sha256(&machine).unwrap();
         for q in options["program"]["qualifications"].as_array_mut().unwrap() {
             q["machine_sha256"] = json!(lock);
+        }
+        if routed {
+            options["program"]["travel_routing"] = json!({
+                "model":"fixture_box_visibility/1", "waypoint_offset_mm":1.
+            });
         }
         w.write("options.json", &options);
         let portable: Value = serde_json::from_str(
@@ -279,7 +284,7 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
         let primary: Value = serde_json::from_slice(&primary.stdout).unwrap();
         assert_eq!(primary["result"], portable);
         assert_eq!(portable["rolls"], baseline["rolls"]);
-        if blocked {
+        if blocked && !routed {
             assert!(portable.get("program").is_none());
             assert!(
                 portable["program_refusal"]["message"]
@@ -292,6 +297,37 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
                 portable["program"]["fixture_clearance"],
                 options["program"]["machine"]["fixture_clearance"]
             );
+            if routed {
+                assert!(
+                    portable["program"]["markers"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|marker| {
+                            marker["selected"]["runs"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|run| {
+                                    run["travel_waypoints_mm"]
+                                        .as_array()
+                                        .is_some_and(|p| !p.is_empty())
+                                })
+                        })
+                );
+                let job: Value = serde_json::from_str(
+                    &ftx_wasm::manufacturing::roll_job(&p.to_string(), &options.to_string(), 0)
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(job["plan_json"].as_str().unwrap()).unwrap(),
+                    portable
+                );
+                let svg = job["preview_svg"].as_str().unwrap();
+                assert!(svg.contains("knife-raised-travel"));
+                assert!(svg.contains("viewBox=\"0 0 500 500\""));
+            }
         }
     }
 }

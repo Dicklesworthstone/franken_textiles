@@ -910,8 +910,19 @@ and outward-rounded line-distance bounds refuse contact or unresolved separation
 physical tolerance. The complete policy joins the machine lock and the geometry work budget. A
 blocked nearest-path candidate retains the checked authored baseline with its refusal; a blocked
 baseline, cut or exhausted check refuses only the process. This is planar geometry, with no inferred
-registration, grip, obstacle routing or three-dimensional machine clearance. Direct geometry,
+registration, grip or three-dimensional machine clearance. Direct geometry,
 roll/finite-stock and native/portable material-study regressions cover this boundary.
+
+Opt-in `program.travel_routing` admits conservative fixture-box corner detours under those same
+exact sweeps and source locks. Its positive waypoint offset chooses graph vertices, not a physical
+clearance margin. Shared budgets include nodes, search, edge checks and final replay; no partial
+baseline is published. Sparse intermediate vertices retain unchanged travel/cut endpoints, and the
+canonical complete-polyline length drives time and cached study decisions. Routed previews show
+the full bed, actual finite-stock loading translation, fixtures, selected raised legs and return.
+Policy omission preserves legacy reports/previews. Known detours, blocked cuts/graphs, budget
+rollback, translated hides, source-sealed study replay and native/portable equality are covered by
+the existing cutting-program, cutting-effort and CLI workflow tests. No general route optimality,
+3D motion, physical process validation or hardware execution follows.
 
 **Bounded split supplier orders.** Optional `market.split_orders` produces `ftx-cut-procurement/3`
 by assigning indivisible markers to current exact-material-locked offers. Each aggregated order

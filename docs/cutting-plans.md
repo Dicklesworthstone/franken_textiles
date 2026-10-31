@@ -125,7 +125,7 @@ and geometry hashes, applied recipe, thickness interval and every raised-tool tr
 `ordering: "nearest_path"` compares unchanged path starts within each phase under one shared bounded
 candidate budget. An unfinished candidate or a candidate with longer travel retains the complete
 baseline; the heuristic never claims a shortest-path proof. `ordering: "authored"` performs no
-search. Optional `geometry_work_limit` bounds validation separately (one million by default,
+ordering search. Optional `geometry_work_limit` bounds validation separately (one million by default,
 at most twenty million); exhausting validation refuses instead of emitting an unchecked path.
 Both budgets are shared by every marker. Material/design studies reserve the complete configured
 limits across all alternatives or adaptive probe slots, capped at two million search comparisons and
@@ -164,11 +164,38 @@ must admit that exact configuration. The program retains the original policy in
 outward-rounded bounds do not introduce a physical padding distance. Geometric work shares the existing
 `geometry_work_limit` across all fixtures and markers. Missing evidence, blocked cuts or a blocked
 authored traversal produce an independent `program_refusal`, preserving valid nesting and purchasing.
-The planner does not route around obstacles. When a nearest-path candidate is blocked but the
+Without the opt-in routing policy below, raised moves stay straight. When a nearest-path candidate is blocked but the
 complete authored baseline is clear, it keeps that baseline and reports the obstruction in
 `program.markers[].candidate_clearance_refusal`. Exhausting geometric validation always refuses
 the process; it never publishes an unchecked candidate. Omission makes no tool/fixture clearance
 claim and keeps the existing machine digest.
+
+### Checked detours for raised moves
+
+An otherwise qualified job can be blocked solely by a straight raised move across a clamp. Set
+`program.travel_routing` to `{"model":"fixture_box_visibility/1","waypoint_offset_mm":1.0}`
+to search checked detours using the existing qualified fixture/tool geometry. The positive offset
+is an explicit **search choice**, not a recommended safety distance: it places candidate corners
+beyond each fixture bounding box plus the raised-tool radius. Only candidate points inside the
+machine bed are used. Every complete connecting chord must pass the original exact circular sweep;
+no fixture, tool radius, cutting point, path direction or qualification is changed. A clear direct
+move stays direct. Blocked cuts or endpoints still refuse.
+
+The finite corner graph and deterministic search are conservative: a missing route does not prove
+that every possible path is blocked, and an accepted route carries no globally shortest-path claim.
+Node generation, candidate comparisons, checked links and final selected sweeps share the existing
+search/geometry budgets across all markers. Failure to complete the authored cut order's raised
+routes refuses the process. Once that baseline is complete, an unfinished or worse optional ordering
+candidate keeps it; geometry-budget exhaustion always refuses instead of retaining unchecked output.
+
+The report retains `travel_routing`. Each run keeps `travel_mm` as its original endpoints and adds
+ordered intermediate `travel_waypoints_mm` only when needed; the final return similarly adds
+`return_waypoints_mm`. All points are in the machine frame. Every chord contributes to travel length,
+modeled time and material-study objectives. Roll and finite-stock SVG previews use the **full bed**
+in this mode, showing stationary fixtures and complete selected raised routes, including a detour
+outside the fabric footprint and the final return. Finite stock retains its explicit loading
+translation. Omission preserves the original report and preview formats. This remains planar
+constant-speed planning, with no new acceleration, 3D motion, measured cutting or execution claim.
 
 ## Dated purchasing observations
 
