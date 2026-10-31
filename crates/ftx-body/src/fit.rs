@@ -407,8 +407,8 @@ pub fn calibrate_nappy(
     Ok((p, s, achieved))
 }
 
-/// What a tape reads on `posed` (mm, in [`TAPE_FIELDS`] order), or `None` when a section around an
-/// axis is missing (a body far outside the model's range).
+/// What a tape reads on `posed` (mm, in [`TAPE_FIELDS`] order), or `None` when any
+/// required section is missing. Fitting retains this complete-reading contract.
 #[must_use]
 pub fn tape_readings(
     faces: &[[usize; 3]],
@@ -416,82 +416,105 @@ pub fn tape_readings(
     posed: &PosedBody,
     frames: &BodyFrames,
 ) -> Option<[f64; N_TAPE]> {
-    let lm = |n: &str| frames.landmarks.get(n).copied();
+    let partial = partial_tape_readings(faces, rest_height_m, posed, frames);
+    let mut values = [0.0; N_TAPE];
+    for (i, value) in partial.into_iter().enumerate() {
+        values[i] = value?;
+    }
+    Some(values)
+}
+
+/// Independently available tape readings (mm, in [`TAPE_FIELDS`] order).
+///
+/// A missing section or landmark withdraws only the readings that depend on it. Nonfinite and
+/// nonpositive values are unavailable, never zero or an inferred replacement. These are model
+/// predictions; partial geometry does not establish measurement readiness or anatomical accuracy.
+#[must_use]
+pub fn partial_tape_readings(
+    faces: &[[usize; 3]],
+    rest_height_m: f64,
+    posed: &PosedBody,
+    frames: &BodyFrames,
+) -> [Option<f64>; N_TAPE] {
+    let lm = |n: &str| frames.landmarks.get(n).copied().filter(|v| v.is_finite());
     let mm: Vec<Vec3> = posed.vertices.iter().map(|v| *v * 1000.0).collect();
-    // torso: horizontal sections around the torso axis
+    // Torso sections retain their shared axis and the original tape arithmetic.
     let axis = [frames.torso.origin.x, frames.torso.origin.y];
     let torso = Slicer::new(&mm, faces, SLAB_MM);
     let g = |h: f64| torso.girth(frames.floor_z + h, axis);
-    let (waist_h, crotch_h, armpit_h) = (lm("waist")?, lm("crotch")?, lm("chest")?);
-    let hip = extreme(crotch_h + 0.2 * (waist_h - crotch_h), waist_h, true, g)?;
-    // limbs: sections perpendicular to the leg and arm axes, around them
+    let hip = (|| {
+        let (waist_h, crotch_h) = (lm("waist")?, lm("crotch")?);
+        extreme(crotch_h + 0.2 * (waist_h - crotch_h), waist_h, true, g)
+    })();
     let frame = |f: &crate::landmarks::Frame| in_frame(&mm, f.origin, f.lat, f.front, f.up);
     let (leg, arm) = (frame(&frames.leg_r), frame(&frames.arm_r));
     let (legs, arms) = (
         Slicer::new(&leg, faces, SLAB_MM),
         Slicer::new(&arm, faces, SLAB_MM),
     );
-    // the part axes run parallel to the limbs, not always through them (near the ankle the leg
-    // axis passes beside it): the nearest loop when none contains the axis
+    // Limb axes can pass beside the surface; preserve the qualified nearest-loop selection.
     let gl = |h: f64| legs.girth_near(h, [0.0, 0.0]);
     let ga = |h: f64| arms.girth_near(h, [0.0, 0.0]);
-    let lh = |n: &str| frames.landmark_h("leg_R", n);
-    let (crotch_l, knee_l, ankle_l) = (lh("crotch")?, lh("knee")?, lh("ankle")?);
-    let shin = knee_l - ankle_l;
-    // thigh: fullest just below the crotch; calf: fullest between 30 % and 90 % up the shin;
-    // ankle: narrowest from 10 mm above the joint to a quarter up the shin
-    let thigh = extreme(crotch_l - 40.0, crotch_l - 5.0, true, gl)?;
-    let calf = extreme(ankle_l + 0.3 * shin, knee_l - 0.1 * shin, true, gl)?;
-    let ankle = extreme(ankle_l + 10.0, ankle_l + 0.25 * shin, false, gl)?;
+    let lh = |n: &str| frames.landmark_h("leg_R", n).filter(|v| v.is_finite());
+    let thigh = lh("crotch").and_then(|h| extreme(h - 40.0, h - 5.0, true, gl));
+    let calf = (|| {
+        let (knee, ankle) = (lh("knee")?, lh("ankle")?);
+        let shin = knee - ankle;
+        extreme(ankle + 0.3 * shin, knee - 0.1 * shin, true, gl)
+    })();
+    let ankle = (|| {
+        let (knee, ankle) = (lh("knee")?, lh("ankle")?);
+        extreme(ankle + 10.0, ankle + 0.25 * (knee - ankle), false, gl)
+    })();
     let tip = frames.tip_h;
-    // upper arm midway between the shoulder point and the elbow (0.55 of the arm down); the wrist
-    let upper_arm = ga(tip - 0.275 * frames.arm_length)?;
-    let wrist = ga(tip - frames.arm_length)?;
-    // C7 down the spine to the waist, along the back's median line
-    let c7_h = lm("c7")?;
-    let mut back = 0.0;
-    let mut prev: Option<(f64, f64)> = None;
-    let mut h = waist_h;
-    loop {
-        let y = torso.back_point(frames.floor_z + h, axis)?;
-        if let Some((ph, py)) = prev {
-            back += ftx_core::det::hypot(h - ph, y - py);
+    let upper_arm = ga(tip - 0.275 * frames.arm_length);
+    let wrist = ga(tip - frames.arm_length);
+    // A missing spine section does not invalidate unrelated circumference readings.
+    let back = (|| {
+        let (waist_h, c7_h) = (lm("waist")?, lm("c7")?);
+        let mut back = 0.0;
+        let mut prev: Option<(f64, f64)> = None;
+        let mut h = waist_h;
+        loop {
+            let y = torso.back_point(frames.floor_z + h, axis)?;
+            if let Some((ph, py)) = prev {
+                back += ftx_core::det::hypot(h - ph, y - py);
+            }
+            prev = Some((h, y));
+            if h >= c7_h {
+                break;
+            }
+            h = (h + SEARCH_STEP_MM).min(c7_h);
         }
-        prev = Some((h, y));
-        if h >= c7_h {
-            break;
-        }
-        h = (h + SEARCH_STEP_MM).min(c7_h);
-    }
-    let (neck_base, snp) = crate::tape::neck_base(&mm, faces, frames)?;
-    let head = crate::tape::head_girth(&torso, frames)?;
-    let (shoulder_length, across_back) =
-        crate::tape::shoulder_and_back(&mm, faces, &torso, frames, snp)?;
-    let total_crotch_length = crate::tape::crotch_length(&mm, faces, frames)?;
-    let outseam = crate::tape::outseam(&torso, frames)?;
-    Some([
-        rest_height_m * 1000.0,
-        g(armpit_h - CHEST_BELOW_ARMPIT_MM)?,
-        g(waist_h)?,
+        Some(back)
+    })();
+    let neck = crate::tape::neck_base(&mm, faces, frames);
+    let shoulders =
+        neck.and_then(|(_, snp)| crate::tape::shoulder_and_back(&mm, faces, &torso, frames, snp));
+    [
+        Some(rest_height_m * 1000.0),
+        lm("chest").and_then(|h| g(h - CHEST_BELOW_ARMPIT_MM)),
+        lm("waist").and_then(g),
         hip,
-        waist_h,
-        crotch_h,
+        lm("waist"),
+        lm("crotch"),
         thigh,
-        gl(knee_l)?,
+        lh("knee").and_then(gl),
         calf,
         ankle,
         upper_arm,
         wrist,
-        frames.arm_length,
-        lm("knee")?,
+        Some(frames.arm_length),
+        lm("knee"),
         back,
-        neck_base,
-        head,
-        shoulder_length,
-        across_back,
-        total_crotch_length,
-        outseam,
-    ])
+        neck.map(|(girth, _)| girth),
+        crate::tape::head_girth(&torso, frames),
+        shoulders.map(|(length, _)| length),
+        shoulders.map(|(_, back)| back),
+        crate::tape::crotch_length(&mm, faces, frames),
+        crate::tape::outseam(&torso, frames),
+    ]
+    .map(|value| value.filter(|v| v.is_finite() && *v > 0.0))
 }
 
 /// One measurement to fit: a name of [`TAPE_FIELDS`] and its value (mm).
@@ -853,7 +876,7 @@ mod tests {
         let mut landmarks = std::collections::BTreeMap::new();
         landmarks.insert("crotch".to_string(), 20.0);
         landmarks.insert("waist".to_string(), 180.0);
-        let frames = BodyFrames {
+        let mut frames = BodyFrames {
             floor_z: 0.0,
             landmarks,
             torso: dummy,
@@ -877,5 +900,34 @@ mod tests {
         };
         let girth = seat_girth(&faces, &posed, &frames).expect("seat girth");
         assert!((girth - 480.0).abs() < 1e-6, "got {girth}");
+
+        // The square frustum has an independently known 104 mm side at z = 180 mm.
+        // It has no head, neck or knee anatomy, which must not erase its valid torso sections.
+        frames.neck.origin.z = 1000.0;
+        let readings = partial_tape_readings(&faces, 0.2, &posed, &frames);
+        assert_eq!(readings[0], Some(200.0));
+        assert!((readings[2].unwrap() - 416.0).abs() < 1e-6);
+        assert!((readings[3].unwrap() - 480.0).abs() < 1e-6);
+        assert_eq!(readings[4], Some(180.0));
+        assert_eq!(readings[5], Some(20.0));
+        for index in [1, 7, 8, 9, 13, 14, 15, 16, 17, 18] {
+            assert_eq!(
+                readings[index], None,
+                "unexpected field {}",
+                TAPE_FIELDS[index]
+            );
+        }
+        assert!(tape_readings(&faces, 0.2, &posed, &frames).is_none());
+        let no_stature = partial_tape_readings(&faces, f64::NAN, &posed, &frames);
+        assert_eq!(no_stature[0], None);
+        assert_eq!(no_stature[2], readings[2]);
+        assert_eq!(no_stature[3], readings[3]);
+
+        frames.landmarks.remove("waist");
+        let no_waist = partial_tape_readings(&faces, 0.2, &posed, &frames);
+        assert_eq!(no_waist[2], None);
+        assert_eq!(no_waist[3], None);
+        assert_eq!(no_waist[4], None);
+        assert_eq!(no_waist[5], Some(20.0));
     }
 }

@@ -130,6 +130,16 @@ identities and signed comparisons without refitting or inventing uncertainty.
 Measurements must already be validated and fused by the caller. Missing anatomy
 remains unavailable. Report consistency is not authenticity or real-person fit.
 
+`partial_tape_readings` retains each independently available positive finite reading in
+`TAPE_FIELDS` order. A missing neck, shoulder or limb section cannot erase valid torso
+circumferences, heights or stature. A failed dependency still withdraws every reading that
+needs it; no inferred value replaces the missing section. Accepted-shape diagnostics identify
+partial coverage and its exact unavailable fields, and material-study flat validation consumes
+the same surviving MODEL_FIT values and signed residuals. The complete-only `tape_readings`
+API and tape optimizer retain their requirement for all 21 readings. The square-frustum
+known-answer check and accepted-prism handoff regression cover this bounded propagation;
+they do not establish new anatomical validity, uncertainty or measurement readiness.
+
 **Units and frames.** Metres, +Z up, the body faces −Y, +X is the body's left. Rest bodies sit in the
 template frame (soles near z = −0.82 m); posed bodies are root-relative. Nothing is grounded here.
 

@@ -31,8 +31,8 @@ pub use drape::{
 };
 pub use fit::{
     FREE, MAX_NAPPY_SIZE, N_PHENOTYPE, N_TAPE, TAPE_FIELDS, TapeFit, TapeResidual, TapeTarget,
-    Wearer, calibrate_nappy, fit_sigma, fit_stature, fit_tape, is_girth, seat_girth, tape_readings,
-    tape_targets,
+    Wearer, calibrate_nappy, fit_sigma, fit_stature, fit_tape, is_girth, partial_tape_readings,
+    seat_girth, tape_readings, tape_targets,
 };
 pub use kinematics::Affine;
 pub use landmarks::{BodyFrames, Frame};
