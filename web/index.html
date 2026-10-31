@@ -85,6 +85,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       </div>
       <p id="traceImportNote" class="mut" hidden><span id="traceImportText"></span>
         <button id="clearTraceImport" type="button">Clear tracing handoff</button></p>
+      <p id="alterImportNote" class="mut" hidden><span id="alterImportText"></span>
+        <a id="alterDownload" download="altered-pattern.json">Download current pattern</a>
+        <button id="undoAlter" type="button" disabled>Undo last alteration and check</button></p>
       <small>Without a fit spec the checks use role-based defaults.</small>
     </div>
   </section>
@@ -229,6 +232,50 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       <iframe id="foldView" class="hidden" title="the fold-up" style="width:100%;height:560px;border:1px solid var(--line);border-radius:8px"></iframe>
     </div>
   </section>
+  <section id="alterSection" class="hidden">
+    <h2>Alter the current pattern</h2>
+    <p>Choose one operation on the checked pattern. Piece coordinates are in millimetres, with y pointing up.
+      Each accepted change keeps the pattern's source and adds its explanation to the history, then checks
+      seams, fit and exports again with the current body inputs.</p>
+    <p class="row"><label>Operation <select id="alterOperation">
+      <option value="slash-spread">Slash and spread</option><option value="move">Move a vertex</option>
+      <option value="true-seam">True a seam</option><option value="cap-ease">Adjust sleeve-cap ease</option>
+      <option value="transfer-curve">Transfer curve shape</option></select></label>
+      <label id="alterPieceBox">Drafted piece <select id="alterPiece"></select></label></p>
+    <div id="alterSpread" class="row">
+      <label>Axis <select id="alterAxis"><option value="x">x — width</option><option value="y">y — length</option></select></label>
+      <label>Cut at (mm) <input id="alterAt" type="number" step="any" value="0"></label>
+      <label>Add (mm; negative removes) <input id="alterAdd" type="number" step="any" value="0"></label>
+      <small>Only coordinates strictly above the cut move. Grain and drawn marks follow; drill coordinates, notch fractions and placement anchors are retained.</small>
+    </div>
+    <div id="alterMove" class="hidden row">
+      <label>Vertex <select id="alterVertex"></select></label>
+      <label>Horizontal change (mm) <input id="alterDx" type="number" step="any" value="0"></label>
+      <label>Vertical change (mm) <input id="alterDy" type="number" step="any" value="0"></label>
+      <small>Connected curves and physical copies follow the vertex. Separate drawn marks do not move.</small>
+    </div>
+    <div id="alterTrue" class="hidden row">
+      <label>Seam <select id="alterSeam"></select></label>
+      <label>Move side-b endpoint <select id="alterEnd"><option value="end">End</option><option value="start">Start</option></select></label>
+      <small>Matches the declared seam ratio by moving the drafted side-b vertex, within a ±60 mm limit.</small>
+    </div>
+    <div id="alterCap" class="hidden row">
+      <label>Cap seams (select every contributing seam) <select id="alterCapSeams" multiple size="4"></select></label>
+      <label>Total cap / armhole ratio <input id="alterRatio" type="number" step="any" min="0" value="1.06"></label>
+      <small>The ratio applies to the total cap, not each half. The solver refuses an unreachable ratio.</small>
+    </div>
+    <div id="alterTransfer" class="hidden row">
+      <label>Source pattern (optional; otherwise this pattern) <input id="alterSourceFile" type="file" accept=".json,application/json"></label>
+      <label>Source physical instance <select id="alterSourceInstance"></select></label>
+      <label>Source edge <select id="alterSourceEdge"></select></label>
+      <label>Destination drafted edge <select id="alterTargetEdge"></select></label>
+      <small>Copies chord-relative curve character, retaining the destination endpoints. Source and destination edges may have different lengths.</small>
+    </div>
+    <p><button id="alterApply" type="button" disabled>Apply alteration and check</button></p>
+    <p id="alterStatus" class="mut" aria-live="polite"></p>
+    <p class="mut">An invalid operation keeps the working pattern unchanged. A changed pattern needs a fresh
+      drape and material study; passing these checks does not establish physical fit.</p>
+  </section>
   <section id="errorBox" class="hidden err"><h2>Something went wrong</h2><pre id="errorText" style="white-space:pre-wrap"></pre>
     <details id="errorDetailBox" class="hidden"><summary>Details</summary><pre id="errorDetail" style="white-space:pre-wrap;font-size:12px"></pre></details></section>
 </main>
@@ -247,6 +294,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   let bodyFitText = null, bodyFitReady = true, bodyFitRead = 0;
   let tracedPattern = null, traceToken = new URL(location.href).searchParams.get("traceImport");
   function clearTraceImport() {if(traceToken)window.opener=null;tracedPattern=traceToken=null;$("traceImportNote").hidden=true;}
+  let editedPattern = null, editedFit = null, editedBodyProgram = null, previousAlteration = null, editedUrl = null;
+  let alterationBase = null, alterationRequest = 0, alterationBusy = false;
+  let alterationSource = null, alterationSourceTargets = null, alterationSourceRequest = 0, alterationSourceBusy = false;
   let photoEvidence = null, photoImportProblem = null, photoToken = new URL(location.href).searchParams.get("photoImport");
   function clearPhotoImport() {if(photoToken)window.opener=null;photoEvidence=photoToken=photoImportProblem=null;$("photoImportNote").hidden=true;}
   let nextRequest = 0, roundRequest = 0, bodyRequest = 0, foldRequest = 0, fieldsRequest = 0;
@@ -256,7 +306,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
   function bodyMode() { return document.querySelector("input[name=bodyMode]:checked").value; }
-  const nappyGarment = () => program === "zouave_trousers" || program === "audit";   // trousers, or maybe trousers
+  const bodyProgram = () => editedBodyProgram ?? program;
+  const nappyGarment = () => bodyProgram() === "zouave_trousers" || bodyProgram() === "audit";   // trousers, or maybe trousers
   function showBodyMode() {
     const m = bodyMode();
     $("tapeBox").classList.toggle("hidden", m !== "tape");
@@ -269,9 +320,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     const entries = Object.entries(info).map(([k, v]) => [k, v.label]).concat([["audit", "Check my own pattern.json"]]);
     $("programs").innerHTML = entries.map(([k, label]) =>
       `<label><input type="radio" name="program" value="${esc(k)}"${k === program ? " checked" : ""}>${esc(label)}</label>`).join("");
-    $("programs").querySelectorAll("input").forEach((el) => el.addEventListener("change", () => { clearTraceImport(); program = el.value; onProgram(); }));
+    $("programs").querySelectorAll("input").forEach((el) => el.addEventListener("change", () => { clearTraceImport(); clearEditedPattern(); program = el.value; onProgram(); }));
   }
-  function onProgram() {
+  function onProgram(keepBodyInputs = false) {
     invalidateRound();
     store.set("program", program);
     showBodyMode();
@@ -286,12 +337,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       const kept = Object.fromEntries(Object.entries(saved || {}).filter(([k]) => k in defaults));
       $("style").value = JSON.stringify({ ...defaults, ...kept }, null, 1);
     }
-    requestFields();
+    if (keepBodyInputs !== true) requestFields();
   }
   function requestFields() {
     if (!ready) return;                                  // the worker has no module until "ready"
     fieldsRequest = ++nextRequest;
-    worker.postMessage({ type: "fields", request: fieldsRequest, args: { program, stature_cm: +$("stature").value || 92, age_months: +$("age").value || null,
+    worker.postMessage({ type: "fields", request: fieldsRequest, args: { program: bodyProgram(), stature_cm: +$("stature").value || 92, age_months: +$("age").value || null,
                                                  nappies: $("nappies").checked && nappyGarment() } });
   }
   function renderFields() {
@@ -354,8 +405,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     // Only page-authored fields are serialized. Original JSON sources retain their number semantics.
     const bodyText = JSON.stringify(body).slice(0, -1) + (measurements === null ? "" : ',"measurements":' + measurements) + "}";
     if (program === "audit") {
-      const pattern = await readJson(tracedPattern ? {files:[tracedPattern]} : $("patternFile"), "pattern.json");
-      const fit = $("fitFile").files.length ? ',"fit_spec":' + await readJson($("fitFile"), "fit_spec.json") : "";
+      const pattern = editedPattern ?? await readJson(tracedPattern ? {files:[tracedPattern]} : $("patternFile"), "pattern.json");
+      const fitText = editedFit ?? ($("fitFile").files.length ? await readJson($("fitFile"), "fit_spec.json") : null);
+      const fit = fitText === null ? "" : ',"fit_spec":' + fitText;
       return '{"body":' + bodyText + ',"pattern":' + pattern + fit + '}';
     }
     const style = $("style").value || "{}";
@@ -502,7 +554,14 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     foldRequest = ++nextRequest; folding = false;
     dropFold(); dropBodyCheck(); foldButton(); status("");
   }
-  function invalidateRound() {
+  function invalidateRound(keepAlteration = false) {
+    alterationRequest = ++nextRequest; alterationBusy = false;
+    if (keepAlteration !== true) {
+      alterationBase = null; alterationSource = alterationSourceTargets = null;
+      alterationSourceRequest = ++nextRequest; alterationSourceBusy = false;
+      $("alterSourceFile").value = "";
+    }
+    alterationControls();
     roundRequest = ++nextRequest; foldable = false; bodyCheckable = false;
     materialSources = null; $("chooseMaterials").disabled = true;
     if (materialTransfer) materialTransfer.files = null;
@@ -519,14 +578,128 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     invalidateRound();
   }
 
+  function clearEditedPattern() {
+    editedPattern = editedFit = editedBodyProgram = previousAlteration = null;
+    if (editedUrl) URL.revokeObjectURL(editedUrl);
+    editedUrl = null; $("alterDownload").removeAttribute("href");
+    $("alterImportNote").hidden = true; $("undoAlter").disabled = true;
+  }
+  function showEditedPattern(message) {
+    if (editedUrl) URL.revokeObjectURL(editedUrl);
+    editedUrl = URL.createObjectURL(new Blob([editedPattern], {type:"application/json"}));
+    $("alterDownload").href = editedUrl; $("alterImportNote").hidden = false;
+    $("alterImportText").textContent = message + " Choose another pattern file or drafting program to replace it. ";
+    $("undoAlter").disabled = !previousAlteration || dead;
+  }
+  function alterationOptions(id, pairs) {
+    const selected = $(id).value;
+    $(id).replaceChildren(...pairs.map(([value,label]) => {
+      const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
+    }));
+    if (id !== "alterCapSeams") $(id).value = pairs.some(([v]) => v === selected) ? selected : (pairs[0]?.[0] ?? "");
+  }
+  function alterationPieceOptions() {
+    const piece = alterationBase?.targets.pieces.find(p => p.id === $("alterPiece").value);
+    alterationOptions("alterVertex", (piece?.vertices || []).map(v => [v,v]));
+    alterationOptions("alterTargetEdge", (piece?.edges || []).map(v => [v,v]));
+  }
+  function alterationSourceOptions() {
+    const targets = alterationSourceTargets || alterationBase?.targets;
+    alterationOptions("alterSourceInstance", (targets?.instances || []).map(i => [i.id,i.id]));
+    const instance = targets?.instances.find(i => i.id === $("alterSourceInstance").value);
+    alterationOptions("alterSourceEdge", (instance?.edges || []).map(v => [v,v]));
+  }
+  function alterationControls() {
+    $("alterSection").classList.toggle("hidden", !alterationBase);
+    const op = $("alterOperation").value || "slash-spread";
+    $("alterApply").disabled = !ready || dead || !alterationBase || alterationBusy || (op === "transfer-curve" && alterationSourceBusy);
+    $("alterOperation").value = op;
+    $("alterPieceBox").classList.toggle("hidden", op === "true-seam");
+    for (const [id, name] of [["alterSpread","slash-spread"],["alterMove","move"],["alterTrue","true-seam"],["alterCap","cap-ease"],["alterTransfer","transfer-curve"]]) {
+      $(id).classList.toggle("hidden", op !== name);
+    }
+  }
+  function offerAlterations(sources, request) {
+    if (!sources || typeof sources.pattern !== "string" || typeof sources.fit !== "string" || !sources.targets) {
+      alterationBase = null; alterationControls(); return;
+    }
+    alterationBase = {...sources, request};
+    alterationOptions("alterPiece", sources.targets.pieces.map(p => [p.id,p.id]));
+    const seams = sources.targets.seams.map(s => [s.id,`${s.id}: ${s.a} ↔ ${s.b}`]);
+    alterationOptions("alterSeam", seams); alterationOptions("alterCapSeams", seams);
+    alterationPieceOptions(); alterationSourceOptions(); alterationControls();
+    $("alterStatus").textContent = "Operations use this checked pattern; all existing source metadata is retained.";
+  }
+  function alterationEdited() {
+    if (!alterationBase) return;
+    invalidateRound(true);
+    $("alterStatus").textContent = "Pending alteration: prior checks, exports and drape withdrawn. Apply it, or Draft and check to keep the working pattern.";
+  }
+  function alterationOperation() {
+    const op = $("alterOperation").value, piece = $("alterPiece").value;
+    const number = id => {
+      const text = $(id).value.trim(), value = Number(text);
+      if (!text || !Number.isFinite(value)) throw Error("Enter a finite number for " + id.replace(/^alter/, "").toLowerCase() + ".");
+      return value;
+    };
+    if (op === "slash-spread") return {op,piece,axis:$("alterAxis").value || "x",at:number("alterAt"),add:number("alterAdd")};
+    if (op === "move") return {op,piece,vertex:$("alterVertex").value,dx:number("alterDx"),dy:number("alterDy")};
+    if (op === "true-seam") return {op,seam:$("alterSeam").value,end:$("alterEnd").value || "end"};
+    if (op === "cap-ease") return {op,piece,seams:Array.from($("alterCapSeams").selectedOptions).map(o=>o.value),target:number("alterRatio")};
+    if (op === "transfer-curve") return {op,from:$("alterSourceInstance").value+"/"+$("alterSourceEdge").value,to:piece+"/"+$("alterTargetEdge").value};
+    throw Error("Choose an alteration operation.");
+  }
+  for (const id of ["alterOperation","alterPiece","alterAxis","alterAt","alterAdd","alterVertex","alterDx","alterDy","alterSeam","alterEnd","alterCapSeams","alterRatio","alterSourceInstance","alterSourceEdge","alterTargetEdge"]) {
+    for (const event of ["input","change"]) $(id).addEventListener(event, () => {
+      alterationEdited();
+      if (id === "alterPiece") alterationPieceOptions();
+      if (id === "alterSourceInstance") alterationSourceOptions();
+      alterationControls();
+    });
+  }
+  $("alterSourceFile").addEventListener("change", async () => {
+    alterationEdited(); alterationSource = alterationSourceTargets = null;
+    const request = alterationSourceRequest = ++nextRequest;
+    if (!$("alterSourceFile").files.length) { alterationSourceBusy = false; alterationSourceOptions(); alterationControls(); return; }
+    alterationSourceBusy = true; alterationControls();
+    try {
+      const source = await readJson($("alterSourceFile"), "curve source pattern");
+      if (request !== alterationSourceRequest || dead || !alterationBase) return;
+      alterationSource = source;
+      worker.postMessage({type:"alterSource",request,source});
+    } catch (e) {
+      if (request !== alterationSourceRequest || dead) return;
+      // A refused explicit source must not fall back to the working pattern.
+      alterationSourceBusy = true; alterationControls(); showError(e.message);
+    }
+  });
+  $("alterApply").addEventListener("click", () => {
+    if (!alterationBase || alterationBusy || (alterationSourceBusy && $("alterOperation").value === "transfer-curve") || dead || !ready) return;
+    alterationEdited();
+    try {
+      const operation = alterationOperation();
+      alterationBusy = true; alterationControls(); $("go").disabled = true;
+      $("errorBox").classList.add("hidden"); $("alterStatus").textContent = "Checking the alteration…";
+      worker.postMessage({type:"alter",request:alterationRequest,round:alterationBase.request,operation:JSON.stringify(operation),
+        ...(operation.op === "transfer-curve" ? {source:alterationSource ?? alterationBase.pattern} : {})});
+    } catch (e) { alterationBusy = false; alterationControls(); showError(e.message); }
+  });
+  $("undoAlter").addEventListener("click", () => {
+    if (!previousAlteration || dead) return;
+    editedPattern = previousAlteration.pattern; previousAlteration = null;
+    showEditedPattern("Restored the pattern before the last alteration.");
+    void runRound();
+  });
+
   worker.onmessage = (ev) => {
     const msg = ev.data;
     if (dead) return;
     const expected = { fields: fieldsRequest, result: roundRequest, bodyReady: bodyRequest, bodyChecked: bodyCheckRequest,
-      foldProgress: foldRequest, folded: foldRequest };
+      foldProgress: foldRequest, folded: foldRequest, altered: alterationRequest, alterSourceReady: alterationSourceRequest };
     if (msg.type in expected && msg.request !== expected[msg.type]) return;
     if (msg.type === "error" && !msg.fatal) {
-      const request = { fields: fieldsRequest, run: roundRequest, body: bodyRequest, fold: foldRequest, inspectBody: bodyCheckRequest }[msg.op];
+      const request = { fields: fieldsRequest, run: roundRequest, body: bodyRequest, fold: foldRequest, inspectBody: bodyCheckRequest,
+        alter: alterationRequest, alterSource: alterationSourceRequest }[msg.op];
       if (request !== undefined && msg.request !== request) return;
     }
     if (msg.type === "progress") status(msg.text);
@@ -539,7 +712,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       renderPrograms(); onProgram();
       $("go").disabled = false; $("go").textContent = "Draft and check";
       status(`Ready (${msg.version}; ${msg.dxf}).`);
-    } else if (msg.type === "fields") { if (msg.program === program) { fields = msg.rows; renderFields(); } }
+    } else if (msg.type === "fields") { if (msg.program === bodyProgram()) { fields = msg.rows; renderFields(); } }
     else if (msg.type === "result") {
       $("go").disabled = false; status("Done.");
       renderResult(msg.res, msg.blobs);
@@ -548,6 +721,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         ? Object.fromEntries(["pattern", "measurements", "fit"].map(id =>
           [id, new Blob([msg.roundSources[id]], { type: "application/json" })])) : null;
       $("chooseMaterials").disabled = !materialSources;
+      offerAlterations(msg.alterationSources, msg.request);
       // a new round's pattern: the last fold-up (its links revoked above) belongs to another one
       dropFold();
       // a validated, to-scale garment with fold-up placements can be draped once the body model is loaded
@@ -556,6 +730,18 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       $("foldBox").classList.toggle("hidden", !foldable);
       foldButton();
       finished();
+    } else if (msg.type === "alterSourceReady") {
+      alterationSourceTargets = msg.targets; alterationSourceBusy = false;
+      alterationSourceOptions(); alterationControls();
+      $("alterStatus").textContent = "Curve source checked. Choose its physical instance and edge.";
+    } else if (msg.type === "altered") {
+      if (!alterationBase || msg.round !== alterationBase.request || typeof msg.pattern !== "string" || typeof msg.fit !== "string") return;
+      previousAlteration = {pattern:alterationBase.pattern};
+      editedBodyProgram = bodyProgram();
+      editedPattern = msg.pattern; editedFit = msg.fit;
+      clearTraceImport(); program = "audit"; renderPrograms(); onProgram(true);
+      showEditedPattern(msg.why);
+      void runRound();
     } else if (msg.type === "bodyReady") {
       bodyLoaded = true; foldButton(); status("Body model loaded.");
       $("errorBox").classList.add("hidden");
@@ -615,6 +801,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       } else if (msg.op === "run") {
         $("go").disabled = false;
       }
+      if (msg.op === "alter") {
+        alterationBusy = false; alterationControls(); $("go").disabled = dead || !ready;
+        $("alterStatus").textContent = "Alteration refused; the working pattern is unchanged. Correct the operation or Draft and check it again.";
+      }
+      if (msg.op === "alterSource") { alterationSourceBusy = true; alterationControls(); }
       if (msg.op === "fold") folding = false;
       if (msg.op === "inspectBody") dropBodyCheck();
       foldButton();
@@ -642,7 +833,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   showBodyMode();
   for (const id of ["style", "patternFile", "fitFile"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event, () => {
-      if(id==="patternFile") clearTraceImport();
+      if(id==="patternFile") {
+        const resetBody = editedBodyProgram !== null;
+        clearTraceImport();clearEditedPattern();
+        if (resetBody) {showBodyMode();requestFields();}
+      }
+      if(id==="fitFile") editedFit = null;
       invalidateRound();
     });
   }
@@ -657,7 +853,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("resetStyle").addEventListener("click", () => {
     $("style").value = JSON.stringify(info[program].style, null, 1); store.set("style-" + program, null); invalidateRound();
   });
-  $("go").addEventListener("click", async () => {
+  async function runRound() {
     // disable first: reading an uploaded file is async, and a second click would start a second run
     invalidateRound();
     const request = roundRequest;
@@ -673,7 +869,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (request !== roundRequest || dead) return;
       $("go").disabled = false; showError(e.message); finished();
     }
-  });
+  }
+  $("go").addEventListener("click", runRound);
   $("bodyFile").addEventListener("change", async () => {
     if (dead) return;
     if (materialTransfer) materialTransfer.files = null;

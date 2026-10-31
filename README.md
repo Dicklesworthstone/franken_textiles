@@ -233,6 +233,16 @@ JavaScript rewriting integers, signed zero or integer/float distinctions. Rust s
 ordinary validation, numerical limits and canonical output formatting; this is not arbitrary-precision
 JSON support. Invalid encoding, a BOM, malformed JSON or an oversized file refuses the round.
 
+After a round, **Alter the current pattern** offers the same five operations as `ftx alter`:
+slash and spread, vertex movement, seam truing, sleeve-cap ease and curve-shape transfer. The
+controls list the current pattern's actual pieces, vertices, seams and physical instance edges;
+curve transfer can also use another local pattern file. **Apply alteration and check** starts a
+fresh ordinary round with the changed pattern and current fit contract. Download the exact altered
+pattern, or undo the last alteration and check again. A refused operation keeps the working pattern;
+new source files or changed inputs invalidate pending results and old exports. Direct alterations
+accept patterns up to 4 MiB, 128 drafted pieces and 8192 drafted edges. Flat checks, measurement
+readiness and any subsequent drape retain their separate verdicts.
+
 ---
 
 ## Workspace and budget

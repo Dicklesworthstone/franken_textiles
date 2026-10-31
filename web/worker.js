@@ -5,6 +5,7 @@ let ftx = null;
 let body = null; // the parsed body model, kept for every fold-up
 let docs = null; // the last round's pattern, measurements and fit spec (JSON text)
 let bodyRound = null; // body checking also works when the garment has no fold-up placement
+let alterationRound = null; // exact successfully checked source; an operation never edits it in place
 let bodyRequest, foldRequest;
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -45,6 +46,7 @@ onmessage = async (ev) => {
     if (msg.type === "run") {
       docs = null; // a refused replacement must never leave the previous garment available
       bodyRound = null;
+      alterationRound = null;
       const { today, created } = clock();
       const round = ftx.run(typeof msg.req === "string" ? msg.req : JSON.stringify(msg.req), today, created);
       try {
@@ -66,9 +68,38 @@ onmessage = async (ev) => {
         // These native saved texts outlive the round handle without a JavaScript numeric round-trip.
         const roundSources = res.zip && !res.errors && pattern && measurements && fit
           ? { pattern, measurements, fit } : null;
+        let alterationSources = null, alterationUnavailable = null;
+        if (data && fit) {
+          try {
+            if (typeof ftx.alteration_targets !== "function") throw Error("Rebuild the browser bundle to use direct alterations.");
+            const targets = JSON.parse(ftx.alteration_targets(pattern));
+            alterationRound = { request: msg.request, pattern, fit, targets };
+            alterationSources = { pattern, fit, targets };
+          } catch (e) {
+            if (e instanceof WebAssembly.RuntimeError) throw e;
+            alterationUnavailable = String(e.message || e);
+          }
+        }
         return postMessage({ type: "result", request: msg.request, res, blobs, foldable,
-          bodyCheckable: !!bodyRound, roundSources }, Object.values(blobs).map((b) => b.buffer));
+          bodyCheckable: !!bodyRound, roundSources, alterationSources, alterationUnavailable }, Object.values(blobs).map((b) => b.buffer));
       } finally { round.free(); }
+    }
+    if (msg.type === "alterSource") {
+      if (typeof msg.source !== "string") throw Error("Choose an original source pattern JSON file.");
+      const targets = JSON.parse(ftx.alteration_targets(msg.source));
+      return postMessage({ type: "alterSourceReady", request: msg.request, targets });
+    }
+    if (msg.type === "alter") {
+      if (!alterationRound || msg.round !== alterationRound.request) throw Error("The alteration source changed; run a current round first.");
+      if (typeof msg.operation !== "string") throw Error("The alteration must be an explicit operation JSON.");
+      docs = null; bodyRound = null;
+      const current = alterationRound;
+      const result = JSON.parse(ftx.alter_pattern(current.pattern, msg.operation, msg.source));
+      if (typeof result.pattern_json !== "string" || typeof result.why !== "string" || !result.targets) {
+        throw Error("Incomplete alteration result; the source pattern was retained.");
+      }
+      return postMessage({ type: "altered", request: msg.request, round: current.request,
+        pattern: result.pattern_json, fit: current.fit, why: result.why, targets: result.targets });
     }
     if (msg.type === "clearBody") {
       if (body) body.free();

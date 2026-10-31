@@ -5,6 +5,7 @@
 //! crates never see browser types.
 #![forbid(unsafe_code)]
 
+pub mod alteration;
 pub mod fold;
 pub mod manufacturing;
 pub mod materials;

@@ -177,6 +177,29 @@ pub fn program_info() -> String {
     page::program_info().dumps(None)
 }
 
+/// Guided alteration targets from the actual source pattern and expanded physical instances.
+///
+/// # Errors
+/// Invalid pattern structure or the direct alteration input budget.
+#[wasm_bindgen]
+pub fn alteration_targets(input: &str) -> Result<String, JsError> {
+    crate::alteration::targets(input).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Apply one native alteration without replacing its source; return lossless pattern text.
+///
+/// # Errors
+/// Invalid operations, refused geometry or the native operation and input budgets.
+#[wasm_bindgen]
+pub fn alter_pattern(
+    input: &str,
+    operation: &str,
+    source: Option<String>,
+) -> Result<String, JsError> {
+    crate::alteration::apply(input, operation, source.as_deref())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// The tape form's rows as JSON text. `args`: `{program, stature_cm, age_months, nappies}` (program null for
 /// someone else's pattern); `today`: `YYYY-MM-DD`.
 ///

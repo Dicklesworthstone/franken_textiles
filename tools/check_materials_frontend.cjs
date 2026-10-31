@@ -3553,6 +3553,153 @@ function draftingPage({traceToken=null,photoToken=null,audit=false}={}) {
   const dispatch=(id,event)=>e[id].handlers[event]?.();
   return {e,modes,messages,live,emit,last,result,body,worker,dispatch,opener,openerMessages,windowEvents,popups,hasOpener:()=>!!context.window.opener};
 }
+const alterationTargets = {
+  pieces:[{id:'front',vertices:['a','b'],edges:['hem','armhole']},{id:'sleeve',vertices:['ua','top'],edges:['cap','hem']}],
+  instances:[{id:'front.R',piece:'front',edges:['hem','armhole']},{id:'front.L',piece:'front',edges:['hem','armhole']},
+    {id:'sleeve.R',piece:'sleeve',edges:['cap','hem']}],
+  seams:[{id:'cap_front',a:'front.R/armhole',b:'sleeve.R/cap'},{id:'cap_back',a:'front.L/armhole',b:'sleeve.R/hem'}]
+};
+const alterationPattern=' {"schema":"fabric-pattern/1","meta":{"source_sequence":18446744073709551615,"probe":-0.0},"pieces":[],"seams":[]}\n';
+const alterationFit=' {"schema":"fabric-fit/1","probe":1.0,"sequence":18446744073709551615}\n';
+async function currentAlterationPage() {
+  const p=draftingPage();await p.e.go.handlers.click();
+  p.result(undefined,{alterationSources:{pattern:alterationPattern,fit:alterationFit,targets:alterationTargets}});
+  for(const id of ['alterAt','alterAdd','alterDx','alterDy'])p.e[id].value='0';
+  p.e.alterAxis.value='x';p.e.alterEnd.value='end';p.e.alterRatio.value='1.06';
+  return p;
+}
+test('direct alteration worker retains original sources, rejects stale rounds and keeps refused candidates retryable',async()=>{
+  const sent=[],calls=[];let refusal=false,targetFailure=null;
+  const values={default:async()=>{},program_info:()=> '{}',calibration_dictionaries:()=> '[]',
+    run:()=>({page:()=>'{"status":"CONVERGED","zip":"round.zip"}',zip:()=>new Uint8Array([1]),
+      file:n=>new TextEncoder().encode(n==='pattern.json'?alterationPattern:n==='fit_spec.json'?alterationFit:'{}'),free(){}}),
+    alteration_targets:source=>{calls.push({targets:source});if(targetFailure)throw targetFailure;return JSON.stringify(alterationTargets);},
+    alter_pattern:(source,operation,other)=>{calls.push({source,operation,other});if(refusal)throw Error('unreachable operation');
+      return JSON.stringify({pattern_json:alterationPattern.replace('"probe":-0.0','"probe":-0.0,"altered":true'),why:'Changed',targets:alterationTargets});}};
+  const context=vm.createContext({JSON,Date,TextDecoder,Uint8Array,WebAssembly,Error,self:{},onmessage:null,postMessage:m=>sent.push(m)});
+  const imports=new vm.SyntheticModule(Object.keys(values),function(){for(const[n,v]of Object.entries(values))this.setExport(n,v);},{context});
+  await imports.link(()=>{});await imports.evaluate();
+  const module=new vm.SourceTextModule(read('worker.js'),{context,importModuleDynamically:()=>imports});
+  await module.link(()=>{});await module.evaluate();
+  const send=async data=>{await context.onmessage({data});return sent.at(-1);};
+  await send({type:'init',pkg:'./pkg/'});
+  const result=await send({type:'run',request:4,req:'{}'});
+  assert.equal(result.alterationSources.pattern,alterationPattern);assert.equal(result.alterationSources.fit,alterationFit);
+  const operation=' {"op":"move","piece":"front","vertex":"a","dx":1.0,"dy":-0.0} ';
+  assert.equal((await send({type:'alter',request:5,round:3,operation})).type,'error');
+  refusal=true;assert.equal((await send({type:'alter',request:6,round:4,operation})).type,'error');
+  refusal=false;const changed=await send({type:'alter',request:7,round:4,operation});
+  assert.equal(changed.type,'altered');assert.equal(changed.fit,alterationFit);assert.equal(changed.round,4);
+  assert.equal(calls.at(-1).source,alterationPattern);assert.equal(calls.at(-1).operation,operation);
+  assert.equal((await send({type:'alter',request:8,round:4,operation})).type,'altered','A cancelled reply can be retried on the same unchanged source');
+  const lookup=await send({type:'alterSource',request:9,source:alterationPattern});
+  assert.equal(lookup.type,'alterSourceReady');assert.deepEqual(plain(lookup.targets),alterationTargets);
+  await send({type:'run',request:10,req:'{}'});
+  assert.equal((await send({type:'alter',request:11,round:4,operation})).type,'error');
+  targetFailure=Error('direct alteration budget exceeded');
+  const ordinary=await send({type:'run',request:12,req:'{}'});
+  assert.equal(ordinary.type,'result');assert.equal(ordinary.alterationSources,null);
+  assert.match(ordinary.alterationUnavailable,/budget exceeded/);
+  targetFailure=new WebAssembly.RuntimeError('unreachable');
+  const trapped=await send({type:'run',request:13,req:'{}'});
+  assert.equal(trapped.type,'error');assert.equal(trapped.fatal,true);
+  assert.equal((await send({type:'run',request:14,req:'{}'})).fatal,true,'A target catalogue trap invalidates the entire module');
+});
+test('primary direct alterations guide all five native operations and recheck exact accepted pattern and fit text',async()=>{
+  for(const [op,inputs,want] of [
+    ['slash-spread',{alterAdd:'12',alterAt:'80'},{op:'slash-spread',piece:'front',axis:'x',at:80,add:12}],
+    ['move',{alterDx:'3.5',alterDy:'-2'},{op:'move',piece:'front',vertex:'a',dx:3.5,dy:-2}],
+    ['true-seam',{alterEnd:'start'},{op:'true-seam',seam:'cap_front',end:'start'}],
+    ['cap-ease',{alterPiece:'sleeve'},{op:'cap-ease',piece:'sleeve',seams:['cap_front','cap_back'],target:1.06}],
+    ['transfer-curve',{}, {op:'transfer-curve',from:'front.R/hem',to:'front/hem'}],
+  ]) {
+    const p=await currentAlterationPage();assert.equal(p.e.alterSection.classList.contains('hidden'),false);
+    assert.deepEqual(p.e.alterPiece.children.map(o=>o.value),['front','sleeve']);
+    p.e.alterOperation.value=op;p.dispatch('alterOperation','change');
+    for(const [id,value]of Object.entries(inputs))p.e[id].value=value;
+    p.e.alterCapSeams.selectedOptions=[{value:'cap_front'},{value:'cap_back'}];
+    p.dispatch('alterPiece','change');p.e.alterApply.handlers.click();
+    const msg=p.last('alter');assert.deepEqual(JSON.parse(msg.operation),want);
+    assert.equal(p.live.size,0,'Pending alteration withdraws prior round artifacts');assert.equal(p.e.foldGo.disabled,true);
+    assert.equal(msg.source,op==='transfer-curve'?alterationPattern:undefined);
+    const changed=alterationPattern.replace('"pieces":[]','"pieces":[],"changed":true');
+    p.emit({type:'altered',request:msg.request,round:msg.round,pattern:changed,fit:alterationFit,why:'Native history sentence'});
+    await new Promise(resolve=>setImmediate(resolve));
+    const next=p.messages.findLast(m=>m.type==='run');
+    assert.ok(next.req.includes('"pattern":'+changed));assert.ok(next.req.includes('"fit_spec":'+alterationFit));
+    assert.equal(JSON.parse(next.req).body.stature_cm,92);assert.equal(p.e.alterImportNote.hidden,false);
+    assert.match(p.e.alterImportText.textContent,/Native history sentence/);
+    assert.equal(await p.live.get(p.e.alterDownload.href).text(),changed);
+    assert.equal(p.e.undoAlter.disabled,false);
+    p.e.undoAlter.handlers.click();await new Promise(resolve=>setImmediate(resolve));
+    assert.ok(p.messages.findLast(m=>m.type==='run').req.includes('"pattern":'+alterationPattern));
+    assert.equal(p.e.undoAlter.disabled,true);
+  }
+});
+test('primary alteration refusals, edited controls and changed source patterns cannot adopt stale candidates',async()=>{
+  const p=await currentAlterationPage();p.e.alterAdd.value='2';p.e.alterApply.handlers.click();const first=p.last('alter');
+  p.emit({type:'error',op:'alter',request:first.request,message:'unreachable seam ratio'});
+  assert.match(p.e.alterStatus.textContent,/working pattern is unchanged/);assert.equal(p.e.alterApply.disabled,false);
+  assert.equal(p.e.alterImportNote.hidden,undefined);assert.equal(p.live.size,0);
+  p.e.alterApply.handlers.click();const pending=p.last('alter');
+  p.e.alterAdd.value='3';p.dispatch('alterAdd','input');
+  p.emit({type:'altered',request:pending.request,round:pending.round,pattern:'{"stale":true}',fit:'{}',why:'old'});
+  assert.equal(p.e.alterImportNote.hidden,undefined);assert.equal(p.live.size,0);
+  p.e.alterApply.handlers.click();assert.equal(JSON.parse(p.last('alter').operation).add,3);
+  const older=p.last('alter');p.e.patternFile.files=[new Blob(['{"replacement":true}'])];p.dispatch('patternFile','change');
+  p.emit({type:'altered',request:older.request,round:older.round,pattern:'{"stale":true}',fit:'{}',why:'old'});
+  assert.equal(p.e.alterApply.disabled,true);assert.equal(p.e.alterSection.classList.contains('hidden'),true);
+  assert.equal(p.e.alterImportNote.hidden,true);assert.equal(p.live.size,0);
+});
+test('primary alteration undo retains a newly selected fit contract with the restored pattern',async()=>{
+  const p=await currentAlterationPage();p.e.alterAdd.value='2';p.e.alterApply.handlers.click();
+  const msg=p.last('alter'),changed=alterationPattern.replace('"pieces":[]','"pieces":[],"changed":true');
+  p.emit({type:'altered',request:msg.request,round:msg.round,pattern:changed,fit:alterationFit,why:'Changed'});
+  await new Promise(resolve=>setImmediate(resolve));
+  const replacement=' {"schema":"fabric-fit/1","replacement":true,"probe":-0.0}\n';
+  p.e.fitFile.files=[new Blob([replacement])];await p.dispatch('fitFile','change');
+  p.e.undoAlter.handlers.click();await new Promise(resolve=>setImmediate(resolve));
+  const request=p.messages.findLast(m=>m.type==='run').req;
+  assert.ok(request.includes('"pattern":'+alterationPattern));
+  assert.ok(request.includes('"fit_spec":'+replacement),'Undo changes the pattern while retaining the current explicit fit source');
+});
+test('primary alterations preserve drafted tape fields and hidden nappy semantics across adoption and later rechecks',async()=>{
+  const p=await currentAlterationPage();
+  p.modes.forEach(m=>{m.checked=m.value==='tape';});p.e.nappies.checked=true;
+  const chest={dataset:{name:'chest'},value:'53'};p.e.tapeRows.querySelectorAll=()=>[chest];
+  await p.e.go.handlers.click();const before=p.last('run').req.body;
+  assert.equal(before.nappies,false);
+  p.result(undefined,{alterationSources:{pattern:alterationPattern,fit:alterationFit,targets:alterationTargets}});
+  const fieldRequests=p.messages.filter(m=>m.type==='fields').length;
+  p.e.alterAdd.value='2';p.e.alterApply.handlers.click();const msg=p.last('alter');
+  p.emit({type:'altered',request:msg.request,round:msg.round,pattern:alterationPattern,fit:alterationFit,why:'Changed'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(p.last('run').req.body,before);
+  assert.equal(p.messages.filter(m=>m.type==='fields').length,fieldRequests,'Adoption does not rebuild the current tape fields');
+  assert.equal(p.e.nappyBox.classList.contains('hidden'),true);
+  await p.dispatch('stature','change');
+  assert.equal(p.last('fields').args.program,'zouave_bolero');assert.equal(p.last('fields').args.nappies,false);
+  p.e.patternFile.files=[new Blob([alterationPattern])];await p.dispatch('patternFile','change');
+  assert.equal(p.last('fields').args.program,'audit','Explicit source replacement restores the ordinary audit field set');
+});
+test('primary curve sources stay exact, failed explicit sources never fall back and superseded reads cannot publish',async()=>{
+  const p=await currentAlterationPage();p.e.alterOperation.value='transfer-curve';p.dispatch('alterOperation','change');
+  p.e.alterSourceFile.files=[new Blob([alterationPattern])];await p.e.alterSourceFile.handlers.change();
+  const source=p.last('alterSource');assert.equal(source.source,alterationPattern);assert.equal(p.e.alterApply.disabled,true);
+  p.emit({type:'error',op:'alterSource',request:source.request,message:'source is invalid'});
+  const count=p.messages.length;p.e.alterApply.handlers.click();assert.equal(p.messages.length,count);
+  p.e.alterOperation.value='move';p.dispatch('alterOperation','change');assert.equal(p.e.alterApply.disabled,false,'An unused curve source cannot block vertex movement');
+  p.e.alterOperation.value='transfer-curve';p.dispatch('alterOperation','change');assert.equal(p.e.alterApply.disabled,true);
+  p.e.alterSourceFile.files=[];await p.e.alterSourceFile.handlers.change();assert.equal(p.e.alterApply.disabled,false);
+  p.e.alterSourceFile.files=[new Blob([alterationPattern])];await p.e.alterSourceFile.handlers.change();
+  p.emit({type:'alterSourceReady',request:p.last('alterSource').request,targets:alterationTargets});
+  p.e.alterApply.handlers.click();assert.equal(p.last('alter').source,alterationPattern);
+  const q=await currentAlterationPage(),late=deferred();
+  q.e.alterSourceFile.files=[{size:1,arrayBuffer:()=>late.promise}];const reading=q.e.alterSourceFile.handlers.change();
+  q.e.stature.value='101';q.dispatch('stature','input');
+  late.resolve(new TextEncoder().encode(alterationPattern).buffer);await reading;
+  assert.equal(q.last('alterSource'),undefined);assert.equal(q.e.alterApply.disabled,true);
+});
 test('current drafting round hands off exact immutable files once and cancels unsent source edits',async()=>{
   const p=draftingPage(),raw={pattern:' {"sequence":18446744073709551615}\n',measurements:' {"probe":-0.0}\n',fit:' {"probe":1.0}\n'};
   assert.equal(p.e.chooseMaterials.disabled,true);await p.e.go.handlers.click();p.result(undefined,{roundSources:raw});

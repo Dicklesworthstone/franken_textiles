@@ -166,6 +166,161 @@ fn file_request() -> Value {
 }
 
 #[test]
+fn direct_browser_alterations_preserve_the_captured_reference_bytes_for_all_five_ops() {
+    let fixture = PyJson::parse(include_str!(
+        "../../../tests/fixtures/oracle/alter/alterations.json"
+    ))
+    .unwrap();
+    let PyJson::List(cases) = get(&fixture, "cases") else {
+        panic!("cases")
+    };
+    let mut operations = std::collections::BTreeSet::new();
+    let mut checked = 0;
+    for case in cases {
+        let input = get(case, "input");
+        let output = get(case, "output");
+        let wanted = output.to_value();
+        if wanted.get("error").is_some() || wanted["structure_errors"] != json!([]) {
+            continue;
+        }
+        let typed = input.to_value();
+        let op = typed["op"].as_str().unwrap();
+        let source_text = get(input, "pattern").dumps(None);
+        let mut request = typed["args"].clone();
+        let args = request.as_object_mut().unwrap();
+        args.insert("op".into(), json!(op));
+        if let Some(seam) = args.remove("seam_id") {
+            args.insert("seam".into(), seam);
+        }
+        if let Some(from) = args.remove("src_ref") {
+            args.insert("from".into(), from);
+        }
+        if let Some(to) = args.remove("dst_ref") {
+            args.insert("to".into(), to);
+        }
+        let other = input.get("source").map(|s| s.dumps(None));
+        let result =
+            ftx_wasm::alteration::apply(&source_text, &request.to_string(), other.as_deref())
+                .unwrap_or_else(|e| panic!("{}: {e}", get(case, "id").dumps(None)));
+        let result: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            result["pattern_json"],
+            get(output, "doc").dumps(Some(1)) + "\n"
+        );
+        assert_eq!(result["why"], wanted["why"]);
+        assert_eq!(source_text, get(input, "pattern").dumps(None));
+        operations.insert(op.to_string());
+        checked += 1;
+    }
+    assert_eq!(operations.len(), 5);
+    assert!(
+        checked >= 10,
+        "only {checked} reference documents exercised"
+    );
+}
+
+#[test]
+fn direct_alterations_refuse_invalid_candidates_and_keep_exact_source_metadata_through_a_round() {
+    let mut request = file_request();
+    request["pattern"]["meta"]["source_sequence"] = json!(u64::MAX);
+    request["pattern"]["meta"]["user_note"] = json!("original provenance");
+    let source = request["pattern"].to_string();
+    let moved: Value = serde_json::from_str(
+        &ftx_wasm::alteration::apply(
+            &source,
+            r#"{"op":"move","piece":"front","vertex":"side_hem","dx":0,"dy":-2}"#,
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let moved_text = moved["pattern_json"].as_str().unwrap();
+    let spread: Value = serde_json::from_str(
+        &ftx_wasm::alteration::apply(
+            moved_text,
+            r#"{"op":"slash-spread","piece":"front","axis":"x","at":50,"add":3}"#,
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let final_text = spread["pattern_json"].as_str().unwrap();
+    request["pattern"] = serde_json::from_str(final_text).unwrap();
+    let history = request["pattern"]["meta"]["history"].as_array().unwrap();
+    assert_eq!(history[history.len() - 2]["op"], "move");
+    assert_eq!(history.last().unwrap()["op"], "slash-spread");
+    let round = ftx_wasm::page::run(&request.to_string(), TODAY, CREATED).unwrap();
+    let (_, bytes) = round
+        .files
+        .iter()
+        .find(|(name, _)| name == "pattern.json")
+        .unwrap();
+    let saved: Value = serde_json::from_slice(bytes).unwrap();
+    assert_eq!(saved, request["pattern"]);
+    assert_eq!(saved["meta"]["source_sequence"].as_u64(), Some(u64::MAX));
+    assert_eq!(saved["meta"]["user_note"], "original provenance");
+    assert!(
+        round
+            .files
+            .iter()
+            .any(|(name, _)| name == "validation.json")
+    );
+    assert!(round.files.iter().any(|(name, _)| name == "readiness.json"));
+    for op in [
+        r#"{"op":"move","piece":"front","vertex":"missing","dx":0,"dy":2}"#,
+        r#"{"op":"slash-spread","piece":"front","axis":"z","at":0,"add":2}"#,
+        r#"{"op":"move","piece":"front","vertex":"side_hem","dx":0,"dy":2,"ignored":true}"#,
+        r#"{"op":"transfer-curve","from":"front.R/armhole","to":"front/armhole"}"#,
+        r#"{"op":"cap-ease","piece":"sleeve","seams":["armhole_f_R","armhole_b_R"],"target":1000000}"#,
+    ] {
+        assert!(
+            ftx_wasm::alteration::apply(&source, op, None).is_err(),
+            "{op}"
+        );
+    }
+    let square = r#"{"schema":"fabric-pattern/1","units":"mm","pieces":[{"id":"p","cut":{"qty":1},"vertices":{"a":[0,0],"b":[10,0],"c":[10,10],"d":[0,10]},"edges":[{"id":"ab","from":"a","to":"b"},{"id":"bc","from":"b","to":"c"},{"id":"cd","from":"c","to":"d"},{"id":"da","from":"d","to":"a"}]}],"seams":[]}"#;
+    let refused = ftx_wasm::alteration::apply(
+        square,
+        r#"{"op":"slash-spread","piece":"p","axis":"x","at":5,"add":-10}"#,
+        None,
+    )
+    .unwrap_err();
+    assert!(refused.message.contains("structure errors"));
+    assert!(
+        ftx_wasm::alteration::targets(square).is_ok(),
+        "source remains usable"
+    );
+}
+
+#[test]
+fn direct_alteration_targets_include_real_mirrored_and_unfolded_edges_and_text_budgets() {
+    let source = file_request()["pattern"].to_string();
+    let targets: Value =
+        serde_json::from_str(&ftx_wasm::alteration::targets(&source).unwrap()).unwrap();
+    let instances = targets["instances"].as_array().unwrap();
+    for id in ["front.R", "front.L", "sleeve.R", "sleeve.L"] {
+        assert!(instances.iter().any(|i| i["id"] == id), "{id}");
+    }
+    let back = instances.iter().find(|i| i["id"] == "back").unwrap();
+    assert!(
+        back["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e.as_str().unwrap().ends_with(".L"))
+    );
+    assert!(
+        targets["seams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == "side_R")
+    );
+    assert!(ftx_wasm::alteration::targets(&" ".repeat(4 * 1024 * 1024 + 1)).is_err());
+    assert!(ftx_wasm::alteration::apply(&source, &" ".repeat(16 * 1024 + 1), None).is_err());
+}
+
+#[test]
 fn full_width_photo_seed_and_source_metadata_survive_an_ordinary_round() {
     let mut request = file_request();
     let mut photo = ftx_wasm::photo::Photo::new(
