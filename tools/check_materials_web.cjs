@@ -6,7 +6,7 @@
 // --strip-proof DIR runs only strip browser checks against retained native reports (manifest.json).
 // --outfit-proof checks public-prior drafted garment composition with synthetic materials, without a model.
 // --compression-proof checks real history controls, heat/work answers and final material binding.
-// --purchasing-proof checks bounded marker previews and combined whole-order purchasing.
+// --purchasing-proof checks bounded roll orders and direct exact finite-stock identities/pricing.
 // --area-proof DIR checks six-parameter area fitting against native-input.json/native-report.json.
 // --swatch-area-proof DIR checks joint swatch identification against retained native consent reports.
 // --adaptive-proof DIR checks guarded Pareto studies on the real page against retained native reports.
@@ -496,8 +496,56 @@ const server = http.createServer((req, res) => {
       }
       await input('market',{...market,as_of:'2026-10-22'});
       assert.equal(await page.locator('a[download="cut-price.json"]').count(),0);
+      assert.ok(fs.existsSync(native),'Finite-stock pricing replay needs the native materials executable');
+      await page.setInputFiles('#patternFile',fixture('synthetic-stock-pattern.json'));
+      await page.waitForFunction(()=>!document.getElementById('bind').disabled);
+      assert.equal(await run('bind'),'');
+      const stockPattern=await download('pattern.json'),stockPatternFile=path.join(work,'finite-price-pattern.json');
+      fs.writeFileSync(stockPatternFile,stockPattern,{flag:'wx'});
+      const stockRequestFile=fixture('synthetic-stock-request.json'),stockRequest=fs.readFileSync(stockRequestFile,'utf8');
+      await page.setInputFiles('#stockRequest',stockRequestFile);assert.equal(await run('stockIdentities'),'');
+      const identities=await download('stock-identities.json');
+      assert.deepEqual(JSON.parse(identities),JSON.parse(invoke('stock-identities',stockPatternFile,stockRequestFile)));
+      assert.equal(await download('stock-identities-pattern.json'),stockPattern);
+      assert.equal(await download('stock-identities-stock-request.json'),stockRequest);
+      const original=load('synthetic-stock-pricing.json'),missing={...original,bindings:[]};
+      const latest=structuredClone(original);latest.market.as_of='2026-10-21';latest.market.max_age_days=1;
+      latest.quotes.quotes.push({...latest.quotes.quotes[0],observed_on:'2026-10-21',available:false});
+      for(const [name,pricing,total] of [['complete',original,17],['missing',missing,null],['latest',latest,null]]) {
+        const raw=name==='complete'?fs.readFileSync(fixture('synthetic-stock-pricing.json'),'utf8'):JSON.stringify(pricing);
+        const pricingFile=path.join(work,`finite-${name}-pricing.json`);fs.writeFileSync(pricingFile,raw,{flag:'wx'});
+        await page.setInputFiles('#stockPricing',pricingFile);
+        assert.equal(await page.locator('a[download="stock-price.json"]').count(),0);
+        assert.equal(await download('stock-identities.json'),identities);
+        assert.equal(await run('stockPrice'),'');
+        const report=JSON.parse(await download('stock-price.json'));
+        assert.deepEqual(report,JSON.parse(invoke('stock-price',stockPatternFile,stockRequestFile,pricingFile)));
+        assert.equal(report.least_observed_independent_order_total,total);
+        assert.equal(report.execution_authorized,false);
+        assert.equal(await download('stock-price-pattern.json'),stockPattern);
+        assert.equal(await download('stock-price-stock-request.json'),stockRequest);
+        assert.equal(await download('stock-price-pricing.json'),raw);
+        const totalTable=page.getByRole('table',{name:'Complete finite-stock order',exact:true});
+        assert.equal(await totalTable.locator('td').nth(2).textContent(),total===null?'Unknown':String(total));
+        if(name==='latest') {
+          assert.equal(report.stocks[0].offers.length,0);
+          assert.match(await page.getByRole('table',{name:'hide-001: dated whole-item offers',exact:true}).textContent(),/Excluded: unavailable/);
+        }
+      }
+      await input('stockPricing',{});assert.notEqual(await run('stockPrice'),'');
+      assert.equal(await page.locator('a[download="stock-price.json"]').count(),0);
+      await page.setInputFiles('#stockPricing',fixture('synthetic-stock-pricing.json'));
+      await page.evaluate(()=>{document.getElementById('stockPrice').click();document.getElementById('cancel').click();});
+      await page.waitForFunction(()=>document.getElementById('status').textContent.startsWith('Ready'));
+      assert.equal(await page.locator('a[download="stock-price.json"]').count(),0);
+      assert.equal(await run('stockPrice'),'');await page.locator('#stockRequest').dispatchEvent('change');
+      assert.equal(await page.locator('a[download="stock-price.json"]').count(),0);
+      assert.equal(await page.locator('a[download="stock-identities.json"]').count(),0);
+      assert.equal(await run('stockIdentities'),'');
+      await input('patternFile',{schema:'fabric-pattern/1',pieces:[]});
+      assert.equal(await page.locator('a[download="stock-identities.json"]').count(),0);
       assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m=>m==='GET'));
-      console.log('PASS: real Chromium renders two bounded markers as one 0.3 m / 3 USD whole order, previews either intact marker, retains raw reports, excludes insufficient total stock/continuous cuts and withdraws stale prices. Synthetic observations only; no live purchasing, fulfillment, optimal nesting or machine claim. Artifacts:',work);
+      console.log('PASS: real Chromium renders bounded roll orders and exact finite-stock identities/prices matching native, retains source bytes and unknown totals, excludes insufficient stock and newer unavailable offers, and withdraws stale prices on edits/refusal/cancellation. Synthetic observations only; no live purchasing, fulfillment, optimal nesting or machine claim. Artifacts:',work);
       return;
     }
     if (compressionProof) {

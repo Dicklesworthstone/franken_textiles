@@ -580,6 +580,25 @@ test('bounded-marker worker previews the selected intact marker and refuses inva
   assert.equal(w.called.filter(c=>c[0]==='svg').length,1);
   assert.equal(w.sent.filter(m=>m.type==='result').length,1);
 });
+test('finite-stock purchasing worker preserves exact inputs and canonical results without replanning through another API', async () => {
+  const pattern=' {"source":-0.0}\n',stockRequest=' {"stock":1.0}\n',stockPricing=' {"seed":18446744073709551615}\n';
+  for(const type of ['stockIdentities','stockPrice']) {
+    const pricing=type==='stockPrice',prefix=pricing?'stock-price':'stock-identities',raw=pricing?' {"total":17.0}\n':' [{"gross_area_m2":1.0}]\n';
+    let calls=0;
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),[pricing?'stock_price':'stock_identities']:(...args)=>{
+      calls++;assert.deepEqual(args,pricing?[pattern,stockRequest,stockPricing]:[pattern,stockRequest]);return raw;
+    },stock_plan:()=>assert.fail('unexpected secondary planner')}});
+    const result=await w.send({type,request:78,pattern,stockRequest,stockPricing});
+    assert.equal(result.type,'result',result.message);assert.equal(calls,1);
+    assert.deepEqual(plain(result.files.map(f=>[f.name,f.text])),[
+      [`${prefix}.json`,raw],[`${prefix}-pattern.json`,pattern],[`${prefix}-stock-request.json`,stockRequest],
+      ...(pricing?[['stock-price-pricing.json',stockPricing]]:[])]);
+    const old=await workerModule({bindings:{default:()=>Promise.resolve()}});
+    const refused=await old.send({type,pattern,stockRequest,stockPricing});
+    assert.equal(refused.type,'error');assert.equal(refused.files,undefined);
+  }
+});
+
 test('direct mixed cutting uses one shared job and preserves original and frozen replay bytes', async () => {
   const pattern=' {"original":-0.0}\n',request=' {"schema":"ftx-cutting-job/1","seed":18446744073709551615}\n';
   const report={complete_inventory:true,pattern_json:' {"frozen":1.0}\n',replay_request_json:' {"replay":-0.0}\n'};
@@ -4841,6 +4860,35 @@ test('design scenario matrices display shared geometry once and keep every case 
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
 });
 
+test('stock identity and price controls retain unknown prices and invalidate only their dependent files', async () => {
+  const p=await pageModule();await p.load();await p.bind();
+  assert.equal(p.e.stockIdentities.disabled,true);assert.equal(p.e.stockPrice.disabled,true);
+  const stock=' {"stock":-0.0}\n',pricing=' {"price":17.0}\n';
+  p.select('stockRequest',stock);p.e.stockRequest.handlers.change();
+  assert.equal(p.e.stockIdentities.disabled,false);assert.equal(p.e.stockPrice.disabled,true);
+  const identity={stock_index:0,stock_id:'hide <one>',used:true,gross_area_m2:0.1,stock_sha256:'stock-lock',material_sha256:'material-lock'};
+  await p.e.stockIdentities.onclick();assert.equal(p.current().messages.at(-1).stockRequest,stock);
+  p.emit([identity],[{name:'stock-identities.json',text:'[{}]'}]);
+  const ids=section(p,'Exact physical-stock identities');assert.match(visibleText(ids),/stock-lock/);
+  p.select('stockPricing',pricing);p.e.stockPricing.handlers.change();assert.equal(ids.hidden,false);
+  assert.equal(p.e.stockPrice.disabled,false);await p.e.stockPrice.onclick();
+  assert.equal(p.current().messages.at(-1).stockPricing,pricing);
+  const report={schema:'ftx-finite-stock-procurement/1',currency:'USD',complete_offer_coverage:false,
+    complete_observed_quantity_coverage:false,least_observed_independent_order_total:null,execution_authorized:false,
+    request:{market:{region:'test',quality:'synthetic',terms:'no shipping',as_of:'2026-10-20'}},
+    stocks:[{identity,least_observed_offer_id:null,least_observed_order_cost:null,binding_refusal:{message:'Stale stock binding'},
+      offers:[],source_exclusions:[],stock_exclusions:[],source_refusals:[{offer_id:'bad',refusal:{message:'Unknown source'}}]}]};
+  p.emit(report,[{name:'stock-price-pricing.json',text:pricing}]);const prices=section(p,'Whole-item finite-stock prices');
+  assert.match(visibleText(prices),/Incomplete; required prices unknown/);assert.match(visibleText(prices),/Stale stock binding/);
+  assert.match(visibleText(prices),/Refused: Unknown source/);assert.match(visibleText(prices),/Unused|Used/);
+  assert.equal(JSON.parse(prices.children[1].textContent).least_observed_independent_order_total,null);
+  const link=descendants(prices).find(n=>n.download==='stock-price-pricing.json');assert.equal(await p.blobs.get(link.href).text(),pricing);
+  p.e.stockPricing.handlers.change();assert.equal(prices.hidden,true);assert.equal(ids.hidden,false);
+  await p.e.stockPrice.onclick();p.emit(report);p.e.stockRequest.handlers.change();assert.equal(prices.hidden,true);assert.equal(ids.hidden,true);
+  await p.e.stockPrice.onclick();const old=p.current();p.e.cancel.onclick();p.ready();
+  old.emit({type:'result',request:old.messages.at(-1).request,result:report,files:[]});assert.equal(prices.hidden,true);
+});
+
 test('direct mixed cutting displays complete inventory and invalidates only dependent results on request changes', async () => {
   const p=await pageModule();await p.load();await p.bind();
   assert.equal(p.e.cutJob.disabled,true);
@@ -6567,6 +6615,45 @@ test('compiled WASM moving vapor integrates changing area and replays the comple
     assert.throws(()=>ftx.thermal_vapor_coverage_history(JSON.stringify(changed)));
     changed.initial=input.initial; changed.policy.max_geometry_operations=1;
     assert.throws(()=>ftx.thermal_vapor_coverage_history(JSON.stringify(changed)));
+  });
+
+test('compiled WASM finite-stock identity and price actions retain whole items, latest exclusions and unknown required totals',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const read=name=>fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials',name),'utf8');
+    const pattern=read('synthetic-stock-pattern.json'),stockRequest=read('synthetic-stock-request.json');
+    const w=await workerModule({bindings:ftx});
+    const ids=await w.send({type:'stockIdentities',request:65,pattern,stockRequest});
+    assert.equal(ids.type,'result',ids.message);assert.equal(ids.files[0].text,ftx.stock_identities(pattern,stockRequest));
+    assert.equal(ids.result[0].stock_id,'hide-001');assert.equal(ids.result[0].used,true);
+    const original=JSON.parse(read('synthetic-stock-pricing.json')),missing={...original,bindings:[]};
+    const unknown=JSON.parse(JSON.stringify(original));delete unknown.quotes.quotes[0].available_quantity;
+    unknown.market.require_observed_quantity=false;
+    const stale=JSON.parse(JSON.stringify(original));stale.bindings[0].stock_sha256='0'.repeat(64);
+    const latest=JSON.parse(JSON.stringify(original));latest.market.as_of='2026-10-21';latest.market.max_age_days=1;
+    latest.quotes.quotes.push({...latest.quotes.quotes[0],observed_on:'2026-10-21',available:false});
+    let planHash;
+    for(const [pricing,total] of [[original,17],[missing,null],[stale,null],[latest,null],[unknown,17]]) {
+      const stockPricing=JSON.stringify(pricing),result=await w.send({type:'stockPrice',request:66,pattern,stockRequest,stockPricing});
+      assert.equal(result.type,'result',result.message);assert.equal(result.files[0].text,ftx.stock_price(pattern,stockRequest,stockPricing));
+      assert.equal(result.result.least_observed_independent_order_total,total);
+      assert.equal(result.result.complete_offer_coverage,total!==null);assert.equal(result.result.execution_authorized,false);
+      planHash ??= result.result.plan_sha256;assert.equal(result.result.plan_sha256,planHash,'Separate pricing must not reoptimize the layout');
+      if(pricing===unknown) assert.equal(result.result.complete_observed_quantity_coverage,false);
+      assert.equal(result.files.find(f=>f.name==='stock-price-pricing.json').text,stockPricing);
+      if(pricing===latest) {
+        assert.equal(result.result.stocks[0].offers.length,0);
+        assert.equal(result.result.stocks[0].source_exclusions[0].quote.observed_on,'2026-10-21');
+      }
+    }
+    const unused=JSON.parse(stockRequest);unused.stocks.push({...unused.stocks[0],id:'unused-hide'});
+    const result=await w.send({type:'stockPrice',request:67,pattern,stockRequest:JSON.stringify(unused),stockPricing:JSON.stringify(original)});
+    assert.equal(result.type,'result',result.message);assert.equal(result.result.least_observed_independent_order_total,17);
+    assert.equal(result.result.stocks[1].identity.used,false);assert.equal(result.result.stocks[1].least_observed_order_cost,null);
+    const refused=await w.send({type:'stockPrice',request:68,pattern,stockRequest,stockPricing:'{}'});
+    assert.equal(refused.type,'error');assert.equal(refused.files,undefined);
   });
 
 test('compiled WASM mixed cutting jobs cover every part and replay the frozen complete allocation',

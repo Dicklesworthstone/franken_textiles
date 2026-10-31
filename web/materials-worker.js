@@ -463,6 +463,18 @@ self.onmessage = async ({ data: msg }) => {
         }
         break;
       }
+      case "stockIdentities":
+      case "stockPrice": {
+        const pricing = msg.type === "stockPrice", api = pricing ? ftx.stock_price : ftx.stock_identities;
+        if (typeof api !== "function") throw Error("Rebuild web/pkg: missing exact finite-stock purchasing.");
+        raw = pricing ? api(msg.pattern, msg.stockRequest, msg.stockPricing) : api(msg.pattern, msg.stockRequest);
+        result = json(raw);
+        const prefix = pricing ? "stock-price" : "stock-identities";
+        files = [file(`${prefix}.json`, raw), file(`${prefix}-pattern.json`, msg.pattern),
+          file(`${prefix}-stock-request.json`, msg.stockRequest)];
+        if (pricing) files.push(file("stock-price-pricing.json", msg.stockPricing));
+        break;
+      }
       case "cutJob": {
         if (typeof ftx.material_cut_job !== "function") throw Error("Rebuild web/pkg: missing complete mixed cutting jobs.");
         raw = ftx.material_cut_job(msg.pattern, msg.cutJobRequest); result = json(raw);

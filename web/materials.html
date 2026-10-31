@@ -264,6 +264,10 @@ meaning. Omit this option for nominal-width planning. Finite hides and remnants 
 <label>Finite hides / remnants with defect maps JSON <input id="stockRequest" type="file" accept=".json,application/json"></label>
 <button id="stock" data-command="stock" disabled>Allocate finite stock &amp; preview</button>
 <p class="note">Use <code>ftx-finite-stock-request/1</code> for individually identified hides or remnants. Supply the actual boundary, exclusions and preferred cutting axis; each item must match the bound material. No roll width is invented.</p>
+<button id="stockIdentities" data-command="stockIdentities" disabled>Inspect exact stock identities</button>
+<label>Whole-item finite-stock pricing JSON <input id="stockPricing" type="file" accept=".json,application/json"></label>
+<button id="stockPrice" data-command="stockPrice" disabled>Price finite-stock layout</button>
+<p class="note">The identity report supplies exact physical-stock and material hashes for reviewed offer bindings. Use <code>ftx-finite-stock-pricing/1</code> to price the current stock request's layout. This separate pricing file does not change the layout objective. Missing required offers keep the complete total unknown; no stock is reserved or purchased.</p>
 <label>Complete roll / finite-stock job JSON <input id="cutJobRequest" type="file" accept=".json,application/json"></label>
 <button id="cutJob" data-command="cutJob" disabled>Plan complete mixed cutting job</button>
 <p class="note">Use <code>ftx-cutting-job/1</code> or <code>/2</code> to route every piece to rolls, hides or remnants in one job. The shared planner retains complete physical inventory, independent process and purchasing outcomes, and frozen replay inputs. It does not authorize machine execution.</p>

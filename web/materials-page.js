@@ -1,7 +1,7 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
-const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "cutJob", "price", "sew"];
+const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "stockIdentities", "stockPrice", "cutJob", "price", "sew"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "treatment", "vapor", "calibrate",
   "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode"];
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
@@ -30,6 +30,7 @@ for (const op of operations) {
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
     stripHistory: "Strip loading and recovery", vaporSurface: "Vapor transfer on this drape",
     stripFit: "Clamped-strip identification", outfit: "Imported joint outfit", cutJob: "Complete mixed cutting job",
+    stockIdentities: "Exact physical-stock identities", stockPrice: "Whole-item finite-stock prices",
     garmentcode: "Imported GarmentCode pattern — review required" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
@@ -98,6 +99,8 @@ function controls() {
   $("selfContact").disabled = !!outfit;
   $("cut").disabled ||= !has("cutOptions");
   $("stock").disabled ||= !has("stockRequest");
+  $("stockIdentities").disabled ||= !has("stockRequest");
+  $("stockPrice").disabled ||= !has("stockRequest") || !has("stockPricing");
   $("cutJob").disabled ||= !has("cutJobRequest");
   $("price").disabled ||= !has("cutOptions") || !has("quotes") || !has("market");
   $("sew").disabled ||= !has("sewOptions");
@@ -207,6 +210,53 @@ function detail(parent, title, value) {
   // Large material snapshots are formatted only when inspected. Downloaded reports stay raw.
   let shown = false;
   d.addEventListener("toggle", () => { if (d.open && !shown) { pre.textContent = text(value); shown = true; } });
+}
+function stockIdentitiesResult(parent, identities) {
+  const t = table(parent, "Physical stock for exact offer binding",
+    ["Inventory item", "Stock ID", "Used by this layout", "Gross area (m²)", "Stock SHA-256", "Material SHA-256"]);
+  for (const row of identities) cells(t, [String(row.stock_index + 1), row.stock_id,
+    row.used ? "Used" : "Unused", metric(row.gross_area_m2), row.stock_sha256, row.material_sha256]);
+  return { stock_items: identities.length, scope: "Exact inventory identities; no price, reservation or metrology claim" };
+}
+function stockPriceResult(parent, r) {
+  const total = table(parent, "Complete finite-stock order",
+    ["Complete offer coverage", "Observed capacity coverage", `Complete whole-item total (${r.currency})`]);
+  cells(total, [r.complete_offer_coverage ? "Complete" : "Incomplete; required prices unknown",
+    r.complete_observed_quantity_coverage ? "Observed sufficient" : "Not fully observed",
+    metric(r.least_observed_independent_order_total)]);
+  stockIdentitiesResult(parent, r.stocks.map(row => row.identity));
+  const t = table(parent, "Whole-item prices for the current finite-stock layout",
+    ["Physical stock", "Required by layout", "Chosen offer", `Whole-item cost (${r.currency})`, "Binding diagnostic"]);
+  for (const row of r.stocks) {
+    cells(t, [row.identity.stock_id, row.identity.used ? "Yes" : "No",
+      row.least_observed_offer_id || (row.identity.used ? "No admitted offer" : "Unused; no price required"),
+      metric(row.least_observed_order_cost), row.binding_refusal?.message || "None"]);
+    const offers = table(parent, `${row.identity.stock_id}: dated whole-item offers`,
+      ["Offer", "Observation", "Status", "Order quantity", `Whole-item cost (${r.currency})`, "Observed capacity"]);
+    for (const offer of row.offers) cells(offers, [offer.quote.offer_id,
+      offer.quote.observed_at || `${offer.quote.observed_on} (date only)`,
+      offer.quote.offer_id === row.least_observed_offer_id ? "Selected" : "Eligible alternative",
+      `${metric(offer.order_quantity)} ${offer.quote.unit}`, metric(offer.order_cost),
+      offer.quantity_sufficiency_observed ? "Observed sufficient" : "Not fully observed"]);
+    for (const excluded of [...row.source_exclusions, ...row.stock_exclusions]) cells(offers, [excluded.quote.offer_id,
+      excluded.quote.observed_at || `${excluded.quote.observed_on} (date only)`, `Excluded: ${excluded.reason}`,
+      "Not ordered", "Unknown", "Not admitted"]);
+    for (const source of row.source_refusals) cells(offers, [source.offer_id, "Unknown",
+      `Refused: ${source.refusal.message}`, "Not ordered", "Unknown", "Not admitted"]);
+    detail(parent, `${row.identity.stock_id}: original offers, source exclusions and binding diagnostics`, row);
+  }
+  detail(parent, "Comparable market and original pricing request", r.request);
+  const note = document.createElement("p");
+  const market = r.request.market;
+  note.textContent = `Market: ${r.currency}; ${market.region}; ${market.quality}; ${market.terms}. Evaluated at ${market.as_of_at || market.as_of} UTC. ` +
+    "Only used physical items contribute to the complete total, once per item. An unknown required price keeps the total unknown. " +
+    "Current pricing does not change the stock request's layout objective or prove the cheapest layout. " +
+    "Dates, capacity, source exclusions and whole-item terms come from the shared quote engine. No reservation, checkout or hardware execution occurs.";
+  parent.append(note);
+  return { schema: r.schema, complete_offer_coverage: r.complete_offer_coverage,
+    complete_observed_quantity_coverage: r.complete_observed_quantity_coverage,
+    currency: r.currency, least_observed_independent_order_total: r.least_observed_independent_order_total,
+    execution_authorized: r.execution_authorized };
 }
 function procurementResult(parent, r) {
   if (r.schema === "ftx-cut-procurement/3") return splitProcurementResult(parent, r);
@@ -3226,6 +3276,8 @@ function show(op, msg) {
         width_m: x.width_m, ...(x.layout_width ? { layout_width: x.layout_width } : {}),
         length_m: x.length_m, stock_mass_kg: x.stock_mass_kg, utilization: x.utilization })), limitations: r.limitations } :
       op === "price" ? procurementResult(s.comparison, r) :
+      op === "stockIdentities" ? stockIdentitiesResult(s.comparison, r) :
+      op === "stockPrice" ? stockPriceResult(s.comparison, r) :
       op === "cutJob" ? { schema: r.schema, complete_inventory: r.complete_inventory,
         allocated_instances: r.inventory?.length, stock_area_m2: r.stock_area_m2,
         external_cut_area_m2: r.external_cut_area_m2, stock_mass_kg: r.stock_mass_kg,
@@ -3480,7 +3532,8 @@ async function execute(op) {
         if (!Number.isSafeInteger(marker) || marker < 1) throw Error("Preview marker number must be a positive integer.");
         msg.rollIndex = marker - 1;
       }
-      if (op === "stock") msg.stockRequest = await read("stockRequest");
+      if (["stock", "stockIdentities", "stockPrice"].includes(op)) msg.stockRequest = await read("stockRequest");
+      if (op === "stockPrice") msg.stockPricing = await read("stockPricing");
       if (op === "cutJob") msg.cutJobRequest = await read("cutJobRequest");
       if (op === "price") { msg.quotes = await read("quotes"); msg.market = await read("market"); }
       if (op === "sew") { msg.options = await read("sewOptions"); msg.selectRecipes = $("sewOptimize").checked; }
@@ -3665,7 +3718,7 @@ for (const [id, operation] of [["compressionRequest", "pressure"], ["compression
 }
 for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
-  stockRequest:["stock"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
+  stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {

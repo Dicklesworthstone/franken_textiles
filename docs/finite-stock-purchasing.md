@@ -158,8 +158,19 @@ The wasm-bindgen exports have those same names, accept JSON text, and retain ori
 text. Their combined input and serialized output budgets are each 64 MiB. Serialization exceeding
 the output budget refuses without returning a partial JSON document.
 
-This increment supplies native commands and browser-callable APIs; it does not add graphical pricing
-controls to the material workbench. It also does not add supplier records, network refreshes,
+The material workbench exposes these APIs directly after binding a pattern and choosing the finite-stock
+request. **Inspect exact stock identities** displays every used and unused item's material hash, stock
+hash and gross area for deliberate offer binding. Load a `ftx-finite-stock-pricing/1` file under
+**Whole-item finite-stock pricing JSON**, then **Price finite-stock layout**. The price result preserves
+unknown complete totals, source exclusions, binding diagnostics and original market terms.
+
+Each action downloads its canonical result, exact bound pattern and original stock request; pricing
+also retains the exact pricing input. Replay those same inputs with `stock-identities` or `stock-price`.
+The separate price file does not re-optimize a layout: its objective and any embedded cost-search
+policy remain in the stock request. Source/stock edits invalidate identities and prices; pricing edits
+invalidate prices only. Cancellation and refused replacements withdraw their dependent downloads.
+
+These controls do not add supplier records, network refreshes,
 supplier-bundle/shipping optimization, currency conversion, accounting rounding rules, inventory
 mutation or checkout. Area/count objectives remain distinct from the explicitly requested cost objective.
 These are explicit remaining purchasing tasks under `ftx-tm6`/`ftx-tm7`, not claims made by a
