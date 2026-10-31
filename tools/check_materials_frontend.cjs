@@ -1305,13 +1305,14 @@ test('compiled WASM material supplemental photo evidence matches the ordinary ro
       assert.equal(saved.taken_on,null);assert.equal(saved.measurement_primary_taken_on,'2026-10-31');
       assert.notEqual(response.result.readiness.status,'READY');
     }finally{expected.free();}
+    const referencePhoto=JSON.parse(original);referencePhoto.wearer.reference=true;
     for(const [measurements,sources,consent,reason] of [
       [primary,[original,original],true,/twice/],
       [primary,[original],false,/same wearer/],
       [primary,['{}'],true,/supplemental measurements/],
       [primary,Array(9).fill(original),true,/1–8/],
       [primary.replace('"label":','"reference":true,"label":'),[original],true,/size-chart demo/],
-      [primary,[original.replace('"wearer":{','"wearer":{"reference":true,')],true,/reference wearer/]
+      [primary,[JSON.stringify(referencePhoto)],true,/reference wearer/]
     ]) {
       const refused=await w.send({...msg,measurements,measurementSources:JSON.stringify(sources),measurementConsent:consent});
       assert.equal(refused.type,'error');assert.match(refused.message,reason);assert.equal(refused.files,undefined);
