@@ -3404,15 +3404,38 @@ function acceptedBodyAngle() {
   }
   return Number(angle);
 }
-async function studyBodyInput() {
+async function measurementInput(msg) {
+  const files = Array.from($("supplementalFiles").files || []);
+  if (files.length && !$("supplementalConsent").checked) throw Error("Confirm that every added file describes this same wearer.");
+  if (files.length > 8 || files.reduce((sum, f) => sum + f.size, 0) > 16 * 1024 * 1024) {
+    throw Error("Choose at most 8 additional measurement files, 16 MiB combined.");
+  }
+  const primary = await read("measurements");
+  if (files.length) {
+    const sources = []; let bytes = 0;
+    for (const f of files) {
+      const buffer = await f.arrayBuffer(); bytes += buffer.byteLength;
+      if (bytes > 16 * 1024 * 1024) throw Error("Additional measurements exceed 16 MiB.");
+      const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
+      JSON.parse(raw); sources.push(raw);
+    }
+    msg.measurementSources = JSON.stringify(sources); msg.measurementConsent = true;
+  }
+  return primary;
+}
+async function studyBodyInput(msg) {
   const mode = studyBodyMode();
-  if (mode === "measurements") return read("measurements");
+  if (mode === "measurements") return measurementInput(msg);
   if (mode === "request") return read("scenarioBody");
   if (mode !== "accepted") throw Error("Choose a supported study body source.");
   if (!has("bodyFitFile")) throw Error("Choose an accepted body-fit report for the selected study body source.");
   if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before running body-dependent studies.");
   const angle = acceptedBodyAngle(), fit = await read("bodyFitFile");
-  const measurements = has("measurements") ? await read("measurements") : "{}";
+  const measurements = has("measurements") ? await measurementInput(msg) : "{}";
+  if (!has("measurements") && $("supplementalFiles").files.length) throw Error("Choose primary measurements before adding evidence.");
+  if (msg.measurementSources !== undefined) {
+    msg.measurementPrimary = measurements; msg.measurementAcceptedFit = fit; msg.measurementArmDeg = angle;
+  }
   // The existing Rust request is the authority. Embed validated source text without rounding its numbers.
   return '{"schema":"ftx-scenario-body/1","measurements":' + measurements +
     ',"accepted_body_fit":' + fit + ',"arm_abduction_deg":' + angle + '}';
@@ -3555,14 +3578,14 @@ async function execute(op) {
       if (op === "study") msg.onBody = $("studyOnBody").checked;
       if (op === "scenario" || msg.onBody) {
         if (op === "scenario") msg.scenarioRequest = await read("scenarioRequest");
-        msg.measurements = await studyBodyInput();
+        msg.measurements = await studyBodyInput(msg);
         msg.bytes = await read("body", true);
       }
     }
     else {
       if (!bound) throw Error("Bind the current materials first.");
       msg.pattern = bound.pattern_json;
-      if (op === "fold" || op === "exports") { msg.measurements = await read("measurements"); msg.fit = await read("fit"); }
+      if (op === "fold" || op === "exports") { msg.measurements = await measurementInput(msg); msg.fit = await read("fit"); }
       if (op === "fold") {
         if (has("bodyFitFile")) {
           if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before draping.");
@@ -3783,6 +3806,14 @@ for (const [id, operation] of [["compressionRequest", "pressure"], ["compression
     invalidate([operation]);
   });
 }
+function supplementalChanged(resetConsent) {
+  if (resetConsent) $("supplementalConsent").checked = false;
+  $("bodyFitConsent").checked = false;
+  invalidate(["exports", "fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies("measurements")], true);
+}
+$("supplementalFiles").addEventListener("change", () => supplementalChanged(true));
+$("supplementalConsent").addEventListener("change", () => supplementalChanged(false));
+$("clearSupplemental").onclick = () => { $("supplementalFiles").value = ""; supplementalChanged(true); };
 for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
@@ -3791,6 +3822,7 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
     if (id === "fit") clearImportFit();
+    if (id === "measurements") $("supplementalConsent").checked = false;
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
     if (id === "measurements" || id === "fit" || id === "body") {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
@@ -3841,6 +3873,7 @@ function clearImportFit() {
 function clearRoundSources() {
   clearImportFit();
   ++roundRead; roundToken = null; roundFiles.clear(); window.opener = null;
+  $("supplementalConsent").checked = false;
   $("bodyFitConsent").checked = false; showReceivedBody();
   $("roundImportNote").hidden = true;
 }
@@ -3856,6 +3889,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       !["ftx-round-sources", "ftx-round-sources-cancelled"].includes(m.type)) return;
     roundToken = null; window.opener = null;
     const rev = ++roundRead;
+    $("supplementalConsent").checked = false;
     resetPatternInput();
     try {
       if (m.type === "ftx-round-sources-cancelled") throw Error("The source round changed before transfer. Draft and check it again.");

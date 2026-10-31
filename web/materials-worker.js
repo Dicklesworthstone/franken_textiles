@@ -122,6 +122,20 @@ self.onmessage = async ({ data: msg }) => {
   active = msg.request;
   try {
     budget(msg);
+    if (msg.measurementSources !== undefined) {
+      if (msg.measurementConsent !== true) throw Error("Associate additional measurements with this same wearer explicitly.");
+      if (!["exports", "fold", "scenario"].includes(msg.type) && !(msg.type === "study" && msg.onBody)) {
+        throw Error("Additional measurements require a consumer using the selected body evidence.");
+      }
+      if (typeof msg.measurementSources !== "string") throw Error("Additional measurements must be original JSON text strings.");
+      if (typeof ftx.measurement_file !== "function") throw Error("Rebuild web/pkg: missing shared measurement fusion.");
+      const primary = msg.measurementPrimary ?? msg.measurements;
+      json(primary); // Validate without reserializing full-width input numbers.
+      const merged = ftx.measurement_file(`{"mode":"file","measurements":${primary},"supplemental_measurements":${msg.measurementSources},"supplemental_same_wearer":true}`, msg.today || "1970-01-01");
+      // A separate body request never enters this path. Retain the exact accepted report text.
+      msg.measurements = msg.measurementAcceptedFit === undefined ? merged :
+        `{"schema":"ftx-scenario-body/1","measurements":${merged},"accepted_body_fit":${msg.measurementAcceptedFit},"arm_abduction_deg":${msg.measurementArmDeg}}`;
+    }
     if (msg.outfit) {
       if (typeof msg.outfit.request_json !== "string" || typeof msg.outfit.composition_json !== "string") throw Error("The original outfit request and composition receipt are required.");
       if (msg.type === "fold" && !(msg.selfContactMm > 0)) throw Error("Joint outfits require cloth-cloth self-contact.");
@@ -423,6 +437,7 @@ self.onmessage = async ({ data: msg }) => {
           finally { fold.free(); }
         } finally { model.free(); }
         files = [file("sim_report.json", reportText), file("fold_viewer.html", viewer, "text/html")];
+        if (msg.measurementSources !== undefined) files.push(file("measurements.json", msg.measurements));
         if (imported) files.push(file("body_fit.json", msg.bodyFit));
         break;
       }

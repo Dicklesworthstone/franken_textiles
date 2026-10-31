@@ -220,6 +220,22 @@ pub fn form_fields(args: &str, today: &str) -> Result<String, JsError> {
     Ok(serde_json::Value::Array(rows).to_string())
 }
 
+/// Resolve measurement evidence through the ordinary round's validation and fusion.
+/// Original supplemental document strings remain in the resulting measurement file.
+///
+/// # Errors
+/// Excessive JSON, invalid evidence, missing wearer association or ordinary body refusals.
+#[wasm_bindgen]
+pub fn measurement_file(body: &str, today: &str) -> Result<String, JsError> {
+    if body.len() > 64 * 1024 * 1024 {
+        return Err(JsError::new("measurement body JSON exceeds 64 MiB"));
+    }
+    let body = ftx_export::PyJson::parse(body).map_err(|e| JsError::new(&e))?;
+    page::body_file(&body, today)
+        .and_then(|data| serde_json::to_string(&data).map_err(|e| e.to_string()))
+        .map_err(|e| JsError::new(&e))
+}
+
 /// One round's result: the page's JSON, its files and the zip.
 #[wasm_bindgen]
 pub struct WebRound {

@@ -98,6 +98,12 @@ The original primary date remains in `measurement_primary_taken_on` when the agg
 Source/body edits reset consent, invalidate downloads and discard superseded reads/replies. The imports
 remain local and never enter browser storage. The numerical fusion and readiness rules are unchanged.
 
+The Material Workbench uses the same `measurement_file(body, today)` binding before exports,
+drapes and body studies that select its primary measurements. It retains the original supplemental
+strings and uses the fused document throughout each consumer; drapes also download that document.
+Explicit same-wearer confirmation is required again after evidence replacement. Separate body-request
+studies retain their own evidence. Malformed or refused supplements never fall back to the primary alone.
+
 **The fold-up.** `fold` is `ftx drape` without files: `load_body(bytes)` reads a converted model the page
 was given (`.ftxbody`, with array hashes checked, at most 512 MiB), and `fold_up(model, pattern,
 measurements, fit_spec, self_contact_mm, two_start, progress)` fits Anny to the tape in the drape pose, trims the

@@ -1171,6 +1171,142 @@ async function pageModule({roundToken=null}={}) {
   return { e, current, workers, ready, select, emit, load, inspect, bind, live, blobs, windowEvents,
     opener,openerMessages,hasOpener:()=>!!window.opener };
 }
+test('material supplemental measurements preserve original text and require fresh wearer association', async () => {
+  const p=await pageModule();await p.load();await p.bind();p.select('measurements');p.select('fit');
+  const raw=' \r\n{"schema":"fabric-measurements/1","seed":18446744073709551615,"x":-0.0}\r\n';
+  p.e.supplementalFiles.files=[new Blob([raw])];p.e.supplementalFiles.handlers.change();
+  const count=p.current().messages.length;await p.e.exports.onclick();
+  assert.match(p.e.error.textContent,/same wearer/);assert.equal(p.current().messages.length,count);
+  p.e.supplementalConsent.checked=true;p.e.supplementalConsent.handlers.change();await p.e.exports.onclick();
+  assert.equal(p.current().messages.at(-1).measurementSources,JSON.stringify([raw]));
+  assert.equal(p.current().messages.at(-1).measurementConsent,true);p.emit({});
+  p.e.bodyFitConsent.checked=true;p.e.measurements.handlers.change();
+  assert.equal(p.e.supplementalConsent.checked,false);assert.equal(p.e.bodyFitConsent.checked,false);
+  // Actual file inputs clear their FileList when value becomes empty.
+  Object.defineProperty(p.e.supplementalFiles,'value',{set(value){assert.equal(value,'');this.files=[];}});
+  p.e.clearSupplemental.onclick();assert.equal(p.e.supplementalFiles.files.length,0);
+  await p.e.exports.onclick();assert.equal(p.current().messages.at(-1).measurementSources,undefined);
+});
+test('material supplemental evidence refuses malformed bytes and declared or actual budgets before publishing',async()=>{
+  const p=await pageModule();await p.load();await p.bind();p.select('measurements');p.select('fit');
+  let reads=0;
+  for(const files of [Array(9).fill(new Blob(['{}'])),
+    [{size:16*1024*1024+1,arrayBuffer:async()=>{reads++;return new ArrayBuffer(0);}}],
+    [new Blob([new Uint8Array([0xc3,0x28])])],[new Blob(['\ufeff{}'])],[new Blob(['{'])],
+    [{size:1,arrayBuffer:async()=>new ArrayBuffer(16*1024*1024+1)}]]) {
+    p.e.supplementalFiles.files=files;p.e.supplementalFiles.handlers.change();p.e.supplementalConsent.checked=true;
+    const count=p.current().messages.length;await p.e.exports.onclick();
+    assert.equal(p.e.error.hidden,false);assert.equal(p.current().messages.length,count);
+  }
+  assert.equal(reads,0,'Declared oversize files are not read');
+});
+test('material supplemental reads cannot publish after cancellation or evidence replacement',async()=>{
+  for(const edit of ['cancel','primary','supplemental','consent','clear']) {
+    const p=await pageModule();await p.load();await p.bind();p.select('measurements');p.select('fit');
+    const delayed=deferred();let reading=false;
+    p.e.supplementalFiles.files=[{size:2,arrayBuffer:()=>{reading=true;return delayed.promise;}}];
+    p.e.supplementalConsent.checked=true;const old=p.current(),count=old.messages.length,running=p.e.exports.onclick();
+    while(!reading) await new Promise(resolve=>setImmediate(resolve));
+    if(edit==='cancel')p.e.cancel.onclick();
+    else if(edit==='primary')p.e.measurements.handlers.change();
+    else if(edit==='supplemental')p.e.supplementalFiles.handlers.change();
+    else if(edit==='consent'){p.e.supplementalConsent.checked=false;p.e.supplementalConsent.handlers.change();}
+    else p.e.clearSupplemental.onclick();
+    p.ready();delayed.resolve(new TextEncoder().encode('{}').buffer);await running;
+    assert.equal(old.dead,true,edit);assert.equal(old.messages.length,count,edit);assert.equal(p.current().messages.length,0,edit);
+  }
+});
+test('material supplemental routing covers drapes and both section-3 study sources while separate requests retain their own evidence',async()=>{
+  const p=await pageModule();await p.load();await p.bind();p.select('measurements');p.select('fit');
+  p.select('studyRequest');p.select('scenarioRequest');p.e.body.files=[new Blob([new Uint8Array([1])])];
+  const raw=' {"photo":1.0}\n';p.e.supplementalFiles.files=[new Blob([raw])];p.e.supplementalConsent.checked=true;
+  await p.e.fold.onclick();assert.equal(p.current().messages.at(-1).measurementSources,JSON.stringify([raw]));p.emit({});
+  p.e.studyOnBody.checked=true;
+  for(const mode of ['measurements','accepted','request']) {
+    p.e.studyBodySource.value=mode;p.e.studyBodySource.handlers.change();
+    if(mode==='accepted'){p.e.bodyFitFile.files=[new Blob([' {"accepted":-0.0}\n'])];p.e.bodyFitConsent.checked=true;p.e.bodyArmDeg.value='35';}
+    if(mode==='request')p.select('scenarioBody',' {"schema":"ftx-scenario-body/1","own":1.0}\n');
+    for(const op of ['study','scenario']) {
+      await p.e[op].onclick();const msg=p.current().messages.at(-1);assert.equal(msg.type,op);
+      assert.equal(msg.measurementSources,mode==='request'?undefined:JSON.stringify([raw]));
+      if(mode==='accepted'){assert.equal(msg.measurementPrimary,'{}');assert.equal(msg.measurementAcceptedFit,' {"accepted":-0.0}\n');assert.equal(msg.measurementArmDeg,35);}
+      if(mode==='request')assert.equal(msg.measurements,' {"schema":"ftx-scenario-body/1","own":1.0}\n');
+      p.emit({alternatives:[]});
+    }
+  }
+});
+test('material supplemental worker delegates fusion and feeds the same result to each consumer without fallback',async()=>{
+  const calls=[],merged=' {"records":[{"provenance":"PHOTO_ESTIMATED"}],"measurement_imports":["exact"]}\n';
+  const bindings={default:()=>Promise.resolve(),measurement_file:(body,today)=>{calls.push(['fusion',body,today]);return merged;},
+    WebBody:class {free(){}},
+    fold_up:(_body,_pattern,m)=>{calls.push(['fold',m]);return {report:()=>'{}',viewer:()=>'<html/>',free(){}};},
+    material_study_on_body:(_body,_pattern,_request,m)=>{calls.push(['study',m]);return '{}';},
+    material_scenario_study:(_body,_pattern,_study,_scenario,m)=>{calls.push(['scenario',m]);return '{}';},
+    run:request=>{calls.push(['exports',request]);return {page:()=>'{}',zip:()=>new Uint8Array([1]),zip_name:()=>'round.zip',free(){}};}};
+  const w=await workerModule({bindings}),source=' {"seed":18446744073709551615,"x":-0.0}\n';
+  for(const type of ['exports','fold','study','scenario']) {
+    const msg={type,request:1901,pattern:'{}',fit:'{}',measurements:' {"primary":1.0}\n',measurementSources:JSON.stringify([source]),
+      measurementConsent:true,onBody:true,bytes:new ArrayBuffer(1),studyRequest:'{}',scenarioRequest:'{}',today:'2026-10-31',created:'2026-10-31T12:00'};
+    const response=await w.send({...msg});assert.equal(response.type,'result',response.message);
+    const fusion=calls.at(-2);assert.equal(fusion[0],'fusion');assert.ok(fusion[1].includes(msg.measurements));
+    assert.equal(JSON.parse(fusion[1]).supplemental_measurements[0],source);
+    assert.equal(calls.at(-1)[1],type==='exports'?`{"pattern":{},"fit_spec":{},"body":{"mode":"file","measurements":${merged}}}`:merged);
+    if(type==='fold')assert.equal(response.files.find(f=>f.name==='measurements.json').text,merged);
+  }
+  const fit=' {"source":18446744073709551615,"x":-0.0}\n';
+  const response=await w.send({type:'scenario',measurements:'{}',measurementPrimary:'{}',measurementAcceptedFit:fit,measurementArmDeg:35,
+    measurementSources:JSON.stringify([source]),measurementConsent:true,bytes:new ArrayBuffer(1),pattern:'{}',studyRequest:'{}',scenarioRequest:'{}'});
+  assert.equal(response.type,'result',response.message);assert.ok(calls.at(-1)[1].includes(fit));assert.ok(calls.at(-1)[1].includes(merged));
+  const count=calls.length;
+  for(const consent of [false,undefined]) {
+    const refused=await w.send({type:'exports',measurements:'{}',measurementSources:'[]',measurementConsent:consent});
+    assert.equal(refused.type,'error');assert.match(refused.message,/same wearer/);assert.equal(refused.files,undefined);
+  }
+  assert.equal(calls.length,count);
+  bindings.measurement_file=()=>{throw Error('supplemental measurements: duplicate evidence');};
+  const refusedWorker=await workerModule({bindings});const refused=await refusedWorker.send({type:'exports',measurements:'{}',measurementSources:'[]',measurementConsent:true});
+  assert.equal(refused.type,'error');assert.match(refused.message,/duplicate evidence/);assert.equal(calls.length,count);
+});
+test('compiled WASM material supplemental photo evidence matches the ordinary round and retains refusals',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const photo=new ftx.WebPhoto(fs.readFileSync(path.join(__dirname,'../tests/fixtures/photo/plain-letter-exif6.jpg')),'letter');
+    let original;
+    try {original=' \r\n'+photo.measure('{"arm_length":[[30,400],[530,400]]}','{}')+'\r\n';}finally{photo.free();}
+    const primary=JSON.stringify({schema:'fabric-measurements/1',wearer:{label:'synthetic sleeve fixture',stature_mm:920,age_months:30},
+      taken_on:'2026-10-31',records:[{name:'cuff_pass',value_mm:200,sigma_mm:1,provenance:'MEASURED_TAPE',method:'synthetic known perimeter'}]});
+    const imported=JSON.parse(ftx.import_garmentcode(fs.readFileSync(path.join(__dirname,'../tests/fixtures/import/synthetic-sleeve.garmentcode.json'),'utf8'),
+      fs.readFileSync(path.join(__dirname,'../tests/fixtures/import/synthetic-sleeve.annotations.json'),'utf8')));
+    const bound=JSON.parse(ftx.material_bind(imported.pattern_json,'{"schema":"ftx-material-bindings/1","default":{"id":"zagreb/polym17152013/M1"},"pieces":{}}'));
+    const p=await pageModule(),w=await workerModule({bindings:ftx});p.select('patternFile',bound.pattern_json);await p.e.patternFile.onchange();
+    await p.e.bind.onclick();const binding=await w.send(p.current().messages.at(-1));assert.equal(binding.type,'result',binding.message);p.current().emit(binding);
+    p.select('fit',imported.fit_spec_json);p.select('measurements',primary);p.e.measurements.handlers.change();
+    p.e.supplementalFiles.files=[new Blob([original])];p.e.supplementalFiles.handlers.change();p.e.supplementalConsent.checked=true;
+    await p.e.exports.onclick();const msg=p.current().messages.at(-1),response=await w.send(msg);
+    assert.equal(response.type,'result',response.message);assert.equal(msg.measurementSources,JSON.stringify([original]));
+    const expected=ftx.run(`{"pattern":${bound.pattern_json},"fit_spec":${imported.fit_spec_json},"body":{"mode":"file","measurements":${primary},"supplemental_same_wearer":true,"supplemental_measurements":${JSON.stringify([original])}}}`,msg.today,msg.created);
+    try {
+      assert.deepEqual(plain(response.result),JSON.parse(expected.page()));
+      assert.deepEqual(Buffer.from(response.files.find(f=>f.mime==='application/zip').bytes),Buffer.from(expected.zip()));
+      const saved=JSON.parse(new TextDecoder().decode(expected.file('measurements.json')));
+      assert.equal(saved.measurement_imports[0],original);assert.equal(saved.fused.arm_length.primary_provenance,'PHOTO_ESTIMATED');
+      assert.equal(saved.taken_on,null);assert.equal(saved.measurement_primary_taken_on,'2026-10-31');
+      assert.notEqual(response.result.readiness.status,'READY');
+    }finally{expected.free();}
+    for(const [measurements,sources,consent,reason] of [
+      [primary,[original,original],true,/twice/],
+      [primary,[original],false,/same wearer/],
+      [primary,['{}'],true,/supplemental measurements/],
+      [primary,Array(9).fill(original),true,/1–8/],
+      [primary.replace('"label":','"reference":true,"label":'),[original],true,/size-chart demo/],
+      [primary,[original.replace('"wearer":{','"wearer":{"reference":true,')],true,/reference wearer/]
+    ]) {
+      const refused=await w.send({...msg,measurements,measurementSources:JSON.stringify(sources),measurementConsent:consent});
+      assert.equal(refused.type,'error');assert.match(refused.message,reason);assert.equal(refused.files,undefined);
+    }
+  });
 test('material accepted-body controls preserve source text and withdraw stale body, pose and downstream results', async () => {
   const p = await pageModule(); await p.load(); await p.bind();
   p.select('measurements'); p.select('fit'); p.e.body.files = [new Blob([new Uint8Array([1,2,3])])];

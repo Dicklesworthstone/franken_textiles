@@ -65,6 +65,16 @@ The existing drafting worker and its `sim_report.json` download use the same los
 
 The remaining operations consume this same bound pattern:
 
+Section 3 accepts **Additional measurements** alongside a primary measurement document. Confirm
+that all files describe the same wearer before running a consumer. Up to eight files (16 MiB total)
+enter the existing Rust validation/fusion path, preserving exact original source text and photo
+uncertainty. Exports, drapes and body studies using section-3 measurements consume the same fused
+records; drapes download `measurements.json`, and studies retain it in `body-input.json`. Separate
+body-request mode uses that request's own evidence. Evidence edits withdraw affected outputs and
+reset association; **Clear additional measurements** explicitly returns to primary-only evidence.
+Refused supplements remain selected until corrected or cleared. PHOTO_ESTIMATED and MODEL_FIT
+remain distinct from direct measurements, and neither added evidence nor a computed body proves fit.
+
 | Operation | Additional local inputs | Existing authority and output |
 |---|---|---|
 | Validate/export | Measurements and fit-specification JSON | `ftx_wasm::page::run`; current verdict basis, measurement readiness and checked export ZIP. No implicit drape/fit claim. |

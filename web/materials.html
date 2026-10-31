@@ -236,6 +236,14 @@ It does not replace the inspected material selection. Freeze selections &amp; bi
 <div class="grid"><div>
 <h3>Fit, exports and mechanical drape</h3>
 <label>Measurements JSON <input id="measurements" type="file" accept=".json,application/json"></label>
+<details><summary>Add measurement evidence for this wearer</summary>
+<label>Additional measurements <input id="supplementalFiles" type="file" multiple accept=".json,application/json"></label>
+<label><input id="supplementalConsent" type="checkbox"> I have checked that every added file describes this same wearer</label>
+<button id="clearSupplemental" type="button">Clear additional measurements</button>
+<p class="note">Up to eight files, 16 MiB combined. Original records and uncertainty enter ordinary fusion for exports,
+drapes and studies using these measurements. Photo estimates remain PHOTO_ESTIMATED. Separate body-request studies
+use their own evidence. Added records do not establish readiness or physical fit.</p>
+</details>
 <label>Fit specification JSON <input id="fit" type="file" accept=".json,application/json"></label>
 <p id="importFitNote" class="note" hidden>Using the supplied imported fit specification. Inspect it below, or choose a file above to replace it. Measurement readiness and physical fit remain separate.</p>
 <div id="importFitFiles" class="links"></div>
