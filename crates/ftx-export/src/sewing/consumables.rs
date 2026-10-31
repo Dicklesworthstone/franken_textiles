@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cutting::procurement::{Market, allocation, stock_components};
 
-use super::{SewOptions, SewPlan, bad, positive, qualified_text};
+use super::{SewOptions, SewPlan, bad, positive, production::parallel, qualified_text};
 
 const MAX_CHANNELS: usize = 8;
 const MAX_MATERIALS: usize = 32;
@@ -498,9 +498,25 @@ pub fn purchasing_work_bound(options: &SewOptions) -> Result<usize, Refusal> {
         })
         .transpose()?
         .unwrap_or(0);
-    let work = (quotes.len() * (hashes.len() + 1) + aliases)
+    let per_order = (quotes.len() * (hashes.len() + 1) + aliases)
         .checked_add(split_work)
         .ok_or_else(|| budget("thread purchasing work reservation overflows"))?;
+    let evaluations = options
+        .production
+        .as_ref()
+        .and_then(|production| production.routing.as_ref())
+        .and_then(|routing| routing.thread_order_search.as_ref())
+        .map_or(Ok(1), |search| {
+            if !(1..=64).contains(&search.max_order_evaluations) {
+                return Err(budget(
+                    "eligible thread-order search supports 1..64 complete price evaluations",
+                ));
+            }
+            Ok(search.max_order_evaluations + 1)
+        })?;
+    let work = per_order
+        .checked_mul(evaluations)
+        .ok_or_else(|| budget("eligible thread-order purchasing reservation overflows"))?;
     if work > MAX_WORK {
         return Err(budget(
             "thread purchasing exceeds 200000 canonical quote/stock-alias work units",
@@ -510,21 +526,49 @@ pub fn purchasing_work_bound(options: &SewOptions) -> Result<usize, Refusal> {
 }
 
 pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refusal> {
+    let routed = plan
+        .production
+        .as_ref()
+        .and_then(|production| production.routing.as_ref());
+    let assignments: Vec<_> = routed
+        .into_iter()
+        .flat_map(|routing| &routing.selected.operations)
+        .map(|operation| RoutedAssignment {
+            cell: &operation.cell,
+            operation_id: &operation.operation_id,
+            copy: operation.copy,
+        })
+        .collect();
+    evaluate_routed(
+        plan,
+        request,
+        routed.map(|routing| (routing.cell_plans.as_slice(), assignments.as_slice())),
+    )
+}
+
+pub(super) struct RoutedAssignment<'a> {
+    pub(super) cell: &'a str,
+    pub(super) operation_id: &'a str,
+    pub(super) copy: usize,
+}
+
+/// The same inventory authority prices a complete candidate assignment before a timeline is retained.
+pub(super) fn evaluate_routed(
+    plan: &SewPlan,
+    request: &Request,
+    routed: Option<(&[parallel::CellPlan], &[RoutedAssignment<'_>])>,
+) -> Result<Report, Refusal> {
     let copies = request.copies()?;
     let configured = plan
         .production
         .as_ref()
         .and_then(|production| production.parallel.as_ref())
         .filter(|parallel| !parallel.cell_plans.is_empty());
-    let routed = plan
-        .production
-        .as_ref()
-        .and_then(|production| production.routing.as_ref());
     let mut routed_counts = BTreeMap::new();
-    if let Some(routing) = routed {
-        for operation in &routing.selected.operations {
+    if let Some((_, assignments)) = routed {
+        for operation in assignments {
             *routed_counts
-                .entry((operation.cell.as_str(), operation.operation_id.as_str()))
+                .entry((operation.cell, operation.operation_id))
                 .or_insert(0usize) += 1;
         }
     }
@@ -549,11 +593,10 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
         purchasing: None,
         purchasing_work_bound: purchasing_work_bound(&plan.options)?,
     };
-    let batches: Vec<_> = if let Some(routing) = routed {
+    let batches: Vec<_> = if let Some((cell_plans, _)) = routed {
         // These are admitted source alternatives. Only selected (cell, operation) executions
         // contribute below; an unused eligible recipe must not invent stitches or missing yarn.
-        routing
-            .cell_plans
+        cell_plans
             .iter()
             .map(|source| (Some(source.cell.as_str()), source.plan.as_ref(), copies))
             .collect()
@@ -674,14 +717,11 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
                             "thread split orders support at most 256 complete operation/channel/copy segments",
                         ));
                     } else {
-                        let copy_ids: Vec<_> = if let Some(routing) = routed {
-                            routing
-                                .selected
-                                .operations
+                        let copy_ids: Vec<_> = if let Some((_, assignments)) = routed {
+                            assignments
                                 .iter()
                                 .filter(|operation| {
-                                    Some(operation.cell.as_str()) == cell
-                                        && operation.operation_id == id
+                                    Some(operation.cell) == cell && operation.operation_id == id
                                 })
                                 .map(|operation| operation.copy)
                                 .collect()
@@ -792,6 +832,44 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
         report.purchasing = Some(price(&report, &resolved, purchasing, segments)?);
     }
     Ok(report)
+}
+
+/// A single complete canonical order score, shared by recipe and cell-assignment search.
+pub(crate) fn complete_order_cost(
+    report: &Report,
+    currency: &str,
+) -> Result<(f64, Option<bool>), Refusal> {
+    let unavailable = |message: &str| {
+        Refusal::new(RefusalCode::NotConverged, message)
+        .repair("supply complete independently qualified thread consumption and eligible exact-yarn orders in the declared market")
+    };
+    if !report.complete_consumption_coverage || report.total_required_length_m.is_none() {
+        return Err(unavailable(
+            "thread order cost is unknown because an admitted operation has missing consumption evidence or incomplete channel coverage",
+        ));
+    }
+    let purchasing = report
+        .purchasing
+        .as_ref()
+        .ok_or_else(|| unavailable("admitted sewing plan has no thread purchasing report"))?;
+    if purchasing.currency != currency {
+        return Err(unavailable(
+            "thread purchasing currency differs from the declared common recipe market",
+        ));
+    }
+    if !purchasing.complete_offer_coverage {
+        return Err(unavailable(
+            purchasing
+                .unavailable_reason
+                .as_deref()
+                .unwrap_or("complete eligible thread order coverage is unavailable"),
+        ));
+    }
+    purchasing
+        .selected_total()
+        .filter(|cost| cost.is_finite() && *cost >= 0.)
+        .map(|cost| (cost, purchasing.order_allocation_optimality_proven))
+        .ok_or_else(|| unavailable("complete canonical thread order total is unavailable"))
 }
 
 fn purchase_scope(requirement: &Requirement, market: &Market) -> Scope {

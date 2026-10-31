@@ -3,7 +3,10 @@
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::material_cost::{Basis, Scope};
 
-use crate::sewing::{SewOptions, SewPlan, consumables::Purchasing};
+use crate::sewing::{
+    SewOptions, SewPlan,
+    consumables::{self, Purchasing},
+};
 
 pub(super) fn purchasing(options: &SewOptions) -> Result<&Purchasing, Refusal> {
     options
@@ -50,31 +53,19 @@ pub(super) fn score(plan: &SewPlan, currency: &str) -> Result<(f64, Option<bool>
         .consumables
         .as_ref()
         .ok_or_else(|| unavailable("admitted sewing plan has no thread consumption report"))?;
-    if !consumption.complete_consumption_coverage || consumption.total_required_length_m.is_none() {
-        return Err(unavailable(
-            "thread order cost is unknown because an admitted operation has missing consumption evidence or incomplete channel coverage",
-        ));
-    }
-    let purchasing = consumption
-        .purchasing
+    let (cost, mut proof) = consumables::complete_order_cost(consumption, currency)?;
+    if let Some(search) = plan
+        .production
         .as_ref()
-        .ok_or_else(|| unavailable("admitted sewing plan has no thread purchasing report"))?;
-    if purchasing.currency != currency {
-        return Err(unavailable(
-            "thread purchasing currency differs from the declared common recipe market",
-        ));
+        .and_then(|production| production.routing.as_ref())
+        .and_then(|route| route.thread_order_search.as_ref())
+    {
+        if search.selected_order_cost != Some(cost) {
+            return Err(unavailable(
+                "routed assignment has no matching canonical selected thread order",
+            ));
+        }
+        proof = Some(proof != Some(false) && search.optimality_proven);
     }
-    if !purchasing.complete_offer_coverage {
-        return Err(unavailable(
-            purchasing
-                .unavailable_reason
-                .as_deref()
-                .unwrap_or("complete eligible thread order coverage is unavailable"),
-        ));
-    }
-    purchasing
-        .selected_total()
-        .filter(|cost| cost.is_finite() && *cost >= 0.0)
-        .map(|cost| (cost, purchasing.order_allocation_optimality_proven))
-        .ok_or_else(|| unavailable("complete canonical thread order total is unavailable"))
+    Ok((cost, proof))
 }

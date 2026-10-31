@@ -375,6 +375,10 @@ impl SurfaceHistory {
                 qualification,
                 water.remaining_liquid_kg(),
                 self.state.temperature_c(),
+                self.request
+                    .surface_water
+                    .as_ref()
+                    .is_some_and(|request| request.drainage.is_some()),
             )?
         } else {
             crate::liquid_mass::bind(
@@ -909,6 +913,21 @@ impl SurfaceHistory {
                 );
                 result["surface_water"]["scope"] = json!(
                     "The mechanical_coupling uses these exact reference-owned remaining and incoming/outgoing masses. Its independent prescribed-velocity model retains momentum, bulk energy and inelastic mixing dissipation. This thermal ledger contains sensible and latent enthalpy only; it receives no inferred mixing heat or wet-property change."
+                );
+            }
+        }
+        if self
+            .request
+            .surface_water
+            .as_ref()
+            .is_some_and(|water| water.drainage.is_some())
+        {
+            result["scope"] = json!(
+                "Accepted-step sheet heat with qualified free liquid, supplied sensible enthalpy and prescribed stock-limited drainage. Optional condensation retains independent reverse-transfer qualification. Evaporation and drainage have separate mass counters; only phase transfer carries latent heat, while both outgoing phases export old-temperature sensible enthalpy. Any mechanical coupling uses these exact accepted phases for the next solve's inertia, momentum and bulk energy, retaining qualified incoming stream velocities before co-moving outflow. Coupled failure restores the whole motion. No inferred runoff, inter-patch transport, wet-property change, body transfer or empirical garment claim; refinement remains necessary."
+            );
+            if !result["mechanical_coupling"].is_null() {
+                result["surface_water"]["scope"] = json!(
+                    "Mechanical coupling uses this exact remaining, supplied, condensed, evaporated and drained liquid. Evaporated and drained mass remain separate; their combined carried momentum and bulk energy belong to mechanics. This thermal ledger owns liquid/vapor sensible enthalpy and phase-change latent heat; drainage has no latent term or inferred recoil."
                 );
             }
         }

@@ -115,6 +115,7 @@ fn admit_mechanics(
         };
     }
     let water = &request["surface_water"];
+    let draining = water["schema"] == "ftx-textile-surface-water/4";
     let bindings = qualification["bindings"].as_object().ok_or_else(fail)?;
     let water_bindings = water["bindings"].as_object().ok_or_else(fail)?;
     let phase_velocities = qualification["schema"] == "ftx-coupled-liquid-mechanics/4";
@@ -140,6 +141,7 @@ fn admit_mechanics(
                 "ftx-textile-surface-water/1"
                     | "ftx-textile-surface-water/2"
                     | "ftx-textile-surface-water/3"
+                    | "ftx-textile-surface-water/4"
             )
         ) && qualification["model"]
             == if phase_velocities {
@@ -276,6 +278,12 @@ fn admit_mechanics(
             let mass = value.remove(full).ok_or_else(fail)?;
             value.insert(short.into(), mass);
         }
+        if draining {
+            let mass = value.remove("drained_liquid_mass_kg").ok_or_else(fail)?;
+            value.insert("drained_liquid_kg".into(), mass);
+        } else if value.contains_key("drained_liquid_mass_kg") {
+            return Err(fail());
+        }
         Ok(Value::Object(value))
     };
     let initial = summary(initial)?;
@@ -299,6 +307,7 @@ fn admit_mechanics(
     let mut previous_mixing_dissipation = 0.;
     let mut previous_incoming_potential = 0.;
     let mut previous_incoming_momentum = [0.; 3];
+    let mut previous_drained = 0.;
     for (index, row) in std::iter::once(&initial)
         .chain(trace.iter().map(|row| &row["mechanical_coupling"]))
         .enumerate()
@@ -311,6 +320,14 @@ fn admit_mechanics(
         let initial_mass = nonnegative(water, "initial_liquid_kg")?;
         let remaining = nonnegative(row, "remaining_liquid_kg")?;
         let evaporated = nonnegative(row, "evaporated_liquid_kg")?;
+        let drained = if draining {
+            nonnegative(row, "drained_liquid_kg")?
+        } else {
+            if row.get("drained_liquid_kg").is_some() {
+                return Err(fail());
+            }
+            0.
+        };
         let total = nonnegative(row, "total_inertial_mass_kg")?;
         let energy = nonnegative(row, "exported_kinetic_energy_j")?;
         let incoming = if exchange {
@@ -341,16 +358,15 @@ fn admit_mechanics(
                 } else {
                     nonnegative(water, "supplied_liquid_kg")?
                 };
-                let condensation =
-                    if request["surface_water"]["schema"] == "ftx-textile-surface-water/3" {
-                        nonnegative(water, "condensed_liquid_kg")?
-                    } else {
-                        0.
-                    };
+                let condensation = if !request["surface_water"]["condensation"].is_null() {
+                    nonnegative(water, "condensed_liquid_kg")?
+                } else {
+                    0.
+                };
                 supply + condensation
             };
             if !near(incoming, thermal_incoming, thermal_incoming)
-                || !near(outgoing, evaporated, evaporated)
+                || !near(outgoing, evaporated + drained, evaporated + drained)
                 || incoming < previous_incoming
                 || outgoing < previous_outgoing
                 || incoming_energy < previous_incoming_energy
@@ -417,7 +433,7 @@ fn admit_mechanics(
                 initial_mass,
                 initial_mass,
             )
-            || !near(remaining + evaporated, available, available)
+            || !near(remaining + evaporated + drained, available, available)
             || !near(total, substrate + remaining, substrate + available)
             || !near(
                 number(row, "mass_balance_residual_kg")?,
@@ -425,14 +441,17 @@ fn admit_mechanics(
                 total,
             )
             || energy < previous_energy
-            || (index == 0 && (remaining != initial_mass || evaporated != 0. || energy != 0.))
+            || drained < previous_drained
+            || (index == 0
+                && (remaining != initial_mass || evaporated != 0. || drained != 0. || energy != 0.))
             || (index != 0
                 && (!near(remaining, number(water, "remaining_liquid_kg")?, available)
                     || !near(
                         evaporated,
                         number(water, "evaporated_liquid_kg")?,
                         available,
-                    )))
+                    )
+                    || draining && !near(drained, number(water, "drained_liquid_kg")?, available)))
         {
             return Err(fail());
         }
@@ -460,6 +479,7 @@ fn admit_mechanics(
             }
         }
         previous_energy = energy;
+        previous_drained = drained;
     }
     Ok(())
 }
@@ -551,6 +571,104 @@ impl Supply {
     }
 }
 
+// The source prescribes a maximum drain demand. Available stock and competing evaporation can
+// reduce actual export; this integrates the authored boundary, never a second transport solve.
+struct Drainage {
+    ends: Vec<f64>,
+    rates: BTreeMap<String, Vec<f64>>,
+}
+
+impl Drainage {
+    fn new(
+        request: &Value,
+        owners: &serde_json::Map<String, Value>,
+        motion: &Value,
+    ) -> Result<Self, Refusal> {
+        source(request)?;
+        let bindings = request["bindings"].as_object().ok_or_else(fail)?;
+        if request["schema"] != "ftx-textile-liquid-drainage/1"
+            || bindings.keys().ne(owners.keys())
+            || !request["qualification"]
+                .as_str()
+                .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
+        {
+            return Err(fail());
+        }
+        let ends = array(motion, "keyframes")?
+            .iter()
+            .map(|frame| number(frame, "time_s"))
+            .collect::<Result<Vec<_>, _>>()?;
+        if ends.is_empty()
+            || ends[0] <= 0.
+            || ends.windows(2).any(|pair| pair[1] <= pair[0])
+            || ends.last().copied() != Some(number(motion, "duration_s")?)
+        {
+            return Err(fail());
+        }
+        let rates = bindings
+            .iter()
+            .map(|(instance, binding)| {
+                let values = array(binding, "rate_kg_m2_s")?;
+                if values.len() != ends.len() {
+                    return Err(fail());
+                }
+                Ok((
+                    instance.clone(),
+                    values
+                        .iter()
+                        .map(|value| finite(value).filter(|v| *v >= 0.).ok_or_else(fail))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, Refusal>>()?;
+        Ok(Self { ends, rates })
+    }
+
+    fn integral(&self, instance: &str, from: f64, to: f64) -> Result<f64, Refusal> {
+        if !from.is_finite()
+            || !to.is_finite()
+            || from < 0.
+            || to < from
+            || to > *self.ends.last().ok_or_else(fail)?
+        {
+            return Err(fail());
+        }
+        let rates = self.rates.get(instance).ok_or_else(fail)?;
+        let mut start: f64 = 0.;
+        let mut total = 0.;
+        for (&end, &rate) in self.ends.iter().zip(rates) {
+            let seconds = end.min(to) - start.max(from);
+            if seconds > 0. {
+                let increment = seconds * rate;
+                let next = total + increment;
+                if !next.is_finite() || (rate > 0. && (increment <= 0. || next <= total)) {
+                    return Err(fail());
+                }
+                total = next;
+            }
+            start = end;
+        }
+        Ok(total)
+    }
+
+    fn demand(&self, areas: &BTreeMap<&str, f64>, from: f64, to: f64) -> Result<f64, Refusal> {
+        let mut total = 0.;
+        for (instance, area) in areas {
+            let integral = self.integral(instance, from, to)?;
+            let amount = area * integral;
+            let next = total + amount;
+            if !next.is_finite()
+                || (integral > 0. && amount <= 0.)
+                || (amount > 0. && next <= total)
+            {
+                return Err(fail());
+            }
+            total = next;
+        }
+        Ok(total)
+    }
+}
+
 // Producer substeps accumulate ordinary floating-point increments. Permit their bounded summation
 // error against independently reconstructed inventories/enthalpy, without a unit-sized tolerance.
 fn accumulated_near(actual: f64, expected: f64, scale: f64, steps: u64) -> bool {
@@ -585,8 +703,10 @@ pub(super) fn admit(
             Err(fail())
         };
     }
-    let condensing = policy["schema"] == "ftx-textile-surface-water/3";
-    let supplied = condensing || policy["schema"] == "ftx-textile-surface-water/2";
+    let draining = policy["schema"] == "ftx-textile-surface-water/4";
+    let condensing = policy["schema"] == "ftx-textile-surface-water/3"
+        || draining && !policy["condensation"].is_null();
+    let supplied = draining || condensing || policy["schema"] == "ftx-textile-surface-water/2";
     let version_valid = if supplied {
         policy["replenishment_kg_m2_s"].is_null() && !policy["supply"].is_null()
     } else {
@@ -597,6 +717,7 @@ pub(super) fn admit(
     if coverage
         || !version_valid
         || condensing == policy["condensation"].is_null()
+        || draining == policy["drainage"].is_null()
         || policy["model"] != "inner_cell_equilibrium_free_film_frozen_properties/1"
         || water["request"] != *policy
         || heat["initial_temperature_c"] != heat_request["initial_temperature_c"]
@@ -706,6 +827,9 @@ pub(super) fn admit(
     let bindings = policy["bindings"].as_object().ok_or_else(fail)?;
     let supply = supplied
         .then(|| Supply::new(&policy["supply"], bindings, motion, cp, reference, domain))
+        .transpose()?;
+    let drainage = draining
+        .then(|| Drainage::new(&policy["drainage"], bindings, motion))
         .transpose()?;
     let total_steps = heat["thermal_steps"].as_u64().ok_or_else(fail)?;
     let enthalpy_scale = |mass: f64| {
@@ -828,7 +952,7 @@ pub(super) fn admit(
         &drape["material"],
     )?;
 
-    let mut totals = [0.; 7];
+    let mut totals = [0.; 9];
     let mut dryouts = 0_u64;
     let mut used = BTreeSet::new();
     let mut areas = BTreeMap::new();
@@ -849,6 +973,30 @@ pub(super) fn admit(
         let initial = nonnegative(row, "initial_liquid_kg")?;
         let remaining = nonnegative(row, "remaining_liquid_kg")?;
         let evaporated = nonnegative(row, "evaporated_liquid_kg")?;
+        let (drained, drained_j) = if let Some(drainage) = &drainage {
+            let mass = nonnegative(row, "drained_liquid_kg")?;
+            let energy = number(row, "exported_liquid_sensible_energy_j")?;
+            let demand = area * drainage.integral(instance, 0., number(motion, "duration_s")?)?;
+            if !inside(mass, 0., demand, demand, total_steps)
+                || !inside(
+                    energy,
+                    mass * cp * (domain[0] - reference),
+                    mass * cp * (domain[1] - reference),
+                    enthalpy_scale(mass),
+                    total_steps,
+                )
+            {
+                return Err(fail());
+            }
+            (mass, energy)
+        } else {
+            if row.get("drained_liquid_kg").is_some()
+                || row.get("exported_liquid_sensible_energy_j").is_some()
+            {
+                return Err(fail());
+            }
+            (0., 0.)
+        };
         let (condensed, incoming_j) = if condensing {
             let mass = nonnegative(row, "condensed_liquid_kg")?;
             let energy = number(row, "incoming_vapor_sensible_energy_j")?;
@@ -912,7 +1060,7 @@ pub(super) fn admit(
             || remaining > maximum * area
             || (!supplied && remaining > initial)
             || !near(
-                remaining + evaporated,
+                remaining + evaporated + drained,
                 initial + supplied_mass + condensed,
                 initial + supplied_mass + condensed,
             )
@@ -931,6 +1079,8 @@ pub(super) fn admit(
             supplied_j,
             condensed,
             incoming_j,
+            drained,
+            drained_j,
         ]) {
             *total += value;
         }
@@ -1012,6 +1162,16 @@ pub(super) fn admit(
     {
         return Err(fail());
     }
+    if draining
+        && (!near(number(water, "drained_liquid_kg")?, totals[7], totals[7])
+            || !near(
+                number(water, "exported_liquid_sensible_energy_j")?,
+                totals[8],
+                enthalpy_scale(totals[7]),
+            ))
+    {
+        return Err(fail());
+    }
     let event_bound = if supplied {
         total_steps
             .checked_mul(patches.len() as u64)
@@ -1038,6 +1198,9 @@ pub(super) fn admit(
     let dry_enthalpy_span = dry_domain_bounds[1] - dry_domain_bounds[0];
     let mut previous = [totals[0], 0., 0., 0.];
     let mut previous_incoming_j = 0.;
+    let mut previous_drained = 0.;
+    let mut previous_drained_j = 0.;
+    let mut previous_time = 0.;
     let mut previous_dryouts = 0;
     let mut steps = 0_u64;
     let mut corrections = Vec::with_capacity(trace.len() + 1);
@@ -1049,6 +1212,19 @@ pub(super) fn admit(
         let latent_j = nonnegative(w, "latent_energy_j")?;
         let stored_j = number(w, "liquid_stored_change_j")?;
         let exported_j = number(w, "exported_vapor_sensible_energy_j")?;
+        let (drained, drained_j) = if draining {
+            (
+                nonnegative(w, "drained_liquid_kg")?,
+                number(w, "exported_liquid_sensible_energy_j")?,
+            )
+        } else {
+            if w.get("drained_liquid_kg").is_some()
+                || w.get("exported_liquid_sensible_energy_j").is_some()
+            {
+                return Err(fail());
+            }
+            (0., 0.)
+        };
         let (condensed, condensation_j, incoming_j) = if condensing {
             (
                 nonnegative(w, "condensed_liquid_kg")?,
@@ -1096,7 +1272,7 @@ pub(super) fn admit(
         let dry_bounds = dry_heat_bounds(&laws, &dry_areas, initial_temperature, range)?;
         let energy_scale = steps as f64
             * (1. + dry_enthalpy_span + cp * available_mass * (domain[1] - domain[0]))
-            + 2. * enthalpy_scale(evaporated + supplied_mass + condensed)
+            + 2. * enthalpy_scale(evaporated + drained + supplied_mass + condensed)
             + cp * (supplied_mass + condensed) * (domain[1] - domain[0])
             + latent_j
             + condensation_j
@@ -1140,6 +1316,27 @@ pub(super) fn admit(
         } else {
             false
         };
+        if let Some(drainage) = &drainage {
+            let time = if std::ptr::eq(row, heat) {
+                number(heat, "duration_s")?
+            } else {
+                number(row, "time_s")?
+            };
+            let demand = drainage.demand(&areas, previous_time, time)?;
+            let increment = drained - previous_drained;
+            if !inside(increment, 0., demand, drained, steps)
+                || !inside(
+                    drained_j - previous_drained_j,
+                    increment * cp * (domain[0] - reference),
+                    increment * cp * (domain[1] - reference),
+                    enthalpy_scale(drained),
+                    steps,
+                )
+            {
+                return Err(fail());
+            }
+            previous_time = time;
+        }
         if let Some(temperatures) = &vapor_temperatures {
             let temperature = *temperatures.get(ambient_index).ok_or_else(fail)?;
             // Incoming vapor has an explicit, constant effective enthalpy within this physical
@@ -1153,8 +1350,10 @@ pub(super) fn admit(
                 return Err(fail());
             }
         }
-        let mass_error = remaining + evaporated - initial - supplied_mass - condensed;
-        let expected_schema = if condensing {
+        let mass_error = remaining + evaporated + drained - initial - supplied_mass - condensed;
+        let expected_schema = if draining {
+            "ftx-textile-surface-water-result/4"
+        } else if condensing {
             "ftx-textile-surface-water-result/3"
         } else if supplied {
             "ftx-textile-surface-water-result/2"
@@ -1174,6 +1373,7 @@ pub(super) fn admit(
             || evaporated < previous[1]
             || supplied_mass < previous[2]
             || condensed < previous[3]
+            || drained < previous_drained
             || events < previous_dryouts
             || events > event_bound
             || (supplied
@@ -1181,7 +1381,11 @@ pub(super) fn admit(
                     || !maximum_total_liquid.is_finite()
                     || (remaining > maximum_total_liquid
                         && !near(remaining, maximum_total_liquid, maximum_total_liquid))))
-            || !near(remaining + evaporated, available_mass, available_mass)
+            || !near(
+                remaining + evaporated + drained,
+                available_mass,
+                available_mass,
+            )
             || !near(
                 number(w, "mass_balance_error_kg")?,
                 mass_error,
@@ -1228,9 +1432,11 @@ pub(super) fn admit(
         }
         previous = [remaining, evaporated, supplied_mass, condensed];
         previous_incoming_j = incoming_j;
+        previous_drained = drained;
+        previous_drained_j = drained_j;
         previous_dryouts = events;
         let correction =
-            stored_j + exported_j + latent_j - supplied_j - condensation_j - incoming_j;
+            stored_j + exported_j + drained_j + latent_j - supplied_j - condensation_j - incoming_j;
         if !correction.is_finite() {
             return Err(fail());
         }
@@ -1251,6 +1457,8 @@ pub(super) fn admit(
         "condensed_liquid_kg",
         "condensation_latent_energy_j",
         "incoming_vapor_sensible_energy_j",
+        "drained_liquid_kg",
+        "exported_liquid_sensible_energy_j",
     ] {
         if water[field] != trace.last().ok_or_else(fail)?["surface_water"][field] {
             return Err(fail());

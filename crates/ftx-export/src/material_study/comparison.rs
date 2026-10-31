@@ -246,6 +246,8 @@ pub enum Metric {
     TextileWaterSuppliedMassKg,
     /// Qualified reverse vapor transfer accumulated as textile free liquid, in kilograms.
     TextileWaterCondensedMassKg,
+    /// Independently qualified prescribed liquid drainage from the textile, in kilograms.
+    TextileWaterDrainedMassKg,
     /// Latent energy removed from the textile/liquid system over the complete motion, in joules.
     TextileWaterLatentEnergyJ,
     /// Latent energy released by qualified condensation into the textile/liquid system, in joules.
@@ -352,6 +354,7 @@ impl Metric {
             | Self::TextileWaterRemainingMassKg
             | Self::TextileWaterSuppliedMassKg
             | Self::TextileWaterCondensedMassKg
+            | Self::TextileWaterDrainedMassKg
             | Self::TextileWaterLatentEnergyJ
             | Self::TextileWaterCondensationLatentEnergyJ
             | Self::TransientSurfaceMinSampleTemperatureC
@@ -388,6 +391,7 @@ impl Metric {
             | Self::TextileWaterRemainingMassKg
             | Self::TextileWaterSuppliedMassKg
             | Self::TextileWaterCondensedMassKg
+            | Self::TextileWaterDrainedMassKg
             | Self::ThreadRequiredMassKg => "kg",
             Self::ObservedOrderCost
             | Self::SelectedObservedOrderCost
@@ -615,6 +619,10 @@ impl Metric {
             }
             Self::TextileWaterCondensedMassKg => {
                 admitted.transient_surface.as_ref()?.result["surface_water"]["condensed_liquid_kg"]
+                    .as_f64()
+            }
+            Self::TextileWaterDrainedMassKg => {
+                admitted.transient_surface.as_ref()?.result["surface_water"]["drained_liquid_kg"]
                     .as_f64()
             }
             Self::TextileWaterLatentEnergyJ => {
@@ -1200,11 +1208,12 @@ impl Policy {
                     | Metric::TextileWaterRemainingMassKg
                     | Metric::TextileWaterSuppliedMassKg
                     | Metric::TextileWaterCondensedMassKg
+                    | Metric::TextileWaterDrainedMassKg
                     | Metric::TextileWaterLatentEnergyJ
                     | Metric::TextileWaterCondensationLatentEnergyJ
             )
         }) {
-            report.notes.push("Textile-water objectives require the source-qualified free-film history, canonical Ret networks and the complete liquid/vapor energy ledger on the admitted motion. Reference material area owns liquid; current area conducts vapor. Version 2 qualifies incoming-liquid delivery and sensible enthalpy. Version 3 additionally qualifies reverse transfer, dry/wet nucleation and the declared incoming-vapor enthalpy model. Evaporative latent removal and condensation latent release stay separate, including when the same water later re-evaporates. These are nominal conditional computations, not sorption, inferred wet properties, continuous-time temperature bounds, comfort or measured garment validation.");
+            report.notes.push("Textile-water objectives require the source-qualified free-film history, canonical Ret networks and the complete liquid/vapor energy ledger on the admitted motion. Reference material area owns liquid; current area conducts vapor. Version 2 qualifies incoming-liquid delivery and sensible enthalpy. Version 3 additionally qualifies reverse transfer, dry/wet nucleation and the declared incoming-vapor enthalpy model. Version 4 qualifies stock-limited prescribed liquid drainage and its separate exported sensible enthalpy. Evaporative latent removal, condensation latent release and drainage stay separate, including when the same water later re-evaporates. These are nominal conditional computations, not sorption, inferred runoff or wet properties, continuous-time temperature bounds, comfort or measured garment validation.");
         }
         if self.consumers().contains(&Consumer::VaporSurface) {
             report.notes.push("Independent draped-sheet vapor objectives use the admitted initial geometry, retained source Ret and declared pressure/film/latent-heat conditions. Overlapping sheets remain independent; these potentials are not covered-body evaporation, water supply, latent cooling, continuous motion totals or comfort. Consumed column protocols require separate cross-alternative admission.");

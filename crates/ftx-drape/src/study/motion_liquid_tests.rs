@@ -24,27 +24,37 @@ impl PartFrames for Form {
 
 #[test]
 fn late_evaporation_budget_failure_restores_whole_solver_and_replays_identically() {
-    rollback_after_liquid_transfer(false, false, false, false);
+    rollback_after_liquid_transfer(false, false, false, false, false);
 }
 
 #[test]
 fn late_supply_budget_failure_rolls_back_liquid_and_attached_mass_together() {
-    rollback_after_liquid_transfer(true, false, false, false);
+    rollback_after_liquid_transfer(true, false, false, false, false);
 }
 
 #[test]
 fn prescribed_supply_impulse_and_mixing_roll_back_and_replay_with_attached_mass() {
-    rollback_after_liquid_transfer(true, true, false, false);
+    rollback_after_liquid_transfer(true, true, false, false, false);
 }
 
 #[test]
 fn phase_specific_supply_impulse_rolls_back_and_replays_with_attached_mass() {
-    rollback_after_liquid_transfer(true, true, true, false);
+    rollback_after_liquid_transfer(true, true, true, false, false);
 }
 
 #[test]
 fn scheduled_supply_follows_keyframes_and_rolls_back_with_attached_mass() {
-    rollback_after_liquid_transfer(true, true, false, true);
+    rollback_after_liquid_transfer(true, true, false, true, false);
+}
+
+#[test]
+fn scheduled_incoming_water_and_drainage_roll_back_and_replay_together() {
+    rollback_after_liquid_transfer(true, true, false, true, true);
+}
+
+#[test]
+fn phase_specific_incoming_water_and_drainage_roll_back_and_replay_together() {
+    rollback_after_liquid_transfer(true, true, true, false, true);
 }
 
 fn rollback_after_liquid_transfer(
@@ -52,6 +62,7 @@ fn rollback_after_liquid_transfer(
     prescribed: bool,
     phase_specific: bool,
     scheduled: bool,
+    drainage: bool,
 ) {
     let mut raw: Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
@@ -201,6 +212,15 @@ fn rollback_after_liquid_transfer(
             "source":{"reference":"test:rollback-liquid-feed","accessed_on":"2026-10-28",
                 "note":"Synthetic numerical delivery, not a measured wearer flux"},
             "evidence":"estimate","allow_estimates":true,"method":"Prescribed co-moving feed"});
+        if drainage {
+            water["schema"] = json!("ftx-textile-surface-water/4");
+            water["drainage"] = json!({"schema":"ftx-textile-liquid-drainage/1",
+                "bindings":{"band":{"rate_kg_m2_s":[5.,3.]}},
+                "source":{"reference":"test:rollback-drainage","accessed_on":"2026-10-30",
+                    "note":"Synthetic prescribed outflow, not measured textile runoff"},
+                "evidence":"estimate","allow_estimates":true,"method":"Independent reference-area removal",
+                "qualification":"Co-moving stock-limited drainage at old inner-cell temperature; proportional evaporation and drainage at empty stock"});
+        }
         heat.surface_water = Some(serde_json::from_value(water).unwrap());
     }
     let endpoints: Vec<Vec<_>> = [0.0001, 0.0002]
@@ -266,6 +286,24 @@ fn rollback_after_liquid_transfer(
         }
     }
     let thermal = &complete["transient_surface"]["result"];
+    if drainage {
+        let water = &thermal["surface_water"];
+        let mechanics = &complete["liquid_mechanics"];
+        assert_eq!(water["schema"], "ftx-textile-surface-water-result/4");
+        let drained = water["drained_liquid_kg"].as_f64().unwrap();
+        let evaporated = water["evaporated_liquid_kg"].as_f64().unwrap();
+        assert!(drained > 0. && evaporated > 0.);
+        assert!((mechanics["drained_liquid_mass_kg"].as_f64().unwrap() - drained).abs() < 1e-15);
+        assert!(
+            (mechanics["evaporated_liquid_mass_kg"].as_f64().unwrap() - evaporated).abs() < 1e-15
+        );
+        assert!(
+            (mechanics["exchange"]["outgoing_mass_kg"].as_f64().unwrap() - drained - evaporated)
+                .abs()
+                < 1e-15
+        );
+        assert!(thermal["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+    }
     let trace = thermal["trace"].as_array().unwrap();
     let first_interval: Vec<_> = trace.iter().filter(|r| r["interval_index"] == 0).collect();
     assert_eq!(first_interval.len(), 2);

@@ -1,4 +1,4 @@
-//! Complete fixed routes are priced from their actual qualified stitches and shared whole orders.
+//! Complete routes and eligible-cell assignments use actual qualified stitches and whole orders.
 
 use super::{eligible_fixture, refresh_locks, route_selection, source};
 use ftx_core::RefusalCode;
@@ -407,4 +407,402 @@ fn fixed_route_cost_study_reuses_the_winner_and_retains_the_entire_search_protoc
     );
     assert!(excluded["alternatives"][0]["metrics"]["thread_observed_order_cost"].is_null());
     assert_eq!(excluded["comparison"]["frontier"], json!([]));
+}
+
+fn eligible_cost(copies: usize) -> (Pattern, Value) {
+    let (pattern, mut options) = eligible_fixture(copies);
+    let (_, priced) = request();
+    options["consumables"] = priced["options"]["consumables"].clone();
+    let consumption =
+        priced["options"]["production"]["routing"]["cells"][0]["configuration"]["qualifications"]
+            [0]["thread_consumption"]
+            .clone();
+    let route = &mut options["production"]["routing"];
+    route["objective"] = json!("minimize_thread_observed_order_cost");
+    route["thread_order_search"] = json!({"max_order_evaluations":8});
+    for cell in route["cells"].as_array_mut().unwrap() {
+        let rate = if cell["id"] == "cell-c" { 0.2 } else { 0.01 };
+        cell["configuration"]["qualifications"][0]["thread_consumption"] = consumption.clone();
+        cell["configuration"]["qualifications"][0]["thread_consumption"]["channels"][0]["metres_per_traversal"] =
+            json!(rate);
+    }
+    refresh_locks(&mut options);
+    (pattern, options)
+}
+
+fn eligible_selection(options: &Value) -> Value {
+    json!({"schema":"ftx-sewing-selection/6","options":options,
+        "objective":"minimize_thread_observed_order_cost","max_plan_evaluations":2,
+        "route_candidates":[{"id":"same-qualified-route","routing":options["production"]["routing"]}]})
+}
+
+fn eligible_plan(pattern: &Pattern, options: &Value) -> SewPlan {
+    SewPlan::build(pattern, &serde_json::from_value(options.clone()).unwrap()).unwrap()
+}
+
+#[test]
+fn eligible_cost_chooses_slower_cheap_assignments_with_an_inclusive_deadline() {
+    let (pattern, mut raw) = eligible_cost(1);
+    let cheap = eligible_plan(&pattern, &raw);
+    let production = cheap.production.as_ref().unwrap();
+    let route = production.routing.as_ref().unwrap();
+    let search = route.thread_order_search.as_ref().unwrap();
+    // Independent fixture arithmetic: a has 40 traversals, b has 20; 0.6m rounds to 2m/$10.
+    // a: 100 load + 1000 setup + 4000 feed + 200 unload, 700 handoff, then b's 2800 = 8800.
+    assert_eq!(
+        (cheap.schema, production.schema, route.schema),
+        (
+            "ftx-sewing-plan/24",
+            "ftx-sewing-production/12",
+            "ftx-sewing-routing/7"
+        )
+    );
+    assert_eq!(route.selected.makespan_milliseconds, 8800);
+    assert_eq!(search.selected_order_cost, Some(10.0));
+    assert_eq!(search.order_evaluations, 2);
+    assert!(search.optimality_proven && route.search_complete && !route.optimality_proven);
+    assert!(
+        (cheap
+            .consumables
+            .as_ref()
+            .unwrap()
+            .total_required_length_m
+            .unwrap()
+            - 0.6)
+            .abs()
+            < 1e-12
+    );
+    assert_eq!(cheap.total_stitch_intervals(), 60);
+
+    let mut fastest = raw.clone();
+    fastest["production"]["routing"]["objective"] = json!("minimize_makespan");
+    fastest["production"]["routing"]
+        .as_object_mut()
+        .unwrap()
+        .remove("thread_order_search");
+    let fast = eligible_plan(&pattern, &fastest);
+    // c has 20 traversals at 0.2m, plus b's 0.2m: 4.2m rounds to 6m, 3 * $7 = $21.
+    assert_eq!(fast.parallel_makespan_seconds(), Some(7.0));
+    assert_eq!(
+        fast.consumables
+            .as_ref()
+            .unwrap()
+            .purchasing
+            .as_ref()
+            .unwrap()
+            .selected_total(),
+        Some(21.0)
+    );
+    assert_eq!(fast.schema, "ftx-sewing-plan/19");
+    assert!(
+        fast.production
+            .as_ref()
+            .unwrap()
+            .routing
+            .as_ref()
+            .unwrap()
+            .thread_order_search
+            .is_none()
+    );
+
+    for (deadline, finish, cost) in [(8800, 8800, 10.0), (8799, 7000, 21.0), (7000, 7000, 21.0)] {
+        raw["production"]["routing"]["thread_order_search"]["completion_deadline_milliseconds"] =
+            json!(deadline);
+        let admitted = eligible_plan(&pattern, &raw);
+        let route = admitted
+            .production
+            .as_ref()
+            .unwrap()
+            .routing
+            .as_ref()
+            .unwrap();
+        assert_eq!(route.selected.makespan_milliseconds, finish);
+        assert_eq!(
+            route
+                .thread_order_search
+                .as_ref()
+                .unwrap()
+                .selected_order_cost,
+            Some(cost)
+        );
+        assert!(
+            route
+                .thread_order_search
+                .as_ref()
+                .unwrap()
+                .optimality_proven
+        );
+    }
+    raw["production"]["routing"]["thread_order_search"]["completion_deadline_milliseconds"] =
+        json!(6999);
+    assert_eq!(
+        SewPlan::build(&pattern, &serde_json::from_value(raw).unwrap())
+            .unwrap_err()
+            .code,
+        RefusalCode::NotConverged
+    );
+}
+
+#[test]
+fn eligible_cost_prices_mixed_physical_copies_and_replays_the_exact_program() {
+    let (pattern, mut options) = eligible_cost(2);
+    options["production"]["routing"]["cells"][2]["configuration"]["qualifications"][0]["thread_consumption"]
+        ["channels"][0]["metres_per_traversal"] = json!(0.1);
+    options["consumables"]["purchasing"]["market"]["split_orders"] =
+        json!({"schema":"ftx-thread-order-allocation/1","max_search_nodes":3000});
+    refresh_locks(&mut options);
+    let plan = eligible_plan(&pattern, &options);
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let joins: Vec<_> = route
+        .selected
+        .operations
+        .iter()
+        .filter(|operation| operation.operation_id == "join")
+        .collect();
+    assert_eq!(joins.len(), 2);
+    assert!(joins.iter().any(|operation| operation.cell == "cell-a"));
+    assert!(joins.iter().any(|operation| operation.cell == "cell-c"));
+    assert_ne!(joins[0].copy, joins[1].copy);
+    // Windows force one 40-traversal a copy and one 20-traversal c copy: .4 + 2 + .4 = 2.8m.
+    let consumption = plan.consumables.as_ref().unwrap();
+    assert!((consumption.total_required_length_m.unwrap() - 2.8).abs() < 1e-12);
+    assert_eq!(
+        route
+            .thread_order_search
+            .as_ref()
+            .unwrap()
+            .selected_order_cost,
+        Some(14.0)
+    );
+    assert!(
+        route
+            .thread_order_search
+            .as_ref()
+            .unwrap()
+            .optimality_proven
+    );
+    assert_eq!(
+        route
+            .thread_order_search
+            .as_ref()
+            .unwrap()
+            .order_evaluations,
+        2
+    );
+    let segments = consumption
+        .purchasing
+        .as_ref()
+        .unwrap()
+        .segments
+        .as_ref()
+        .unwrap();
+    assert_eq!(segments.len(), 4);
+    assert_eq!(
+        segments.iter().filter(|segment| segment.copy == 0).count(),
+        2
+    );
+    assert_eq!(
+        segments.iter().filter(|segment| segment.copy == 1).count(),
+        2
+    );
+    let program = SewProgram::build(&pattern, &plan.options).unwrap();
+    assert_eq!(program.stitches.len(), 100);
+    assert_eq!(
+        serde_json::to_value(&plan).unwrap(),
+        serde_json::to_value(&program.plan).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&plan).unwrap(),
+        serde_json::to_value(SewPlan::build(&pattern, &plan.options).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn eligible_cost_keeps_nonmonotone_tiers_and_bounded_incumbents_without_false_proof() {
+    let (pattern, mut raw) = eligible_cost(1);
+    raw["consumables"]["purchasing"]["quote_book"]["quotes"][0]["price_breaks"] =
+        json!([{"minimum_quantity":6.0,"price":1.0}]);
+    let larger = eligible_plan(&pattern, &raw);
+    let route = larger
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    // Complete six-metre order costs 3 * $1 = $3, less than the smaller two-metre $10 order.
+    assert_eq!(
+        route
+            .thread_order_search
+            .as_ref()
+            .unwrap()
+            .selected_order_cost,
+        Some(3.0)
+    );
+    assert!(
+        route
+            .thread_order_search
+            .as_ref()
+            .unwrap()
+            .optimality_proven
+    );
+    assert_eq!(route.selected.makespan_milliseconds, 7000);
+
+    raw["production"]["routing"]["thread_order_search"]["max_order_evaluations"] = json!(1);
+    let bounded = eligible_plan(&pattern, &raw);
+    let route = bounded
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    let search = route.thread_order_search.as_ref().unwrap();
+    assert_eq!(search.selected_order_cost, Some(10.0));
+    assert_eq!(search.order_evaluations, 1);
+    assert!(search.order_budget_exhausted && !search.optimality_proven && !route.search_complete);
+    assert_eq!(route.selected.makespan_milliseconds, 8800);
+
+    raw["production"]["routing"]["thread_order_search"]["max_order_evaluations"] = json!(8);
+    raw["production"]["routing"]["max_search_nodes"] = json!(2);
+    let bounded = eligible_plan(&pattern, &raw);
+    let route = bounded
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    assert!(
+        route.budget_exhausted
+            && !route
+                .thread_order_search
+                .as_ref()
+                .unwrap()
+                .optimality_proven
+    );
+    assert_eq!(
+        route
+            .thread_order_search
+            .as_ref()
+            .unwrap()
+            .selected_order_cost,
+        Some(10.0)
+    );
+}
+
+#[test]
+fn eligible_cost_preserves_missing_orders_zero_prices_and_stale_qualifications() {
+    let (pattern, options) = eligible_cost(1);
+    let mut absent = options.clone();
+    absent["consumables"]["purchasing"]["quote_book"]["quotes"] = json!([]);
+    let plan = eligible_plan(&pattern, &absent);
+    let search = plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap()
+        .thread_order_search
+        .as_ref()
+        .unwrap();
+    assert_eq!(search.selected_order_cost, None);
+    assert_eq!(search.unresolved_assignments, 2);
+    assert!(!search.optimality_proven);
+    let missing = serde_json::from_value::<Request>(eligible_selection(&absent))
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert!(missing.selected_plan.is_none() && !missing.no_feasible_listed_recipe);
+    assert_eq!(missing.unresolved_trials, 2);
+
+    let mut zero = options.clone();
+    zero["consumables"]["purchasing"]["quote_book"]["quotes"][0]["price"] = json!(0.0);
+    zero["consumables"]["purchasing"]["quote_book"]["quotes"][0]["price_breaks"] = json!([]);
+    let plan = eligible_plan(&pattern, &zero);
+    let search = plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap()
+        .thread_order_search
+        .as_ref()
+        .unwrap();
+    assert_eq!(search.selected_order_cost, Some(0.0));
+    assert!(search.optimality_proven);
+
+    let mut stale = options;
+    stale["production"]["routing"]["cells"][2]["configuration"]["qualifications"][0]["thread_consumption"]
+        ["channels"][0]["metres_per_traversal"] = json!(0.001);
+    assert!(SewPlan::build(&pattern, &serde_json::from_value(stale).unwrap()).is_err());
+}
+
+#[test]
+fn eligible_cost_reserves_every_purchase_and_retains_outer_deadline_replay() {
+    let (pattern, options) = eligible_cost(1);
+    let mut raw = eligible_selection(&options);
+    raw["completion_deadline_milliseconds"] = json!(8799);
+    let result = serde_json::from_value::<Request>(raw.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(result.selected_thread_order_cost, Some(21.0));
+    assert!(result.optimality_proven && result.unresolved_trials == 0);
+    let plan = result.selected_plan.as_ref().unwrap();
+    assert_eq!(
+        plan.options
+            .production
+            .as_ref()
+            .unwrap()
+            .routing
+            .as_ref()
+            .unwrap()
+            .thread_order_search
+            .as_ref()
+            .unwrap()
+            .completion_deadline_milliseconds,
+        Some(8799)
+    );
+    assert_eq!(plan.parallel_makespan_seconds(), Some(7.0));
+    let portable: Value =
+        serde_json::from_str(&select_json(&pattern.raw().to_string(), &raw.to_string()).unwrap())
+            .unwrap();
+    assert_eq!(portable["report"], serde_json::to_value(&result).unwrap());
+    let replay: SewOptions =
+        serde_json::from_str(portable["selected_options_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        serde_json::to_value(SewPlan::build(&pattern, &replay).unwrap()).unwrap(),
+        serde_json::to_value(plan).unwrap()
+    );
+
+    let mut heavy = options;
+    heavy["production"]["routing"]["thread_order_search"]["max_order_evaluations"] = json!(64);
+    heavy["consumables"]["purchasing"]["market"]["split_orders"] =
+        json!({"schema":"ftx-thread-order-allocation/1","max_search_nodes":3000});
+    let typed: SewOptions = serde_json::from_value(heavy.clone()).unwrap();
+    // (one market scan + one yarn scan + one alias + 3000 allocation units) * (64 + replay).
+    assert_eq!(
+        ftx_export::sewing::consumables::purchasing_work_bound(&typed).unwrap(),
+        195195
+    );
+    let outer: Request = serde_json::from_value(eligible_selection(&heavy)).unwrap();
+    assert_eq!(
+        outer.purchasing_work_bound().unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+    let study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"a","changes":{"schema":"ftx-material-bindings/1","default":pattern.raw()["fabric"]["material"]}},
+                    {"key":"b","changes":{"schema":"ftx-material-bindings/1","default":pattern.raw()["fabric"]["material"]}}],
+        "sewing":heavy});
+    assert_eq!(
+        serde_json::from_value::<material_study::Request>(study)
+            .unwrap()
+            .evaluate(&pattern)
+            .unwrap_err()
+            .code,
+        RefusalCode::BudgetExceeded
+    );
 }

@@ -651,19 +651,25 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
     }
     if (h?.surface_water) {
       const water = h.surface_water;
-      const condensing = water.schema === "ftx-textile-surface-water-result/3";
-      const supplied = condensing || water.schema === "ftx-textile-surface-water-result/2";
+      const draining = water.schema === "ftx-textile-surface-water-result/4";
+      const condensing = water.schema === "ftx-textile-surface-water-result/3" ||
+        draining && typeof water.condensed_liquid_kg === "number";
+      const supplied = draining || condensing || water.schema === "ftx-textile-surface-water-result/2";
       const mass = table(parent, `${key}: textile surface liquid — conserved ${condensing ? "initial, supplied and condensed" : supplied ? "initial and supplied" : "initial"} inventory`,
         ["Initial liquid (kg)", ...(supplied ? ["Supplied liquid (kg)"] : []),
-          ...(condensing ? ["Condensed liquid (kg)"] : []), "Evaporated liquid (kg)", "Remaining liquid (kg)", "Mass residual (kg)", "Dryout events"]);
+          ...(condensing ? ["Condensed liquid (kg)"] : []), "Evaporated liquid (kg)",
+          ...(draining ? ["Drained liquid (kg)"] : []), "Remaining liquid (kg)", "Mass residual (kg)", "Dryout events"]);
       cells(mass, [metric(water.initial_liquid_kg), ...(supplied ? [metric(water.supplied_liquid_kg)] : []),
-        ...(condensing ? [metric(water.condensed_liquid_kg)] : []), metric(water.evaporated_liquid_kg), metric(water.remaining_liquid_kg),
+        ...(condensing ? [metric(water.condensed_liquid_kg)] : []), metric(water.evaporated_liquid_kg),
+        ...(draining ? [metric(water.drained_liquid_kg)] : []), metric(water.remaining_liquid_kg),
         metric(water.mass_balance_error_kg), metric(water.dryout_events)]);
       const energy = table(parent, `${key}: textile evaporation and sensible energy`,
-        ["Latent energy (J)", "Exported vapor sensible energy (J)", "Liquid sensible change (J)",
+        ["Latent energy (J)", "Exported vapor sensible energy (J)",
+          ...(draining ? ["Exported liquid sensible energy (J)"] : []), "Liquid sensible change (J)",
           ...(supplied ? ["Incoming liquid sensible energy (J)"] : []),
           ...(condensing ? ["Condensation latent release (J)", "Incoming vapor sensible energy (J)"] : []), "Combined energy residual (J)"]);
       cells(energy, [metric(water.latent_energy_j), metric(water.exported_vapor_sensible_energy_j),
+        ...(draining ? [metric(water.exported_liquid_sensible_energy_j)] : []),
         metric(water.liquid_stored_change_j), ...(supplied ? [metric(water.supplied_liquid_sensible_energy_j)] : []),
         ...(condensing ? [metric(water.condensation_latent_energy_j), metric(water.incoming_vapor_sensible_energy_j)] : []), metric(water.balance_error_j)]);
       const scope = document.createElement("p");
@@ -674,7 +680,8 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         "The combined balance includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, " +
         "against boundary energy plus qualified material heat" + (supplied ? " and incoming liquid sensible energy. Loading beyond the qualified cap refuses the interval. " : ". The initial-only model has zero replenishment. ") +
         (condensing ? "Independently qualified reverse vapor transfer can condense on dry or wet cloth and later re-evaporate. Condensation latent release and incoming vapor sensible enthalpy are separate energy inputs; the effective enthalpy convention remains explicit in the source policy. " : "") +
-        (h.mechanical_coupling?.exchange ? "Qualified supplied liquid, condensed vapor and evaporation update cloth inertia and gravity after every accepted interval. " :
+        (draining ? "Independently sourced drainage demand uses reference material area and is limited by available liquid. Drained liquid exports sensible enthalpy at the old inner-cell temperature with no latent energy; empty cloth shares available inflow proportionally between evaporation and drainage demands. No overflow or runoff law is inferred. " : "") +
+        (h.mechanical_coupling?.exchange ? `Qualified supplied liquid, condensed vapor, evaporation${draining ? " and drainage" : ""} update cloth inertia and gravity after every accepted interval. ` :
           h.mechanical_coupling ? "Qualified evaporation updates cloth inertia and gravity after every accepted interval; co-moving vapor removes its own momentum without accelerating the remaining cloth. " :
           "The liquid adds no mechanical water mass. ") +
         (["ftx-coupled-liquid-mechanics-result/2", "ftx-coupled-liquid-mechanics-result/3", "ftx-coupled-liquid-mechanics-result/4"].includes(h.mechanical_coupling?.schema) ?
@@ -698,7 +705,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
             metric(exchange.initial_kinetic_energy_j), metric(exchange.initial_gravitational_energy_j)]);
           cells(transfer, ["Incoming liquid and condensed vapor", metric(exchange.incoming_mass_kg), vector(exchange.incoming_momentum_kg_m_s),
             metric(exchange.incoming_kinetic_energy_j), metric(exchange.incoming_gravitational_energy_j)]);
-          cells(transfer, ["Outgoing vapor", metric(exchange.outgoing_mass_kg), vector(m.exported_momentum_kg_m_s),
+          cells(transfer, [draining ? "Outgoing vapor and drained liquid" : "Outgoing vapor", metric(exchange.outgoing_mass_kg), vector(m.exported_momentum_kg_m_s),
             metric(m.exported_kinetic_energy_j), metric(m.exported_gravitational_energy_j)]);
           const residual = table(parent, `${key}: liquid exchange momentum and energy residuals`,
             ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)",
@@ -715,11 +722,13 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         couplingScope.textContent = "Initial liquid is added co-moving after the dry drape; it is not a wet equilibrium. Each mechanical step uses its starting water mass, then accepted heat and liquid exchange update the next step. " +
           "Refine the mechanical time step to assess this first-order coupling. The thermal latent/sensible ledger remains separate from transferred bulk mechanical energy. " +
           (exchange ? (prescribed ?
-            "Incoming liquid and condensed vapor use the prescribed world-frame velocities; outgoing vapor leaves at the mixed cloth velocity. Inelastic mixing loss is separate from thermal heat. " :
-            "Incoming liquid, condensed vapor and outgoing vapor share the local endpoint cloth velocity under the independent source qualification. ") +
+            `Incoming liquid and condensed vapor use the prescribed world-frame velocities; outgoing vapor${draining ? " and drained liquid leave" : " leaves"} at the mixed cloth velocity. Inelastic mixing loss is separate from thermal heat. ` :
+            `Incoming liquid, condensed vapor and outgoing vapor${draining ? " and drained liquid" : ""} share the local endpoint cloth velocity under the independent source qualification. `) +
             "Equal incoming and outgoing mass retain both transfer ledgers. Signed gravitational energies keep the declared world frame. These residuals check mass transfer, not the complete motion energy balance. " :
             "Supply and condensation are unsupported in this evaporation-only mode. ") +
-          "A coupled heat or source-domain failure refuses the motion. Drainage, resolved fluid impact and inferred wet material properties remain unsupported.";
+          "A coupled heat or source-domain failure refuses the motion. " +
+          (draining ? "Liquid drainage and evaporation retain separate mass totals; their combined outgoing mass carries bulk momentum and energy. " : "") +
+          "Resolved fluid impact and inferred wet material properties remain unsupported.";
         parent.append(couplingScope);
         detail(parent, `${key}: ${exchange ? "liquid exchange" : "evaporation"} mechanics qualification and complete transfer ledger (display only)`, m);
       }
@@ -744,7 +753,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       }
       const scope = document.createElement("p");
       scope.textContent = (h.surface_water ?
-        "The energy residual includes dry-textile and liquid sensible storage, exported vapor sensible energy and evaporative latent energy, minus net boundary energy, qualified source heat and declared incoming liquid/vapor sensible energy and condensation latent release. " :
+        "The energy residual includes dry-textile and liquid sensible storage, exported vapor and drainage sensible energy and evaporative latent energy, minus net boundary energy, qualified source heat and declared incoming liquid/vapor sensible energy and condensation latent release. " :
         "The energy residual is physical stored change minus net boundary energy minus the sum of qualified source heat. ") +
         "Each source needs its own material conversion evidence. Work already accumulated in the initial drape, reversible storage and numerical loss are excluded. " +
         (channels.every(([field]) => h[field].distribution === "uniform_reference_thickness" && h[field].temporal_distribution === "uniform_over_accepted_interval") ?
@@ -2335,6 +2344,26 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     metric(seconds(timeline?.makespan_milliseconds)), metric(timeline?.feed_seconds),
     metric(seconds(timeline?.scheduled_feed_milliseconds)), metric(seconds(timeline?.setup_milliseconds)),
     metric(seconds(timeline?.handling_milliseconds)), metric(seconds(timeline?.transfer_milliseconds))]);
+  if (report.thread_order_search) {
+    const search = report.thread_order_search;
+    const cost = table(parent, `${label}: routed thread-order cost and proof`,
+      ["Currency", "Selected order cost", "Completion deadline (s)", "Order evaluations",
+        "Unresolved assignments", "Order budget exhausted", "Cost minimum proved"]);
+    cells(cost, [search.currency || "Unavailable",
+      typeof search.selected_order_cost === "number" ? metric(search.selected_order_cost) : "Unavailable",
+      typeof search.completion_deadline_milliseconds === "number" ? metric(seconds(search.completion_deadline_milliseconds)) : "None declared",
+      metric(search.order_evaluations), metric(search.unresolved_assignments),
+      search.order_budget_exhausted ? "Yes" : "No", search.optimality_proven ? "Yes" : "No"]);
+    const scope = document.createElement("p");
+    scope.textContent = (search.optimality_proven ?
+      "Minimum selected thread order cost proved within the declared eligible-cell assignments and order search. " :
+      "The minimum selected thread order cost is not proved. ") +
+      "This proof concerns the qualified discrete thread purchase, including assigned stitch demand and declared setup waste. " +
+      "A completion deadline constrains feasible assignments when declared. Cost proof and minimum completion-time proof are independent. " +
+      (search.order_budget_exhausted ? "The order search reached its declared evaluation limit. " : "") +
+      (search.unresolved_assignments ? "Unresolved assignments prevent a global cost proof." : "");
+    parent.append(scope);
+  }
   const route = table(parent, `${label}: ${eligible ? "eligible cells by garment operation" : "fixed garment route"}`,
     ["Step", "Operation", "Physical cell", ...(eligible ? ["Authored seed", "Selected copies"] : []),
       "Qualified machine", "Needle", "Thread", "Maximum stitch (mm)", "Stitches/min"]);

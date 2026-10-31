@@ -593,7 +593,11 @@ fn evaluate_path(
         );
     }
     if coupled {
-        result["thermal_basis"] = json!(if matches!(
+        result["thermal_basis"] = json!(if result["liquid_mechanics"]["drained_liquid_mass_kg"]
+            .is_number()
+        {
+            "Accepted-step heat and qualified free-liquid exchange update the next mechanical interval's inertia, gravity and velocity. Independently qualified incoming streams mix before evaporation and drainage leave at the common endpoint velocity. The outgoing phases retain distinct mass and sensible/latent labels; their combined bulk momentum and energy remain separate from thermal enthalpy. No mixing heat or runoff law is inferred. Steady snapshots and optional coverage heat remain separate domains."
+        } else if matches!(
             result["liquid_mechanics"]["schema"].as_str(),
             Some(
                 "ftx-coupled-liquid-mechanics-result/2"

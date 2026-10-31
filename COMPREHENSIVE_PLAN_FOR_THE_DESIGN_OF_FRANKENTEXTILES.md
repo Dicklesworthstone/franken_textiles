@@ -4338,8 +4338,18 @@ variable-mass oscillator refinement, sewn heterogeneous/accessory ownership, who
 comparison tampering and both native commands cover supplied and condensing single/named-case studies.
 See [textile-surface-water.md](docs/textile-surface-water.md). Initial water is explicitly admitted
 co-moving after a dry drape. The first-order endpoint model requires mechanical time-step refinement;
-relative flow impact, drainage, inferred wet constitutive changes, pinned-coordinate exchange impulses
+relative outgoing flow, inferred wet constitutive changes, pinned-coordinate exchange impulses
 and empirical wet-garment qualification remain outside this model and under the open parent work.
+
+The explicit water `/4` extension additionally admits separately source-qualified reference-area
+drainage demands alongside supply and optional condensation. Empty stock divides available flow
+between evaporation and drainage in their potential-rate ratio; exact dryout consumes only available
+inventory. Liquid drainage exports old-temperature sensible enthalpy without latent heat, changes
+the actual remaining thermal capacity and feeds the same next-step mechanical inertia. Separate
+evaporated/drained counters, combined co-moving bulk export, source/interval admission and the
+`textile_water_drained_mass_kg` objective compose with all four incoming mechanical models. This is
+prescribed outflow, not an inferred gravity-runoff or wet-material law; broader empirical acceptance
+remains open under `ftx-vc2.3`.
 
 ### 25.122 Guide adaptive alterations with actual material-bound consumer results
 
@@ -4604,16 +4614,23 @@ for missing measured properties.
 ### 25.137 Choose specialist routes by complete thread order cost
 
 The existing authored-route selector can now minimize complete observed thread orders across
-independently qualified fixed specialist routes, with optional recipe choices and an inclusive
+independently qualified fixed or explicitly cost-directed eligible specialist routes, with optional recipe choices and an inclusive
 completion deadline. Every attempted route supplies its own actual stitch intervals, source-qualified
 channel demand and canonical rounded supplier orders. A slower, cheaper route can therefore remain
 selected until the declared deadline requires a different complete job.
 
 Fixed assignment keeps thread demand independent of dispatch order, so an unproved minimum
 makespan does not erase a complete cost result. Unknown orders and unresolved deadline admission
-still prevent optimum claims. Flexible eligible-cell assignments retain their separate makespan
-objective and cannot claim a cost minimum. Exact winning options and the complete search domain
-reach downstream studies, stitch replay and source-protocol identity.
+still prevent optimum claims. Flexible eligible-cell assignments now have a separate explicit
+bounded cost objective: complete feasible physical-copy assignments pass through the same canonical
+consumption and purchasing engine, with cached assignment prices and no partial-cost pruning across
+nonmonotone supplier tiers. Cost and makespan proofs stay separate, unknown prices stay null, and
+either search cap preserves a complete incumbent without inventing an optimum. All configured
+quote, stock-alias and split-order work is multiplied by the order-evaluation cap plus final replay
+before recipe and material-study reservations. Outer deadlines tighten inner assignment search.
+Exact winning options and the complete search domain reach downstream studies, stitch replay and
+source-protocol identity. The opt-in uses plan `/24`, production `/12` and routing `/7`; existing
+makespan-only policies keep their earlier serialization and semantics.
 
 This increment is tracked by `ftx-pb2.2.15`; see [sewing-selection.md](docs/sewing-selection.md).
 The finite listed routes do not establish a global manufacturing optimum, measured throughput,
@@ -4656,7 +4673,7 @@ mechanical keyframe interval, while schema `/4` prescribes separate constant sup
 condensed-vapor velocities. Their fields and model tags are exclusive; phase-specific schedules
 remain unsupported. The phase-specific work is tracked by `ftx-vc2.3.3` and the broader work by
 `ftx-vc2.3`. Independent conservation and step-refinement checks establish numerical closure;
-measured wet response, rain interception, drainage, changing wet constitutive laws, mixing-heat
+measured wet response, rain interception, relative outgoing velocity, changing wet constitutive laws, mixing-heat
 partition and empirical garment agreement remain separate work.
 
 ### 25.140 Turn material-aware markers into qualified cold-knife path plans
