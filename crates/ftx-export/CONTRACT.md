@@ -627,7 +627,13 @@ every accepted mechanical inventory against supplied plus condensed water, outgo
 the unchanged source substrate, and the initial/final/trace exchange ledgers. Independent incoming
 and outgoing bulk momentum/energy never enter thermal latent/sensible objectives. Missing or
 invented transfer/source fields refuse the dependent comparison; exact source assembly and cutting
-remain independently comparable.
+remain independently comparable. Prescribed incoming-velocity versions `/2` and `/3` retain
+separate nonnegative mixing dissipation without adding it to thermal heat. Scheduled `/3`
+qualification must provide exactly one finite world vector per mechanical keyframe interval
+for every retained instance, no constant-velocity field, and exact request/result identities.
+The complete mechanical policy participates in protocol comparability whenever a consumer needs
+motion; changes to velocity or its source cannot silently compare as the same experiment.
+Static drape and manufacturing-only consumers retain their independent protocol identities.
 
 **Scoped material-direction requirements.** `material_strain` and `motion_material_strain` admit raw
 dimensionless `[E11, E22, 2E12]` from the production membrane frame. Six static signed min/max metrics
@@ -869,6 +875,16 @@ cut, raised-travel and lift/lower times. It supplies no device commands, physica
 or hardware authorization. Native, portable, mixed-job roll and material-study consumers share this
 boundary; see `docs/cutting-plans.md`, `tests/cutting_program.rs` and the CLI cutting workflow.
 
+Optional `machine.fixture_clearance` independently qualifies stationary machine-frame polygons and
+cutting/raised circular tool envelopes. Complete cut chords, travel and final returns must strictly
+clear every filled footprint after any finite-stock loading translation. Exact endpoint predicates
+and outward-rounded line-distance bounds refuse contact or unresolved separation without adding a
+physical tolerance. The complete policy joins the machine lock and the geometry work budget. A
+blocked nearest-path candidate retains the checked authored baseline with its refusal; a blocked
+baseline, cut or exhausted check refuses only the process. This is planar geometry, with no inferred
+registration, grip, obstacle routing or three-dimensional machine clearance. Direct geometry,
+roll/finite-stock and native/portable material-study regressions cover this boundary.
+
 **Bounded split supplier orders.** Optional `market.split_orders` produces `ftx-cut-procurement/3`
 by assigning indivisible markers to current exact-material-locked offers. Each aggregated order
 reuses canonical quote rounding, capacity, continuous-cut and quantity-price evaluation. Connected
@@ -878,6 +894,20 @@ evaluations; studies reserve configured work across every alternative against a 
 Complete feasible selected costs remain available after exhaustion, while minimum-cost metrics
 require completed proof. Mixed jobs add exact finite-item prices only when all routes are complete.
 Neither an incomplete subtotal nor duplicated physical stock may supply a comparison value.
+
+**Split thread inventory orders.** `consumables.purchasing.market.split_orders` accepts
+`ftx-thread-order-allocation/1` through the same indivisible-demand allocator. Complete actual
+operation/channel/copy lengths, including selected configured/specialist cell recipes, replace
+marker area as its length-based inputs; no fake marker or second price authority is introduced.
+Source currentness, exact yarn locks, transitive base/tier stock aliases, full-order rounding,
+all-unit price breaks, capacity and continuity are canonical. At most 256 segments overall, 63 per
+yarn and eight candidate offers per yarn enter the explicit shared search; full quote scans are
+reserved across all recipe/material trials. Refused demand domains preserve sewing and quantities.
+Complete incumbents feed thread/material/combined purchasing decisions; unfinished allocations
+withhold minimum claims, including outer recipe optimality. Every order retains its actual segment
+indices, source scope and canonical offer. Omission preserves whole-supplier serialization.
+Tests: `sewing_consumables`, its selection and combined-purchasing cases, and native/portable
+sewing production replay. This does not infer a spool-change schedule or authorize purchases.
 
 **Named scenario matrices.** `material_study::Request::evaluate_matrix_with` expands and binds one
 unchanged-pattern material study, runs manufacturing once and retains every named case's independent

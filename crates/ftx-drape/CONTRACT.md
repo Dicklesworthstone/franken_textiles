@@ -170,17 +170,28 @@ Independent control-volume accretion/refinement, welded multiple-stream conserva
 invariance and sewn/accessory replay tests cover this bounded numerical capability. Prescribed
 velocity applies to all incoming phases for an instance.
 
-`ftx-coupled-liquid-mechanics/3` instead requires separate constant finite `supply` and
+`ftx-coupled-liquid-mechanics/4` instead requires separate constant finite `supply` and
 `condensation` world velocities in each binding's `incoming_stream_velocities_world_m_s`.
 The shared version-2 velocity field is forbidden, and older versions reject the new field.
 Accepted thermal increments retain their phase identities until lumped at welded vertices; both
 streams mix once with all previous dry/accessory/liquid inertia before evaporation leaves.
 Phase mass must reconcile to aggregate incoming mass before mutation. Opposing momentum does
-not cancel incoming kinetic energy or nonnegative mixing loss. Result schema `/3` retains the
+not cancel incoming kinetic energy or nonnegative mixing loss. Result schema `/4` retains the
 qualification and existing separate mechanical ledger. Independent known answers, Galilean and
 whole-motion rollback tests and native/portable named-case replay cover this numerical closure.
-Time-varying streams, drainage, pinned-coordinate impulses, heat deposition and empirical
-wet-garment claims remain open.
+Phase-specific time-varying streams, drainage, pinned-coordinate impulses, heat deposition and
+empirical wet-garment claims remain open.
+
+Published schema `ftx-coupled-liquid-mechanics/3`, model `scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1`,
+qualifies an explicit common incoming world velocity for every
+mechanical keyframe interval and retained instance. Each accepted substep uses its enclosing
+interval's vector, including after thermal event subdivision. Exact schedule coverage, finite
+vectors and exclusive constant/scheduled fields are required before admission. The same welded
+mixing law and mass, momentum, energy, source and rollback checks remain authoritative. Changing
+directions affects actual solver velocity and the next cloth step. Complete schedules survive
+native/portable study receipts, comparison protocols and browser reports. No interpolation,
+rain direction, separate liquid/vapor velocities or new wet-material qualification is inferred.
+Phase-specific streams stay on schema `/4` and result `/4`. Scheduled intervals stay on schema `/3` and result `/3`. Their fields cannot be combined. Each result retains the full exact qualification.
 
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
@@ -238,10 +249,13 @@ Material-study receipts retain it when true. Existing pair, fold and absent-side
 unchanged. Direct scene tests cover asymmetric frame providers, selected anchors/radii, actual
 imported sewn geometry, public normals, roll endpoints and both leg constraints.
 
-The current `BodyFrames` adapter derives an explicit left start frame by reflecting right origin,
-up and front, then recomputing `lat = up × front`. It uses the same right-derived heights and radii;
-other `PartFrames` providers may supply independent sides. This is a symmetric start convention,
-not independent left-body measurement, a convergence guarantee or physical-fit qualification.
+The `BodyFrames` adapter uses each explicit limb's actual posed joints and skinned region. Left
+arm shoulder/wrist offsets and radius, and left leg axis, ankle/calf/knee levels and section radii,
+are independent of the right limb. Both frames retain `lat = up × front`. Generated mirror pairs
+continue to use the reference's right-then-reflect convention. Synthetic posed-model controls
+exercise unequal left/right angles, positions, lengths and radii through the ordinary mesher,
+placement and roll, plus a symmetric case and unchanged generated-pair output. These establish
+geometric side selection, not anatomical landmark, convergence or physical-fit qualification.
 
 **Scene** (`scene.rs`; plan §11.3–11.4). A pattern meshed, placed with a body's part frames (any
 `PartFrames`; `ftx_body::BodyFrames` reads them off a posed Anny body), started (wrap, pre-sew, relax

@@ -242,10 +242,11 @@ pub(super) fn evaluate(request: &Request, row: &Alternative) -> Result<Report, R
         ));
     }
     let mut market = fabric.market.clone();
-    // Supplier-allocation strategy is not a market or source qualification. Yarn's existing
-    // consumer rejects split orders; fabric may retain a complete bounded allocation.
+    // Supplier-allocation strategies are independent of the comparable market/source scope.
     market.split_orders = None;
-    if hash(&market)? != hash(&input.market)? {
+    let mut thread_market = input.market.clone();
+    thread_market.split_orders = None;
+    if hash(&market)? != hash(&thread_market)? {
         return Err(invalid(
             "cut-and-sew purchasing requires the same comparable market, clock and capacity policies",
         ));
@@ -286,16 +287,14 @@ pub(super) fn evaluate(request: &Request, row: &Alternative) -> Result<Report, R
         .map(|id| component(id))
         .collect::<Result<BTreeSet<_>, _>>()?;
     let thread_offer_ids = priced
-        .material_orders
-        .iter()
-        .map(|order| {
-            order
-                .least_observed_order
-                .as_ref()
-                .map(|offer| offer.quote.offer_id.clone())
-                .ok_or_else(|| invalid("complete thread order lost its selected source offer"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        .selected_offers()
+        .map(|offer| offer.quote.offer_id.clone())
+        .collect::<Vec<_>>();
+    if thread_offer_ids.is_empty() {
+        return Err(invalid(
+            "complete thread order lost its selected source offers",
+        ));
+    }
     for id in &thread_offer_ids {
         if fabric_components.contains(&component(id)?) {
             return Err(invalid(
@@ -303,7 +302,7 @@ pub(super) fn evaluate(request: &Request, row: &Alternative) -> Result<Report, R
             ));
         }
     }
-    let thread_selected_order_cost = amount(priced.least_observed_independent_order_total)?;
+    let thread_selected_order_cost = amount(priced.selected_total())?;
     let selected_order_cost = fabric.cost + thread_selected_order_cost;
     if !selected_order_cost.is_finite()
         || (fabric.cost > 0.0
@@ -326,7 +325,8 @@ pub(super) fn evaluate(request: &Request, row: &Alternative) -> Result<Report, R
         thread_selected_order_cost,
         selected_order_cost,
         fabric_order_allocation_optimality_proven: fabric.proved,
-        order_allocation_optimality_proven: fabric.proved,
+        order_allocation_optimality_proven: fabric.proved
+            && priced.order_allocation_optimality_proven.unwrap_or(true),
         complete_observed_quantity_coverage: fabric.observed
             && priced.complete_observed_quantity_coverage,
         fabric_offer_ids: fabric.offers,

@@ -100,8 +100,15 @@ bones and their descendants (the drape uses the wrists and feet: no garment in s
 mm: floor, waist (Anny's waist loop), crotch, chest (the armpit), across back, hip, knee, calf, ankle,
 shoulder tip, side neck point, C7 and head top, with the reference's formulas where it derives one from
 others (hip = crotch + 0.45 × (waist − crotch), calf = ankle + 0.6 × (knee − ankle), across back midway
-between chest and shoulder); torso, right-arm and right-leg frames in the reference's convention (spec 04
-§3.2); section radii from the vertices of each region (by dominant skinning bone). On the 92 cm
+between chest and shoulder); torso and independent right/left arm and leg frames in the reference's
+convention (spec 04 §3.2); section radii from the vertices of each region (by dominant skinning bone).
+Explicit left panels use the actual left upper-arm bone, shoulder/wrist distance and upper-arm
+radius. Left leg placement uses its own hip-to-ankle axis, ankle/calf/knee levels and left-leg/pelvis
+vertices; shared torso levels retain their original definitions. Generated mirrored pattern
+instances keep the reference's right-then-reflect convention. Independent synthetic asymmetric
+joints and regions are exercised through actual `BodyFrames::new`, placement, wrap and roll in
+the drape scene tests; these establish side selection and geometric arithmetic, not anatomical
+or empirical fit accuracy. On the 92 cm
 reference toddler fitted to stature only: waist 525 mm (taped 530), crotch 394 (372.5), knee 248 (231),
 chest 617 (the reference's formula on the tape gives 635); fitted to the tape, waist and crotch land on
 the taped heights. The armpit (lowest upper-arm vertex by the torso) and the shoulder tip (0.8 ×
@@ -122,6 +129,16 @@ predictions at 35 degrees. It retains source residuals, exact report/request
 identities and signed comparisons without refitting or inventing uncertainty.
 Measurements must already be validated and fused by the caller. Missing anatomy
 remains unavailable. Report consistency is not authenticity or real-person fit.
+
+`partial_tape_readings` retains each independently available positive finite reading in
+`TAPE_FIELDS` order. A missing neck, shoulder or limb section cannot erase valid torso
+circumferences, heights or stature. A failed dependency still withdraws every reading that
+needs it; no inferred value replaces the missing section. Accepted-shape diagnostics identify
+partial coverage and its exact unavailable fields, and material-study flat validation consumes
+the same surviving MODEL_FIT values and signed residuals. The complete-only `tape_readings`
+API and tape optimizer retain their requirement for all 21 readings. The square-frustum
+known-answer check and accepted-prism handoff regression cover this bounded propagation;
+they do not establish new anatomical validity, uncertainty or measurement readiness.
 
 **Units and frames.** Metres, +Z up, the body faces −Y, +X is the body's left. Rest bodies sit in the
 template frame (soles near z = −0.82 m); posed bodies are root-relative. Nothing is grounded here.

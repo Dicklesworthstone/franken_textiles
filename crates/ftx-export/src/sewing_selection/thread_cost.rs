@@ -45,7 +45,7 @@ fn unavailable(message: impl Into<String>) -> Refusal {
         .repair("supply complete independently qualified thread consumption and eligible exact-yarn orders in the declared market")
 }
 
-pub(super) fn score(plan: &SewPlan, currency: &str) -> Result<f64, Refusal> {
+pub(super) fn score(plan: &SewPlan, currency: &str) -> Result<(f64, Option<bool>), Refusal> {
     let consumption = plan
         .consumables
         .as_ref()
@@ -73,7 +73,8 @@ pub(super) fn score(plan: &SewPlan, currency: &str) -> Result<f64, Refusal> {
         ));
     }
     purchasing
-        .least_observed_independent_order_total
+        .selected_total()
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
+        .map(|cost| (cost, purchasing.order_allocation_optimality_proven))
         .ok_or_else(|| unavailable("complete canonical thread order total is unavailable"))
 }

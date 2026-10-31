@@ -104,6 +104,353 @@ fn close(actual: f64, expected: f64) {
     assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
 }
 
+fn split_policy(options: &mut Value, work: usize) {
+    options["consumables"]["purchasing"]["market"]["split_orders"] =
+        json!({"schema":"ftx-thread-order-allocation/1","max_search_nodes":work});
+}
+
+#[test]
+fn split_thread_orders_cover_actual_copy_channels_when_no_supplier_can_supply_the_batch() {
+    let (pattern, mut options, selected) = fixture();
+    options["consumables"]["production_copies"] = json!(2);
+    purchasing(
+        &mut options,
+        vec![quote(&selected, "a", "a"), quote(&selected, "b", "b")],
+    );
+    let original = build(pattern.clone(), options.clone()).unwrap();
+    assert!(
+        !original
+            .consumables
+            .as_ref()
+            .unwrap()
+            .purchasing
+            .as_ref()
+            .unwrap()
+            .complete_offer_coverage
+    );
+    split_policy(&mut options, 10000);
+    let plan = build(pattern.clone(), options).unwrap();
+    let consumption = plan.consumables.as_ref().unwrap();
+    let priced = consumption.purchasing.as_ref().unwrap();
+    assert!(
+        priced.complete_offer_coverage
+            && priced.complete_observed_quantity_coverage
+            && priced.complete_continuous_length_limit_coverage
+    );
+    assert_eq!(priced.order_allocation_optimality_proven, Some(true));
+    close(priced.selected_total().unwrap(), 28.0);
+    close(priced.least_observed_independent_order_total.unwrap(), 28.0);
+    let segments = priced.segments.as_ref().unwrap();
+    assert_eq!(segments.len(), 8);
+    let allocation = priced.material_orders[0].allocation.as_ref().unwrap();
+    assert_eq!(allocation.schema, "ftx-thread-order-allocation-report/1");
+    assert!(
+        allocation
+            .whole_order_sample
+            .as_ref()
+            .unwrap()
+            .offers
+            .is_empty()
+    );
+    let mut assigned = Vec::new();
+    for order in allocation.selected_orders.as_ref().unwrap() {
+        close(order.offer.order_quantity, 4.0);
+        close(order.offer.order_cost, 14.0);
+        close(order.scope.requirement, order.required_length_m);
+        assert_eq!(order.scope.basis, ftx_pattern::material_cost::Basis::Length);
+        let mut longest = 0.0_f64;
+        let mut length = 0.0;
+        for &index in &order.segment_indices {
+            assigned.push(index);
+            let segment = &segments[index];
+            assert!(segment.copy < 2);
+            let original = &consumption.operation_channels[segment.operation_channel];
+            close(
+                segment.required_length_m,
+                original.per_copy.as_ref().unwrap().required_length_m,
+            );
+            length += segment.required_length_m;
+            longest = longest.max(segment.required_length_m);
+        }
+        close(order.required_length_m, length);
+        close(order.required_continuous_length_m, longest);
+    }
+    assigned.sort_unstable();
+    assert_eq!(assigned, (0..8).collect::<Vec<_>>());
+    assert_eq!(
+        serde_json::to_value(&plan.seams).unwrap(),
+        serde_json::to_value(original.seams).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&plan).unwrap(),
+        serde_json::to_value(SewPlan::build(&Pattern::new(pattern), &plan.options).unwrap())
+            .unwrap()
+    );
+    assert!(
+        priced.quote_observations_evaluated + priced.stock_aliases_examined
+            <= consumption.purchasing_work_bound
+    );
+}
+
+#[test]
+fn split_thread_orders_apply_all_unit_tiers_to_complete_supplier_orders() {
+    let (pattern, mut options, selected) = fixture();
+    options["consumables"]["production_copies"] = json!(2);
+    let mut a = quote(&selected, "a", "a");
+    a["available_quantity"] = json!(6.0);
+    a["price_breaks"] = json!([{"minimum_quantity":6.0,"price":1.0}]);
+    let mut b = quote(&selected, "b", "b");
+    b["price_breaks"] = json!([]);
+    purchasing(&mut options, vec![a, b]);
+    split_policy(&mut options, 10000);
+    let plan = build(pattern.clone(), options.clone()).unwrap();
+    let priced = plan.consumables.unwrap().purchasing.unwrap();
+    close(priced.selected_total().unwrap(), 13.0); // six metres at 0.5/m plus two at 5/m
+    assert_eq!(priced.order_allocation_optimality_proven, Some(true));
+    let offers = priced.selected_offers().collect::<Vec<_>>();
+    assert_eq!(offers.len(), 2);
+    close(offers[0].order_quantity, 6.0);
+    close(offers[1].order_quantity, 2.0);
+    for offer in options["consumables"]["purchasing"]["quote_book"]["quotes"]
+        .as_array_mut()
+        .unwrap()
+    {
+        offer["price"] = json!(0.0);
+        offer["price_breaks"] = json!([]);
+    }
+    // Preserve canonical quote validation: zero prices cannot become free winning suppliers.
+    let invalid = build(pattern, options).unwrap_err();
+    assert_eq!(invalid.code, ftx_core::RefusalCode::InvalidDocument);
+    assert_eq!(invalid.message, "price must be finite and positive");
+}
+
+#[test]
+fn split_thread_orders_exclude_cross_yarn_aliases_even_when_only_partial_orders_fit() {
+    let (pattern, mut options, a) = fixture();
+    let b = yarn("other-exact-yarn");
+    options["consumables"]["production_copies"] = json!(2);
+    options["qualifications"][0]["thread_consumption"]["channels"][1]["material"] = json!(b);
+    purchasing(
+        &mut options,
+        vec![
+            quote(&a, "a", "shared-stock"),
+            quote(&b, "b", "shared-stock"),
+        ],
+    );
+    split_policy(&mut options, 1000);
+    let consumed = build(pattern, options).unwrap().consumables.unwrap();
+    close(consumed.total_required_length_m.unwrap(), 7.4);
+    let priced = consumed.purchasing.unwrap();
+    assert!(priced.selected_total().is_none());
+    assert!(priced.material_orders.iter().all(|order| {
+        order.excluded_shared_stock_offer_ids.len() == 1
+            && order
+                .allocation
+                .as_ref()
+                .unwrap()
+                .no_feasible_listed_allocation
+    }));
+}
+
+#[test]
+fn split_thread_orders_do_not_multiply_aliased_stock_or_revive_depleted_observations() {
+    let (pattern, mut options, selected) = fixture();
+    options["consumables"]["production_copies"] = json!(2);
+    let mut a = quote(&selected, "a", "a");
+    a["price_breaks"][0]["sku"] = json!("left");
+    let mut b = quote(&selected, "b", "b");
+    b["price_breaks"][0]["sku"] = json!("right");
+    let mut bridge = quote(&yarn("unused-thread"), "bridge", "left");
+    bridge["price_breaks"][0]["sku"] = json!("right");
+    purchasing(&mut options, vec![a, b, bridge]);
+    split_policy(&mut options, 10000);
+    let plan = build(pattern.clone(), options.clone()).unwrap();
+    let priced = plan.consumables.unwrap().purchasing.unwrap();
+    assert!(!priced.complete_offer_coverage);
+    assert!(
+        priced.material_orders[0]
+            .allocation
+            .as_ref()
+            .unwrap()
+            .no_feasible_listed_allocation
+    );
+    assert!(priced.selected_total().is_none());
+
+    let mut spare = quote(&selected, "spare", "independent-stock");
+    spare["supplier"] = json!("independent-supplier");
+    spare["available_quantity"] = json!(8.0);
+    options["consumables"]["purchasing"]["quote_book"]["quotes"]
+        .as_array_mut()
+        .unwrap()
+        .push(spare.clone());
+    let plan = build(pattern.clone(), options.clone()).unwrap();
+    let priced = plan.consumables.unwrap().purchasing.unwrap();
+    assert_eq!(
+        priced
+            .selected_offers()
+            .map(|o| o.quote.offer_id.as_str())
+            .collect::<Vec<_>>(),
+        ["spare"]
+    );
+    spare["observed_on"] = json!("2026-10-24");
+    spare["available_quantity"] = json!(0.0);
+    options["consumables"]["purchasing"]["market"]["as_of"] = json!("2026-10-24");
+    options["consumables"]["purchasing"]["quote_book"]["quotes"]
+        .as_array_mut()
+        .unwrap()
+        .push(spare);
+    let plan = build(pattern, options).unwrap();
+    let priced = plan.consumables.unwrap().purchasing.unwrap();
+    assert!(!priced.complete_offer_coverage && priced.selected_total().is_none());
+}
+
+#[test]
+fn split_thread_orders_preserve_quantities_when_continuity_or_domain_limits_refuse_purchasing() {
+    let (pattern, mut options, selected) = fixture();
+    let mut offer = quote(&selected, "a", "a");
+    offer["maximum_continuous_quantity"] = json!(0.5);
+    purchasing(&mut options, vec![offer]);
+    split_policy(&mut options, 1000);
+    let plan = build(pattern.clone(), options.clone()).unwrap();
+    let consumed = plan.consumables.unwrap();
+    close(consumed.total_required_length_m.unwrap(), 3.7);
+    assert!(consumed.purchasing.unwrap().selected_total().is_none());
+    for copies in [16, 65] {
+        options["consumables"]["production_copies"] = json!(copies);
+        let plan = build(pattern.clone(), options.clone()).unwrap();
+        let consumed = plan.consumables.unwrap();
+        assert!(consumed.complete_consumption_coverage);
+        close(
+            consumed.total_required_length_m.unwrap(),
+            3.7 * copies as f64,
+        );
+        let priced = consumed.purchasing.unwrap();
+        assert_eq!(
+            priced.allocation_refusal.unwrap().code,
+            ftx_core::RefusalCode::BudgetExceeded
+        );
+        assert!(!priced.complete_offer_coverage && priced.selected_observed_order_total.is_none());
+    }
+}
+
+#[test]
+fn split_thread_large_domains_keep_complete_bounded_allocations_and_the_highest_mask_bit() {
+    let (pattern, mut options, selected) = fixture();
+    options["consumables"]["production_copies"] = json!(5);
+    let mut a = quote(&selected, "a", "a");
+    let mut b = quote(&selected, "b", "b");
+    a["available_quantity"] = json!(10.0);
+    b["available_quantity"] = json!(10.0);
+    purchasing(&mut options, vec![a, b]);
+    split_policy(&mut options, 256);
+    let consumed = build(pattern.clone(), options.clone())
+        .unwrap()
+        .consumables
+        .unwrap();
+    close(consumed.total_required_length_m.unwrap(), 18.5);
+    let priced = consumed.purchasing.unwrap();
+    assert_eq!(priced.segments.as_ref().unwrap().len(), 20);
+    assert!(priced.complete_offer_coverage);
+    assert_eq!(priced.order_allocation_optimality_proven, Some(false));
+    close(priced.selected_total().unwrap(), 70.0);
+    let allocated = priced.material_orders[0].allocation.as_ref().unwrap();
+    assert!(allocated.budget_exhausted && !allocated.search_complete);
+    assert!(
+        allocated
+            .whole_order_sample
+            .as_ref()
+            .unwrap()
+            .offers
+            .is_empty()
+    );
+    let mut indices: Vec<_> = allocated
+        .selected_orders
+        .as_ref()
+        .unwrap()
+        .iter()
+        .flat_map(|order| {
+            assert!(order.offer.order_quantity <= 10.0);
+            order.segment_indices.iter().copied()
+        })
+        .collect();
+    indices.sort_unstable();
+    assert_eq!(indices, (0..20).collect::<Vec<_>>());
+    assert!(allocated.search_nodes + allocated.quote_evaluations <= 256);
+
+    options["passes"].as_array_mut().unwrap().truncate(1);
+    options["qualifications"][0]["thread_consumption"]["channels"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    options["consumables"]["production_copies"] = json!(63);
+    let mut whole = quote(&selected, "whole", "whole");
+    whole["available_quantity"] = json!(100.0);
+    purchasing(&mut options, vec![whole]);
+    split_policy(&mut options, 1);
+    let consumed = build(pattern, options).unwrap().consumables.unwrap();
+    let priced = consumed.purchasing.unwrap();
+    assert_eq!(priced.segments.as_ref().unwrap().len(), 63);
+    assert_eq!(priced.order_allocation_optimality_proven, Some(true));
+    assert_eq!(
+        priced.material_orders[0]
+            .allocation
+            .as_ref()
+            .unwrap()
+            .selected_orders
+            .as_ref()
+            .unwrap()[0]
+            .segment_indices,
+        (0..63).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn split_thread_budget_retains_complete_incumbents_without_proving_recipe_optimality() {
+    let (pattern, mut options, selected) = fixture();
+    options["require_qualification"] = json!(true);
+    options["consumables"]["production_copies"] = json!(2);
+    let mut large = quote(&selected, "large", "large");
+    large["available_quantity"] = json!(20.0);
+    large["price"] = json!(30.0);
+    large["price_breaks"] = json!([]);
+    purchasing(
+        &mut options,
+        vec![quote(&selected, "small", "small"), large],
+    );
+    split_policy(&mut options, 1);
+    let plan = build(pattern.clone(), options.clone()).unwrap();
+    let priced = plan
+        .consumables
+        .as_ref()
+        .unwrap()
+        .purchasing
+        .as_ref()
+        .unwrap();
+    close(priced.selected_total().unwrap(), 120.0);
+    assert!(priced.least_observed_independent_order_total.is_none());
+    assert_eq!(priced.order_allocation_optimality_proven, Some(false));
+    assert!(
+        priced.material_orders[0]
+            .allocation
+            .as_ref()
+            .unwrap()
+            .budget_exhausted
+    );
+    let request: ftx_export::sewing_selection::Request = serde_json::from_value(json!({
+        "schema":"ftx-sewing-selection/3","objective":"minimize_thread_observed_order_cost",
+        "max_plan_evaluations":2,"alternatives":[{"operation":"join","recipes":[{
+            "id":"same-qualified-recipe","needle":options["passes"][0]["needle"],
+            "thread":options["passes"][0]["thread"],"max_stitch_mm":options["passes"][0]["max_stitch_mm"],
+            "stitches_per_minute":options["passes"][0]["stitches_per_minute"]}]}],"options":options
+    }))
+    .unwrap();
+    let result = request.select(&Pattern::new(pattern)).unwrap();
+    close(result.selected_thread_order_cost.unwrap(), 120.0);
+    assert!(result.search_complete && !result.optimality_proven);
+    assert_eq!(result.unresolved_trials, 2);
+    assert_eq!(result.trials[0].thread_order_optimality_proven, Some(false));
+}
+
 #[test]
 fn catalog_yarn_mass_and_kilogram_orders_follow_complete_batch_consumption() {
     let (pattern, mut options, _) = fixture();
@@ -912,7 +1259,7 @@ fn source_changes_recompute_consumption_and_omitted_request_preserves_legacy_out
 }
 
 #[test]
-fn preflight_bounds_thread_choices_quote_work_and_unsupported_supplier_splitting() {
+fn preflight_bounds_thread_choices_quote_work_and_wrong_supplier_allocation_schema() {
     let (_, options, selected) = fixture();
     let mut too_many_channels = options.clone();
     let channel =
@@ -940,7 +1287,7 @@ fn preflight_bounds_thread_choices_quote_work_and_unsupported_supplier_splitting
         consumables::purchasing_work_bound(&serde_json::from_value(splitting).unwrap())
             .unwrap_err()
             .message
-            .contains("split orders")
+            .contains("ftx-thread-order-allocation/1")
     );
     let mut materials = options;
     let qualification = materials["qualifications"][0].clone();

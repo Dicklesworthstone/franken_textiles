@@ -677,7 +677,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         (h.mechanical_coupling?.exchange ? "Qualified supplied liquid, condensed vapor and evaporation update cloth inertia and gravity after every accepted interval. " :
           h.mechanical_coupling ? "Qualified evaporation updates cloth inertia and gravity after every accepted interval; co-moving vapor removes its own momentum without accelerating the remaining cloth. " :
           "The liquid adds no mechanical water mass. ") +
-        (["ftx-coupled-liquid-mechanics-result/2", "ftx-coupled-liquid-mechanics-result/3"].includes(h.mechanical_coupling?.schema) ?
+        (["ftx-coupled-liquid-mechanics-result/2", "ftx-coupled-liquid-mechanics-result/3", "ftx-coupled-liquid-mechanics-result/4"].includes(h.mechanical_coupling?.schema) ?
           "Incoming water also transfers its explicitly prescribed world-frame momentum. Inelastic mixing loss is reported separately from sensible and latent heat. " : "") +
         "It does not infer absorbed moisture, wicking, body sweat or wet material properties. Comparison admission checks the complete liquid and vapor ledger, " +
         "including exact material bindings and canonical vapor paths, before temperature, energy or textile-water objectives can qualify.";
@@ -685,7 +685,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       detail(parent, `${key}: textile liquid source, exact patches and canonical vapor paths (display only)`, water);
       if (h.mechanical_coupling) {
         const m = h.mechanical_coupling, exchange = m.exchange;
-        const prescribed = ["ftx-coupled-liquid-mechanics-result/2", "ftx-coupled-liquid-mechanics-result/3"].includes(m.schema);
+        const prescribed = ["ftx-coupled-liquid-mechanics-result/2", "ftx-coupled-liquid-mechanics-result/3", "ftx-coupled-liquid-mechanics-result/4"].includes(m.schema);
         const inertia = table(parent, `${key}: ${exchange ? "liquid exchange" : "evaporation"} changes moving cloth mass`,
           ["Dry cloth + accessories (kg)", "Initial water (kg)", "Remaining water (kg)", "Current inertial mass (kg)", "Mass residual (kg)"]);
         cells(inertia, [metric(m.substrate_and_attached_mass_kg), metric(m.initial_liquid_mass_kg),
@@ -1671,7 +1671,7 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
     const pricing = purchase ? (purchase.complete_offer_coverage === true ? "Complete offer coverage" :
       "Incomplete offer coverage") : report || plan ? "Not requested" : state(row.sewing);
     const cost = metric(complete && purchase?.complete_offer_coverage === true ?
-      purchase.least_observed_independent_order_total : null);
+      (purchase.selected_observed_order_total ?? purchase.least_observed_independent_order_total) : null);
     const copies = report?.schema === "ftx-sewing-consumables/1" ? 1 : report?.production_copies;
     cells(totals, [row.key, metric(copies), quantity, metric(complete ? report.total_required_length_m : null), pricing,
       purchase?.currency || "Unknown", cost === "Unknown" ? cost : `${cost} ${purchase?.currency || "(currency unavailable)"}`]);
@@ -1702,6 +1702,31 @@ function sewingConsumablesComparison(parent, alternatives, computed) {
           const one = channel.per_copy;
           cells(perCopy, [...(physicalCells ? [channel.cell || "Unknown"] : []), channel.operation_id, channel.channel_id, metric(one?.stitch_intervals),
             metric(one?.traversal_length_m), metric(one?.start_allowance_m), metric(one?.end_allowance_m), metric(one?.required_length_m)]);
+        }
+      }
+    }
+    if (purchase?.order_allocation_optimality_proven != null) {
+      const allocation = document.createElement("p");
+      allocation.textContent = `${row.key}: ` + (purchase.order_allocation_optimality_proven ?
+        "The least complete thread allocation among the listed offers is proved. " :
+        purchase.complete_offer_coverage ? "A complete thread allocation is available; its minimum cost is unproved. " :
+        "No complete thread allocation is available. ") +
+        "Each operation/channel on each garment stays with one supplier; no mid-operation thread splice is inferred.";
+      parent.append(allocation);
+      const orders = table(parent, `${row.key}: complete thread orders across suppliers`,
+        ["Exact yarn", "Offer", "Assigned operation / channel / garment", "Required length (m)",
+          "Supplier order quantity", "Sale unit", "Merchandise cost", "Allocation search"]);
+      for (const material of purchase.material_orders || []) {
+        const result = material.allocation;
+        for (const order of result?.selected_orders || []) {
+          const assigned = (order.segment_indices || []).map(index => {
+            const segment = purchase.segments?.[index], channel = report.operation_channels?.[segment?.operation_channel];
+            return channel && segment ? `${channel.cell ? `${channel.cell} / ` : ""}${channel.operation_id} / ${channel.channel_id} / garment ${segment.copy + 1}` : "Unknown segment";
+          }).join("; ");
+          cells(orders, [material.requirement?.material_sha256 ?? "Unknown", order.offer?.quote?.offer_id ?? "Unknown",
+            assigned, metric(order.required_length_m), metric(order.offer?.order_quantity), order.offer?.quote?.unit ?? "Unknown",
+            `${metric(order.offer?.order_cost)} ${purchase.currency || "Unknown currency"}`,
+            result.optimality_proven ? "Listed minimum proved" : result.budget_exhausted ? "Complete incumbent; budget ended" : "Unproved"]);
         }
       }
     }

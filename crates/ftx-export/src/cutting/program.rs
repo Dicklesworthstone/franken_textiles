@@ -4,7 +4,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::{Refusal, RefusalCode, Vec2, polyline::point_in_polygon, receipt::sha256_hex};
+use ftx_core::{
+    Refusal, RefusalCode, Vec2,
+    polyline::{point_in_polygon, signed_area},
+    receipt::sha256_hex,
+};
 use ftx_pattern::{
     Pattern,
     material_catalog::ResolvedMaterial,
@@ -57,6 +61,48 @@ pub struct Machine {
     pub start_mm: Vec2,
     /// Include a final raised-tool straight return to the same initial coordinate.
     pub return_to_start: bool,
+    /// Independently sourced fixed fixture footprints and tool envelopes in this machine frame.
+    /// Absence makes no tool/fixture clearance claim and preserves the original machine digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixture_clearance: Option<FixtureClearance>,
+}
+
+/// Filled, stationary exclusion polygon at both declared tool elevations.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fixture {
+    /// Unique fixture identity in this complete loaded configuration.
+    pub id: String,
+    /// Simple machine-frame polygon in mm, either winding, with implicit closing edge.
+    pub outline_mm: Vec<Vec2>,
+}
+
+/// Optional source-qualified planar checks of complete cutting and raised-travel sweeps.
+/// These footprints must cover the fixture at both elevations; no height, grip or registration
+/// is inferred. Every process qualification also locks this complete policy via the machine hash.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureClearance {
+    /// `planar_disk_sweep/1`; no inferred 3D tool geometry or automatic obstacle routing.
+    pub model: String,
+    /// Positive radius of the complete cutting tool envelope, centered on the path, in mm.
+    pub cutting_radius_mm: f64,
+    /// Positive radius of the complete raised tool envelope, centered on its travel, in mm.
+    pub raised_radius_mm: f64,
+    /// Every fixed filled fixture footprint; 1..=64 simple polygons, at most 1024 total vertices.
+    pub fixtures: Vec<Fixture>,
+    /// Acquisition of the tool envelopes, fixture geometry and declared frame/elevations.
+    pub source: Source,
+    /// Geometry acquisition and applicability protocol, not just a display identity.
+    pub method: String,
+    /// Retained fixture, loading and registration assumptions.
+    #[serde(default)]
+    pub conditions: BTreeMap<String, String>,
+    /// Geometry evidence is admitted independently of the process rate and textile evidence.
+    pub evidence: Evidence,
+    /// Separate explicit permission for estimated geometry/applicability.
+    #[serde(default)]
+    pub allow_estimates: bool,
 }
 
 /// Independently supplied process applicability and rate for one exact textile snapshot.
@@ -198,6 +244,9 @@ pub struct Marker {
     pub selected: Traversal,
     /// Whether a complete nearest-path candidate strictly improved on the baseline.
     pub improved: bool,
+    /// A complete ordering candidate crossed a declared fixture, so the checked baseline was kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_clearance_refusal: Option<Refusal>,
 }
 
 /// Source-qualified modeled cut planning, independent of hardware authorization.
@@ -207,6 +256,9 @@ pub struct Report {
     pub schema: &'static str,
     /// Full machine configuration and timing lock used by all admitted recipes.
     pub machine_sha256: String,
+    /// Exact optional source geometry checked against both baseline and selected traversals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixture_clearance: Option<FixtureClearance>,
     /// Complete marker-specific programs, in the original material/marker order.
     pub markers: Vec<Marker>,
     /// Actual bounded nearest-path candidate comparisons shared by every marker.
@@ -258,6 +310,97 @@ pub fn machine_sha256(machine: &Machine) -> Result<String, Refusal> {
     Ok(sha256_hex(
         &serde_json::to_vec(&value).map_err(|e| bad(e.to_string()))?,
     ))
+}
+
+impl FixtureClearance {
+    fn validate(&self, work: &mut geometry::Work) -> Result<(), Refusal> {
+        if self.model != "planar_disk_sweep/1"
+            || [self.cutting_radius_mm, self.raised_radius_mm]
+                .iter()
+                .any(|&r| !positive(r) || r > 1_000_000.0)
+            || !text(&self.source.reference)
+            || !text(&self.source.accessed_on)
+            || !text(&self.source.note)
+            || !text(&self.method)
+            || self.conditions.len() > 64
+            || self.conditions.iter().any(|(k, v)| !text(k) || !text(v))
+        {
+            return Err(bad(
+                "knife fixture clearance needs explicit positive tool envelopes and complete source geometry/applicability evidence",
+            ));
+        }
+        if self.evidence == Evidence::Estimate && !self.allow_estimates {
+            return Err(bad(
+                "estimated knife fixture geometry requires its own explicit consent",
+            ));
+        }
+        if self.fixtures.is_empty()
+            || self.fixtures.len() > 64
+            || self
+                .fixtures
+                .iter()
+                .fold(0usize, |n, f| n.saturating_add(f.outline_mm.len()))
+                > 1024
+        {
+            return Err(budget());
+        }
+        let mut ids = BTreeSet::new();
+        for fixture in &self.fixtures {
+            let ring = &fixture.outline_mm;
+            work.spend(ring.len()).ok_or_else(budget)?;
+            if !text(&fixture.id)
+                || !ids.insert(fixture.id.as_str())
+                || ring.len() < 3
+                || ring
+                    .iter()
+                    .any(|p| !p.is_finite() || p.x.abs().max(p.y.abs()) > 1_000_000.0)
+                || signed_area(ring).abs() <= 1e-8
+            {
+                return Err(bad(
+                    "knife fixtures need unique identities and finite, nondegenerate machine-frame polygons with implicit closing edges",
+                ));
+            }
+            geometry_result(
+                geometry::simple(ring, work),
+                "knife fixture polygon is not simple",
+            )?;
+        }
+        Ok(())
+    }
+
+    fn check_segment(
+        &self,
+        [a, b]: [Vec2; 2],
+        cutting: bool,
+        work: &mut geometry::Work,
+    ) -> Result<(), Refusal> {
+        let radius = if cutting {
+            self.cutting_radius_mm
+        } else {
+            self.raised_radius_mm
+        };
+        for fixture in &self.fixtures {
+            geometry_result(
+                geometry::swept_disk_clear(a, b, radius, &fixture.outline_mm, work),
+                &format!(
+                    "knife {} tool envelope touches or crosses fixture {}, or strict clearance could not be resolved numerically",
+                    if cutting { "cutting" } else { "raised-travel" },
+                    fixture.id
+                ),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn check_travel(&self, route: &Traversal, work: &mut geometry::Work) -> Result<(), Refusal> {
+        for run in &route.runs {
+            self.check_segment(run.travel_mm, false, work)?;
+        }
+        if let Some(segment) = route.return_mm {
+            self.check_segment(segment, false, work)?;
+        }
+        Ok(())
+    }
 }
 
 impl Policy {
@@ -610,6 +753,12 @@ fn paths<'a>(
                     ));
                 }
                 simple_path(points, closed, work)?;
+                if let Some(clearance) = &machine.fixture_clearance {
+                    for (a, b) in edges(points, closed) {
+                        let load = |p| envelope.offset.map_or(p, |d| p + d);
+                        clearance.check_segment([load(a), load(b)], true, work)?;
+                    }
+                }
                 if internal_cut.is_some() {
                     geometry_result(
                         geometry::path_inside(points, closed, &piece.cut_mm, work),
@@ -797,6 +946,9 @@ fn build_markers(
 ) -> Result<Report, Refusal> {
     let (machine_sha256, recipes) = policy.validate()?;
     let mut geometry_work = geometry::Work::new(policy.geometry_work_limit);
+    if let Some(clearance) = &policy.machine.fixture_clearance {
+        clearance.validate(&mut geometry_work)?;
+    }
     let mut search_work = geometry::Work::new(policy.work_limit);
     let mut markers = Vec::with_capacity(sources.len());
     if sources.is_empty() || sources.len() > 4096 {
@@ -831,13 +983,27 @@ fn build_markers(
             &policy.machine,
             q.feed_mm_s,
         )?;
-        let candidate = if policy.ordering == Ordering::NearestPath {
+        if let Some(clearance) = &policy.machine.fixture_clearance {
+            clearance.check_travel(&baseline, &mut geometry_work)?;
+        }
+        let mut candidate = if policy.ordering == Ordering::NearestPath {
             nearest(&paths, &policy.machine, &mut search_work)
                 .map(|order| traversal(placements, &paths, &order, &policy.machine, q.feed_mm_s))
                 .transpose()?
         } else {
             None
         };
+        let mut candidate_clearance_refusal = None;
+        if let Some(clearance) = &policy.machine.fixture_clearance
+            && let Some(route) = &candidate
+            && let Err(refusal) = clearance.check_travel(route, &mut geometry_work)
+        {
+            if refusal.code == RefusalCode::BudgetExceeded {
+                return Err(refusal);
+            }
+            candidate_clearance_refusal = Some(refusal);
+            candidate = None;
+        }
         let improved = candidate
             .as_ref()
             .is_some_and(|c| c.travel_length_mm < baseline.travel_length_mm);
@@ -856,6 +1022,7 @@ fn build_markers(
             baseline,
             selected,
             improved,
+            candidate_clearance_refusal,
         });
     }
     Ok(Report {
@@ -865,6 +1032,7 @@ fn build_markers(
             "ftx-knife-cut-program/1"
         },
         machine_sha256,
+        fixture_clearance: policy.machine.fixture_clearance.clone(),
         markers,
         search_work: search_work.used,
         geometry_work: geometry_work.used,
@@ -877,9 +1045,16 @@ fn build_markers(
                 "Single-ply cold-knife planning uses exact final marker paths. All internal paths finish before exterior releases; paths retain their authored start, direction and closing edge.",
                 "Source qualifications are exact material and full machine locks. A changed textile, finish, thickness, blade, bed or timing configuration requires new applicable process evidence.",
                 "Modeled time includes only constant-rate cutting, raised-tool straight travel and explicit lift/lower cycles. Acceleration, corner slowing, blade turning, loading, workholding changes and inspection are not inferred.",
-                "No kerf compensation, common-line cutting, drill operation, thermal processing, tool/body collision check, measured cut quality, physical cycle-time claim or hardware execution authorization.",
+                "No kerf compensation, common-line cutting, drill operation, thermal processing, three-dimensional tool/body collision check, measured cut quality, physical cycle-time claim or hardware execution authorization.",
                 "Nearest-path ordering is a bounded heuristic; an unfinished or longer candidate retains the complete authored baseline, without a shortest-path proof.",
             ];
+            if policy.machine.fixture_clearance.is_some() {
+                limits.push("Declared fixed machine-frame fixtures are checked against complete cutting and raised-travel circular envelopes, including the final return. Touching and numerically unresolved strict clearance refuse, without adding a physical margin. The complete authored baseline must clear every fixture; a blocked ordering candidate falls back to that checked baseline. No automatic routing, fixture motion, grip strength, registration or 3D clearance is inferred.");
+            } else {
+                limits.push(
+                    "No fixture geometry was supplied; tool/fixture clearance was not evaluated.",
+                );
+            }
             if finite {
                 limits.push("Each used physical stock item is independently loaded with its complete marker bounding-box lower-left corner at the bed origin. The reported translation preserves source orientation, all defects and prior occupied regions; stock boundaries, defects, occupied areas and zones are not cutting paths. This modeled loading position is not measured machine registration or workholding qualification.");
             }

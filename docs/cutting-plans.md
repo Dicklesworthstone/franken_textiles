@@ -137,8 +137,38 @@ For each traversal, `cutting_seconds` is complete path length divided by the qua
 one complete declared cycle per cut. `modeled_path_seconds` is their sum. It excludes acceleration,
 corner slowing, blade turning, loading, inspection and workholding changes, so it is **not a measured
 production cycle time**. The output always reports false physical-cutting validation and hardware
-authorization. It contains no G-code, laser/hot-wire processing, kerf compensation, collision or
-interlock approval. Numerical source admission and synthetic tests do not establish real cut quality.
+authorization. It contains no G-code, laser/hot-wire processing, kerf compensation, three-dimensional
+collision or interlock approval. Numerical source admission and synthetic tests do not establish real cut quality.
+
+### Declared fixtures and complete tool sweeps
+
+Optional `machine.fixture_clearance` checks stationary fixture footprints against every complete
+cutting chord, raised travel chord and requested final return. Cutting and raised tools have separate
+circular envelopes; a clear centerline or two clear endpoints are insufficient. The polygons use
+the declared machine frame, including the reported loading translation for hides and remnants.
+The same policy applies to every independently loaded marker. Fixtures may extend outside the bed;
+their coordinates must remain within the supported ±1,000,000 mm domain.
+
+Supply `model: "planar_disk_sweep/1"`, positive `cutting_radius_mm` and `raised_radius_mm`, and
+`fixtures: [{"id": "clamp-1", "outline_mm": [[x0,y0], ...]}]`. Each filled footprint must be a
+simple polygon with an implicit closing edge and a unique ID. There may be 1–64 fixtures and at
+most 1024 total polygon vertices. The complete policy also requires `source` (reference, accessed
+date and note), `method`, `evidence`, optional `conditions`, and separate `allow_estimates: true`
+when the geometry is estimated. Its source must cover both tool envelopes, fixture footprints,
+their common frame and applicability at both elevations. No fixture height, measured registration
+or gripping force is inferred from a drawing.
+
+Adding or changing this policy changes `machine_sha256`; all consumed process qualifications
+must admit that exact configuration. The program retains the original policy in
+`program.fixture_clearance`. Boundary contact and numerically unresolved strict separation refuse;
+outward-rounded bounds do not introduce a physical padding distance. Geometric work shares the existing
+`geometry_work_limit` across all fixtures and markers. Missing evidence, blocked cuts or a blocked
+authored traversal produce an independent `program_refusal`, preserving valid nesting and purchasing.
+The planner does not route around obstacles. When a nearest-path candidate is blocked but the
+complete authored baseline is clear, it keeps that baseline and reports the obstruction in
+`program.markers[].candidate_clearance_refusal`. Exhausting geometric validation always refuses
+the process; it never publishes an unchecked candidate. Omission makes no tool/fixture clearance
+claim and keeps the existing machine digest.
 
 ## Dated purchasing observations
 

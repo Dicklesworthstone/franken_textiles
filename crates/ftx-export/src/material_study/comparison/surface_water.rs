@@ -117,9 +117,20 @@ fn admit_mechanics(
     let water = &request["surface_water"];
     let bindings = qualification["bindings"].as_object().ok_or_else(fail)?;
     let water_bindings = water["bindings"].as_object().ok_or_else(fail)?;
-    let phase_velocities = qualification["schema"] == "ftx-coupled-liquid-mechanics/3";
-    let prescribed_velocity =
-        phase_velocities || qualification["schema"] == "ftx-coupled-liquid-mechanics/2";
+    let phase_velocities = qualification["schema"] == "ftx-coupled-liquid-mechanics/4";
+    let scheduled_velocity = qualification["schema"] == "ftx-coupled-liquid-mechanics/3";
+    if (phase_velocities
+        && qualification["model"]
+            != "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1")
+        || (scheduled_velocity
+            && qualification["model"]
+                != "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1")
+    {
+        return Err(fail());
+    }
+    let prescribed_velocity = phase_velocities
+        || scheduled_velocity
+        || qualification["schema"] == "ftx-coupled-liquid-mechanics/2";
     let exchange =
         prescribed_velocity || qualification["schema"] == "ftx-coupled-liquid-mechanics/1";
     let compatible_policy = if exchange {
@@ -133,6 +144,8 @@ fn admit_mechanics(
         ) && qualification["model"]
             == if phase_velocities {
                 "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1"
+            } else if scheduled_velocity {
+                "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1"
             } else if prescribed_velocity {
                 "prescribed_incoming_velocity_mass_exchange_frozen_mechanics/1"
             } else {
@@ -167,7 +180,12 @@ fn admit_mechanics(
             let streams = binding["incoming_stream_velocities_world_m_s"]
                 .as_object()
                 .ok_or_else(fail)?;
-            if streams.len() != 2 || binding.get("incoming_velocity_world_m_s").is_some() {
+            if streams.len() != 2
+                || binding.get("incoming_velocity_world_m_s").is_some()
+                || binding
+                    .get("incoming_velocity_world_m_s_by_interval")
+                    .is_some()
+            {
                 return Err(fail());
             }
             for phase in ["supply", "condensation"] {
@@ -176,22 +194,45 @@ fn admit_mechanics(
                     return Err(fail());
                 }
             }
-        } else if prescribed_velocity {
-            let velocity = array(binding, "incoming_velocity_world_m_s")?;
-            if velocity.len() != 3
-                || velocity.iter().any(|v| finite(v).is_none())
+        } else if scheduled_velocity {
+            let velocities = array(binding, "incoming_velocity_world_m_s_by_interval")?;
+            let intervals = array(request, "boundaries")?.len();
+            if intervals == 0
+                || intervals > 16
+                || velocities.len() != intervals
+                || binding.get("incoming_velocity_world_m_s").is_some()
                 || binding
                     .get("incoming_stream_velocities_world_m_s")
                     .is_some()
+                || velocities.iter().any(|v| {
+                    v.as_array().is_none_or(|v| {
+                        v.len() != 3 || v.iter().any(|component| finite(component).is_none())
+                    })
+                })
             {
                 return Err(fail());
             }
-        } else if binding.get("incoming_velocity_world_m_s").is_some()
-            || binding
+        } else {
+            if binding
                 .get("incoming_stream_velocities_world_m_s")
                 .is_some()
-        {
-            return Err(fail());
+            {
+                return Err(fail());
+            }
+            if binding
+                .get("incoming_velocity_world_m_s_by_interval")
+                .is_some()
+            {
+                return Err(fail());
+            }
+            if prescribed_velocity {
+                let velocity = array(binding, "incoming_velocity_world_m_s")?;
+                if velocity.len() != 3 || velocity.iter().any(|v| finite(v).is_none()) {
+                    return Err(fail());
+                }
+            } else if binding.get("incoming_velocity_world_m_s").is_some() {
+                return Err(fail());
+            }
         }
         if range.len() != 2
             || binding["material_sha256"] != water_bindings[instance]["material_sha256"]
@@ -206,6 +247,8 @@ fn admit_mechanics(
     let summary = |report: &Value| -> Result<Value, Refusal> {
         if report["schema"]
             != if phase_velocities {
+                "ftx-coupled-liquid-mechanics-result/4"
+            } else if scheduled_velocity {
                 "ftx-coupled-liquid-mechanics-result/3"
             } else if prescribed_velocity {
                 "ftx-coupled-liquid-mechanics-result/2"

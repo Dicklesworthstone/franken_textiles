@@ -41,8 +41,9 @@ pub struct Market {
     /// This is independent of total stock and does not establish guaranteed continuous inventory.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_observed_continuous_length: bool,
-    /// Optional whole-marker allocation across exact-source-locked supplier offers. Omission keeps
-    /// the original one-offer-per-material calculation and its wire format.
+    /// Optional indivisible-demand allocation across exact-source-locked supplier offers. Cutting
+    /// uses the marker schema; thread purchasing uses its operation/channel/copy segment schema.
+    /// Omission keeps the original one-offer-per-material calculation and its wire format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub split_orders: Option<allocation::Policy>,
 }

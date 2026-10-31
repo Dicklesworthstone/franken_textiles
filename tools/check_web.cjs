@@ -8,6 +8,7 @@
 //   node tools/check_web.cjs --calibration-sheets NATIVE_DIR  # six local downloads, without page JavaScript
 //   node tools/check_web.cjs --generated-calibration-sheets NATIVE_DIR  # actual WASM generation/replay
 //   node tools/check_web.cjs --web-dir STAGED_WEB   # retained build with the same page/worker assets
+//   node tools/check_web.cjs --alterations --ftx /path/to/ftx   # real five-operation browser/native loop
 //
 // Needs Playwright with its Chromium (npm i -g playwright && npx playwright install chromium).
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
@@ -30,6 +31,7 @@ const generatedSheets = arg("--generated-calibration-sheets");
 const evidenceReplay = arg("--measurement-evidence");
 const bodyCheckReplay = arg("--body-check");
 const traceEdits = process.argv.includes("--trace-edits");
+const alterations = process.argv.includes("--alterations");
 const timingArg = arg("--timings");
 const timingRuns = Number(timingArg || 0);
 if (process.argv.includes("--body-check") && (!bodyCheckReplay || model || evidenceReplay || standalone || timingArg)) {
@@ -52,6 +54,139 @@ const ftx = arg("--ftx") || path.join(root, "target/release/ftx");
 const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
 let failed = 0;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) failed++; };
+
+async function directAlterations(browser, origin) {
+  const assert = require("node:assert/strict");
+  const context = await browser.newContext({ userAgent, acceptDownloads: true });
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "ftx-browser-alterations-"));
+  const errors = [], requests = [];
+  context.on("request", r => requests.push({url:r.url(),method:r.method()}));
+  await context.route("**/worker.js", async route => {
+    const response = await route.fetch();
+    await route.fulfill({response,body:"const NativeDate=Date;globalThis.Date=class extends NativeDate {constructor(...a){super(...(a.length?a:[2026,9,13,12,0]));}};\n"+await response.text()});
+  });
+  if (process.env.FTX_WASM_PKG) await context.route("**/pkg/*", async route => {
+    const name = path.basename(new URL(route.request().url()).pathname);
+    assert.ok(["ftx_wasm.js","ftx_wasm_bg.wasm"].includes(name));
+    await route.fulfill({path:path.join(process.env.FTX_WASM_PKG,name),contentType:name.endsWith(".wasm")?"application/wasm":"text/javascript"});
+  });
+  await context.addInitScript(() => {
+    const Original = Worker;
+    window.Worker = class extends Original {
+      constructor(...args) {super(...args);this.addEventListener("message", e => {
+        if (e.data.type === "result") window.__lastAlterationSource = e.data.alterationSources?.pattern;
+        if (e.data.type === "fields") window.__lastFields = e.data;
+        if (window.__holdAlter && e.data.type === "altered") {
+          e.stopImmediatePropagation();window.__holdAlter=false;window.__heldAlter={worker:this,data:e.data};
+        }
+      });}
+      postMessage(message,...rest) {
+        if (message.type === "run") window.__lastRoundRequest = typeof message.req === "string" ? JSON.parse(message.req) : message.req;
+        return super.postMessage(message,...rest);
+      }
+    };
+  });
+  const page = await context.newPage(), manual = await context.newPage();
+  for (const tab of [page,manual]) tab.on("pageerror", e => errors.push(String(e)));
+  const fixture = JSON.parse(fs.readFileSync(path.join(root,"tests/fixtures/oracle/web/webapp.json"),"utf8"));
+  const input = fixture.cases.find(c => c.id === "file-pattern-spec").input;
+  const pattern = JSON.stringify(input.pattern).replace('"meta":{','"meta":{"source_sequence":18446744073709551615,"signed_probe":-0.0,"float_probe":1.0,');
+  const fit = JSON.stringify(input.fit_spec), measurements = JSON.stringify(input.body.measurements);
+  fs.writeFileSync(path.join(work,"source.json"),pattern,{flag:"wx"});
+  const upload = (tab,id,text) => tab.setInputFiles("#"+id,{name:id+".json",mimeType:"application/json",buffer:Buffer.from(text)});
+  const bytes = async (tab,selector) => Buffer.from(await tab.$eval(selector,async a => {
+    const data = new Uint8Array(await (await fetch(a.href)).arrayBuffer());
+    let text = "";for(let i=0;i<data.length;i+=0x8000)text+=String.fromCharCode.apply(null,data.subarray(i,i+0x8000));
+    return btoa(text);
+  }),"base64");
+  const settled = async tab => {
+    await tab.waitForFunction(() => !document.getElementById("results").classList.contains("hidden") || !document.getElementById("errorBox").classList.contains("hidden"),null,{timeout:180000});
+    assert.equal(await tab.isVisible("#errorBox"),false,await tab.textContent("#errorText"));
+  };
+  const round = async (tab,source) => {await upload(tab,"patternFile",source);await tab.click("#go");await settled(tab);};
+  try {
+    for (const tab of [page,manual]) {
+      await tab.goto(origin+"/");await tab.waitForFunction(() => !document.getElementById("go").disabled);
+      await tab.check('input[name="program"][value="audit"]');
+      await tab.check('input[name="bodyMode"][value="file"]');
+      await upload(tab,"measFile",measurements);await upload(tab,"fitFile",fit);
+    }
+    const drafted = await context.newPage();drafted.on("pageerror", e => errors.push(String(e)));
+    await drafted.addInitScript(() => localStorage.setItem("fab-wb-nappies","true"));
+    await drafted.goto(origin+"/");await drafted.waitForFunction(() => !document.getElementById("go").disabled);
+    await drafted.check('input[name="program"][value="zouave_bolero"]');
+    await drafted.check('input[name="bodyMode"][value="tape"]');
+    await drafted.waitForFunction(() => window.__lastFields?.program === "zouave_bolero");
+    await drafted.fill('#tapeRows input[data-name="chest"]',"53");
+    await drafted.click("#go");await settled(drafted);
+    const bodyBefore = await drafted.evaluate(() => window.__lastRoundRequest.body);
+    assert.equal(bodyBefore.nappies,false);assert.equal(await drafted.isChecked("#nappies"),true);
+    const fieldsBefore = await drafted.$$eval("#tapeRows input", nodes => nodes.map(n=>n.dataset.name));
+    await drafted.selectOption("#alterOperation","move");await drafted.selectOption("#alterPiece","front");
+    await drafted.selectOption("#alterVertex","side_hem");await drafted.fill("#alterDy","-1");
+    await drafted.click("#alterApply");await settled(drafted);
+    assert.deepEqual(await drafted.evaluate(() => window.__lastRoundRequest.body),bodyBefore,"Adopting a draft preserves the complete live tape-body request");
+    assert.deepEqual(await drafted.$$eval("#tapeRows input",nodes=>nodes.map(n=>n.dataset.name)),fieldsBefore);
+    assert.equal(await drafted.isVisible("#nappyBox"),false);
+    await drafted.close();
+    console.log("PASS drafted garment alteration preserves tape fields and a previously hidden nappy preference");
+    const cases = [
+      ["slash-spread",["--piece","front","--axis","x","--at","50","--add","2"],{alterPiece:"front",alterAxis:"x"},{alterAt:"50",alterAdd:"2"}],
+      ["move",["--piece","front","--vertex","side_hem","--dx","0","--dy","-2"],{alterPiece:"front",alterVertex:"side_hem"},{alterDx:"0",alterDy:"-2"}],
+      ["true-seam",["--seam","side_R","--end","start"],{alterSeam:"side_R",alterEnd:"start"},{}],
+      ["cap-ease",["--piece","sleeve","--seams","armhole_f_R,armhole_b_R","--target","1.06"],{alterPiece:"sleeve",alterCapSeams:["armhole_f_R","armhole_b_R"]},{alterRatio:"1.06"}],
+      ["transfer-curve",["--from",path.join(work,"source.json")+":sleeve.R/cap_f","--to","front/armhole"],{alterPiece:"front",alterTargetEdge:"armhole",alterSourceInstance:"sleeve.R",alterSourceEdge:"cap_f"},{}],
+    ];
+    let lastPattern, originalPattern;
+    for (const [op,args,choices,values] of cases) {
+      await round(page,pattern);assert.equal(await page.isVisible("#alterSection"),true);
+      originalPattern = Buffer.from(await page.evaluate(() => window.__lastAlterationSource));
+      await page.selectOption("#alterOperation",op);
+      if (op === "transfer-curve") {
+        await upload(page,"alterSourceFile",pattern);await page.waitForFunction(() => !document.getElementById("alterApply").disabled);
+      }
+      for (const [id,value] of Object.entries(choices)) await page.selectOption("#"+id,value);
+      for (const [id,value] of Object.entries(values)) await page.fill("#"+id,value);
+      assert.equal(await page.isVisible("#results"),false,"Editing withdraws prior round outputs");
+      const nativePath = path.join(work,op+".json");
+      execFileSync(ftx,["alter",op,path.join(work,"source.json"),...args,"--out",nativePath,"--json"]);
+      const native = fs.readFileSync(nativePath);
+      await page.click("#alterApply");await settled(page);
+      assert.ok((await bytes(page,"#alterDownload")).equals(native),op+": exact native altered pattern");
+      assert.match(native.toString(),/18446744073709551615/);assert.match(native.toString(),/"signed_probe": -0\.0/);
+      assert.match(native.toString(),/"float_probe": 1\.0/);
+      await round(manual,native.toString());
+      assert.ok((await bytes(page,'#resFiles a[download$=".zip"]')).equals(await bytes(manual,'#resFiles a[download$=".zip"]')),op+": complete rechecked ZIP equals ordinary manual upload");
+      console.log("PASS browser alteration "+op+": native pattern bytes and complete ordinary-round ZIP agree");
+      lastPattern = native;
+    }
+    await page.locator("#alterSection").screenshot({path:path.join(work,"alteration-controls.png")});
+    const originalDownload = await bytes(page,"#alterDownload");
+    await page.selectOption("#alterOperation","cap-ease");await page.selectOption("#alterPiece","sleeve");
+    await page.selectOption("#alterCapSeams",["armhole_f_R","armhole_b_R"]);await page.fill("#alterRatio","1000000");
+    await page.click("#alterApply");await page.waitForFunction(() => !document.getElementById("errorBox").classList.contains("hidden"));
+    assert.match(await page.textContent("#alterStatus"),/working pattern is unchanged/);
+    assert.ok((await bytes(page,"#alterDownload")).equals(originalDownload));
+    assert.equal(await page.locator("#resFiles a").count(),0);
+    await page.click("#go");await settled(page);
+    await page.selectOption("#alterOperation","move");await page.selectOption("#alterPiece","front");await page.selectOption("#alterVertex","side_hem");
+    await page.fill("#alterDx","0");await page.fill("#alterDy","-1");
+    await page.evaluate(() => {window.__holdAlter=true;});await page.click("#alterApply");
+    await page.waitForFunction(() => !!window.__heldAlter);await page.fill("#alterDy","-3");
+    await page.evaluate(() => {const h=window.__heldAlter;window.__heldAlter=null;h.worker.dispatchEvent(new MessageEvent("message",{data:h.data}));});
+    assert.ok((await bytes(page,"#alterDownload")).equals(lastPattern),"Superseded native result cannot replace working source");
+    assert.equal(await page.isVisible("#results"),false);
+    await page.click("#undoAlter");await settled(page);
+    await round(manual,pattern);
+    assert.ok((await bytes(page,'#resFiles a[download$=".zip"]')).equals(await bytes(manual,'#resFiles a[download$=".zip"]')),"Undo restores complete original round");
+    const downloadEvent = page.waitForEvent("download");await page.click("#alterDownload");const download = await downloadEvent;
+    assert.equal(await download.failure(),null);assert.ok(fs.readFileSync(await download.path()).equals(originalPattern));
+    assert.deepEqual(errors,[]);
+    assert.ok(requests.filter(r=>/^https?:/.test(r.url)).every(r=>r.url.startsWith(origin+"/")&&r.method==="GET"));
+    assert.equal(await page.evaluate(() => Object.values(localStorage).some(text=>text.includes("source_sequence"))),false);
+    console.log("PASS browser alteration refusal, stale-worker cancellation, undo, download and local-only inputs; evidence "+work);
+  } finally {await context.close();}
+}
 
 async function tracingEdits(browser, origin) {
   const assert=require("node:assert/strict"),context=await browser.newContext({userAgent});
@@ -577,9 +712,14 @@ async function offlineViewer(browser, file) {
     process.exit(failed ? 1 : 0);
   }
   const port = 20000 + Math.floor(Math.random() * 20000);
-  const srv = spawn("python3", ["-m", "http.server", String(port), "-d", webDir], { stdio: ["ignore", "ignore", "inherit"] });
+  const srv = spawn("python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1", "-d", webDir], { stdio: ["ignore", "ignore", "inherit"] });
   await new Promise((r) => setTimeout(r, 1200));
   const browser = await chromium.launch();
+  if (alterations) {
+    try {await directAlterations(browser,`http://localhost:${port}`);}
+    finally {await browser.close();srv.kill();}
+    return;
+  }
   if(traceEdits) {
     try {await tracingEdits(browser,`http://localhost:${port}`);}
     finally {await browser.close();srv.kill();}

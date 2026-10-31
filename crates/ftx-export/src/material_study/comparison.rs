@@ -1868,6 +1868,15 @@ impl Policy {
                 &descriptor["scenario"]["motion"]["transient_surface"]["surface_water"],
             ))?;
         }
+        if self.needs_motion() {
+            let coupling =
+                &descriptor["scenario"]["motion"]["transient_surface"]["mechanical_coupling"];
+            if !coupling.is_null() {
+                // Source velocity changes the actual trajectory even when water inventory matches.
+                // Static and manufacturing-only consumers retain their independent protocols.
+                base = hash(&(&base, coupling))?;
+            }
+        }
         if consumers.contains(&Consumer::Coverage) {
             let expected = &descriptor["scenario"]["coverage"]["thermal_bridges"];
             let result = &admitted.drape["coverage"]["result"];
@@ -1905,11 +1914,8 @@ impl Policy {
                         .as_ref()
                         .and_then(|c| c.purchasing.as_ref())
                         .is_some_and(|p| {
-                            p.material_orders.iter().any(|order| {
-                                order.least_observed_order.as_ref().is_some_and(|offer| {
-                                    offer.quote.unit
-                                        == ftx_pattern::material_cost::SaleUnit::Kilogram
-                                })
+                            p.selected_offers().any(|offer| {
+                                offer.quote.unit == ftx_pattern::material_cost::SaleUnit::Kilogram
                             })
                         }));
             let mut mass_protocols = BTreeMap::new();
@@ -2274,9 +2280,7 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
             .and_then(|p| p.consumables.as_ref())
             .filter(|c| c.complete_consumption_coverage)
             .and_then(|c| c.purchasing.as_ref())
-            .is_some_and(|p| {
-                p.complete_offer_coverage && p.least_observed_independent_order_total.is_some()
-            }),
+            .is_some_and(|p| p.complete_offer_coverage && p.selected_total().is_some()),
         Consumer::CutAndSewPurchasing => row.cut_and_sew_purchasing.value().is_some_and(|r| {
             row.metrics.cut_and_sew_selected_order_cost == Some(r.selected_order_cost)
                 && row.binding.value().is_some_and(|b| {

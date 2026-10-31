@@ -19,6 +19,18 @@ ordinary range checks; out-of-range integer literals refuse instead of being rou
 does not add arbitrary-precision numerical calculations or fit evidence. Test:
 `page::full_width_photo_seed_and_source_metadata_survive_an_ordinary_round`.
 
+**Direct alterations.** `alteration::targets` and `alteration::apply` expose the existing five native
+operations to the primary Pattern Workbench: slash-spread, vertex movement, seam truing, cap ease and
+curve transfer. Controls use actual drafted IDs and expanded physical-instance edges. Each pattern is
+limited to 4 MiB, 128 pieces and 8192 drafted edges; operation text to 16 KiB. Source and result pass
+ordinary structure checks before publication. The CLI's ordered serializer preserves unrelated source
+fields, signed zero and full-width integer metadata while appending the canonical history sentence.
+The browser adopts only a successful current candidate, retains one-step undo, and reuses the ordinary
+round for seam, fit, measurement and export checks. Refusals retain the working pattern. Pending edits,
+replacement files and superseded messages withdraw earlier round/drape/material handoffs; an explicitly
+refused curve source never falls back to another pattern. No CAD curve editor or physical-fit claim is
+introduced. Tests reuse captured alteration bytes and the existing page/worker lifecycle seams.
+
 **Material treatments and production.** `materials::treatment` and `treatment_pattern` expose the
 shared source-qualified before/after state and grain-axis geometry consumers within a combined
 64 MiB input budget. Browser exports `material_treatment` and `material_treatment_pattern` retain

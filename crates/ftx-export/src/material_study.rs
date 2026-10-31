@@ -1477,7 +1477,7 @@ impl Request {
                     .purchasing
                     .as_ref()
                     .filter(|p| p.complete_offer_coverage)
-                    .and_then(|p| p.least_observed_independent_order_total);
+                    .and_then(|p| p.selected_total());
             }
             if let Some(timing) = plan
                 .ordering_report()

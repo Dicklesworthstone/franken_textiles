@@ -5,11 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::material_catalog::{ResolvedMaterial, Selection};
-use ftx_pattern::material_cost::{Basis, Offer, PriceSample, QuoteBook, Scope};
+use ftx_pattern::material_cost::{
+    Basis, ExclusionReason, Offer, PriceSample, Quote, QuoteBook, Scope,
+};
 use ftx_pattern::materials::{CATALOG_SCHEMA, Catalog, Evidence, Form, Source};
 use serde::{Deserialize, Serialize};
 
-use crate::cutting::procurement::{Market, stock_components};
+use crate::cutting::procurement::{Market, allocation, stock_components};
 
 use super::{SewOptions, SewPlan, bad, positive, qualified_text};
 
@@ -63,7 +65,8 @@ pub struct Consumption {
 pub struct Purchasing {
     /// Original immutable observations; no prices are synthesized by the sewing consumer.
     pub quote_book: QuoteBook,
-    /// Existing comparable market, quantity and continuity policies. Split orders are unsupported.
+    /// Existing comparable market, quantity and continuity policies. Optional thread split orders
+    /// assign complete operation/channel/copy segments, without mid-operation splices.
     pub market: Market,
 }
 
@@ -179,6 +182,35 @@ pub struct MaterialOrder {
     pub excluded_shared_stock_offer_ids: Vec<String>,
     /// Cheapest eligible, exact-locked, unambiguous whole order; ties use the exact offer ID.
     pub least_observed_order: Option<Offer>,
+    /// Explicit bounded supplier allocation; absence preserves the whole-order consumer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allocation: Option<allocation::Report<ThreadOrder>>,
+}
+
+/// One indivisible actual operation/channel execution on one physical garment.
+#[derive(Clone, Debug, Serialize)]
+pub struct ThreadSegment {
+    /// Index into the enclosing consumption report's canonical `operation_channels`.
+    pub operation_channel: usize,
+    /// Actual zero-based garment copy, including configured-cell and specialist assignments.
+    pub copy: usize,
+    /// Complete qualified thread length including this operation's start/end allowances.
+    pub required_length_m: f64,
+}
+
+/// One canonical source order supplying whole continuous thread segments.
+#[derive(Clone, Debug, Serialize)]
+pub struct ThreadOrder {
+    /// Canonical complete minimum/increment/tier and capacity calculation.
+    pub offer: Offer,
+    /// Indices into purchasing `segments`, each assigned exactly once across complete orders.
+    pub segment_indices: Vec<usize>,
+    /// Sum of the complete assigned lengths before supplier rounding.
+    pub required_length_m: f64,
+    /// Largest assigned uninterrupted operation/channel length.
+    pub required_continuous_length_m: f64,
+    /// Exact canonical source scope, using length rather than sheet area.
+    pub scope: Scope,
 }
 
 /// Whole-order observations, not checkout, reserved inventory or a supplier-bundle optimization.
@@ -202,6 +234,49 @@ pub struct PurchasingReport {
     pub quote_observations_evaluated: usize,
     /// Base/tier SKU declarations visited once while resolving transitive inventory aliases.
     pub stock_aliases_examined: usize,
+    /// Complete actual segments, retained only when the requested allocation domain was admitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segments: Option<Vec<ThreadSegment>>,
+    /// Complete feasible split-order incumbent; never a prefix or an unproved minimum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_observed_order_total: Option<f64>,
+    /// Explicit allocation proof when split orders were requested. False preserves incumbents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_allocation_optimality_proven: Option<bool>,
+    /// Unsupported/budgeted demand domains refuse purchasing without discarding thread quantities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allocation_refusal: Option<Refusal>,
+}
+
+impl PurchasingReport {
+    /// Complete selected order cost, including a bounded split-order incumbent when requested.
+    pub fn selected_total(&self) -> Option<f64> {
+        if !self.complete_offer_coverage {
+            None
+        } else if self.order_allocation_optimality_proven.is_some() {
+            self.selected_observed_order_total
+        } else {
+            self.least_observed_independent_order_total
+        }
+    }
+
+    /// Actual complete selected offers; whole-order baselines do not duplicate split allocations.
+    pub fn selected_offers(&self) -> impl Iterator<Item = &Offer> {
+        self.material_orders
+            .iter()
+            .filter(|_| self.complete_offer_coverage)
+            .flat_map(|order| {
+                order
+                    .least_observed_order
+                    .iter()
+                    .filter(|_| order.allocation.is_none())
+                    .chain(
+                        order.allocation.iter().flat_map(|a| {
+                            a.selected_orders.iter().flatten().map(|order| &order.offer)
+                        }),
+                    )
+            })
+    }
 }
 
 /// Source-qualified inventory derived from the actual selected production sewing plan.
@@ -346,7 +421,7 @@ impl Consumption {
 ///
 /// # Errors
 /// More than 8 channels per qualification, 32 yarn snapshots, 4096 observations or 200000 work
-/// units; an unlocked thread selection or unsupported supplier splitting. No source is consulted.
+/// units; an unlocked thread selection or invalid supplier-allocation policy. No source is consulted.
 pub fn purchasing_work_bound(options: &SewOptions) -> Result<usize, Refusal> {
     let Some(request) = &options.consumables else {
         return Ok(0);
@@ -399,11 +474,6 @@ pub fn purchasing_work_bound(options: &SewOptions) -> Result<usize, Refusal> {
     let Some(purchasing) = &request.purchasing else {
         return Ok(0);
     };
-    if purchasing.market.split_orders.is_some() {
-        return Err(bad(
-            "sewing consumables use one complete order per yarn; split orders are unsupported",
-        ));
-    }
     let quotes = &purchasing.quote_book.quotes;
     if quotes.len() > MAX_QUOTES || quotes.iter().any(|q| q.price_breaks.len() > 64) {
         return Err(budget(
@@ -414,7 +484,23 @@ pub fn purchasing_work_bound(options: &SewOptions) -> Result<usize, Refusal> {
         .iter()
         .map(|q| 1 + q.price_breaks.iter().filter(|p| p.sku.is_some()).count())
         .sum();
-    let work = quotes.len() * (hashes.len() + 1) + aliases;
+    let split_work = purchasing
+        .market
+        .split_orders
+        .as_ref()
+        .map(|policy| {
+            allocation::validate_thread_policy(policy)?;
+            // Each charged search unit is either an assignment or a full canonical quote scan.
+            policy
+                .max_search_nodes
+                .checked_mul(quotes.len().max(1))
+                .ok_or_else(|| budget("thread allocation work reservation overflows"))
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let work = (quotes.len() * (hashes.len() + 1) + aliases)
+        .checked_add(split_work)
+        .ok_or_else(|| budget("thread purchasing work reservation overflows"))?;
     if work > MAX_WORK {
         return Err(budget(
             "thread purchasing exceeds 200000 canonical quote/stock-alias work units",
@@ -491,6 +577,11 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
     };
     let mut resolved = BTreeMap::new();
     let mut requirements: BTreeMap<String, Requirement> = BTreeMap::new();
+    let splitting = request
+        .purchasing
+        .as_ref()
+        .is_some_and(|p| p.market.split_orders.is_some());
+    let mut segments = Ok(Vec::new());
     for (cell, source, copies) in batches {
         let qualifications: BTreeMap<_, _> = source
             .options
@@ -577,6 +668,46 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
                 requirement.required_length_m = add(requirement.required_length_m, batch_length)?;
                 requirement.required_continuous_length_m =
                     requirement.required_continuous_length_m.max(length);
+                if splitting && let Ok(entries) = &mut segments {
+                    if entries.len().saturating_add(copies) > allocation::MAX_THREAD_SEGMENTS {
+                        segments = Err(budget(
+                            "thread split orders support at most 256 complete operation/channel/copy segments",
+                        ));
+                    } else {
+                        let copy_ids: Vec<_> = if let Some(routing) = routed {
+                            routing
+                                .selected
+                                .operations
+                                .iter()
+                                .filter(|operation| {
+                                    Some(operation.cell.as_str()) == cell
+                                        && operation.operation_id == id
+                                })
+                                .map(|operation| operation.copy)
+                                .collect()
+                        } else if let Some(parallel) = configured {
+                            parallel
+                                .selected
+                                .cells
+                                .iter()
+                                .find(|assigned| Some(assigned.cell.as_str()) == cell)
+                                .expect("admitted configured cell")
+                                .copies
+                                .clone()
+                        } else {
+                            (0..copies).collect()
+                        };
+                        let mut copy_ids = copy_ids;
+                        copy_ids.sort_unstable();
+                        for copy in copy_ids {
+                            entries.push(ThreadSegment {
+                                operation_channel: report.operation_channels.len(),
+                                copy,
+                                required_length_m: length,
+                            });
+                        }
+                    }
+                }
                 report.operation_channels.push(Contribution {
                     cell: cell.map(str::to_string),
                     operation_id: id.into(),
@@ -608,6 +739,16 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
         let mut total = 0.0;
         let mut mass_total = Ok(0.0);
         for mut requirement in requirements.into_values() {
+            if splitting && let Ok(segments) = &segments {
+                // This exact complete-segment sum is also the supplier allocator's full scope.
+                requirement.required_length_m = segments
+                    .iter()
+                    .filter(|segment| {
+                        report.operation_channels[segment.operation_channel].material_sha256
+                            == requirement.material_sha256
+                    })
+                    .try_fold(0.0, |sum, segment| add(sum, segment.required_length_m))?;
+            }
             total = add(total, requirement.required_length_m)?;
             let mass = resolved[&requirement.material_sha256]
                 .yarn_linear_density_kg_m()
@@ -648,7 +789,7 @@ pub(super) fn evaluate(plan: &SewPlan, request: &Request) -> Result<Report, Refu
             Some("thread consumption is incomplete; no complete inventory mass is known".into());
     }
     if let Some(purchasing) = &request.purchasing {
-        report.purchasing = Some(price(&report, &resolved, purchasing)?);
+        report.purchasing = Some(price(&report, &resolved, purchasing, segments)?);
     }
     Ok(report)
 }
@@ -674,6 +815,7 @@ fn price(
     report: &Report,
     materials: &BTreeMap<String, ResolvedMaterial>,
     request: &Purchasing,
+    segments: Result<Vec<ThreadSegment>, Refusal>,
 ) -> Result<PurchasingReport, Refusal> {
     request.quote_book.validate()?;
     let market = &request.market;
@@ -687,6 +829,10 @@ fn price(
         unavailable_reason: None,
         quote_observations_evaluated: 0,
         stock_aliases_examined: 0,
+        segments: None,
+        selected_observed_order_total: None,
+        order_allocation_optimality_proven: request.market.split_orders.as_ref().map(|_| false),
+        allocation_refusal: None,
     };
     if !report.complete_consumption_coverage {
         priced.unavailable_reason =
@@ -714,21 +860,21 @@ fn price(
             excluded_unlocked_offer_ids: Vec::new(),
             excluded_shared_stock_offer_ids: Vec::new(),
             least_observed_order: None,
+            allocation: None,
         });
     }
-    let locked = |offer: &Offer, hash: &str| {
-        offer
-            .quote
+    let locked = |quote: &Quote, hash: &str| {
+        quote
             .material_sha256
             .as_deref()
             .is_some_and(|s| s.eq_ignore_ascii_case(hash))
     };
     let mut owners: BTreeMap<usize, BTreeSet<&str>> = BTreeMap::new();
     for order in &priced.material_orders {
-        for offer in &order.sample.offers {
-            if locked(offer, &order.requirement.material_sha256) {
+        for quote in candidate_quotes(order, market.split_orders.is_some()) {
+            if locked(quote, &order.requirement.material_sha256) {
                 owners
-                    .entry(components[&offer.quote.offer_id])
+                    .entry(components[&quote.offer_id])
                     .or_default()
                     .insert(&order.requirement.material_sha256);
             }
@@ -746,7 +892,7 @@ fn price(
     for order in &mut priced.material_orders {
         let mut candidates = Vec::new();
         for offer in &order.sample.offers {
-            if !locked(offer, &order.requirement.material_sha256) {
+            if !locked(&offer.quote, &order.requirement.material_sha256) {
                 order
                     .excluded_unlocked_offer_ids
                     .push(offer.quote.offer_id.clone());
@@ -781,5 +927,132 @@ fn price(
     if !complete {
         priced.unavailable_reason = Some("at least one exact yarn requirement has no eligible unambiguous source-locked whole order".into());
     }
+    if let Some(policy) = &market.split_orders {
+        // Whole-order samples remain diagnostics. A refused/incomplete split allocation cannot
+        // silently fall back to an independently reported whole-order total or a known prefix.
+        priced.complete_offer_coverage = false;
+        priced.complete_observed_quantity_coverage = false;
+        priced.complete_continuous_length_limit_coverage = false;
+        priced.least_observed_independent_order_total = None;
+        let result = segments.and_then(|segments| {
+            split_orders(
+                &mut priced,
+                report,
+                materials,
+                request,
+                policy,
+                &components,
+                &shared,
+                segments,
+            )
+        });
+        if let Err(refusal) = result {
+            priced.unavailable_reason = Some(refusal.message.clone());
+            priced.allocation_refusal = Some(refusal);
+        }
+    }
     Ok(priced)
+}
+
+fn candidate_quotes(order: &MaterialOrder, splitting: bool) -> impl Iterator<Item = &Quote> {
+    order.sample.offers.iter().map(|offer| &offer.quote).chain(
+        order
+            .sample
+            .excluded_offers
+            .iter()
+            .filter(move |excluded| {
+                splitting
+                    && matches!(
+                        excluded.reason,
+                        ExclusionReason::InsufficientQuantity
+                            | ExclusionReason::InsufficientContinuousLength
+                    )
+            })
+            .map(|excluded| &excluded.quote),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn split_orders(
+    priced: &mut PurchasingReport,
+    consumption: &Report,
+    materials: &BTreeMap<String, ResolvedMaterial>,
+    request: &Purchasing,
+    policy: &allocation::Policy,
+    components: &BTreeMap<String, usize>,
+    shared: &BTreeSet<usize>,
+    segments: Vec<ThreadSegment>,
+) -> Result<(), Refusal> {
+    let demands: Vec<_> = consumption
+        .material_requirements
+        .iter()
+        .map(|requirement| allocation::Demand {
+            material: &materials[&requirement.material_sha256],
+            basis: Basis::Length,
+            segments: segments
+                .iter()
+                .enumerate()
+                .filter(|(_, segment)| {
+                    consumption.operation_channels[segment.operation_channel].material_sha256
+                        == requirement.material_sha256
+                })
+                .map(|(index, segment)| allocation::Segment {
+                    index,
+                    length_m: segment.required_length_m,
+                    quantity: segment.required_length_m,
+                })
+                .collect(),
+        })
+        .collect();
+    let allocations = allocation::threads(
+        &demands,
+        &request.quote_book,
+        &request.market,
+        policy,
+        components,
+        shared,
+    )?;
+    priced.segments = Some(segments);
+    let mut total = 0.0;
+    let mut complete = true;
+    let mut observed = true;
+    let mut continuous = true;
+    let mut proved = true;
+    for (order, allocated) in priced.material_orders.iter_mut().zip(allocations) {
+        order.excluded_shared_stock_offer_ids = candidate_quotes(order, true)
+            .filter(|quote| shared.contains(&components[&quote.offer_id]))
+            .map(|quote| quote.offer_id.clone())
+            .collect();
+        let allocated = allocated.map_orders(|order| ThreadOrder {
+            offer: order.offer,
+            segment_indices: order.indices,
+            required_length_m: order.length_m,
+            required_continuous_length_m: order
+                .scope
+                .continuous_length_m
+                .expect("thread segment scope"),
+            scope: order.scope,
+        });
+        priced.quote_observations_evaluated +=
+            allocated.quote_evaluations * request.quote_book.quotes.len();
+        proved &= allocated.optimality_proven;
+        if let Some(orders) = &allocated.selected_orders {
+            for selected in orders {
+                total = add(total, selected.offer.order_cost)?;
+                observed &= selected.offer.quantity_sufficiency_observed;
+                continuous &= selected.offer.within_observed_continuous_limit == Some(true);
+            }
+        } else {
+            complete = false;
+        }
+        order.allocation = Some(allocated);
+    }
+    priced.complete_offer_coverage = complete;
+    priced.complete_observed_quantity_coverage = complete && observed;
+    priced.complete_continuous_length_limit_coverage = complete && continuous;
+    priced.selected_observed_order_total = complete.then_some(total);
+    priced.least_observed_independent_order_total = (complete && proved).then_some(total);
+    priced.order_allocation_optimality_proven = Some(complete && proved);
+    priced.unavailable_reason = (!complete).then(|| "no complete exact-yarn allocation was found within the declared source and search limits; thread quantities remain available".into());
+    Ok(())
 }

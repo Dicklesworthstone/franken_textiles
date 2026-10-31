@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 
 use ftx_body::{
     AnnyModel, BodyFrames, BodyParams, Pose, SkinMesh, TAPE_FIELDS, Wearer,
-    accepted_shape::AcceptedShape, fit_tape, pose_deltas, skin_mesh, tape_readings, tape_targets,
-    trimmed_skin,
+    accepted_shape::AcceptedShape, fit_tape, partial_tape_readings, pose_deltas, skin_mesh,
+    tape_targets, trimmed_skin,
 };
 use ftx_core::Refusal;
 use ftx_pattern::{instance::PyError, validate::BodyMeasure};
@@ -268,8 +268,8 @@ impl FittedBody {
 
     /// Lazily measure this unchanged selected shape in the standard A-pose at 35 degrees.
     /// The ordinary scenario pose and any image-frame poses do not change flat-fit targets.
-    /// Stature remains available from model anthropometry when the complete tape-section
-    /// evaluator cannot measure this shape; all other missing sections remain unavailable.
+    /// Stature remains available from model anthropometry. Each valid tape reading survives
+    /// unrelated missing sections; unavailable anatomy never receives an inferred replacement.
     ///
     /// # Errors
     /// The supplied model digest does not match the selected shape, or reference geometry,
@@ -298,17 +298,14 @@ impl FittedBody {
             .iter()
             .map(|face| face.map(|index| index as usize))
             .collect();
-        let readings = tape_readings(&faces, stature_m, &posed, &frames)
-            .filter(|values| values.iter().all(|value| value.is_finite() && *value > 0.0));
+        let readings = partial_tape_readings(&faces, stature_m, &posed, &frames);
         let mut values = BTreeMap::from([("stature".into(), stature_mm)]);
-        if let Some(readings) = readings {
-            values.extend(
-                TAPE_FIELDS
-                    .into_iter()
-                    .zip(readings)
-                    .map(|(name, value)| (name.into(), value)),
-            );
-        }
+        values.extend(
+            TAPE_FIELDS
+                .into_iter()
+                .zip(readings)
+                .filter_map(|(name, value)| value.map(|value| (name.into(), value))),
+        );
         let identity = json!({"schema":"ftx-flat-fit-body/1","provenance":"MODEL_FIT",
             "model_sha256":model_sha256,
             "shape_sha256":hash(&(model_sha256, parameters(&self.params)))?,
@@ -318,7 +315,7 @@ impl FittedBody {
             "measurement_geometry_sha256":hash(&(&posed.vertices, &faces))?,
             "measurement_values_sha256":hash(&values)?,
             "available_measurements":values.keys().collect::<Vec<_>>(),
-            "complete_tape_sections":readings.is_some(),
+            "complete_tape_sections":readings.iter().all(Option::is_some),
             "uncertainty_propagated":false,"fit_claim":false});
         Ok(FlatFitBody {
             frames,
@@ -456,7 +453,7 @@ fn accepted_shape(
     }
     // Match the existing accepted-body adapter's measurement pose, not its image poses or the
     // requested visualization angle. Missing sections are unavailable residuals, never zeros.
-    let readings = (|| {
+    let readings: Result<_, Refusal> = (|| {
         let posed = model.pose(&rest, &pose_deltas(model, &rest, &Pose::a_pose(35.0), 1.0)?)?;
         let frames = BodyFrames::new(model, &posed)?;
         let faces: Vec<_> = model
@@ -465,9 +462,12 @@ fn accepted_shape(
             .iter()
             .map(|f| f.map(|i| i as usize))
             .collect();
-        tape_readings(&faces, dimensions.height, &posed, &frames)
-            .filter(|a| a.iter().all(|v| v.is_finite() && *v > 0.0))
-            .ok_or_else(|| invalid("accepted body tape sections are unavailable"))
+        Ok(partial_tape_readings(
+            &faces,
+            dimensions.height,
+            &posed,
+            &frames,
+        ))
     })();
     let comparisons: Vec<_> = tape_targets(measurements)
         .iter()
@@ -479,7 +479,7 @@ fn accepted_shape(
                     TAPE_FIELDS
                         .iter()
                         .position(|&n| n == target.name)
-                        .map(|i| values[i])
+                        .and_then(|i| values[i])
                 })
             };
             json!({"name":target.name,"target_mm":target.value_mm,"body_mm":body_mm,
@@ -491,7 +491,10 @@ fn accepted_shape(
         "refitted":false,"image_poses_reused":false}, "source_fit":accepted,
         "fit_iterations":0,"measurement_pose":"a_pose_35", "body_mass_kg":dimensions.mass,
         "residuals":comparisons,"tape_evaluation":match &readings {
-            Ok(_) => json!({"status":"available"}),
+            Ok(values) if values.iter().all(Option::is_some) => json!({"status":"available"}),
+            Ok(values) => json!({"status":"partial","unavailable_fields":TAPE_FIELDS
+                .iter().zip(values).filter_map(|(name,value)|value.is_none().then_some(*name))
+                .collect::<Vec<_>>()}),
             Err(e) => json!({"status":"refused","refusal":e}),
         }, "no_claim":"Accepted shape reused without refitting; receipt consistency is not authenticity or physical fit. MODEL_FIT predictions are not new measurements."});
     Ok((shape.params, report))
@@ -658,11 +661,51 @@ mod tests {
         assert!((flat.value("stature").unwrap() - 2210.0).abs() < 1e-9);
         assert_eq!(flat.sigma("stature"), None);
         assert_eq!(flat.identity()["complete_tape_sections"], false);
-        assert_eq!(
-            flat.identity()["available_measurements"],
-            json!(["stature"])
+        // The untouched waist is a regular 16-gon of radius 140 mm, independent of height.
+        let waist = 32.0 * 140.0 * ftx_core::det::sin_cos(std::f64::consts::PI / 16.0).0;
+        assert!((flat.value("waist").unwrap() - waist).abs() < 1e-9);
+        assert_eq!(flat.sigma("waist"), None);
+        assert!(
+            flat.identity()["available_measurements"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("waist"))
         );
-        assert!(flat.value("waist").is_err());
+        assert_eq!(report["tape_evaluation"]["status"], "partial");
+        let waist_residual = report["residuals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "waist")
+            .unwrap();
+        assert!((waist_residual["body_mm"].as_f64().unwrap() - waist).abs() < 1e-9);
+        assert!((waist_residual["residual_mm"].as_f64().unwrap() - (waist - 500.0)).abs() < 1e-9);
+        assert_eq!(waist_residual["used_to_refit"], false);
+        let (_, description) = ftx_body::accepted_shape::prepare(
+            &model,
+            &digest,
+            &serde_json::to_vec(request.accepted_body_fit.as_ref().unwrap()).unwrap(),
+            Some(&request.measurements),
+        )
+        .unwrap();
+        assert_eq!(description["tape_evaluation"]["status"], "PARTIAL");
+        assert_eq!(description["tape_evaluation"]["provenance"], "MODEL_FIT");
+        assert_eq!(
+            description["tape_evaluation"]["unavailable_fields"],
+            report["tape_evaluation"]["unavailable_fields"]
+        );
+        assert!((description["readings_mm"]["waist"].as_f64().unwrap() - waist).abs() < 1e-9);
+        for name in report["tape_evaluation"]["unavailable_fields"]
+            .as_array()
+            .unwrap()
+        {
+            assert!(flat.value(name.as_str().unwrap()).is_err());
+            assert!(
+                description["readings_mm"]
+                    .get(name.as_str().unwrap())
+                    .is_none()
+            );
+        }
         assert!(flat.value("hand_pass").is_err());
         assert!(flat.landmark_h("torso", "unknown").is_err());
         assert!(flat.landmark_h("unknown", "waist").is_err());
@@ -694,7 +737,7 @@ mod tests {
         assert_eq!(row.status, "IN_BAND");
         assert_eq!(row.body_sigma_mm, Some(None));
         let mut missing = point;
-        missing["body"] = json!("waist");
+        missing["body"] = json!("hand_pass");
         assert_eq!(
             ftx_pattern::validate::measure_point(&pattern, &missing, &flat).status,
             "UNMEASURABLE"
@@ -824,8 +867,17 @@ mod tests {
         let rows = b.report["residuals"].as_array().unwrap();
         assert!(rows[0]["residual_mm"].as_f64().unwrap() > 1000.0);
         assert!(rows.iter().all(|r| r["used_to_refit"] == false));
-        assert_eq!(b.report["tape_evaluation"]["status"], "refused");
-        assert!(rows[1]["body_mm"].is_null()); // the synthetic rig lacks complete tape sections
+        assert_eq!(b.report["tape_evaluation"]["status"], "partial");
+        // Missing head/limb sections do not erase the independently known regular-polygon waist.
+        let waist = 32.0 * 140.0 * ftx_core::det::sin_cos(std::f64::consts::PI / 16.0).0;
+        let row = rows.iter().find(|r| r["name"] == "waist").unwrap();
+        assert!((row["body_mm"].as_f64().unwrap() - waist).abs() < 1e-9);
+        assert!((row["residual_mm"].as_f64().unwrap() - (waist - 500.0)).abs() < 1e-9);
+        let missing = b.report["tape_evaluation"]["unavailable_fields"]
+            .as_array()
+            .unwrap();
+        assert!(!missing.is_empty());
+        assert!(!missing.contains(&json!("waist")));
     }
 
     #[test]

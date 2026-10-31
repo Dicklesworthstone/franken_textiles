@@ -39,13 +39,21 @@ pub struct MaterialDomain {
         deserialize_with = "incoming_velocity"
     )]
     pub incoming_velocity_world_m_s: Option<Vec3>,
-    /// Separately qualified supply/condensation velocities for coupled mechanics version 3.
+    /// Separately qualified supply/condensation velocities for coupled mechanics version 4.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "incoming_stream_velocities"
     )]
     pub incoming_stream_velocities_world_m_s: Option<IncomingVelocities>,
+    /// Incoming world velocity for every mechanical keyframe interval, m/s.
+    /// Accepted mechanical and thermal substeps use the enclosing interval's value.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "incoming_velocity_schedule"
+    )]
+    pub incoming_velocity_world_m_s_by_interval: Option<Vec<Vec3>>,
 }
 
 /// Constant world-frame velocities of the two independently supplied incoming phases, m/s.
@@ -70,11 +78,18 @@ fn incoming_velocity<'de, D: serde::Deserializer<'de>>(
     Vec3::deserialize(deserializer).map(Some)
 }
 
+fn incoming_velocity_schedule<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<Vec3>>, D::Error> {
+    Vec::<Vec3>::deserialize(deserializer).map(Some)
+}
+
 impl MaterialDomain {
     fn incoming_streams(
         &self,
         total: f64,
         components: Option<[f64; 2]>,
+        interval: Option<usize>,
     ) -> Result<[(f64, Vec3); 2], Refusal> {
         if let Some(velocities) = self.incoming_stream_velocities_world_m_s {
             let [supply, condensation] = components.ok_or_else(|| {
@@ -85,10 +100,28 @@ impl MaterialDomain {
                 (condensation, velocities.condensation),
             ])
         } else {
-            let velocity = self
-                .incoming_velocity_world_m_s
-                .ok_or_else(|| invalid("missing qualified incoming world velocity"))?;
+            let velocity = self.incoming_at(interval)?;
             Ok([(total, velocity), (0., Vec3::ZERO)])
+        }
+    }
+
+    fn incoming_at(&self, interval: Option<usize>) -> Result<Vec3, Refusal> {
+        match (
+            self.incoming_velocity_world_m_s,
+            &self.incoming_velocity_world_m_s_by_interval,
+        ) {
+            (Some(velocity), None) => Ok(velocity),
+            (None, Some(schedule)) => {
+                interval
+                    .and_then(|i| schedule.get(i))
+                    .copied()
+                    .ok_or_else(|| {
+                        invalid("scheduled liquid exchange needs its exact keyframe interval")
+                    })
+            }
+            _ => Err(invalid(
+                "missing or ambiguous qualified incoming world velocity",
+            )),
         }
     }
 }
@@ -97,7 +130,7 @@ impl MaterialDomain {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Qualification {
-    /// `ftx-evaporating-liquid-mechanics/1`, or coupled mechanics `/1`, `/2` or `/3`.
+    /// `ftx-evaporating-liquid-mechanics/1`, or coupled mechanics `/1`, `/2`, `/3` or `/4`.
     pub schema: String,
     /// Evaporation, co-moving exchange, or prescribed incoming velocity with frozen mechanics.
     pub model: String,
@@ -129,6 +162,7 @@ impl Qualification {
             || self.bindings.values().any(|domain| {
                 domain.incoming_velocity_world_m_s.is_some()
                     || domain.incoming_stream_velocities_world_m_s.is_some()
+                    || domain.incoming_velocity_world_m_s_by_interval.is_some()
             })
         {
             return Err(invalid(
@@ -144,6 +178,7 @@ impl Qualification {
                 self.bindings.values().all(|domain| {
                     domain.incoming_velocity_world_m_s.is_none()
                         && domain.incoming_stream_velocities_world_m_s.is_none()
+                        && domain.incoming_velocity_world_m_s_by_interval.is_none()
                 })
             }
             (
@@ -154,15 +189,32 @@ impl Qualification {
                     .incoming_velocity_world_m_s
                     .is_some_and(|velocity| velocity.is_finite())
                     && domain.incoming_stream_velocities_world_m_s.is_none()
+                    && domain.incoming_velocity_world_m_s_by_interval.is_none()
             }),
             (
-                "ftx-coupled-liquid-mechanics/3",
+                "ftx-coupled-liquid-mechanics/4",
                 "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1",
             ) => self.bindings.values().all(|domain| {
                 domain.incoming_velocity_world_m_s.is_none()
+                    && domain.incoming_velocity_world_m_s_by_interval.is_none()
                     && domain
                         .incoming_stream_velocities_world_m_s
                         .is_some_and(|v| v.supply.is_finite() && v.condensation.is_finite())
+            }),
+            (
+                "ftx-coupled-liquid-mechanics/3",
+                "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1",
+            ) => self.bindings.values().all(|domain| {
+                domain.incoming_velocity_world_m_s.is_none()
+                    && domain.incoming_stream_velocities_world_m_s.is_none()
+                    && domain
+                        .incoming_velocity_world_m_s_by_interval
+                        .as_ref()
+                        .is_some_and(|velocities| {
+                            !velocities.is_empty()
+                                && velocities.len() <= 16
+                                && velocities.iter().all(|velocity| velocity.is_finite())
+                        })
             }),
             _ => false,
         };
@@ -174,12 +226,28 @@ impl Qualification {
         self.validate_fields()
     }
 
+    pub(crate) fn validate_exchange_intervals(&self, intervals: usize) -> Result<(), Refusal> {
+        self.validate_exchange()?;
+        if self.bindings.values().any(|domain| {
+            domain
+                .incoming_velocity_world_m_s_by_interval
+                .as_ref()
+                .is_some_and(|velocities| velocities.len() != intervals)
+        }) {
+            return Err(invalid(
+                "scheduled liquid exchange needs exactly one incoming velocity per keyframe interval for every instance",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn is_exchange(&self) -> bool {
         matches!(
             self.schema.as_str(),
             "ftx-coupled-liquid-mechanics/1"
                 | "ftx-coupled-liquid-mechanics/2"
                 | "ftx-coupled-liquid-mechanics/3"
+                | "ftx-coupled-liquid-mechanics/4"
         )
     }
 
@@ -222,7 +290,7 @@ impl Qualification {
 /// Accepted mechanical liquid ledger; thermal sensible and latent energies remain separate.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `ftx-evaporating-liquid-mechanics-result/1` or coupled result `/1`, `/2` or `/3`.
+    /// `ftx-evaporating-liquid-mechanics-result/1` or coupled result `/1`, `/2`, `/3` or `/4`.
     pub schema: &'static str,
     /// Exact independent qualification, retained for replay.
     pub qualification: Qualification,
@@ -336,7 +404,21 @@ impl Binding {
         incoming: &[f64],
         entering: &[f64],
         components: Option<[&[f64]; 2]>,
+        interval: Option<usize>,
     ) -> Result<Mixing, Refusal> {
+        // Dry bindings also need a valid keyframe: zero flow must not hide a missing interval.
+        let streams = self
+            .domains
+            .iter()
+            .enumerate()
+            .map(|(i, domain)| {
+                domain.incoming_streams(
+                    incoming[i],
+                    components.map(|c| [c[0][i], c[1][i]]),
+                    interval,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut result = Mixing {
             velocity: solver.v.clone(),
             incoming_momentum: vec![Vec3::ZERO; solver.v.len()],
@@ -344,20 +426,8 @@ impl Binding {
             dissipation: vec![0.; solver.v.len()],
         };
         let mut relative_momentum = vec![Vec3::ZERO; solver.v.len()];
-        for (i, ((element, domain), &amount)) in self
-            .original
-            .membranes
-            .iter()
-            .zip(&self.domains)
-            .zip(incoming)
-            .enumerate()
-        {
-            if amount == 0. {
-                continue;
-            }
-            for (mass, velocity) in
-                domain.incoming_streams(amount, components.map(|c| [c[0][i], c[1][i]]))?
-            {
+        for (element, streams) in self.original.membranes.iter().zip(&streams) {
+            for &(mass, velocity) in streams {
                 if mass == 0. {
                     continue;
                 }
@@ -385,20 +455,8 @@ impl Binding {
             result.velocity[i] += relative_momentum[i] / combined;
             result.dissipation[i] = 0.5 * old * (solver.v[i] - result.velocity[i]).norm2();
         }
-        for (i, ((element, domain), &amount)) in self
-            .original
-            .membranes
-            .iter()
-            .zip(&self.domains)
-            .zip(incoming)
-            .enumerate()
-        {
-            if amount == 0. {
-                continue;
-            }
-            for (mass, velocity) in
-                domain.incoming_streams(amount, components.map(|c| [c[0][i], c[1][i]]))?
-            {
+        for (element, streams) in self.original.membranes.iter().zip(&streams) {
+            for &(mass, velocity) in streams {
                 if mass == 0. {
                     continue;
                 }
@@ -826,8 +884,11 @@ fn start_with_exchange(
     }
     let initial_total: f64 = initial.iter().sum();
     let substrate: f64 = solver.model.mass.iter().sum();
-    let phases = qualification.schema == "ftx-coupled-liquid-mechanics/3";
-    let prescribed = phases || qualification.schema == "ftx-coupled-liquid-mechanics/2";
+    let phases = qualification.schema == "ftx-coupled-liquid-mechanics/4";
+    let scheduled = qualification.schema == "ftx-coupled-liquid-mechanics/3";
+    let prescribed = phases
+        || scheduled
+        || qualification.schema == "ftx-coupled-liquid-mechanics/2";
     if !initial_total.is_finite() || !substrate.is_finite() {
         return Err(invalid("initial liquid or substrate mass overflows"));
     }
@@ -843,6 +904,8 @@ fn start_with_exchange(
         remaining: initial.to_vec(),
         report: Report {
             schema: if phases {
+                "ftx-coupled-liquid-mechanics-result/4"
+            } else if scheduled {
                 "ftx-coupled-liquid-mechanics-result/3"
             } else if prescribed {
                 "ftx-coupled-liquid-mechanics-result/2"
@@ -886,7 +949,9 @@ fn start_with_exchange(
         if prescribed {
             binding.report.scope = "Source-qualified frozen mechanical/interface laws with prescribed incoming world velocities. At each accepted endpoint, incoming streams mix inelastically with the previous total welded mass; outgoing evaporation then leaves at that common velocity. Initial liquid remains co-moving after a dry drape. Reference-owned mass, momentum, bulk kinetic/gravitational energy and nonnegative mixing dissipation are retained separately. Mixing work is not deposited into the thermal sensible/latent ledger. Mechanical time-step refinement remains required. No drainage, constrained-DOF impulse, inferred wet law, heat conversion or empirical garment claim.";
         }
-        if phases {
+        if binding.report.qualification.model
+            == "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1"
+        {
             binding.report.scope = "Source-qualified frozen mechanical/interface laws with separately prescribed supply and condensation world velocities. At each accepted endpoint both streams mix once with the previous welded mass before evaporation leaves at their common mixed velocity. Thermal inventory owns final inertia; incoming momentum, bulk kinetic/gravitational energy and nonnegative mixing dissipation remain separate from sensible/latent heat. Initial liquid is co-moving after a dry drape. No inferred velocity, drainage, pinned-coordinate impulse, wet law, mixing-heat conversion or empirical garment claim; mechanical step refinement remains necessary.";
         }
     }
@@ -933,10 +998,11 @@ impl Solver {
         outgoing: &[f64],
         temperatures: &[Vec<f64>],
     ) -> Result<Report, Refusal> {
-        self.exchange_liquid_inner(remaining, incoming, outgoing, temperatures, None)
+        self.exchange_liquid_inner(remaining, incoming, outgoing, temperatures, None, None)
     }
 
     /// Retain exact supplied and condensed increments until the source-qualified mixing step.
+    #[cfg(test)]
     pub(crate) fn exchange_liquid_streams(
         &mut self,
         remaining: &[f64],
@@ -952,6 +1018,39 @@ impl Solver {
             outgoing,
             temperatures,
             Some([supplied, condensed]),
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exchange_liquid_in_interval(
+        &mut self,
+        remaining: &[f64],
+        incoming: &[f64],
+        outgoing: &[f64],
+        temperatures: &[Vec<f64>],
+        interval: Option<usize>,
+    ) -> Result<Report, Refusal> {
+        self.exchange_liquid_inner(remaining, incoming, outgoing, temperatures, None, interval)
+    }
+
+    /// Preserve phase amounts and the enclosing keyframe without composing qualification models.
+    pub(crate) fn exchange_liquid_streams_in_interval(
+        &mut self,
+        remaining: &[f64],
+        incoming: &[f64],
+        components: [&[f64]; 2],
+        outgoing: &[f64],
+        temperatures: &[Vec<f64>],
+        interval: Option<usize>,
+    ) -> Result<Report, Refusal> {
+        self.exchange_liquid_inner(
+            remaining,
+            incoming,
+            outgoing,
+            temperatures,
+            Some(components),
+            interval,
         )
     }
 
@@ -962,6 +1061,7 @@ impl Solver {
         outgoing: &[f64],
         temperatures: &[Vec<f64>],
         components: Option<[&[f64]; 2]>,
+        interval: Option<usize>,
     ) -> Result<Report, Refusal> {
         self.check_liquid_mass()?;
         let mut binding = self
@@ -973,7 +1073,9 @@ impl Solver {
             || outgoing.len() != incoming.len()
             || remaining.len() != incoming.len()
             || components.is_some_and(|c| c.iter().any(|v| v.len() != incoming.len()))
-            || (binding.report.qualification.schema == "ftx-coupled-liquid-mechanics/3"
+            || ((binding.report.qualification.schema == "ftx-coupled-liquid-mechanics/4"
+                || binding.report.qualification.model
+                    == "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1")
                 && components.is_none())
         {
             return Err(invalid(
@@ -1056,7 +1158,7 @@ impl Solver {
             .exchange
             .as_ref()
             .is_some_and(|flow| flow.mixing_dissipation_j.is_some())
-            .then(|| binding.mix_incoming(self, incoming, &entering, components))
+            .then(|| binding.mix_incoming(self, incoming, &entering, components, interval))
             .transpose()?;
         let r = &mut binding.report;
         let flow = r.exchange.as_mut().expect("qualified exchange ledger");
@@ -1301,7 +1403,7 @@ mod tests {
         velocities: &[IncomingVelocities],
     ) -> Report {
         let mut q = exchange_qualification();
-        q.schema = "ftx-coupled-liquid-mechanics/3".into();
+        q.schema = "ftx-coupled-liquid-mechanics/4".into();
         q.model = "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1".into();
         let original = q.bindings["sheet"].clone();
         q.bindings = velocities
@@ -1342,7 +1444,7 @@ mod tests {
             },
         ];
         let admitted = initialize_phases(&mut s, &[0., 0.], &u);
-        assert_eq!(admitted.schema, "ftx-coupled-liquid-mechanics-result/3");
+        assert_eq!(admitted.schema, "ftx-coupled-liquid-mechanics-result/4");
         let old_mass = s.model.mass.clone();
         let report = s
             .exchange_liquid_streams(
@@ -1513,6 +1615,10 @@ mod tests {
                 "ftx-coupled-liquid-mechanics/2",
                 "prescribed_incoming_velocity_mass_exchange_frozen_mechanics/1",
             ),
+            (
+                "ftx-coupled-liquid-mechanics/3",
+                "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1",
+            ),
         ] {
             let mut bad = report.qualification.clone();
             bad.schema = schema.into();
@@ -1578,6 +1684,202 @@ mod tests {
                 .is_err()
         );
         assert_eq!(format!("{s:?}"), before);
+    }
+
+    fn scheduled_qualification() -> Qualification {
+        let mut q = exchange_qualification();
+        q.schema = "ftx-coupled-liquid-mechanics/3".into();
+        q.model = "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1".into();
+        q.bindings
+            .get_mut("sheet")
+            .unwrap()
+            .incoming_velocity_world_m_s_by_interval =
+            Some(vec![Vec3::new(-3., 1., 2.), Vec3::new(0.5, -1., 3.)]);
+        q
+    }
+
+    #[test]
+    fn version_three_models_reject_each_others_velocity_fields() {
+        let mut q = scheduled_qualification();
+        q.validate_exchange_intervals(2).unwrap();
+        q.bindings
+            .get_mut("sheet")
+            .unwrap()
+            .incoming_stream_velocities_world_m_s = Some(IncomingVelocities {
+            supply: Vec3::ZERO,
+            condensation: Vec3::ZERO,
+        });
+        assert!(q.validate_exchange().is_err());
+        q.model = "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1".into();
+        assert!(q.validate_exchange().is_err());
+        q.schema = "ftx-coupled-liquid-mechanics/4".into();
+        q.bindings
+            .get_mut("sheet")
+            .unwrap()
+            .incoming_velocity_world_m_s_by_interval = None;
+        q.validate_exchange_intervals(2).unwrap();
+        q.schema = "ftx-coupled-liquid-mechanics/3".into();
+        q.model = "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1".into();
+        assert!(q.validate_exchange().is_err());
+    }
+
+    #[test]
+    fn scheduled_streams_follow_keyframes_and_close_welded_transfers() {
+        let mut s = solver();
+        let q = scheduled_qualification();
+        q.validate_exchange_intervals(2).unwrap();
+        let velocities = q.bindings["sheet"]
+            .incoming_velocity_world_m_s_by_interval
+            .clone()
+            .unwrap();
+        let domains = vec![q.bindings["sheet"].clone(); 2];
+        let report =
+            start_with_exchange(&mut s, q, domains, &[0., 0.], &[vec![20.], vec![20.]], true)
+                .unwrap();
+        assert_eq!(report.schema, "ftx-coupled-liquid-mechanics-result/3");
+        let mut expected_incoming = Vec3::ZERO;
+        let mut expected_kinetic = 0.;
+        for interval in [0, 0, 1, 1] {
+            let old = s.v.clone();
+            let mass = s.model.mass.clone();
+            let incoming = [0.12, 0.3];
+            let report = s
+                .exchange_liquid_in_interval(
+                    &[0., 0.],
+                    &incoming,
+                    &incoming,
+                    &[vec![20.], vec![20.]],
+                    Some(interval),
+                )
+                .unwrap();
+            // Unequal triangles share two vertices; equal-net outflow preserves mass, not momentum.
+            for (i, amount) in [0.14, 0.14, 0.04, 0.1].into_iter().enumerate() {
+                let expected =
+                    (old[i] * mass[i] + velocities[interval] * amount) / (mass[i] + amount);
+                assert!((s.v[i] - expected).norm() < 2e-15);
+            }
+            assert_eq!(s.model.mass, mass);
+            expected_incoming += velocities[interval] * 0.42;
+            expected_kinetic += 0.5 * 0.42 * velocities[interval].norm2();
+            let flow = report.exchange.as_ref().unwrap();
+            assert!((flow.incoming_momentum_kg_m_s - expected_incoming).norm() < 3e-15);
+            assert!((flow.incoming_kinetic_energy_j - expected_kinetic).abs() < 2e-14);
+            assert!(flow.mixing_dissipation_j.unwrap() > 0.);
+            assert!(report.transfer_momentum_residual_kg_m_s.norm() < 3e-15);
+            assert!(report.transfer_kinetic_residual_j.abs() < 2e-14);
+        }
+    }
+
+    #[test]
+    fn constant_velocity_schedule_preserves_existing_exchange_arithmetic() {
+        let velocity = Vec3::new(-1., 2., 0.5);
+        let mut constant = solver();
+        let mut scheduled = solver();
+        initialize_prescribed(&mut constant, &[0., 0.], &[velocity; 2]);
+        let mut q = scheduled_qualification();
+        q.bindings
+            .get_mut("sheet")
+            .unwrap()
+            .incoming_velocity_world_m_s_by_interval = Some(vec![velocity; 2]);
+        let domains = vec![q.bindings["sheet"].clone(); 2];
+        start_with_exchange(
+            &mut scheduled,
+            q,
+            domains,
+            &[0., 0.],
+            &[vec![20.], vec![20.]],
+            true,
+        )
+        .unwrap();
+        for interval in [0, 0, 1, 1] {
+            let a = constant
+                .exchange_liquid(
+                    &[0., 0.],
+                    &[0.03, 0.06],
+                    &[0.03, 0.06],
+                    &[vec![20.], vec![20.]],
+                )
+                .unwrap();
+            let b = scheduled
+                .exchange_liquid_in_interval(
+                    &[0., 0.],
+                    &[0.03, 0.06],
+                    &[0.03, 0.06],
+                    &[vec![20.], vec![20.]],
+                    Some(interval),
+                )
+                .unwrap();
+            assert_eq!(constant.v, scheduled.v);
+            assert_eq!(constant.model.mass, scheduled.model.mass);
+            assert_eq!(a.summary(), b.summary());
+        }
+    }
+
+    #[test]
+    fn schedules_require_complete_unambiguous_intervals_and_preserve_state_on_refusal() {
+        let original = scheduled_qualification();
+        original.validate_exchange_intervals(2).unwrap();
+        assert!(original.validate_exchange_intervals(1).is_err());
+        assert!(original.validate_exchange_intervals(3).is_err());
+        assert!(original.validate().is_err());
+        let mut explicit_null = serde_json::to_value(&original).unwrap();
+        explicit_null["bindings"]["sheet"]["incoming_velocity_world_m_s_by_interval"] = json!(null);
+        assert!(serde_json::from_value::<Qualification>(explicit_null).is_err());
+        for schedule in [
+            None,
+            Some(vec![]),
+            Some(vec![Vec3::ZERO; 17]),
+            Some(vec![Vec3::new(f64::NAN, 0., 0.); 2]),
+        ] {
+            let mut invalid = original.clone();
+            invalid
+                .bindings
+                .get_mut("sheet")
+                .unwrap()
+                .incoming_velocity_world_m_s_by_interval = schedule;
+            assert!(invalid.validate_exchange().is_err());
+        }
+        let mut ambiguous = original.clone();
+        ambiguous
+            .bindings
+            .get_mut("sheet")
+            .unwrap()
+            .incoming_velocity_world_m_s = Some(Vec3::ZERO);
+        assert!(ambiguous.validate_exchange().is_err());
+        for schema in [
+            "ftx-coupled-liquid-mechanics/1",
+            "ftx-coupled-liquid-mechanics/2",
+        ] {
+            let mut wrong = original.clone();
+            wrong.schema = schema.into();
+            assert!(wrong.validate_exchange().is_err());
+        }
+        let mut s = solver();
+        let domains = vec![original.bindings["sheet"].clone(); 2];
+        start_with_exchange(
+            &mut s,
+            original,
+            domains,
+            &[0., 0.],
+            &[vec![20.], vec![20.]],
+            true,
+        )
+        .unwrap();
+        // A dry substep still requires a valid interval.
+        for interval in [None, Some(2), Some(usize::MAX)] {
+            let before = format!("{s:?}");
+            assert!(
+                s.exchange_liquid_in_interval(
+                    &[0., 0.],
+                    &[0., 0.],
+                    &[0., 0.],
+                    &[vec![20.], vec![20.]],
+                    interval,
+                )
+                .is_err()
+            );
+            assert_eq!(format!("{s:?}"), before);
+        }
     }
 
     #[test]

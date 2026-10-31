@@ -243,11 +243,14 @@ anchor and radius drive the partial roll. For physical leg panels the own-side s
 `min(x, −1 mm)` on the right and `max(x, +1 mm)` on the left, applied only at the completed wrap.
 Torso sides, mirror-pair quantities and folded panels with an explicit physical side refuse.
 
-`PartFrames` providers may supply independent left and right frames. The existing Anny
-`BodyFrames` drape adapter supplies the left start frame by reflecting the right origin, up and
-front about x = 0 and recomputing `lat = up × front`; it retains the right-derived landmark
-heights and section radii. This is the existing symmetric initial-placement convention, not
-qualification of asymmetric anatomy, a different solver, or a physical-fit claim.
+`PartFrames` providers supply independent left and right frames. The native Anny `BodyFrames`
+adapter obtains each explicit limb's frame from its own posed joints and its radius from its own
+skinned region. Left arm offsets use the left shoulder and wrist; left leg ankle, calf and knee
+levels use the left joints, while shared torso levels retain their existing definitions. Each
+frame recomputes `lat = up × front`. Generated mirror pairs without an explicit physical side
+retain the reference's right-then-reflect path above. Independent synthetic asymmetric joints and
+regions test this selection through the ordinary placement and roll APIs; the anatomical
+landmark heuristics and empirical fit remain unqualified.
 
 ### 3.5 Inferred placement (pieces without one; traced sheets)
 

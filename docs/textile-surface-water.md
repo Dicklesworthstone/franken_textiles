@@ -128,7 +128,7 @@ qualification.
 
 ### Separate supplied-liquid and condensed-vapor velocities
 
-`ftx-coupled-liquid-mechanics/3` with model
+`ftx-coupled-liquid-mechanics/4` with model
 `phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1` qualifies two constant world
 velocities per instance through `incoming_stream_velocities_world_m_s`:
 
@@ -137,7 +137,7 @@ velocities per instance through `incoming_stream_velocities_world_m_s`:
 ```
 
 These example values are synthetic. Both finite vectors are required, including for an inactive
-phase; the older `incoming_velocity_world_m_s` field is forbidden. Older mechanical versions
+phase; the older `incoming_velocity_world_m_s` and interval schedule fields are forbidden. Older mechanical versions
 reject the new field. All material, source, domain and consent requirements above still apply.
 
 The thermal adapter retains the accepted supplied and condensed increments separately, then
@@ -147,12 +147,45 @@ all neighboring material instances; evaporation leaves only after that single mi
 Opposing stream momenta can cancel while their kinetic energies and mixing dissipation remain
 positive. No averaged source velocity replaces these separate energy terms.
 
-Results use `ftx-coupled-liquid-mechanics-result/3`, retain both qualified velocities, and use the
+Results use `ftx-coupled-liquid-mechanics-result/4`, retain both qualified velocities, and use the
 same cumulative mechanical ledger as version 2. Thermal reports retain separate supplied and
 condensed mass. Mixing work remains separate from thermal enthalpy. Independent welded-vertex,
 opposing-stream, Galilean and rollback tests, plus native/portable named-case replay, exercise this
-numerical capability. Time-varying source velocities, drainage and empirical wet-fabric behavior
-remain unsupported.
+numerical capability. Phase-specific time-varying velocities, drainage and empirical wet-fabric behavior
+remain unsupported. Schema `/3` stays the published scheduled-interval contract in the next section; this phase-specific contract does not reuse it.
+
+### Changing incoming velocity across keyframe intervals
+
+Use `ftx-coupled-liquid-mechanics/3` with model
+`scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1` to prescribe a separate incoming
+world-frame velocity for each mechanical keyframe interval. Replace the constant velocity field
+in **every** instance binding with:
+
+```json
+"incoming_velocity_world_m_s_by_interval": [
+  [0.2, 0.1, -0.5],
+  [-0.3, 0.4, 0.2]
+]
+```
+
+This example declares two intervals; the actual request must have exactly two keyframes.
+The first vector applies from the initial state to the first keyframe, and the next from that
+keyframe to the second. Every accepted mechanical substep, including thermal dryout subdivisions,
+uses its enclosing keyframe's vector. There is no interpolation or inferred flow direction.
+All supplied and condensed incoming water for an instance still shares that interval's velocity.
+
+The source must qualify the complete schedule and the existing exact material/interface,
+loading and temperature domains. Missing, null, nonfinite, extra or short schedules refuse,
+as does supplying constant or phase-specific fields alongside the schedule. Older versions reject the new field.
+
+The result uses `ftx-coupled-liquid-mechanics-result/3` and retains the same separate mass,
+momentum, bulk energy and mixing-dissipation ledgers. Constant schedules reproduce version-2
+transfer arithmetic. Schedule changes enter the next actual cloth step; whole-motion failure
+restores the original solver and histories. Comparison protocol identity includes the exact
+mechanical qualification for motion-dependent consumers, while static and manufacturing
+comparisons remain independent. Native, portable and browser reports retain the original
+schedule. This extension supplies no drainage, rain interception, phase-specific flow, mixing
+heat, new wet constitutive law or empirical garment qualification. Phase-specific supply and condensation velocities are schema `/4`, not a second `/3` model. Combining `/3` and `/4` fields refuses.
 
 ## Thermal water model
 

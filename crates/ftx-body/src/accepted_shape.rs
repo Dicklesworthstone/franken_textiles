@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     AnnyModel, BodyFrames, BodyParams, Phenotype, Pose, TAPE_FIELDS, Wearer,
-    age_parameter_for_years, pose_deltas, tape_readings, tape_targets,
+    age_parameter_for_years, partial_tape_readings, pose_deltas, tape_targets,
 };
 
 /// Prepare an imported shape and its ordinary native/browser diagnostics, without refitting.
@@ -78,25 +78,39 @@ pub fn prepare(
         .map(|f| f.map(|i| i as usize))
         .collect();
     // Independent of the requested display/drape pose. Missing anatomy is unavailable, never zero.
-    let tape = (|| {
+    let tape: Result<_, Refusal> = (|| {
         let posed = model.pose(&rest, &pose_deltas(model, &rest, &Pose::a_pose(35.0), 1.0)?)?;
         let frames = BodyFrames::new(model, &posed)?;
-        tape_readings(&faces, anthropometry.height, &posed, &frames)
-            .ok_or_else(|| bad("body tape sections are unavailable"))
+        Ok(partial_tape_readings(
+            &faces,
+            anthropometry.height,
+            &posed,
+            &frames,
+        ))
     })();
     let mut readings = Map::new();
     readings.insert("stature".into(), json!(anthropometry.height * 1000.0));
     let tape_status = match tape {
-        Ok(values) if values.iter().all(|v| v.is_finite() && *v > 0.0) => {
-            readings.extend(
-                TAPE_FIELDS
-                    .iter()
-                    .zip(values)
-                    .map(|(n, v)| (n.to_string(), json!(v))),
-            );
-            json!({"status":"AVAILABLE","pose":"a_pose_35","provenance":"MODEL_FIT"})
+        Ok(values) => {
+            let unavailable: Vec<_> = TAPE_FIELDS
+                .iter()
+                .zip(values)
+                .filter_map(|(name, value)| {
+                    if let Some(value) = value {
+                        readings.insert(name.to_string(), json!(value));
+                        None
+                    } else {
+                        Some(*name)
+                    }
+                })
+                .collect();
+            if unavailable.is_empty() {
+                json!({"status":"AVAILABLE","pose":"a_pose_35","provenance":"MODEL_FIT"})
+            } else {
+                json!({"status":"PARTIAL","pose":"a_pose_35","provenance":"MODEL_FIT",
+                    "unavailable_fields":unavailable})
+            }
         }
-        Ok(_) => json!({"status":"UNAVAILABLE","reason":"non-finite or nonpositive tape readings"}),
         Err(e) => json!({"status":"UNAVAILABLE","reason":e.message}),
     };
     let comparisons: Vec<Value> = measurements

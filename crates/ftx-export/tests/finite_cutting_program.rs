@@ -171,6 +171,56 @@ fn complete_hide_paths_keep_geometry_and_cut_features_before_release_in_a_report
 }
 
 #[test]
+fn fixtures_are_checked_in_the_loaded_machine_frame_for_translated_hides() {
+    let (p, mut r) = inputs();
+    qualify(&p, &mut r);
+    let clear = r.build(&p).unwrap();
+    let marker = &clear.program().unwrap().markers[0];
+    let offset = marker
+        .finite_stock
+        .as_ref()
+        .unwrap()
+        .marker_to_machine_offset_mm;
+    let placement = &clear.markers()[marker.marker].placements[0];
+    let midpoint = (placement.cut_mm[0] + placement.cut_mm[1]) * 0.5 + offset;
+    assert!(midpoint.x >= 0. && midpoint.y >= 0.);
+    let policy = r.options.program.as_mut().unwrap();
+    policy.machine.fixture_clearance = Some(
+        serde_json::from_value(json!({
+            "model":"planar_disk_sweep/1","cutting_radius_mm":0.1,"raised_radius_mm":0.1,
+            "fixtures":[{"id":"loaded-hide-clamp","outline_mm":[
+                [midpoint.x-0.25,midpoint.y-0.25],[midpoint.x+0.25,midpoint.y-0.25],
+                [midpoint.x+0.25,midpoint.y+0.25],[midpoint.x-0.25,midpoint.y+0.25]]}],
+            "source":{"reference":"test:translated-fixture","accessed_on":"2026-10-30",
+                "note":"Synthetic independent machine-frame geometry, not a measured fixture"},
+            "method":"Known translated midpoint with a filled exclusion at both tool elevations",
+            "evidence":"estimate","allow_estimates":true
+        }))
+        .unwrap(),
+    );
+    relock(policy);
+    let blocked = r.build(&p).unwrap();
+    assert!(blocked.program().is_none());
+    assert!(
+        blocked
+            .program_refusal()
+            .unwrap()
+            .message
+            .contains("cutting tool envelope")
+    );
+    assert_eq!(value(&blocked.markers()), value(&clear.markers()));
+    // Original source coordinates are far from the loaded machine-frame cut, so confusing the
+    // two frames would miss the obstruction above. Moving that same fixture away admits the cut.
+    let policy = r.options.program.as_mut().unwrap();
+    for point in &mut policy.machine.fixture_clearance.as_mut().unwrap().fixtures[0].outline_mm {
+        point.x += 300.;
+        point.y += 300.;
+    }
+    relock(policy);
+    assert!(r.build(&p).unwrap().program().is_some());
+}
+
+#[test]
 fn stock_identity_defects_and_rotated_source_frame_remain_bound_to_the_program() {
     let (p, mut r) = inputs();
     qualify(&p, &mut r);

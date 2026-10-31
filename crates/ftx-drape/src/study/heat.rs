@@ -225,7 +225,7 @@ impl SurfaceRequest {
         if let Some(coupling) = &self.mechanical_coupling {
             let exchange = coupling.is_exchange();
             if exchange {
-                coupling.validate_exchange()?;
+                coupling.validate_exchange_intervals(intervals)?;
             } else {
                 coupling.validate()?;
             }
@@ -422,7 +422,7 @@ impl SurfaceHistory {
             .as_ref()
             .ok_or_else(|| invalid("missing coupled textile-water history"))?;
         let report = if exchange {
-            water.accept_mechanical_exchange(self.state.temperature_c(), solver)?
+            water.accept_mechanical_exchange(self.state.temperature_c(), solver, interval)?
         } else {
             solver.evaporate_liquid(water.remaining_liquid_kg(), self.state.temperature_c())?
         };
@@ -885,6 +885,7 @@ impl SurfaceHistory {
                 Some(
                     "ftx-coupled-liquid-mechanics-result/2"
                         | "ftx-coupled-liquid-mechanics-result/3"
+                        | "ftx-coupled-liquid-mechanics-result/4"
                 )
             );
             result["mechanical_coupling"] = coupling;

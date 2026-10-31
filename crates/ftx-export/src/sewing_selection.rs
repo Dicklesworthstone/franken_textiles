@@ -135,6 +135,10 @@ pub struct Trial {
     /// Canonical complete thread-order score, in the request's one unchanged market currency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_order_cost: Option<f64>,
+    /// Inner supplier-allocation proof when split thread orders were requested. An unproved
+    /// complete incumbent can win the observed comparison but cannot prove the recipe optimum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_order_optimality_proven: Option<bool>,
     /// Complete source timing, consumption or eligible prices are unavailable. Timing admission may
     /// fail before production; this is unresolved objective evidence, never a zero or infeasibility.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -668,6 +672,7 @@ impl Request {
                 objective_seconds: None,
                 ordering_optimality_proven: None,
                 thread_order_cost: None,
+                thread_order_optimality_proven: None,
                 objective_unavailable: None,
                 completion_deadline: self
                     .completion_deadline_milliseconds
@@ -688,8 +693,9 @@ impl Request {
                     trial.stitch_intervals = Some(plan.total_stitch_intervals());
                     let score = if let Some(currency) = objective_currency.as_deref() {
                         match thread_cost::score(&plan, currency) {
-                            Ok(score) => {
+                            Ok((score, proved)) => {
                                 trial.thread_order_cost = Some(score);
+                                trial.thread_order_optimality_proven = proved;
                                 Some(score)
                             }
                             Err(refusal) => {
@@ -786,6 +792,7 @@ impl Request {
                         RefusalCode::BudgetExceeded | RefusalCode::NotConverged | RefusalCode::Io
                     )
                 }) || trial.ordering_optimality_proven == Some(false)
+                    || trial.thread_order_optimality_proven == Some(false)
                     || trial.objective_unavailable.is_some()
             })
             .count();

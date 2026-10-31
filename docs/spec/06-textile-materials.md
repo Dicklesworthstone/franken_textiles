@@ -115,11 +115,11 @@ Full input and consumer contract: [attached-mass.md](../attached-mass.md#fixed-r
 
 ## Independently qualified incoming liquid streams
 
-The accepted-step wet-mechanics model `ftx-coupled-liquid-mechanics/3` uses
-`phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1`. Every physical instance
+The accepted-step wet-mechanics schema `ftx-coupled-liquid-mechanics/4` is the phase-specific contract. `phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1`
+qualifies constant phase-specific streams. Every physical instance
 declares `incoming_stream_velocities_world_m_s: {supply: [x,y,z], condensation: [x,y,z]}`;
 both finite world-frame velocities are required, including for an inactive stream. The older
-single `incoming_velocity_world_m_s` field is forbidden in this model. Existing evaporation-only,
+single `incoming_velocity_world_m_s` field and the interval schedule are forbidden in this model. Existing evaporation-only,
 co-moving exchange and single-velocity qualifications keep their original semantics.
 
 The thermal authority supplies exact accepted supplied, condensed and evaporated triangle masses.
@@ -129,11 +129,21 @@ dry/accessory/liquid mass once: `v_new = (m*v + sum(a_i*u_i))/(m + sum(a_i))`.
 Mixing work is `0.5*m*|v-v_new|² + sum(0.5*a_i*|u_i-v_new|²)`. Evaporation then leaves at
 `v_new`. Per-triangle total and split incoming masses must agree within the existing floating-point
 mass tolerance; malformed, unrepresentable or overflowing transfers refuse without state changes.
-The result uses `ftx-coupled-liquid-mechanics-result/3`, retains the complete independent source
+The result uses `ftx-coupled-liquid-mechanics-result/4`, retains the complete independent source
 qualification and reports aggregate momentum, bulk energy and mixing dissipation separately from
 thermal sensible/latent heat. No source velocity, heat conversion, wet material law, drainage or
 empirical garment qualification is inferred. This is an explicitly declared endpoint closure;
 mechanical time-step refinement remains necessary.
+
+Schema `ftx-coupled-liquid-mechanics/3` remains the published scheduled-interval model `scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1`. It
+declares `incoming_velocity_world_m_s_by_interval` for every instance: one finite world vector
+per mechanical keyframe interval, covering exactly the request's boundaries (1–16 intervals).
+Each accepted substep uses its enclosing interval's common incoming velocity for both supply and
+condensation, including after thermal subdivision. Constant and phase-specific velocity fields
+are forbidden in this variant. Constant schedules reproduce the single-velocity transfer law;
+changing directions affects the next actual cloth step. Exact qualifications remain in the
+result and comparison protocol. The scheduled result schema stays `ftx-coupled-liquid-mechanics-result/3`. Combining phase-specific `/4` fields with this `/3` contract is
+unsupported and refuses; neither model is silently averaged or interpolated.
 
 ## Thermal consumer
 
