@@ -138,6 +138,55 @@ fn synthetic_targets_are_recovered() {
 
 #[test]
 #[ignore = "needs the converted Anny model"]
+fn reachable_stature_outside_the_height_only_range_is_fitted() {
+    let model = model();
+    let years = 2.5;
+    let gender = 0.5;
+    for (height, local_length) in [(0.0, -0.25), (1.0, 0.25)] {
+        let mut params = model.params(ftx_body::Phenotype {
+            age: ftx_body::age_parameter_for_years(years),
+            gender,
+            height,
+            ..ftx_body::Phenotype::default()
+        });
+        params.local_changes[model
+            .local_change_index("measure-upperleg-height-incr")
+            .unwrap()] = local_length;
+        let stature_mm = model.anthropometry(&model.rest(&params).unwrap()).height * 1000.0;
+        let wearer = Wearer {
+            years,
+            gender,
+            stature_mm,
+            weight_kg: None,
+        };
+        assert_eq!(
+            ftx_body::fit_stature(&model, &wearer).unwrap_err().code,
+            ftx_core::RefusalCode::OutOfRange
+        );
+        let fit = fit_tape(&model, &wearer, &[], &Pose::drape()).unwrap();
+        let achieved = fit.readings[0].expect("the requested stature must be available");
+        assert!(
+            (achieved - stature_mm).abs() < 2.0,
+            "height endpoint {height}, requested {stature_mm} mm, achieved {achieved} mm"
+        );
+        assert_eq!(fit.residuals.len(), 1);
+        assert_eq!(fit.residuals[0].target_mm, stature_mm);
+        assert_eq!(fit.residuals[0].body_mm, achieved);
+        assert!(
+            fit.free[..N_PHENOTYPE]
+                .iter()
+                .all(|v| (0.0..=1.0).contains(v))
+        );
+        assert!(
+            fit.free[N_PHENOTYPE..]
+                .iter()
+                .all(|v| (-1.0..=1.0).contains(v))
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs the converted Anny model"]
 fn the_reference_toddler_is_fitted() {
     let model = model();
     let wearer = Wearer {

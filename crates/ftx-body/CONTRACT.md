@@ -65,9 +65,16 @@ per length, except 5 mm for shoulder length, across back and total crotch length
 outseam (`fit_sigma`: readings that rest on where a measurer puts the tape, whose catalogue tape σ is
 10–15 mm). Missing sigma retains that floor exactly; invalid supplied sigmas refuse. This explicit
 residual-scaling policy does not calibrate a model-error distribution or certify posterior uncertainty.
-The phenotype is
-clamped to [0, 1], local changes to [−1, 1]; age and gender are set, not fitted. Residuals are returned,
-never hidden. Gate G1b (`tests/fit_tape.rs`): all 21 measurements drawn from the model itself (1.5, 2.5,
+The phenotype is bounded to [0, 1], local changes to [−1, 1]; age and gender are set, not fitted.
+Each damped step solves within those bounds, redistributing motion from saturated controls and
+releasing a bound when the remaining gradient points inward. Interior steps retain the original
+least-squares arithmetic. The full tape fit may start at the nearest height-only endpoint when
+proportions or local lengths are needed to reach the requested stature; the standalone
+`fit_stature` retains its strict one-parameter range refusal. Requested measurements are never
+clipped, and unreachable targets retain their residuals. Independent analytic length and bounded
+least-squares controls cover these numerical behaviors without claiming anatomical accuracy.
+Previously recorded G1b results (`tests/fit_tape.rs`, before the bounded-step correction):
+all 21 measurements drawn from the model itself (1.5, 2.5,
 4 and 30 years, local changes up to ±0.3) are recovered within 1.5 mm (the gate asks 3 mm girths, 2 mm
 lengths); the 92 cm reference toddler's 21 chart values in 9 iterations, the gate's within 2.6 mm and the
 four gentler ones within 2σ (shoulder length 9 mm short and outseam 9 mm short: the chart's shoulder is
@@ -85,8 +92,8 @@ fused value's optional `sigma_mm`. The independent `wearer.stature_mm` override 
 stature's uncertainty, even when their values coincide; without the override, fused stature retains
 its own sigma. A missing sigma remains supported for legacy fused-only inputs, while a supplied null,
 non-number, zero, negative or nonfinite sigma is refused. Numerical residuals retain the original
-reported sigma and the effective scale separately from signed millimetre discrepancies. The unchanged
-LM kernel has an analytic weighted-quadratic control: changing which of two incompatible section
+reported sigma and the effective scale separately from signed millimetre discrepancies. The weighted
+LM objective has an analytic quadratic control: changing which of two incompatible section
 targets has 3 versus 30 mm uncertainty changes the fitted section toward the more precise target,
 while absent and below-floor sigmas retain exactly the old fit. This is numerical fitting evidence,
 not anatomical or empirical fit qualification.

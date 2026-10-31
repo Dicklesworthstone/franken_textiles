@@ -165,6 +165,17 @@ pub fn tape_targets(meas: &Value) -> Result<Vec<TapeTarget>, Refusal> {
 /// [`RefusalCode::OutOfRange`] for a non-positive or non-finite age or stature, or a stature Anny cannot
 /// reach at that age with the other parameters at 0.5; refusals of the model.
 pub fn fit_stature(model: &AnnyModel, wearer: &Wearer) -> Result<(BodyParams, f64), Refusal> {
+    stature_start(model, wearer, false)
+}
+
+// The full tape fit can change body proportions and local leg/torso lengths. The range of the
+// height parameter with all those controls at their priors is only an initialization range, not
+// the full model's reachable stature. Endpoint seeds never change the target sent to the solve.
+fn stature_start(
+    model: &AnnyModel,
+    wearer: &Wearer,
+    allow_endpoint_seed: bool,
+) -> Result<(BodyParams, f64), Refusal> {
     let Wearer {
         years,
         gender,
@@ -190,7 +201,17 @@ pub fn fit_stature(model: &AnnyModel, wearer: &Wearer) -> Result<(BodyParams, f6
         Ok(model.anthropometry(&model.rest(&p)?).height * 1000.0)
     };
     let (shortest, tallest) = (height_at(0.0)?, height_at(1.0)?);
+    if !shortest.is_finite() || !tallest.is_finite() || shortest <= 0.0 || tallest < shortest {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "the body model's stature initialization range must be finite, positive and ordered",
+        ));
+    }
     if !(shortest..=tallest).contains(&stature_mm) {
+        if allow_endpoint_seed {
+            let h = if stature_mm < shortest { 0.0 } else { 1.0 };
+            return Ok((model.params(Phenotype { height: h, ..base }), height_at(h)?));
+        }
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
             format!(
@@ -676,12 +697,15 @@ impl TapeFit {
 /// Fits the body of `wearer` (age and gender set; its stature fitted unless `targets` has one, its
 /// weight when known) to `targets` on `pose`. Each residual is scaled by the larger of the target's
 /// reported sigma and the explicit per-functional fitting floor. Missing sigma preserves the floor.
+/// A stature outside the height-only initialization range starts from its nearest endpoint; the
+/// full bounded fit can still use proportions and local lengths. Original targets and residuals
+/// remain unchanged, including any discrepancy the complete model cannot resolve.
 /// Only requested readings constrain admission; unavailable unrequested diagnostics remain absent.
 ///
 /// # Errors
 /// [`RefusalCode::InvalidDocument`] for a target that is not a [`TAPE_FIELDS`] name or not finite and
 /// positive, a supplied sigma that is not finite and positive, or a model without the [`FREE`] local
-/// changes; refusals of [`fit_stature`] (the start) and of the model;
+/// changes; invalid age/stature inputs and refusals of the model;
 /// [`RefusalCode::DegenerateGeometry`] when the start body lacks a requested reading.
 pub fn fit_tape(
     model: &AnnyModel,
@@ -703,12 +727,13 @@ pub fn fit_tape(
         .iter()
         .find(|r| r.field == 0)
         .map_or(wearer.stature_mm, |r| r.target);
-    let (start, _) = fit_stature(
+    let (start, _) = stature_start(
         model,
         &Wearer {
             stature_mm: stature,
             ..*wearer
         },
+        true,
     )?;
     let faces: Vec<[usize; 3]> = model
         .data()
@@ -771,6 +796,118 @@ struct TapeSolution {
     free: [f64; N_FREE],
     readings: [Option<f64>; N_TAPE + 1],
     iterations: usize,
+}
+
+// Solve the damped tape-fit step inside the actual parameter box. Clipping an unconstrained
+// least-squares answer discards the motion assigned to saturated controls without letting the
+// remaining controls compensate. A small active set preserves the ordinary solve exactly when
+// it is interior; hit bounds can be released when their reduced gradient points back inward.
+fn bounded_tape_step(a: &[[f64; N_FREE]], b: &[f64], th: &[f64; N_FREE]) -> Option<[f64; N_FREE]> {
+    let lower: [f64; N_FREE] = std::array::from_fn(|j| {
+        if j < N_PHENOTYPE {
+            -th[j]
+        } else {
+            -LOCAL_LIMIT - th[j]
+        }
+    });
+    let upper: [f64; N_FREE] = std::array::from_fn(|j| {
+        if j < N_PHENOTYPE {
+            1.0 - th[j]
+        } else {
+            LOCAL_LIMIT - th[j]
+        }
+    });
+    let mut step = [0.0; N_FREE];
+    // -1: lower bound, 0: free, +1: upper bound.
+    let mut active = [0_i8; N_FREE];
+    for _ in 0..4 * N_FREE {
+        let mut free_a = a.to_vec();
+        let mut free_b = b.to_vec();
+        for (i, row) in free_a.iter_mut().enumerate() {
+            for j in 0..N_FREE {
+                if active[j] != 0 {
+                    free_b[i] -= row[j] * step[j];
+                    row[j] = 0.0;
+                }
+            }
+        }
+        if free_b.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        let mut trial = lstsq(&free_a, &free_b);
+        for j in 0..N_FREE {
+            if active[j] != 0 {
+                trial[j] = step[j];
+            }
+        }
+        if trial.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        let mut first = None;
+        let mut alpha = 1.0;
+        for j in 0..N_FREE {
+            if active[j] != 0 {
+                continue;
+            }
+            let bound = if trial[j] < lower[j] {
+                Some((lower[j], -1))
+            } else if trial[j] > upper[j] {
+                Some((upper[j], 1))
+            } else {
+                None
+            };
+            if let Some((value, side)) = bound {
+                let fraction = (value - step[j]) / (trial[j] - step[j]);
+                if fraction < alpha || (first.is_none() && fraction == alpha) {
+                    alpha = fraction;
+                    first = Some((j, value, side));
+                }
+            }
+        }
+        if let Some((j, value, side)) = first {
+            for k in 0..N_FREE {
+                step[k] = (step[k] + alpha * (trial[k] - step[k])).clamp(lower[k], upper[k]);
+            }
+            step[j] = value;
+            active[j] = side;
+            continue;
+        }
+        step = trial;
+        let residuals: Vec<f64> = a
+            .iter()
+            .zip(b)
+            .map(|(row, rhs)| row.iter().zip(step).map(|(a, x)| a * x).sum::<f64>() - rhs)
+            .collect();
+        let mut release = None;
+        let mut largest = 0.0;
+        for j in 0..N_FREE {
+            if active[j] == 0 {
+                continue;
+            }
+            let mut gradient = 0.0;
+            let mut scale = 0.0;
+            for (row, residual) in a.iter().zip(&residuals) {
+                let contribution = row[j] * residual;
+                gradient += contribution;
+                scale += contribution.abs();
+            }
+            if !gradient.is_finite() || !scale.is_finite() {
+                return None;
+            }
+            let violation = f64::from(active[j]) * gradient;
+            if violation > 64.0 * f64::EPSILON * scale.max(1.0) && violation > largest {
+                largest = violation;
+                release = Some(j);
+            }
+        }
+        if let Some(j) = release {
+            active[j] = 0;
+        } else {
+            return Some(step);
+        }
+    }
+    // Retry with stronger LM damping instead of publishing an unfinished constrained step.
+    None
 }
 
 // The same bounded LM solve serves actual model readings and independent analytic controls. Keep
@@ -883,7 +1020,10 @@ fn optimize_tape(
             }));
             let mut b: Vec<f64> = r.iter().map(|x| -x).collect();
             b.extend(std::iter::repeat_n(0.0, N_FREE));
-            let step = lstsq(&a, &b);
+            let Some(step) = bounded_tape_step(&a, &b, &th) else {
+                lambda *= 4.0;
+                continue;
+            };
             let trial = clamp(std::array::from_fn(|j| th[j] + step[j]));
             let rt = read(&trial)?;
             if admitted(&rt) {
@@ -1038,6 +1178,252 @@ mod tests {
             let error = tape_rows(&wearer, &[target]).unwrap_err();
             assert_eq!(error.code, RefusalCode::InvalidDocument);
             assert!(error.message.contains("waist.sigma_mm"));
+        }
+    }
+
+    fn stature_test_model() -> AnnyModel {
+        use crate::AnnyData;
+        use ftx_core::Mat3;
+        use serde_json::json;
+
+        // An independent four-point length model, not an anatomical body: stature in mm is
+        // exactly 900 + 100 * height + 100 * local_length. Its 900..1000 height-only interval
+        // is strictly smaller than the full 800..1100 interval of the bounded shape controls.
+        let data = AnnyData {
+            header: serde_json::from_value(json!({
+                "schema":"ftxbody/1", "model":"anny", "anny_version":"0.6.1",
+                "configuration":"synthetic length test", "licence":"synthetic", "package_sha256":{},
+                "counts":{"vertices":4,"faces":4,"bones":1,"blendshapes":4,
+                    "phenotype_blendshapes":2,"local_changes":1,"influences":1},
+                "phenotype":{"features":["height"],"components":[["height","min"],["height","max"]],
+                    "anchors":{"height":[0.0,1.0]},"exposed":["height"],"fixed_value":0.5},
+                "labels":{"blendshapes":["min","max","length+","length-"],"bones":["root"],
+                    "bone_parents":[-1],"local_changes":["measure-upperleg-height-incr"]},
+                "y_axis":[0,1,0], "degenerate_rotation":[[1,0,0],[0,1,0],[0,0,1]],
+                "waist_loop_final":[], "arrays":{}
+            }))
+            .unwrap(),
+            template_vertices: vec![
+                Vec3::ZERO,
+                Vec3::new(0.1, 0.0, 0.0),
+                Vec3::new(0.0, 0.1, 0.0),
+                Vec3::new(0.0, 0.0, 0.9),
+            ],
+            faces: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+            blendshape_row_ptr: vec![0, 0, 1, 2, 3],
+            blendshape_vertex: vec![3, 3, 3],
+            blendshape_delta: vec![
+                Vec3::new(0.0, 0.0, 0.1),
+                Vec3::new(0.0, 0.0, 0.1),
+                Vec3::new(0.0, 0.0, -0.1),
+            ],
+            phenotype_mask: vec![1, 0, 0, 1],
+            template_bone_heads: vec![Vec3::ZERO],
+            template_bone_tails: vec![Vec3::new(0.0, 1.0, 0.0)],
+            bone_heads_blendshapes: vec![Vec3::ZERO; 4],
+            bone_tails_blendshapes: vec![Vec3::ZERO; 4],
+            bone_rolls: vec![Mat3::IDENTITY],
+            vertex_bone_indices: vec![0; 4],
+            vertex_bone_weights: vec![1.0; 4],
+            base_mesh_vertex_indices: vec![0, 1, 2, 3],
+        };
+        AnnyModel::from_data(data).unwrap()
+    }
+
+    #[test]
+    fn full_tape_fit_reaches_lengths_outside_the_height_only_seed_range() {
+        let model = stature_test_model();
+        let local_index = FREE
+            .iter()
+            .position(|name| *name == "measure-upperleg-height-incr")
+            .unwrap();
+        for (target, endpoint) in [(850.0, 0.0), (1050.0, 1.0)] {
+            let wearer = Wearer {
+                years: 2.5,
+                gender: 0.5,
+                stature_mm: target,
+                weight_kg: None,
+            };
+            assert_eq!(
+                fit_stature(&model, &wearer).unwrap_err().code,
+                RefusalCode::OutOfRange,
+                "the standalone one-control fit must retain its strict contract"
+            );
+            let (start, achieved) = stature_start(&model, &wearer, true).unwrap();
+            assert_eq!(start.phenotype.height, endpoint);
+            assert_eq!(achieved, 900.0 + 100.0 * endpoint);
+            let rows = tape_rows(&wearer, &[]).unwrap();
+            let fit = optimize_tape(&rows, start.phenotype.height, |th| {
+                let mut params = model.params(Phenotype {
+                    height: th[0],
+                    ..Phenotype::default()
+                });
+                params.local_changes[0] = th[local_index];
+                let rest = model.rest(&params)?;
+                let mut readings = [None; N_TAPE + 1];
+                readings[0] = Some(model.anthropometry(&rest).height * 1000.0);
+                Ok(readings)
+            })
+            .unwrap();
+            // At this constrained quadratic minimum height is on its endpoint. The remaining
+            // local parameter balances the unchanged 2 mm target against its 0.35 prior.
+            let desired_local = (target - achieved) / 100.0;
+            let exact_local = desired_local * 10_000.0
+                / (10_000.0 + FIT_SIGMA_LENGTH_MM.powi(2) / PRIOR_SIGMA_LOCAL.powi(2));
+            assert!((fit.free[0] - endpoint).abs() < 1e-8);
+            assert!(
+                (fit.free[local_index] - exact_local).abs() < 1e-5,
+                "target {target}, local {} versus {exact_local}",
+                fit.free[local_index]
+            );
+            assert!((fit.readings[0].unwrap() - target).abs() < 0.2);
+            assert_eq!(
+                rows[0].target, target,
+                "the requested stature was not clipped"
+            );
+        }
+    }
+
+    #[test]
+    fn tape_and_stature_initializers_match_inside_the_original_range() {
+        let model = stature_test_model();
+        for stature_mm in [900.0, 925.0, 950.0, 975.0, 1000.0] {
+            let wearer = Wearer {
+                years: 2.5,
+                gender: 0.5,
+                stature_mm,
+                weight_kg: None,
+            };
+            assert_eq!(
+                stature_start(&model, &wearer, true).unwrap(),
+                fit_stature(&model, &wearer).unwrap()
+            );
+        }
+        for stature_mm in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let wearer = Wearer {
+                years: 2.5,
+                gender: 0.5,
+                stature_mm,
+                weight_kg: None,
+            };
+            assert_eq!(
+                stature_start(&model, &wearer, true).unwrap_err().code,
+                RefusalCode::OutOfRange
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_tape_step_releases_and_reenters_correlated_bounds() {
+        // AᵀA = [[1, -0.75], [-0.75, 1]]. Starting near x's bound makes x hit first,
+        // but after y hits its bound the constrained solution requires releasing x.
+        let mut a = [[0.0; N_FREE]; 2];
+        a[0][0] = 1.0;
+        a[0][1] = -0.75;
+        a[1][1] = (1.0_f64 - 0.75 * 0.75).sqrt();
+        for mirrored in [false, true] {
+            let coordinate = |x: f64| if mirrored { 1.0 - x } else { x };
+            let mut start = [0.5; N_FREE];
+            start[0] = coordinate(0.9);
+            start[1] = coordinate(0.0);
+            for (target, expected) in [([2.0, 3.0], [0.5, 1.0]), ([10.0, 100.0], [0.0, 1.0])] {
+                let dx = coordinate(target[0]) - start[0];
+                let dy = coordinate(target[1]) - start[1];
+                let b = [dx - 0.75 * dy, a[1][1] * dy];
+                let step = bounded_tape_step(&a, &b, &start).unwrap();
+                for j in 0..2 {
+                    assert!(
+                        (start[j] + step[j] - coordinate(expected[j])).abs() < 1e-12,
+                        "target {target:?}, mirrored {mirrored}, step {step:?}"
+                    );
+                }
+                // The second target requires the released x to hit the opposite bound.
+                // Independently check optimality against every corner of the feasible square.
+                let cost = |x: f64, y: f64| {
+                    let dx = x - coordinate(target[0]);
+                    let dy = y - coordinate(target[1]);
+                    dx * dx - 1.5 * dx * dy + dy * dy
+                };
+                let value = cost(start[0] + step[0], start[1] + step[1]);
+                for x in [0.0, 1.0] {
+                    for y in [0.0, 1.0] {
+                        assert!(value <= cost(x, y) + 1e-12);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_tape_step_preserves_the_interior_least_squares_answer() {
+        let a: Vec<[f64; N_FREE]> = (0..N_FREE)
+            .map(|j| {
+                let mut row = [0.0; N_FREE];
+                row[j] = 2.0;
+                row[(j + 1) % N_FREE] = -0.25;
+                row
+            })
+            .collect();
+        let b: Vec<_> = (0..N_FREE).map(|j| (j % 3) as f64 * 0.1 - 0.1).collect();
+        let start = std::array::from_fn(|j| if j < N_PHENOTYPE { 0.5 } else { 0.0 });
+        assert_eq!(
+            bounded_tape_step(&a, &b, &start).unwrap().map(f64::to_bits),
+            lstsq(&a, &b).map(f64::to_bits)
+        );
+    }
+
+    #[test]
+    fn bounded_tape_step_matches_independent_rectangle_edge_minima() {
+        // A convex quadratic in one phenotype and one local control has its constrained minimum
+        // at the unconstrained point or at one of four analytically minimized rectangle edges.
+        for (xx, yy, xy) in [
+            (1.0_f64, 1.0_f64, -0.75_f64),
+            (1.0, 1.0, 0.75),
+            (10.0, 1.0, -2.0),
+            (10.0, 1.0, 2.0),
+            (1.0, 10.0, -2.0),
+            (1.0, 10.0, 2.0),
+        ] {
+            let mut a = [[0.0; N_FREE]; 2];
+            a[0][0] = xx.sqrt();
+            a[0][N_PHENOTYPE] = xy / xx.sqrt();
+            a[1][N_PHENOTYPE] = (yy - xy * xy / xx).sqrt();
+            for tx in [-1.0, 0.4, 2.0] {
+                for ty in [-3.0, 0.25, 3.0] {
+                    let cost = |x: f64, y: f64| {
+                        xx * (x - tx).powi(2)
+                            + 2.0 * xy * (x - tx) * (y - ty)
+                            + yy * (y - ty).powi(2)
+                    };
+                    let mut expected = f64::INFINITY;
+                    for x in [0.0, 1.0] {
+                        expected =
+                            expected.min(cost(x, (ty - xy / yy * (x - tx)).clamp(-1.0, 1.0)));
+                    }
+                    for y in [-1.0, 1.0] {
+                        expected = expected.min(cost((tx - xy / xx * (y - ty)).clamp(0.0, 1.0), y));
+                    }
+                    if (0.0..=1.0).contains(&tx) && (-1.0..=1.0).contains(&ty) {
+                        expected = 0.0;
+                    }
+                    for x0 in [0.0, 0.37, 1.0] {
+                        for y0 in [-1.0, 0.2, 1.0] {
+                            let mut start =
+                                std::array::from_fn(|j| if j < N_PHENOTYPE { 0.5 } else { 0.0 });
+                            start[0] = x0;
+                            start[N_PHENOTYPE] = y0;
+                            let b = [
+                                a[0][0] * (tx - x0) + a[0][N_PHENOTYPE] * (ty - y0),
+                                a[1][N_PHENOTYPE] * (ty - y0),
+                            ];
+                            let step = bounded_tape_step(&a, &b, &start).unwrap();
+                            let (x, y) = (x0 + step[0], y0 + step[N_PHENOTYPE]);
+                            assert!((0.0..=1.0).contains(&x) && (-1.0..=1.0).contains(&y));
+                            assert!((cost(x, y) - expected).abs() < 1e-10);
+                        }
+                    }
+                }
+            }
         }
     }
 
