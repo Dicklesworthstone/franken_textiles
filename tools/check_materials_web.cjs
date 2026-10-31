@@ -11,6 +11,7 @@
 // --swatch-area-proof DIR checks joint swatch identification against retained native consent reports.
 // --adaptive-proof DIR checks guarded Pareto studies on the real page against retained native reports.
 // --sewing-selection-proof DIR checks native captured fixed-route requests through direct recipe selection.
+// --mixed-cutting-proof DIR checks complete and process-refused native mixed cutting jobs on the real page.
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
@@ -46,7 +47,10 @@ const adaptiveProof = adaptiveIndex < 0 ? null : path.resolve(process.argv[adapt
 const sewingSelectionIndex = process.argv.indexOf('--sewing-selection-proof');
 if (sewingSelectionIndex >= 0 && !process.argv[sewingSelectionIndex + 1]) throw Error('--sewing-selection-proof requires the native route-cost capture directory');
 const sewingSelectionProof = sewingSelectionIndex < 0 ? null : path.resolve(process.argv[sewingSelectionIndex + 1]);
-assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,areaProof,swatchAreaProof,fitProof,adaptiveProof,sewingSelectionProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
+const mixedCuttingIndex = process.argv.indexOf('--mixed-cutting-proof');
+if (mixedCuttingIndex >= 0 && !process.argv[mixedCuttingIndex + 1]) throw Error('--mixed-cutting-proof requires the native finite-knife capture directory');
+const mixedCuttingProof = mixedCuttingIndex < 0 ? null : path.resolve(process.argv[mixedCuttingIndex + 1]);
+assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,areaProof,swatchAreaProof,fitProof,adaptiveProof,sewingSelectionProof,mixedCuttingProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -96,6 +100,57 @@ const server = http.createServer((req, res) => {
   try {
     await page.goto(origin); await page.click('a[href="materials.html"]');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (mixedCuttingProof) {
+      const source=name=>fs.readFileSync(path.join(mixedCuttingProof,name),'utf8');
+      const output=name=>page.locator(`#outputs a[download="${name}"]`).evaluate(async a=>await(await fetch(a.href)).text());
+      await page.setInputFiles('#patternFile',path.join(mixedCuttingProof,'mixed-pattern.json'));
+      assert.equal(await page.isDisabled('#cutJob'),true);
+      await page.waitForFunction(()=>!document.getElementById('bind').disabled);
+      assert.equal(await run('bind'),'');
+      const pattern=await download('pattern.json'),patternFile=path.join(work,'mixed-bound-pattern.json');
+      fs.writeFileSync(patternFile,pattern,{flag:'wx'});
+      for(const name of ['job','refused-job']) {
+        const requestFile=path.join(mixedCuttingProof,`${name}.json`),request=source(`${name}.json`);
+        await page.setInputFiles('#cutJobRequest',requestFile);assert.equal(await run('cutJob'),'');
+        const report=JSON.parse(await output('cut-job.json'));
+        assert.deepEqual(report,JSON.parse(invoke('cut-job',patternFile,requestFile)));
+        assert.equal(report.complete_inventory,true);assert.equal(report.hardware_execution_authorized,false);
+        assert.equal(new Set(report.inventory.map(i=>`${i.instance}/${i.copy}`)).size,report.inventory.length);
+        assert.equal(await output('original-pattern.json'),pattern);
+        assert.equal(await output('original-cut-job-request.json'),request);
+        assert.equal(await output('cut-job-pattern.json'),report.pattern_json);
+        assert.equal(await output('cut-job-request.json'),report.replay_request_json);
+        const replayPattern=path.join(work,`${name}-pattern.json`),replayRequest=path.join(work,`${name}-request.json`);
+        fs.writeFileSync(replayPattern,report.pattern_json,{flag:'wx'});fs.writeFileSync(replayRequest,report.replay_request_json,{flag:'wx'});
+        assert.deepEqual(JSON.parse(invoke('cut-job',replayPattern,replayRequest)),report);
+        assert.equal(await page.getByRole('table',{name:'Complete cutting jobs — rolls, hides and remnants',exact:true}).locator('tr').count(),2);
+        assert.ok(report.roll.program.markers[0].selected.modeled_path_seconds>0);
+        if(name==='job') {
+          assert.ok(report.finite_stock.program.markers[0].selected.modeled_path_seconds>0);
+          assert.equal(await page.getByRole('table',{name:'Current bound pattern: finite-stock route: physical stock and machine placement',exact:true}).count(),1);
+        } else {
+          assert.equal(report.finite_stock.program,undefined);assert.ok(report.finite_stock.program_refusal);
+          assert.match(await page.locator('#outputs').textContent(),/knife process unavailable/);
+        }
+      }
+      const invalid=JSON.parse(source('job.json'));invalid.routes.pop();
+      await input('cutJobRequest',invalid);
+      assert.equal(await page.locator('a[download="cut-job.json"]').count(),0);
+      assert.notEqual(await run('cutJob'),'');
+      assert.equal(await page.locator('a[download="cut-job-request.json"]').count(),0);
+      await page.setInputFiles('#cutJobRequest',path.join(mixedCuttingProof,'job.json'));
+      await page.evaluate(()=>{document.getElementById('cutJob').click();document.getElementById('cancel').click();});
+      await page.waitForFunction(()=>document.getElementById('status').textContent.startsWith('Ready'));
+      assert.equal(await page.locator('a[download="cut-job.json"]').count(),0);
+      assert.equal(await run('cutJob'),'');
+      await page.screenshot({path:path.join(work,'mixed-cutting.png'),fullPage:true});
+      await input('patternFile',{schema:'fabric-pattern/1',pieces:[]});
+      assert.equal(await page.locator('a[download="cut-job.json"]').count(),0);
+      assert.equal(await page.locator('a[download="cut-job-pattern.json"]').count(),0);
+      assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(methods.every(m=>m==='GET'));
+      console.log('PASS: direct Chromium mixed cutting matches complete native roll/finite jobs and frozen replay, retains independent knife refusals and exact downloads, and withdraws stale output on invalid requests, cancellation and source edits. Synthetic software evidence only. Artifacts:',work);
+      return;
+    }
     if (sewingSelectionProof) {
       const source=name=>fs.readFileSync(path.join(sewingSelectionProof,name),'utf8');
       const output=name=>page.locator(`#outputs a[download="${name}"]`).evaluate(async a=>await(await fetch(a.href)).text());

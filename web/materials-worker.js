@@ -463,6 +463,16 @@ self.onmessage = async ({ data: msg }) => {
         }
         break;
       }
+      case "cutJob": {
+        if (typeof ftx.material_cut_job !== "function") throw Error("Rebuild web/pkg: missing complete mixed cutting jobs.");
+        raw = ftx.material_cut_job(msg.pattern, msg.cutJobRequest); result = json(raw);
+        if (result.complete_inventory !== true || typeof result.pattern_json !== "string" ||
+            typeof result.replay_request_json !== "string") throw Error("Rebuild web/pkg: incomplete mixed cutting job response.");
+        files = [file("cut-job.json", raw), file("original-pattern.json", msg.pattern),
+          file("original-cut-job-request.json", msg.cutJobRequest),
+          file("cut-job-pattern.json", result.pattern_json), file("cut-job-request.json", result.replay_request_json)];
+        break;
+      }
       case "stock": {
         // Older bundles keep their existing single-product contract. Unknown optimizer options
         // still fail their native request parser; the worker never removes or rewrites a policy.

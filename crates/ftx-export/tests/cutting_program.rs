@@ -574,5 +574,21 @@ fn unavailable_process_preserves_study_geometry_and_independent_purchasing() {
         b["purchasing"]["result"]["least_observed_independent_order_total"],
         1.0
     );
-    assert_eq!(b["metrics"], a["metrics"]);
+    // Only process-dependent readings disappear; all stock, mass and purchasing metrics
+    // retain their exact values when the local knife qualification is unavailable.
+    let mut independent_metrics = a["metrics"].clone();
+    for field in [
+        "cutting_cut_length_m",
+        "cutting_modeled_path_seconds",
+        "cutting_raised_travel_length_m",
+    ] {
+        let qualified = independent_metrics
+            .as_object_mut()
+            .unwrap()
+            .remove(field)
+            .unwrap();
+        assert!(qualified.as_f64().unwrap() > 0.0, "{field}");
+        assert!(b["metrics"].get(field).is_none(), "{field}");
+    }
+    assert_eq!(b["metrics"], independent_metrics);
 }

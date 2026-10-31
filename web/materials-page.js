@@ -1,7 +1,7 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
-const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "price", "sew"];
+const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "cutJob", "price", "sew"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "treatment", "vapor", "calibrate",
   "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode"];
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
@@ -29,7 +29,8 @@ for (const op of operations) {
     thermalPoint: "Material at the stated temperature", thermalHistory: "Dry heating and cooling history",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
     stripHistory: "Strip loading and recovery", vaporSurface: "Vapor transfer on this drape",
-    stripFit: "Clamped-strip identification", outfit: "Imported joint outfit", garmentcode: "Imported GarmentCode pattern — review required" })[op] || op;
+    stripFit: "Clamped-strip identification", outfit: "Imported joint outfit", cutJob: "Complete mixed cutting job",
+    garmentcode: "Imported GarmentCode pattern — review required" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
   section.append(title, summary, comparison, links); $("outputs").append(section);
@@ -97,6 +98,7 @@ function controls() {
   $("selfContact").disabled = !!outfit;
   $("cut").disabled ||= !has("cutOptions");
   $("stock").disabled ||= !has("stockRequest");
+  $("cutJob").disabled ||= !has("cutJobRequest");
   $("price").disabled ||= !has("cutOptions") || !has("quotes") || !has("market");
   $("sew").disabled ||= !has("sewOptions");
   $("heat").disabled ||= !drape || !has("heatConditions");
@@ -1754,7 +1756,7 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
   parent.append(note);
   detail(parent, `${label}: exact knife paths, material locks and process limits (display only)`, program);
 }
-function cuttingJobComparison(op, parent, alternatives) {
+function cuttingJobComparison(op, parent, alternatives, downloadReplay = true) {
   if (!alternatives.some(row => row.cutting_job && row.cutting_job.status !== "not_requested")) return;
   const note = document.createElement("p");
   note.textContent = "A complete cutting job allocates each physical instance and copy once, using its declared roll or finite-stock route. " +
@@ -1795,6 +1797,7 @@ function cuttingJobComparison(op, parent, alternatives) {
         String(purchase.order_allocation_optimality_proven)]);
       splitProcurementResult(parent, rollPurchase, `${row.key}: roll-route supplier allocation`);
     }
+    if (!downloadReplay) continue;
     const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
     if (typeof r.pattern_json === "string") link(op, actions,
       { name: `alternative-${i + 1}-cut-job-pattern.json`, text: r.pattern_json, mime: "application/json" });
@@ -3209,6 +3212,8 @@ function show(op, msg) {
     if (op === "cut" || op === "stock") {
       knifeProgramResult(s.comparison, r.program, op === "stock" ? "Finite-stock plan" : "Cutting plan", r.program_refusal);
     }
+    if (op === "cutJob") cuttingJobComparison(op, s.comparison,
+      [{ key: "Current bound pattern", cutting_job: { status: "available", result: r } }], false);
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
       op === "calibrate" ? calibrationResult(s.comparison, r) :
       op === "stripHistory" ? stripHistoryResult(s.comparison, r) :
@@ -3221,6 +3226,10 @@ function show(op, msg) {
         width_m: x.width_m, ...(x.layout_width ? { layout_width: x.layout_width } : {}),
         length_m: x.length_m, stock_mass_kg: x.stock_mass_kg, utilization: x.utilization })), limitations: r.limitations } :
       op === "price" ? procurementResult(s.comparison, r) :
+      op === "cutJob" ? { schema: r.schema, complete_inventory: r.complete_inventory,
+        allocated_instances: r.inventory?.length, stock_area_m2: r.stock_area_m2,
+        external_cut_area_m2: r.external_cut_area_m2, stock_mass_kg: r.stock_mass_kg,
+        hardware_execution_authorized: r.hardware_execution_authorized } :
       op === "stock" ? { used_stock_count: r.used_stock_count, used_gross_area_m2: r.used_gross_area_m2,
         external_cut_area_m2: r.external_cut_area_m2, markers: r.markers.map(m => ({ id: m.id, pieces: m.placements.length,
           gross_area_m2: m.gross_area_m2, defect_free_area_m2: m.defect_free_area_m2, utilization: m.utilization,
@@ -3472,6 +3481,7 @@ async function execute(op) {
         msg.rollIndex = marker - 1;
       }
       if (op === "stock") msg.stockRequest = await read("stockRequest");
+      if (op === "cutJob") msg.cutJobRequest = await read("cutJobRequest");
       if (op === "price") { msg.quotes = await read("quotes"); msg.market = await read("market"); }
       if (op === "sew") { msg.options = await read("sewOptions"); msg.selectRecipes = $("sewOptimize").checked; }
     }
@@ -3655,7 +3665,7 @@ for (const [id, operation] of [["compressionRequest", "pressure"], ["compression
 }
 for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
-  stockRequest:["stock"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
+  stockRequest:["stock"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {

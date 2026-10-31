@@ -70,10 +70,20 @@ The remaining operations consume this same bound pattern:
 | Validate/export | Measurements and fit-specification JSON | `ftx_wasm::page::run`; current verdict basis, measurement readiness and checked export ZIP. No implicit drape/fit claim. |
 | Mechanical drape | Measurements, fit specification, converted `.ftxbody` model, optional accepted image-fit report | Existing `fold_up` fits the supplied model, or `fold_up_with_body_fit` reuses the exact accepted shape at the declared arm angle. Current report and fold-up viewer, or an explicit refusal. |
 | Cutting | `CutOptions` JSON | `ftx_export::cutting::CutPlan`; all material-specific roll requirements and a bounded first-roll SVG preview. Not a machine-coordinate program or proof of optimal nesting. |
+| Complete mixed cutting | `ftx-cutting-job/1` or `/2` request | Existing `material_cut_job`; complete roll/finite-stock inventory, route-specific knife programs or independent refusals, purchasing outcomes and exact frozen replay inputs. |
 | Purchasing | Cut options, dated `QuoteBook`, comparable `Market` scope | Existing marker procurement evaluates gross stock including layout waste and order terms. Missing offers remain unknown, not zero-cost purchases. No checkout or live refresh runs in the page. |
 | Sewing | Complete `SewOptions` recipes and machine envelope | Existing `SewProgram`; every declared stitch interval and process refusals. Execution remains unauthorized. |
 | Independent sheet heat | A fresh workbench drape and `SurfaceConditions` JSON | Existing `thermal_steady_surface`; material-following fields, optional declared exterior exchange and source-locked replay. |
 | Layered body coverage | A fresh workbench drape, body/instance-layer map and coverage conditions | Existing `thermal_steady_coverage`; recomputed overlaps, covered/bare accounting and exposed-face exchange. No guessed layer map or environmental data. |
+
+For a complete mixed cutting job, load its request under **Complete roll / finite-stock job JSON**
+and select **Plan complete mixed cutting job** after binding the current materials. Every source
+piece must have an explicit route; the page does not infer roll versus hide from material names.
+The result keeps valid allocation when a knife qualification or purchasing offer is unavailable.
+Download `cut-job-pattern.json` and `cut-job-request.json` to replay the frozen job with native
+`cut-job`; the original bound pattern, original request and complete report remain separate
+downloads. Request or source edits, cancellation and refused replacements withdraw stale outputs.
+These review results do not reserve stock, place orders or authorize a machine.
 
 To keep a previously accepted image-fitted shape, open **Reuse an accepted image-fit shape for
 this drape**, choose its original report, explicitly associate it with the current wearer and

@@ -264,6 +264,9 @@ meaning. Omit this option for nominal-width planning. Finite hides and remnants 
 <label>Finite hides / remnants with defect maps JSON <input id="stockRequest" type="file" accept=".json,application/json"></label>
 <button id="stock" data-command="stock" disabled>Allocate finite stock &amp; preview</button>
 <p class="note">Use <code>ftx-finite-stock-request/1</code> for individually identified hides or remnants. Supply the actual boundary, exclusions and preferred cutting axis; each item must match the bound material. No roll width is invented.</p>
+<label>Complete roll / finite-stock job JSON <input id="cutJobRequest" type="file" accept=".json,application/json"></label>
+<button id="cutJob" data-command="cutJob" disabled>Plan complete mixed cutting job</button>
+<p class="note">Use <code>ftx-cutting-job/1</code> or <code>/2</code> to route every piece to rolls, hides or remnants in one job. The shared planner retains complete physical inventory, independent process and purchasing outcomes, and frozen replay inputs. It does not authorize machine execution.</p>
 <label>Dated quote book JSON <input id="quotes" type="file" accept=".json,application/json"></label>
 <label>Comparable market scope JSON <input id="market" type="file" accept=".json,application/json"></label>
 <button id="price" data-command="price" disabled>Compare whole-order costs</button>

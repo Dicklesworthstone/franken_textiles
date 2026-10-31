@@ -580,6 +580,25 @@ test('bounded-marker worker previews the selected intact marker and refuses inva
   assert.equal(w.called.filter(c=>c[0]==='svg').length,1);
   assert.equal(w.sent.filter(m=>m.type==='result').length,1);
 });
+test('direct mixed cutting uses one shared job and preserves original and frozen replay bytes', async () => {
+  const pattern=' {"original":-0.0}\n',request=' {"schema":"ftx-cutting-job/1","seed":18446744073709551615}\n';
+  const report={complete_inventory:true,pattern_json:' {"frozen":1.0}\n',replay_request_json:' {"replay":-0.0}\n'};
+  const raw=JSON.stringify(report);let calls=0;
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_cut_job:(p,r)=>{
+    calls++;assert.equal(p,pattern);assert.equal(r,request);return raw;
+  },cut_plan:()=>assert.fail('must not replan roll route'),stock_plan:()=>assert.fail('must not replan finite route')}});
+  const result=await w.send({type:'cutJob',request:79,pattern,cutJobRequest:request});
+  assert.equal(result.type,'result',result.message);assert.equal(calls,1);
+  assert.deepEqual(plain(result.files.map(f=>[f.name,f.text])),[
+    ['cut-job.json',raw],['original-pattern.json',pattern],['original-cut-job-request.json',request],
+    ['cut-job-pattern.json',report.pattern_json],['cut-job-request.json',report.replay_request_json]]);
+  for(const value of [null,{...report,complete_inventory:false},{...report,pattern_json:null},{...report,replay_request_json:null}]) {
+    const old=await workerModule({bindings:{default:()=>Promise.resolve(),...(value?{material_cut_job:()=>JSON.stringify(value)}:{})}});
+    const refused=await old.send({type:'cutJob',request:79,pattern,cutJobRequest:request});
+    assert.equal(refused.type,'error');assert.equal(refused.files,undefined);
+  }
+});
+
 test('direct sewing selection retains exact requests and selected options and never falls back without an incumbent', async () => {
   const pattern=' {"original":-0.0}\n',request=' {"schema":"ftx-sewing-selection/6","limit":1.0}\n';
   const options=' {"chosen":1.0,"seed":18446744073709551615}\n',calls=[];
@@ -4822,6 +4841,34 @@ test('design scenario matrices display shared geometry once and keep every case 
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
 });
 
+test('direct mixed cutting displays complete inventory and invalidates only dependent results on request changes', async () => {
+  const p=await pageModule();await p.load();await p.bind();
+  assert.equal(p.e.cutJob.disabled,true);
+  const request=' {"schema":"ftx-cutting-job/1","probe":-0.0}\n';
+  p.select('cutJobRequest',request);p.e.cutJobRequest.handlers.change();
+  assert.equal(p.e.cutJob.disabled,false);await p.e.cutJob.onclick();
+  assert.equal(p.current().messages.at(-1).cutJobRequest,request);
+  assert.equal(p.current().messages.at(-1).pattern,JSON.stringify({pieces:[{id:'front'},{id:'lining'}]}));
+  const report={schema:'ftx-cutting-job-plan/1',complete_inventory:true,inventory:[{},{}],
+    roll:{rolls:[{}]},finite_stock:{used_stock_count:1,program_refusal:{message:'Unknown knife qualification'}},
+    purchasing:{complete_offer_coverage:false,currency:'USD',least_observed_independent_order_total:null},
+    stock_area_m2:0.1,external_cut_area_m2:0.03,stock_mass_kg:null,hardware_execution_authorized:false};
+  const files=[{name:'cut-job.json',text:JSON.stringify(report)},
+    {name:'cut-job-pattern.json',text:' {"frozen":-0.0}\n'},{name:'cut-job-request.json',text:request}];
+  p.emit(report,files);const s=section(p,'Complete mixed cutting job');
+  assert.match(visibleText(s),/Incomplete offer coverage/);assert.match(visibleText(s),/Unknown knife qualification/);
+  assert.equal(JSON.parse(s.children[1].textContent).allocated_instances,2);
+  assert.equal(JSON.parse(s.children[1].textContent).hardware_execution_authorized,false);
+  const actions=descendants(s).filter(n=>n.download);assert.equal(actions.length,files.length);
+  for(const file of files) assert.equal(await p.blobs.get(actions.find(n=>n.download===file.name).href).text(),file.text);
+  p.e.cutJobRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,1);
+  await p.e.cutJob.onclick();const previous=p.current();p.e.cancel.onclick();p.ready();
+  previous.emit({type:'result',request:previous.messages.at(-1).request,result:report,files});
+  assert.equal(s.hidden,true);assert.equal(p.live.size,1);
+  await p.e.cutJob.onclick();p.emit(report,files);await p.load();
+  assert.equal(s.hidden,true);assert.equal(p.e.cutJob.disabled,true);assert.equal(p.live.size,0);
+});
+
 test('mixed cutting jobs retain complete inventory, independent pricing and exact replay in both study workflows', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const a=studyRow('<mixed job>'), b=studyRow('unpriced'), c=studyRow('missing inventory');
@@ -6547,6 +6594,10 @@ test('compiled WASM mixed cutting jobs cover every part and replay the frozen co
     assert.deepEqual(JSON.parse(ftx.material_cut_job(job.pattern_json,job.replay_request_json)),job);
     assert.equal(job.roll.pattern_sha256,job.pattern_sha256);
     assert.equal(job.finite_stock.pattern_sha256,job.pattern_sha256);
+    const direct=await w.send({type:'cutJob',request:63,pattern,cutJobRequest:JSON.stringify(JSON.parse(request).cutting_job)});
+    assert.equal(direct.type,'result',direct.message);assert.deepEqual(direct.result,job);
+    assert.equal(direct.files.find(f=>f.name==='cut-job-pattern.json').text,job.pattern_json);
+    assert.equal(direct.files.find(f=>f.name==='cut-job-request.json').text,job.replay_request_json);
     const p=await pageModule(); await p.load(); p.select('studyRequest',request); await p.e.study.onclick();
     p.emit(result.result,result.files);
     const s=section(p,'Fixed-pattern manufacturing alternatives');
@@ -6560,6 +6611,8 @@ test('compiled WASM mixed cutting jobs cover every part and replay the frozen co
     assert.equal(refusedStudy.result.alternatives[0].cutting_job.status,'refused');
     assert.deepEqual(refusedStudy.result.comparison.frontier,[]);
     assert.throws(()=>ftx.material_cut_job(pattern,JSON.stringify(bad.cutting_job)));
+    const badDirect=await w.send({type:'cutJob',request:64,pattern,cutJobRequest:JSON.stringify(bad.cutting_job)});
+    assert.equal(badDirect.type,'error');assert.equal(badDirect.files,undefined);
   });
 
 test('compiled WASM material studies recompute vapor from final assignments and retain independent refusals',
@@ -7788,6 +7841,12 @@ test('compiled WASM finite and mixed knife programs replay exact native stock in
       const actual=JSON.parse(ftx.material_cut_job(mixed,request));
       assert.deepEqual(actual,JSON.parse(input(`${name}-report.json`)));
       assert.equal(actual.complete_inventory,true);
+      const direct=await w.send({type:'cutJob',request:255,pattern:mixed,cutJobRequest:request});
+      assert.equal(direct.type,'result',direct.message);assert.deepEqual(direct.result,actual);
+      assert.equal(direct.files.find(file=>file.name==='cut-job.json').text,ftx.material_cut_job(mixed,request));
+      assert.equal(direct.files.find(file=>file.name==='original-cut-job-request.json').text,request);
+      assert.equal(direct.files.find(file=>file.name==='cut-job-pattern.json').text,actual.pattern_json);
+      assert.equal(direct.files.find(file=>file.name==='cut-job-request.json').text,actual.replay_request_json);
       assert.equal(new Set(actual.inventory.map(item=>`${item.instance}/${item.copy}`)).size,actual.inventory.length);
       assert.ok(actual.roll.program.markers[0].selected.modeled_path_seconds>0);
       if(name==='job') assert.ok(actual.finite_stock.program.markers[0].selected.modeled_path_seconds>0);
