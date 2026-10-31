@@ -627,7 +627,13 @@ every accepted mechanical inventory against supplied plus condensed water, outgo
 the unchanged source substrate, and the initial/final/trace exchange ledgers. Independent incoming
 and outgoing bulk momentum/energy never enter thermal latent/sensible objectives. Missing or
 invented transfer/source fields refuse the dependent comparison; exact source assembly and cutting
-remain independently comparable.
+remain independently comparable. Prescribed incoming-velocity versions `/2` and `/3` retain
+separate nonnegative mixing dissipation without adding it to thermal heat. Scheduled `/3`
+qualification must provide exactly one finite world vector per mechanical keyframe interval
+for every retained instance, no constant-velocity field, and exact request/result identities.
+The complete mechanical policy participates in protocol comparability whenever a consumer needs
+motion; changes to velocity or its source cannot silently compare as the same experiment.
+Static drape and manufacturing-only consumers retain their independent protocol identities.
 
 **Scoped material-direction requirements.** `material_strain` and `motion_material_strain` admit raw
 dimensionless `[E11, E22, 2E12]` from the production membrane frame. Six static signed min/max metrics

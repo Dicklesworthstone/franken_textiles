@@ -272,15 +272,20 @@ fn evaporating_mechanical_water_replays_in_native_portable_and_named_case_decisi
 
 #[test]
 fn incoming_mechanical_water_replays_actual_native_portable_and_named_case_decisions() {
-    replay_incoming_mechanical_water(false);
+    replay_incoming_mechanical_water(false, false);
 }
 
 #[test]
 fn incoming_water_impulse_replays_actual_native_portable_and_named_case_decisions() {
-    replay_incoming_mechanical_water(true);
+    replay_incoming_mechanical_water(true, false);
 }
 
-fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
+#[test]
+fn scheduled_incoming_water_replays_native_portable_and_named_case_decisions() {
+    replay_incoming_mechanical_water(true, true);
+}
+
+fn replay_incoming_mechanical_water(prescribed_velocity: bool, scheduled: bool) {
     for condensation in [false, true] {
         let (pattern, mut study, mut single) = inputs();
         single["motion"]["keyframes"] = json!([
@@ -333,6 +338,7 @@ fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
             json!({"metric":"textile_water_remaining_mass_kg","minimum":0.});
         qualify_mechanics(&pattern, &study, &mut single, true);
         let velocity = [0.2, 0.1, -0.5];
+        let next_velocity = [-0.3, 0.4, 0.2];
         if prescribed_velocity {
             let qualification = &mut single["motion"]["transient_surface"]["mechanical_coupling"];
             qualification["schema"] = json!("ftx-coupled-liquid-mechanics/2");
@@ -344,12 +350,27 @@ fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
             qualification["qualification"] = json!(
                 "Exact artificial wet mechanical laws and prescribed incoming momentum over the complete declared thermal domain; numerical test, not measured rain or condensation"
             );
+            if scheduled {
+                qualification["schema"] = json!("ftx-coupled-liquid-mechanics/3");
+                qualification["model"] =
+                    json!("scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1");
+                qualification["bindings"]["band"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("incoming_velocity_world_m_s");
+                qualification["bindings"]["band"]["incoming_velocity_world_m_s_by_interval"] =
+                    json!([velocity, next_velocity]);
+            }
         }
         replay(
             &pattern,
             &study,
             single,
-            if prescribed_velocity && condensation {
+            if scheduled && condensation {
+                "FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY"
+            } else if scheduled {
+                "FTX_SCHEDULED_WATER_IMPULSE_REPLAY"
+            } else if prescribed_velocity && condensation {
                 "FTX_CONDENSING_IMPULSE_REPLAY"
             } else if prescribed_velocity {
                 "FTX_INCOMING_WATER_IMPULSE_REPLAY"
@@ -366,7 +387,9 @@ fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
                 let mechanics = &motion["liquid_mechanics"];
                 assert_eq!(
                     mechanics["schema"],
-                    if prescribed_velocity {
+                    if scheduled {
+                        "ftx-coupled-liquid-mechanics-result/3"
+                    } else if prescribed_velocity {
                         "ftx-coupled-liquid-mechanics-result/2"
                     } else {
                         "ftx-coupled-liquid-mechanics-result/1"
@@ -398,15 +421,37 @@ fn replay_incoming_mechanical_water(prescribed_velocity: bool) {
                 if prescribed_velocity {
                     let flow = &mechanics["exchange"];
                     assert!(flow["mixing_dissipation_j"].as_f64().unwrap() > 0.);
+                    let first_incoming = if scheduled {
+                        let first = heat["trace"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .rev()
+                            .find(|row| row["interval_index"] == 0)
+                            .unwrap();
+                        first["mechanical_coupling"]["exchange"]["incoming_mass_kg"]
+                            .as_f64()
+                            .unwrap()
+                    } else {
+                        incoming
+                    };
+                    let later_incoming = incoming - first_incoming;
+                    if scheduled && !condensation {
+                        assert!(first_incoming > 0. && later_incoming > 0.);
+                    }
                     for (axis, speed) in velocity.iter().enumerate() {
+                        let expected =
+                            first_incoming * speed + later_incoming * next_velocity[axis];
                         assert!(
-                            (flow["incoming_momentum_kg_m_s"][axis].as_f64().unwrap()
-                                - incoming * speed)
+                            (flow["incoming_momentum_kg_m_s"][axis].as_f64().unwrap() - expected)
                                 .abs()
                                 < 1e-12
                         );
                     }
-                    let kinetic = 0.5 * incoming * velocity.iter().map(|v| v * v).sum::<f64>();
+                    let kinetic = 0.5
+                        * first_incoming
+                        * velocity.iter().map(|v| v * v).sum::<f64>()
+                        + 0.5 * later_incoming * next_velocity.iter().map(|v| v * v).sum::<f64>();
                     assert!(
                         (flow["incoming_kinetic_energy_j"].as_f64().unwrap() - kinetic).abs()
                             < 1e-12

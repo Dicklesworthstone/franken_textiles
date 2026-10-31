@@ -225,7 +225,7 @@ impl SurfaceRequest {
         if let Some(coupling) = &self.mechanical_coupling {
             let exchange = coupling.is_exchange();
             if exchange {
-                coupling.validate_exchange()?;
+                coupling.validate_exchange_intervals(intervals)?;
             } else {
                 coupling.validate()?;
             }
@@ -422,7 +422,7 @@ impl SurfaceHistory {
             .as_ref()
             .ok_or_else(|| invalid("missing coupled textile-water history"))?;
         let report = if exchange {
-            water.accept_mechanical_exchange(self.state.temperature_c(), solver)?
+            water.accept_mechanical_exchange(self.state.temperature_c(), solver, interval)?
         } else {
             solver.evaporate_liquid(water.remaining_liquid_kg(), self.state.temperature_c())?
         };
@@ -880,7 +880,13 @@ impl SurfaceHistory {
         }
         if let Some(coupling) = self.mechanical_coupling {
             let exchange = !coupling["exchange"].is_null();
-            let prescribed = coupling["schema"] == "ftx-coupled-liquid-mechanics-result/2";
+            let prescribed = matches!(
+                coupling["schema"].as_str(),
+                Some(
+                    "ftx-coupled-liquid-mechanics-result/2"
+                        | "ftx-coupled-liquid-mechanics-result/3"
+                )
+            );
             result["mechanical_coupling"] = coupling;
             result["scope"] = json!(
                 "First-order accepted-step evaporation coupling: cloth and contact use interval-start liquid mass, then the qualified thermal/water solver uses accepted geometry and removes co-moving vapor for the next mechanical interval. Initial liquid is a post-drape co-moving condition, not a wet equilibrium. Frozen mechanical laws are source-qualified over the complete loading and temperature domain. Thermal latent/sensible enthalpy and mechanical exported momentum/bulk energy have separate ledgers. Mechanical step refinement remains necessary. No supply, condensation, drainage, inferred wet laws, body-water transfer or empirical garment/comfort claim."

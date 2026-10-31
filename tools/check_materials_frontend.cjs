@@ -7378,6 +7378,17 @@ test('evaporation and incoming liquid mechanics expose separate mass and bulk tr
     'Mechanical mixing loss must not be relabeled as sensible or latent thermal input');
   assert.match(visibleText(s),/explicitly prescribed world-frame momentum/);
   assert.doesNotMatch(visibleText(s),/Incoming liquid, condensed vapor and outgoing vapor share the local endpoint cloth velocity/);
+  mechanics.schema='ftx-coupled-liquid-mechanics-result/3';
+  mechanics.qualification.bindings={front:{incoming_velocity_world_m_s_by_interval:[[1,0,0],[0,1,0]]}};
+  await p.e.scenario.onclick();p.emit(report);
+  assert.equal(table('A: co-moving liquid transfer — separate from thermal energy'),undefined);
+  assert.ok(table('A: prescribed incoming liquid transfer — separate from thermal energy'));
+  assert.match(visibleText(s),/explicitly prescribed world-frame momentum/);
+  assert.equal(table('A: liquid exchange momentum and energy residuals').children[2].children[3].textContent,'0.001');
+  assert.equal(visibleText(table('A: textile evaporation and sensible energy')),thermalBefore);
+  const scheduledSource=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='A: liquid exchange mechanics qualification and complete transfer ledger (display only)');
+  scheduledSource.open=true;scheduledSource.handlers.toggle();
+  assert.match(visibleText(scheduledSource),/incoming_velocity_world_m_s_by_interval/);
   evaluation.motion=refused('coupled liquid mechanics left its source domain');
   await p.e.scenario.onclick(); p.emit(report);
   assert.equal(table('A: evaporation changes moving cloth mass'),undefined);

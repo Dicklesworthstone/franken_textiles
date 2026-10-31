@@ -1868,6 +1868,15 @@ impl Policy {
                 &descriptor["scenario"]["motion"]["transient_surface"]["surface_water"],
             ))?;
         }
+        if self.needs_motion() {
+            let coupling =
+                &descriptor["scenario"]["motion"]["transient_surface"]["mechanical_coupling"];
+            if !coupling.is_null() {
+                // Source velocity changes the actual trajectory even when water inventory matches.
+                // Static and manufacturing-only consumers retain their independent protocols.
+                base = hash(&(&base, coupling))?;
+            }
+        }
         if consumers.contains(&Consumer::Coverage) {
             let expected = &descriptor["scenario"]["coverage"]["thermal_bridges"];
             let result = &admitted.drape["coverage"]["result"];

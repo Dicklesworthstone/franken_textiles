@@ -593,8 +593,14 @@ Both require the complete material/interface report hash and every instance's so
 Initial water is admitted co-moving after the dry drape. Each accepted heat/liquid interval updates the next mechanical step;
 refine the mechanical time step to assess this first-order model. Incoming and outgoing water share the local cloth velocity,
 with separate momentum, kinetic and signed gravitational transfers; those energies are not latent or sensible heat.
-Late source or thermal failure refuses the coupled motion. Drainage, relative flow impact, pinned cloth coordinates and
-inferred wet constitutive changes remain unsupported.</p>
+Late source or thermal failure refuses the coupled motion. For independently qualified incoming momentum, use
+<code>ftx-coupled-liquid-mechanics/2</code> with one constant <code>incoming_velocity_world_m_s</code> per instance,
+or <code>ftx-coupled-liquid-mechanics/3</code> with
+<code>scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1</code> and
+<code>incoming_velocity_world_m_s_by_interval</code>: one world-frame vector per keyframe interval for every instance.
+Constant and scheduled fields cannot be combined. Incoming water mixes with the actual cloth and accessory inertia;
+outgoing vapor leaves at the mixed velocity. Mixing loss is reported separately and is not deposited as thermal heat.
+Drainage, phase-specific incoming velocities, pinned cloth coordinates and inferred wet constitutive changes remain unsupported.</p>
 <p class="note">For serial production handling, provide <code>production.handling</code> with exact machine and
 process qualification locks, independent timing evidence, initial loading, final unloading and every directed
 operation transition for the same garment or a different garment. Select ordering objective

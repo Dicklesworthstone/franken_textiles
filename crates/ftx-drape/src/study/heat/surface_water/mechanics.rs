@@ -41,16 +41,18 @@ impl Water {
         &self,
         temperatures: &[Vec<f64>],
         solver: &mut crate::Solver,
+        interval: usize,
     ) -> Result<crate::liquid_mass::Report, Refusal> {
         let flow = self
             .mechanical_flow
             .as_ref()
             .ok_or_else(|| invalid("missing accepted thermal interval flows"))?;
-        solver.exchange_liquid(
+        solver.exchange_liquid_in_interval(
             &self.remaining,
             &flow.incoming,
             &flow.outgoing,
             temperatures,
+            Some(interval),
         )
     }
 }

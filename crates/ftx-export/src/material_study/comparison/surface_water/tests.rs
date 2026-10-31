@@ -795,6 +795,146 @@ fn prescribe_incoming_velocity(d: &mut Value, m: &mut Value) {
     d["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
 }
 
+fn schedule_incoming_velocity(d: &mut Value, m: &mut Value) {
+    prescribe_incoming_velocity(d, m);
+    let mut qualification = m["liquid_mechanics"]["qualification"].clone();
+    qualification["schema"] = json!("ftx-coupled-liquid-mechanics/3");
+    qualification["model"] = json!("scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1");
+    for binding in qualification["bindings"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        binding
+            .as_object_mut()
+            .unwrap()
+            .remove("incoming_velocity_world_m_s");
+        binding["incoming_velocity_world_m_s_by_interval"] = json!([[1., 0., 0.]]);
+    }
+    for path in [
+        "/initial_sample/liquid_mechanics",
+        "/liquid_mechanics",
+        "/transient_surface/result/mechanical_coupling",
+    ] {
+        let report = m.pointer_mut(path).unwrap();
+        report["schema"] = json!("ftx-coupled-liquid-mechanics-result/3");
+        report["qualification"] = qualification.clone();
+    }
+    let heat = &mut m["transient_surface"]["result"];
+    heat["request"]["mechanical_coupling"] = qualification;
+    d["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+}
+
+#[test]
+fn scheduled_incoming_velocity_admission_requires_exact_complete_source_intervals() {
+    for condensation in [false, true] {
+        let (a, mut d, s, mut m) = exchanging_case(condensation);
+        let h = &m["transient_surface"]["result"];
+        let expected = admit(&a, &s, &m, h, &h["request"], false, &[3., 3.]).unwrap();
+        schedule_incoming_velocity(&mut d, &mut m);
+        assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+        let h = &m["transient_surface"]["result"];
+        assert_eq!(
+            admit(&a, &s, &m, h, &h["request"], false, &[3., 3.]).unwrap(),
+            expected
+        );
+        for fault in 0..12 {
+            let mut changed = m.clone();
+            let mut descriptor = d.clone();
+            let mut q = changed["liquid_mechanics"]["qualification"].clone();
+            let binding = &mut q["bindings"]["front"];
+            match fault {
+                0 => binding["incoming_velocity_world_m_s_by_interval"] = json!([]),
+                1 => {
+                    binding["incoming_velocity_world_m_s_by_interval"] =
+                        json!([[1., 0., 0.], [1., 0., 0.]])
+                }
+                2 => binding["incoming_velocity_world_m_s_by_interval"] = json!([[1., 0.]]),
+                3 => binding["incoming_velocity_world_m_s_by_interval"] = json!([[1., null, 0.]]),
+                4 => {
+                    binding
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("incoming_velocity_world_m_s_by_interval");
+                }
+                5 => binding["incoming_velocity_world_m_s_by_interval"] = Value::Null,
+                6 => binding["incoming_velocity_world_m_s"] = json!([1., 0., 0.]),
+                7 => q["schema"] = json!("ftx-coupled-liquid-mechanics/2"),
+                8 => {
+                    q["model"] =
+                        json!("prescribed_incoming_velocity_mass_exchange_frozen_mechanics/1")
+                }
+                9 => binding["incoming_velocity_world_m_s"] = Value::Null,
+                10 => q["qualification"] = json!(""),
+                _ => binding["incoming_velocity_world_m_s_by_interval"] = json!([1., 0., 0.]),
+            }
+            for path in [
+                "/initial_sample/liquid_mechanics",
+                "/liquid_mechanics",
+                "/transient_surface/result/mechanical_coupling",
+            ] {
+                changed.pointer_mut(path).unwrap()["qualification"] = q.clone();
+            }
+            let heat = &mut changed["transient_surface"]["result"];
+            heat["request"]["mechanical_coupling"] = q;
+            descriptor["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+            assert!(
+                admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err(),
+                "fault {fault}"
+            );
+        }
+        let mut stale = m.clone();
+        stale["initial_sample"]["liquid_mechanics"]["schema"] =
+            json!("ftx-coupled-liquid-mechanics-result/2");
+        assert!(admit_heat(&a, &d, &s, &stale, Consumer::TransientSurface).is_err());
+    }
+}
+
+#[test]
+fn scheduled_mechanical_policy_changes_only_motion_comparison_protocols() {
+    let (a, mut d, s, mut m) = exchanging_case(false);
+    schedule_incoming_velocity(&mut d, &mut m);
+    let admitted = Numerical {
+        cutting_program: None,
+        finite_stock_program: None,
+        cutting_job_program: None,
+        drape: &s,
+        material_strain: None,
+        contact_loads: None,
+        vapor_surface: &Value::Null,
+        vapor_coverage: None,
+        motion: &m,
+        motion_material_strain: None,
+        motion_contact_loads: None,
+        motion_vapor_coverage: None,
+        motion_wet_film: None,
+        transient_surface: None,
+        transient_coverage: None,
+    };
+    for (metric, moving) in [
+        ("motion_max_absolute_edge_strain_pct", true),
+        ("max_absolute_edge_strain_pct", false),
+        ("assembly_mass_kg", false),
+    ] {
+        let policy: Policy = serde_json::from_value(json!({"basis":"nominal",
+            "objectives":[{"metric":metric,"direction":"minimize"}]}))
+        .unwrap();
+        let original = policy.protocol(&a, &d, &admitted).unwrap();
+        for changed_key in ["velocity", "source"] {
+            let mut changed = d.clone();
+            let q = &mut changed["scenario"]["motion"]["transient_surface"]["mechanical_coupling"];
+            if changed_key == "velocity" {
+                q["bindings"]["front"]["incoming_velocity_world_m_s_by_interval"] =
+                    json!([[0., 1., 0.]]);
+            } else {
+                q["source"]["reference"] = json!("test:independent-inflow-qualification");
+            }
+            let actual = policy.protocol(&a, &changed, &admitted).unwrap();
+            assert_eq!(original != actual, moving, "{metric}: {changed_key}");
+        }
+    }
+}
+
 #[test]
 fn prescribed_incoming_velocity_keeps_thermal_objectives_independent_of_bulk_mixing() {
     for condensation in [false, true] {

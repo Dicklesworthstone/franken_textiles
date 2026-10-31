@@ -168,8 +168,17 @@ and dry/accessory ownership, exact source laws, domain checks and whole-motion r
 mandatory. Older models reject the velocity field and preserve their existing behavior.
 Independent control-volume accretion/refinement, welded multiple-stream conservation, Galilean
 invariance and sewn/accessory replay tests cover this bounded numerical capability. Prescribed
-velocity applies to all incoming phases for an instance; phase-specific or time-varying streams,
-drainage, pinned-coordinate impulses, heat deposition and empirical wet-garment claims remain open.
+velocity applies to all incoming phases for an instance; phase-specific streams, drainage,
+pinned-coordinate impulses, heat deposition and empirical wet-garment claims remain open.
+
+`ftx-coupled-liquid-mechanics/3` qualifies an explicit incoming world velocity for every
+mechanical keyframe interval and retained instance. Each accepted substep uses its enclosing
+interval's vector, including after thermal event subdivision. Exact schedule coverage, finite
+vectors and exclusive constant/scheduled fields are required before admission. The same welded
+mixing law and mass, momentum, energy, source and rollback checks remain authoritative. Changing
+directions affects actual solver velocity and the next cloth step. Complete schedules survive
+native/portable study receipts, comparison protocols and browser reports. No interpolation,
+rain direction, separate liquid/vapor velocities or new wet-material qualification is inferred.
 
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface

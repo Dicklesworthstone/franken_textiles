@@ -123,8 +123,41 @@ reproduces the independent control-volume momentum solution and converges to its
 position history under mechanical-step refinement. Actual sewn motion with attached accessories
 checks a late thermal failure restores the complete pre-motion state and that replay is identical.
 These are software and numerical guarantees, not rain interception, drainage, measured wet laws,
-damage or real garment validation. A changing source velocity or different supplied-liquid and
-condensed-vapor velocities require a separately supported qualification.
+damage or real garment validation. Different supplied-liquid and condensed-vapor velocities still
+require a separately supported qualification.
+
+### Changing incoming velocity across keyframe intervals
+
+Use `ftx-coupled-liquid-mechanics/3` with model
+`scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1` to prescribe a separate incoming
+world-frame velocity for each mechanical keyframe interval. Replace the constant velocity field
+in **every** instance binding with:
+
+```json
+"incoming_velocity_world_m_s_by_interval": [
+  [0.2, 0.1, -0.5],
+  [-0.3, 0.4, 0.2]
+]
+```
+
+This example declares two intervals; the actual request must have exactly two keyframes.
+The first vector applies from the initial state to the first keyframe, and the next from that
+keyframe to the second. Every accepted mechanical substep, including thermal dryout subdivisions,
+uses its enclosing keyframe's vector. There is no interpolation or inferred flow direction.
+All supplied and condensed incoming water for an instance still shares that interval's velocity.
+
+The source must qualify the complete schedule and the existing exact material/interface,
+loading and temperature domains. Missing, null, nonfinite, extra or short schedules refuse,
+as does supplying both constant and scheduled fields. Older versions reject the new field.
+
+The result uses `ftx-coupled-liquid-mechanics-result/3` and retains the same separate mass,
+momentum, bulk energy and mixing-dissipation ledgers. Constant schedules reproduce version-2
+transfer arithmetic. Schedule changes enter the next actual cloth step; whole-motion failure
+restores the original solver and histories. Comparison protocol identity includes the exact
+mechanical qualification for motion-dependent consumers, while static and manufacturing
+comparisons remain independent. Native, portable and browser reports retain the original
+schedule. This extension supplies no drainage, rain interception, phase-specific flow, mixing
+heat, new wet constitutive law or empirical garment qualification.
 
 ## Thermal water model
 

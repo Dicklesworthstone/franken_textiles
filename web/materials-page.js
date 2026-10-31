@@ -624,7 +624,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         (h.mechanical_coupling?.exchange ? "Qualified supplied liquid, condensed vapor and evaporation update cloth inertia and gravity after every accepted interval. " :
           h.mechanical_coupling ? "Qualified evaporation updates cloth inertia and gravity after every accepted interval; co-moving vapor removes its own momentum without accelerating the remaining cloth. " :
           "The liquid adds no mechanical water mass. ") +
-        (h.mechanical_coupling?.schema === "ftx-coupled-liquid-mechanics-result/2" ?
+        (["ftx-coupled-liquid-mechanics-result/2", "ftx-coupled-liquid-mechanics-result/3"].includes(h.mechanical_coupling?.schema) ?
           "Incoming water also transfers its explicitly prescribed world-frame momentum. Inelastic mixing loss is reported separately from sensible and latent heat. " : "") +
         "It does not infer absorbed moisture, wicking, body sweat or wet material properties. Comparison admission checks the complete liquid and vapor ledger, " +
         "including exact material bindings and canonical vapor paths, before temperature, energy or textile-water objectives can qualify.";
@@ -632,7 +632,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       detail(parent, `${key}: textile liquid source, exact patches and canonical vapor paths (display only)`, water);
       if (h.mechanical_coupling) {
         const m = h.mechanical_coupling, exchange = m.exchange;
-        const prescribed = m.schema === "ftx-coupled-liquid-mechanics-result/2";
+        const prescribed = ["ftx-coupled-liquid-mechanics-result/2", "ftx-coupled-liquid-mechanics-result/3"].includes(m.schema);
         const inertia = table(parent, `${key}: ${exchange ? "liquid exchange" : "evaporation"} changes moving cloth mass`,
           ["Dry cloth + accessories (kg)", "Initial water (kg)", "Remaining water (kg)", "Current inertial mass (kg)", "Mass residual (kg)"]);
         cells(inertia, [metric(m.substrate_and_attached_mass_kg), metric(m.initial_liquid_mass_kg),
