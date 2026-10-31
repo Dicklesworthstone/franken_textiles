@@ -9,6 +9,17 @@ same active contact policy and exact source checks. Real sewn-band regressions c
 velocities, masses and frames against complete records with identical active physics. These tests
 establish numerical admission/equivalence, not empirical material or fit qualification.
 
+**Simulation scope and material ownership.** Explicit `sim: false` pieces keep their validated
+source snapshots without compiling unused mechanical laws. An unused pattern default is also a
+source record, not a requirement that every active override share its characterization. Only active
+source pieces contribute material fields, thickness envelopes and required contact pairs. Missing
+placement does not imply exclusion: ordinary garment admission still requires placement on every
+active piece. All supplied source records and interface observations remain validated, including
+dormant ones; no unknown material is replaced by a fabricated mechanical default. Liquid replay
+checks the same active source identities and reconstructs contact coefficients from their retained
+observations. Manufacturing keeps every authored cut piece regardless of the drape-only exclusion.
+Actual sewn-drape regressions and native/portable binding/BOM checks cover these separate consumers.
+
 **Source-qualified vapor potentials** (`thermal::vapor`, `ftx-vc1`). Characterized drapes retain an
 independent material/ownership/geometry frame without requiring dry conductivity or heat capacity.
 Explicit vapor conditions reuse `ftx-pattern::material_vapor` per source-locked material column,

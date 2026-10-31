@@ -4,27 +4,38 @@
 use ftx_core::Refusal;
 use ftx_pattern::material_friction::Interface;
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 use super::invalid;
 
-pub(super) struct Interfaces {
+pub(crate) struct Interfaces {
     pub matrix: Option<Vec<Vec<f64>>>,
     pub report: Value,
 }
 
-/// Canonical hashes and optional same-sheet coefficients are already resolved from the records.
-/// Validate every supplied pair even when self-contact is off, but require coverage only when on.
-pub(super) fn resolve(
+/// Only active sheets supply contact coefficients. All declared source pieces still authorize
+/// and validate their supplied pair observations, including pieces explicitly excluded by sim:false.
+pub(crate) fn resolve(
     raw: Option<&Value>,
     hashes: &[String],
     diagonal: &[Option<f64>],
+    declared_hashes: &[String],
     self_contact: bool,
 ) -> Result<Interfaces, Refusal> {
     let count = hashes.len();
-    if count == 0 || count > 64 || diagonal.len() != count {
+    if (count == 0 && self_contact)
+        || count > 64
+        || diagonal.len() != count
+        || declared_hashes.len() > 64
+        || hashes.windows(2).any(|pair| pair[0] >= pair[1])
+        || declared_hashes.windows(2).any(|pair| pair[0] >= pair[1])
+        || hashes
+            .iter()
+            .any(|hash| declared_hashes.binary_search(hash).is_err())
+    {
         return Err(invalid("contact supports 1..64 distinct source snapshots"));
     }
-    let max_pairs = count * (count - 1) / 2;
+    let max_pairs = declared_hashes.len() * declared_hashes.len().saturating_sub(1) / 2;
     let mut pairs: Vec<Interface> = match raw {
         None => Vec::new(),
         Some(raw) => {
@@ -49,22 +60,27 @@ pub(super) fn resolve(
     for (i, &mu) in diagonal.iter().enumerate() {
         matrix[i][i] = mu;
     }
+    let mut seen = BTreeSet::new();
     for pair in &pairs {
-        let index = |h: &String| {
-            hashes.binary_search(h).map_err(|_| {
-                invalid(format!(
-                    "interface names unassigned or stale material snapshot {h}"
-                ))
-            })
-        };
-        let (a, b) = (index(&pair.materials[0])?, index(&pair.materials[1])?);
-        if a == b || matrix[a][b].is_some() {
+        for hash in &pair.materials {
+            if declared_hashes.binary_search(hash).is_err() {
+                return Err(invalid(format!(
+                    "interface names unassigned or stale material snapshot {hash}"
+                )));
+            }
+        }
+        if pair.materials[0] == pair.materials[1] || !seen.insert(&pair.materials) {
             return Err(invalid(
                 "duplicate or same-sheet interface; diagonals belong to the sheet record",
             ));
         }
-        matrix[a][b] = Some(pair.friction.value);
-        matrix[b][a] = Some(pair.friction.value);
+        if let (Ok(a), Ok(b)) = (
+            hashes.binary_search(&pair.materials[0]),
+            hashes.binary_search(&pair.materials[1]),
+        ) {
+            matrix[a][b] = Some(pair.friction.value);
+            matrix[b][a] = Some(pair.friction.value);
+        }
     }
     let matrix = if self_contact {
         Some(matrix.into_iter().map(|row| row.into_iter().map(|v| {

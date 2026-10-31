@@ -16,12 +16,12 @@ use serde_json::{Value, json};
 use crate::elements::Membrane;
 use crate::run::DrapeOptions;
 
-mod interfaces;
+pub(crate) mod interfaces;
 mod pieces;
 
 /// Contact lookup in source-hash order, independent of piece order and mesh resolution.
 pub(crate) struct ContactMaterials {
-    pub piece_ids: Vec<usize>,
+    pub piece_ids: Vec<Option<usize>>,
     pub surfaces: Vec<crate::contact::SurfaceMaterial>,
     pub friction: Option<Vec<Vec<f64>>>,
 }
@@ -199,7 +199,7 @@ pub struct MaterialInputs {
     /// Evidence snapshot, effective bundle and explicit model limits.
     pub report: Value,
     // Indexed by source piece, not vertex: seam welding must never merge material identities.
-    pub(crate) piece_fabrics: Option<Vec<Fabric>>,
+    pub(crate) piece_fabrics: Option<Vec<Option<Fabric>>>,
     pub(crate) response: Option<CompiledMembrane>,
     pub(crate) piece_responses: Option<Vec<Option<CompiledMembrane>>>,
     pub(crate) relaxation: Option<CompiledRelaxation>,
@@ -226,7 +226,7 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
     {
         return Err(invalid("fabric must be an object"));
     }
-    let inputs = pieces::resolve(pattern, resolve_uniform(pattern, options)?)?;
+    let inputs = pieces::resolve(pattern, options)?;
     let permanent = inputs.piece_membrane_plasticities.as_ref().map_or_else(
         || inputs.membrane_plasticity.is_some(),
         |pieces| pieces.iter().any(Option::is_some),

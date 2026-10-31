@@ -234,6 +234,193 @@ fn assigned(scale: f64) -> Pattern {
     Pattern::new(p)
 }
 
+fn with_excluded_sheet(pattern: &Pattern, selection: Value) -> Pattern {
+    let mut raw = pattern.raw().clone();
+    let mut piece = raw["pieces"][0].clone();
+    piece["id"] = json!("unsimulated_trim");
+    piece["sim"] = json!(false);
+    piece["fabric"] = json!({"material":selection});
+    // Put the exclusion between active sources to exercise original source-piece indexing.
+    raw["pieces"].as_array_mut().unwrap().insert(1, piece);
+    Pattern::new(raw)
+}
+
+fn source_only_sheet() -> Value {
+    let mut selection = sheet(9.0);
+    selection["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|key, _| key == "areal_density");
+    selection["allow_estimates"] = json!(false);
+    selection
+}
+
+#[test]
+fn dormant_sources_and_unused_defaults_do_not_block_or_change_active_cloth() {
+    let baseline = band();
+    let mut raw = with_excluded_sheet(&baseline, source_only_sheet())
+        .raw()
+        .clone();
+    for index in [0, 2] {
+        raw["pieces"][index]["fabric"] = baseline.raw()["fabric"].clone();
+    }
+    raw["fabric"]["material"] = source_only_sheet();
+    for self_contact in [None, Some(options().contact)] {
+        let opts = DrapeOptions {
+            self_contact,
+            ..options()
+        };
+        let reference = run(&baseline, opts);
+        for use_source_default in [true, false] {
+            let mut candidate = raw.clone();
+            if !use_source_default {
+                candidate.as_object_mut().unwrap().remove("fabric");
+            }
+            let actual = run(&Pattern::new(candidate), opts);
+            assert_eq!(
+                actual.scene.solver.model.mass,
+                reference.scene.solver.model.mass
+            );
+            assert_eq!(actual.scene.solver.x, reference.scene.solver.x);
+            assert_eq!(actual.scene.solver.v, reference.scene.solver.v);
+            assert_eq!(actual.fold.frames, reference.fold.frames);
+            assert_eq!(
+                actual.scene.target_thickness,
+                reference.scene.target_thickness
+            );
+            let report = &actual.report["material"];
+            assert_eq!(
+                report["contact_material_order"].as_array().unwrap().len(),
+                1
+            );
+            assert_eq!(report["pieces"][1]["mechanics_consumed"], false);
+            let dormant = report["pieces"][1]["record_sha256"].as_str().unwrap();
+            assert_eq!(report["records"][dormant]["basis"], "source_record");
+            assert_eq!(report["records"][dormant]["mechanics_consumed"], false);
+            assert_eq!(report["instances"][1]["piece_index"], 2);
+            assert_eq!(
+                actual.report["simulation_scope"]["basis"],
+                "declared_subset"
+            );
+        }
+    }
+}
+
+#[test]
+fn excluded_thick_sheet_cannot_change_active_contact_or_bending() {
+    let baseline = interface_pattern(assigned(2.0).raw().clone(), 0.12);
+    let mut dormant = panel_sheet(1.0, 0.5);
+    dormant["record"]["properties"]["thickness"]["value"] = json!(400.0);
+    dormant["record"]["properties"]["friction_skin"]["value"] = json!(9.0);
+    dormant["record"]["properties"]["friction_self"]["value"] = json!(8.0);
+    let candidate = with_excluded_sheet(&baseline, dormant);
+    let opts = DrapeOptions {
+        self_contact: Some(options().contact),
+        ..options()
+    };
+    let reference = run(&baseline, opts);
+    let actual = run(&candidate, opts);
+    assert_eq!(actual.scene.solver.x, reference.scene.solver.x);
+    assert_eq!(actual.scene.solver.v, reference.scene.solver.v);
+    assert_eq!(
+        actual.scene.solver.model.mass,
+        reference.scene.solver.model.mass
+    );
+    assert_eq!(actual.fold.frames, reference.fold.frames);
+    assert_eq!(
+        actual.scene.target_thickness,
+        reference.scene.target_thickness
+    );
+    assert_eq!(actual.report["material"]["panel_bending_piece_count"], 0);
+    assert_eq!(
+        actual.report["material"]["contact_material_order"],
+        reference.report["material"]["contact_material_order"]
+    );
+    assert_eq!(
+        actual.report["material"]["self_friction_matrix"],
+        reference.report["material"]["self_friction_matrix"]
+    );
+}
+
+#[test]
+fn excluded_sources_still_validate_and_reactivation_requires_mechanics() {
+    let partial = with_excluded_sheet(&band(), source_only_sheet());
+    assert!(resolve(&partial, &options()).is_ok());
+    for selection in [
+        json!({"id":"unknown-excluded-material"}),
+        {
+            let mut selection = source_only_sheet();
+            selection["expected_sha256"] = json!("0".repeat(64));
+            selection
+        },
+        {
+            let mut selection = source_only_sheet();
+            selection["record"]["properties"]["areal_density"]["source"] = json!("missing");
+            selection
+        },
+    ] {
+        assert!(resolve(&with_excluded_sheet(&band(), selection), &options()).is_err());
+    }
+    let mut raw = partial.raw().clone();
+    raw["pieces"][1]["sim"] = json!(true);
+    assert!(resolve(&Pattern::new(raw.clone()), &options()).is_err());
+    raw["pieces"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("placement");
+    assert!(ftx_drape::garment::simulation_scope(&Pattern::new(raw)).is_err());
+    let mut raw = partial.raw().clone();
+    raw["pieces"][1]["fabric"]["role"] = json!("laminate");
+    assert!(resolve(&Pattern::new(raw), &options()).is_err());
+}
+
+#[test]
+fn excluded_interface_observations_remain_validated_without_phantom_contacts() {
+    let candidate = with_excluded_sheet(&band(), source_only_sheet());
+    let paired = interface_pattern(candidate.raw().clone(), 0.8);
+    let opts = DrapeOptions {
+        self_contact: Some(options().contact),
+        ..options()
+    };
+    let resolved = resolve(&paired, &opts).unwrap();
+    assert_eq!(resolved.report["interfaces"].as_array().unwrap().len(), 1);
+    assert_eq!(resolved.report["self_friction_matrix"], json!([[0.3]]));
+    assert_eq!(resolved.options.self_contact.unwrap().mu, 0.3);
+    let mut raw = paired.raw().clone();
+    raw["fabric"]["interfaces"][0]["allow_estimates"] = json!(false);
+    assert!(resolve(&Pattern::new(raw), &opts).is_err());
+    let mut raw = paired.raw().clone();
+    raw["fabric"]["interfaces"][0]["materials"][1] = json!("0".repeat(64));
+    assert!(resolve(&Pattern::new(raw), &opts).is_err());
+}
+
+#[test]
+fn dormant_source_selections_preserve_the_uniform_legacy_path() {
+    let mut raw = band().raw().clone();
+    raw["fabric"] = json!({});
+    let baseline = Pattern::new(raw);
+    let candidate = with_excluded_sheet(&baseline, source_only_sheet());
+    let opts = DrapeOptions {
+        self_contact: Some(options().contact),
+        ..options()
+    };
+    let reference = run(&baseline, opts);
+    let actual = run(&candidate, opts);
+    assert_eq!(actual.scene.solver.x, reference.scene.solver.x);
+    assert_eq!(actual.scene.solver.v, reference.scene.solver.v);
+    assert_eq!(
+        actual.scene.solver.model.mass,
+        reference.scene.solver.model.mass
+    );
+    assert_eq!(actual.fold.frames, reference.fold.frames);
+    assert_eq!(actual.report["material"]["basis"], "legacy_uncertain");
+    assert_eq!(
+        actual.report["material"]["excluded_piece_materials"]["pieces"][0]["piece_index"],
+        1
+    );
+    assert_eq!(actual.report["fabric"], reference.report["fabric"]);
+}
+
 #[test]
 fn body_only_piece_materials_keep_unknown_diagonals_out_of_contact() {
     let complete = assigned(2.0);
