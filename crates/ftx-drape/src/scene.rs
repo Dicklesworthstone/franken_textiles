@@ -36,51 +36,22 @@ pub trait PartFrames {
     fn section_radius(&self, part: &str, h: f64) -> f64;
 }
 
-fn right_part(part: &str) -> &str {
-    match part {
-        "arm_L" => "arm_R",
-        "leg_L" => "leg_R",
-        _ => part,
-    }
-}
-
-fn symmetric_left_frame(frame: PartFrame) -> PartFrame {
-    let reflect = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
-    let up = reflect(frame.up);
-    let front = reflect(frame.front);
-    PartFrame {
-        origin: reflect(frame.origin),
-        up,
-        front,
-        // Recompute handedness: reflecting the lateral vector alone turns public normals inward.
-        lat: up.cross(front),
-    }
-}
-
-// Anny's current placement authority supplies only right limb measurements. Explicit left panels
-// use a symmetric initial-placement convention, not a claim about asymmetric anatomy. Other
-// PartFrames providers can supply independently qualified left frames, landmarks and radii.
+// Physical panels select their actual posed limb. Generated mirror pairs still select the right
+// frame in placements() and reflect their completed wrap according to the reference convention.
 impl PartFrames for BodyFrames {
     fn frame(&self, part: &str) -> Option<PartFrame> {
-        BodyFrames::frame(self, right_part(part)).map(|f| {
-            let frame = PartFrame {
-                origin: f.origin,
-                up: f.up,
-                front: f.front,
-                lat: f.lat,
-            };
-            if matches!(part, "arm_L" | "leg_L") {
-                symmetric_left_frame(frame)
-            } else {
-                frame
-            }
+        BodyFrames::frame(self, part).map(|f| PartFrame {
+            origin: f.origin,
+            up: f.up,
+            front: f.front,
+            lat: f.lat,
         })
     }
     fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
-        BodyFrames::landmark_h(self, right_part(part), name)
+        BodyFrames::landmark_h(self, part, name)
     }
     fn section_radius(&self, part: &str, h: f64) -> f64 {
-        BodyFrames::section_radius(self, right_part(part), h)
+        BodyFrames::section_radius(self, part, h)
     }
 }
 
@@ -1447,22 +1418,275 @@ mod grain_tests {
         }
     }
 
-    #[test]
-    fn symmetric_left_frame_retains_public_side_handedness() {
-        let up = Vec3::new(0.6, 0., 0.8);
-        let front = Vec3::new(0., -1., 0.);
-        let right = PartFrame {
-            origin: Vec3::new(-200., 12., 400.),
-            up,
-            front,
-            lat: up.cross(front),
+    // Independent numerical joints and skin regions, not an anatomical body or oracle. The
+    // asymmetric variant changes only left joints and radii; the unchanged right readings are
+    // the compatibility control. Feed these through BodyFrames::new, not a mock PartFrames.
+    fn posed_limb_model(asymmetric: bool) -> (ftx_body::AnnyModel, ftx_body::PosedBody) {
+        use ftx_body::{Affine, AnnyData, AnnyModel, PosedBody};
+        use ftx_core::Mat3;
+
+        let labels = [
+            "root",
+            "upperarm01.R",
+            "upperarm02.R",
+            "wrist.R",
+            "upperarm01.L",
+            "upperarm02.L",
+            "wrist.L",
+            "upperleg01.R",
+            "lowerleg01.R",
+            "foot.R",
+            "upperleg01.L",
+            "lowerleg01.L",
+            "foot.L",
+            "neck01",
+            "head",
+        ];
+        let parents = [-1, 0, 1, 2, 0, 4, 5, 0, 7, 8, 0, 10, 11, 0, 13];
+        let right_shoulder = Vec3::new(-0.2, 0., 0.8);
+        let right_up = Vec3::new(0.6, 0., 0.8);
+        let (left_shoulder, left_up, left_radius, left_length) = if asymmetric {
+            (
+                Vec3::new(0.24, 0.025, 0.85),
+                Vec3::new(-0.8, 0., 0.6),
+                0.035,
+                0.4,
+            )
+        } else {
+            (Vec3::new(0.2, 0., 0.8), Vec3::new(-0.6, 0., 0.8), 0.02, 0.3)
         };
-        let left = symmetric_left_frame(right);
-        assert_eq!(left.origin, Vec3::new(200., 12., 400.));
-        assert_eq!(left.up, Vec3::new(-0.6, 0., 0.8));
-        assert_eq!(left.front, front);
-        assert_eq!(left.lat, Vec3::new(0.8, 0., 0.6));
-        assert_eq!(left.lat.cross(left.up), left.front);
+        let (left_hip, left_knee, left_ankle, left_leg_radius) = if asymmetric {
+            (
+                Vec3::new(0.11, 0., 0.54),
+                Vec3::new(0.16, 0., 0.31),
+                Vec3::new(0.23, 0., 0.06),
+                0.045,
+            )
+        } else {
+            (
+                Vec3::new(0.08, 0., 0.5),
+                Vec3::new(0.08, 0., 0.25),
+                Vec3::new(0.08, 0., 0.05),
+                0.025,
+            )
+        };
+        let heads = vec![
+            Vec3::ZERO,
+            right_shoulder,
+            right_shoulder - right_up * 0.12,
+            right_shoulder - right_up * 0.3,
+            left_shoulder,
+            left_shoulder - left_up * 0.12,
+            left_shoulder - left_up * left_length,
+            Vec3::new(-0.08, 0., 0.5),
+            Vec3::new(-0.08, 0., 0.25),
+            Vec3::new(-0.08, 0., 0.05),
+            left_hip,
+            left_knee,
+            left_ankle,
+            Vec3::new(0., 0., 0.9),
+            Vec3::new(0., 0., 0.95),
+        ];
+        let mut poses: Vec<_> = heads
+            .iter()
+            .map(|&t| Affine {
+                m: Mat3::IDENTITY,
+                t,
+            })
+            .collect();
+        for (i, up) in [(1, right_up), (4, left_up)] {
+            let across = Vec3::new(0., 1., 0.);
+            poses[i].m = Mat3::from_cols(across, -up, across.cross(-up));
+        }
+        let mut vertices = vec![
+            Vec3::new(-0.1, -0.05, 0.5),
+            Vec3::new(0.1, -0.05, 0.5),
+            Vec3::new(0.1, 0.05, 0.5),
+            Vec3::new(-0.1, 0.05, 0.5),
+            Vec3::new(0., 0., 0.4),
+            Vec3::ZERO,
+            Vec3::new(0., 0., 1.),
+        ];
+        let mut owners = vec![0; vertices.len()];
+        owners[5] = 9; // The floor belongs to the foot, not the torso's crotch section.
+        for (bone, origin, up, radius) in [
+            (1, right_shoulder, right_up, 0.02),
+            (4, left_shoulder, left_up, left_radius),
+        ] {
+            let front = Vec3::new(0., -1., 0.);
+            let lat = up.cross(front);
+            for offset in [front, -front, lat, -lat] {
+                vertices.push(origin - up * 0.01 + offset * radius);
+                owners.push(bone);
+            }
+        }
+        let left_leg_up = (left_hip - left_ankle).normalized();
+        for (bone, origin, up, radius) in [
+            (7, Vec3::new(-0.08, 0., 0.425), Vec3::new(0., 0., 1.), 0.025),
+            (
+                10,
+                Vec3::new(left_hip.x, 0., 0.425),
+                left_leg_up,
+                left_leg_radius,
+            ),
+        ] {
+            for k in 0..=40 {
+                for sign in [-1., 1.] {
+                    vertices.push(
+                        origin + up * (-0.4 + k as f64 * 0.01) + Vec3::new(0., sign * radius, 0.),
+                    );
+                    owners.push(bone);
+                }
+            }
+        }
+        let n = vertices.len();
+        let j = labels.len();
+        let model = AnnyModel::from_data(AnnyData {
+            header: serde_json::from_value(json!({
+                "schema":"ftxbody/1","model":"anny","anny_version":"0.6.1",
+                "configuration":"synthetic independent limb regions","licence":"synthetic","package_sha256":{},
+                "counts":{"vertices":n,"faces":0,"bones":j,"blendshapes":0,"phenotype_blendshapes":0,"local_changes":0,"influences":1},
+                "phenotype":{"features":[],"components":[],"anchors":{},"exposed":[],"fixed_value":0.5},
+                "labels":{"blendshapes":[],"bones":labels,"bone_parents":parents,"local_changes":[]},
+                "y_axis":[0,1,0],"degenerate_rotation":[[1,0,0],[0,1,0],[0,0,1]],"waist_loop_final":[0,1,2,3],"arrays":{}
+            })).unwrap(),
+            template_vertices: vertices.clone(), faces: vec![], blendshape_row_ptr: vec![0],
+            blendshape_vertex: vec![], blendshape_delta: vec![], phenotype_mask: vec![],
+            template_bone_heads: heads.clone(), template_bone_tails: heads,
+            bone_heads_blendshapes: vec![], bone_tails_blendshapes: vec![], bone_rolls: vec![Mat3::IDENTITY; j],
+            vertex_bone_indices: owners, vertex_bone_weights: vec![1.; n],
+            base_mesh_vertex_indices: (0..n as u32).collect(),
+        }).unwrap();
+        (
+            model,
+            PosedBody {
+                vertices,
+                bone_poses: poses,
+                transforms: vec![Affine::IDENTITY; j],
+            },
+        )
+    }
+
+    #[test]
+    fn anny_physical_panels_use_actual_asymmetric_left_joints_and_skin() {
+        let (model, posed) = posed_limb_model(true);
+        let frames = BodyFrames::new(&model, &posed).unwrap();
+        let near = |a: f64, b: f64| assert!((a - b).abs() < 1e-10, "{a} != {b}");
+        near(frames.section_radius("arm_R", 0.), 23.);
+        near(frames.section_radius("arm_L", 0.), 40.25);
+        near(frames.section_radius("leg_R", -200.), 25.);
+        near(frames.section_radius("leg_L", -200.), 45.);
+        near(frames.landmark_h("arm_R", "shoulder_tip").unwrap(), 16.);
+        near(frames.landmark_h("arm_L", "shoulder_tip").unwrap(), 28.);
+        near(frames.landmark_h("arm_R", "wrist").unwrap(), -300.);
+        near(frames.landmark_h("arm_L", "wrist").unwrap(), -400.);
+        let left_up = Vec3::new(-0.12, 0., 0.48).normalized();
+        for (name, z) in [
+            ("ankle", 60.),
+            ("calf", 210.),
+            ("knee", 310.),
+            ("waist", 500.),
+        ] {
+            near(
+                frames.landmark_h("leg_L", name).unwrap(),
+                (z - 425.) / left_up.z,
+            );
+        }
+        let mut pieces = Vec::new();
+        for (part, anchor) in [("arm", "shoulder_tip"), ("leg", "knee")] {
+            for side in ["R", "L"] {
+                let mut piece = physical_panel(&format!("{part}_{side}"), part, Some(side));
+                piece["placement"]["y0_landmark"] = json!(anchor);
+                piece["placement"]["y0"] = json!(0.);
+                piece["placement"]["x0"] = json!(13.);
+                piece["placement"]["theta_deg"] = json!(0.);
+                pieces.push(piece);
+            }
+        }
+        let pattern = Pattern::new(
+            json!({"schema":"fabric-pattern/1","units":"mm","pieces":pieces,"seams":[]}),
+        );
+        let mesh = build_garment(&pattern, 12.).unwrap();
+        let places = placements(&pattern, &mesh, &frames).unwrap();
+        let wrapped = wrapped_positions(&mesh, &places);
+        let expected = [
+            Vec3::new(-191.6, -30., 811.2),
+            Vec3::new(219.2, -22.25, 865.6),
+            Vec3::new(-80., -32., 248.),
+            Vec3::new(138.75 - 2. * left_up.x, -52., 310. - 2. * left_up.z),
+        ];
+        for (k, id) in ["arm_R", "arm_L", "leg_R", "leg_L"].into_iter().enumerate() {
+            let p = &places[k];
+            let index = mesh.corner[&(id.into(), "a".into())];
+            assert!(
+                (wrapped[index] - expected[k] * MM).norm() < 1e-12,
+                "{id}: {:?}",
+                wrapped[index]
+            );
+            assert_eq!(p.frame, PartFrames::frame(&frames, id).unwrap());
+            assert!(!p.mirrored);
+            assert!((p.frame.up.cross(p.frame.front) - p.frame.lat).norm() < 1e-14);
+            // The native roll uses the identical physical anchor throughout partial folding.
+            for progress in [0., 0.4, 1.] {
+                let rolled = roll_points(&[Vec2::new(13., -2.)], p, progress);
+                assert!((rolled[0] - expected[k] * MM).norm() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn anny_symmetric_left_and_generated_mirror_pairs_keep_their_conventions() {
+        let reflect = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
+        for asymmetric in [false, true] {
+            let (model, posed) = posed_limb_model(asymmetric);
+            let frames = BodyFrames::new(&model, &posed).unwrap();
+            let right = PartFrames::frame(&frames, "arm_R").unwrap();
+            let left = PartFrames::frame(&frames, "arm_L").unwrap();
+            if !asymmetric {
+                assert_eq!(left.origin, reflect(right.origin));
+                assert_eq!(left.up, reflect(right.up));
+                assert_eq!(left.front, reflect(right.front));
+                assert_eq!(left.lat, -reflect(right.lat));
+                assert_eq!(left.lat.cross(left.up), left.front);
+                for name in ["shoulder_tip", "elbow", "wrist"] {
+                    assert_eq!(
+                        frames.landmark_h("arm_L", name),
+                        frames.landmark_h("arm_R", name)
+                    );
+                }
+            } else {
+                assert_ne!(left.origin, reflect(right.origin));
+            }
+            let mut piece = physical_panel("pair", "arm", None);
+            piece["cut"]["qty"] = json!(2);
+            piece["placement"]["y0_landmark"] = json!("shoulder_tip");
+            let pattern = Pattern::new(
+                json!({"schema":"fabric-pattern/1","units":"mm","pieces":[piece],"seams":[]}),
+            );
+            let mesh = build_garment(&pattern, 12.).unwrap();
+            let places = placements(&pattern, &mesh, &frames).unwrap();
+            assert_eq!(places[0].frame, right);
+            assert_eq!(places[1].frame, right);
+            assert!(!places[0].mirrored && places[1].mirrored);
+            let r = wrap_points(&[Vec2::new(23., 7.)], &places[0])[0];
+            let l = wrap_points(&[Vec2::new(-23., 7.)], &places[1])[0];
+            assert_eq!(l, reflect(r));
+        }
+    }
+
+    #[test]
+    fn anny_missing_left_region_refuses_instead_of_borrowing_the_right() {
+        let (model, posed) = posed_limb_model(true);
+        let mut data = model.data().clone();
+        for bone in &mut data.vertex_bone_indices {
+            if *bone == 4 {
+                *bone = 1;
+            }
+        }
+        let model = ftx_body::AnnyModel::from_data(data).unwrap();
+        let error = BodyFrames::new(&model, &posed).unwrap_err();
+        assert_eq!(error.code, RefusalCode::DegenerateGeometry);
+        assert!(error.message.contains("left upper-arm"));
     }
 
     #[test]

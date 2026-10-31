@@ -4127,10 +4127,13 @@ Already expanded arm and leg panels can declare an explicit physical side throug
 pattern placement record. The same selection drives fit landmarks, body-frame placement and wrap/
 roll without generating another cut piece or reflecting its flat geometry. Contradictory side,
 quantity and fold declarations refuse; unplaced imported limb roles cannot infer a side. Existing
-generated mirror pairs retain their reference behavior. The current Anny adapter supplies a
-properly handed symmetric left start frame with right-derived heights and radii. Direct synthetic
-tests cover sewn imported panels and independent side-specific frame providers; no asymmetric
-anatomical, drape-convergence or physical-fit claim follows. See spec 01 §2.8 and spec 04 §3.4.
+generated mirror pairs retain their reference behavior. The Anny adapter now derives explicit
+left frames, shoulder/wrist offsets, upper-arm radii, leg landmarks and section radii from the
+actual posed left joints and skinned regions. It no longer reflects right-body data for physical
+left panels. Direct synthetic tests exercise asymmetric and symmetric source models through the
+ordinary mesher, placement, wrap and roll, and refuse missing left-arm evidence. This qualifies
+geometric side selection, not the remaining anatomical heuristics, drape convergence or physical
+fit. See spec 01 §2.8, spec 04 §3.4 and the still-open `ftx-onn.16` acceptance.
 
 ### 25.113 Route complete garments through independently qualified specialist cells
 

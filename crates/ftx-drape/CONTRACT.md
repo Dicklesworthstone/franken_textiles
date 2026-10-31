@@ -227,10 +227,13 @@ Material-study receipts retain it when true. Existing pair, fold and absent-side
 unchanged. Direct scene tests cover asymmetric frame providers, selected anchors/radii, actual
 imported sewn geometry, public normals, roll endpoints and both leg constraints.
 
-The current `BodyFrames` adapter derives an explicit left start frame by reflecting right origin,
-up and front, then recomputing `lat = up × front`. It uses the same right-derived heights and radii;
-other `PartFrames` providers may supply independent sides. This is a symmetric start convention,
-not independent left-body measurement, a convergence guarantee or physical-fit qualification.
+The `BodyFrames` adapter uses each explicit limb's actual posed joints and skinned region. Left
+arm shoulder/wrist offsets and radius, and left leg axis, ankle/calf/knee levels and section radii,
+are independent of the right limb. Both frames retain `lat = up × front`. Generated mirror pairs
+continue to use the reference's right-then-reflect convention. Synthetic posed-model controls
+exercise unequal left/right angles, positions, lengths and radii through the ordinary mesher,
+placement and roll, plus a symmetric case and unchanged generated-pair output. These establish
+geometric side selection, not anatomical landmark, convergence or physical-fit qualification.
 
 **Scene** (`scene.rs`; plan §11.3–11.4). A pattern meshed, placed with a body's part frames (any
 `PartFrames`; `ftx_body::BodyFrames` reads them off a posed Anny body), started (wrap, pre-sew, relax

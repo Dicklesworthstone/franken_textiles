@@ -18,10 +18,10 @@
 //! | shoulder | shoulder tip: the arm frame origin plus `tip_h` along the arm |
 //! | snp | `neck01` head; c7 = snp + 5 mm (the reference form's snp = C7 − 5); head_top = highest skin point |
 //! | torso frame | origin (0, y_c, floor) with y_c the waist loop's mid-depth; up +Z, front −Y, lat +X |
-//! | arm_R frame | origin the `upperarm01.R` head, up from elbow to shoulder, front −Y made orthogonal |
+//! | arm_R / arm_L frame | origin the corresponding `upperarm01` head, up from elbow to shoulder, front −Y made orthogonal |
 //! | upper-arm radius r | median distance of upper-arm vertices from the arm axis; `tip_h = 0.8·r` as the reference |
-//! | leg_R frame | origin (hip-joint x, y_c, crotch + 25 mm), up from ankle to hip joint |
-//! | section radius | torso: farthest torso vertex from the axis within ±10 mm of h; arm: 1.15·r; leg: farthest right-leg vertex from the leg axis within ±10 mm of h, and right-half torso vertices when within 20 mm below the origin or above (the pelvis) |
+//! | leg_R / leg_L frame | origin (corresponding hip-joint x, y_c, crotch + 25 mm), up from that ankle to hip joint |
+//! | section radius | torso: farthest torso vertex from the axis within ±10 mm of h; arm: 1.15·r of that arm; leg: farthest same-leg vertex from its axis within ±10 mm of h, and same-half torso vertices when within 20 mm below the origin or above (the pelvis) |
 //!
 //! Frames are meant to be taken on the standing A-pose body; other poses are reached by a pose ramp.
 
@@ -60,16 +60,26 @@ pub struct BodyFrames {
     pub torso: Frame,
     /// The wearer's-right arm frame.
     pub arm_r: Frame,
+    /// The wearer's-left arm frame from its own posed shoulder and bone direction.
+    pub arm_l: Frame,
     /// The wearer's-right leg frame.
     pub leg_r: Frame,
+    /// The wearer's-left leg frame from its own posed hip and ankle.
+    pub leg_l: Frame,
     /// World height of the floor (mm).
     pub floor_z: f64,
-    /// Shoulder tip along the arm's `up` from its origin (mm).
+    /// Right shoulder tip along the arm's `up` from its origin (mm).
     pub tip_h: f64,
-    /// Upper-arm radius (mm).
+    /// Left shoulder tip along the left arm's `up` from its origin (mm).
+    pub tip_h_l: f64,
+    /// Right upper-arm radius (mm).
     pub upper_arm_radius: f64,
-    /// Shoulder tip to wrist (mm).
+    /// Left upper-arm radius (mm), measured from left upper-arm vertices.
+    pub upper_arm_radius_l: f64,
+    /// Right shoulder tip to wrist (mm).
     pub arm_length: f64,
+    /// Left shoulder tip to wrist (mm).
+    pub arm_length_l: f64,
     /// Landmark heights above the floor (mm).
     pub landmarks: BTreeMap<String, f64>,
     /// The neck frame: origin the `neck01` head (the base of the neck), `up` towards the `head` bone's head.
@@ -82,6 +92,10 @@ pub struct BodyFrames {
     pub(crate) torso_points: Vec<Vec3>,
     /// Wearer's-right leg vertices (mm).
     pub(crate) leg_points: Vec<Vec3>,
+    /// Wearer's-left leg vertices (mm).
+    pub(crate) leg_points_l: Vec<Vec3>,
+    /// Left ankle, calf and knee heights above the floor (mm), in that order.
+    pub(crate) leg_landmarks_l: [f64; 3],
 }
 
 fn orthonormal(up: Vec3) -> Frame {
@@ -226,11 +240,37 @@ impl BodyFrames {
             return Err(none("armpit"));
         }
         let arm_length = (head("wrist.R")? - shoulder).norm() + tip_h;
+        // Explicit physical left panels use the same definitions on their own posed joints and
+        // skin. Reflecting the right side loses independently posed or shaped left limbs.
+        let shoulder_l = head("upperarm01.L")?;
+        let mut arm_l = orthonormal(-posed.bone_poses[bone("upperarm01.L")?].m.col(1));
+        arm_l.origin = shoulder_l;
+        let upper_l = [bone("upperarm01.L")?, bone("upperarm02.L")?];
+        let mut radii_l: Vec<f64> = (0..mm.len())
+            .filter(|&v| {
+                let row = &data.vertex_bone_weights[v * k..(v + 1) * k];
+                let best = (0..k).fold(0, |b, j| if row[j] > row[b] { j } else { b });
+                upper_l.contains(&(data.vertex_bone_indices[v * k + best] as usize))
+            })
+            .map(|v| axial(mm[v], arm_l.origin, arm_l.up).0)
+            .collect();
+        if radii_l.is_empty() {
+            return Err(none("left upper-arm"));
+        }
+        radii_l.sort_by(f64::total_cmp);
+        let upper_arm_radius_l = radii_l[radii_l.len() / 2];
+        let tip_h_l = 0.8 * upper_arm_radius_l;
+        let arm_length_l = (head("wrist.L")? - shoulder_l).norm() + tip_h_l;
         // Leg.
         let hip = head("upperleg01.R")?;
         let ankle = head("foot.R")?;
         let mut leg = orthonormal(hip - ankle);
         leg.origin = Vec3::new(hip.x, y_c, crotch_z + 25.0);
+        let hip_l = head("upperleg01.L")?;
+        let ankle_l = head("foot.L")?;
+        let knee_l = head("lowerleg01.L")?;
+        let mut leg_l = orthonormal(hip_l - ankle_l);
+        leg_l.origin = Vec3::new(hip_l.x, y_c, crotch_z + 25.0);
         // Torso.
         let torso = Frame {
             origin: Vec3::new(0.0, y_c, floor_z),
@@ -273,27 +313,40 @@ impl BodyFrames {
         Ok(Self {
             torso,
             arm_r: arm,
+            arm_l,
             leg_r: leg,
+            leg_l,
             floor_z,
             tip_h,
+            tip_h_l,
             upper_arm_radius,
+            upper_arm_radius_l,
             arm_length,
+            arm_length_l,
             landmarks,
             neck,
             head_bone,
             shoulder_joint_r: shoulder,
             torso_points: pick(Region::Torso),
             leg_points: pick(Region::LegR),
+            leg_points_l: pick(Region::LegL),
+            leg_landmarks_l: [
+                ankle_l.z - floor_z,
+                ankle_l.z + 0.6 * (knee_l.z - ankle_l.z) - floor_z,
+                knee_l.z - floor_z,
+            ],
         })
     }
 
-    /// The frame of `part` (`torso`, `arm_R`, `leg_R`).
+    /// The frame of `part` (`torso`, `arm_R`, `arm_L`, `leg_R`, `leg_L`).
     #[must_use]
     pub fn frame(&self, part: &str) -> Option<Frame> {
         match part {
             "torso" => Some(self.torso),
             "arm_R" => Some(self.arm_r),
+            "arm_L" => Some(self.arm_l),
             "leg_R" => Some(self.leg_r),
+            "leg_L" => Some(self.leg_l),
             _ => None,
         }
     }
@@ -310,9 +363,25 @@ impl BodyFrames {
                 "wrist" => Some(self.tip_h - self.arm_length),
                 _ => None,
             },
+            "arm_L" => match name {
+                "shoulder_tip" => Some(self.tip_h_l),
+                "elbow" => Some(self.tip_h_l - 0.55 * self.arm_length_l),
+                "wrist" => Some(self.tip_h_l - self.arm_length_l),
+                _ => None,
+            },
             "leg_R" => {
                 let z = self.floor_z + self.landmarks.get(name)?;
                 Some(-(self.leg_r.origin.z - z) / self.leg_r.up.z)
+            }
+            "leg_L" => {
+                let h = match name {
+                    "ankle" => self.leg_landmarks_l[0],
+                    "calf" => self.leg_landmarks_l[1],
+                    "knee" => self.leg_landmarks_l[2],
+                    _ => *self.landmarks.get(name)?,
+                };
+                let z = self.floor_z + h;
+                Some(-(self.leg_l.origin.z - z) / self.leg_l.up.z)
             }
             _ => None,
         }
@@ -332,10 +401,15 @@ impl BodyFrames {
                     .fold(0.0, f64::max)
             }
             "arm_R" => 1.15 * self.upper_arm_radius,
-            "leg_R" => {
-                let f = &self.leg_r;
-                let mut r = self
-                    .leg_points
+            "arm_L" => 1.15 * self.upper_arm_radius_l,
+            "leg_R" | "leg_L" => {
+                let left = part == "leg_L";
+                let (f, points) = if left {
+                    (&self.leg_l, &self.leg_points_l)
+                } else {
+                    (&self.leg_r, &self.leg_points)
+                };
+                let mut r = points
                     .iter()
                     .map(|p| axial(*p, f.origin, f.up))
                     .filter(|(_, ph)| (ph - h).abs() <= SLAB)
@@ -346,7 +420,9 @@ impl BodyFrames {
                     r = self
                         .torso_points
                         .iter()
-                        .filter(|p| p.x <= 0.0 && (p.z - z).abs() <= SLAB)
+                        .filter(|p| {
+                            (if left { p.x >= 0.0 } else { p.x <= 0.0 }) && (p.z - z).abs() <= SLAB
+                        })
                         .map(|p| axial(*p, f.origin, f.up).0)
                         .fold(r, f64::max);
                 }

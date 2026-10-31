@@ -698,17 +698,24 @@ mod tests {
         let mut frames = BodyFrames {
             torso: frame,
             arm_r: frame,
+            arm_l: frame,
             leg_r: frame,
+            leg_l: frame,
             floor_z: 0.0,
             tip_h: 0.0,
+            tip_h_l: 0.0,
             upper_arm_radius: 0.0,
+            upper_arm_radius_l: 0.0,
             arm_length: 0.0,
+            arm_length_l: 0.0,
             landmarks: std::collections::BTreeMap::new(),
             neck: frame,
             head_bone: Vec3::ZERO,
             shoulder_joint_r: Vec3::new(-50.0, 0.0, 90.0),
             torso_points: Vec::new(),
             leg_points: Vec::new(),
+            leg_points_l: Vec::new(),
+            leg_landmarks_l: [0.0; 3],
         };
         for shift in [
             Vec3::ZERO,
@@ -835,11 +842,16 @@ mod tests {
         BodyFrames {
             torso: frame,
             arm_r: frame,
+            arm_l: frame,
             leg_r: frame,
+            leg_l: frame,
             floor_z: 0.0,
             tip_h: 0.0,
+            tip_h_l: 0.0,
             upper_arm_radius: 0.0,
+            upper_arm_radius_l: 0.0,
             arm_length: 0.0,
+            arm_length_l: 0.0,
             landmarks: std::collections::BTreeMap::from([
                 ("waist".into(), 100.0),
                 ("crotch".into(), 50.0),
@@ -849,6 +861,8 @@ mod tests {
             shoulder_joint_r: Vec3::ZERO,
             torso_points: Vec::new(),
             leg_points: Vec::new(),
+            leg_points_l: Vec::new(),
+            leg_landmarks_l: [0.0; 3],
         }
     }
 

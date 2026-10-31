@@ -858,15 +858,22 @@ mod tests {
             landmarks,
             torso: dummy,
             arm_r: dummy,
+            arm_l: dummy,
             leg_r: dummy,
+            leg_l: dummy,
             tip_h: 0.0,
+            tip_h_l: 0.0,
             upper_arm_radius: 0.0,
+            upper_arm_radius_l: 0.0,
             arm_length: 0.0,
+            arm_length_l: 0.0,
             neck: dummy,
             head_bone: Vec3::ZERO,
             shoulder_joint_r: Vec3::ZERO,
             torso_points: Vec::new(),
             leg_points: Vec::new(),
+            leg_points_l: Vec::new(),
+            leg_landmarks_l: [0.0; 3],
         };
         let girth = seat_girth(&faces, &posed, &frames).expect("seat girth");
         assert!((girth - 480.0).abs() < 1e-6, "got {girth}");
