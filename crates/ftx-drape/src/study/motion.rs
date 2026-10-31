@@ -595,7 +595,11 @@ fn evaluate_path(
     if coupled {
         result["thermal_basis"] = json!(if matches!(
             result["liquid_mechanics"]["schema"].as_str(),
-            Some("ftx-coupled-liquid-mechanics-result/2" | "ftx-coupled-liquid-mechanics-result/3" | "ftx-coupled-liquid-mechanics-result/4")
+            Some(
+                "ftx-coupled-liquid-mechanics-result/2"
+                    | "ftx-coupled-liquid-mechanics-result/3"
+                    | "ftx-coupled-liquid-mechanics-result/4"
+            )
         ) {
             "Accepted-step sheet heat and source-qualified free-liquid exchange update the next mechanical interval's inertia, gravity and velocity. Prescribed incoming streams mix inelastically before outgoing evaporation leaves at the mixed velocity. Bulk momentum, kinetic/gravitational energy and nonnegative mixing dissipation remain separate from thermal sensible/latent enthalpy; no mixing heat is inferred. Steady snapshots and optional coverage heat remain separate domains."
         } else if result["liquid_mechanics"]["schema"] == "ftx-coupled-liquid-mechanics-result/1" {

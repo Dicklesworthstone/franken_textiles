@@ -886,9 +886,8 @@ fn start_with_exchange(
     let substrate: f64 = solver.model.mass.iter().sum();
     let phases = qualification.schema == "ftx-coupled-liquid-mechanics/4";
     let scheduled = qualification.schema == "ftx-coupled-liquid-mechanics/3";
-    let prescribed = phases
-        || scheduled
-        || qualification.schema == "ftx-coupled-liquid-mechanics/2";
+    let prescribed =
+        phases || scheduled || qualification.schema == "ftx-coupled-liquid-mechanics/2";
     if !initial_total.is_finite() || !substrate.is_finite() {
         return Err(invalid("initial liquid or substrate mass overflows"));
     }
@@ -1699,7 +1698,7 @@ mod tests {
     }
 
     #[test]
-    fn version_three_models_reject_each_others_velocity_fields() {
+    fn incoming_velocity_models_reject_each_others_velocity_fields() {
         let mut q = scheduled_qualification();
         q.validate_exchange_intervals(2).unwrap();
         q.bindings
