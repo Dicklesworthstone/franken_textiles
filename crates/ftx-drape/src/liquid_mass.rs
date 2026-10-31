@@ -1988,13 +1988,14 @@ mod tests {
         let condensed = [0.08, 0.2];
         let mut expected_momentum = Vec3::ZERO;
         let mut expected_kinetic = 0.;
-        for interval in 0..2 {
-            for i in 0..2 {
-                expected_momentum += schedules[i][interval].supply * supplied[i]
-                    + schedules[i][interval].condensation * condensed[i];
+        for (interval, _) in schedules[0].iter().enumerate() {
+            for (i, schedule) in schedules.iter().enumerate() {
+                let phases = &schedule[interval];
+                expected_momentum +=
+                    phases.supply * supplied[i] + phases.condensation * condensed[i];
                 expected_kinetic += 0.5
-                    * (supplied[i] * schedules[i][interval].supply.norm2()
-                        + condensed[i] * schedules[i][interval].condensation.norm2());
+                    * (supplied[i] * phases.supply.norm2()
+                        + condensed[i] * phases.condensation.norm2());
             }
             let report = s
                 .exchange_liquid_streams_in_interval(

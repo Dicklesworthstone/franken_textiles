@@ -492,6 +492,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       + (imported ? "" : `<td>${number(r?.effective_sigma_mm)}</td><td>${number(r?.normalized_residual, true)}</td>`)
       + "</tr>").join("");
     const weight = body.fit?.weight_kg;
+    const occupancy = body.nappy_occupancy;
+    const targetFlags = Array.isArray(occupancy?.target_source?.flags)
+      ? occupancy.target_source.flags.filter(flag => typeof flag === "string") : [];
     const unavailable = Array.isArray(body.tape_evaluation?.unavailable_fields)
       ? body.tape_evaluation.unavailable_fields.filter(name => typeof name === "string") : [];
     return `<details open><summary>Body-fitting residuals (MODEL_FIT)</summary>`
@@ -504,6 +507,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       + (imported ? "" : "<p>The fit scale is the larger of supplied uncertainty and the existing tape-fitting tolerance. Missing uncertainty uses that tolerance. Scaled residuals are diagnostics, not confidence intervals.</p>")
       + `<p>Model mass: ${number(body.mass_kg)} kg.</p>`
       + (weight ? `<p>Supplied weight: ${number(weight.target_kg)} kg; model: ${number(weight.body_kg)} kg; body − target: ${number(weight.residual_kg, true)} kg.</p>` : "")
+      + (occupancy ? `<h3>Nappy geometry proxy (MODEL_FIT)</h3>`
+        + `<div class="scroll"><table><tr><th>Target seat over nappy mm</th><th>Bare seat mm</th><th>Occupied seat mm</th><th>Occupied − target mm</th><th>Supplied σ mm</th></tr>`
+        + `<tr><td>${number(occupancy.target_mm)}</td><td>${number(occupancy.bare_seat_mm)}</td><td>${number(occupancy.achieved_seat_mm)}</td><td>${number(occupancy.residual_mm, true)}</td><td>${occupancy.sigma_mm == null ? "not supplied" : number(occupancy.sigma_mm)}</td></tr></table></div>`
+        + `<p>Target evidence: ${esc(occupancy.target_source?.primary_provenance || "not supplied")}`
+        + (targetFlags.length ? `; ${targetFlags.map(esc).join(", ")}` : "") + ".</p>"
+        + "<p>Calibrated in the fixed reference pose and reused for display, contact and movement. Bare body parameters, model mass and fitting residuals stay unchanged. A chart target remains a prior; this geometry proxy supplies no nappy material properties or physical-fit evidence.</p>" : "")
       + "</details>";
   }
   let foldUrls = [];

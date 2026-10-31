@@ -458,6 +458,104 @@ pub fn calibrate_nappy(
     Ok((p, s, achieved))
 }
 
+/// Separately calibrated occupied geometry. The original body parameters and evidence are unchanged.
+#[derive(Clone, Debug)]
+pub struct NappyOccupancy {
+    /// Derived shape to reuse for collision/display and every requested pose, never body refitting.
+    pub params: BodyParams,
+    /// Computed occupied seat in the standard straight-arm 35-degree pose, in mm.
+    pub seat_over_nappy_mm: f64,
+    /// Source-bearing calibration, explicit local additions and occupied reference geometry identity.
+    pub description: Value,
+}
+
+/// Apply an explicitly requested nappy occupancy to an otherwise unchanged fitted/accepted body.
+/// The caller validates and fuses source records. A chart target remains a chart target; the result
+/// is a geometric MODEL_FIT proxy and supplies no nappy mass, material law or measurement readiness.
+/// Calibration always uses [`Pose::drape`], independently of later export and motion poses.
+///
+/// # Errors
+/// Invalid wearer selection, missing/invalid fused target or sigma, an unreachable target, missing
+/// model local changes or seat geometry, or calibration that cannot match within 0.01 mm.
+pub fn nappy_occupancy(
+    model: &AnnyModel,
+    bare_params: &BodyParams,
+    measurements: &Value,
+) -> Result<Option<NappyOccupancy>, Refusal> {
+    let bad = |message: &str| Refusal::new(RefusalCode::InvalidDocument, message);
+    match measurements["wearer"].get("nappies") {
+        None | Some(Value::Bool(false)) => return Ok(None),
+        Some(Value::Bool(true)) => {}
+        _ => return Err(bad("wearer.nappies must be a boolean")),
+    }
+    let source = &measurements["fused"]["seat_over_nappy"];
+    let target = source["value_mm"]
+        .as_f64()
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .ok_or_else(|| bad("wearer.nappies requires a positive fused seat_over_nappy.value_mm target; no default bulk is inferred"))?;
+    if source.get("unit").is_some_and(|unit| unit != "mm") {
+        return Err(bad("seat_over_nappy must use millimetres"));
+    }
+    let sigma = source
+        .get("sigma_mm")
+        .map(|value| {
+            value
+                .as_f64()
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .ok_or_else(|| bad("seat_over_nappy.sigma_mm must be finite and positive"))
+        })
+        .transpose()?;
+    let pose = Pose::drape();
+    let faces: Vec<_> = model
+        .data()
+        .faces
+        .iter()
+        .map(|f| f.map(|i| i as usize))
+        .collect();
+    let posed_body = |params: &BodyParams| {
+        let rest = model.rest(params)?;
+        let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
+        let frames = BodyFrames::new(model, &posed)?;
+        let seat = seat_girth(&faces, &posed, &frames)
+            .filter(|g| g.is_finite() && *g > 0.0)
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    "nappy occupancy requires a valid seat section",
+                )
+            })?;
+        Ok::<_, Refusal>((posed, seat))
+    };
+    let (_, bare_seat) = posed_body(bare_params)?;
+    let (params, size, _) = calibrate_nappy(model, bare_params, &pose, target)?;
+    let (posed, achieved) = posed_body(&params)?;
+    if (achieved - target).abs() > 0.01 {
+        return Err(Refusal::new(
+            RefusalCode::NotConverged,
+            "nappy occupancy could not match the supplied seat within 0.01 mm; no bare-body fallback",
+        ));
+    }
+    let geometry = serde_json::to_vec(&(&posed.vertices, &faces))
+        .map_err(|_| bad("cannot identify the occupied reference geometry"))?;
+    let mut description = serde_json::json!({
+        "model":"anny_seat_proxy/1","measurement_pose":"standard_straight_arm_drape_35_degrees",
+        "target_mm":target,"target_source":source,"bare_seat_mm":bare_seat,
+        "achieved_seat_mm":achieved,"residual_mm":achieved-target,"size_parameter":size,
+        "local_change_additions":{"buttocks-volume-incr":size,"hip-scale-depth-incr":size/2.0},
+        "occupied_reference_geometry_sha256":ftx_core::receipt::sha256_hex(&geometry),
+        "provenance":"MODEL_FIT","physical_validation_claim":false,
+        "no_claim":"Geometric occupancy proxy only. Bare body parameters, mass and fit evidence are unchanged. No nappy material, friction, thermal or vapor law, measured readiness or physical fit is established."
+    });
+    if let Some(sigma) = sigma {
+        description["sigma_mm"] = serde_json::json!(sigma);
+    }
+    Ok(Some(NappyOccupancy {
+        params,
+        seat_over_nappy_mm: achieved,
+        description,
+    }))
+}
+
 /// What a tape reads on `posed` (mm, in [`TAPE_FIELDS`] order), or `None` when any
 /// section is missing. Use [`partial_tape_readings`] to retain independently available sections.
 #[must_use]

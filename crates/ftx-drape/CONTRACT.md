@@ -66,6 +66,15 @@ are unchanged, and measurement/display geometry remains complete. Reports retain
 roots and synthetic cap count in `body_contact_proxy` (inside the study body report for studies).
 This supports the scoped clothing calculation, not facial/hand/foot contact or physical fit.
 
+**Nappy occupancy on selected bodies.** An explicit `wearer.nappies: true` invokes the shared body
+calibration against fused `seat_over_nappy` in the fixed 35-degree measurement pose. Collision,
+display and every motion endpoint reuse the derived parameters; the fitted/accepted source shape,
+its mass and residuals retain their original identity. Reports separately identify the occupied
+shape and reference geometry, and immutable flat-fit context adds only its computed
+`seat_over_nappy` value alongside bare anatomical measurements. Missing or unreachable required
+occupancy refuses before simulation. Target source/uncertainty is retained without promoting chart
+priors to measurements or adding nappy material, friction, mass, thermal or vapor properties.
+
 **Declared simulation coverage.** `garment::simulation_scope` validates all instance and seam
 references and requires explicit placement on each instance whose `sim` is not false. Missing
 placement refuses before production meshing, including disconnected panels. Explicit exclusions

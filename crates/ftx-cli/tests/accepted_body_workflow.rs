@@ -31,6 +31,456 @@ fn model_bytes() -> Vec<u8> {
 }
 
 #[test]
+fn nappy_occupancy_preserves_bare_evidence_and_drives_native_portable_and_motion_geometry() {
+    use ftx_body::{Pose, Wearer, fit_tape, nappy_occupancy, pose_deltas, tape_targets};
+    use ftx_drape::study::{
+        fitted::{BodyRequest, FittedBody},
+        motion,
+    };
+    use ftx_pattern::validate::BodyMeasure;
+
+    let mut labels = ftx_body::FREE[ftx_body::N_PHENOTYPE..].to_vec();
+    labels.extend(["buttocks-volume-incr", "hip-scale-depth-incr"]);
+    let bytes = model_bytes_with_locals(true, &labels);
+    let digest = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let bare_seat = 3200.0 * ftx_core::det::sin_cos(std::f64::consts::PI / 16.0).0;
+    let target = bare_seat + 60.0;
+    let mut measurements = json!({"wearer":{"age_months":30,"sex":"F","stature_mm":1300.0},
+        "fused":{"waist":{"value_mm":bare_seat,"sigma_mm":10.0},
+            "seat_over_nappy":{"value_mm":target,"sigma_mm":40.0,"unit":"mm",
+                "primary_provenance":"CHART_PRIOR","flags":["PRIOR_ONLY"],
+                "sources":[{"provenance":"CHART_PRIOR","used":true,"method":"synthetic occupancy target"}]}}});
+    let wearer = Wearer::from_measurements(&measurements).unwrap();
+    let fit = fit_tape(
+        &model,
+        &wearer,
+        &tape_targets(&measurements).unwrap(),
+        &Pose::drape(),
+    )
+    .unwrap();
+    let original_params = fit.params.clone();
+    assert!(
+        nappy_occupancy(&model, &fit.params, &measurements)
+            .unwrap()
+            .is_none()
+    );
+    measurements["wearer"]["nappies"] = json!(true);
+    let occupied = nappy_occupancy(&model, &fit.params, &measurements)
+        .unwrap()
+        .unwrap();
+    let receipt = &occupied.description;
+    assert_eq!(fit.params, original_params);
+    assert!((occupied.seat_over_nappy_mm - target).abs() < 1e-8);
+    let size = receipt["size_parameter"].as_f64().unwrap();
+    // The fixture's independent radial law is R(s) = R(0) * (1 + 0.15 s).
+    assert!((size - 60.0 / (0.15 * bare_seat)).abs() < 1e-8);
+    assert_eq!(
+        receipt["target_source"],
+        measurements["fused"]["seat_over_nappy"]
+    );
+    assert_eq!(receipt["sigma_mm"], 40.0);
+    assert_eq!(receipt["provenance"], "MODEL_FIT");
+    assert_eq!(receipt["physical_validation_claim"], false);
+    for (i, name) in labels.iter().enumerate() {
+        let delta = match *name {
+            "buttocks-volume-incr" => size,
+            "hip-scale-depth-incr" => size / 2.0,
+            _ => 0.0,
+        };
+        assert_eq!(
+            occupied.params.local_changes[i],
+            fit.params.local_changes[i] + delta
+        );
+    }
+
+    let text = measurements.to_string();
+    let portable = ftx_wasm::fold::inspect_body(&model, &digest, &text, None).unwrap();
+    assert_eq!(portable["body"]["nappy_occupancy"], *receipt);
+    assert_eq!(portable["body"]["mass_kg"], fit.mass_kg);
+    assert_eq!(
+        portable["body"]["readings_mm"]["waist"],
+        fit.readings[2].unwrap()
+    );
+    assert_eq!(
+        portable["body"]["readings_mm"]["hip"],
+        fit.readings[3].unwrap()
+    );
+    assert_eq!(
+        portable["body"]["readings_mm"]["seat_over_nappy"],
+        occupied.seat_over_nappy_mm
+    );
+
+    let request = BodyRequest::read(&json!({"schema":"ftx-scenario-body/1",
+        "measurements":measurements,"arm_abduction_deg":50.0}))
+    .unwrap();
+    let mut study = FittedBody::prepare(&model, &digest, &request).unwrap();
+    assert_eq!(study.report["nappy_occupancy"], *receipt);
+    assert_eq!(
+        study.report["shape_parameters"]["local_changes"],
+        json!(fit.params.local_changes)
+    );
+    assert_eq!(study.report["body_mass_kg"], fit.mass_kg);
+    assert_ne!(
+        study.report["shape_sha256"],
+        study.report["occupied_shape_sha256"]
+    );
+    let flat = study.flat_fit_body(&model, &digest).unwrap();
+    assert!((flat.value("waist").unwrap() - bare_seat).abs() < 1e-8);
+    assert!((flat.value("hip").unwrap() - bare_seat).abs() < 1e-8);
+    assert_eq!(
+        flat.value("seat_over_nappy").unwrap(),
+        occupied.seat_over_nappy_mm
+    );
+    assert_eq!(flat.sigma("seat_over_nappy"), None);
+    let flat_identity = flat.identity().clone();
+    let rest = model.rest(&occupied.params).unwrap();
+    let mut pose = Pose::drape();
+    pose.arm_abduction_deg = Some(50.0);
+    let posed = model
+        .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+        .unwrap();
+    let displayed = ftx_body::skin_mesh(&posed.vertices, &model.data().faces).unwrap();
+    assert_eq!(study.body().display.0, displayed.vertices);
+    assert_eq!(study.body().display.1, displayed.triangles);
+    let motion: motion::Request = serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
+        "keyframes":[{"time_s":0.01,"arm_abduction_deg":51.0},{"time_s":0.02,"arm_abduction_deg":52.0}],
+        "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000})).unwrap();
+    let mut endpoints = Vec::new();
+    for key in &motion.keyframes {
+        pose.arm_abduction_deg = Some(key.arm_abduction_deg);
+        let posed = model
+            .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+            .unwrap();
+        endpoints.push(
+            ftx_body::clothing_skin(&model, &posed.vertices)
+                .unwrap()
+                .vertices,
+        );
+    }
+    let expected = motion::Path::new(&motion, study.body().collision, endpoints).unwrap();
+    assert_eq!(
+        study
+            .motion_path(&model, &digest, &motion)
+            .unwrap()
+            .sha256(),
+        expected.sha256()
+    );
+    study.report["nappy_occupancy"] = json!({"achieved_seat_mm":1.0,"target_source":"tampered"});
+    study.report["occupied_shape_sha256"] = json!("tampered");
+    assert_eq!(
+        study.flat_fit_body(&model, &digest).unwrap().identity(),
+        &flat_identity
+    );
+    assert_eq!(
+        study
+            .motion_path(&model, &digest, &motion)
+            .unwrap()
+            .sha256(),
+        expected.sha256()
+    );
+
+    let dir = setup();
+    std::fs::write(dir.join("nappy.ftxbody"), &bytes).unwrap();
+    save(&dir.join("nappy.json"), &measurements);
+    let out = invoke(
+        &dir,
+        &[
+            "body",
+            "--measurements",
+            "nappy.json",
+            "--model",
+            "nappy.ftxbody",
+            "--pose",
+            "seated",
+            "--out",
+            "nappy-body",
+        ],
+        0,
+    );
+    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let doc = &out["result"]["body"];
+    assert_eq!(doc["nappy_occupancy"], *receipt); // Export pose does not recalibrate the proxy.
+    assert_eq!(doc["mass_kg"], (fit.mass_kg * 100.0).round() / 100.0);
+    assert_eq!(doc["phenotype"]["height"], fit.params.phenotype.height);
+    assert!(doc["local_changes"].get("buttocks-volume-incr").is_none());
+    let mesh = ftx_drape::render::read_obj(
+        &std::fs::read_to_string(dir.join("nappy-body/body.obj")).unwrap(),
+    )
+    .unwrap();
+    let pose = Pose::seated();
+    let expected = model
+        .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+        .unwrap();
+    let expected = ftx_body::skin_mesh(&expected.vertices, &model.data().faces).unwrap();
+    assert_eq!(mesh.vertices.len(), expected.vertices.len());
+    assert_eq!(mesh.triangles, expected.triangles);
+    for (a, b) in mesh.vertices.iter().zip(&expected.vertices) {
+        assert!((*a - *b).norm() < 1e-7);
+    }
+
+    // Accepted evidence remains exact; occupancy is an additional operational geometry.
+    let mut accepted = self::receipt(&digest);
+    accepted["solution"]["anny_parameters"]["local_changes"] = json!(vec![0.0; labels.len()]);
+    save(&dir.join("nappy-fit.json"), &accepted);
+    let accepted_bytes = std::fs::read(dir.join("nappy-fit.json")).unwrap();
+    let out = invoke(
+        &dir,
+        &[
+            "body",
+            "--body-fit",
+            "nappy-fit.json",
+            "--measurements",
+            "nappy.json",
+            "--model",
+            "nappy.ftxbody",
+            "--pose",
+            "rest",
+            "--out",
+            "accepted-nappy",
+        ],
+        0,
+    );
+    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let doc = &out["result"]["body"];
+    assert_eq!(doc["source_fit"], accepted);
+    assert_eq!(doc["phenotype"]["height"], 0.6);
+    assert!(doc["local_changes"].get("buttocks-volume-incr").is_none());
+    assert_eq!(
+        std::fs::read(dir.join("accepted-nappy/body_fit.json")).unwrap(),
+        accepted_bytes
+    );
+    let portable = ftx_wasm::fold::inspect_body(
+        &model,
+        &digest,
+        &text,
+        Some(std::str::from_utf8(&accepted_bytes).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(portable["body"]["nappy_occupancy"], doc["nappy_occupancy"]);
+    assert_eq!(portable["body"]["source_fit"], accepted);
+    let mut current = measurements.clone();
+    current["schema"] = json!("fabric-measurements/1");
+    current["records"] = json!([ftx_measure::make_record(
+        "seat_over_nappy",
+        target,
+        40.0,
+        "MEASURED_TAPE",
+        "synthetic target freshness check",
+        None,
+        ""
+    )
+    .unwrap()]);
+    current["fused"]["seat_over_nappy"]["value_mm"] = json!(1.0); // Deliberately stale cache.
+    let freshly_fused = ftx_measure::fuse(&current, true).unwrap();
+    let checked = ftx_wasm::fold::inspect_body(
+        &model,
+        &digest,
+        &current.to_string(),
+        Some(std::str::from_utf8(&accepted_bytes).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(
+        checked["body"]["nappy_occupancy"]["target_source"],
+        freshly_fused["fused"]["seat_over_nappy"]
+    );
+    assert_eq!(checked["body"]["source_fit"], accepted);
+    let mut request = request;
+    request.accepted_body_fit = Some(accepted);
+    let reused = FittedBody::prepare(&model, &digest, &request).unwrap();
+    assert_eq!(reused.report["nappy_occupancy"], doc["nappy_occupancy"]);
+    assert_eq!(
+        reused.report["shape_parameters"]["phenotype"]["height"],
+        0.6
+    );
+    assert_eq!(
+        reused.report["shape_parameters"]["local_changes"],
+        json!(vec![0.0; labels.len()])
+    );
+    assert!(
+        (reused
+            .flat_fit_body(&model, &digest)
+            .unwrap()
+            .value("seat_over_nappy")
+            .unwrap()
+            - target)
+            .abs()
+            < 1e-8
+    );
+
+    // Exercise the actual cloth entry points, including the explicit schema-tagged fused-only
+    // input supported by the tape path. The viewer and exported collider must use occupied skin.
+    let mut pattern: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+    ))
+    .unwrap();
+    let width = std::f64::consts::TAU * 180.0;
+    pattern["pieces"][0]["vertices"]["b"][0] = json!(width);
+    pattern["pieces"][0]["vertices"]["c"][0] = json!(width);
+    pattern["pieces"][0]["placement"]["radius_mm"] = json!(180.0);
+    pattern["pieces"][0]["placement"]["x0"] = json!(width / 2.0);
+    let mut fold_measurements = measurements.clone();
+    fold_measurements["schema"] = json!("fabric-measurements/1");
+    let portable = ftx_wasm::fold::fold_up(
+        &model,
+        &pattern,
+        &fold_measurements,
+        &json!({"points":[]}),
+        0.0,
+        false,
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(portable.report["body"]["nappy_occupancy"], *receipt);
+    save(&dir.join("fold-measurements.json"), &fold_measurements);
+    save(&dir.join("pattern.json"), &pattern);
+    let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "drape",
+            "pattern.json",
+            "--measurements",
+            "fold-measurements.json",
+            "--model",
+            "nappy.ftxbody",
+            "--out",
+            "nappy-fold",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        matches!(out.status.code(), Some(0 | 2)),
+        "{} / {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut native = read(&dir.join("nappy-fold/sim_report.json"));
+    assert_eq!(native["body"]["nappy_occupancy"], *receipt);
+    // Native tape summaries retain their documented display rounding; cloth state is exact.
+    for field in ["pattern", "wall_s", "measurements_sha256", "body"] {
+        native.as_object_mut().unwrap().remove(field);
+    }
+    let mut portable_report = portable.report;
+    portable_report.as_object_mut().unwrap().remove("body");
+    assert_eq!(native, portable_report);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("nappy-fold/fold_viewer.html")).unwrap(),
+        portable.viewer
+    );
+    let mesh = ftx_drape::render::read_obj(
+        &std::fs::read_to_string(dir.join("nappy-fold/body.obj")).unwrap(),
+    )
+    .unwrap();
+    let pose = Pose::drape();
+    let expected = model
+        .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+        .unwrap();
+    let expected = ftx_body::skin_mesh(&expected.vertices, &model.data().faces).unwrap();
+    assert_eq!(mesh.vertices.len(), expected.vertices.len());
+    assert_eq!(mesh.triangles, expected.triangles);
+    for (a, b) in mesh.vertices.iter().zip(&expected.vertices) {
+        assert!((*a - *b).norm() < 1e-7);
+    }
+}
+
+#[test]
+fn requested_nappy_occupancy_refuses_missing_invalid_and_unreachable_targets() {
+    let mut labels = ftx_body::FREE[ftx_body::N_PHENOTYPE..].to_vec();
+    labels.extend(["buttocks-volume-incr", "hip-scale-depth-incr"]);
+    let bytes = model_bytes_with_locals(true, &labels);
+    let digest = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let params = model.params(ftx_body::Phenotype {
+        height: 0.6,
+        ..Default::default()
+    });
+    let bare = 3200.0 * ftx_core::det::sin_cos(std::f64::consts::PI / 16.0).0;
+    let base = json!({"wearer":{"age_months":30,"stature_mm":1300.0,"nappies":true},
+        "fused":{"waist":{"value_mm":bare}}});
+    for value in [
+        Value::Null,
+        json!({"value_mm":0.0}),
+        json!({"value_mm":-1.0}),
+        json!({"value_mm":"700"}),
+        json!({"value_mm":bare+50.0,"sigma_mm":0.0}),
+        json!({"value_mm":bare+50.0,"sigma_mm":null}),
+        json!({"value_mm":bare+50.0,"unit":"cm"}),
+    ] {
+        let mut data = base.clone();
+        data["fused"]["seat_over_nappy"] = value;
+        let error = ftx_body::nappy_occupancy(&model, &params, &data).unwrap_err();
+        assert_eq!(error.code, ftx_core::RefusalCode::InvalidDocument);
+        assert!(error.message.contains("seat_over_nappy"));
+        data["wearer"]["nappies"] = json!(false);
+        assert!(
+            ftx_body::nappy_occupancy(&model, &params, &data)
+                .unwrap()
+                .is_none()
+        );
+    }
+    for target in [bare - 1.0, bare * 2.0] {
+        let mut data = base.clone();
+        data["fused"]["seat_over_nappy"] = json!({"value_mm":target});
+        assert_eq!(
+            ftx_body::nappy_occupancy(&model, &params, &data)
+                .unwrap_err()
+                .code,
+            ftx_core::RefusalCode::OutOfRange
+        );
+    }
+    let mut valid = base.clone();
+    valid["fused"]["seat_over_nappy"] = json!({"value_mm":bare+50.0});
+    let unqualified = ftx_wasm::fold::load_body(&model_bytes_with_locals(
+        true,
+        &ftx_body::FREE[ftx_body::N_PHENOTYPE..],
+    ))
+    .unwrap();
+    let error =
+        ftx_body::nappy_occupancy(&unqualified, &unqualified.params(params.phenotype), &valid)
+            .unwrap_err();
+    assert!(error.message.contains("buttocks-volume-incr"));
+    let occupied = ftx_body::nappy_occupancy(&model, &params, &valid)
+        .unwrap()
+        .unwrap();
+    assert!(occupied.description.get("sigma_mm").is_none());
+    assert!(
+        ftx_wasm::fold::inspect_body(&model, &digest, &base.to_string(), None)
+            .unwrap_err()
+            .contains("seat_over_nappy")
+    );
+    let request = ftx_drape::study::fitted::BodyRequest::read(
+        &json!({"schema":"ftx-scenario-body/1","measurements":base}),
+    )
+    .unwrap();
+    assert!(
+        ftx_drape::study::fitted::FittedBody::prepare(&model, &digest, &request)
+            .err()
+            .unwrap()
+            .message
+            .contains("seat_over_nappy")
+    );
+    let dir = setup();
+    std::fs::write(dir.join("nappy.ftxbody"), bytes).unwrap();
+    save(&dir.join("missing-seat.json"), &base);
+    invoke(
+        &dir,
+        &[
+            "body",
+            "--measurements",
+            "missing-seat.json",
+            "--model",
+            "nappy.ftxbody",
+            "--out",
+            "missing-nappy",
+        ],
+        3,
+    );
+    assert!(!dir.join("missing-nappy/body.obj").exists());
+    assert!(!dir.join("missing-nappy/body.json").exists());
+}
+
+#[test]
 fn partial_tape_targets_reach_native_portable_and_study_workflows() {
     use ftx_body::{Pose, Wearer, fit_tape, tape_targets};
     use ftx_drape::study::fitted::{BodyRequest, FittedBody};
@@ -1071,31 +1521,45 @@ fn model_bytes_with_locals(articulated: bool, local_changes: &[&str]) -> Vec<u8>
     let n = vertices.len() / 3;
     let nfaces = faces.len() / 3;
     let nblend = 1 + 2 * local_changes.len();
-    let delta = vertices
+    let mut delta: Vec<f64> = vertices
         .as_chunks::<3>()
         .0
         .iter()
         .flat_map(|v| [0.0, 0.0, 0.5 * v[2]])
         .collect();
+    let mut blend_vertices: Vec<u32> = (0..n as u32).collect();
+    let mut blend_rows = vec![0, n as u32];
+    for name in local_changes {
+        for sign in [1.0, -1.0] {
+            if ["buttocks-volume-incr", "hip-scale-depth-incr"].contains(name) {
+                // Independent synthetic law: each nappy coordinate expands the lower prism's
+                // radius by 10%. With coefficients s and s/2 its seat grows by exactly 15% * s.
+                for (i, vertex) in vertices.as_chunks::<3>().0.iter().enumerate() {
+                    if vertex[2] <= 0.4 {
+                        blend_vertices.push(i as u32);
+                        delta.extend([sign * 0.1 * vertex[0], sign * 0.1 * vertex[1], 0.0]);
+                    }
+                }
+            }
+            blend_rows.push(blend_vertices.len() as u32);
+        }
+    }
+    let blend_count = blend_vertices.len();
     add("template_vertices", "f64", vec![n, 3], f64s(vertices));
     add("faces", "u32", vec![nfaces, 3], u32s(faces));
     add(
         "blendshape_row_ptr",
         "u32",
         vec![nblend + 1],
-        u32s(
-            std::iter::once(0)
-                .chain(std::iter::repeat_n(n as u32, nblend))
-                .collect(),
-        ),
+        u32s(blend_rows),
     );
     add(
         "blendshape_vertex",
         "u32",
-        vec![n],
-        u32s((0..n as u32).collect()),
+        vec![blend_count],
+        u32s(blend_vertices),
     );
-    add("blendshape_delta", "f64", vec![n, 3], f64s(delta));
+    add("blendshape_delta", "f64", vec![blend_count, 3], f64s(delta));
     let mut mask = vec![0; 26];
     mask[1] = 1;
     add("phenotype_mask", "u8", vec![1, 26], mask);

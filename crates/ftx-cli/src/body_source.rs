@@ -73,13 +73,23 @@ fn read_report(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
 pub(super) fn prepare(args: &Args, measurements: Option<&Value>) -> Result<PreparedBody, Refusal> {
     let Some(path) = args.options.get("body-fit") else {
         let model = load_model(args)?;
-        let (wearer, fit) = fitted_body(
-            &model,
-            measurements.ok_or_else(|| bad_input("--measurements is required"))?,
-        )?;
+        let measurements = measurements.ok_or_else(|| bad_input("--measurements is required"))?;
+        let (wearer, fit) = fitted_body(&model, measurements)?;
+        let mut description = body_json(&wearer, &fit);
+        let params =
+            if let Some(occupied) = ftx_body::nappy_occupancy(&model, &fit.params, measurements)? {
+                description
+                    .entry("readings_mm")
+                    .or_insert_with(|| json!({}))["seat_over_nappy"] =
+                    json!(occupied.seat_over_nappy_mm);
+                description.insert("nappy_occupancy".into(), occupied.description);
+                occupied.params
+            } else {
+                fit.params
+            };
         return Ok(PreparedBody {
-            description: body_json(&wearer, &fit),
-            params: fit.params,
+            description,
+            params,
             model,
             source_bytes: None,
         });
@@ -101,15 +111,29 @@ pub(super) fn prepare(args: &Args, measurements: Option<&Value>) -> Result<Prepa
     // Hash and parse the SAME bytes: replacing the path mid-read cannot change the evaluated model.
     let model = AnnyModel::from_data(AnnyData::from_bytes(&model_bytes, true)?)?;
     let data = measurements.map(crate::round::measurements).transpose()?;
-    let (shape, description) =
+    let (shape, mut description) =
         accepted_shape::prepare(&model, &hash, &report_bytes, data.as_ref())?;
+    let occupancy = data
+        .as_ref()
+        .map(|data| ftx_body::nappy_occupancy(&model, &shape.params, data))
+        .transpose()?
+        .flatten();
+    let params = if let Some(occupied) = occupancy {
+        description
+            .entry("readings_mm")
+            .or_insert_with(|| json!({}))["seat_over_nappy"] = json!(occupied.seat_over_nappy_mm);
+        description.insert("nappy_occupancy".into(), occupied.description);
+        occupied.params
+    } else {
+        shape.params
+    };
     eprintln!(
         "body: reusing accepted image-fit shape without tape refitting; source {}",
         sha256_hex(&report_bytes)
     );
     Ok(PreparedBody {
         model,
-        params: shape.params,
+        params,
         description,
         source_bytes: Some(report_bytes),
     })

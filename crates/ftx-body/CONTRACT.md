@@ -113,6 +113,18 @@ the closed shell enclosing the most volume (the mesh also holds two eyes
 and a tongue), refused unless every edge has exactly two oppositely wound triangles, no triangle is
 degenerate and the volume is positive. `trimmed_skin` leaves out the regions skinned mostly to given
 bones and their descendants and closes each opening with a fan, checked the same way.
+
+**Declared nappy occupancy.** `nappy_occupancy` activates only for explicit `wearer.nappies: true`
+and requires a positive fused `seat_over_nappy` target; absent, malformed or unreachable targets
+refuse without a default thickness or bare-body fallback. The existing size calibration runs once
+in the straight-arm 35-degree measurement pose, and the derived parameters are reused for all
+requested poses and motion. The bare fitted/accepted parameters, source report, mass and tape
+residuals remain unchanged. The separate `nappy_occupancy` description retains the complete fused
+target evidence, any valid supplied sigma, achieved seat, size/local additions and occupied reference
+geometry digest. Its `seat_over_nappy` is a MODEL_FIT prediction, including when the target is a
+chart prior; calibration never creates measurement readiness. This is a geometric occupancy proxy,
+not a characterized nappy garment, added body mass or an inferred thermal/friction/material law.
+
 Production `clothing_skin` selects wrists, feet and, where present, paired `levator05` facial-detail
 regions. The pinned detailed face has intersections even with correct upstream coordinates. This
 clothing proxy preserves retained source vertices exactly and identifies synthetic cap centres;

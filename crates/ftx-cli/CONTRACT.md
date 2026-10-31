@@ -248,6 +248,11 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   coverage with its exact unavailable fields. A missing requested reading still refuses by name.
   The synthetic articulated-prism workflow in `tests/accepted_body_workflow.rs` covers native and
   portable fitting, body publication and material-study handoff without external model assets.
+  Explicit `wearer.nappies: true` adds the shared calibrated nappy occupancy to exported/draped
+  geometry, including accepted-body reuse. The required fused `seat_over_nappy` target must be
+  available and reachable. Bare body parameters, mass, source identity and fitting residuals stay
+  separate from the `nappy_occupancy` report and computed `readings_mm.seat_over_nappy`. Calibration
+  uses the standard measurement pose once; a seated/squat/export pose never refits that proxy.
 
 Record-bearing standalone `draft`, tape-fitting `body`, and `drape` inputs are re-fused through the same
 authority as workspace rounds before fitting, model loading or output creation. A cached `fused` value cannot

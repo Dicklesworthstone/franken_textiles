@@ -98,11 +98,11 @@ pub fn inspect_body(
         }
         data = ftx_measure::fuse(&data, true).map_err(|e| e.message)?;
     }
-    let mut body = if let Some(report) = accepted_report {
-        let (_, description) =
+    let (mut body, params) = if let Some(report) = accepted_report {
+        let (shape, description) =
             ftx_body::accepted_shape::prepare(model, model_sha256, report.as_bytes(), Some(&data))
                 .map_err(|e| e.message)?;
-        Value::Object(description)
+        (Value::Object(description), shape.params)
     } else {
         if !data["wearer"]["age_months"].is_number() {
             return Err("the body check needs the wearer's age (months)".into());
@@ -110,8 +110,14 @@ pub fn inspect_body(
         let wearer = Wearer::from_measurements(&data).map_err(|e| e.message)?;
         let targets = tape_targets(&data).map_err(|e| e.message)?;
         let fit = fit_tape(model, &wearer, &targets, &Pose::drape()).map_err(|e| e.message)?;
-        body_report(&wearer, &fit)
+        (body_report(&wearer, &fit), fit.params)
     };
+    if let Some(occupied) =
+        ftx_body::nappy_occupancy(model, &params, &data).map_err(|e| e.message)?
+    {
+        body["readings_mm"]["seat_over_nappy"] = json!(occupied.seat_over_nappy_mm);
+        body["nappy_occupancy"] = occupied.description;
+    }
     body["model_sha256"] = json!(model_sha256);
     Ok(json!({"schema":"ftx-body-check/1", "body":body,
         "measurements_sha256":ftx_core::receipt::sha256_hex(measurements.as_bytes()),
@@ -222,18 +228,25 @@ fn fold_on_source(
         opts.self_contact = Some(p);
     }
     ftx_drape::material::resolve(&pat, &opts).map_err(m)?;
+    // Occupancy and the bare fitter must consume the same current evidence, including in direct
+    // portable calls that have not passed through a saved round.
+    let data = if measurements.get("records").is_some()
+        || (source.is_some() && measurements.get("schema").is_some())
+    {
+        let errors = ftx_measure::validate(measurements);
+        if !errors.is_empty() {
+            return Err(format!("fold-up measurements: {}", errors.join("; ")));
+        }
+        ftx_measure::fuse(measurements, true).map_err(m)?
+    } else {
+        measurements.clone()
+    };
     let mut pose = Pose::drape();
-    let (params, description) = if let Some(source) = source {
+    let (params, mut description) = if let Some(source) = source {
         if !source.arm_deg.is_finite() || !(0.0..=180.0).contains(&source.arm_deg) {
             return Err("arm angle must be finite and between 0 and 180 degrees".into());
         }
         pose.arm_abduction_deg = Some(source.arm_deg);
-        let data = if measurements.get("records").is_some() || measurements.get("schema").is_some()
-        {
-            ftx_measure::fuse(measurements, true).map_err(m)?
-        } else {
-            measurements.clone()
-        };
         let (shape, mut description) = ftx_body::accepted_shape::prepare(
             model,
             source.model_sha256,
@@ -251,8 +264,8 @@ fn fold_on_source(
         progress("body: reusing accepted image-fit shape without tape refitting");
         (shape.params, Value::Object(description))
     } else {
-        let wearer = Wearer::from_measurements(measurements).map_err(m)?;
-        let targets = tape_targets(measurements).map_err(m)?;
+        let wearer = Wearer::from_measurements(&data).map_err(m)?;
+        let targets = tape_targets(&data).map_err(m)?;
         let fit = fit_tape(model, &wearer, &targets, &pose).map_err(m)?;
         progress(&format!(
             "body: fitted in {} iterations, {:.2} kg",
@@ -261,7 +274,15 @@ fn fold_on_source(
         let description = body_report(&wearer, &fit);
         (fit.params, description)
     };
-    let rest = model.rest(&params).map_err(m)?;
+    let occupancy = ftx_body::nappy_occupancy(model, &params, &data).map_err(m)?;
+    let occupied_params = occupancy
+        .as_ref()
+        .map_or(&params, |occupied| &occupied.params);
+    let rest = model.rest(occupied_params).map_err(m)?;
+    if let Some(occupied) = occupancy {
+        description["readings_mm"]["seat_over_nappy"] = json!(occupied.seat_over_nappy_mm);
+        description["nappy_occupancy"] = occupied.description;
+    }
     let posed = model
         .pose(&rest, &pose_deltas(model, &rest, &pose, 1.0).map_err(m)?)
         .map_err(m)?;

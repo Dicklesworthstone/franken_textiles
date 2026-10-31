@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, BodyParams, Pose, SkinMesh, TAPE_FIELDS, Wearer,
+    AnnyModel, BodyFrames, BodyParams, NappyOccupancy, Pose, SkinMesh, TAPE_FIELDS, Wearer,
     accepted_shape::AcceptedShape, clothing_skin, fit_tape, partial_tape_readings, pose_deltas,
     skin_mesh, tape_targets,
 };
@@ -157,6 +157,8 @@ pub struct FittedBody {
     display: SkinMesh,
     arm_deg: f64,
     params: BodyParams,
+    // This geometric proxy never replaces the source shape or inherits edits to the public report.
+    nappy_occupancy: Option<NappyOccupancy>,
     model_sha256: String,
     // Freeze source identity separately from the public display report. Lazy flat measurements
     // must not inherit later edits to report text or a different set of supplied tape targets.
@@ -234,9 +236,13 @@ impl FittedBody {
         } else {
             tape_shape(model, &request.measurements)?
         };
+        let occupancy = ftx_body::nappy_occupancy(model, &params, &request.measurements)?;
+        let occupied_params = occupancy
+            .as_ref()
+            .map_or(&params, |occupied| &occupied.params);
         let mut pose = Pose::drape();
         pose.arm_abduction_deg = Some(request.arm_abduction_deg);
-        let rest = model.rest(&params)?;
+        let rest = model.rest(occupied_params)?;
         let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
         let collision = clothing_skin(model, &posed.vertices)?;
         let display = skin_mesh(&posed.vertices, &model.data().faces)?;
@@ -244,6 +250,12 @@ impl FittedBody {
         report["measurements_sha256"] = json!(hash(&request.measurements)?);
         report["shape_parameters"] = parameters(&params);
         report["shape_sha256"] = json!(hash(&(model_sha256, parameters(&params)))?);
+        if let Some(occupied) = &occupancy {
+            report["nappy_occupancy"] = occupied.description.clone();
+            report["readings_mm"]["seat_over_nappy"] = json!(occupied.seat_over_nappy_mm);
+            report["occupied_shape_sha256"] =
+                json!(hash(&(model_sha256, parameters(&occupied.params)))?);
+        }
         report["pose"] =
             json!({"kind":"standing_straight_arm", "arm_abduction_deg":request.arm_abduction_deg});
         report["body_provenance"] = json!("MODEL_FIT");
@@ -257,6 +269,7 @@ impl FittedBody {
             display,
             arm_deg: request.arm_abduction_deg,
             params,
+            nappy_occupancy: occupancy,
             model_sha256: model_sha256.into(),
             flat_source,
             report,
@@ -303,7 +316,10 @@ impl FittedBody {
                 .zip(readings)
                 .filter_map(|(name, value)| value.map(|value| (name.into(), value))),
         );
-        let identity = json!({"schema":"ftx-flat-fit-body/1","provenance":"MODEL_FIT",
+        if let Some(occupied) = &self.nappy_occupancy {
+            values.insert("seat_over_nappy".into(), occupied.seat_over_nappy_mm);
+        }
+        let mut identity = json!({"schema":"ftx-flat-fit-body/1","provenance":"MODEL_FIT",
             "model_sha256":model_sha256,
             "shape_sha256":hash(&(model_sha256, parameters(&self.params)))?,
             "shape_source":self.flat_source["shape_source"],
@@ -314,6 +330,11 @@ impl FittedBody {
             "available_measurements":values.keys().collect::<Vec<_>>(),
             "complete_tape_sections":readings.iter().all(Option::is_some),
             "uncertainty_propagated":false,"fit_claim":false});
+        if let Some(occupied) = &self.nappy_occupancy {
+            identity["nappy_occupancy"] = occupied.description.clone();
+            identity["occupied_shape_sha256"] =
+                json!(hash(&(model_sha256, parameters(&occupied.params)))?);
+        }
         Ok(FlatFitBody {
             frames,
             values,
@@ -348,7 +369,11 @@ impl FittedBody {
         {
             return Err(budget("motion endpoint body-vertex budget exceeded"));
         }
-        let rest = model.rest(&self.params)?;
+        let params = self
+            .nappy_occupancy
+            .as_ref()
+            .map_or(&self.params, |occupied| &occupied.params);
+        let rest = model.rest(params)?;
         let mut endpoints = Vec::with_capacity(request.keyframes.len());
         for keyframe in &request.keyframes {
             let mut pose = Pose::drape();

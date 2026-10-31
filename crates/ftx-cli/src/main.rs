@@ -439,12 +439,21 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     make_dir(&out)?;
     let model = load_model(args)?;
     let (w, fit) = fitted_body(&model, &meas)?;
-    let rest = model.rest(&fit.params)?;
+    let occupancy = ftx_body::nappy_occupancy(&model, &fit.params, &meas)?;
+    let params = occupancy
+        .as_ref()
+        .map_or(&fit.params, |occupied| &occupied.params);
+    let rest = model.rest(params)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
     let skin = skin_mesh(&posed.vertices, &model.data().faces)?;
     let ph = fit.params.phenotype;
     let labels = &model.data().header.labels.local_changes;
     let mut doc = body_json(&w, &fit);
+    if let Some(occupied) = occupancy {
+        doc.entry("readings_mm").or_insert_with(|| json!({}))["seat_over_nappy"] =
+            json!(occupied.seat_over_nappy_mm);
+        doc.insert("nappy_occupancy".into(), occupied.description);
+    }
     doc.insert("schema".into(), json!("ftx-body/1"));
     doc.insert("measurements_sha256".into(), json!(sha256_hex(&meas_bytes)));
     doc.insert("pose".into(), json!(pose_name));
