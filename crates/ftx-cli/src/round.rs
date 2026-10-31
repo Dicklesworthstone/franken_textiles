@@ -717,7 +717,7 @@ fn reserve_ws_qualification(ws: &Path) -> Result<PathBuf, Refusal> {
 /// `ftx qualify`: run the three known-answer chest bands (`-20`, `0`, `+20` mm ease) at zero
 /// gravity (`--sew 70 --drape 0`) and write `qualify.json` (`fabric-qualify/1`, spec 04 §7.1).
 pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    use ftx_body::{BodyFrames, Pose, pose_deltas, skin_mesh, trimmed_skin};
+    use ftx_body::{BodyFrames, Pose, clothing_skin, pose_deltas, skin_mesh};
     use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
     use ftx_drape::qualify::{
         DEFAULT_BAND_HEIGHT_MM, QUALIFY_DRAPE_STEPS, QUALIFY_EASES, QUALIFY_SEW_STEPS,
@@ -814,11 +814,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     } = super::body_source::prepare(args, Some(&data))?;
     let rest = model.rest(&params)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
-    let skin = trimmed_skin(
-        &model,
-        &posed.vertices,
-        &["wrist.R", "wrist.L", "foot.R", "foot.L"],
-    )?;
+    let skin = clothing_skin(&model, &posed.vertices)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;
     let body = DrapeBody {
@@ -843,7 +839,8 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         super::reserve_drape_output(&sim_dir)?;
         let pattern = Pattern::new(bpat);
         let started = std::time::Instant::now();
-        let run = drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?;
+        let mut run = drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?;
+        run.report["body_contact_proxy"] = skin.contact_proxy_basis();
         let mut report = run.report.clone();
         if let Some(selected) = &fabric_override {
             report["fabric_override"] = selected.receipt().clone();

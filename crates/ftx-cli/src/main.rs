@@ -38,8 +38,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, FREE, Pose, TAPE_FIELDS, TapeFit, Wearer, default_model_path, fit_tape,
-    pose_deltas, skin_mesh, tape_targets, trimmed_skin,
+    AnnyModel, BodyFrames, FREE, Pose, TAPE_FIELDS, TapeFit, Wearer, clothing_skin,
+    default_model_path, fit_tape, pose_deltas, skin_mesh, tape_targets,
 };
 use ftx_core::Vec3;
 use ftx_core::receipt::sha256_hex;
@@ -797,11 +797,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     } = body_source::prepare(args, Some(&meas))?;
     let rest = model.rest(&params)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
-    let skin = trimmed_skin(
-        &model,
-        &posed.vertices,
-        &["wrist.R", "wrist.L", "foot.R", "foot.L"],
-    )?;
+    let skin = clothing_skin(&model, &posed.vertices)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;
     let pattern = Pattern::new(pat);
@@ -812,7 +808,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
     let started = std::time::Instant::now();
-    let run = if let Some(prepared) = &outfit {
+    let mut run = if let Some(prepared) = &outfit {
         prepared.drape(&spec, &body, &opts, |line| eprintln!("{line}"))?
     } else {
         match pair {
@@ -824,6 +820,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             None => drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?,
         }
     };
+    run.report["body_contact_proxy"] = skin.contact_proxy_basis();
     let mut report = run.report.clone();
     if outfit.is_some() {
         report["outfit"]["input_file_sha256"] = json!(sha256_hex(&pattern_bytes));

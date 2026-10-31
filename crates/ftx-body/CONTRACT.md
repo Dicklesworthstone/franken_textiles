@@ -92,8 +92,14 @@ taped `seat_over_nappy` target within 0.01 mm, refusing targets outside the reac
 the closed shell enclosing the most volume (the mesh also holds two eyes
 and a tongue), refused unless every edge has exactly two oppositely wound triangles, no triangle is
 degenerate and the volume is positive. `trimmed_skin` leaves out the regions skinned mostly to given
-bones and their descendants (the drape uses the wrists and feet: no garment in scope covers them, and a
-12 mm garment mesh cannot clear a thumb) and closes each opening with a fan, checked the same way.
+bones and their descendants and closes each opening with a fan, checked the same way.
+Production `clothing_skin` selects wrists, feet and, where present, paired `levator05` facial-detail
+regions. The pinned detailed face has intersections even with correct upstream coordinates. This
+clothing proxy preserves retained source vertices exactly and identifies synthetic cap centres;
+consumers still require the strict full-surface intersection audit. `body_contact_proxy` in drape
+reports records selected roots and cap count. Full measurement/display skin is retained. No hand,
+foot, facial-contact, anatomical or real-fit qualification follows from these caps. The positive
+and detailed-source negative are in `ftx-drape/tests/kat_fitted.rs`.
 `examples/posed_skins.rs` writes the poses as OBJ for a look.
 
 **Frames and landmarks** (`BodyFrames`, definitions in the `landmarks.rs` table). On the posed body, in

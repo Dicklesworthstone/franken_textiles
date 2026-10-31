@@ -309,11 +309,26 @@ pub struct SkinMesh {
     pub triangles: Vec<[usize; 3]>,
     /// Index of each vertex in the source mesh.
     pub source_vertex: Vec<usize>,
+    /// Bone roots selected for removal and centroid capping, in policy order.
+    pub trim_roots: Vec<String>,
     /// Checks.
     pub report: SkinReport,
 }
 
 impl SkinMesh {
+    /// Explicit scope of the collision approximation; this does not qualify physical contact.
+    #[must_use]
+    pub fn contact_proxy_basis(&self) -> serde_json::Value {
+        serde_json::json!({
+            "policy": "dominant_bone_region_caps/1",
+            "selected_trim_roots": self.trim_roots,
+            "generated_cap_vertices": self.source_vertex.iter().filter(|&&i| i == usize::MAX).count(),
+            "source_vertices_moved": false,
+            "physical_qualification": false,
+            "scope": "clothing collision only; full measurement and display skin retained; no hand, foot or facial-contact qualification"
+        })
+    }
+
     /// Wavefront OBJ text (metres, z up, 17 significant digits; 1-based indices).
     #[must_use]
     pub fn to_obj(&self) -> String {
@@ -449,6 +464,7 @@ pub fn skin_mesh(vertices: &[Vec3], faces: &[[u32; 3]]) -> Result<SkinMesh, Refu
         vertices: out_v,
         triangles: tris,
         source_vertex: source,
+        trim_roots: Vec::new(),
         report: SkinReport {
             shells_dropped,
             triangles_dropped,
@@ -554,7 +570,25 @@ pub fn trimmed_skin(
         .iter()
         .map(|&i| skin.source_vertex.get(i).copied().unwrap_or(usize::MAX))
         .collect();
+    out.trim_roots = roots.iter().map(|label| (*label).to_owned()).collect();
     Ok(out)
+}
+
+/// Clothing collider with the wrist/foot and paired levator05 regions capped.
+/// Measurement and display callers retain the complete [`skin_mesh`]. Source vertices are never
+/// moved; cap centres are explicitly synthetic. This is not an anatomical/facial-contact claim.
+/// The consumer must still admit the complete result through its ordinary intersection audit.
+///
+/// # Errors
+/// As [`trimmed_skin`]; a cap is not guaranteed to produce an admissible collider.
+pub fn clothing_skin(model: &AnnyModel, vertices: &[Vec3]) -> Result<SkinMesh, Refusal> {
+    let mut roots = vec!["wrist.R", "wrist.L", "foot.R", "foot.L"];
+    roots.extend(
+        ["levator05.R", "levator05.L"]
+            .into_iter()
+            .filter(|label| model.bone_index(label).is_some()),
+    );
+    trimmed_skin(model, vertices, &roots)
 }
 
 /// The posed skin of a body: rest shape from `params`, `pose` a fraction `t` of the way from rest.

@@ -26,8 +26,8 @@ pub mod tape;
 
 pub use data::{AnnyData, default_model_path};
 pub use drape::{
-    JointRotation, Legs, Pose, SkinMesh, SkinReport, joint_rotations, nappy_local_changes,
-    pose_deltas, posed_skin, skin_mesh, trimmed_skin,
+    JointRotation, Legs, Pose, SkinMesh, SkinReport, clothing_skin, joint_rotations,
+    nappy_local_changes, pose_deltas, posed_skin, skin_mesh, trimmed_skin,
 };
 pub use fit::{
     FREE, MAX_NAPPY_SIZE, N_PHENOTYPE, N_TAPE, TAPE_FIELDS, TapeFit, TapeResidual, TapeTarget,

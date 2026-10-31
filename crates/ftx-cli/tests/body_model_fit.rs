@@ -271,6 +271,22 @@ fn standalone_body_and_drape_ignore_poisoned_caches_but_retain_source_identity()
         .unwrap();
         assert_eq!(report["measurements_sha256"], sha256_hex(&bytes));
         assert_eq!(report["body"]["fit"], body["fit"]);
+        let proxy = &report["body_contact_proxy"];
+        assert_eq!(proxy["policy"], "dominant_bone_region_caps/1");
+        assert_eq!(
+            proxy["selected_trim_roots"],
+            json!([
+                "wrist.R",
+                "wrist.L",
+                "foot.R",
+                "foot.L",
+                "levator05.R",
+                "levator05.L"
+            ])
+        );
+        assert!(proxy["generated_cap_vertices"].as_u64().unwrap() > 0);
+        assert_eq!(proxy["source_vertices_moved"], false);
+        assert_eq!(proxy["physical_qualification"], false);
         assert_eq!(std::fs::read(dir.join(&source)).unwrap(), bytes);
         bodies.push(body);
         drapes.push(drape_dir);

@@ -38,6 +38,14 @@ thickness-offset gap, additive CCD, lagged smoothed Coulomb friction); and the g
 (`garment.rs`). Placement, pre-sew, the drape schedule and the reference's metrics are described below.
 Optional cloth self-contact adds moving cloth–cloth barriers and independent friction.
 
+**Anny clothing collider.** CLI, portable fold and fitted studies share `ftx_body::clothing_skin`:
+dominant-bone wrist/foot regions and paired `levator05` facial details are replaced by centroid caps.
+The complete detailed source can self-intersect; that negative must still fail `audit_surface`.
+No audit exclusion or tolerance relaxation is applied to the proxy. Retained source coordinates
+are unchanged, and measurement/display geometry remains complete. Reports retain the selected
+roots and synthetic cap count in `body_contact_proxy` (inside the study body report for studies).
+This supports the scoped clothing calculation, not facial/hand/foot contact or physical fit.
+
 **Declared simulation coverage.** `garment::simulation_scope` validates all instance and seam
 references and requires explicit placement on each instance whose `sim` is not false. Missing
 placement refuses before production meshing, including disconnected panels. Explicit exclusions

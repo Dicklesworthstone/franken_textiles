@@ -3,8 +3,8 @@
 //! fit report), with the body model read from bytes the page was given and the fold-up viewer page as text.
 
 use ftx_body::{
-    AnnyData, AnnyModel, BodyFrames, Pose, TAPE_FIELDS, TapeFit, Wearer, fit_tape, pose_deltas,
-    skin_mesh, tape_targets, trimmed_skin,
+    AnnyData, AnnyModel, BodyFrames, Pose, TAPE_FIELDS, TapeFit, Wearer, clothing_skin, fit_tape,
+    pose_deltas, skin_mesh, tape_targets,
 };
 use ftx_drape::{
     run::{DrapeBody, DrapeOptions, drape, viewer},
@@ -258,12 +258,7 @@ fn fold_on_source(
     let posed = model
         .pose(&rest, &pose_deltas(model, &rest, &pose, 1.0).map_err(m)?)
         .map_err(m)?;
-    let skin = trimmed_skin(
-        model,
-        &posed.vertices,
-        &["wrist.R", "wrist.L", "foot.R", "foot.L"],
-    )
-    .map_err(m)?;
+    let skin = clothing_skin(model, &posed.vertices).map_err(m)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces).map_err(m)?;
     let frames = BodyFrames::new(model, &posed).map_err(m)?;
     let body = DrapeBody {
@@ -286,6 +281,7 @@ fn fold_on_source(
     }
     .map_err(m)?;
     run.report["body"] = description;
+    run.report["body_contact_proxy"] = skin.contact_proxy_basis();
     let html = viewer(&run, &pat, &body, TEMPLATE)?;
     Ok(Fold {
         report: run.report,

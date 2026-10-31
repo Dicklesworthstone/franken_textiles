@@ -12,8 +12,8 @@
 //! `cargo test -p ftx-drape --release --test kat_fitted -- --include-ignored --nocapture`.
 
 use ftx_body::{
-    AnnyModel, BodyFrames, Pose, Wearer, default_model_path, fit_tape, pose_deltas, skin_mesh,
-    tape_targets, trimmed_skin,
+    AnnyModel, BodyFrames, Pose, Wearer, clothing_skin, default_model_path, fit_tape, pose_deltas,
+    skin_mesh, tape_targets, trimmed_skin,
 };
 use ftx_drape::run::{DrapeBody, DrapeOptions, drape};
 use ftx_pattern::Pattern;
@@ -54,12 +54,7 @@ fn drape_result(
     let posed = model
         .pose(&rest, &pose_deltas(model, &rest, &pose, 1.0).unwrap())
         .unwrap();
-    let skin = trimmed_skin(
-        model,
-        &posed.vertices,
-        &["wrist.R", "wrist.L", "foot.R", "foot.L"],
-    )
-    .unwrap();
+    let skin = clothing_skin(model, &posed.vertices).unwrap();
     let full = skin_mesh(&posed.vertices, &model.data().faces).unwrap();
     let frames = BodyFrames::new(model, &posed).unwrap();
     let body = DrapeBody {
@@ -102,6 +97,73 @@ fn no_fold_up_placement_refuses() {
         err.message.contains("back") && err.message.contains("placement"),
         "{err}"
     );
+}
+
+#[test]
+#[ignore = "needs admitted Anny data; clothing-collider qualification"]
+fn clothing_proxy_retains_source_vertices_and_passes_strict_admission() {
+    let fx = drafts();
+    let case = fx["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "zouave_bolero-920")
+        .unwrap();
+    let model = AnnyModel::load(&default_model_path().unwrap(), false).unwrap();
+    let meas = &case["input"]["measurements"];
+    let pose = Pose::drape();
+    let fit = fit_tape(
+        &model,
+        &Wearer::from_measurements(meas).unwrap(),
+        &tape_targets(meas),
+        &pose,
+    )
+    .unwrap();
+    let rest = model.rest(&fit.params).unwrap();
+    let posed = model
+        .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+        .unwrap();
+    let detailed = trimmed_skin(
+        &model,
+        &posed.vertices,
+        &["wrist.R", "wrist.L", "foot.R", "foot.L"],
+    )
+    .unwrap();
+    let refusal =
+        ftx_drape::collider::audit_surface(&detailed.vertices, &detailed.triangles, 1_000_000)
+            .unwrap_err();
+    assert_eq!(refusal.code, ftx_core::RefusalCode::IntersectingStart);
+    let proxy = ftx_body::clothing_skin(&model, &posed.vertices).unwrap();
+    let basis = proxy.contact_proxy_basis();
+    assert_eq!(
+        basis["selected_trim_roots"],
+        serde_json::json!([
+            "wrist.R",
+            "wrist.L",
+            "foot.R",
+            "foot.L",
+            "levator05.R",
+            "levator05.L"
+        ])
+    );
+    assert!(basis["generated_cap_vertices"].as_u64().unwrap() > 0);
+    assert_eq!(basis["source_vertices_moved"], false);
+    assert_eq!(basis["physical_qualification"], false);
+    for (&source, &point) in proxy.source_vertex.iter().zip(&proxy.vertices) {
+        if source != usize::MAX {
+            assert_eq!(point, posed.vertices[source]);
+        }
+    }
+    eprintln!(
+        "detailed/proxy vertices {}/{}, triangles {}/{}, volume {}/{} m3",
+        detailed.vertices.len(),
+        proxy.vertices.len(),
+        detailed.triangles.len(),
+        proxy.triangles.len(),
+        detailed.report.volume,
+        proxy.report.volume
+    );
+    ftx_drape::collider::audit_surface(&proxy.vertices, &proxy.triangles, 1_000_000).unwrap();
 }
 
 fn numbers(v: &Value) -> Vec<(String, f64)> {
@@ -295,12 +357,7 @@ fn kat9_fitted_pipeline_digest() {
     let posed = model
         .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
         .unwrap();
-    let skin = trimmed_skin(
-        &model,
-        &posed.vertices,
-        &["wrist.R", "wrist.L", "foot.R", "foot.L"],
-    )
-    .unwrap();
+    let skin = clothing_skin(&model, &posed.vertices).unwrap();
     let full = skin_mesh(&posed.vertices, &model.data().faces).unwrap();
     let frames = BodyFrames::new(&model, &posed).unwrap();
     let body = DrapeBody {

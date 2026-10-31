@@ -13,8 +13,8 @@
 //! `cargo test -p ftx-drape --release --test kat_elastic -- --include-ignored --nocapture`.
 
 use ftx_body::{
-    AnnyModel, BodyFrames, Pose, Wearer, default_model_path, fit_tape, pose_deltas, skin_mesh,
-    tape_targets, trimmed_skin,
+    AnnyModel, BodyFrames, Pose, Wearer, clothing_skin, default_model_path, fit_tape, pose_deltas,
+    skin_mesh, tape_targets,
 };
 use ftx_drape::run::{DrapeBody, DrapeOptions, drape};
 use ftx_pattern::Pattern;
@@ -51,12 +51,7 @@ fn kat7_elastic_ladder() {
     let posed = model
         .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
         .unwrap();
-    let skin = trimmed_skin(
-        &model,
-        &posed.vertices,
-        &["wrist.R", "wrist.L", "foot.R", "foot.L"],
-    )
-    .unwrap();
+    let skin = clothing_skin(&model, &posed.vertices).unwrap();
     let full = skin_mesh(&posed.vertices, &model.data().faces).unwrap();
     let frames = BodyFrames::new(&model, &posed).unwrap();
     let body = DrapeBody {

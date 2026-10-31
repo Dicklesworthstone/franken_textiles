@@ -42,3 +42,35 @@ same Torch 2.14.1 runtime changes all six choices: the admitted template's diago
 are -6.94e-18 to -1.22e-17 m, whereas the Linux template gives ties and selects the other diagonal.
 Thus small coordinate differences can change topology; selected forward-vertex agreement alone
 cannot justify admitting that conversion. Use the reproduced environment and full hash checks.
+
+## Full-surface reference and portable reuse
+
+The admitted converted file can be copied to another platform without rebuilding it. Verify its
+size and complete SHA-256 above before setting `FTX_ANNY_MODEL`; unchanged internal array, label
+and sparse-reconstruction checks still apply. A successful copy does not qualify body anatomy or
+make an intersecting posed mesh a valid cloth collider.
+
+The companion `anny-0.6.1-full-vertices.bin` contains every rest and posed vertex for the existing
+16 reference inputs: 438,976 vertices across 32 surfaces. It was captured twice from the pinned
+Python environment above with identical bytes: **10,541,975 bytes**, SHA-256
+`8d019f3aca6597bb2be99629676fd746a0385ca33ff7ed703c05e38141a10782`.
+It is derived model data and stays in the external model cache, alongside the converted file.
+The original sampled JSON oracle remains unchanged.
+
+```sh
+python tools/body-model/capture_anny_reference.py NEW_FULL_REFERENCE.bin \
+  --full-vertices-from tests/fixtures/oracle/body/anny-0.6.1-reference.json
+FTX_ANNY_MODEL=/path/to/anny-0.6.1-default.ftxbody \
+FTX_ANNY_FULL_REFERENCE=/path/to/anny-0.6.1-full-vertices.bin \
+  cargo test -p ftx-body --release --test anny_parity -- --include-ignored --nocapture
+```
+
+The capture checks the installed wheel's RECORD and exact reference array/label hashes before
+calling upstream Anny on the JSON's unchanged inputs. It creates a new output exclusively.
+The binary starts with `FTXANNY1`, a little-endian u64 JSON-header length, and that header's bytes.
+The remaining f64 little-endian payload is ordered by case, rest/posed state, vertex, then xyz,
+in metres. The header locks the sampled JSON's full SHA-256, every input, state order and model
+hashes. The Rust test additionally locks the complete binary digest, compares every vertex at
+the existing 1e-9 m tolerance and checks that an unsampled coordinate mutation fails. If no
+explicit full-reference path is supplied, it looks next to the converted model. This additional
+ignored test requires both external files; missing data is a failed invocation, never a pass.

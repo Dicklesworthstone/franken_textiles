@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 
 use ftx_body::{
     AnnyModel, BodyFrames, BodyParams, Pose, SkinMesh, TAPE_FIELDS, Wearer,
-    accepted_shape::AcceptedShape, fit_tape, partial_tape_readings, pose_deltas, skin_mesh,
-    tape_targets, trimmed_skin,
+    accepted_shape::AcceptedShape, clothing_skin, fit_tape, partial_tape_readings, pose_deltas,
+    skin_mesh, tape_targets,
 };
 use ftx_core::Refusal;
 use ftx_pattern::{instance::PyError, validate::BodyMeasure};
@@ -238,11 +238,7 @@ impl FittedBody {
         pose.arm_abduction_deg = Some(request.arm_abduction_deg);
         let rest = model.rest(&params)?;
         let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
-        let collision = trimmed_skin(
-            model,
-            &posed.vertices,
-            &["wrist.R", "wrist.L", "foot.R", "foot.L"],
-        )?;
+        let collision = clothing_skin(model, &posed.vertices)?;
         let display = skin_mesh(&posed.vertices, &model.data().faces)?;
         let frames = BodyFrames::new(model, &posed)?;
         report["measurements_sha256"] = json!(hash(&request.measurements)?);
@@ -251,6 +247,7 @@ impl FittedBody {
         report["pose"] =
             json!({"kind":"standing_straight_arm", "arm_abduction_deg":request.arm_abduction_deg});
         report["body_provenance"] = json!("MODEL_FIT");
+        report["body_contact_proxy"] = collision.contact_proxy_basis();
         report["physical_validation_claim"] = json!(false);
         let flat_source = json!({"shape_source":report["shape_source"],
             "input_measurements_sha256":report["measurements_sha256"]});
@@ -357,11 +354,7 @@ impl FittedBody {
             let mut pose = Pose::drape();
             pose.arm_abduction_deg = Some(keyframe.arm_abduction_deg);
             let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
-            let skin = trimmed_skin(
-                model,
-                &posed.vertices,
-                &["wrist.R", "wrist.L", "foot.R", "foot.L"],
-            )?;
+            let skin = clothing_skin(model, &posed.vertices)?;
             if skin.triangles != self.collision.triangles
                 || skin.source_vertex != self.collision.source_vertex
             {

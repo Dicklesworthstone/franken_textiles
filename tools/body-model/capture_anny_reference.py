@@ -26,9 +26,11 @@ import json
 import math
 import platform
 import statistics
+import struct
 import sys
 import time
 import warnings
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -337,12 +339,62 @@ def data_hashes(model) -> dict:
     return res
 
 
+def capture_full_vertices(model, reference_path: str, output: str) -> None:
+    """Extend the unchanged sampled oracle with upstream f64 surfaces, never candidate output."""
+    from convert_anny import verify_installation
+
+    problems = verify_installation()
+    if problems:
+        raise ValueError("; ".join(problems))
+    reference_bytes = Path(reference_path).read_bytes()
+    reference = json.loads(reference_bytes)
+    hashes = data_hashes(model)
+    labels = {
+        name: hashlib.sha256("\n".join(getattr(model, name)).encode()).hexdigest()
+        for name in ("blendshape_labels", "bone_labels")
+    }
+    if (reference["schema"] != SCHEMA or reference["meta"]["anny_version"] != PINNED_VERSION
+            or hashes != reference["model"]["data_hashes"] or labels != reference["model"]["label_hashes"]):
+        raise ValueError("full-surface capture requires the unchanged pinned package arrays and labels")
+    header = {
+        "schema": "ftx-anny-full-vertices/1",
+        "reference_sha256": hashlib.sha256(reference_bytes).hexdigest(),
+        "model": {"vertex_count": int(model.template_vertices.shape[0]),
+                  "data_hashes": hashes, "label_hashes": labels},
+        "meta": {"anny_version": PINNED_VERSION, "torch_version": torch.__version__,
+                 "numpy_version": np.__version__, "python_version": platform.python_version(),
+                 "machine": platform.machine(), "system": platform.system(), "capture_threads": 1},
+        "states": ["rest_vertices", "posed_vertices"],
+        "dtype": "<f8",
+        "cases": [{"name": case["name"], "inputs": case["inputs"]} for case in reference["cases"]],
+    }
+    encoded = json.dumps(header, sort_keys=True, separators=(",", ":")).encode()
+    # Header identity fixes every input and the payload order: case, state, vertex, xyz in metres.
+    with open(output, "xb") as stream:
+        stream.write(b"FTXANNY1" + struct.pack("<Q", len(encoded)) + encoded)
+        for case in reference["cases"]:
+            inputs = case["inputs"]
+            out, _, recorded = run_forward(model, inputs["phenotype"], inputs["local_changes"],
+                                           inputs["pose_local_bone"])
+            if recorded != inputs["pose_local_bone"]:
+                raise ValueError(f"{case['name']}: upstream pose input differs from the sampled oracle")
+            for key in ("rest_vertices", "vertices"):
+                points = out[key][0].detach().cpu().numpy().astype("<f8", copy=False)
+                if points.shape != (header["model"]["vertex_count"], 3) or not np.isfinite(points).all():
+                    raise ValueError(f"{case['name']}: invalid complete upstream surface")
+                stream.write(points.tobytes(order="C"))
+    print(f"wrote {len(reference['cases'])} complete rest/posed cases to {output}")
+    print(f"SHA256 {hashlib.sha256(Path(output).read_bytes()).hexdigest()}")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("output", help="path of the JSON file to write")
     ap.add_argument("--cache-dir", default=None, help="Anny model-data cache directory (default: Anny's own)")
     ap.add_argument("--timing-repeats", type=int, default=50)
     ap.add_argument("--allow-other-version", action="store_true", help="do not refuse a version other than the pin")
+    ap.add_argument("--full-vertices-from", metavar="REFERENCE_JSON",
+                    help="write full binary surfaces for this existing sampled oracle instead of new JSON/timings")
     args = ap.parse_args(argv)
 
     import anny
@@ -359,6 +411,9 @@ def main(argv=None) -> int:
     t0 = time.perf_counter()
     model = build_model(args.cache_dir)
     load_s = time.perf_counter() - t0
+    if args.full_vertices_from:
+        capture_full_vertices(model, args.full_vertices_from, args.output)
+        return 0
     model32 = copy.deepcopy(model).to(torch.float32)
     anthropometry = anny.Anthropometry(model)
 

@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use ftx_body::{Affine, AnnyModel, BodyParams, Phenotype, default_model_path};
 use ftx_core::receipt::Sha256;
 use ftx_core::{Mat3, Vec3};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Vertices and bone positions (spec 05 §8.8 recommends 1e-9 m for the f64 path; gate G1a is 5e-5 m).
 const TOL_M: f64 = 1e-9;
@@ -33,6 +33,29 @@ fn fixture() -> Value {
         "/../../tests/fixtures/oracle/body/anny-0.6.1-reference.json"
     );
     serde_json::from_str(&std::fs::read_to_string(path).expect("fixture")).expect("fixture JSON")
+}
+
+fn case_inputs(m: &AnnyModel, case: &Value) -> (BodyParams, Vec<Affine>) {
+    let inp = &case["inputs"];
+    let ph = &inp["phenotype"];
+    let get = |k: &str| ph[k].as_f64().unwrap();
+    let mut params = m.params(Phenotype {
+        gender: get("gender"),
+        age: get("age"),
+        muscle: get("muscle"),
+        weight: get("weight"),
+        height: get("height"),
+        proportions: get("proportions"),
+    });
+    for (label, v) in inp["local_changes"].as_object().unwrap() {
+        let j = m.local_change_index(label).expect("reference local change");
+        params.local_changes[j] = v.as_f64().unwrap();
+    }
+    let mut deltas = vec![Affine::IDENTITY; m.data().header.counts.bones];
+    for (bone, spec) in inp["pose_local_bone"].as_object().unwrap() {
+        deltas[m.bone_index(bone).unwrap()] = Affine::from_rows4(&rows4(&spec["matrix"]));
+    }
+    (params, deltas)
 }
 
 fn v3(v: &Value) -> Vec3 {
@@ -139,27 +162,7 @@ fn sixteen_reference_cases_match_the_package() {
     let mut worst = Worst::default();
     for case in cases {
         let name = case["name"].as_str().unwrap();
-        let inp = &case["inputs"];
-        let ph = &inp["phenotype"];
-        let get = |k: &str| ph[k].as_f64().unwrap();
-        let mut params: BodyParams = m.params(Phenotype {
-            gender: get("gender"),
-            age: get("age"),
-            muscle: get("muscle"),
-            weight: get("weight"),
-            height: get("height"),
-            proportions: get("proportions"),
-        });
-        for (label, v) in inp["local_changes"].as_object().unwrap() {
-            let j = m
-                .local_change_index(label)
-                .unwrap_or_else(|| panic!("{name}: unknown local change {label}"));
-            params.local_changes[j] = v.as_f64().unwrap();
-        }
-        let mut deltas = vec![Affine::IDENTITY; m.data().header.counts.bones];
-        for (bone, spec) in inp["pose_local_bone"].as_object().unwrap() {
-            deltas[m.bone_index(bone).unwrap()] = Affine::from_rows4(&rows4(&spec["matrix"]));
-        }
+        let (params, deltas) = case_inputs(m, case);
 
         // Coefficients: every non-zero phenotype coefficient, by label.
         let coef = m.coefficients(&params).unwrap();
@@ -272,6 +275,117 @@ fn sixteen_reference_cases_match_the_package() {
         "{} mismatches:\n{}",
         worst.failures.len(),
         worst.failures.join("\n")
+    );
+}
+
+#[test]
+#[ignore = "needs admitted Anny data and full upstream vertices (capture_anny_reference.py --full-vertices-from)"]
+fn every_rest_and_posed_vertex_matches_the_package() {
+    let path = std::env::var_os("FTX_ANNY_FULL_REFERENCE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            default_model_path()
+                .expect("model path")
+                .with_file_name("anny-0.6.1-full-vertices.bin")
+        });
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    assert_eq!(
+        sha256_hex(bytes.iter().copied()),
+        "8d019f3aca6597bb2be99629676fd746a0385ca33ff7ed703c05e38141a10782"
+    );
+    assert_eq!(&bytes[..8], b"FTXANNY1");
+    let header_len: usize = u64::from_le_bytes(bytes[8..16].try_into().unwrap())
+        .try_into()
+        .unwrap();
+    let header: Value = serde_json::from_slice(&bytes[16..16 + header_len]).unwrap();
+    let fx = fixture();
+    let reference = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/oracle/body/anny-0.6.1-reference.json"
+    ))
+    .unwrap();
+    assert_eq!(header["reference_sha256"], sha256_hex(reference));
+    assert_eq!(header["schema"], "ftx-anny-full-vertices/1");
+    assert_eq!(header["dtype"], "<f8");
+    assert_eq!(header["states"], json!(["rest_vertices", "posed_vertices"]));
+    assert_eq!(
+        header["model"],
+        json!({"vertex_count":fx["model"]["vertex_count"],
+        "data_hashes":fx["model"]["data_hashes"], "label_hashes":fx["model"]["label_hashes"]})
+    );
+    let cases = fx["cases"].as_array().unwrap();
+    assert_eq!(
+        header["cases"],
+        json!(
+            cases
+                .iter()
+                .map(|case| json!({"name":case["name"],"inputs":case["inputs"]}))
+                .collect::<Vec<_>>()
+        )
+    );
+    let m = model();
+    let count = m.data().header.counts.vertices;
+    let payload = &bytes[16 + header_len..];
+    assert_eq!(payload.len(), cases.len() * 2 * count * 24);
+    fn error(a: &[Vec3], b: &[Vec3]) -> (usize, f64) {
+        assert_eq!(a.len(), b.len());
+        a.iter()
+            .zip(b)
+            .enumerate()
+            .map(|(i, (a, b))| {
+                let d = (*a - *b).norm();
+                assert!(d.is_finite(), "nonfinite full-surface error at vertex {i}");
+                (i, d)
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap()
+    }
+    let mut worst = 0.0_f64;
+    let mut observed = 0;
+    for (case_index, case) in cases.iter().enumerate() {
+        let (params, deltas) = case_inputs(m, case);
+        let rest = m.rest(&params).unwrap();
+        let posed = m.pose(&rest, &deltas).unwrap();
+        for (state, vertices) in [&rest.vertices, &posed.vertices].into_iter().enumerate() {
+            let offset = (case_index * 2 + state) * count * 24;
+            let expected: Vec<_> = payload[offset..offset + count * 24]
+                .as_chunks::<24>()
+                .0
+                .iter()
+                .map(|p| {
+                    let coordinate = |i| f64::from_le_bytes(p[i..i + 8].try_into().unwrap());
+                    Vec3::new(coordinate(0), coordinate(8), coordinate(16))
+                })
+                .collect();
+            let (index, deviation) = error(vertices, &expected);
+            assert!(
+                deviation <= TOL_M,
+                "{} state {state}, vertex {index}: {deviation:.3e} m",
+                case["name"]
+            );
+            worst = worst.max(deviation);
+            observed += count;
+            if case_index == 0 && state == 0 {
+                let mut changed = vertices.clone();
+                changed[100].x += 10.0 * TOL_M;
+                for index in fx["model"]["selected_vertices"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                {
+                    let i = index.as_u64().unwrap() as usize;
+                    assert_eq!(changed[i], vertices[i]);
+                }
+                assert!(
+                    error(&changed, &expected).1 > TOL_M,
+                    "a changed unsampled vertex must fail the full-surface gate"
+                );
+            }
+        }
+    }
+    assert_eq!(observed, 438_976);
+    eprintln!(
+        "anny full-surface parity: {observed} rest/posed vertices, max {worst:.3e} m; tolerance {TOL_M:.1e} m"
     );
 }
 

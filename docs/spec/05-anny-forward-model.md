@@ -752,6 +752,16 @@ a relative tolerance (its magnitude reaches 1e4).
 
 ---
 
+### Complete surface companion
+
+`capture_anny_reference.py --full-vertices-from` captures every rest/posed coordinate for the
+unchanged 16 JSON inputs using the pinned upstream package, after RECORD and model-hash checks.
+The external `anny-0.6.1-full-vertices.bin` and its digest are documented in
+`tools/body-model/PIN.md`. The existing sampled fixture is not regenerated. The companion adds
+438,976 checked vertices, with the same 1e-9 m comparison tolerance; its input/header/file locks
+and unsampled-coordinate mutation control distinguish a full-surface bound from sampled agreement.
+Neither comparison independently qualifies the tape definitions, anatomical landmarks or physical fit.
+
 ## 9. Quirks and porting hazards
 
 1. **Gender polarity.** gender 0 = male, 1 = female (§2.1); the package's shape sampler agrees (gender ≤ 0.5 uses
@@ -812,6 +822,19 @@ a relative tolerance (its magnitude reaches 1e4).
     batch 1 only is a deliberate narrowing worth recording.
 
 ---
+
+### Clothing collider (FrankenTextiles, not upstream parity)
+
+Current public-prior 920 mm fitted bodies expose intersections between detailed facial triangles
+whose vertices are dominated by `levator05.R`; the admitted file and array hashes are unchanged.
+Forward-model parity does not establish a valid clothing collider. `clothing_skin` uses the
+existing dominant-bone trim and reversed-boundary centroid caps for `levator05.R/L`, in addition
+to wrists and feet. Missing facial groups do not create new geometry. Remaining source vertices
+must be unchanged; all resulting topology and intersections must pass the ordinary strict audit.
+This clothing collision approximation preserves measured/display body surfaces. It grants no
+anatomical, facial-contact or empirical fit claim. The original elastic ladder, three-size armpit
+wedge, two-start and fitted digest assertions pass unchanged with this proxy. Reports retain the
+selected roots and synthetic cap count; a failed cap remains a refusal.
 
 ## Appendix A. Local-change labels (index j; blend-shape rows 624 + 2j and 625 + 2j)
 

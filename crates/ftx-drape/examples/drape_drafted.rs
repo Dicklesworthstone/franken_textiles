@@ -11,8 +11,8 @@ use std::fmt::Write as _;
 use std::time::Instant;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, Pose, Wearer, default_model_path, fit_tape, pose_deltas, skin_mesh,
-    tape_targets, trimmed_skin,
+    AnnyModel, BodyFrames, Pose, Wearer, clothing_skin, default_model_path, fit_tape, pose_deltas,
+    skin_mesh, tape_targets,
 };
 use ftx_core::Vec3;
 use ftx_drape::animation::{mesh_map, pc2};
@@ -87,12 +87,7 @@ fn main() {
     let posed = model
         .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
         .unwrap();
-    let skin = trimmed_skin(
-        &model,
-        &posed.vertices,
-        &["wrist.R", "wrist.L", "foot.R", "foot.L"],
-    )
-    .unwrap_or_else(|r| panic!("{r}"));
+    let skin = clothing_skin(&model, &posed.vertices).unwrap_or_else(|r| panic!("{r}"));
     let full = skin_mesh(&posed.vertices, &model.data().faces).unwrap_or_else(|r| panic!("{r}"));
     let frames = BodyFrames::new(&model, &posed).unwrap_or_else(|r| panic!("{r}"));
     println!(
@@ -129,10 +124,11 @@ fn main() {
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
     let t0 = Instant::now();
-    let run = drape(&pattern, &case["input"]["fit_spec"], &body, &opts, |line| {
+    let mut run = drape(&pattern, &case["input"]["fit_spec"], &body, &opts, |line| {
         println!("{line}")
     })
     .unwrap_or_else(|r| panic!("{r}"));
+    run.report["body_contact_proxy"] = skin.contact_proxy_basis();
     println!("draped in {:.1} s", t0.elapsed().as_secs_f64());
     std::fs::write(
         out.join("start.obj"),
