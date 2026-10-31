@@ -3191,7 +3191,7 @@ The pinned nightly was already installed. For each remote command below, the env
 | `RCH_REQUIRE_REMOTE=1 RCH_VISIBILITY=summary rch exec -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx" cargo clippy --all-targets --locked -- -D warnings` | PASS, exit 0, worker `vmi1293453`; artifacts/terminal completion returned. |
 | `RCH_REQUIRE_REMOTE=1 RCH_VISIBILITY=summary rch exec -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx" cargo build --target wasm32-unknown-unknown -p ftx-wasm --locked` | PASS, exit 0, worker `vmi1153651`; debug WASM artifacts retrieved. Compilation is not browser execution or a release benchmark. |
 | Existing prebuilt native test executables on `vmi1152480`, each with `--format terse`: CLI `draft_workflow`; conformance `export_all`, `measurements`; shared Rust `ftx-wasm/page` | PASS, exit 0 for each: respectively 4, 2, 3 and 8 tests. These independently complete core draft/validate/export, captured export/measurement and page checks while the broad suite continues; the page target executes natively, not in a browser. |
-| `RCH_REQUIRE_REMOTE=1 RCH_VISIBILITY=summary rch exec -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx" cargo test --workspace --all-targets --locked` | Running when this section was drafted; final outcome recorded below before handoff. |
+| `RCH_REQUIRE_REMOTE=1 RCH_VISIBILITY=summary rch exec -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx" cargo test --workspace --all-targets --locked` | FAIL to complete: RCH's configured 1,800-second deadline terminated the command, exit 137 after 1,804.216 s. Worker `vmi1152480`, build `30082169883854243`; RCH explicitly reports deadline exceeded and no retry. No full-suite pass. |
 | `ast-grep run --lang Rust --pattern 'fn $NAME($$$) { todo!() }' crates` | No matches, exit 1; keyword/control-flow inspection qualified above. |
 | `bv --robot-triage`, `bv --robot-insights`, `bv --robot-plan` | PASS; current graph has no cycles and retains the material-data critical path. |
 | `git diff --check` | PASS at the documentation/backlog checkpoint. |
@@ -3202,6 +3202,19 @@ full fitted G1/G2 lanes, actual Chromium/offline candidate workflows, current-so
 measurements and private physical experiments have not been established by the checks above.
 No `web/pkg`, installed `ftx`, verified local production Anny asset, hosted deployment or remote
 release was verified. Local Git has no tags; that is not a remote-release query.
+
+The broad native run also completes the real-CLI accepted-body workflows (36 passed), capture/body-fit
+workflows (38 passed), immutable round workflows (12 passed, one production-model case ignored) and
+sewing-production workflows (20 passed). These are meaningful supported software integrations;
+synthetic bodies, source declarations and timings in them remain synthetic.
+
+At termination the broad run had reached conformance `trace_image`; no assertion failure was
+reported before the deadline. Completed targets also include alteration/drafting, export formats,
+pattern geometry/model, garment mesh/start, measurement/metrics and deterministic-math-policy
+conformance. The remaining conformance and later workspace targets were not completed, including
+the comprehensive cloth/thermal/material unit and integration suites. They are unverified cells,
+not passes or exclusions. The current source qualification task `ftx-onn.9` stays open. The direct
+page and focused targets above are separate completed invocations, not a substitute total.
 
 The first optional direct worker invocation used the default SSH identity and failed authentication
 before running `ftx`; its downstream summary had no JSON to parse. Using the existing RCH-configured
