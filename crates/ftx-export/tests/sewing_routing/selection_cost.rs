@@ -692,7 +692,7 @@ fn eligible_cost_keeps_nonmonotone_tiers_and_bounded_incumbents_without_false_pr
 }
 
 #[test]
-fn eligible_cost_preserves_missing_orders_zero_prices_and_stale_qualifications() {
+fn eligible_cost_preserves_missing_orders_and_rejects_invalid_quotes_and_stale_qualifications() {
     let (pattern, options) = eligible_cost(1);
     let mut absent = options.clone();
     absent["consumables"]["purchasing"]["quote_book"]["quotes"] = json!([]);
@@ -720,19 +720,18 @@ fn eligible_cost_preserves_missing_orders_zero_prices_and_stale_qualifications()
     let mut zero = options.clone();
     zero["consumables"]["purchasing"]["quote_book"]["quotes"][0]["price"] = json!(0.0);
     zero["consumables"]["purchasing"]["quote_book"]["quotes"][0]["price_breaks"] = json!([]);
-    let plan = eligible_plan(&pattern, &zero);
-    let search = plan
-        .production
-        .as_ref()
+    // Cell assignment must preserve canonical quote admission; a zero-priced observation
+    // cannot become a free supplier even though the report scorer preserves numeric zero.
+    let refusal =
+        SewPlan::build(&pattern, &serde_json::from_value(zero.clone()).unwrap()).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+    assert_eq!(refusal.message, "price must be finite and positive");
+    let refusal = serde_json::from_value::<Request>(eligible_selection(&zero))
         .unwrap()
-        .routing
-        .as_ref()
-        .unwrap()
-        .thread_order_search
-        .as_ref()
-        .unwrap();
-    assert_eq!(search.selected_order_cost, Some(0.0));
-    assert!(search.optimality_proven);
+        .select(&pattern)
+        .unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+    assert_eq!(refusal.message, "price must be finite and positive");
 
     let mut stale = options;
     stale["production"]["routing"]["cells"][2]["configuration"]["qualifications"][0]["thread_consumption"]

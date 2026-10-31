@@ -324,7 +324,8 @@ complete order cost, distinct order evaluations, unresolved assignments and pric
 and every relevant complete order was available and proved. The routing-level `optimality_proven`
 remains a separate makespan claim. A slower cheap assignment may prove its cost while its makespan
 proof is false. Exhausting either dispatch or pricing work preserves a complete priced incumbent
-without an optimum claim; missing prices remain null, while a supported zero price remains zero.
+without an optimum claim. Missing prices remain null; source quote prices retain the canonical
+requirement to be finite and strictly positive.
 
 An outer recipe-selection deadline tightens the inner deadline, and the retained winning options
 include that effective limit for exact ordinary-plan, stitch and browser replay. Before evaluation,

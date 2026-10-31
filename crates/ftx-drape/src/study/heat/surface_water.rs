@@ -704,9 +704,17 @@ impl Water {
         {
             let supplied = supply_rate * seconds;
             let condensed = condensation_rate * seconds;
+            // Repeated inventory updates can place the same dryout a few ulps after a regular
+            // step boundary. Reconcile that event using the complete available inventory below;
+            // do not leave a spurious positive capacity or relax the positive-capacity guard.
+            // A genuinely later event retains its inventory. Zero drainage keeps legacy arithmetic.
+            let at_dryout = dry_times[i] == seconds
+                || (drainage_rate > 0.
+                    && dry_times[i].is_finite()
+                    && dry_times[i] - seconds <= 64. * f64::EPSILON * dry_times[i].max(seconds));
             let (evaporated, drained) = if drainage_rate > 0. {
                 let available = self.remaining[i] + (supplied + condensed);
-                if dry_times[i] == seconds
+                if at_dryout
                     || (self.remaining[i] == 0.
                         && rate + drainage_rate == supply_rate + condensation_rate)
                 {
@@ -714,7 +722,7 @@ impl Water {
                 } else {
                     (rate * seconds, drainage_rate * seconds)
                 }
-            } else if dry_times[i] == seconds {
+            } else if at_dryout {
                 (self.remaining[i] + supplied, 0.)
             } else if self.remaining[i] == 0. && rate == supply_rate {
                 (supplied, 0.)
@@ -722,7 +730,7 @@ impl Water {
                 (rate * seconds, 0.)
             };
             let outgoing = evaporated + drained;
-            let remaining = if dry_times[i] == seconds {
+            let remaining = if at_dryout {
                 0.
             } else if drained > 0. {
                 self.remaining[i] + (supplied + condensed - outgoing)
@@ -765,7 +773,7 @@ impl Water {
                 || (condensed > 0. && condensation_latent <= 0.)
                 || (supplied + condensed > outgoing && remaining <= self.remaining[i])
                 || (supplied + condensed < outgoing && remaining >= self.remaining[i])
-                || (dry_times[i] == seconds && outgoing <= supplied + condensed)
+                || (at_dryout && outgoing <= supplied + condensed)
                 || (remaining > 0. && capacity <= 0.)
             {
                 return Err(invalid(

@@ -1134,3 +1134,57 @@ fn split_orders(
     priced.unavailable_reason = (!complete).then(|| "no complete exact-yarn allocation was found within the declared source and search limits; thread quantities remain available".into());
     Ok(())
 }
+
+#[cfg(test)]
+mod score_tests {
+    use super::*;
+
+    #[test]
+    fn complete_order_score_preserves_reported_zero_and_refuses_unknown() {
+        // Isolate the aggregate-report boundary, without submitting a zero-priced quote or
+        // claiming this report double is an admitted supplier order. Public planner regressions
+        // separately enforce strictly positive quote prices and complete actual yarn demand.
+        let mut report = Report {
+            schema: "ftx-sewing-consumables/1",
+            production_copies: None,
+            complete_consumption_coverage: true,
+            missing_operations: Vec::new(),
+            operation_channels: Vec::new(),
+            materials: BTreeMap::new(),
+            material_requirements: Vec::new(),
+            total_required_length_m: Some(1.0),
+            complete_mass_coverage: false,
+            total_required_mass_kg: None,
+            mass_unavailable_reason: None,
+            purchasing: Some(PurchasingReport {
+                currency: "USD".into(),
+                complete_offer_coverage: true,
+                complete_observed_quantity_coverage: true,
+                complete_continuous_length_limit_coverage: true,
+                material_orders: Vec::new(),
+                least_observed_independent_order_total: Some(0.0),
+                unavailable_reason: None,
+                quote_observations_evaluated: 0,
+                stock_aliases_examined: 0,
+                segments: None,
+                selected_observed_order_total: None,
+                order_allocation_optimality_proven: None,
+                allocation_refusal: None,
+            }),
+            purchasing_work_bound: 0,
+        };
+        assert_eq!(complete_order_cost(&report, "USD").unwrap(), (0.0, None));
+        report.purchasing.as_mut().unwrap().complete_offer_coverage = false;
+        assert_eq!(
+            complete_order_cost(&report, "USD").unwrap_err().code,
+            RefusalCode::NotConverged
+        );
+        let purchasing = report.purchasing.as_mut().unwrap();
+        purchasing.complete_offer_coverage = true;
+        purchasing.least_observed_independent_order_total = None;
+        assert_eq!(
+            complete_order_cost(&report, "USD").unwrap_err().code,
+            RefusalCode::NotConverged
+        );
+    }
+}

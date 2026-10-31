@@ -430,7 +430,8 @@ fn evaporation_and_drainage_share_empty_stock_and_split_exact_dryout() {
             fixed_pressure(&mut h, 1000.);
             h.water.as_mut().unwrap().begin_mechanical_interval();
             // E=.015, D=.01 and I=.005 kg/s. Wet .025 kg dries at1.25s; empty input splits3:2.
-            advance(&mut h, 0.5, 2.).unwrap();
+            advance(&mut h, 0.5, 2.)
+                .unwrap_or_else(|error| panic!("loading={loading}, step={step}: {error:?}"));
             let w = h.water.as_ref().unwrap();
             assert_eq!(w.remaining, vec![0.]);
             near(w.evaporated[0], expected_e);
@@ -445,6 +446,23 @@ fn evaporation_and_drainage_share_empty_stock_and_split_exact_dryout() {
             near(h.balance_error_j(), 0.);
         }
     }
+}
+
+#[test]
+fn drainage_dryout_roundoff_does_not_erase_genuinely_retained_liquid() {
+    let mut h = with_drainage(
+        supplied_fixture(0.05 + 1e-8, 0.125, vec![0.01], vec![20.]),
+        vec![0.02],
+    );
+    fixed_pressure(&mut h, 1000.);
+    advance(&mut h, 0.5, 1.25).unwrap();
+    let water = h.water.as_ref().unwrap();
+    assert!((water.remaining[0] - 5e-9).abs() < 1e-16);
+    assert_eq!(water.dryout_events, 0);
+    assert!(water.remaining[0] > 0.);
+    near(water.evaporated[0], 0.01875);
+    near(water.drained[0], 0.0125);
+    near(h.balance_error_j(), 0.);
 }
 
 #[test]
