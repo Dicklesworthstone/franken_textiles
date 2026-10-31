@@ -187,11 +187,24 @@ and consumes canonical source-qualified actual channel quantities and whole supp
 completion deadlines filter candidates through the existing complete timing authority. Fixed cell
 assignment makes consumption independent of dispatch order, so feasible cost results do not require
 minimum-makespan proof; unknown orders or unresolved deadline feasibility still prevent an optimum
-claim. Eligible-cell routes and heterogeneous whole-garment allocation remain excluded from cost
-optimization. The complete request, including unused routes and work limits, participates in relevant
+claim. Eligible routes require the separate explicit cost-directed assignment policy below;
+heterogeneous whole-garment allocation remains excluded. The complete request, including unused routes and work limits, participates in relevant
 study protocols. Selected source options replay actual plans, stitches and thread purchasing.
 Tests: `sewing_routing` and both native commands in `sewing_production_workflow`.
 Finite-domain software decisions do not qualify physical production or authorize hardware execution.
+
+**Cost-directed eligible specialist assignments** (`routing.thread_order_search`, `ftx-pb2.2.15`).
+An explicit `minimize_thread_observed_order_cost` route prices complete physical-copy assignments
+inside the existing qualified append-dispatch search and an optional inclusive deadline. Actual
+selected cell stitches, allowances and yarn locks feed the shared canonical purchasing authority;
+identical assignments reuse prices, and nonmonotone supplier tiers forbid partial-cost pruning.
+Separate dispatch and 1–64 order caps retain complete incumbents without unsupported proof. Unknown
+orders and unproved supplier allocation keep cost optimality unresolved; the existing makespan proof
+retains its distinct meaning. All configured pricing plus exact selected replay is reserved across
+recipe/material searches. Outer recipe deadlines tighten the inner search and remain in replayable
+selected options. Plan `/24`, production `/12`, routing `/7` expose cost, currency, evaluation and
+unresolved counts, budget exhaustion and declared-domain cost proof. Direct eligible-cost regressions
+reuse `sewing_routing/selection_cost.rs`; existing fixed-route behavior is unchanged.
 
 **Routed availability calendars** (`production.routing.availability_calendars`, `ftx-pb2.2.13`).
 Source-qualified finite windows constrain complete cell, worker and transfer occupancy in fixed and

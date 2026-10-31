@@ -286,8 +286,8 @@ An eligible policy additionally searches the explicitly qualified cell choices f
 copy and operation. Machine eligibility must be authored and independently qualified; it is never
 inferred from a machine name or from another candidate's evidence.
 
-The outer selector compares makespan for both routing models. When the template and every candidate
-use fixed operation routes, version 6 also accepts `minimize_thread_observed_order_cost`. It minimizes
+The outer selector compares makespan for both routing models. Version 6 also accepts
+`minimize_thread_observed_order_cost` for fixed routes and explicitly cost-directed eligible routes. It minimizes
 the complete canonical thread orders for each route's actual stitch intervals and qualified channel
 quantities. Supplier minimums, increments, price tiers and stock checks apply to the full order;
 unknown or incomplete orders remain unresolved. The thread market stays shared across routes.
@@ -295,11 +295,54 @@ Because fixed assignment makes these quantities independent of dispatch order, a
 plan can establish its cost without proving the minimum makespan. An optional inclusive
 `completion_deadline_milliseconds` still requires an admitted complete schedule before selection.
 
-Eligible assignment changes the actual recipe, stitch intervals and yarn demand while optimizing
-makespan. Feed-only or thread-cost selection therefore remains refused whenever the template or
-any candidate uses eligible cells. Material comparisons may still report that selected batch's
-actual feed and thread quantities. The full eligible-route or fixed-route cost-search request,
-including unused candidates and its evaluation cap, participates in the relevant study protocol.
+Eligible assignment changes the actual recipe, stitch intervals and yarn demand. To select these
+assignments by complete order cost, give **every eligible routing policy** the following explicit
+objective and a separate complete-order evaluation allowance:
+
+```json
+{
+  "objective": "minimize_thread_observed_order_cost",
+  "thread_order_search": {
+    "max_order_evaluations": 32,
+    "completion_deadline_milliseconds": 8800
+  }
+}
+```
+
+The order limit is 1..64 distinct complete physical-copy assignments, including the feasible seed;
+the deadline is optional and inclusive. The normal dispatch search still checks the actual machine,
+worker, fixture, transfer, staging and calendar constraints. Each feasible assignment uses the shared
+thread-consumption and purchasing engine with its actual source-qualified stitches, channels,
+allowances, copy identities and supplier stock. Repeated dispatch orders with the same physical-copy
+assignment reuse its complete price. Partial quantity or cost does not prune an assignment: a larger
+rounded order may enter a cheaper supplier tier.
+
+This opt-in produces plan `/24`, production `/12` and routing `/7`. Its
+`production.routing.thread_order_search` report retains the currency, inclusive deadline, selected
+complete order cost, distinct order evaluations, unresolved assignments and pricing-budget status.
+`optimality_proven` in that object proves the cost only when the finite dispatch domain was completed
+and every relevant complete order was available and proved. The routing-level `optimality_proven`
+remains a separate makespan claim. A slower cheap assignment may prove its cost while its makespan
+proof is false. Exhausting either dispatch or pricing work preserves a complete priced incumbent
+without an optimum claim; missing prices remain null, while a supported zero price remains zero.
+
+An outer recipe-selection deadline tightens the inner deadline, and the retained winning options
+include that effective limit for exact ordinary-plan, stitch and browser replay. Before evaluation,
+the full existing quote, stock-alias and split-order work allowance is multiplied by
+`max_order_evaluations + 1`, reserving the final selected-order reconstruction as well. Outer
+recipe/route and material-study counts multiply that entire reservation; requests exceeding the
+existing 200000 purchasing-work ceiling refuse before search.
+
+The independent synthetic regression has a 60-traversal, 8800-millisecond assignment requiring
+0.6 metres and a USD 10 rounded order, while a faster 7000-millisecond assignment requires 4.2 metres
+and a USD 21 order. A deadline of 8800 admits the cheaper assignment; 8799 selects the faster one.
+Another tier fixture deliberately makes the larger order cost USD 3. These are software checks,
+not observations of a factory or supplier.
+
+Makespan-directed eligible routes cannot enter a cost selector without that explicit policy,
+and cost-directed eligible routes cannot supply a makespan-selector optimum. Eligible feed-only
+selection remains unsupported. The full routing and cost-search request, including unused
+candidates and both evaluation caps, participates in the relevant study protocol.
 
 Recipe `alternatives` may be empty in version 6. When supplied, their Cartesian product is searched
 within each route: the template route first, then route IDs in lexical order, with the existing

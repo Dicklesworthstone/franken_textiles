@@ -4604,16 +4604,23 @@ for missing measured properties.
 ### 25.137 Choose specialist routes by complete thread order cost
 
 The existing authored-route selector can now minimize complete observed thread orders across
-independently qualified fixed specialist routes, with optional recipe choices and an inclusive
+independently qualified fixed or explicitly cost-directed eligible specialist routes, with optional recipe choices and an inclusive
 completion deadline. Every attempted route supplies its own actual stitch intervals, source-qualified
 channel demand and canonical rounded supplier orders. A slower, cheaper route can therefore remain
 selected until the declared deadline requires a different complete job.
 
 Fixed assignment keeps thread demand independent of dispatch order, so an unproved minimum
 makespan does not erase a complete cost result. Unknown orders and unresolved deadline admission
-still prevent optimum claims. Flexible eligible-cell assignments retain their separate makespan
-objective and cannot claim a cost minimum. Exact winning options and the complete search domain
-reach downstream studies, stitch replay and source-protocol identity.
+still prevent optimum claims. Flexible eligible-cell assignments now have a separate explicit
+bounded cost objective: complete feasible physical-copy assignments pass through the same canonical
+consumption and purchasing engine, with cached assignment prices and no partial-cost pruning across
+nonmonotone supplier tiers. Cost and makespan proofs stay separate, unknown prices stay null, and
+either search cap preserves a complete incumbent without inventing an optimum. All configured
+quote, stock-alias and split-order work is multiplied by the order-evaluation cap plus final replay
+before recipe and material-study reservations. Outer deadlines tighten inner assignment search.
+Exact winning options and the complete search domain reach downstream studies, stitch replay and
+source-protocol identity. The opt-in uses plan `/24`, production `/12` and routing `/7`; existing
+makespan-only policies keep their earlier serialization and semantics.
 
 This increment is tracked by `ftx-pb2.2.15`; see [sewing-selection.md](docs/sewing-selection.md).
 The finite listed routes do not establish a global manufacturing optimum, measured throughput,

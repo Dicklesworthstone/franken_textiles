@@ -419,24 +419,27 @@ impl Request {
                 ));
             }
         }
-        let has_eligible_route = self
+        let routes: Vec<_> = self
             .options
             .production
             .as_ref()
             .and_then(|production| production.routing.as_ref())
-            .is_some_and(routing::Policy::eligible)
-            || self
-                .route_candidates
-                .iter()
-                .any(|candidate| candidate.routing.eligible());
-        if has_eligible_route
-            && matches!(
-                self.objective,
-                Objective::MinimizeFeedSeconds | Objective::MinimizeThreadObservedOrderCost
+            .into_iter()
+            .chain(
+                self.route_candidates
+                    .iter()
+                    .map(|candidate| &candidate.routing),
             )
-        {
+            .collect();
+        let cost = self.objective == Objective::MinimizeThreadObservedOrderCost;
+        if routes.iter().any(|route| {
+            route.cost_directed() && !cost
+                || route.eligible()
+                    && (self.objective == Objective::MinimizeFeedSeconds
+                        || cost && !route.cost_directed())
+        }) {
             return Err(invalid(
-                "eligible-route cells assign operations for minimum makespan; feed and thread cost depend on those choices and cannot claim their own minimum; use minimize_parallel_makespan and inspect actual feed and thread orders",
+                "unoptimized eligible assignments cannot claim their own minimum: match the outer selector with explicit bounded thread-order search for cost or makespan search for time; eligible feed-only selection is unsupported",
             ));
         }
         if !(1..=MAX_TRIALS).contains(&self.max_plan_evaluations)
@@ -646,6 +649,19 @@ impl Request {
             } else {
                 self.options_for_route(routes[route_index - 1])?
             };
+            if let Some(search) = options
+                .production
+                .as_mut()
+                .and_then(|production| production.routing.as_mut())
+                .and_then(|route| route.thread_order_search.as_mut())
+                && let Some(deadline) = self.completion_deadline_milliseconds
+            {
+                search.completion_deadline_milliseconds = Some(
+                    search
+                        .completion_deadline_milliseconds
+                        .map_or(deadline, |inner| inner.min(deadline)),
+                );
+            }
             let mut choices = BTreeMap::new();
             for (group, &index) in groups.iter().zip(&indices) {
                 let id = if index == 0 {

@@ -30,8 +30,11 @@ const MAX_EXACT_MILLISECONDS: u64 = 9_007_199_254_740_991;
 pub struct Policy {
     /// `fixed_operation_route/1` or explicit `eligible_operation_route/1` machine alternatives.
     pub model: String,
-    /// `minimize_makespan` over bounded copy dispatch and any declared eligible-cell choices.
+    /// `minimize_makespan`, or `minimize_thread_observed_order_cost` for eligible-cell assignment.
     pub objective: String,
+    /// Complete-order evaluation budget and optional inclusive deadline for cost search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_order_search: Option<ThreadOrderSearch>,
     /// `ceil_operation_feed_milliseconds/1`; each actual feed is ceiled separately.
     pub time_basis: String,
     /// `unloaded_between_operations/1`; every operation consumes its own load and unload evidence.
@@ -74,6 +77,38 @@ pub struct Policy {
     /// Separate explicit consent for an estimated route/resource protocol.
     #[serde(default)]
     pub allow_estimates: bool,
+}
+
+/// Bounded complete thread purchasing over actual qualified eligible-cell assignments.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadOrderSearch {
+    /// At most 64 distinct complete physical-copy assignments are priced, including the seed.
+    pub max_order_evaluations: usize,
+    /// Every retained cost-directed schedule must finish within this inclusive job-origin clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_deadline_milliseconds: Option<u64>,
+}
+
+/// Complete-order search evidence, separate from the selected schedule's makespan proof.
+#[derive(Clone, Debug, Serialize)]
+pub struct ThreadOrderReport {
+    /// Exact common canonical purchasing currency.
+    pub currency: String,
+    /// Inclusive cost-search completion limit, if authored or inherited from recipe selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_deadline_milliseconds: Option<u64>,
+    /// Complete selected actual-cell thread order; absent when no priced incumbent was found.
+    pub selected_order_cost: Option<f64>,
+    /// Distinct complete assignments sent through the ordinary consumption and purchasing engine.
+    pub order_evaluations: usize,
+    /// Priced assignments with missing evidence or an unproved supplier allocation.
+    pub unresolved_assignments: usize,
+    /// Whether assignment pricing stopped at its separate explicit cap.
+    pub order_budget_exhausted: bool,
+    /// All admitted append-dispatch assignments were examined and every relevant order was proved.
+    /// This is not a minimum makespan or unrestricted factory scheduling claim.
+    pub optimality_proven: bool,
 }
 
 /// One original operation with an explicit seed cell and optional qualified alternatives.
@@ -219,7 +254,7 @@ pub struct Timeline {
 /// Source-qualified fixed routing with an exact complete incumbent and bounded dispatch search.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` fixed; `/2` eligible; `/3` fixtures; `/4` labor; `/5` owned handoffs; `/6` calendars.
+    /// `/1` fixed; `/2` eligible; `/3` fixtures; `/4` labor; `/5` owned handoffs; `/6` calendars; `/7` cost.
     pub schema: &'static str,
     /// Source-qualified fixed operation route.
     pub route: Vec<RouteStep>,
@@ -239,6 +274,9 @@ pub struct Report {
     /// machine setups, worker locations or independently tracked fixture inventory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub availability_calendars: Option<calendars::Policy>,
+    /// Optional complete-order assignment objective and its independent bounded-search evidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_order_search: Option<ThreadOrderReport>,
     /// Complete copy-major seed, or selected replacement if resources/windows excluded that seed.
     pub baseline: Timeline,
     /// Best complete feasible dispatch found within the admitted budget.
@@ -297,6 +335,10 @@ impl Policy {
         self.model == "eligible_operation_route/1"
     }
 
+    pub(crate) fn cost_directed(&self) -> bool {
+        self.objective == "minimize_thread_observed_order_cost"
+    }
+
     /// Reserve bounded search and two complete exact replays, independent of whether a seed is valid.
     ///
     /// # Errors
@@ -316,6 +358,16 @@ impl Policy {
         {
             return Err(budget(
                 "routing needs 1..8 used cells, a complete route and work for one complete seed",
+            ));
+        }
+        if let Some(search) = &self.thread_order_search
+            && (!(1..=64).contains(&search.max_order_evaluations)
+                || search
+                    .completion_deadline_milliseconds
+                    .is_some_and(|limit| limit > MAX_EXACT_MILLISECONDS))
+        {
+            return Err(budget(
+                "thread-order route search supports 1..64 complete order evaluations and an exact nonnegative millisecond deadline",
             ));
         }
         self.max_search_nodes
@@ -349,7 +401,8 @@ impl Policy {
         if !matches!(
             self.model.as_str(),
             "fixed_operation_route/1" | "eligible_operation_route/1"
-        ) || self.objective != "minimize_makespan"
+        ) || !(self.objective == "minimize_makespan" && self.thread_order_search.is_none()
+            || self.cost_directed() && self.eligible() && self.thread_order_search.is_some())
             || self.time_basis != "ceil_operation_feed_milliseconds/1"
             || self.protocol != "unloaded_between_operations/1"
             || self.independence != independence
@@ -365,6 +418,17 @@ impl Policy {
         if self.evidence == Evidence::Estimate && !self.allow_estimates {
             return Err(bad(
                 "estimated routing applicability needs its own explicit consent",
+            ));
+        }
+        if self.cost_directed()
+            && options
+                .consumables
+                .as_ref()
+                .and_then(|request| request.purchasing.as_ref())
+                .is_none()
+        {
+            return Err(bad(
+                "cost-directed eligible routing requires complete thread purchasing in one explicit market",
             ));
         }
         let mut cells = BTreeSet::new();
@@ -1065,24 +1129,130 @@ struct Search<'a, 'b> {
     complete: bool,
     lower: u64,
     best: Option<(u64, Vec<Dispatch>)>,
+    cost: Option<CostSearch<'a>>,
+}
+
+struct CostSearch<'a> {
+    plan: &'a SewPlan,
+    cell_plans: &'a [parallel::CellPlan],
+    request: &'a consumables::Request,
+    currency: String,
+    scores: BTreeMap<Vec<usize>, Option<f64>>,
+    unresolved: usize,
+    exhausted: bool,
+    best_cost: Option<f64>,
+}
+
+impl CostSearch<'_> {
+    fn score(&mut self, prepared: &Prepared<'_>, path: &[Dispatch]) -> Option<f64> {
+        let mut assignment = vec![usize::MAX; path.len()];
+        for dispatch in path {
+            assignment
+                [dispatch.copy * prepared.choices.len() + prepared.tasks[dispatch.task].route] =
+                dispatch.task;
+        }
+        if let Some(score) = self.scores.get(&assignment) {
+            return *score;
+        }
+        let policy = prepared
+            .policy
+            .thread_order_search
+            .as_ref()
+            .expect("cost policy");
+        if self.scores.len() == policy.max_order_evaluations {
+            self.exhausted = true;
+            return None;
+        }
+        let selected: Vec<_> = assignment
+            .iter()
+            .enumerate()
+            .map(|(index, &task)| {
+                let task = &prepared.tasks[task];
+                consumables::RoutedAssignment {
+                    cell: &prepared.policy.cells[task.cell].id,
+                    operation_id: &prepared.policy.route[task.route].operation,
+                    copy: index / prepared.choices.len(),
+                }
+            })
+            .collect();
+        let priced = consumables::evaluate_routed(
+            self.plan,
+            self.request,
+            Some((self.cell_plans, &selected)),
+        )
+        .and_then(|report| consumables::complete_order_cost(&report, &self.currency));
+        let score = match priced {
+            Ok((value, proof)) => {
+                if proof == Some(false) {
+                    self.unresolved += 1;
+                }
+                Some(value)
+            }
+            Err(_) => {
+                self.unresolved += 1;
+                None
+            }
+        };
+        self.scores.insert(assignment, score);
+        score
+    }
 }
 
 impl Search<'_, '_> {
+    fn consider(&mut self, state: &State, path: &[Dispatch]) {
+        if self
+            .prepared
+            .policy
+            .thread_order_search
+            .as_ref()
+            .and_then(|policy| policy.completion_deadline_milliseconds)
+            .is_some_and(|deadline| state.makespan > deadline)
+        {
+            return;
+        }
+        if let Some(cost) = &mut self.cost {
+            // A missing price preserves feasible sewing, but cannot supply a winning zero.
+            if self.best.is_none() {
+                self.best = Some((state.makespan, path.to_vec()));
+            }
+            if let Some(score) = cost.score(self.prepared, path)
+                && cost.best_cost.is_none_or(|old| score < old)
+            {
+                cost.best_cost = Some(score);
+                self.best = Some((state.makespan, path.to_vec()));
+            }
+            if cost.exhausted {
+                self.complete = false;
+            }
+        } else if self
+            .best
+            .as_ref()
+            .is_none_or(|(finish, _)| state.makespan < *finish)
+        {
+            self.best = Some((state.makespan, path.to_vec()));
+        }
+    }
+
     fn visit(&mut self, state: &State, path: &mut Vec<Dispatch>) -> Result<(), Refusal> {
         if path.len() == self.prepared.copies * self.prepared.choices.len() {
-            if self
-                .best
-                .as_ref()
-                .is_none_or(|(finish, _)| state.makespan < *finish)
-            {
-                self.best = Some((state.makespan, path.clone()));
-            }
+            self.consider(state, path);
             return Ok(());
         }
         if self
-            .best
+            .prepared
+            .policy
+            .thread_order_search
             .as_ref()
-            .is_some_and(|(finish, _)| state.makespan >= *finish || *finish == self.lower)
+            .and_then(|policy| policy.completion_deadline_milliseconds)
+            .is_some_and(|deadline| state.makespan > deadline)
+        {
+            return Ok(());
+        }
+        if self.cost.is_none()
+            && self
+                .best
+                .as_ref()
+                .is_some_and(|(finish, _)| state.makespan >= *finish || *finish == self.lower)
         {
             return Ok(());
         }
@@ -1102,10 +1272,14 @@ impl Search<'_, '_> {
                     self.visit(&next, path)?;
                     path.pop();
                 }
-                if self
-                    .best
-                    .as_ref()
-                    .is_some_and(|(finish, _)| *finish == self.lower)
+                if self.cost.as_ref().is_some_and(|cost| cost.exhausted) {
+                    return Ok(());
+                }
+                if self.cost.is_none()
+                    && self
+                        .best
+                        .as_ref()
+                        .is_some_and(|(finish, _)| *finish == self.lower)
                 {
                     return Ok(());
                 }
@@ -1259,7 +1433,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if policy.availability_calendars.is_some() {
+        schema: if policy.cost_directed() {
+            "ftx-sewing-plan/24"
+        } else if policy.availability_calendars.is_some() {
             "ftx-sewing-plan/23"
         } else if owned_transfer {
             "ftx-sewing-plan/22"
@@ -1446,28 +1622,77 @@ pub(in crate::sewing) fn build(
             seed = next;
         }
     }
-    let seed_complete = seed_path.len() == copies * count;
+    let seed_complete = seed_path.len() == copies * count
+        && policy.thread_order_search.as_ref().is_none_or(|search| {
+            search
+                .completion_deadline_milliseconds
+                .is_none_or(|deadline| seed.makespan <= deadline)
+        });
     let mut search = Search {
         prepared: &prepared,
         used: seed_used,
         complete: true,
         lower,
-        best: seed_complete.then(|| (seed.makespan, seed_path.clone())),
+        best: None,
+        cost: policy.cost_directed().then(|| {
+            let request = options
+                .consumables
+                .as_ref()
+                .expect("admitted thread request");
+            CostSearch {
+                plan: &out,
+                cell_plans: &cell_plans,
+                request,
+                currency: request
+                    .purchasing
+                    .as_ref()
+                    .expect("admitted purchasing")
+                    .market
+                    .currency
+                    .clone(),
+                scores: BTreeMap::new(),
+                unresolved: 0,
+                exhausted: false,
+                best_cost: None,
+            }
+        }),
     };
+    if seed_complete {
+        search.consider(&seed, &seed_path);
+    }
     search.visit(&prepared.initial(), &mut Vec::with_capacity(copies * count))?;
-    let Some((best_finish, selected_path)) = search.best.as_ref() else {
+    let Some((best_finish, selected_path)) = search.best.clone() else {
         return Err(Refusal::new(
             RefusalCode::NotConverged,
             "no complete routed dispatch was found inside the qualified windows and bounded search; this does not establish unrestricted production infeasibility",
         ));
     };
-    let selected = prepared.replay(selected_path)?;
+    let search_nodes = search.used;
+    let search_complete = search.complete || (search.cost.is_none() && best_finish == lower);
+    let thread_order_search = search.cost.as_ref().map(|cost| ThreadOrderReport {
+        currency: cost.currency.clone(),
+        completion_deadline_milliseconds: policy
+            .thread_order_search
+            .as_ref()
+            .expect("cost policy")
+            .completion_deadline_milliseconds,
+        selected_order_cost: cost.best_cost,
+        order_evaluations: cost.scores.len(),
+        unresolved_assignments: cost.unresolved,
+        order_budget_exhausted: cost.exhausted,
+        optimality_proven: search.complete
+            && cost.best_cost.is_some()
+            && cost.unresolved == 0
+            && !cost.exhausted,
+    });
+    drop(search);
+    let selected = prepared.replay(&selected_path)?;
     let baseline = prepared.replay(if seed_complete {
         &seed_path
     } else {
-        selected_path
+        &selected_path
     })?;
-    if selected.makespan_milliseconds != *best_finish {
+    if selected.makespan_milliseconds != best_finish {
         return Err(bad(
             "routed incumbent changed during exact timeline reconstruction",
         ));
@@ -1537,7 +1762,6 @@ pub(in crate::sewing) fn build(
         }
     }
     let proven = selected.makespan_milliseconds == lower;
-    let search_complete = search.complete || proven;
     let workholding = prepared
         .fixtures
         .as_ref()
@@ -1549,7 +1773,9 @@ pub(in crate::sewing) fn build(
         .map(|labor| labor.report(&baseline, &selected))
         .transpose()?;
     let report = Report {
-        schema: if policy.availability_calendars.is_some() {
+        schema: if policy.cost_directed() {
+            "ftx-sewing-routing/7"
+        } else if policy.availability_calendars.is_some() {
             "ftx-sewing-routing/6"
         } else if owned_transfer {
             "ftx-sewing-routing/5"
@@ -1568,10 +1794,11 @@ pub(in crate::sewing) fn build(
         workholding,
         attending_labor,
         availability_calendars: policy.availability_calendars.clone(),
+        thread_order_search,
         baseline,
         selected,
         baseline_replaced: !seed_complete,
-        search_nodes: search.used,
+        search_nodes,
         search_complete,
         optimality_proven: proven,
         budget_exhausted: !search_complete,
@@ -1590,11 +1817,13 @@ pub(in crate::sewing) fn build(
             "coupled_handoff_cell_append_dispatch/1"
         },
         replay_operations: 2 * copies * count,
-        work_used: search.used + 2 * copies * count,
+        work_used: search_nodes + 2 * copies * count,
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if policy.availability_calendars.is_some() {
+        schema: if policy.cost_directed() {
+            "ftx-sewing-production/12"
+        } else if policy.availability_calendars.is_some() {
             "ftx-sewing-production/11"
         } else if owned_transfer {
             "ftx-sewing-production/10"
@@ -1620,6 +1849,23 @@ pub(in crate::sewing) fn build(
     });
     if let Some(request) = &options.consumables {
         out.consumables = Some(consumables::evaluate(&out, request)?);
+    }
+    if let Some(search) = out
+        .production
+        .as_ref()
+        .and_then(|production| production.routing.as_ref())
+        .and_then(|route| route.thread_order_search.as_ref())
+        && let Some(selected_cost) = search.selected_order_cost
+    {
+        let (replayed, _) = consumables::complete_order_cost(
+            out.consumables.as_ref().expect("cost-directed consumption"),
+            &search.currency,
+        )?;
+        if replayed != selected_cost {
+            return Err(bad(
+                "selected routed thread order changed during exact consumption replay",
+            ));
+        }
     }
     Ok(out)
 }
