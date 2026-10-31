@@ -217,6 +217,61 @@ fn material_controls_membrane_mass_bending_and_both_contacts() {
 }
 
 #[test]
+fn body_only_drape_does_not_invent_or_require_self_friction() {
+    let complete = band(json!({"material":record(1.0)}));
+    let mut selection = record(1.0);
+    selection["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("friction_self");
+    let resolved = ftx_pattern::textile_import::resolve_fabric(&json!({"material":selection}))
+        .unwrap()
+        .unwrap();
+    assert!(resolved.mechanics().is_err());
+    let partial = band(json!({"material":resolved.frozen_selection()}));
+    let surface = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.0,
+    };
+    let opts = DrapeOptions {
+        spacing: 24.0,
+        sew_steps: 3,
+        drape_steps: 3,
+        step: 1e-3,
+        ..DrapeOptions::default()
+    };
+    let reference = drape(&complete, &json!({}), &body, &opts, |_| {}).unwrap();
+    let actual = drape(&partial, &json!({}), &body, &opts, |_| {}).unwrap();
+    assert_eq!(
+        actual.scene.solver.model.mass,
+        reference.scene.solver.model.mass
+    );
+    assert_eq!(actual.scene.solver.x, reference.scene.solver.x);
+    assert_eq!(actual.scene.solver.v, reference.scene.solver.v);
+    assert_eq!(actual.fold.frames, reference.fold.frames);
+    assert!(actual.report["material"]["mechanics"]["friction_self"].is_null());
+    assert_eq!(actual.report["material"]["self_contact_enabled"], false);
+    assert_eq!(
+        actual.report["material"]["record_sha256"],
+        resolved.sha256()
+    );
+    assert!(
+        actual.report["material"]["record"]["authored"]["properties"]
+            .get("friction_self")
+            .is_none()
+    );
+    let enabled = DrapeOptions {
+        self_contact: Some(opts.contact),
+        ..opts
+    };
+    let failure = resolve(&partial, &enabled).err().unwrap();
+    assert!(failure.message.contains("friction_self"));
+}
+
+#[test]
 fn the_real_drape_changes_when_only_material_observations_change() {
     let surface = body();
     let body = DrapeBody {

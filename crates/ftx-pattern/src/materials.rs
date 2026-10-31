@@ -179,8 +179,9 @@ pub struct Mechanics {
     pub thickness_m: f64,
     /// Cloth against skin coefficient at the cited conditions.
     pub friction_skin: f64,
-    /// Cloth against itself coefficient at the cited conditions.
-    pub friction_self: f64,
+    /// Cloth against itself coefficient at the cited conditions. An absent observation is allowed
+    /// only when self-contact is disabled; it is never replaced by a frictionless assumption.
+    pub friction_self: Option<f64>,
 }
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -485,6 +486,21 @@ impl Material {
     /// Unsupported material level, incomplete data, unapproved estimates, nonpositive moduli or
     /// thickness, negative bending/friction, or a non-positive-definite orthotropic law.
     pub fn mechanics(&self, allow_estimates: bool) -> Result<Mechanics, Refusal> {
+        self.mechanics_for_contacts(allow_estimates, true)
+    }
+
+    /// Resolve sheet/body-contact mechanics for the actual self-contact policy. Disabled
+    /// self-contact does not require a same-sheet friction observation. Any supplied observation
+    /// still passes the ordinary unit, evidence and physical-value checks, and remains in the
+    /// returned source bundle. Body friction is always required by this consumer.
+    ///
+    /// # Errors
+    /// The same failures as [`Self::mechanics`], except absent same-sheet friction when disabled.
+    pub fn mechanics_for_contacts(
+        &self,
+        allow_estimates: bool,
+        self_contact: bool,
+    ) -> Result<Mechanics, Refusal> {
         self.validate()?;
         if matches!(self.form, Form::Fiber | Form::Yarn | Form::Fill) {
             return Err(invalid(format!(
@@ -495,7 +511,7 @@ impl Material {
         // Capability discovery must reject an invalid permanent-strain selector or unsupported
         // joint history law before a consumer can silently fall back to elastic mechanics.
         self.compiled_membrane_plasticity(allow_estimates)?;
-        let mut v = [0.0; 9];
+        let mut v = [0.0; 8];
         v[0] = self.mechanical_areal_density(allow_estimates)?;
         if let Some(law) = self.compiled_membrane(allow_estimates)? {
             let [q11, q22, q12, g12] = law.origin_stiffness();
@@ -522,11 +538,19 @@ impl Material {
                 v[i] = self.require(name, unit, allow_estimates)?;
             }
         }
-        for i in 5..9 {
+        for i in 5..8 {
             let (name, unit) = MECHANICAL_PROPERTIES[i];
             v[i] = self.require(name, unit, allow_estimates)?;
         }
-        if [0, 1, 2, 4, 6].iter().any(|&i| v[i] <= 0.0) || [5, 7, 8].iter().any(|&i| v[i] < 0.0) {
+        let friction_self = if self_contact || self.properties.contains_key("friction_self") {
+            Some(self.require("friction_self", "1", allow_estimates)?)
+        } else {
+            None
+        };
+        if [0, 1, 2, 4, 6].iter().any(|&i| v[i] <= 0.0)
+            || [5, 7].iter().any(|&i| v[i] < 0.0)
+            || friction_self.is_some_and(|mu| mu < 0.0)
+        {
             return Err(invalid(format!(
                 "{}: nonphysical mechanical property",
                 self.id
@@ -554,7 +578,7 @@ impl Material {
             bending_nm: v[5],
             thickness_m: v[6],
             friction_skin: v[7],
-            friction_self: v[8],
+            friction_self,
         };
         if let Some(relaxation) = &self.membrane_relaxation {
             relaxation.validate_equilibrium(self)?;
@@ -707,7 +731,7 @@ mod tests {
         let p = m.mechanics(true).unwrap();
         assert_eq!(p.warp_n_m, 8000.0);
         assert_eq!(p.weft_n_m, 2000.0);
-        assert_eq!(p.friction_self, 0.5);
+        assert_eq!(p.friction_self, Some(0.5));
     }
 
     #[test]
@@ -719,6 +743,42 @@ mod tests {
         let mut m = specimen();
         m.properties.get_mut("warp_stiffness").unwrap().unit = "Pa".into();
         assert!(m.mechanics(true).is_err());
+    }
+
+    #[test]
+    fn body_only_mechanics_keeps_missing_self_friction_explicit() {
+        let mut material = specimen();
+        material.properties.remove("friction_self");
+        let mechanics = material.mechanics_for_contacts(true, false).unwrap();
+        assert_eq!(mechanics.friction_self, None);
+        assert_eq!(mechanics.friction_skin, 0.3);
+        assert!(serde_json::to_value(mechanics).unwrap()["friction_self"].is_null());
+        assert!(material.mechanics(true).is_err());
+        assert!(material.mechanics_for_contacts(true, true).is_err());
+        assert_eq!(material.missing_mechanics(), vec!["friction_self"]);
+        material.properties.remove("friction_skin");
+        assert!(material.mechanics_for_contacts(true, false).is_err());
+    }
+
+    #[test]
+    fn disabled_self_contact_still_validates_supplied_friction() {
+        for value in [-0.1, f64::NAN, f64::INFINITY] {
+            let mut material = specimen();
+            material.properties.get_mut("friction_self").unwrap().value = value;
+            assert!(material.mechanics_for_contacts(true, false).is_err());
+        }
+        let mut material = specimen();
+        for property in material.properties.values_mut() {
+            property.evidence = Evidence::Measured;
+        }
+        material
+            .properties
+            .get_mut("friction_self")
+            .unwrap()
+            .evidence = Evidence::Estimate;
+        assert!(material.mechanics_for_contacts(false, false).is_err());
+        material.properties.get_mut("friction_self").unwrap().unit = "N".into();
+        assert!(material.mechanics_for_contacts(true, false).is_err());
     }
 
     #[test]

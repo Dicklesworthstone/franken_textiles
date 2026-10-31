@@ -101,7 +101,8 @@ pub(super) fn load(args: &Args) -> Result<Option<Override>, Refusal> {
     }
 
     let (basis, material_sha256) = if let Some(record) = resolve_fabric(&fabric)? {
-        record.mechanics()?;
+        // Freeze source identity here. The requested drape/export consumer admits only its own
+        // required capabilities; a flat draft does not need a complete cloth/contact law.
         let frozen = serde_json::to_value(record.frozen_selection())
             .map_err(|e| bad_input(e.to_string()))?;
         let object = fabric

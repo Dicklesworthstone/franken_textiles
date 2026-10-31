@@ -16,9 +16,10 @@ and will not replace an existing result. Round patterns inherit the effective fa
 round. Direct drape stores the override receipt in `sim_report.json`.
 
 The operation changes no geometry, measurements, or fit contract. It does not promote published
-or estimated material data into a fit claim. Missing or unapproved load-bearing properties,
-invalid directional grain, and inconsistent snapshot digests retain the material resolver's
-fail-closed behavior.
+or estimated material data into a fit claim. Flat drafting and export preserve validated source
+records without requiring unused mechanical properties. Physical consumers still refuse missing
+or unapproved properties they require; drape requires same-sheet friction only when self-contact
+is enabled. Invalid directional grain and inconsistent snapshot digests remain fail-closed.
 
 Browser fold-up has no filesystem override switch, but it preflights the pattern's effective
 material before the expensive body fit using the same drape resolver. Malformed material evidence

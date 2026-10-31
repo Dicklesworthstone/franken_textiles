@@ -106,8 +106,7 @@ pub fn inspect_body(
         }
         let wearer = Wearer::from_measurements(&data).map_err(|e| e.message)?;
         let targets = tape_targets(&data).map_err(|e| e.message)?;
-        let fit = fit_tape(model, &wearer, &targets, &Pose::drape())
-            .map_err(|e| e.message)?;
+        let fit = fit_tape(model, &wearer, &targets, &Pose::drape()).map_err(|e| e.message)?;
         body_report(&wearer, &fit)
     };
     body["model_sha256"] = json!(model_sha256);

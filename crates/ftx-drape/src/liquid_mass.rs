@@ -130,7 +130,8 @@ impl MaterialDomain {
         interval: Option<usize>,
     ) -> Result<[(f64, Vec3); 2], Refusal> {
         let components = || {
-            components.ok_or_else(|| invalid("phase-specific mechanics requires separate thermal flows"))
+            components
+                .ok_or_else(|| invalid("phase-specific mechanics requires separate thermal flows"))
         };
         if let Some(schedule) = &self.incoming_stream_velocities_world_m_s_by_interval {
             let velocities = interval
@@ -162,9 +163,7 @@ impl MaterialDomain {
         drainage: f64,
         interval: Option<usize>,
     ) -> Result<[(f64, Vec3); 2], Refusal> {
-        if let Some(schedule) =
-            &self.outgoing_stream_velocities_relative_to_cloth_m_s_by_interval
-        {
+        if let Some(schedule) = &self.outgoing_stream_velocities_relative_to_cloth_m_s_by_interval {
             let velocities = interval
                 .and_then(|i| schedule.get(i))
                 .copied()
@@ -237,7 +236,9 @@ impl Qualification {
             || self.bindings.values().any(|domain| {
                 domain.incoming_velocity_world_m_s.is_some()
                     || domain.incoming_stream_velocities_world_m_s.is_some()
-                    || domain.incoming_stream_velocities_world_m_s_by_interval.is_some()
+                    || domain
+                        .incoming_stream_velocities_world_m_s_by_interval
+                        .is_some()
                     || domain.incoming_velocity_world_m_s_by_interval.is_some()
                     || domain
                         .outgoing_stream_velocities_relative_to_cloth_m_s_by_interval
@@ -264,9 +265,9 @@ impl Qualification {
                 .is_some_and(|velocities| {
                     !velocities.is_empty()
                         && velocities.len() <= 16
-                        && velocities.iter().all(|v| {
-                            v.supply.is_finite() && v.condensation.is_finite()
-                        })
+                        && velocities
+                            .iter()
+                            .all(|v| v.supply.is_finite() && v.condensation.is_finite())
                 })
         };
         let valid = match (self.schema.as_str(), self.model.as_str()) {
@@ -274,7 +275,9 @@ impl Qualification {
                 self.bindings.values().all(|domain| {
                     domain.incoming_velocity_world_m_s.is_none()
                         && domain.incoming_stream_velocities_world_m_s.is_none()
-                        && domain.incoming_stream_velocities_world_m_s_by_interval.is_none()
+                        && domain
+                            .incoming_stream_velocities_world_m_s_by_interval
+                            .is_none()
                         && domain.incoming_velocity_world_m_s_by_interval.is_none()
                         && no_outgoing_recoil(domain)
                 })
@@ -287,7 +290,9 @@ impl Qualification {
                     .incoming_velocity_world_m_s
                     .is_some_and(|velocity| velocity.is_finite())
                     && domain.incoming_stream_velocities_world_m_s.is_none()
-                    && domain.incoming_stream_velocities_world_m_s_by_interval.is_none()
+                    && domain
+                        .incoming_stream_velocities_world_m_s_by_interval
+                        .is_none()
                     && domain.incoming_velocity_world_m_s_by_interval.is_none()
                     && no_outgoing_recoil(domain)
             }),
@@ -297,7 +302,9 @@ impl Qualification {
             ) => self.bindings.values().all(|domain| {
                 domain.incoming_velocity_world_m_s.is_none()
                     && domain.incoming_velocity_world_m_s_by_interval.is_none()
-                    && domain.incoming_stream_velocities_world_m_s_by_interval.is_none()
+                    && domain
+                        .incoming_stream_velocities_world_m_s_by_interval
+                        .is_none()
                     && no_outgoing_recoil(domain)
                     && domain
                         .incoming_stream_velocities_world_m_s
@@ -309,7 +316,9 @@ impl Qualification {
             ) => self.bindings.values().all(|domain| {
                 domain.incoming_velocity_world_m_s.is_none()
                     && domain.incoming_stream_velocities_world_m_s.is_none()
-                    && domain.incoming_stream_velocities_world_m_s_by_interval.is_none()
+                    && domain
+                        .incoming_stream_velocities_world_m_s_by_interval
+                        .is_none()
                     && no_outgoing_recoil(domain)
                     && domain
                         .incoming_velocity_world_m_s_by_interval
@@ -344,9 +353,9 @@ impl Qualification {
                         .is_some_and(|velocities| {
                             !velocities.is_empty()
                                 && velocities.len() <= 16
-                                && velocities.iter().all(|v| {
-                                    v.evaporation.is_finite() && v.drainage.is_finite()
-                                })
+                                && velocities
+                                    .iter()
+                                    .all(|v| v.evaporation.is_finite() && v.drainage.is_finite())
                         })
             }),
             _ => false,
@@ -692,8 +701,7 @@ impl Binding {
                 }
                 for &vertex in &element.v {
                     result.relative_momentum[vertex] += relative_velocity * share;
-                    result.relative_kinetic[vertex] +=
-                        0.5 * share * relative_velocity.norm2();
+                    result.relative_kinetic[vertex] += 0.5 * share * relative_velocity.norm2();
                 }
             }
         }
@@ -923,6 +931,9 @@ fn bind_checked(
         &run.scene.mesh.instances,
         &run.scene.triangle_owner,
     )?;
+    let self_contact = material["self_contact_enabled"]
+        .as_bool()
+        .ok_or_else(|| invalid("missing qualified self-contact policy"))?;
     let solver = &mut run.scene.solver;
     if assignments.len() != solver.model.membranes.len()
         || solver.model.compression.len() != assignments.len()
@@ -944,7 +955,7 @@ fn bind_checked(
         record.material().require_dry_mass_transport()?;
         let id = &run.scene.mesh.instances[run.scene.triangle_owner[i]];
         let domain = &qualification.bindings[id];
-        let mechanics = record.mechanics()?;
+        let mechanics = record.mechanics_for_contacts(self_contact)?;
         let reference = Membrane::orthotropic(
             mechanics.warp_n_m,
             mechanics.weft_n_m,
@@ -1036,7 +1047,7 @@ fn check_source_contact(
     let mut mechanics = Vec::with_capacity(hashes.len());
     for hash in &hashes {
         if let Some(record) = records.iter().find(|r| r.sha256() == hash) {
-            mechanics.push(record.mechanics()?);
+            mechanics.push(record.mechanics_for_contacts(enabled)?);
             continue;
         }
         // Unplaced pieces still contribute to the canonical contact envelope and interface table.
@@ -1064,7 +1075,7 @@ fn check_source_contact(
                 "qualified contact material is not its canonical source",
             ));
         }
-        mechanics.push(record.mechanics()?);
+        mechanics.push(record.mechanics_for_contacts(enabled)?);
     }
     let triangle_ids = assignments
         .iter()
@@ -1084,15 +1095,19 @@ fn check_source_contact(
     let friction: Option<Vec<Vec<f64>>> = if per_piece {
         serde_json::from_value(material["self_friction_matrix"].clone())
             .map_err(|e| invalid(format!("qualified contact interfaces: {e}")))?
+    } else if enabled {
+        Some(vec![vec![mechanics[0].friction_self.ok_or_else(|| {
+            invalid("qualified self-contact requires same-sheet friction evidence")
+        })?]])
     } else {
-        enabled.then(|| vec![vec![mechanics[0].friction_self]])
+        None
     };
     if enabled != friction.is_some()
         || friction.as_ref().is_some_and(|matrix| {
             mechanics
                 .iter()
                 .enumerate()
-                .any(|(i, m)| matrix.get(i).and_then(|row| row.get(i)) != Some(&m.friction_self))
+                .any(|(i, m)| matrix.get(i).and_then(|row| row.get(i)).copied() != m.friction_self)
         })
     {
         return Err(invalid(
@@ -1152,8 +1167,7 @@ fn start_with_exchange(
     let initial_total: f64 = initial.iter().sum();
     let substrate: f64 = solver.model.mass.iter().sum();
     let recoil = qualification.schema == "ftx-coupled-liquid-mechanics/6";
-    let phase_scheduled =
-        qualification.schema == "ftx-coupled-liquid-mechanics/5" || recoil;
+    let phase_scheduled = qualification.schema == "ftx-coupled-liquid-mechanics/5" || recoil;
     let phases = qualification.schema == "ftx-coupled-liquid-mechanics/4" || phase_scheduled;
     let scheduled = qualification.schema == "ftx-coupled-liquid-mechanics/3" || phase_scheduled;
     let prescribed =
@@ -1516,9 +1530,7 @@ impl Solver {
             .exchange
             .as_ref()
             .is_some_and(|flow| flow.outgoing_separation_work_j.is_some())
-            .then(|| {
-                binding.outgoing_separation(evaporated, drained_phase, interval, self.v.len())
-            })
+            .then(|| binding.outgoing_separation(evaporated, drained_phase, interval, self.v.len()))
             .transpose()?;
         let mut accepted_velocity = mixing
             .as_ref()
@@ -1574,8 +1586,7 @@ impl Solver {
                         + relative_kinetic;
                     let final_velocity = accepted_velocity[i];
                     let final_kinetic = 0.5 * final_velocity.norm2();
-                    let work =
-                        relative_kinetic + 0.5 * relative_momentum.norm2() / next[i];
+                    let work = relative_kinetic + 0.5 * relative_momentum.norm2() / next[i];
                     if !outgoing_momentum.is_finite()
                         || !outgoing_kinetic.is_finite()
                         || outgoing_kinetic < 0.
@@ -1592,16 +1603,14 @@ impl Solver {
                         .outgoing_separation_work_j
                         .as_mut()
                         .expect("qualified separation-work ledger") += work;
-                    r.transfer_momentum_residual_kg_m_s += final_velocity * next[i]
-                        - velocity * old
-                        - mixing.incoming_momentum[i]
-                        + outgoing_momentum;
-                    r.transfer_kinetic_residual_j += final_kinetic * next[i]
-                        - kinetic * old
-                        - mixing.incoming_kinetic[i]
-                        + outgoing_kinetic
-                        + dissipation
-                        - work;
+                    r.transfer_momentum_residual_kg_m_s +=
+                        final_velocity * next[i] - velocity * old - mixing.incoming_momentum[i]
+                            + outgoing_momentum;
+                    r.transfer_kinetic_residual_j +=
+                        final_kinetic * next[i] - kinetic * old - mixing.incoming_kinetic[i]
+                            + outgoing_kinetic
+                            + dissipation
+                            - work;
                 } else {
                     r.exported_momentum_kg_m_s += mixed * leaving[i];
                     r.exported_kinetic_energy_j += mixed_kinetic * leaving[i];
@@ -1913,8 +1922,16 @@ mod tests {
         ];
         let admitted = initialize_phase_schedule(&mut s, &[0., 0.], &schedules);
         assert_eq!(admitted.schema, "ftx-coupled-liquid-mechanics-result/5");
-        admitted.qualification.validate_exchange_intervals(2).unwrap();
-        assert!(admitted.qualification.validate_exchange_intervals(1).is_err());
+        admitted
+            .qualification
+            .validate_exchange_intervals(2)
+            .unwrap();
+        assert!(
+            admitted
+                .qualification
+                .validate_exchange_intervals(1)
+                .is_err()
+        );
 
         let incoming = [0.12, 0.3];
         let supplied = [0.04, 0.1];
@@ -2954,10 +2971,20 @@ mod tests {
     }
 
     fn source_run() -> (DrapeRun, Qualification) {
-        let raw = serde_json::from_str(include_str!(
+        source_run_with_self_friction(true)
+    }
+
+    fn source_run_with_self_friction(self_friction: bool) -> (DrapeRun, Qualification) {
+        let mut raw: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
         ))
         .unwrap();
+        if !self_friction {
+            raw["fabric"]["material"]["record"]["properties"]
+                .as_object_mut()
+                .unwrap()
+                .remove("friction_self");
+        }
         let material = crate::material::resolve(
             &ftx_pattern::Pattern::new(raw),
             &crate::run::DrapeOptions::default(),
@@ -3020,6 +3047,44 @@ mod tests {
             fabric: material.fabric,
         };
         (run, q)
+    }
+
+    #[test]
+    fn liquid_source_replay_uses_the_actual_disabled_self_contact_policy() {
+        let (mut complete, q_complete) = source_run();
+        let (mut partial, q_partial) = source_run_with_self_friction(false);
+        for (run, qualification) in [(&mut complete, &q_complete), (&mut partial, &q_partial)] {
+            bind(run, qualification, &[0.12, 0.24], &[vec![20.], vec![20.]]).unwrap();
+            let report = run
+                .scene
+                .solver
+                .evaporate_liquid(&[0.06, 0.12], &[vec![20.], vec![20.]])
+                .unwrap();
+            assert!(report.mass_balance_residual_kg.abs() < 1e-15);
+            assert!(report.transfer_momentum_residual_kg_m_s.norm() < 1e-15);
+        }
+        assert_eq!(
+            partial.scene.solver.model.mass,
+            complete.scene.solver.model.mass
+        );
+        assert_eq!(partial.scene.solver.v, complete.scene.solver.v);
+        assert!(partial.report["material"]["mechanics"]["friction_self"].is_null());
+        // A source report claiming newly enabled self-contact cannot authorize missing friction.
+        let (mut false_claim, mut qualification) = source_run_with_self_friction(false);
+        false_claim.report["material"]["self_contact_enabled"] = json!(true);
+        qualification.material_report_sha256 =
+            sha256_hex(&serde_json::to_vec(&false_claim.report["material"]).unwrap());
+        let before = format!("{:?}", false_claim.scene.solver);
+        assert!(
+            bind(
+                &mut false_claim,
+                &qualification,
+                &[0.12, 0.24],
+                &[vec![20.], vec![20.]]
+            )
+            .is_err()
+        );
+        assert_eq!(format!("{:?}", false_claim.scene.solver), before);
     }
 
     #[test]

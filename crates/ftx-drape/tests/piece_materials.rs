@@ -235,6 +235,47 @@ fn assigned(scale: f64) -> Pattern {
 }
 
 #[test]
+fn body_only_piece_materials_keep_unknown_diagonals_out_of_contact() {
+    let complete = assigned(2.0);
+    let mut partial = complete.raw().clone();
+    partial["fabric"]["material"]["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("friction_self");
+    partial["pieces"][1]["fabric"]["material"]["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("friction_self");
+    let partial = Pattern::new(partial);
+    let reference = run(&complete, options());
+    let actual = run(&partial, options());
+    assert_eq!(
+        actual.scene.solver.model.mass,
+        reference.scene.solver.model.mass
+    );
+    assert_eq!(actual.scene.solver.x, reference.scene.solver.x);
+    assert_eq!(actual.scene.solver.v, reference.scene.solver.v);
+    assert_eq!(actual.fold.frames, reference.fold.frames);
+    let material = &actual.report["material"];
+    assert_eq!(material["self_contact_enabled"], false);
+    assert!(material["self_friction_matrix"].is_null());
+    for record in material["records"].as_object().unwrap().values() {
+        assert!(record["mechanics"]["friction_self"].is_null());
+    }
+    let opts = DrapeOptions {
+        self_contact: Some(options().contact),
+        ..options()
+    };
+    assert!(
+        resolve(&partial, &opts)
+            .err()
+            .unwrap()
+            .message
+            .contains("friction_self")
+    );
+}
+
+#[test]
 fn piece_laws_drive_the_actual_sewn_garment_without_changing_its_pattern() {
     let plain = run(&band(), options());
     let mixed = run(&assigned(2.0), options());

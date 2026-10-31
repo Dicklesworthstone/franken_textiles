@@ -1,5 +1,13 @@
 # ftx-pattern contract
 
+**Contact-specific mechanical admission** (`Material::mechanics_for_contacts`,
+`ResolvedMaterial::mechanics_for_contacts`). Body-contact sheet mechanics can retain absent
+same-sheet friction when self-contact is disabled. `Mechanics.friction_self` is optional and
+serializes missing evidence as null; supplied observations still pass evidence, units and physical
+checks. The existing `mechanics` API remains strict and complete. No coefficient is guessed, and
+complete-record source identities and report values remain unchanged. Regressions: `materials`
+unit tests and the real drape `materials`, `piece_materials` and liquid source-replay tests.
+
 **Unloaded manufacturing thickness** (`materials::Material::unloaded_thickness`,
 `material_catalog::ResolvedMaterial::unloaded_thickness`). Source-qualified
 `unloaded_thickness` observations normalize to m while retaining specimen/conditioning,
