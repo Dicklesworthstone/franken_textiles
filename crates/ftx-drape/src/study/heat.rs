@@ -890,6 +890,8 @@ impl SurfaceHistory {
                     "ftx-coupled-liquid-mechanics-result/2"
                         | "ftx-coupled-liquid-mechanics-result/3"
                         | "ftx-coupled-liquid-mechanics-result/4"
+                        | "ftx-coupled-liquid-mechanics-result/5"
+                        | "ftx-coupled-liquid-mechanics-result/6"
                 )
             );
             result["mechanical_coupling"] = coupling;
@@ -915,6 +917,14 @@ impl SurfaceHistory {
                     "The mechanical_coupling uses these exact reference-owned remaining and incoming/outgoing masses. Its independent prescribed-velocity model retains momentum, bulk energy and inelastic mixing dissipation. This thermal ledger contains sensible and latent enthalpy only; it receives no inferred mixing heat or wet-property change."
                 );
             }
+            if result["mechanical_coupling"]["schema"] == "ftx-coupled-liquid-mechanics-result/6" {
+                result["scope"] = json!(
+                    "First-order accepted-step liquid exchange with scheduled phase-specific incoming velocities and qualified outgoing recoil. Incoming supply and condensation mix once with the previous welded mass. Evaporation and drainage then leave at their independently scheduled velocities relative to the post-mixing cloth, and retained cloth/liquid recoils to conserve momentum. Bulk outgoing kinetic energy, incoming mixing dissipation and nonnegative outgoing separation work remain explicit mechanical boundary terms, separate from thermal sensible/latent heat. Whole-motion failure rolls back every history. No inferred jet-pressure law, runoff direction, wet constitutive law or empirical garment claim."
+                );
+                result["surface_water"]["scope"] = json!(
+                    "The mechanical_coupling uses these exact supplied, condensed, evaporated and drained masses. Its /6 recoil authority owns relative-flow momentum, bulk kinetic energy, incoming mixing dissipation and outgoing separation work. This thermal ledger remains limited to liquid/vapor sensible enthalpy and phase-change latent heat; no mechanical separation work is converted to heat."
+                );
+            }
         }
         if self
             .request
@@ -925,7 +935,10 @@ impl SurfaceHistory {
             result["scope"] = json!(
                 "Accepted-step sheet heat with qualified free liquid, supplied sensible enthalpy and prescribed stock-limited drainage. Optional condensation retains independent reverse-transfer qualification. Evaporation and drainage have separate mass counters; only phase transfer carries latent heat, while both outgoing phases export old-temperature sensible enthalpy. Any mechanical coupling uses these exact accepted phases for the next solve's inertia, momentum and bulk energy, retaining qualified incoming stream velocities before co-moving outflow. Coupled failure restores the whole motion. No inferred runoff, inter-patch transport, wet-property change, body transfer or empirical garment claim; refinement remains necessary."
             );
-            if !result["mechanical_coupling"].is_null() {
+            if !result["mechanical_coupling"].is_null()
+                && result["mechanical_coupling"]["schema"]
+                    != "ftx-coupled-liquid-mechanics-result/6"
+            {
                 result["surface_water"]["scope"] = json!(
                     "Mechanical coupling uses this exact remaining, supplied, condensed, evaporated and drained liquid. Evaporated and drained mass remain separate; their combined carried momentum and bulk energy belong to mechanics. This thermal ledger owns liquid/vapor sensible enthalpy and phase-change latent heat; drainage has no latent term or inferred recoil."
                 );

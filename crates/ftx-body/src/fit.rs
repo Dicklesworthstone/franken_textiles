@@ -111,22 +111,50 @@ impl Wearer {
 
 /// The tape targets of a measurement file: each [`TAPE_FIELDS`] name with a fused value, whatever its
 /// provenance (the drape tests a pattern against the measurements it was drafted to, as the reference's
-/// dress form does), the stature from `wearer.stature_mm` when given.
-#[must_use]
-pub fn tape_targets(meas: &Value) -> Vec<TapeTarget> {
+/// dress form does), and its reported uncertainty. The stature from `wearer.stature_mm` takes precedence
+/// when given; it is separate evidence and never inherits a fused stature's uncertainty.
+/// Missing uncertainty retains the fitter's documented per-functional tolerance.
+///
+/// # Errors
+/// [`RefusalCode::InvalidDocument`] if a selected fused target declares a `sigma_mm` that is not finite
+/// and positive. An absent sigma is supported; an explicit null or malformed sigma is not absence.
+pub fn tape_targets(meas: &Value) -> Result<Vec<TapeTarget>, Refusal> {
     TAPE_FIELDS
         .iter()
         .filter_map(|&name| {
             let fused = meas["fused"][name]["value_mm"].as_f64();
-            let value = if name == "stature" {
-                meas["wearer"]["stature_mm"].as_f64().or(fused)
+            let override_value = if name == "stature" {
+                meas["wearer"]["stature_mm"].as_f64()
             } else {
-                fused
-            }?;
-            Some(TapeTarget {
-                name: name.to_string(),
-                value_mm: value,
-            })
+                None
+            };
+            let value = override_value.or(fused)?;
+            Some((|| {
+                let sigma_mm = if override_value.is_some() {
+                    None
+                } else {
+                    meas["fused"][name]
+                        .get("sigma_mm")
+                        .map(|v| {
+                            v.as_f64()
+                                .filter(|s| s.is_finite() && *s > 0.0)
+                                .ok_or_else(|| {
+                                    Refusal::new(
+                                        RefusalCode::InvalidDocument,
+                                        format!(
+                                            "fused {name}.sigma_mm must be finite and positive"
+                                        ),
+                                    )
+                                })
+                        })
+                        .transpose()?
+                };
+                Ok(TapeTarget {
+                    name: name.to_string(),
+                    value_mm: value,
+                    sigma_mm,
+                })
+            })())
         })
         .collect()
 }
@@ -240,17 +268,19 @@ const SEARCH_STEP_MM: f64 = 2.0;
 /// Height slab of the slicers' triangle buckets (mm).
 const SLAB_MM: f64 = 5.0;
 
-/// The fit's tolerance (1σ, mm) for a girth and for a length: the accuracy gate G1b asks of it.
+/// The fit's residual-scale floor (mm) for a girth, from the accuracy gate G1b.
 pub const FIT_SIGMA_GIRTH_MM: f64 = 3.0;
 /// See [`FIT_SIGMA_GIRTH_MM`].
 pub const FIT_SIGMA_LENGTH_MM: f64 = 2.0;
 
-/// The fit's 1σ for a [`TAPE_FIELDS`] measurement (mm). Four lengths whose reading on a body rests on an
-/// approximation of where a measurer puts the tape (the shoulder point taken above the shoulder joint, a tape
+/// The fit's residual-scale floor for a [`TAPE_FIELDS`] measurement (mm). Four lengths whose reading
+/// on a body rests on an approximation of where a measurer puts the tape (the shoulder point taken
+/// above the shoulder joint, a tape
 /// hanging from the hip, a snug tape through the crotch as a hull) pull more gently: 5 mm, and 8 mm for the
 /// outseam (the catalogue's tape σ for them is 10–15 mm). Pulled to 2 mm they distort the body where the
 /// definition, not the body, is uncertain (the 92 cm chart's outseam and shoulder length cannot both be met
-/// with its crotch height).
+/// with its crotch height). A target's larger declared measurement sigma supersedes this floor. This
+/// numerical fitting policy is not a calibrated model-error distribution or a posterior confidence.
 #[must_use]
 pub fn fit_sigma(name: &str) -> f64 {
     match name {
@@ -517,13 +547,15 @@ pub fn partial_tape_readings(
     .map(|value| value.filter(|v| v.is_finite() && *v > 0.0))
 }
 
-/// One measurement to fit: a name of [`TAPE_FIELDS`] and its value (mm).
+/// One measurement to fit: a name of [`TAPE_FIELDS`], value and optional source uncertainty (mm).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TapeTarget {
     /// The measurement.
     pub name: String,
     /// Its value (mm).
     pub value_mm: f64,
+    /// Reported measurement 1σ (mm), finite and positive when present. None uses [`fit_sigma`].
+    pub sigma_mm: Option<f64>,
 }
 
 /// One measurement after the fit.
@@ -535,6 +567,80 @@ pub struct TapeResidual {
     pub target_mm: f64,
     /// What the tape reads on the fitted body (mm).
     pub body_mm: f64,
+    /// The target's reported measurement 1σ, if supplied (mm).
+    pub sigma_mm: Option<f64>,
+    /// Actual residual scale: the larger of reported sigma and [`fit_sigma`] (mm).
+    pub effective_sigma_mm: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TapeRow {
+    field: usize,
+    target: f64,
+    sigma: f64,
+    source_sigma: Option<f64>,
+}
+
+fn tape_rows(wearer: &Wearer, targets: &[TapeTarget]) -> Result<Vec<TapeRow>, Refusal> {
+    let bad = |m: String| Refusal::new(RefusalCode::InvalidDocument, m);
+    let mut rows = Vec::new();
+    for t in targets {
+        let field = TAPE_FIELDS
+            .iter()
+            .position(|f| *f == t.name)
+            .ok_or_else(|| {
+                bad(format!(
+                    "no tape reading for {}: the fit reads {}",
+                    t.name,
+                    TAPE_FIELDS.join(", ")
+                ))
+            })?;
+        if !(t.value_mm.is_finite() && t.value_mm > 0.0) {
+            return Err(bad(format!(
+                "{} = {} mm must be finite and positive",
+                t.name, t.value_mm
+            )));
+        }
+        if let Some(sigma) = t.sigma_mm
+            && !(sigma.is_finite() && sigma > 0.0)
+        {
+            return Err(bad(format!(
+                "{}.sigma_mm = {sigma} must be finite and positive",
+                t.name
+            )));
+        }
+        rows.push(TapeRow {
+            field,
+            target: t.value_mm,
+            sigma: t.sigma_mm.unwrap_or(0.0).max(fit_sigma(&t.name)),
+            source_sigma: t.sigma_mm,
+        });
+    }
+    // The wearer's independent stature has no declared uncertainty in this file contract.
+    if !rows.iter().any(|r| r.field == 0) {
+        rows.insert(
+            0,
+            TapeRow {
+                field: 0,
+                target: wearer.stature_mm,
+                sigma: FIT_SIGMA_LENGTH_MM,
+                source_sigma: None,
+            },
+        );
+    }
+    // Weight retains its separate kg-scale policy, never a tape target's mm uncertainty.
+    if let Some(kg) = wearer.weight_kg {
+        if !(kg.is_finite() && kg > 0.0) {
+            return Err(bad(format!("weight {kg} kg must be finite and positive")));
+        }
+        rows.push(TapeRow {
+            field: N_TAPE,
+            target: kg,
+            sigma: (WEIGHT_SIGMA_FRACTION * kg).max(WEIGHT_SIGMA_MIN_KG),
+            source_sigma: None,
+        });
+    }
+    Ok(rows)
 }
 
 /// A body fitted to tape measurements.
@@ -555,12 +661,14 @@ pub struct TapeFit {
 }
 
 /// Fits the body of `wearer` (age and gender set; its stature fitted unless `targets` has one, its
-/// weight when known) to `targets` on `pose`.
+/// weight when known) to `targets` on `pose`. Each residual is scaled by the larger of the target's
+/// reported sigma and the explicit per-functional fitting floor. Missing sigma preserves the floor.
 ///
 /// # Errors
 /// [`RefusalCode::InvalidDocument`] for a target that is not a [`TAPE_FIELDS`] name or not finite and
-/// positive, or a model without the [`FREE`] local changes; refusals of [`fit_stature`] (the start) and of
-/// the model; [`RefusalCode::DegenerateGeometry`] when the start body lacks a section a reading needs.
+/// positive, a supplied sigma that is not finite and positive, or a model without the [`FREE`] local
+/// changes; refusals of [`fit_stature`] (the start) and of the model;
+/// [`RefusalCode::DegenerateGeometry`] when the start body lacks a section a reading needs.
 pub fn fit_tape(
     model: &AnnyModel,
     wearer: &Wearer,
@@ -568,41 +676,7 @@ pub fn fit_tape(
     pose: &Pose,
 ) -> Result<TapeFit, Refusal> {
     let bad = |m: String| Refusal::new(RefusalCode::InvalidDocument, m);
-    let mut rows: Vec<(usize, f64, f64)> = Vec::new(); // (field, value, σ)
-    for t in targets {
-        let k = TAPE_FIELDS
-            .iter()
-            .position(|f| *f == t.name)
-            .ok_or_else(|| {
-                bad(format!(
-                    "no tape reading for {}: the fit reads {}",
-                    t.name,
-                    TAPE_FIELDS.join(", ")
-                ))
-            })?;
-        if !(t.value_mm.is_finite() && t.value_mm > 0.0) {
-            return Err(bad(format!(
-                "{} = {} mm must be finite and positive",
-                t.name, t.value_mm
-            )));
-        }
-        rows.push((k, t.value_mm, fit_sigma(&t.name)));
-    }
-    // the wearer's stature is a target unless `targets` gives one
-    if !rows.iter().any(|r| r.0 == 0) {
-        rows.insert(0, (0, wearer.stature_mm, FIT_SIGMA_LENGTH_MM));
-    }
-    // the weight: a row on the mass, read in the extra slot after the tape readings
-    if let Some(kg) = wearer.weight_kg {
-        if !(kg.is_finite() && kg > 0.0) {
-            return Err(bad(format!("weight {kg} kg must be finite and positive")));
-        }
-        rows.push((
-            N_TAPE,
-            kg,
-            (WEIGHT_SIGMA_FRACTION * kg).max(WEIGHT_SIGMA_MIN_KG),
-        ));
-    }
+    let rows = tape_rows(wearer, targets)?;
     let lc: Vec<usize> = FREE[N_PHENOTYPE..]
         .iter()
         .map(|n| {
@@ -613,8 +687,8 @@ pub fn fit_tape(
         .collect::<Result<_, _>>()?;
     let stature = rows
         .iter()
-        .find(|r| r.0 == 0)
-        .map_or(wearer.stature_mm, |r| r.1);
+        .find(|r| r.field == 0)
+        .map_or(wearer.stature_mm, |r| r.target);
     let (start, _) = fit_stature(
         model,
         &Wearer {
@@ -651,6 +725,45 @@ pub fn fit_tape(
         Ok(tape_readings(&faces, anthro.height, &posed, &frames)
             .map(|t| std::array::from_fn(|k| if k < N_TAPE { t[k] } else { anthro.mass })))
     };
+    let TapeSolution {
+        free,
+        readings,
+        iterations,
+    } = optimize_tape(&rows, base.height, read)?;
+    let residuals = rows
+        .iter()
+        .filter(|r| r.field < N_TAPE)
+        .map(|r| TapeResidual {
+            name: TAPE_FIELDS[r.field].to_string(),
+            target_mm: r.target,
+            body_mm: readings[r.field],
+            sigma_mm: r.source_sigma,
+            effective_sigma_mm: r.sigma,
+        })
+        .collect();
+    Ok(TapeFit {
+        params: params_of(&free),
+        readings: std::array::from_fn(|k| readings[k]),
+        mass_kg: readings[N_TAPE],
+        residuals,
+        free,
+        iterations,
+    })
+}
+
+struct TapeSolution {
+    free: [f64; N_FREE],
+    readings: [f64; N_TAPE + 1],
+    iterations: usize,
+}
+
+// The same bounded LM solve serves actual model readings and independent analytic controls. Keep
+// target scales in both residual and Jacobian rows; scaling only one changes the fitted optimum.
+fn optimize_tape(
+    rows: &[TapeRow],
+    initial_height: f64,
+    read: impl Fn(&[f64; N_FREE]) -> Result<Option<[f64; N_TAPE + 1]>, Refusal>,
+) -> Result<TapeSolution, Refusal> {
     let pheno = |j: usize| j < N_PHENOTYPE;
     let prior = |j: usize| if pheno(j) { 0.5 } else { 0.0 };
     let tau = |j: usize| {
@@ -672,13 +785,13 @@ pub fn fit_tape(
     // residual vector: the measurements, then the priors
     let resid = |th: &[f64; N_FREE], r: &[f64; N_TAPE + 1]| -> Vec<f64> {
         rows.iter()
-            .map(|&(k, v, s)| (r[k] - v) / s)
+            .map(|row| (r[row.field] - row.target) / row.sigma)
             .chain((0..N_FREE).map(|j| (th[j] - prior(j)) / tau(j)))
             .collect()
     };
     let cost = |r: &[f64]| r.iter().map(|x| x * x).sum::<f64>();
     let mut th: [f64; N_FREE] =
-        std::array::from_fn(|j| if j == 0 { base.height } else { prior(j) });
+        std::array::from_fn(|j| if j == 0 { initial_height } else { prior(j) });
     let mut readings = read(&th)?.ok_or_else(|| {
         Refusal::new(
             RefusalCode::DegenerateGeometry,
@@ -711,8 +824,8 @@ pub fn fit_tape(
             if xh == xl {
                 continue;
             }
-            for (i, &(k, _, s)) in rows.iter().enumerate() {
-                jac[i][j] = (hi[k] - lo[k]) / ((xh - xl) * s);
+            for (i, row) in rows.iter().enumerate() {
+                jac[i][j] = (hi[row.field] - lo[row.field]) / ((xh - xl) * row.sigma);
             }
         }
         let mut improved = false;
@@ -753,21 +866,9 @@ pub fn fit_tape(
             break;
         }
     }
-    let residuals = rows
-        .iter()
-        .filter(|&&(k, _, _)| k < N_TAPE)
-        .map(|&(k, v, _)| TapeResidual {
-            name: TAPE_FIELDS[k].to_string(),
-            target_mm: v,
-            body_mm: readings[k],
-        })
-        .collect();
-    Ok(TapeFit {
-        params: params_of(&th),
-        readings: std::array::from_fn(|k| readings[k]),
-        mass_kg: readings[N_TAPE],
-        residuals,
+    Ok(TapeSolution {
         free: th,
+        readings,
         iterations,
     })
 }
@@ -824,7 +925,7 @@ mod tests {
                       "thigh": {"value_mm": 290.0}, "hip": {"value_deg": 3.0},
                       "head": {"value_mm": 480.0}, "belly_depth": {"value_mm": 140.0}},
         });
-        let t = tape_targets(&m);
+        let t = tape_targets(&m).unwrap();
         let got: Vec<(&str, f64)> = t.iter().map(|t| (t.name.as_str(), t.value_mm)).collect();
         // in TAPE_FIELDS order; no value_mm (hip) or not a tape reading (belly_depth): left out
         assert_eq!(
@@ -836,6 +937,119 @@ mod tests {
                 ("head", 480.0)
             ]
         );
+        assert!(t.iter().all(|target| target.sigma_mm.is_none()));
+    }
+
+    #[test]
+    fn target_uncertainty_stays_with_its_selected_measurement() {
+        let mut m = serde_json::json!({
+            "wearer":{"age_months":30.0,"stature_mm":921.0},
+            "fused":{"stature":{"value_mm":920.0,"sigma_mm":12.0},
+                "waist":{"value_mm":530.0,"sigma_mm":18.0},
+                "chest":{"value_mm":540.0}}
+        });
+        let wearer = Wearer::from_measurements(&m).unwrap();
+        let targets = tape_targets(&m).unwrap();
+        assert_eq!(targets[0].value_mm, 921.0);
+        assert_eq!(targets[0].sigma_mm, None);
+        assert_eq!(targets[1].name, "chest");
+        assert_eq!(targets[1].sigma_mm, None);
+        assert_eq!(targets[2].name, "waist");
+        assert_eq!(targets[2].sigma_mm, Some(18.0));
+        let rows = tape_rows(&wearer, &targets).unwrap();
+        assert_eq!(rows[0].sigma, FIT_SIGMA_LENGTH_MM);
+        assert_eq!(rows[1].sigma, FIT_SIGMA_GIRTH_MM);
+        assert_eq!(rows[2].sigma, 18.0);
+
+        // Numeric equality does not turn the independent wearer override into the fused evidence.
+        m["wearer"]["stature_mm"] = serde_json::json!(920.0);
+        assert_eq!(tape_targets(&m).unwrap()[0].sigma_mm, None);
+        m["wearer"].as_object_mut().unwrap().remove("stature_mm");
+        assert_eq!(tape_targets(&m).unwrap()[0].sigma_mm, Some(12.0));
+    }
+
+    #[test]
+    fn malformed_uncertainty_is_not_treated_as_missing() {
+        for sigma in [
+            serde_json::Value::Null,
+            serde_json::json!(0.0),
+            serde_json::json!(-1.0),
+            serde_json::json!("5.0"),
+            serde_json::json!(true),
+            serde_json::json!([]),
+        ] {
+            let m = serde_json::json!({"fused":{"waist":{"value_mm":530.0,"sigma_mm":sigma}}});
+            let error = tape_targets(&m).unwrap_err();
+            assert_eq!(error.code, RefusalCode::InvalidDocument);
+            assert!(error.message.contains("waist.sigma_mm"));
+        }
+        let wearer = Wearer {
+            years: 2.5,
+            gender: 0.5,
+            stature_mm: 920.0,
+            weight_kg: None,
+        };
+        for sigma in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            let target = TapeTarget {
+                name: "waist".into(),
+                value_mm: 530.0,
+                sigma_mm: Some(sigma),
+            };
+            let error = tape_rows(&wearer, &[target]).unwrap_err();
+            assert_eq!(error.code, RefusalCode::InvalidDocument);
+            assert!(error.message.contains("waist.sigma_mm"));
+        }
+    }
+
+    #[test]
+    fn reported_uncertainty_changes_the_actual_tape_optimizer() {
+        let solve = |waist_sigma: Option<f64>, chest_sigma: Option<f64>| {
+            let mut m = serde_json::json!({"wearer":{"age_months":30.0,"stature_mm":920.0},
+                "fused":{"waist":{"value_mm":510.0},"chest":{"value_mm":560.0}}});
+            for (name, sigma) in [("waist", waist_sigma), ("chest", chest_sigma)] {
+                if let Some(sigma) = sigma {
+                    m["fused"][name]["sigma_mm"] = serde_json::json!(sigma);
+                }
+            }
+            let wearer = Wearer::from_measurements(&m).unwrap();
+            let rows = tape_rows(&wearer, &tape_targets(&m).unwrap()).unwrap();
+            // Analytic one-parameter body: chest and waist share a 500 + 100 q mm section.
+            // Contradictory targets force the production LM solver to use both declared scales.
+            // The exact optimum follows by differentiating the weighted quadratic plus q's prior.
+            let result = optimize_tape(&rows, 0.5, |th| {
+                let mut readings = [500.0; N_TAPE + 1];
+                readings[0] = 920.0;
+                readings[1] += 100.0 * th[N_PHENOTYPE];
+                readings[2] += 100.0 * th[N_PHENOTYPE];
+                Ok(Some(readings))
+            })
+            .unwrap();
+            let a = 1.0 / waist_sigma.unwrap_or(3.0).max(3.0).powi(2);
+            let b = 1.0 / chest_sigma.unwrap_or(3.0).max(3.0).powi(2);
+            let exact = 100.0 * (10.0 * a + 60.0 * b)
+                / (10_000.0 * (a + b) + 1.0 / PRIOR_SIGMA_LOCAL.powi(2));
+            assert!(
+                (result.free[N_PHENOTYPE] - exact).abs() < 1e-7,
+                "{} versus analytic {exact}",
+                result.free[N_PHENOTYPE]
+            );
+            result
+        };
+        let precise_waist = solve(Some(3.0), Some(30.0));
+        let precise_chest = solve(Some(30.0), Some(3.0));
+        assert!(precise_waist.readings[2] < 512.0);
+        assert!(precise_chest.readings[1] > 558.0);
+        assert!(precise_chest.readings[2] - precise_waist.readings[2] > 45.0);
+
+        let legacy = solve(None, None);
+        let at_floor = solve(Some(3.0), Some(3.0));
+        let below_floor = solve(Some(0.1), Some(0.2));
+        assert_eq!(legacy.free, at_floor.free);
+        assert_eq!(legacy.free, below_floor.free);
+        let repeat = solve(Some(3.0), Some(30.0));
+        assert_eq!(precise_waist.free, repeat.free);
+        assert_eq!(precise_waist.readings, repeat.readings);
+        assert_eq!(precise_waist.iterations, repeat.iterations);
     }
 
     #[test]

@@ -12,12 +12,12 @@ pub(super) struct Interfaces {
     pub report: Value,
 }
 
-/// Canonical hashes and same-sheet diagonal coefficients are already resolved from the records.
+/// Canonical hashes and optional same-sheet coefficients are already resolved from the records.
 /// Validate every supplied pair even when self-contact is off, but require coverage only when on.
 pub(super) fn resolve(
     raw: Option<&Value>,
     hashes: &[String],
-    diagonal: &[f64],
+    diagonal: &[Option<f64>],
     self_contact: bool,
 ) -> Result<Interfaces, Refusal> {
     let count = hashes.len();
@@ -47,7 +47,7 @@ pub(super) fn resolve(
     pairs.sort_by(|a, b| a.materials.cmp(&b.materials));
     let mut matrix = vec![vec![None; count]; count];
     for (i, &mu) in diagonal.iter().enumerate() {
-        matrix[i][i] = Some(mu);
+        matrix[i][i] = mu;
     }
     for pair in &pairs {
         let index = |h: &String| {

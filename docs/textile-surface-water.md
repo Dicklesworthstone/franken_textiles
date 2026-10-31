@@ -153,8 +153,39 @@ Results use `ftx-coupled-liquid-mechanics-result/4`, retain both qualified veloc
 same cumulative mechanical ledger as version 2. Thermal reports retain separate supplied and
 condensed mass. Mixing work remains separate from thermal enthalpy. Independent welded-vertex,
 opposing-stream, Galilean and rollback tests, plus native/portable named-case replay, exercise this
-numerical capability. Phase-specific time-varying velocities and empirical wet-fabric behavior
-remain unsupported. Schema `/3` stays the published scheduled-interval contract in the next section; this phase-specific contract does not reuse it.
+numerical capability. Phase-specific constant velocities remain available as schema `/4`. Time-varying phase-specific
+velocities use the separately versioned schema below. Empirical wet-fabric behavior remains unsupported.
+
+### Scheduled supply and condensation velocities
+
+Use `ftx-coupled-liquid-mechanics/5` with model
+`scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1` when supplied liquid
+and condensed vapor each need an independently qualified velocity in every mechanical keyframe
+interval. Every instance binding replaces the constant phase object with:
+
+```json
+"incoming_stream_velocities_world_m_s_by_interval": [
+  {"supply": [0.2, 0.1, -0.5], "condensation": [-0.1, 0.3, 0.4]},
+  {"supply": [-0.3, 0.4, 0.2], "condensation": [0.5, -0.2, 0.1]}
+]
+```
+
+The array length must exactly match the mechanical keyframe intervals for every retained instance.
+Both finite phase vectors are explicit in every entry, even when one phase carries zero mass in that
+interval. The thermal authority still provides the accepted supplied and condensed masses separately;
+the mechanical mixer applies their corresponding interval velocities at the shared welded vertices.
+Momentum cancellation never erases either stream's independently accumulated kinetic energy or
+inelastic mixing work. There is no interpolation, velocity averaging, or fallback to a constant phase
+velocity.
+
+Schemas `/1`–`/4` reject this field, and `/5` rejects the aggregate constant/scheduled fields and
+the constant phase-specific field. Missing, extra, short, nonfinite or ambiguous schedules refuse
+before state mutation. Results use `ftx-coupled-liquid-mechanics-result/5`; the existing cumulative
+mass, momentum, kinetic, gravitational and mixing-dissipation ledgers are unchanged. Drainage remains
+an independently qualified outgoing water process and, in this version, still leaves co-moving with
+the post-mixing cloth velocity. Whole-motion rollback and comparison protocol identity retain the
+complete phase schedule. This is a numerical boundary condition, not a rain, condensation, runoff or
+wet-material measurement claim.
 
 ### Changing incoming velocity across keyframe intervals
 
@@ -188,6 +219,40 @@ mechanical qualification for motion-dependent consumers, while static and manufa
 comparisons remain independent. Native, portable and browser reports retain the original
 schedule. Drainage requires the independent water `/4` source below. This velocity extension supplies no rain interception, phase-specific flow, mixing
 heat, new wet constitutive law or empirical garment qualification. Phase-specific supply and condensation velocities are schema `/4`, not a second `/3` model. Combining `/3` and `/4` fields refuses.
+
+### Qualified outgoing recoil
+
+Use `ftx-coupled-liquid-mechanics/6` with model
+`scheduled_phase_specific_incoming_and_outgoing_velocity_mass_exchange_frozen_mechanics/1` to retain
+the `/5` phase-specific incoming schedules and additionally prescribe evaporation and drainage
+velocity **relative to the post-incoming-mixing cloth velocity** in every keyframe interval:
+
+```json
+"outgoing_stream_velocities_relative_to_cloth_m_s_by_interval": [
+  {"evaporation": [0.0, 0.0, 0.4], "drainage": [0.2, 0.0, -0.1]},
+  {"evaporation": [0.0, 0.0, 0.2], "drainage": [-0.1, 0.1, -0.2]}
+]
+```
+
+Every retained instance has exactly one finite pair per mechanical interval. The actual world velocity
+of each outgoing phase is the accepted post-incoming-mixing cloth velocity plus its qualified relative
+vector. At each welded vertex the retained cloth/liquid velocity recoils so total momentum is conserved.
+Opposing evaporation and drainage momenta may cancel, but their separate kinetic energies cannot.
+
+Creating relative outgoing velocity can require mechanical work. The exchange receipt therefore adds
+`outgoing_separation_work_j`, computed without cancellation as the sum of relative-stream kinetic
+energy plus the retained-mass recoil term. The kinetic residual becomes final retained kinetic energy
+minus previous kinetic energy minus incoming kinetic energy plus outgoing kinetic energy plus incoming
+mixing dissipation **minus** this separation work. Separation work is a mechanical boundary term; it
+is not deposited into the thermal sensible/latent ledger and no heat-conversion fraction is inferred.
+
+Schema `/6` rejects constant or aggregate incoming velocity fields, incomplete interval arrays,
+nonfinite vectors and mixed outgoing policies. Older schemas reject the outgoing-recoil field and
+retain their exact co-moving outflow behavior. Drainage still requires water `/4`; an inactive drainage
+phase keeps an explicit velocity but contributes zero momentum and zero energy. Whole-motion failure
+rolls back the recoil state and all ledgers. This contract supplies no jet-pressure law, droplet-size
+model, runoff direction, aerodynamic coupling, measured wet constitutive behavior or empirical garment
+validation.
 
 ## Thermal water model
 

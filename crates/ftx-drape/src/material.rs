@@ -265,7 +265,7 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
             mechanics: None,
         });
     };
-    let mechanics = record.mechanics()?;
+    let mechanics = record.mechanics_for_contacts(opts.self_contact.is_some())?;
     let retained_liquid = record
         .material()
         .retained_liquid_mass(record.allows_estimates())?;
@@ -294,7 +294,9 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
     opts.contact.mu = mechanics.friction_skin;
     if let Some(p) = &mut opts.self_contact {
         p.thickness = mechanics.thickness_m;
-        p.mu = mechanics.friction_self;
+        p.mu = mechanics
+            .friction_self
+            .ok_or_else(|| invalid("self-contact requires same-sheet friction evidence"))?;
     }
     opts.validate()?;
     let thermal_basis = if thermal_failure.is_some() {

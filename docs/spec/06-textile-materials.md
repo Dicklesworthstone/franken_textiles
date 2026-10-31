@@ -37,6 +37,14 @@ positive definite. Constituent bulk Young's modulus in Pa is NOT accepted as she
 The solver retains its existing grain rotation and gathered-seam compression field. This first effective
 law is not a nonlinear yarn/loop homogenizer, hysteresis law, damage law or anisotropic bending model.
 
+`Material::mechanics` remains the strict complete-contact capability check. The ordinary drape uses
+`mechanics_for_contacts` with its actual self-contact policy: when self-contact is disabled, absent
+`friction_self` remains `null` in the resolved mechanical report and cannot become a frictionless
+interface. Body friction is still required, and supplied same-sheet observations retain all unit,
+evidence and physical-value checks. Enabling self-contact requires the complete same-sheet and
+unlike-sheet table before meshing. Source freezing and flat drafting/export do not require unused
+mechanical properties; their own consumers enforce the capabilities they actually use.
+
 The extensible property map also admits test-qualified tensile/tear/cut resistance, abrasion cycles,
 flammability results, ignition and decomposition observations, thermal conductivity/resistance, vapor
 resistance, air permeability, absorbency, shrinkage, colorfastness, UV performance, yarn tex/denier,

@@ -59,9 +59,13 @@ reordering. `fit_stature` bisects the height parameter to a stature. `fit_tape` 
 parameters (height, weight, muscle, proportions; prior 1σ = 0.5 about 0.5) and nineteen local changes
 (fifteen `measure-*`, `measure-neck-circ-incr`, `measure-shoulder-dist-incr`, and both head scales, so the
 prior spreads a head change evenly; prior 1σ = 0.35 about 0: the scanned shape space explains the body
-before the authored blend shapes adjust it), with 1σ = 3 mm per girth and 2 mm per length, except 5 mm
-for shoulder length, across back and total crotch length and 8 mm for the outseam (`fit_sigma`: readings
-that rest on where a measurer puts the tape, whose catalogue tape σ is 10–15 mm); the phenotype is
+before the authored blend shapes adjust it). Each measurement residual and its Jacobian row use the
+larger of its supplied `sigma_mm` and the existing functional fitting floor: 3 mm per girth and 2 mm
+per length, except 5 mm for shoulder length, across back and total crotch length and 8 mm for the
+outseam (`fit_sigma`: readings that rest on where a measurer puts the tape, whose catalogue tape σ is
+10–15 mm). Missing sigma retains that floor exactly; invalid supplied sigmas refuse. This explicit
+residual-scaling policy does not calibrate a model-error distribution or certify posterior uncertainty.
+The phenotype is
 clamped to [0, 1], local changes to [−1, 1]; age and gender are set, not fitted. Residuals are returned,
 never hidden. Gate G1b (`tests/fit_tape.rs`): all 21 measurements drawn from the model itself (1.5, 2.5,
 4 and 30 years, local changes up to ±0.3) are recovered within 1.5 mm (the gate asks 3 mm girths, 2 mm
@@ -76,7 +80,16 @@ the same fit had driven `weight` to 0 and compensated with large local changes. 
 one gets 491 mm), with the tape it is one more measurement (synthetic masses within 0.3 %).
 `tape_targets` and `Wearer::from_measurements` read a `fabric-measurements/1` file (fused values
 whatever their provenance: the drape tests a pattern against the measurements it was drafted to; the
-weight from `wearer.weight_kg`, else `wearer.bmi` × stature²).
+weight from `wearer.weight_kg`, else `wearer.bmi` × stature²). `tape_targets` retains each selected
+fused value's optional `sigma_mm`. The independent `wearer.stature_mm` override never borrows a fused
+stature's uncertainty, even when their values coincide; without the override, fused stature retains
+its own sigma. A missing sigma remains supported for legacy fused-only inputs, while a supplied null,
+non-number, zero, negative or nonfinite sigma is refused. Numerical residuals retain the original
+reported sigma and the effective scale separately from signed millimetre discrepancies. The unchanged
+LM kernel has an analytic weighted-quadratic control: changing which of two incompatible section
+targets has 3 versus 30 mm uncertainty changes the fitted section toward the more precise target,
+while absent and below-floor sigmas retain exactly the old fit. This is numerical fitting evidence,
+not anatomical or empirical fit qualification.
 
 **Drape poses** (definition in the `drape.rs` module notes). A joint turns its bone about its head by φ
 about an axis in the rest pose's world frame; its local-bone delta is `φ·R_restᵀ·a`. Arms
@@ -132,7 +145,8 @@ native/browser importer. It checks an ACCEPTED `ftx-body-fit/1` report against t
 caller-supplied digest of the same array-verified pinned model, reconstructs the
 named parameters, checks declared wearer age/sex, and recomputes MODEL_FIT tape
 predictions at 35 degrees. It retains source residuals, exact report/request
-identities and signed comparisons without refitting or inventing uncertainty.
+identities and signed comparisons with the supplied target sigma without refitting or inventing
+uncertainty. A reused accepted shape has no new fitting weights or normalized fitting residuals.
 Measurements must already be validated and fused by the caller. Missing anatomy
 remains unavailable. Report consistency is not authenticity or real-person fit.
 

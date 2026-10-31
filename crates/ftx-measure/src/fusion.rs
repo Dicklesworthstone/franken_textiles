@@ -110,7 +110,7 @@ impl Observation {
             "definition_id": self.record["definition_id"],
             "weight": py::round(weight, 4), "used": used});
         src[format!("value_{u}")] = json!(py::round(self.value, digits));
-        src[format!("sigma_{u}")] = json!(py::round(self.sigma, digits));
+        src[format!("sigma_{u}")] = json!(rounded_sigma(self.sigma, digits));
         if self.n > 1 {
             src["n_repeats"] = json!(self.n);
         }
@@ -208,6 +208,13 @@ fn weighted(observations: &[Observation]) -> Result<(f64, f64, Vec<f64>), Refusa
     Ok((value, sigma, weights))
 }
 
+// Native `fusion-positive-sigma` exception: display precision must not erase valid uncertainty.
+// Admission already requires positive finite sigma; retain that value, never invent a minimum.
+fn rounded_sigma(sigma: f64, digits: usize) -> f64 {
+    let rounded = py::round(sigma, digits);
+    if rounded == 0.0 { sigma } else { rounded }
+}
+
 fn entry(
     u: &str,
     value: f64,
@@ -221,7 +228,7 @@ fn entry(
     let mut out = json!({"unit": u, "primary_provenance": provenance,
         "sources": sources, "flags": flags});
     out[format!("value_{u}")] = json!(py::round(value, digits));
-    out[format!("sigma_{u}")] = json!(py::round(sigma, digits));
+    out[format!("sigma_{u}")] = json!(rounded_sigma(sigma, digits));
     if let Some(bounds) = bounds {
         out[format!("p1_p99_{u}")] = json!(bounds);
     }

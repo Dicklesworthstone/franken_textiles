@@ -386,13 +386,15 @@ fn tape_shape(model: &AnnyModel, measurements: &Value) -> Result<(BodyParams, Va
     }
     let pose = Pose::drape();
     let wearer = Wearer::from_measurements(measurements)?;
-    let fit = fit_tape(model, &wearer, &tape_targets(measurements), &pose)?;
+    let fit = fit_tape(model, &wearer, &tape_targets(measurements)?, &pose)?;
     let residuals: Vec<_> = fit
         .residuals
         .iter()
         .map(|r| {
             json!({"name":r.name,
-            "target_mm":r.target_mm,"body_mm":r.body_mm,"residual_mm":r.body_mm-r.target_mm})
+            "target_mm":r.target_mm,"body_mm":r.body_mm,"residual_mm":r.body_mm-r.target_mm,
+            "sigma_mm":r.sigma_mm,"effective_sigma_mm":r.effective_sigma_mm,
+            "normalized_residual":(r.body_mm-r.target_mm)/r.effective_sigma_mm})
         })
         .collect();
     let report = json!({"measurement_pose":"standard_straight_arm_drape_35_degrees",
@@ -462,7 +464,7 @@ fn accepted_shape(
             &frames,
         ))
     })();
-    let comparisons: Vec<_> = tape_targets(measurements)
+    let comparisons: Vec<_> = tape_targets(measurements)?
         .iter()
         .map(|target| {
             let body_mm = if target.name == "stature" {
@@ -476,6 +478,7 @@ fn accepted_shape(
                 })
             };
             json!({"name":target.name,"target_mm":target.value_mm,"body_mm":body_mm,
+            "sigma_mm":target.sigma_mm,
             "residual_mm":body_mm.map(|v| v-target.value_mm),"used_to_refit":false})
         })
         .collect();

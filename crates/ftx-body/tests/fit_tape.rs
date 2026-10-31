@@ -22,6 +22,7 @@ fn targets(values: &[f64; N_TAPE]) -> Vec<TapeTarget> {
         .map(|(n, v)| TapeTarget {
             name: (*n).to_string(),
             value_mm: *v,
+            sigma_mm: None,
         })
         .collect()
 }
@@ -214,6 +215,7 @@ fn stature_and_weight_alone() {
         vec![TapeTarget {
             name: "stature".to_string(),
             value_mm: stature,
+            sigma_mm: None,
         }]
     };
     let mut waists = Vec::new();

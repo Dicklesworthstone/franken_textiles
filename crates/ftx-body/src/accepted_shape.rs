@@ -63,6 +63,10 @@ pub fn prepare(
             }
         }
     }
+    let targets = measurements
+        .map(tape_targets)
+        .transpose()?
+        .unwrap_or_default();
     let rest = model.rest(&shape.params)?;
     let anthropometry = model.anthropometry(&rest);
     if !anthropometry.height.is_finite()
@@ -113,13 +117,12 @@ pub fn prepare(
         }
         Err(e) => json!({"status":"UNAVAILABLE","reason":e.message}),
     };
-    let comparisons: Vec<Value> = measurements
+    let comparisons: Vec<Value> = targets
         .into_iter()
-        .flat_map(tape_targets)
         .map(|t| {
             let predicted = readings.get(&t.name).and_then(Value::as_f64);
             json!({"name":t.name,"target_mm":t.value_mm,"body_mm":predicted,
-            "residual_mm":predicted.map(|v|v-t.value_mm),"used_to_refit":false})
+            "residual_mm":predicted.map(|v|v-t.value_mm),"sigma_mm":t.sigma_mm,"used_to_refit":false})
         })
         .collect();
     let p = shape.params.phenotype;

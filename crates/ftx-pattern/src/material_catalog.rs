@@ -372,6 +372,16 @@ impl ResolvedMaterial {
         self.normalized.mechanics(self.allow_estimates)
     }
 
+    /// Resolve sheet/body-contact mechanics with same-sheet friction required only when the
+    /// consumer enables self-contact. Missing friction stays absent; source policy is unchanged.
+    ///
+    /// # Errors
+    /// The existing mechanical admission failures for the active contact policy.
+    pub fn mechanics_for_contacts(&self, self_contact: bool) -> Result<Mechanics, Refusal> {
+        self.normalized
+            .mechanics_for_contacts(self.allow_estimates, self_contact)
+    }
+
     /// Compile the optional nonlinear membrane response under this frozen selection's evidence policy.
     ///
     /// # Errors

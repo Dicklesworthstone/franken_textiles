@@ -1,5 +1,14 @@
 # ftx-drape contract
 
+**Active-contact source requirements.** Uniform and per-piece drapes require body friction but
+do not require absent same-sheet friction when self-contact is disabled. Missing observations stay
+null in the source-bound mechanical report; no inactive interface is filled with zero. Supplied
+friction retains its original evidence and physical checks, and enabling self-contact still
+requires all diagonal and pair observations before solver work. Liquid binding/replay uses the
+same active contact policy and exact source checks. Real sewn-band regressions compare positions,
+velocities, masses and frames against complete records with identical active physics. These tests
+establish numerical admission/equivalence, not empirical material or fit qualification.
+
 **Source-qualified vapor potentials** (`thermal::vapor`, `ftx-vc1`). Characterized drapes retain an
 independent material/ownership/geometry frame without requiring dry conductivity or heat capacity.
 Explicit vapor conditions reuse `ftx-pattern::material_vapor` per source-locked material column,

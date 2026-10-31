@@ -43,7 +43,7 @@ fn kat7_elastic_ladder() {
     let fit = fit_tape(
         &model,
         &Wearer::from_measurements(meas).unwrap(),
-        &tape_targets(meas),
+        &tape_targets(meas).unwrap(),
         &pose,
     )
     .unwrap();

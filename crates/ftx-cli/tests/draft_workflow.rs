@@ -127,6 +127,114 @@ fn drafts_validate_and_export_like_the_reference() {
 }
 
 #[test]
+fn source_fabric_drafts_and_flat_exports_do_not_require_unused_mechanics() {
+    let dir = workspace();
+    let fx = programs();
+    let case = fx["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "zouave_bolero-920")
+        .unwrap();
+    std::fs::write(
+        dir.join("m.json"),
+        serde_json::to_vec(&case["input"]["measurements"]).unwrap(),
+    )
+    .unwrap();
+    let fabric = r#"{"material_id":"fs_il019_natural"}"#;
+    std::fs::write(dir.join("fabric.json"), fabric).unwrap();
+    run(
+        &dir,
+        &[
+            "draft",
+            "zouave_bolero",
+            "--measurements",
+            "m.json",
+            "--out",
+            "baseline",
+        ],
+        0,
+    );
+    let baseline: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("baseline/pattern.json")).unwrap()).unwrap();
+    for (destination, directory) in [("--out", "flat"), ("--ws", "workspace")] {
+        let result = run(
+            &dir,
+            &[
+                "draft",
+                "zouave_bolero",
+                "--measurements",
+                "m.json",
+                "--fabric",
+                "fabric.json",
+                destination,
+                directory,
+            ],
+            0,
+        );
+        let pattern_path = result["result"]["pattern"].as_str().unwrap();
+        let pattern: Value =
+            serde_json::from_slice(&std::fs::read(dir.join(pattern_path)).unwrap()).unwrap();
+        assert_eq!(pattern["pieces"], baseline["pieces"]);
+        assert_eq!(pattern["seams"], baseline["seams"]);
+        let record = ftx_pattern::textile_import::resolve_fabric(&pattern["fabric"])
+            .unwrap()
+            .unwrap();
+        assert!(record.mechanics().is_err());
+        assert_eq!(
+            pattern["fabric"]["material"]["expected_sha256"],
+            record.sha256()
+        );
+        let parent = dir.join(pattern_path).parent().unwrap().to_owned();
+        assert_eq!(
+            std::fs::read(parent.join("fabric.source.json")).unwrap(),
+            fabric.as_bytes()
+        );
+    }
+    let exported = run(
+        &dir,
+        &[
+            "export",
+            "all",
+            "flat/pattern.json",
+            "--out",
+            "exports",
+            "--created",
+            "2026-10-11T12:00",
+        ],
+        0,
+    );
+    assert_eq!(exported["result"]["checks"]["status"], "PASS");
+    // The source freeze remains strict even though it does not require unrelated capabilities.
+    std::fs::write(
+        dir.join("invalid.json"),
+        r#"{"material":{"id":"fs_il019_natural","expected_sha256":"stale"}}"#,
+    )
+    .unwrap();
+    let refused = run(
+        &dir,
+        &[
+            "draft",
+            "zouave_bolero",
+            "--measurements",
+            "m.json",
+            "--fabric",
+            "invalid.json",
+            "--out",
+            "refused",
+        ],
+        3,
+    );
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("expected_sha256")
+    );
+    assert!(!dir.join("refused").exists());
+}
+
+#[test]
 fn unknown_programs_and_style_keys_are_refused() {
     let dir = workspace();
     let fx = programs();
