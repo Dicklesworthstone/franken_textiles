@@ -178,7 +178,7 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   left out of contact), then
   `ftx_drape::run::drape`, writing `sim_report.json` (the metrics and flags plus run fields: pattern path
   as given, measurements SHA-256, wall time, and `body` with the fit's target and body value per
-  measurement, its free parameters, every tape reading and the body's mass; with `wearer.weight_kg` or
+  measurement, its free parameters, every available tape reading and the body's mass; with `wearer.weight_kg` or
   `wearer.bmi` the mass is fitted too), `fold.pc2`, `mesh_map.json`,
   `fold_viewer.html`, and the last frame as OBJ for renders elsewhere (metres, z up): `garment.obj` with
   per-vertex seam colours and `garment_strain.obj` with strain colours (`v x y z r g b`, spec 04 §9.4),
@@ -240,10 +240,14 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   the same fitted body (fitted on the drape pose, then posed as asked) as `body.obj` (the closed skin)
   and `body.json` (`ftx-body/1`: the fit as `drape` reports it, plus the measurements' SHA-256, the pose,
   the phenotype and every local change in use). Exit 0; an unknown pose is refused. Both reports carry
-  `model_fit`: every tape reading the file lacks, read off the fitted body, as a `fabric-measurements/1`
+  `model_fit`: every available tape reading the file lacks, read off the fitted body, as a `fabric-measurements/1`
   record with provenance `MODEL_FIT` and the population spread as σ (the chart prior's at the wearer's
   stature and age, else the catalogue's 12 mm), so it can be added to the file as a model value, never
-  as a measurement (`tests/body_model_fit.rs`, which needs the model).
+  as a measurement (`tests/body_model_fit.rs`, which needs the model). Unrequested missing sections
+  do not block fitting: `readings_mm` and `model_fit` omit them, and `tape_evaluation` reports partial
+  coverage with its exact unavailable fields. A missing requested reading still refuses by name.
+  The synthetic articulated-prism workflow in `tests/accepted_body_workflow.rs` covers native and
+  portable fitting, body publication and material-study handoff without external model assets.
 
 Record-bearing standalone `draft`, tape-fitting `body`, and `drape` inputs are re-fused through the same
 authority as workspace rounds before fitting, model loading or output creation. A cached `fused` value cannot

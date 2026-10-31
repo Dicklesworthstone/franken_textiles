@@ -156,9 +156,15 @@ circumferences, heights or stature. A failed dependency still withdraws every re
 needs it; no inferred value replaces the missing section. Accepted-shape diagnostics identify
 partial coverage and its exact unavailable fields, and material-study flat validation consumes
 the same surviving MODEL_FIT values and signed residuals. The complete-only `tape_readings`
-API and tape optimizer retain their requirement for all 21 readings. The square-frustum
-known-answer check and accepted-prism handoff regression cover this bounded propagation;
-they do not establish new anatomical validity, uncertainty or measurement readiness.
+API still requires all 21 readings. The tape optimizer requires only the supplied targets,
+the always-fitted stature and known weight. A missing requested reading refuses the start;
+finite-difference probes and trial steps that lose a requested reading are inadmissible.
+Unrequested sections never block a fit or become invented values. `TapeFit.readings` retains
+each independently available prediction as an option; native, portable and study reports
+identify partial coverage and the exact unavailable fields. Native MODEL_FIT records contain
+only available predictions. Square-frustum, analytic-optimizer and articulated-prism workflow
+regressions cover these boundaries; they do not establish new anatomical validity, uncertainty
+or measurement readiness.
 
 **Units and frames.** Metres, +Z up, the body faces −Y, +X is the body's left. Rest bodies sit in the
 template frame (soles near z = −0.82 m); posed bodies are root-relative. Nothing is grounded here.

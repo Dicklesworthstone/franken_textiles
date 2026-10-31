@@ -5,7 +5,7 @@
 //!   parameters stay at the population middle (0.5).
 //! - [`fit_tape`] ("from tape measurements"): Levenberg–Marquardt over the height and weight parameters and
 //!   the `measure-*` local changes that move one measurement each ([`FREE`]), minimising the residuals
-//!   between the wearer's measurements and what a tape reads on the posed body ([`tape_readings`]), with
+//!   between the wearer's measurements and what a tape reads on the posed body ([`partial_tape_readings`]), with
 //!   weak priors that keep unmeasured directions at the population middle. The residuals are reported,
 //!   never hidden: a measurement Anny cannot reach within its parameter ranges stays a residual.
 //!
@@ -438,7 +438,7 @@ pub fn calibrate_nappy(
 }
 
 /// What a tape reads on `posed` (mm, in [`TAPE_FIELDS`] order), or `None` when any
-/// required section is missing. Fitting retains this complete-reading contract.
+/// section is missing. Use [`partial_tape_readings`] to retain independently available sections.
 #[must_use]
 pub fn tape_readings(
     faces: &[[usize; 3]],
@@ -648,8 +648,9 @@ fn tape_rows(wearer: &Wearer, targets: &[TapeTarget]) -> Result<Vec<TapeRow>, Re
 pub struct TapeFit {
     /// The body parameters.
     pub params: BodyParams,
-    /// Every tape reading on the fitted body (mm, [`TAPE_FIELDS`] order), measured or not.
-    pub readings: [f64; N_TAPE],
+    /// Independently available tape readings (mm, [`TAPE_FIELDS`] order), measured or not.
+    /// Requested readings are always present; missing unrequested sections remain `None`.
+    pub readings: [Option<f64>; N_TAPE],
     /// The fitted body's mass (kg; Anny's 980 kg/m³ × volume), fitted when the wearer's weight is known.
     pub mass_kg: f64,
     /// The fitted measurements, target against body.
@@ -660,15 +661,28 @@ pub struct TapeFit {
     pub iterations: usize,
 }
 
+impl TapeFit {
+    /// Unavailable diagnostics in [`TAPE_FIELDS`] order. None of these were requested fit targets.
+    #[must_use]
+    pub fn unavailable_fields(&self) -> Vec<&'static str> {
+        TAPE_FIELDS
+            .iter()
+            .zip(self.readings)
+            .filter_map(|(name, reading)| reading.is_none().then_some(*name))
+            .collect()
+    }
+}
+
 /// Fits the body of `wearer` (age and gender set; its stature fitted unless `targets` has one, its
 /// weight when known) to `targets` on `pose`. Each residual is scaled by the larger of the target's
 /// reported sigma and the explicit per-functional fitting floor. Missing sigma preserves the floor.
+/// Only requested readings constrain admission; unavailable unrequested diagnostics remain absent.
 ///
 /// # Errors
 /// [`RefusalCode::InvalidDocument`] for a target that is not a [`TAPE_FIELDS`] name or not finite and
 /// positive, a supplied sigma that is not finite and positive, or a model without the [`FREE`] local
 /// changes; refusals of [`fit_stature`] (the start) and of the model;
-/// [`RefusalCode::DegenerateGeometry`] when the start body lacks a section a reading needs.
+/// [`RefusalCode::DegenerateGeometry`] when the start body lacks a requested reading.
 pub fn fit_tape(
     model: &AnnyModel,
     wearer: &Wearer,
@@ -717,13 +731,15 @@ pub fn fit_tape(
         p
     };
     // the tape readings, then the mass (kg)
-    let read = |th: &[f64; N_FREE]| -> Result<Option<[f64; N_TAPE + 1]>, Refusal> {
+    let read = |th: &[f64; N_FREE]| -> Result<[Option<f64>; N_TAPE + 1], Refusal> {
         let rest = model.rest(&params_of(th))?;
         let anthro = model.anthropometry(&rest);
         let posed = model.pose(&rest, &pose_deltas(model, &rest, pose, 1.0)?)?;
         let frames = BodyFrames::new(model, &posed)?;
-        Ok(tape_readings(&faces, anthro.height, &posed, &frames)
-            .map(|t| std::array::from_fn(|k| if k < N_TAPE { t[k] } else { anthro.mass })))
+        let t = partial_tape_readings(&faces, anthro.height, &posed, &frames);
+        Ok(std::array::from_fn(|k| {
+            if k < N_TAPE { t[k] } else { Some(anthro.mass) }
+        }))
     };
     let TapeSolution {
         free,
@@ -736,7 +752,7 @@ pub fn fit_tape(
         .map(|r| TapeResidual {
             name: TAPE_FIELDS[r.field].to_string(),
             target_mm: r.target,
-            body_mm: readings[r.field],
+            body_mm: readings[r.field].expect("requested readings are admitted"),
             sigma_mm: r.source_sigma,
             effective_sigma_mm: r.sigma,
         })
@@ -744,7 +760,7 @@ pub fn fit_tape(
     Ok(TapeFit {
         params: params_of(&free),
         readings: std::array::from_fn(|k| readings[k]),
-        mass_kg: readings[N_TAPE],
+        mass_kg: readings[N_TAPE].expect("mass is always evaluated"),
         residuals,
         free,
         iterations,
@@ -753,7 +769,7 @@ pub fn fit_tape(
 
 struct TapeSolution {
     free: [f64; N_FREE],
-    readings: [f64; N_TAPE + 1],
+    readings: [Option<f64>; N_TAPE + 1],
     iterations: usize,
 }
 
@@ -762,7 +778,7 @@ struct TapeSolution {
 fn optimize_tape(
     rows: &[TapeRow],
     initial_height: f64,
-    read: impl Fn(&[f64; N_FREE]) -> Result<Option<[f64; N_TAPE + 1]>, Refusal>,
+    read: impl Fn(&[f64; N_FREE]) -> Result<[Option<f64>; N_TAPE + 1], Refusal>,
 ) -> Result<TapeSolution, Refusal> {
     let pheno = |j: usize| j < N_PHENOTYPE;
     let prior = |j: usize| if pheno(j) { 0.5 } else { 0.0 };
@@ -783,22 +799,41 @@ fn optimize_tape(
         })
     };
     // residual vector: the measurements, then the priors
-    let resid = |th: &[f64; N_FREE], r: &[f64; N_TAPE + 1]| -> Vec<f64> {
+    let available = |reading: Option<f64>| reading.is_some_and(|v| v.is_finite() && v > 0.0);
+    let admitted = |r: &[Option<f64>; N_TAPE + 1]| rows.iter().all(|row| available(r[row.field]));
+    let resid = |th: &[f64; N_FREE], r: &[Option<f64>; N_TAPE + 1]| -> Vec<f64> {
         rows.iter()
-            .map(|row| (r[row.field] - row.target) / row.sigma)
+            .map(|row| {
+                (r[row.field].expect("requested readings are admitted") - row.target) / row.sigma
+            })
             .chain((0..N_FREE).map(|j| (th[j] - prior(j)) / tau(j)))
             .collect()
     };
     let cost = |r: &[f64]| r.iter().map(|x| x * x).sum::<f64>();
     let mut th: [f64; N_FREE] =
         std::array::from_fn(|j| if j == 0 { initial_height } else { prior(j) });
-    let mut readings = read(&th)?.ok_or_else(|| {
-        Refusal::new(
+    let mut readings = read(&th)?;
+    if !admitted(&readings) {
+        let missing: Vec<_> = rows
+            .iter()
+            .filter(|row| !available(readings[row.field]))
+            .map(|row| {
+                if row.field < N_TAPE {
+                    TAPE_FIELDS[row.field]
+                } else {
+                    "weight"
+                }
+            })
+            .collect();
+        return Err(Refusal::new(
             RefusalCode::DegenerateGeometry,
-            "the start body lacks a section one of the tape readings needs (a body far outside the \
-             model's range?)",
-        )
-    })?;
+            format!(
+                "the start body cannot evaluate requested measurements: {} (a required section is \
+                 missing or invalid; a body far outside the model's range?)",
+                missing.join(", ")
+            ),
+        ));
+    }
     let mut r = resid(&th, &readings);
     let mut c = cost(&r);
     let mut lambda: f64 = 1e-3;
@@ -813,9 +848,11 @@ fn optimize_tape(
             up[j] += FD_STEP;
             dn[j] -= FD_STEP;
             let (up, dn) = (clamp(up), clamp(dn));
-            // a probe whose body lacks a section falls back to the one-sided difference from the current
-            // point; only when both fail does the column stay zero (the parameter rests this iteration)
-            let (hi, lo, xh, xl) = match (read(&up)?, read(&dn)?) {
+            // A probe missing a requested section falls back to a one-sided difference. Optional
+            // diagnostics never invalidate a probe; both failing leaves this column at zero.
+            let (ru, rd) = (read(&up)?, read(&dn)?);
+            let (hi, lo, xh, xl) = match (admitted(&ru).then_some(ru), admitted(&rd).then_some(rd))
+            {
                 (Some(ru), Some(rd)) => (ru, rd, up[j], dn[j]),
                 (Some(ru), None) => (ru, readings, up[j], th[j]),
                 (None, Some(rd)) => (readings, rd, th[j], dn[j]),
@@ -825,7 +862,9 @@ fn optimize_tape(
                 continue;
             }
             for (i, row) in rows.iter().enumerate() {
-                jac[i][j] = (hi[row.field] - lo[row.field]) / ((xh - xl) * row.sigma);
+                jac[i][j] = (hi[row.field].expect("requested readings are admitted")
+                    - lo[row.field].expect("requested readings are admitted"))
+                    / ((xh - xl) * row.sigma);
             }
         }
         let mut improved = false;
@@ -846,7 +885,8 @@ fn optimize_tape(
             b.extend(std::iter::repeat_n(0.0, N_FREE));
             let step = lstsq(&a, &b);
             let trial = clamp(std::array::from_fn(|j| th[j] + step[j]));
-            if let Some(rt) = read(&trial)? {
+            let rt = read(&trial)?;
+            if admitted(&rt) {
                 let res = resid(&trial, &rt);
                 let ct = cost(&res);
                 if ct < c {
@@ -1017,11 +1057,11 @@ mod tests {
             // Contradictory targets force the production LM solver to use both declared scales.
             // The exact optimum follows by differentiating the weighted quadratic plus q's prior.
             let result = optimize_tape(&rows, 0.5, |th| {
-                let mut readings = [500.0; N_TAPE + 1];
-                readings[0] = 920.0;
-                readings[1] += 100.0 * th[N_PHENOTYPE];
-                readings[2] += 100.0 * th[N_PHENOTYPE];
-                Ok(Some(readings))
+                let mut readings = [Some(500.0); N_TAPE + 1];
+                readings[0] = Some(920.0);
+                readings[1] = Some(500.0 + 100.0 * th[N_PHENOTYPE]);
+                readings[2] = readings[1];
+                Ok(readings)
             })
             .unwrap();
             let a = 1.0 / waist_sigma.unwrap_or(3.0).max(3.0).powi(2);
@@ -1037,9 +1077,9 @@ mod tests {
         };
         let precise_waist = solve(Some(3.0), Some(30.0));
         let precise_chest = solve(Some(30.0), Some(3.0));
-        assert!(precise_waist.readings[2] < 512.0);
-        assert!(precise_chest.readings[1] > 558.0);
-        assert!(precise_chest.readings[2] - precise_waist.readings[2] > 45.0);
+        assert!(precise_waist.readings[2].unwrap() < 512.0);
+        assert!(precise_chest.readings[1].unwrap() > 558.0);
+        assert!(precise_chest.readings[2].unwrap() - precise_waist.readings[2].unwrap() > 45.0);
 
         let legacy = solve(None, None);
         let at_floor = solve(Some(3.0), Some(3.0));
@@ -1050,6 +1090,130 @@ mod tests {
         assert_eq!(precise_waist.free, repeat.free);
         assert_eq!(precise_waist.readings, repeat.readings);
         assert_eq!(precise_waist.iterations, repeat.iterations);
+    }
+
+    #[test]
+    fn optional_sections_cannot_block_a_requested_tape_fit() {
+        let wearer = Wearer {
+            years: 2.5,
+            gender: 0.5,
+            stature_mm: 920.0,
+            weight_kg: None,
+        };
+        let waist = TapeTarget {
+            name: "waist".into(),
+            value_mm: 540.0,
+            sigma_mm: None,
+        };
+        let rows = tape_rows(&wearer, std::slice::from_ref(&waist)).unwrap();
+        let read = |th: &[f64; N_FREE], complete: bool| {
+            let mut readings = [if complete { Some(500.0) } else { None }; N_TAPE + 1];
+            readings[0] = Some(wearer.stature_mm);
+            readings[2] = Some(500.0 + 100.0 * th[N_PHENOTYPE]);
+            readings
+        };
+        let complete = optimize_tape(&rows, 0.5, |th| Ok(read(th, true))).unwrap();
+        let partial = optimize_tape(&rows, 0.5, |th| Ok(read(th, false))).unwrap();
+        assert_eq!(complete.free, partial.free);
+        assert_eq!(complete.iterations, partial.iterations);
+        assert_eq!(partial.readings[0], Some(wearer.stature_mm));
+        assert!((partial.readings[2].unwrap() - waist.value_mm).abs() < 0.3);
+        assert_eq!(partial.readings[16], None);
+
+        let requested = tape_rows(
+            &wearer,
+            &[
+                waist,
+                TapeTarget {
+                    name: "head".into(),
+                    value_mm: 500.0,
+                    sigma_mm: None,
+                },
+            ],
+        )
+        .unwrap();
+        let error = optimize_tape(&requested, 0.5, |th| Ok(read(th, false)))
+            .err()
+            .expect("a missing requested head must refuse");
+        assert_eq!(error.code, RefusalCode::DegenerateGeometry);
+        assert!(error.message.contains("head"));
+        assert!(!error.message.contains("waist"));
+
+        let weighted_rows = tape_rows(
+            &Wearer {
+                weight_kg: Some(10.0),
+                ..wearer
+            },
+            &[],
+        )
+        .unwrap();
+        let error = optimize_tape(&weighted_rows, 0.5, |th| Ok(read(th, false)))
+            .err()
+            .expect("a supplied weight remains a required constraint");
+        assert_eq!(error.code, RefusalCode::DegenerateGeometry);
+        assert!(error.message.contains("weight"));
+
+        // Invalid required values are unavailable; unrelated missing anatomy is still permitted.
+        for value in [
+            None,
+            Some(0.0),
+            Some(-1.0),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+        ] {
+            let error = optimize_tape(&rows, 0.5, |th| {
+                let mut readings = read(th, false);
+                readings[2] = value;
+                Ok(readings)
+            })
+            .err()
+            .expect("an invalid requested waist must refuse");
+            assert_eq!(error.code, RefusalCode::DegenerateGeometry);
+            assert!(error.message.contains("waist"));
+        }
+    }
+
+    #[test]
+    fn probes_and_trials_cannot_drop_a_requested_section() {
+        let wearer = Wearer {
+            years: 2.5,
+            gender: 0.5,
+            stature_mm: 920.0,
+            weight_kg: None,
+        };
+        let rows = tape_rows(
+            &wearer,
+            &[TapeTarget {
+                name: "waist".into(),
+                value_mm: 600.0,
+                sigma_mm: None,
+            }],
+        )
+        .unwrap();
+        let solve = |upper_limit: f64| {
+            optimize_tape(&rows, 0.5, |th| {
+                let mut readings = [None; N_TAPE + 1];
+                readings[0] = Some(wearer.stature_mm);
+                let q = th[N_PHENOTYPE];
+                // The negative initial probe lacks the requested section; the positive probe remains
+                // usable. Trial steps beyond the supplied domain must keep, not drop, this constraint.
+                readings[2] = (q >= 0.0 && q <= upper_limit).then_some(500.0 + 100.0 * q);
+                Ok(readings)
+            })
+            .unwrap()
+        };
+        let open = solve(1.0);
+        let exact = 10_000.0 / (10_000.0 + FIT_SIGMA_GIRTH_MM.powi(2) / PRIOR_SIGMA_LOCAL.powi(2));
+        assert!((open.free[N_PHENOTYPE] - exact).abs() < 1e-7);
+        let restricted = solve(0.25);
+        assert!(restricted.free[N_PHENOTYPE] > 0.2);
+        assert!(restricted.free[N_PHENOTYPE] <= 0.25);
+        assert_eq!(
+            restricted.readings[2],
+            Some(500.0 + 100.0 * restricted.free[N_PHENOTYPE])
+        );
+        assert!(600.0 - restricted.readings[2].unwrap() >= 75.0);
+        assert_eq!(restricted.readings[16], None);
     }
 
     #[test]

@@ -116,6 +116,9 @@ supplied uncertainty and its existing tape-functional tolerance; absent uncertai
 existing tolerance. Explicit invalid uncertainty refuses. The native commands and material studies
 retain the same diagnostics. These are fitting weights and residuals, not confidence intervals or
 newly estimated measurement uncertainty. They use the already-computed TapeFit, not a second fit.
+Only requested tape readings must be available to fit the body. Unavailable unrequested sections
+remain absent from `readings_mm`; `tape_evaluation` identifies partial coverage and its exact
+`unavailable_fields`. A missing requested section refuses instead of dropping its constraint.
 The wasm boundary adds the exact loaded model and saved measurement document hashes.
 The page shows residuals beside the cloth verdict, with unavailable data explicit; existing fold
 invalidation withdraws both. Targets can be priors, and these diagnostics supply no new measured

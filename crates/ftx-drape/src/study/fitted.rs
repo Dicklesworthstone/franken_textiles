@@ -397,9 +397,18 @@ fn tape_shape(model: &AnnyModel, measurements: &Value) -> Result<(BodyParams, Va
             "normalized_residual":(r.body_mm-r.target_mm)/r.effective_sigma_mm})
         })
         .collect();
+    let readings: serde_json::Map<_, _> = TAPE_FIELDS
+        .iter()
+        .zip(fit.readings)
+        .filter_map(|(name, value)| value.map(|value| (name.to_string(), json!(value))))
+        .collect();
+    let unavailable = fit.unavailable_fields();
     let report = json!({"measurement_pose":"standard_straight_arm_drape_35_degrees",
             "shape_source":{"kind":"tape_fit","refitted":true},"fit_iterations":fit.iterations,
             "body_mass_kg":fit.mass_kg,"residuals":residuals,"body_provenance":"MODEL_FIT",
+            "readings_mm":readings,"tape_evaluation":{
+                "status":if unavailable.is_empty() { "AVAILABLE" } else { "PARTIAL" },
+                "pose":"a_pose_35","provenance":"MODEL_FIT","unavailable_fields":unavailable},
             "physical_validation_claim":false});
     Ok((fit.params, report))
 }

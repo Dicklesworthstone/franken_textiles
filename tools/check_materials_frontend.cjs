@@ -4324,7 +4324,8 @@ test('primary workshop preserves signed body-fit precision, escapes targets and 
   assert.match(p.e.foldSummary.innerHTML,/Body-fitting residuals unavailable/);
   p.e.foldGo.handlers.click();request=p.last('fold').request;
   const residual=100.0004-100;
-  const report={settled:true,gating:[],body:{provenance:'MODEL_FIT',mass_kg:10.0003,fit:{
+  const report={settled:true,gating:[],body:{provenance:'MODEL_FIT',mass_kg:10.0003,
+    tape_evaluation:{status:'PARTIAL',unavailable_fields:['head','shoulder_length','<script>']},fit:{
     tape:{chest:{target_mm:100,body_mm:100.0004,residual_mm:residual,
       sigma_mm:7.5,effective_sigma_mm:7.5,normalized_residual:residual/7.5},
       '<img src=x onerror=boom>':{target_mm:100,body_mm:99.9996,residual_mm:-0.0004},
@@ -4342,6 +4343,9 @@ test('primary workshop preserves signed body-fit precision, escapes targets and 
   assert.ok((html.match(/unavailable/g)||[]).length>=3);
   assert.ok(html.includes('+'+String(10.0003-10.0001)));
   assert.match(html,/do not establish measurement readiness or physical fit/);
+  assert.match(html,/Unavailable model predictions: head, shoulder length, &lt;script&gt;/i);
+  assert.match(html,/No value is inferred for a missing section/);
+  assert.equal(html.includes('<script>'),false);
   assert.equal(p.e.resStatus.textContent,readiness);
   assert.equal(await [...p.live.values()].find(b=>b.type==='application/json').text(),raw);
   p.e.selfContact.handlers.change();assert.equal(p.e.foldSummary.textContent,'');
