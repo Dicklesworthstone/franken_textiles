@@ -23,6 +23,11 @@ locally and do not fetch prices, reserve goods,
 change a pattern, or operate a machine. The primary command uses the usual `ftx-cli/1` JSON envelope;
 the companion emits its result directly and prints JSON refusals on stderr with a nonzero exit status.
 
+The material workbench's **Plan rolls & preview** action uses `roll_job` to build one complete plan
+and render the selected marker from it. The plan and SVG come from the same bounded search; preview
+failure retains `cut-plan.json` plus an explicit `roll-preview-refusal.json`. Invalid marker numbers
+still refuse. The standalone `cut-plan` and `cut-svg` commands retain their existing contracts.
+
 ## Inputs
 
 A source piece without `fabric` inherits the pattern's `fabric`. A piece override is a complete

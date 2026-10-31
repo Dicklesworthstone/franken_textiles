@@ -580,6 +580,28 @@ test('bounded-marker worker previews the selected intact marker and refuses inva
   assert.equal(w.called.filter(c=>c[0]==='svg').length,1);
   assert.equal(w.sent.filter(m=>m.type==='result').length,1);
 });
+test('roll worker uses one combined plan and retains it when only the preview refuses', async () => {
+  const pattern=' {"coordinate":-0.0}\n',options=' {"copies":1.0}\n';
+  const plan=' {"rolls":[{},{}],"source":1.0}\n';
+  for(const preview of [true,false]) {
+    let calls=0;
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),roll_job:(p,o,index)=>{
+      calls++;assert.equal(p,pattern);assert.equal(o,options);assert.equal(index,1);
+      return JSON.stringify({schema:'ftx-roll-job/1',plan_json:plan,roll_index:1,
+        preview_svg:preview?'<svg/>':null,preview_refusal:preview?null:{code:'budget_exceeded',message:'Preview unavailable'}});
+    },cut_plan:()=>assert.fail('second plan'),cut_svg:()=>assert.fail('second preview planning')}});
+    const result=await w.send({type:'cut',request:77,pattern,options,rollIndex:1});
+    assert.equal(result.type,'result',result.message);assert.equal(calls,1);assert.equal(result.files[0].text,plan);
+    assert.equal(result.files[1].name,preview?'roll-1.svg':'roll-preview-refusal.json');
+    assert.equal(result.picture,preview?'<svg/>':null);
+  }
+  for(const rollIndex of [-1,0.5,2**32]) {
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),roll_job:()=>assert.fail('Invalid index reached planner')}});
+    const result=await w.send({type:'cut',request:77,pattern,options,rollIndex});
+    assert.equal(result.type,'error');assert.equal(result.files,undefined);
+  }
+});
+
 test('finite-stock purchasing worker preserves exact inputs and canonical results without replanning through another API', async () => {
   const pattern=' {"source":-0.0}\n',stockRequest=' {"stock":1.0}\n',stockPricing=' {"seed":18446744073709551615}\n';
   for(const type of ['stockIdentities','stockPrice']) {
@@ -7959,7 +7981,10 @@ test('compiled WASM bounded markers retain whole geometry, selected SVG and one 
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
-    const w=await workerModule({bindings:ftx});
+    assert.equal(typeof ftx.roll_job,'function','Build the bundle with the same-plan roll adapter');
+    let builds=0;
+    const w=await workerModule({bindings:{...ftx,roll_job:(...args)=>{builds++;return ftx.roll_job(...args);},
+      cut_plan:()=>assert.fail('Worker repeated roll planning'),cut_svg:()=>assert.fail('Worker repeated preview planning')}});
     const property=(value,unit)=>({value,unit,source:'test',evidence:'estimate',method:'Synthetic bounded-marker test'});
     const pattern=JSON.stringify({schema:'fabric-pattern/1',units:'mm',meta:{sa_mm:0},
       fabric:{material:{id:'bounded-marker-sheet',allow_estimates:true,record:{id:'bounded-marker-sheet',name:'Synthetic sheet',form:'woven',
@@ -7970,6 +7995,7 @@ test('compiled WASM bounded markers retain whole geometry, selected SVG and one 
     const options='{"copies":3,"gap_mm":5,"edge_margin_mm":5,"end_margin_mm":10,"maximum_marker_length_m":0.12}';
     const cut=await w.send({type:'cut',request:51,pattern,options,rollIndex:1});
     assert.equal(cut.type,'result',cut.message);
+    assert.equal(builds,1);
     assert.equal(cut.files[0].text,ftx.cut_plan(pattern,options));
     assert.equal(cut.result.schema,'ftx-roll-cut-plan/2');
     assert.deepEqual(cut.result.rolls.map(r=>r.length_m),[0.12,0.12]);

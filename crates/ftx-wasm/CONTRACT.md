@@ -210,6 +210,13 @@ The combined JSON input limit is 64 MiB. Every original instance/copy is account
 is independently reported, and the exact frozen pattern/request strings can replay the result offline.
 Existing material-study/scenario transports expose this outcome without another browser planner.
 
+**Same-plan roll preview.** `manufacturing::roll_job` / wasm32 `roll_job` builds the complete
+`CutPlan` once and renders only the requested marker from that same object. The plan remains exact
+Rust JSON text; the escaped combined response is bounded to 64 MiB using the same serializer as
+`stock_job`. An invalid marker index refuses; a preview-only refusal preserves the complete plan.
+The current material worker uses this combined adapter and keeps the earlier exports for older
+bundles. This removes a repeated planning call, without a measured latency or optimality claim.
+
 **Finite-strip characterization.** `materials::strip_experiment` and `calibrate_strip` expose
 the shared `strip::evaluate` and `strip::fit` authorities without filesystem access. Their wasm32
 exports are `material_strip_experiment(input)` and `material_calibrate_strip(input, allow_estimates)`.

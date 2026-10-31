@@ -450,11 +450,28 @@ self.onmessage = async ({ data: msg }) => {
         result = json(raw); files = [file("thermal-coverage.json", raw)]; break;
       }
       case "cut": {
+        const index = msg.rollIndex ?? 0;
+        if (ftx.roll_job !== undefined) {
+          if (!Number.isSafeInteger(index) || index < 0 || index > 0xffffffff) throw Error("Preview marker number must be a positive integer within the supported range.");
+          if (typeof ftx.roll_job !== "function") throw Error("Rebuild web/pkg: invalid single-run roll engine.");
+          const job = json(ftx.roll_job(msg.pattern, msg.options, index));
+          if (job.schema !== "ftx-roll-job/1" || typeof job.plan_json !== "string" || job.roll_index !== index) {
+            throw Error("Rebuild web/pkg: incomplete roll job response.");
+          }
+          raw = job.plan_json; result = json(raw);
+          if (!result.rolls?.[index]) throw Error("Roll preview does not identify an allocated marker.");
+          files = [file("cut-plan.json", raw)];
+          if (typeof job.preview_svg === "string" && job.preview_refusal == null) {
+            picture = job.preview_svg; files.push(file(`roll-${index}.svg`, picture, "image/svg+xml"));
+          } else if (job.preview_svg == null && job.preview_refusal?.message) {
+            files.push(file("roll-preview-refusal.json", job.preview_refusal));
+          } else throw Error("Roll preview needs either its SVG or its explicit refusal.");
+          break;
+        }
         raw = ftx.cut_plan(msg.pattern, msg.options); result = json(raw);
         files = [file("cut-plan.json", raw)];
-        // Compute one requested preview; never regenerate every marker's complete plan in a loop.
+        // Older bundles retain their existing two-export path and marker diagnostics.
         if (result.rolls.length) {
-          const index = msg.rollIndex ?? 0;
           if (!Number.isSafeInteger(index) || index < 0 || index >= result.rolls.length) {
             throw Error(`Preview marker number must be between 1 and ${result.rolls.length}.`);
           }

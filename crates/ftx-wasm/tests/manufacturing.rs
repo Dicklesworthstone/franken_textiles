@@ -10,6 +10,45 @@ const OPTIONS: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-multipass-options.json");
 
 #[test]
+fn roll_job_keeps_exact_native_plan_and_each_preview_with_one_shared_result() {
+    let mut raw: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-stock-pattern.json"
+    ))
+    .unwrap();
+    raw["fabric"]["material"]["record"]["form"] = json!("woven");
+    raw["fabric"]["material"]["record"]["properties"]["width"] = json!({
+        "value":0.03,"unit":"m","evidence":"estimate","source":"test",
+        "method":"Synthetic width for same-plan marker replay, not production evidence"
+    });
+    let pattern = raw.to_string();
+    let options = json!({"copies":3,"gap_mm":1,"edge_margin_mm":1,"end_margin_mm":1,
+        "seam_allowance_mm":0,"maximum_marker_length_m":0.05})
+    .to_string();
+    let native = ftx_export::cutting::CutPlan::build(
+        &Pattern::from_json(&pattern).unwrap(),
+        &serde_json::from_str(&options).unwrap(),
+    )
+    .unwrap();
+    assert!(native.rolls.len() > 1);
+    let expected = serde_json::to_string(&native).unwrap();
+    for index in 0..native.rolls.len() {
+        let job: Value =
+            serde_json::from_str(&manufacturing::roll_job(&pattern, &options, index).unwrap())
+                .unwrap();
+        assert_eq!(job["schema"], "ftx-roll-job/1");
+        assert_eq!(job["roll_index"], index);
+        assert_eq!(job["plan_json"], expected);
+        assert_eq!(
+            job["preview_svg"],
+            ftx_export::cutting::preview::svg(&native, index).unwrap()
+        );
+        assert!(job["preview_refusal"].is_null());
+    }
+    assert!(manufacturing::roll_job(&pattern, &options, native.rolls.len()).is_err());
+    assert!(manufacturing::roll_job("invalid", &options, 0).is_err());
+}
+
+#[test]
 fn browser_entry_point_preserves_core_material_receipts_and_directed_program() {
     let pattern = Pattern::from_json(PATTERN).unwrap();
     let options: SewOptions = serde_json::from_str(OPTIONS).unwrap();

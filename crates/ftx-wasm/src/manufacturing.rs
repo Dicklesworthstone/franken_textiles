@@ -19,6 +19,15 @@ struct StockJob {
     preview_refusal: Option<Refusal>,
 }
 
+#[derive(Serialize)]
+struct RollJob {
+    schema: &'static str,
+    plan_json: String,
+    roll_index: usize,
+    preview_svg: Option<String>,
+    preview_refusal: Option<Refusal>,
+}
+
 struct LimitedJson {
     bytes: Vec<u8>,
     limit: usize,
@@ -34,7 +43,7 @@ impl std::io::Write for LimitedJson {
         {
             self.exceeded = true;
             return Err(std::io::Error::other(
-                "finite-stock job output exceeds its byte budget",
+                "manufacturing job output exceeds its byte budget",
             ));
         }
         self.bytes.extend_from_slice(bytes);
@@ -54,7 +63,7 @@ fn limited_json(value: &impl Serialize, limit: usize) -> Result<String, Refusal>
     if writer.exceeded {
         return Err(Refusal::new(
             RefusalCode::BudgetExceeded,
-            "finite-stock job output exceeds 64 MiB",
+            "manufacturing job output exceeds 64 MiB",
         ));
     }
     result.map_err(|e| invalid(e.to_string()))?;
@@ -203,6 +212,50 @@ pub fn web_stock_svg(
 /// Oversized/invalid JSON or the native cutter's geometry, source, width or layout refusals.
 pub fn cut_plan(pattern: &str, options: &str) -> Result<String, Refusal> {
     serde_json::to_string(&cut_inputs(pattern, options)?).map_err(|e| invalid(e.to_string()))
+}
+
+/// Build the complete roll plan once, then render one requested marker from that same plan.
+/// Preview-only refusal preserves the complete plan; JSON stays text across JavaScript.
+///
+/// # Errors
+/// Same input/planning errors as [`cut_plan`], invalid marker index, or output over 64 MiB.
+pub fn roll_job(pattern: &str, options: &str, roll: usize) -> Result<String, Refusal> {
+    const LIMIT: usize = 64 * 1024 * 1024;
+    let plan = cut_inputs(pattern, options)?;
+    if roll >= plan.rolls.len() {
+        return Err(invalid(format!(
+            "Preview marker number must be between 1 and {}.",
+            plan.rolls.len()
+        )));
+    }
+    let (preview_svg, preview_refusal) = match ftx_export::cutting::preview::svg(&plan, roll) {
+        Ok(svg) => (Some(svg), None),
+        Err(refusal) => (None, Some(refusal)),
+    };
+    limited_json(
+        &RollJob {
+            schema: "ftx-roll-job/1",
+            plan_json: limited_json(&plan, LIMIT)?,
+            roll_index: roll,
+            preview_svg,
+            preview_refusal,
+        },
+        LIMIT,
+    )
+}
+
+/// Browser export of [`roll_job`], sharing one bounded plan for report and preview.
+///
+/// # Errors
+/// Same errors as [`roll_job`]; preview-only refusal stays in the successful response.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = roll_job)]
+pub fn web_roll_job(
+    pattern: &str,
+    options: &str,
+    roll: usize,
+) -> Result<String, wasm_bindgen::JsError> {
+    roll_job(pattern, options, roll).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
 /// Route every physical cut instance to declared roll or finite inventory in one complete job.
