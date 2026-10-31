@@ -890,6 +890,7 @@ impl SurfaceHistory {
                     "ftx-coupled-liquid-mechanics-result/2"
                         | "ftx-coupled-liquid-mechanics-result/3"
                         | "ftx-coupled-liquid-mechanics-result/4"
+                        | "ftx-coupled-liquid-mechanics-result/5"
                 )
             );
             result["mechanical_coupling"] = coupling;

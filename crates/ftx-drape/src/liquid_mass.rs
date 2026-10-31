@@ -46,6 +46,13 @@ pub struct MaterialDomain {
         deserialize_with = "incoming_stream_velocities"
     )]
     pub incoming_stream_velocities_world_m_s: Option<IncomingVelocities>,
+    /// Separately qualified supply/condensation velocities for every mechanical keyframe interval.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "incoming_stream_velocity_schedule"
+    )]
+    pub incoming_stream_velocities_world_m_s_by_interval: Option<Vec<IncomingVelocities>>,
     /// Incoming world velocity for every mechanical keyframe interval, m/s.
     /// Accepted mechanical and thermal substeps use the enclosing interval's value.
     #[serde(
@@ -72,6 +79,12 @@ fn incoming_stream_velocities<'de, D: serde::Deserializer<'de>>(
     IncomingVelocities::deserialize(deserializer).map(Some)
 }
 
+fn incoming_stream_velocity_schedule<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<IncomingVelocities>>, D::Error> {
+    Vec::<IncomingVelocities>::deserialize(deserializer).map(Some)
+}
+
 fn incoming_velocity<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Vec3>, D::Error> {
@@ -91,10 +104,23 @@ impl MaterialDomain {
         components: Option<[f64; 2]>,
         interval: Option<usize>,
     ) -> Result<[(f64, Vec3); 2], Refusal> {
-        if let Some(velocities) = self.incoming_stream_velocities_world_m_s {
-            let [supply, condensation] = components.ok_or_else(|| {
-                invalid("phase-specific mechanics requires separate thermal flows")
-            })?;
+        let components = || {
+            components.ok_or_else(|| invalid("phase-specific mechanics requires separate thermal flows"))
+        };
+        if let Some(schedule) = &self.incoming_stream_velocities_world_m_s_by_interval {
+            let velocities = interval
+                .and_then(|i| schedule.get(i))
+                .copied()
+                .ok_or_else(|| {
+                    invalid("scheduled phase-specific liquid exchange needs its exact keyframe interval")
+                })?;
+            let [supply, condensation] = components()?;
+            Ok([
+                (supply, velocities.supply),
+                (condensation, velocities.condensation),
+            ])
+        } else if let Some(velocities) = self.incoming_stream_velocities_world_m_s {
+            let [supply, condensation] = components()?;
             Ok([
                 (supply, velocities.supply),
                 (condensation, velocities.condensation),
@@ -162,6 +188,7 @@ impl Qualification {
             || self.bindings.values().any(|domain| {
                 domain.incoming_velocity_world_m_s.is_some()
                     || domain.incoming_stream_velocities_world_m_s.is_some()
+                    || domain.incoming_stream_velocities_world_m_s_by_interval.is_some()
                     || domain.incoming_velocity_world_m_s_by_interval.is_some()
             })
         {
@@ -178,6 +205,7 @@ impl Qualification {
                 self.bindings.values().all(|domain| {
                     domain.incoming_velocity_world_m_s.is_none()
                         && domain.incoming_stream_velocities_world_m_s.is_none()
+                        && domain.incoming_stream_velocities_world_m_s_by_interval.is_none()
                         && domain.incoming_velocity_world_m_s_by_interval.is_none()
                 })
             }
@@ -189,6 +217,7 @@ impl Qualification {
                     .incoming_velocity_world_m_s
                     .is_some_and(|velocity| velocity.is_finite())
                     && domain.incoming_stream_velocities_world_m_s.is_none()
+                    && domain.incoming_stream_velocities_world_m_s_by_interval.is_none()
                     && domain.incoming_velocity_world_m_s_by_interval.is_none()
             }),
             (
@@ -197,6 +226,7 @@ impl Qualification {
             ) => self.bindings.values().all(|domain| {
                 domain.incoming_velocity_world_m_s.is_none()
                     && domain.incoming_velocity_world_m_s_by_interval.is_none()
+                    && domain.incoming_stream_velocities_world_m_s_by_interval.is_none()
                     && domain
                         .incoming_stream_velocities_world_m_s
                         .is_some_and(|v| v.supply.is_finite() && v.condensation.is_finite())
@@ -207,6 +237,7 @@ impl Qualification {
             ) => self.bindings.values().all(|domain| {
                 domain.incoming_velocity_world_m_s.is_none()
                     && domain.incoming_stream_velocities_world_m_s.is_none()
+                    && domain.incoming_stream_velocities_world_m_s_by_interval.is_none()
                     && domain
                         .incoming_velocity_world_m_s_by_interval
                         .as_ref()
@@ -214,6 +245,24 @@ impl Qualification {
                             !velocities.is_empty()
                                 && velocities.len() <= 16
                                 && velocities.iter().all(|velocity| velocity.is_finite())
+                        })
+            }),
+            (
+                "ftx-coupled-liquid-mechanics/5",
+                "scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1",
+            ) => self.bindings.values().all(|domain| {
+                domain.incoming_velocity_world_m_s.is_none()
+                    && domain.incoming_stream_velocities_world_m_s.is_none()
+                    && domain.incoming_velocity_world_m_s_by_interval.is_none()
+                    && domain
+                        .incoming_stream_velocities_world_m_s_by_interval
+                        .as_ref()
+                        .is_some_and(|velocities| {
+                            !velocities.is_empty()
+                                && velocities.len() <= 16
+                                && velocities.iter().all(|v| {
+                                    v.supply.is_finite() && v.condensation.is_finite()
+                                })
                         })
             }),
             _ => false,
@@ -233,9 +282,13 @@ impl Qualification {
                 .incoming_velocity_world_m_s_by_interval
                 .as_ref()
                 .is_some_and(|velocities| velocities.len() != intervals)
+                || domain
+                    .incoming_stream_velocities_world_m_s_by_interval
+                    .as_ref()
+                    .is_some_and(|velocities| velocities.len() != intervals)
         }) {
             return Err(invalid(
-                "scheduled liquid exchange needs exactly one incoming velocity per keyframe interval for every instance",
+                "scheduled liquid exchange needs exactly one qualified incoming velocity entry per keyframe interval for every instance",
             ));
         }
         Ok(())
@@ -248,6 +301,7 @@ impl Qualification {
                 | "ftx-coupled-liquid-mechanics/2"
                 | "ftx-coupled-liquid-mechanics/3"
                 | "ftx-coupled-liquid-mechanics/4"
+                | "ftx-coupled-liquid-mechanics/5"
         )
     }
 
@@ -945,8 +999,9 @@ fn start_with_exchange(
     }
     let initial_total: f64 = initial.iter().sum();
     let substrate: f64 = solver.model.mass.iter().sum();
-    let phases = qualification.schema == "ftx-coupled-liquid-mechanics/4";
-    let scheduled = qualification.schema == "ftx-coupled-liquid-mechanics/3";
+    let phase_scheduled = qualification.schema == "ftx-coupled-liquid-mechanics/5";
+    let phases = qualification.schema == "ftx-coupled-liquid-mechanics/4" || phase_scheduled;
+    let scheduled = qualification.schema == "ftx-coupled-liquid-mechanics/3" || phase_scheduled;
     let prescribed =
         phases || scheduled || qualification.schema == "ftx-coupled-liquid-mechanics/2";
     if !initial_total.is_finite() || !substrate.is_finite() {
@@ -963,7 +1018,9 @@ fn start_with_exchange(
         initial: initial.to_vec(),
         remaining: initial.to_vec(),
         report: Report {
-            schema: if phases {
+            schema: if phase_scheduled {
+                "ftx-coupled-liquid-mechanics-result/5"
+            } else if phases {
                 "ftx-coupled-liquid-mechanics-result/4"
             } else if scheduled {
                 "ftx-coupled-liquid-mechanics-result/3"
@@ -1198,10 +1255,14 @@ impl Solver {
             || outgoing.len() != incoming.len()
             || remaining.len() != incoming.len()
             || components.is_some_and(|c| c.iter().any(|v| v.len() != incoming.len()))
-            || ((binding.report.qualification.schema == "ftx-coupled-liquid-mechanics/4"
-                || binding.report.qualification.model
-                    == "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1")
-                && components.is_none())
+            || ((matches!(
+                binding.report.qualification.schema.as_str(),
+                "ftx-coupled-liquid-mechanics/4" | "ftx-coupled-liquid-mechanics/5"
+            ) || matches!(
+                binding.report.qualification.model.as_str(),
+                "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1"
+                    | "scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1"
+            )) && components.is_none())
         {
             return Err(invalid(
                 "incoming liquid needs its independent complete exchange qualification and triangle ledger",
@@ -1558,6 +1619,120 @@ mod tests {
             false,
         )
         .unwrap()
+    }
+
+    fn initialize_phase_schedule(
+        solver: &mut Solver,
+        masses: &[f64],
+        schedules: &[Vec<IncomingVelocities>],
+    ) -> Report {
+        let mut q = exchange_qualification();
+        q.schema = "ftx-coupled-liquid-mechanics/5".into();
+        q.model =
+            "scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1".into();
+        let original = q.bindings["sheet"].clone();
+        q.bindings = schedules
+            .iter()
+            .enumerate()
+            .map(|(i, schedule)| {
+                let mut domain = original.clone();
+                domain.incoming_stream_velocities_world_m_s_by_interval = Some(schedule.clone());
+                (format!("sheet-{i}"), domain)
+            })
+            .collect();
+        q.validate_exchange_intervals(schedules[0].len()).unwrap();
+        let domains = q.bindings.values().cloned().collect();
+        start_with_exchange(
+            solver,
+            q,
+            domains,
+            masses,
+            &vec![vec![20.]; masses.len()],
+            true,
+            false,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn scheduled_phase_streams_follow_each_keyframe_without_velocity_averaging() {
+        let mut s = solver();
+        let schedules = [
+            vec![
+                IncomingVelocities {
+                    supply: Vec3::new(3., 0., 0.),
+                    condensation: Vec3::new(-1., 2., 0.),
+                },
+                IncomingVelocities {
+                    supply: Vec3::new(0., -2., 1.),
+                    condensation: Vec3::new(1., 0., 4.),
+                },
+            ],
+            vec![
+                IncomingVelocities {
+                    supply: Vec3::new(-2., 1., 0.5),
+                    condensation: Vec3::new(0., 3., -1.),
+                },
+                IncomingVelocities {
+                    supply: Vec3::new(4., 1., -2.),
+                    condensation: Vec3::new(-3., 0., 2.),
+                },
+            ],
+        ];
+        let admitted = initialize_phase_schedule(&mut s, &[0., 0.], &schedules);
+        assert_eq!(admitted.schema, "ftx-coupled-liquid-mechanics-result/5");
+        admitted.qualification.validate_exchange_intervals(2).unwrap();
+        assert!(admitted.qualification.validate_exchange_intervals(1).is_err());
+
+        let incoming = [0.12, 0.3];
+        let supplied = [0.04, 0.1];
+        let condensed = [0.08, 0.2];
+        let mut expected_momentum = Vec3::ZERO;
+        let mut expected_kinetic = 0.;
+        for interval in 0..2 {
+            for i in 0..2 {
+                expected_momentum += schedules[i][interval].supply * supplied[i]
+                    + schedules[i][interval].condensation * condensed[i];
+                expected_kinetic += 0.5
+                    * (supplied[i] * schedules[i][interval].supply.norm2()
+                        + condensed[i] * schedules[i][interval].condensation.norm2());
+            }
+            let report = s
+                .exchange_liquid_streams_in_interval(
+                    &[0., 0.],
+                    &incoming,
+                    [&supplied, &condensed],
+                    Outgoing {
+                        evaporated: &incoming,
+                        drained: None,
+                    },
+                    &[vec![20.], vec![20.]],
+                    Some(interval),
+                )
+                .unwrap();
+            let flow = report.exchange.as_ref().unwrap();
+            assert!((flow.incoming_momentum_kg_m_s - expected_momentum).norm() < 2e-14);
+            assert!((flow.incoming_kinetic_energy_j - expected_kinetic).abs() < 2e-13);
+            assert!(report.transfer_momentum_residual_kg_m_s.norm() < 2e-14);
+            assert!(report.transfer_kinetic_residual_j.abs() < 2e-13);
+        }
+
+        let mut ambiguous = admitted.qualification.clone();
+        let domain = ambiguous.bindings.values_mut().next().unwrap();
+        domain.incoming_stream_velocities_world_m_s = Some(schedules[0][0]);
+        assert!(ambiguous.validate_exchange().is_err());
+        let mut nonfinite = admitted.qualification.clone();
+        nonfinite
+            .bindings
+            .values_mut()
+            .next()
+            .unwrap()
+            .incoming_stream_velocities_world_m_s_by_interval
+            .as_mut()
+            .unwrap()[0]
+            .supply
+            .x = f64::NAN;
+        assert!(nonfinite.validate_exchange().is_err());
     }
 
     #[test]
