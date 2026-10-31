@@ -9719,7 +9719,7 @@ test('compiled WASM routed shared fixtures and attending workers replay exact na
   });
 
 test('compiled WASM evaporating, supplied and condensing textile-water objectives, moving mass and incoming momentum replay native commands and named scenarios',
-  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY)}, async()=>{
+  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY || process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY || process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY || process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY || process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY)}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
@@ -9731,8 +9731,13 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
         [process.env.FTX_EVAPORATING_MECHANICS_REPLAY,'mechanics'],[process.env.FTX_MECHANICAL_WATER_REPLAY,'supplied-mechanics'],
         [process.env.FTX_CONDENSING_MECHANICS_REPLAY,'condensing-mechanics'],
         [process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY,'supplied-impulse-mechanics'],
-        [process.env.FTX_CONDENSING_IMPULSE_REPLAY,'condensing-impulse-mechanics']].filter(([dir])=>dir)) {
+        [process.env.FTX_CONDENSING_IMPULSE_REPLAY,'condensing-impulse-mechanics'],
+        [process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY,'supplied-phase-impulse-mechanics'],
+        [process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY,'condensing-phase-impulse-mechanics'],
+        [process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY,'supplied-scheduled-impulse-mechanics'],
+        [process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY,'condensing-scheduled-impulse-mechanics']].filter(([dir])=>dir)) {
         const prescribed=kind.includes('impulse');
+        const phases=kind.includes('phase'),scheduled=kind.includes('scheduled');
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8');
         const bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
         for(const name of ['single','matrix']) {
@@ -9776,24 +9781,45 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
               assert.equal(mechanics.remaining_liquid_mass_kg,0);
               assert.ok(mechanics.initial_liquid_mass_kg>0);
             } else {
-              assert.equal(mechanics.schema,prescribed?'ftx-coupled-liquid-mechanics-result/2':'ftx-coupled-liquid-mechanics-result/1');
+              assert.equal(mechanics.schema,phases?'ftx-coupled-liquid-mechanics-result/4':
+                scheduled?'ftx-coupled-liquid-mechanics-result/3':prescribed?
+                  'ftx-coupled-liquid-mechanics-result/2':'ftx-coupled-liquid-mechanics-result/1');
               assert.ok(mechanics.exchange.incoming_mass_kg>0);
               assert.equal(mechanics.exchange.outgoing_mass_kg,mechanics.evaporated_liquid_mass_kg);
               assert.ok(Math.abs(mechanics.remaining_liquid_mass_kg-heat.surface_water.remaining_liquid_kg)<1e-14);
               assert.ok(mechanics.exchange.incoming_kinetic_energy_j>=0);
               if(prescribed) {
                 const exchange=mechanics.exchange,velocity=[0.2,0.1,-0.5];
-                assert.deepEqual(mechanics.qualification.bindings.band.incoming_velocity_world_m_s,velocity);
+                const vaporVelocity=[-0.1,0.3,0.4],nextVelocity=[-0.3,0.4,0.2];
+                const binding=mechanics.qualification.bindings.band;
+                if(phases) {
+                  assert.deepEqual(binding.incoming_stream_velocities_world_m_s,{supply:velocity,condensation:vaporVelocity});
+                  assert.equal(binding.incoming_velocity_world_m_s,undefined);
+                  assert.equal(binding.incoming_velocity_world_m_s_by_interval,undefined);
+                } else if(scheduled) {
+                  assert.deepEqual(binding.incoming_velocity_world_m_s_by_interval,[velocity,nextVelocity]);
+                  assert.equal(binding.incoming_velocity_world_m_s,undefined);
+                  assert.equal(binding.incoming_stream_velocities_world_m_s,undefined);
+                } else assert.deepEqual(binding.incoming_velocity_world_m_s,velocity);
                 assert.ok(exchange.mixing_dissipation_j>0);
                 assert.equal(motion.initial_sample.liquid_mechanics.exchange.mixing_dissipation_j,0);
                 assert.ok(Math.abs(exchange.incoming_mass_kg-heat.surface_water.supplied_liquid_kg-
                   (heat.surface_water.condensed_liquid_kg||0))<1e-14);
+                const firstIncoming=scheduled?heat.trace.filter(row=>row.interval_index===0).at(-1)
+                  .mechanical_coupling.exchange.incoming_mass_kg:exchange.incoming_mass_kg;
+                const firstMass=phases?heat.surface_water.supplied_liquid_kg:firstIncoming;
+                const otherMass=phases?(heat.surface_water.condensed_liquid_kg||0):exchange.incoming_mass_kg-firstIncoming;
+                const otherVelocity=phases?vaporVelocity:nextVelocity;
+                if(scheduled&&kind.startsWith('supplied')) assert.ok(firstMass>0&&otherMass>0);
+                if(phases&&kind.startsWith('condensing')) assert.ok(firstMass>0&&otherMass>0);
                 for(const [axis,speed] of velocity.entries()) {
-                  assert.ok(Math.abs(exchange.incoming_momentum_kg_m_s[axis]-exchange.incoming_mass_kg*speed)<1e-12);
+                  assert.ok(Math.abs(exchange.incoming_momentum_kg_m_s[axis]-
+                    firstMass*speed-otherMass*otherVelocity[axis])<1e-12);
                   assert.ok(Math.abs(mechanics.transfer_momentum_residual_kg_m_s[axis])<1e-12);
                 }
                 assert.ok(Math.abs(exchange.incoming_kinetic_energy_j-
-                  0.5*exchange.incoming_mass_kg*velocity.reduce((sum,speed)=>sum+speed*speed,0))<1e-12);
+                  0.5*firstMass*velocity.reduce((sum,speed)=>sum+speed*speed,0)-
+                  0.5*otherMass*otherVelocity.reduce((sum,speed)=>sum+speed*speed,0))<1e-12);
                 assert.ok(Math.abs(mechanics.transfer_kinetic_residual_j)<1e-12);
               } else assert.equal(mechanics.exchange.mixing_dissipation_j,undefined);
             }

@@ -612,9 +612,12 @@ Late source or thermal failure refuses the coupled motion. For independently qua
 or <code>ftx-coupled-liquid-mechanics/3</code> with
 <code>scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1</code> and
 <code>incoming_velocity_world_m_s_by_interval</code>: one world-frame vector per keyframe interval for every instance.
-Constant and scheduled fields cannot be combined. Incoming water mixes with the actual cloth and accessory inertia;
+For separately qualified constant supply and condensation velocities, use <code>ftx-coupled-liquid-mechanics/4</code>,
+<code>phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1</code> and
+<code>incoming_stream_velocities_world_m_s</code> with <code>supply</code> and <code>condensation</code> vectors.
+The constant, scheduled and phase-specific fields cannot be combined. Incoming water mixes with the actual cloth and accessory inertia;
 outgoing vapor leaves at the mixed velocity. Mixing loss is reported separately and is not deposited as thermal heat.
-Drainage, phase-specific incoming velocities, pinned cloth coordinates and inferred wet constitutive changes remain unsupported.</p>
+Drainage, phase-specific schedules, pinned cloth coordinates and inferred wet constitutive changes remain unsupported.</p>
 <p class="note">For serial production handling, provide <code>production.handling</code> with exact machine and
 process qualification locks, independent timing evidence, initial loading, final unloading and every directed
 operation transition for the same garment or a different garment. Select ordering objective

@@ -4651,8 +4651,12 @@ The ordinary motion, thermal, material-study, native and portable paths retain t
 momentum and bulk-energy accounting. Inelastic mixing loss remains explicit and separate from
 sensible/latent heat. Existing co-moving requests retain their original semantics. This increment
 is tracked by `ftx-vc2.3.2`; see [textile-surface-water.md](docs/textile-surface-water.md).
-Independent conservation and step-refinement checks establish the numerical closure; measured wet
-response, rain interception, drainage, time-varying or phase-specific flow velocities, mixing-heat
+The bounded extensions retain that law: schema `/3` prescribes one common incoming velocity per
+mechanical keyframe interval, while schema `/4` prescribes separate constant supplied-liquid and
+condensed-vapor velocities. Their fields and model tags are exclusive; phase-specific schedules
+remain unsupported. The phase-specific work is tracked by `ftx-vc2.3.3` and the broader work by
+`ftx-vc2.3`. Independent conservation and step-refinement checks establish numerical closure;
+measured wet response, rain interception, drainage, changing wet constitutive laws, mixing-heat
 partition and empirical garment agreement remain separate work.
 
 ### 25.140 Turn material-aware markers into qualified cold-knife path plans
