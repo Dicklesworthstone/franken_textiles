@@ -9,7 +9,7 @@ let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
 let preparedBy = null;
 let preparedTreatment = null;
-let preparedImport = null, adoptedImport = false;
+let preparedImport = null, adoptedImport = false, selectedImportFit = null;
 let sourceText = null, outfit = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
@@ -72,6 +72,7 @@ function controls() {
   $("useTreatment").disabled = !!pending || !preparedTreatment;
   $("garmentcode").disabled ||= !has("garmentcodeSource");
   $("useGarmentcode").disabled = !!pending || !preparedImport;
+  $("useGarmentcodeFit").disabled = !!pending || typeof preparedImport?.fit_spec_json !== "string";
   $("clearGarmentcodeAnnotations").disabled = !has("garmentcodeAnnotations");
   $("garmentcodeArcs").disabled = has("garmentcodeAnnotations");
   for (const id of ["garmentcodeArcSagitta", "garmentcodeArcLength"]) {
@@ -124,7 +125,7 @@ function clear(keys) {
     if (key === "stock") { $("stockMarker").hidden = true; $("stockMarker").removeAttribute("src"); }
     if (key === "bind") { bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren(); }
     if (key === "treatment") preparedTreatment = null;
-    if (key === "garmentcode") preparedImport = null;
+    if (key === "garmentcode") { preparedImport = null; $("useGarmentcodeFit").checked = false; }
     if (key === "calibrate") {
       calibratedPair = null;
       $("calibratedInterfaceSummary").textContent = "No current calibrated contact pair.";
@@ -3237,7 +3238,8 @@ function show(op, msg) {
   } else if (op === "inspect") {
     preparedBy = null; inspectResult(r);
   } else if (op === "garmentcode") {
-    preparedImport = r.pattern_json;
+    preparedImport = { pattern_json: r.pattern_json, fit_spec_json: r.fit_spec_json };
+    $("useGarmentcodeFit").checked = false;
     const report = r.report, s = sections.get(op); s.section.hidden = false;
     s.summary.textContent = text({ status: report.status, scope: report.scope,
       source_units_per_meter: report.source_units_per_meter, counts: report.counts,
@@ -3247,7 +3249,7 @@ function show(op, msg) {
     const note = document.createElement("p");
     note.textContent = "REVIEW_REQUIRED: conversion preserves supported evaluated geometry; it does not establish garment completeness or fit. " +
       "Review the missing construction information, then choose Use imported pattern to replace the current workbench pattern. " +
-      (r.fit_spec_json ? "A supplied fit specification is available to download and select in section 3." : "No fit specification was supplied.");
+      (r.fit_spec_json ? "You can also select the supplied fit specification when adopting this pattern, or keep your own choice." : "No fit specification was supplied.");
     s.comparison.append(note);
     const panels = table(s.comparison, "Original panels and native physical pieces", ["Source panel", "Native piece", "Winding reversed"]);
     for (const panel of report.panels) cells(panels, [panel.source_panel, panel.piece, panel.winding_reversed ? "Yes" : "No"]);
@@ -3693,17 +3695,28 @@ $("useTreatment").onclick = () => {
 };
 $("useGarmentcode").onclick = () => {
   if (!preparedImport || pending) return;
-  const raw = preparedImport;
+  const { pattern_json: raw, fit_spec_json: fit } = preparedImport;
+  const useFit = $("useGarmentcodeFit").checked;
+  if (useFit && typeof fit !== "string") { error("This import has no supplied fit specification."); return; }
   clearRoundSources();
   resetPatternInput(true); preparedImport = null;
+  $("useGarmentcodeFit").checked = false;
   $("patternFile").value = "";
   installPattern(raw, "Imported GarmentCode pattern — REVIEW_REQUIRED");
   adoptedImport = true;
-  $("status").textContent = "Imported pattern loaded for review. Assign materials and freeze selections to recompute its consumers. Conversion does not establish fit.";
+  if (useFit) {
+    selectedImportFit = fit; roundFiles.set("fit", fit); $("fit").value = "";
+    $("importFitNote").hidden = false;
+    link("importFit", $("importFitFiles"), { name: "fit_spec.json", text: fit, mime: "application/json" });
+  }
+  $("status").textContent = "Imported pattern loaded for review. " +
+    (useFit ? "The supplied fit specification is selected. " : "") +
+    "Assign materials and freeze selections to recompute its consumers. Conversion does not establish fit.";
   controls();
 };
 function invalidateGarmentcode() {
   if (adoptedImport) {
+    clearImportFit();
     resetPatternInput();
     $("patternName").textContent = "Imported pattern withdrawn. Convert the changed inputs and review the new result before adopting it.";
   } else invalidate(["garmentcode"]);
@@ -3777,6 +3790,7 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
+    if (id === "fit") clearImportFit();
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
     if (id === "measurements" || id === "fit" || id === "body") {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
@@ -3819,7 +3833,13 @@ function showReceivedBody() {
   if (model) link("roundBody", $("receivedBodyFiles"), { name: "body-model.ftxbody", bytes: model, mime: "application/octet-stream" });
   if (fit) link("roundBody", $("receivedBodyFiles"), { name: "body_fit.json", text: fit, mime: "application/json" });
 }
+function clearImportFit() {
+  if (selectedImportFit !== null && roundFiles.get("fit") === selectedImportFit) roundFiles.delete("fit");
+  selectedImportFit = null;
+  clear(["importFit"]); $("importFitFiles").replaceChildren(); $("importFitNote").hidden = true;
+}
 function clearRoundSources() {
+  clearImportFit();
   ++roundRead; roundToken = null; roundFiles.clear(); window.opener = null;
   $("bodyFitConsent").checked = false; showReceivedBody();
   $("roundImportNote").hidden = true;

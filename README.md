@@ -341,9 +341,11 @@ and optional annotations, each at most 4 MiB. Choose **Convert & review imported
 missing construction information and `REVIEW_REQUIRED` report, then choose **Use imported pattern**
 to make that geometry the original pattern for material binding and manufacturing. Conversion alone
 does not replace the current pattern. The exact original inputs, converted native pattern and import
-report remain downloadable. If annotations supply a fit contract, download it and select it under
-**Fit specification** before using consumers that require one; it does not establish measurement
-readiness or physical fit.
+report remain downloadable. If annotations supply a fit contract, optionally check **Also select
+the supplied fit specification** before adopting the pattern. The exact selected contract appears
+under **Fit, exports and mechanical drape**, with a download link; choosing a fit file replaces it.
+Pattern-only adoption keeps your manual fit-file choice. Import-source edits withdraw a contract
+still owned by that import. Selection does not establish measurement readiness or physical fit.
 
 Without an annotations file, the workbench can create the circular-arc policy from the opt-in checkbox
 and two positive millimetre limits. With a file selected, that file alone supplies the policy and the

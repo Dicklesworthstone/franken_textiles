@@ -77,6 +77,15 @@ The remaining operations consume this same bound pattern:
 | Independent sheet heat | A fresh workbench drape and `SurfaceConditions` JSON | Existing `thermal_steady_surface`; material-following fields, optional declared exterior exchange and source-locked replay. |
 | Layered body coverage | A fresh workbench drape, body/instance-layer map and coverage conditions | Existing `thermal_steady_coverage`; recomputed overlaps, covered/bare accounting and exposed-face exchange. No guessed layer map or environmental data. |
 
+The GarmentCode review offers **Also select the supplied fit specification** when annotations
+include one. Check it before **Use imported pattern** to select the exact Rust-generated contract
+without downloading and uploading it again. The active contract and its download appear beside
+the ordinary fit-file input; choosing a file there replaces it. Source, annotation or arc-policy
+edits withdraw the pattern and contract still owned by that import. An explicitly adopted study
+or treatment pattern retains its selected contract as a frozen input; a new pattern file clears
+the imported snapshot. Pattern-only adoption preserves manual fit-file choices. Measurement
+readiness and physical fit remain independent.
+
 For a complete mixed cutting job, load its request under **Complete roll / finite-stock job JSON**
 and select **Plan complete mixed cutting job** after binding the current materials. Every source
 piece must have an explicit route; the page does not infer roll versus hide from material names.

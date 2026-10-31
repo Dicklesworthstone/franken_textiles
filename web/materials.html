@@ -196,14 +196,15 @@ Without a file, these controls create downloadable annotations. The limits apply
 later stitch spacing, drape meshing and allowance offsets have their own discretization.</p>
 </fieldset>
 <button id="garmentcode" data-command="garmentcode" disabled>Convert &amp; review imported pattern</button>
+<label><input id="useGarmentcodeFit" type="checkbox" disabled> Also select the supplied fit specification when using this pattern</label>
 <button id="useGarmentcode" type="button" disabled>Use imported pattern</button>
 <p class="note">Supply UTF-8 JSON; each input is limited to 4 MiB. This imports already evaluated panels and stitches, not a design program or a garment mesh.
 Review the missing construction information, source mapping and limitations below before choosing Use imported pattern.
 Every imported panel remains one physical piece. Conversion stays <code>REVIEW_REQUIRED</code>; it does not establish fit,
 recover omitted garment components, or supply missing material properties.</p>
 <p class="note">Download the original inputs, converted pattern and import report. If annotations include a fit specification,
-download it and choose it under Fit, exports and mechanical drape. After adopting the pattern, assign materials and freeze selections
-to use the existing consumers. Changing an import input withdraws its review and any adopted imported pattern.</p>
+you can select it when adopting the pattern, or choose your own under Fit, exports and mechanical drape. After adopting the pattern, assign materials and freeze selections
+to use the existing consumers. Changing an import input withdraws its review, adopted pattern and any fit specification still selected from that import.</p>
 </details>
 <p class="note">A <code>ftx-outfit-drape/1</code> request composes independently authored garments for one contact solve.
 The original request and source correspondence remain downloadable; the exact composed pattern drives assignments and every consumer below.
@@ -236,6 +237,8 @@ It does not replace the inspected material selection. Freeze selections &amp; bi
 <h3>Fit, exports and mechanical drape</h3>
 <label>Measurements JSON <input id="measurements" type="file" accept=".json,application/json"></label>
 <label>Fit specification JSON <input id="fit" type="file" accept=".json,application/json"></label>
+<p id="importFitNote" class="note" hidden>Using the supplied imported fit specification. Inspect it below, or choose a file above to replace it. Measurement readiness and physical fit remain separate.</p>
+<div id="importFitFiles" class="links"></div>
 <button id="exports" data-command="exports" disabled>Validate &amp; regenerate exports</button>
 <label>Local converted body model (.ftxbody) <input id="body" type="file" accept=".ftxbody"></label>
 <p id="receivedBodyNote" class="note" hidden></p><div id="receivedBodyFiles" class="links"></div>
