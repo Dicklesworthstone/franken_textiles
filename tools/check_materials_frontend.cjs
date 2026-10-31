@@ -1216,6 +1216,16 @@ test('material supplemental reads cannot publish after cancellation or evidence 
     assert.equal(old.dead,true,edit);assert.equal(old.messages.length,count,edit);assert.equal(p.current().messages.length,0,edit);
   }
 });
+test('material supplemental association is withdrawn when a delayed primary round arrives',async()=>{
+  const token='5'.repeat(32),p=await pageModule({roundToken:token}),delay=deferred();let reading=false;
+  const pattern=new Blob(['{"pieces":[{"id":"front"}]}']);
+  pattern.arrayBuffer=()=>{reading=true;return delay.promise;};
+  const incoming=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+    data:{type:'ftx-round-sources',token,files:{pattern,measurements:new Blob(['{}']),fit:new Blob(['{}'])}}});
+  while(!reading)await new Promise(resolve=>setImmediate(resolve));
+  p.e.supplementalConsent.checked=true;delay.resolve(new TextEncoder().encode('{"pieces":[{"id":"front"}]}').buffer);await incoming;
+  assert.equal(p.e.supplementalConsent.checked,false);assert.match(p.e.patternName.textContent,/Received round/);
+});
 test('material supplemental routing covers drapes and both section-3 study sources while separate requests retain their own evidence',async()=>{
   const p=await pageModule();await p.load();await p.bind();p.select('measurements');p.select('fit');
   p.select('studyRequest');p.select('scenarioRequest');p.e.body.files=[new Blob([new Uint8Array([1])])];
@@ -1286,7 +1296,7 @@ test('compiled WASM material supplemental photo evidence matches the ordinary ro
     p.e.supplementalFiles.files=[new Blob([original])];p.e.supplementalFiles.handlers.change();p.e.supplementalConsent.checked=true;
     await p.e.exports.onclick();const msg=p.current().messages.at(-1),response=await w.send(msg);
     assert.equal(response.type,'result',response.message);assert.equal(msg.measurementSources,JSON.stringify([original]));
-    const expected=ftx.run(`{"pattern":${bound.pattern_json},"fit_spec":${imported.fit_spec_json},"body":{"mode":"file","measurements":${primary},"supplemental_same_wearer":true,"supplemental_measurements":${JSON.stringify([original])}}}`,msg.today,msg.created);
+    const expected=ftx.run(`{"pattern":${binding.result.pattern_json},"fit_spec":${imported.fit_spec_json},"body":{"mode":"file","measurements":${primary},"supplemental_same_wearer":true,"supplemental_measurements":${JSON.stringify([original])}}}`,msg.today,msg.created);
     try {
       assert.deepEqual(plain(response.result),JSON.parse(expected.page()));
       assert.deepEqual(Buffer.from(response.files.find(f=>f.mime==='application/zip').bytes),Buffer.from(expected.zip()));

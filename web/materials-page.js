@@ -3925,6 +3925,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       installPattern(files.get("patternFile"), "Received round pattern.json");
       for (const [id, raw] of files) roundFiles.set(id, raw);
       if (context?.fit) $("bodyArmDeg").value = String(context.armDeg);
+      $("supplementalConsent").checked = false;
       $("bodyFitConsent").checked = false; showReceivedBody();
       $("roundImportText").textContent = "Received pattern.json, measurements.json and fit_spec.json. Originals retained in this tab. Review sources, then Freeze selections and bind before running a consumer. " +
         (context ? "Selected body sources also arrived; review them and confirm the accepted-fit association separately before draping. " : "Choose a body separately for draping. ") +
