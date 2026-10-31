@@ -155,8 +155,36 @@ minimums, increments, all-unit price thresholds,
 available quantities, exact dates and validity limits apply **after** all matching channels and
 operations have been aggregated. Each operation/channel's complete demand, including allowances,
 is one uninterrupted segment; the largest determines the existing continuous-length check.
-The market's quantity and continuity policies retain their meanings. Supplier splitting is not
-supported by this consumer and a supplied `split_orders` policy refuses explicitly.
+The market's quantity and continuity policies retain their meanings. Omission of `split_orders`
+keeps the original one-complete-order-per-yarn behavior. To allocate a batch across several
+suppliers, set `consumables.purchasing.market.split_orders` to
+`{"schema":"ftx-thread-order-allocation/1","max_search_nodes":10000}`.
+
+The shared supplier allocator assigns each complete operation/channel on each actual garment copy
+to exactly one offer. It never splits a continuous thread segment or invents a mid-operation splice.
+Selected specialist and configured-cell recipes retain their actual copy identities and per-copy
+consumption. Each supplier's complete assigned requirement goes through the existing quote authority,
+including source locks, current observations, sale units, minima, increments, all-unit price tiers,
+observed capacity and the longest assigned segment's continuity limit. Distinct base/tier offer IDs
+cannot multiply one physical supplier stock: transitive aliases through unused current quotes are
+retained, and stock spanning different exact yarn snapshots is excluded.
+
+The explicit search admits at most 256 segments overall, 63 per exact yarn and eight current
+candidate offers per yarn. `max_search_nodes` bounds assignments and uncached quote evaluations;
+sewing/material studies also reserve each evaluation's full quote scan within their existing work
+limit. Excessive actual segment domains refuse purchasing while preserving the complete thread
+quantities and sewing geometry. Narrow the authored request or use ordinary whole-supplier pricing;
+the allocator does not silently merge, omit or divide segments to fit its cap.
+
+Purchasing retains `segments`, per-material `allocation` reports and complete selected orders with
+their segment indices. `selected_observed_order_total` is a complete feasible incumbent even when
+search ends early; `least_observed_independent_order_total` is present only when the listed minimum
+is proved. An unfinished allocation with no complete incumbent has neither total. Material studies,
+thread-cost recipe selection and combined cut-and-sew purchasing consume the selected complete
+orders; unfinished inner allocation cannot prove a recipe or combined-order optimum. Frozen plan
+options replay the same assignments, and the workbench shows each actual supplier order and its
+operation/channel/copy allocation. No inventory reservation, checkout, spooling schedule, measured
+thread consumption or production authorization follows.
 
 An admitted linear density also supplies each complete requirement's optional `mass` receipt:
 `linear_density_kg_m` and `required_mass_kg`. `complete_mass_coverage` and

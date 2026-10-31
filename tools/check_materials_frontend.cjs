@@ -5238,6 +5238,38 @@ function selectedThreadPlan() {
         least_observed_independent_order_total:6,unavailable_reason:null}}};
 }
 
+test('split thread purchases show complete incumbents, actual segment assignments and separate optimality', async()=>{
+  const plan=selectedThreadPlan(), report=plan.consumables, purchase=report.purchasing;
+  purchase.least_observed_independent_order_total=null;
+  purchase.selected_observed_order_total=7;
+  purchase.order_allocation_optimality_proven=false;
+  purchase.segments=report.operation_channels.map((channel,operation_channel)=>
+    ({operation_channel,copy:0,required_length_m:channel.required_length_m}));
+  purchase.material_orders.forEach((row,i)=>{row.allocation={schema:'ftx-thread-order-allocation-report/1',
+    optimality_proven:false,budget_exhausted:true,selected_orders:[{offer:row.least_observed_order,
+      segment_indices:[i],required_length_m:row.requirement.required_length_m}]}; row.least_observed_order=null;});
+  const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('split thread'); row.sewing=outcome(plan);
+    const study=studyReport([row]), value=op==='sew'?{stitches:[],plan}:
+      op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=JSON.stringify(value), name=`${op}-split-thread.json`;
+    await p.e[op].onclick(); p.emit(value,[{name,text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    const totals=table('Thread for the selected sewing plan — complete or unknown');
+    assert.equal(totals.children[2].children.at(-1).textContent,'7 EUR');
+    const orders=table('complete thread orders across suppliers');
+    assert.match(visibleText(orders),/hem <selected> \/ needle \/ garment 1/);
+    assert.match(visibleText(orders),/observed-1/);
+    assert.match(visibleText(orders),/Complete incumbent; budget ended/);
+    assert.match(visibleText(s),/minimum cost is unproved/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    const link=descendants(s).find(n=>n.download===name);
+    assert.equal(await p.blobs.get(link.href).text(),raw);
+  }
+});
+
 test('consumed thread mass preserves missing density while length inventory stays available', async()=>{
   const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions');
   const plan=selectedThreadPlan(), r=plan.consumables;

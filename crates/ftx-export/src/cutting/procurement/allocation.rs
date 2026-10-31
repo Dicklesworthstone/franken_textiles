@@ -1,9 +1,10 @@
-//! Whole-marker supplier allocation. QuoteBook remains the sole price, source-history, capacity
-//! and sale-unit authority; this module chooses which indivisible markers share an order.
+//! Indivisible-demand supplier allocation. QuoteBook remains the sole price, source-history,
+//! capacity and sale-unit authority; roll markers and thread segments share this bounded search.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode};
+use ftx_pattern::material_catalog::ResolvedMaterial;
 use ftx_pattern::material_cost::{
     Basis, ExclusionReason, Offer, PriceSample, Quote, QuoteBook, Scope,
 };
@@ -14,15 +15,17 @@ use super::{CutPlan, Market};
 
 const MAX_MARKERS: usize = 32;
 const MAX_MATERIAL_MARKERS: usize = 12;
+pub(crate) const MAX_THREAD_SEGMENTS: usize = 256;
+const MAX_YARN_SEGMENTS: usize = 63;
 const MAX_OFFERS: usize = 8;
 const MAX_QUOTES: usize = 4096;
 const MAX_WORK: usize = 200_000;
 
-/// Explicit finite search; no marker geometry or supplier stock is divided or inferred.
+/// Explicit finite search; no marker, continuous thread segment or supplier stock is divided.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
-    /// Must be `ftx-cut-order-allocation/1`.
+    /// `ftx-cut-order-allocation/1` for markers or `ftx-thread-order-allocation/1` for thread.
     pub schema: String,
     /// Shared limit across all materials, 1..200000. Each attempted assignment and each uncached
     /// canonical quote evaluation consumes one unit; cached subsets do not re-evaluate quotes.
@@ -47,20 +50,21 @@ pub struct Order {
 }
 
 /// A complete feasible incumbent, never a subtotal from an unfinished assignment.
+/// Roll orders retain cut-plan marker indices; thread orders retain consumables segment indices.
 #[derive(Clone, Debug, Serialize)]
-pub struct Report {
-    /// `ftx-cut-order-allocation-report/1`.
+pub struct Report<O = Order> {
+    /// `ftx-cut-order-allocation-report/1` or `ftx-thread-order-allocation-report/1`.
     pub schema: &'static str,
     /// Complete admitted bounded-search policy.
     pub policy: Policy,
-    /// Current exact-locked offers which can possibly improve through marker partitioning.
+    /// Current exact-locked offers which can improve through allocation of indivisible demands.
     pub candidate_offer_ids: Vec<String>,
     /// Otherwise current offers omitted because they do not lock the selected material snapshot.
     pub excluded_unlocked_offer_ids: Vec<String>,
     /// Whole-material canonical sample, including reasons a single offer cannot supply the job.
     pub whole_order_sample: Option<PriceSample>,
-    /// Complete orders for every marker, or unknown when no complete allocation was found.
-    pub selected_orders: Option<Vec<Order>>,
+    /// Complete orders for every marker or thread segment, or unknown if none were found.
+    pub selected_orders: Option<Vec<O>>,
     /// Sum of the complete incumbent's merchandise costs, never a partial price.
     pub selected_observed_order_total: Option<f64>,
     /// Attempted feasible-prefix extensions, including rejected assignments.
@@ -75,8 +79,50 @@ pub struct Report {
     pub optimality_proven: bool,
     /// Listed current offers cannot allocate the job; never asserted after budget exhaustion.
     pub no_feasible_listed_allocation: bool,
-    /// Stable equal-cost behavior, conditional on the listed offers and markers.
+    /// Stable equal-cost behavior, conditional on the listed offers and indivisible demands.
     pub tie_break: &'static str,
+}
+
+impl<O> Report<O> {
+    pub(crate) fn map_orders<T>(self, map: impl FnMut(O) -> T) -> Report<T> {
+        Report {
+            schema: self.schema,
+            policy: self.policy,
+            candidate_offer_ids: self.candidate_offer_ids,
+            excluded_unlocked_offer_ids: self.excluded_unlocked_offer_ids,
+            whole_order_sample: self.whole_order_sample,
+            selected_orders: self
+                .selected_orders
+                .map(|orders| orders.into_iter().map(map).collect()),
+            selected_observed_order_total: self.selected_observed_order_total,
+            search_nodes: self.search_nodes,
+            quote_evaluations: self.quote_evaluations,
+            search_complete: self.search_complete,
+            budget_exhausted: self.budget_exhausted,
+            optimality_proven: self.optimality_proven,
+            no_feasible_listed_allocation: self.no_feasible_listed_allocation,
+            tie_break: self.tie_break,
+        }
+    }
+}
+
+pub(crate) struct Segment {
+    pub index: usize,
+    pub length_m: f64,
+    pub quantity: f64,
+}
+
+pub(crate) struct Demand<'a> {
+    pub material: &'a ResolvedMaterial,
+    pub basis: Basis,
+    pub segments: Vec<Segment>,
+}
+
+pub(crate) struct Assignment {
+    pub offer: Offer,
+    pub indices: Vec<usize>,
+    pub length_m: f64,
+    pub scope: Scope,
 }
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -132,7 +178,7 @@ impl Work {
 
 struct Incumbent {
     cost: f64,
-    masks: Vec<u16>,
+    masks: Vec<u64>,
     offers: Vec<Option<Offer>>,
 }
 
@@ -146,22 +192,20 @@ struct Prepared {
 }
 
 fn scope(
-    plan: &CutPlan,
+    demand: &Demand<'_>,
     market: &Market,
-    source_indices: &[usize],
-    mask: u16,
+    mask: u64,
 ) -> Result<(Scope, f64, Vec<usize>), Refusal> {
-    let mut area = 0.0;
+    let mut quantity = 0.0;
     let mut length = 0.0;
     let mut longest = 0.0_f64;
     let mut indices = Vec::new();
-    for (bit, &index) in source_indices.iter().enumerate() {
+    for (bit, segment) in demand.segments.iter().enumerate() {
         if mask & (1 << bit) != 0 {
-            let marker = &plan.rolls[index];
-            area = add(area, marker.stock_area_m2)?;
-            length = add(length, marker.length_m)?;
-            longest = longest.max(marker.length_m);
-            indices.push(index);
+            quantity = add(quantity, segment.quantity)?;
+            length = add(length, segment.length_m)?;
+            longest = longest.max(segment.length_m);
+            indices.push(segment.index);
         }
     }
     Ok((
@@ -173,8 +217,8 @@ fn scope(
             as_of: market.as_of.clone(),
             as_of_at: market.as_of_at.clone(),
             max_age_days: market.max_age_days,
-            requirement: area,
-            basis: Basis::Area,
+            requirement: quantity,
+            basis: demand.basis,
             require_observed_quantity: market.require_observed_quantity,
             continuous_length_m: Some(longest),
             require_observed_continuous_length: market.require_observed_continuous_length,
@@ -185,15 +229,14 @@ fn scope(
 }
 
 fn prepare(
-    plan: &CutPlan,
+    demand: &Demand<'_>,
     book: &QuoteBook,
     market: &Market,
-    indices: &[usize],
     work: &mut Work,
 ) -> Result<Prepared, Refusal> {
     let sample = if work.charge(true) {
-        let (scope, _, _) = scope(plan, market, indices, (1 << indices.len()) - 1)?;
-        Some(book.evaluate(&plan.rolls[indices[0]].material, &scope)?)
+        let (scope, _, _) = scope(demand, market, (1 << demand.segments.len()) - 1)?;
+        Some(book.evaluate(demand.material, &scope)?)
     } else {
         None
     };
@@ -215,9 +258,11 @@ fn prepare(
                 .map(|excluded| &excluded.quote),
         );
         for quote in candidates {
-            if quote.material_sha256.as_deref().is_some_and(|sha| {
-                sha.eq_ignore_ascii_case(plan.rolls[indices[0]].material.sha256())
-            }) {
+            if quote
+                .material_sha256
+                .as_deref()
+                .is_some_and(|sha| sha.eq_ignore_ascii_case(demand.material.sha256()))
+            {
                 costs_monotone &= quote.price_breaks.is_empty();
                 current.insert(quote.offer_id.clone(), stock_keys(quote));
             } else {
@@ -273,15 +318,14 @@ fn connect_stock(prepared: &mut [Prepared]) {
 }
 
 struct Search<'a> {
-    plan: &'a CutPlan,
+    demand: &'a Demand<'a>,
     book: &'a QuoteBook,
     market: &'a Market,
-    indices: &'a [usize],
     ids: Vec<String>,
     stock_components: Vec<usize>,
     costs_monotone: bool,
-    cache: BTreeMap<u16, Vec<Option<Offer>>>,
-    masks: Vec<u16>,
+    cache: BTreeMap<u64, Vec<Option<Offer>>>,
+    masks: Vec<u64>,
     active: Vec<Option<Offer>>,
     visit_order: Vec<usize>,
     incumbent: Option<Incumbent>,
@@ -290,22 +334,20 @@ struct Search<'a> {
 }
 
 impl Search<'_> {
-    fn scope(&self, mask: u16) -> Result<(Scope, f64, Vec<usize>), Refusal> {
-        scope(self.plan, self.market, self.indices, mask)
+    fn scope(&self, mask: u64) -> Result<(Scope, f64, Vec<usize>), Refusal> {
+        scope(self.demand, self.market, mask)
     }
 
-    fn sample(&mut self, mask: u16) -> Result<Option<PriceSample>, Refusal> {
+    fn sample(&mut self, mask: u64) -> Result<Option<PriceSample>, Refusal> {
         if !self.work.charge(true) {
             self.exhausted = true;
             return Ok(None);
         }
         let (scope, _, _) = self.scope(mask)?;
-        self.book
-            .evaluate(&self.plan.rolls[self.indices[0]].material, &scope)
-            .map(Some)
+        self.book.evaluate(self.demand.material, &scope).map(Some)
     }
 
-    fn priced(&mut self, mask: u16, candidate: usize) -> Result<Option<Offer>, Refusal> {
+    fn priced(&mut self, mask: u64, candidate: usize) -> Result<Option<Offer>, Refusal> {
         if !self.cache.contains_key(&mask) {
             let Some(sample) = self.sample(mask)? else {
                 return Ok(None);
@@ -385,7 +427,7 @@ impl Search<'_> {
         Ok(())
     }
 
-    fn orders(&self) -> Result<Option<Vec<Order>>, Refusal> {
+    fn orders(&self) -> Result<Option<Vec<Assignment>>, Refusal> {
         let Some(incumbent) = &self.incumbent else {
             return Ok(None);
         };
@@ -393,12 +435,10 @@ impl Search<'_> {
         for (&mask, offer) in incumbent.masks.iter().zip(&incumbent.offers) {
             if let Some(offer) = offer {
                 let (scope, length, indices) = self.scope(mask)?;
-                orders.push(Order {
+                orders.push(Assignment {
                     offer: offer.clone(),
-                    roll_indices: indices,
-                    required_length_m: length,
-                    required_stock_area_m2: scope.requirement,
-                    required_continuous_length_m: scope.continuous_length_m.expect("marker scope"),
+                    indices,
+                    length_m: length,
                     scope,
                 });
             }
@@ -408,14 +448,13 @@ impl Search<'_> {
 }
 
 fn group(
-    plan: &CutPlan,
+    demand: &Demand<'_>,
     book: &QuoteBook,
     market: &Market,
     policy: &Policy,
-    indices: &[usize],
     prepared: Prepared,
     work: &mut Work,
-) -> Result<(Report, BTreeSet<usize>), Refusal> {
+) -> Result<(Report<Assignment>, BTreeSet<usize>), Refusal> {
     let before = (work.nodes, work.quotes);
     let Prepared {
         sample,
@@ -428,28 +467,27 @@ fn group(
     let initial_quotes = usize::from(sample.is_some());
     let candidate_count = ids.len();
     let mut search = Search {
-        plan,
+        demand,
         book,
         market,
-        indices,
         ids,
         stock_components: components,
         costs_monotone,
         cache: BTreeMap::new(),
         masks: vec![0; candidate_count],
         active: vec![None; candidate_count],
-        visit_order: (0..indices.len()).collect(),
+        visit_order: (0..demand.segments.len()).collect(),
         incumbent: None,
         work,
         exhausted: sample.is_none(),
     };
     search.visit_order.sort_by(|&a, &b| {
-        plan.rolls[indices[b]]
+        demand.segments[b]
             .length_m
-            .total_cmp(&plan.rolls[indices[a]].length_m)
+            .total_cmp(&demand.segments[a].length_m)
             .then(a.cmp(&b))
     });
-    let full = (1 << indices.len()) - 1;
+    let full = (1 << demand.segments.len()) - 1;
     if let Some(sample) = &sample {
         let offers: Vec<_> = search
             .ids
@@ -524,6 +562,80 @@ fn group(
     ))
 }
 
+pub(crate) fn validate_thread_policy(policy: &Policy) -> Result<(), Refusal> {
+    if policy.schema != "ftx-thread-order-allocation/1"
+        || !(1..=MAX_WORK).contains(&policy.max_search_nodes)
+    {
+        return Err(invalid(
+            "thread split_orders requires ftx-thread-order-allocation/1 and 1..200000 shared work units",
+        ));
+    }
+    Ok(())
+}
+
+// The sewing consumer supplies canonical complete per-operation/channel/copy lengths. The
+// allocator never reconstructs stitch geometry, divides a continuous segment, or prices a prefix.
+pub(crate) fn threads(
+    demands: &[Demand<'_>],
+    book: &QuoteBook,
+    market: &Market,
+    policy: &Policy,
+    stock_components: &BTreeMap<String, usize>,
+    excluded_components: &BTreeSet<usize>,
+) -> Result<Vec<Report<Assignment>>, Refusal> {
+    validate_thread_policy(policy)?;
+    let count = demands.iter().map(|d| d.segments.len()).sum::<usize>();
+    if demands.is_empty() || count > MAX_THREAD_SEGMENTS || book.quotes.len() > MAX_QUOTES {
+        return Err(budget(
+            "thread split orders support 1..256 continuous segments and at most 4096 quote observations",
+        ));
+    }
+    let mut identities = BTreeSet::new();
+    let mut indices = BTreeSet::new();
+    for demand in demands {
+        if demand.segments.is_empty() || demand.segments.len() > MAX_YARN_SEGMENTS {
+            return Err(budget(
+                "thread split orders support at most 63 continuous segments per exact yarn",
+            ));
+        }
+        if demand.basis != Basis::Length || !identities.insert(demand.material.sha256()) {
+            return Err(invalid(
+                "thread allocation needs distinct exact-yarn length requirements",
+            ));
+        }
+        for segment in &demand.segments {
+            add(0.0, segment.length_m)?;
+            if segment.quantity != segment.length_m || !indices.insert(segment.index) {
+                return Err(invalid(
+                    "thread allocation must preserve every complete segment exactly once",
+                ));
+            }
+        }
+    }
+    let mut work = Work {
+        limit: policy.max_search_nodes,
+        ..Work::default()
+    };
+    let mut prepared = demands
+        .iter()
+        .map(|demand| prepare(demand, book, market, &mut work))
+        .collect::<Result<Vec<_>, _>>()?;
+    for input in &mut prepared {
+        // Use all current observations, including unused transitive bridging SKUs. Ambiguous
+        // stock shared by distinct exact yarn snapshots is independently excluded by the caller.
+        input
+            .ids
+            .retain(|id| !excluded_components.contains(&stock_components[id]));
+        input.components = input.ids.iter().map(|id| stock_components[id]).collect();
+    }
+    demands.iter().zip(prepared).map(|(demand, prepared)| {
+        let (mut report, _) = group(demand, book, market, policy, prepared, &mut work)?;
+        report.schema = "ftx-thread-order-allocation-report/1";
+        report.tie_break = "retain the cheapest whole-order baseline on equal cost; otherwise retain the first complete allocation in descending-segment-length then offer-ID order";
+        Ok(report)
+    }).collect()
+}
+
 pub(super) fn evaluate(
     plan: &CutPlan,
     book: &QuoteBook,
@@ -567,9 +679,24 @@ pub(super) fn evaluate(
         limit: policy.max_search_nodes,
         ..Work::default()
     };
-    let mut prepared = groups
+    let demands = groups
         .values()
-        .map(|indices| prepare(plan, book, market, indices, &mut work))
+        .map(|indices| Demand {
+            material: &plan.rolls[indices[0]].material,
+            basis: Basis::Area,
+            segments: indices
+                .iter()
+                .map(|&index| Segment {
+                    index,
+                    length_m: plan.rolls[index].length_m,
+                    quantity: plan.rolls[index].stock_area_m2,
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    let mut prepared = demands
+        .iter()
+        .map(|demand| prepare(demand, book, market, &mut work))
         .collect::<Result<Vec<_>, _>>()?;
     connect_stock(&mut prepared);
     let mut material_orders = Vec::new();
@@ -581,9 +708,16 @@ pub(super) fn evaluate(
     let mut search_complete = true;
     let mut total = 0.0;
     let mut used_stock = BTreeSet::new();
-    for ((hash, indices), prepared) in groups.into_iter().zip(prepared) {
-        let (report, components) =
-            group(plan, book, market, policy, &indices, prepared, &mut work)?;
+    for (((hash, indices), demand), prepared) in groups.into_iter().zip(&demands).zip(prepared) {
+        let (report, components) = group(demand, book, market, policy, prepared, &mut work)?;
+        let report = report.map_orders(|order| Order {
+            offer: order.offer,
+            roll_indices: order.indices,
+            required_length_m: order.length_m,
+            required_stock_area_m2: order.scope.requirement,
+            required_continuous_length_m: order.scope.continuous_length_m.expect("marker scope"),
+            scope: order.scope,
+        });
         // All groups' candidate identities were connected before selection. An unselected bridging
         // quote therefore cannot make one supplier's physical stock appear independent again.
         if !used_stock.is_disjoint(&components) {

@@ -885,6 +885,20 @@ Complete feasible selected costs remain available after exhaustion, while minimu
 require completed proof. Mixed jobs add exact finite-item prices only when all routes are complete.
 Neither an incomplete subtotal nor duplicated physical stock may supply a comparison value.
 
+**Split thread inventory orders.** `consumables.purchasing.market.split_orders` accepts
+`ftx-thread-order-allocation/1` through the same indivisible-demand allocator. Complete actual
+operation/channel/copy lengths, including selected configured/specialist cell recipes, replace
+marker area as its length-based inputs; no fake marker or second price authority is introduced.
+Source currentness, exact yarn locks, transitive base/tier stock aliases, full-order rounding,
+all-unit price breaks, capacity and continuity are canonical. At most 256 segments overall, 63 per
+yarn and eight candidate offers per yarn enter the explicit shared search; full quote scans are
+reserved across all recipe/material trials. Refused demand domains preserve sewing and quantities.
+Complete incumbents feed thread/material/combined purchasing decisions; unfinished allocations
+withhold minimum claims, including outer recipe optimality. Every order retains its actual segment
+indices, source scope and canonical offer. Omission preserves whole-supplier serialization.
+Tests: `sewing_consumables`, its selection and combined-purchasing cases, and native/portable
+sewing production replay. This does not infer a spool-change schedule or authorize purchases.
+
 **Named scenario matrices.** `material_study::Request::evaluate_matrix_with` expands and binds one
 unchanged-pattern material study, runs manufacturing once and retains every named case's independent
 production outcomes. One to eight unique cases reserve at most 64 alternative/case slots before

@@ -48,6 +48,53 @@ fn receipt<'a>(report: &'a Value, key: &str) -> &'a Value {
 }
 
 #[test]
+fn split_thread_purchases_feed_the_actual_complete_cut_and_sew_decision() {
+    let (pattern, mut request) = combined();
+    request["cutting"]["copies"] = json!(2);
+    let first = &mut request["purchasing"]["quotes"]["quotes"][1];
+    first["available_quantity"] = json!(4.0);
+    let mut second = first.clone();
+    second["offer_id"] = json!("thread-cone-two");
+    second["sku"] = json!("independent-thread-stock");
+    request["purchasing"]["quotes"]["quotes"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
+    same_book(&mut request);
+    request["sewing"]["consumables"]["purchasing"]["market"]["split_orders"] =
+        json!({"schema":"ftx-thread-order-allocation/1","max_search_nodes":10000});
+    request["comparison"] = json!({"basis":"nominal","required_consumers":["sewing_purchasing","cut_and_sew_purchasing"],
+        "objectives":[{"metric":"thread_observed_order_cost","direction":"minimize"},
+            {"metric":"cut_and_sew_selected_order_cost","direction":"minimize"}]});
+    let report = run(&pattern, &request);
+    let combined = receipt(&report, "base");
+    close(
+        combined["thread_selected_order_cost"].as_f64().unwrap(),
+        28.0,
+    );
+    close(combined["selected_order_cost"].as_f64().unwrap(), 38.0);
+    assert_eq!(
+        combined["thread_offer_ids"],
+        json!(["thread-cone", "thread-cone-two"])
+    );
+    assert_eq!(combined["order_allocation_optimality_proven"], true);
+    assert_eq!(report["comparison"]["frontier"], json!(["base"]));
+    close(
+        row(&report, "base")["metrics"]["thread_observed_order_cost"]
+            .as_f64()
+            .unwrap(),
+        28.0,
+    );
+    let selected = &row(&report, "base")["sewing"]["result"];
+    let replay = super::super::build(
+        row(&report, "base")["binding"]["result"]["pattern"].clone(),
+        selected["options"].clone(),
+    )
+    .unwrap();
+    assert_eq!(selected, &serde_json::to_value(replay).unwrap());
+}
+
+#[test]
 fn complete_orders_share_the_batch_and_keep_actual_minimum_increment_and_tier_rounding() {
     for (copies, thread_cost, total, multicut) in [
         (1, 14.0, 24.0, false),

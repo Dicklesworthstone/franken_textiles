@@ -1721,6 +1721,133 @@ fn heterogeneous_cells_replay_actual_stitches_and_combined_thread_orders_through
 }
 
 #[test]
+fn split_thread_orders_replay_actual_configured_and_specialist_copies_in_both_clis() {
+    for (kind, mut options) in [
+        (
+            "configured",
+            serde_json::from_str::<Value>(HETEROGENEOUS).unwrap(),
+        ),
+        ("routed", routed_specialist_options()),
+        ("eligible", eligible_route_options(true)),
+    ] {
+        let original = options["consumables"]["purchasing"]["quote_book"]["quotes"][0].clone();
+        let quotes: Vec<_> = (0..4)
+            .map(|index| {
+                let mut offer = original.clone();
+                offer["offer_id"] = json!(format!("supplier-{index}"));
+                offer["sku"] = json!(format!("independent-stock-{index}"));
+                offer["available_quantity"] = json!(1.0);
+                offer["minimum_quantity"] = json!(0.1);
+                offer["order_increment"] = json!(0.1);
+                offer
+            })
+            .collect();
+        options["consumables"]["purchasing"]["quote_book"]["quotes"] = json!(quotes);
+        options["consumables"]["purchasing"]["market"]["split_orders"] =
+            json!({"schema":"ftx-thread-order-allocation/1","max_search_nodes":10000});
+        let options_text = options.to_string();
+        let plan = portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &options_text).unwrap());
+        let program =
+            portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &options_text).unwrap());
+        assert_eq!(program["plan"], plan);
+        let consumed = &plan["consumables"];
+        let purchased = &consumed["purchasing"];
+        assert_eq!(
+            purchased["complete_offer_coverage"], true,
+            "{kind}: {purchased}"
+        );
+        let channels = consumed["operation_channels"].as_array().unwrap();
+        let segments = purchased["segments"].as_array().unwrap();
+        let mut identities = std::collections::BTreeSet::new();
+        for segment in segments {
+            let index = segment["operation_channel"].as_u64().unwrap() as usize;
+            let channel = &channels[index];
+            let copy = segment["copy"].as_u64().unwrap();
+            assert!(
+                identities.insert((index, copy)),
+                "a physical thread segment was duplicated"
+            );
+            assert_eq!(
+                segment["required_length_m"],
+                channel["per_copy"]["required_length_m"]
+            );
+            if kind == "configured" {
+                let cell = plan["production"]["parallel"]["selected"]["cells"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|cell| cell["cell"] == channel["cell"])
+                    .unwrap();
+                assert!(cell["copies"].as_array().unwrap().contains(&json!(copy)));
+            } else {
+                assert!(
+                    plan["production"]["routing"]["selected"]["operations"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|operation| operation["cell"] == channel["cell"]
+                            && operation["operation_id"] == channel["operation_id"]
+                            && operation["copy"] == copy)
+                );
+            }
+        }
+        let mut assigned: Vec<_> = purchased["material_orders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|material| {
+                material["allocation"]["selected_orders"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|order| {
+                        order["segment_indices"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|index| index.as_u64().unwrap() as usize)
+                    })
+            })
+            .collect();
+        assigned.sort_unstable();
+        assert_eq!(assigned, (0..segments.len()).collect::<Vec<_>>());
+        let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+        let study = json!({"schema":"ftx-material-study/1",
+            "variants":[{"key":"split","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern["fabric"]["material"]}}],"sewing":options,
+            "comparison":{"basis":"nominal","required_consumers":["sewing_purchasing"],
+                "objectives":[{"metric":"thread_observed_order_cost","direction":"minimize"}]}});
+        let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+        assert_eq!(report["comparison"]["frontier"], json!(["split"]));
+        assert_eq!(
+            report["alternatives"][0]["metrics"]["thread_observed_order_cost"],
+            purchased["selected_observed_order_total"]
+        );
+        let directory = workspace();
+        for (name, text) in [
+            ("pattern.json", PATTERN.to_owned()),
+            ("options.json", options_text),
+            ("study.json", study.to_string()),
+        ] {
+            fs::write(directory.join(name), text).unwrap();
+        }
+        for main in [false, true] {
+            for (action, input, expected) in [
+                ("sew-plan", "options.json", &plan),
+                ("sew-stitches", "options.json", &program),
+                ("study", "study.json", &report),
+            ] {
+                assert_eq!(
+                    run(main, &directory, action, "pattern.json", input),
+                    *expected,
+                    "{kind}/{main}/{action}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn heterogeneous_recipe_selection_uses_cell_setup_domains_and_refuses_other_allocation_optima() {
     let options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
     let mut request = json!({"schema":"ftx-sewing-selection/5","options":options,
