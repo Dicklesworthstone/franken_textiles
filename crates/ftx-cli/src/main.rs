@@ -297,7 +297,7 @@ fn load_model(args: &Args) -> Result<AnnyModel, Refusal> {
 /// The wearer of a measurement file and the body fitted to it on the drape pose (a line on stderr).
 fn fitted_body(model: &AnnyModel, meas: &Value) -> Result<(Wearer, TapeFit), Refusal> {
     let w = Wearer::from_measurements(meas)?;
-    let fit = fit_tape(model, &w, &tape_targets(meas), &Pose::drape())?;
+    let fit = fit_tape(model, &w, &tape_targets(meas)?, &Pose::drape())?;
     eprintln!(
         "body: fitted in {} iterations; {}; {:.2} kg{}",
         fit.iterations,
@@ -335,6 +335,10 @@ fn body_json(w: &Wearer, fit: &TapeFit) -> serde_json::Map<String, Value> {
             "tape": named(&mut fit.residuals.iter().map(|r| (r.name.clone(), json!({
                 "target_mm": r.target_mm,
                 "body_mm": mm(r.body_mm),
+                "residual_mm": r.body_mm - r.target_mm,
+                "sigma_mm": r.sigma_mm,
+                "effective_sigma_mm": r.effective_sigma_mm,
+                "normalized_residual": (r.body_mm - r.target_mm) / r.effective_sigma_mm,
             })))),
             "free": named(&mut FREE.iter().zip(fit.free).map(|(n, v)| {
                 ((*n).to_string(), json!((v * 1e4).round() / 1e4))
@@ -1033,6 +1037,47 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn body_report_retains_fit_uncertainty_and_submillimetre_residuals() {
+        let wearer = Wearer {
+            years: 2.5,
+            gender: 0.5,
+            stature_mm: 920.0,
+            weight_kg: None,
+        };
+        let fit = TapeFit {
+            params: ftx_body::BodyParams {
+                phenotype: Default::default(),
+                local_changes: vec![],
+            },
+            readings: [100.0004; ftx_body::N_TAPE],
+            mass_kg: 10.0,
+            residuals: vec![ftx_body::TapeResidual {
+                name: "waist".into(),
+                target_mm: 100.0,
+                body_mm: 100.0004,
+                sigma_mm: Some(17.0),
+                effective_sigma_mm: 17.0,
+            }],
+            free: [0.0; FREE.len()],
+            iterations: 3,
+        };
+        let body = Value::Object(body_json(&wearer, &fit));
+        let row = &body["fit"]["tape"]["waist"];
+        assert_eq!(row["body_mm"], 100.0); // Preserve the historical display precision.
+        assert_eq!(row["residual_mm"], 100.0004 - 100.0);
+        assert_eq!(row["sigma_mm"], 17.0);
+        assert_eq!(row["effective_sigma_mm"], 17.0);
+        assert_eq!(row["normalized_residual"], (100.0004 - 100.0) / 17.0);
+        assert!(
+            body["model_fit"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|record| { record["name"] != "waist" && record["provenance"] == "MODEL_FIT" })
+        );
+    }
 
     fn drape_scratch() -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};

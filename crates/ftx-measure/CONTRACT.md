@@ -16,6 +16,12 @@ or discard supplied evidence. A numeric wearer.stature_mm is retained as evidenc
 without an age/automatic stature prior. Original records are not changed, and a stored fused
 cache is always recomputed.
 
+Native `fusion-positive-sigma` exception: fused and source-entry uncertainties retain their actual
+positive value when ordinary display rounding (0.1 mm or 0.01 degree) would produce zero. Otherwise
+reference rounding is unchanged. This preserves valid evidence for downstream positive-sigma
+admission without inventing a minimum uncertainty or changing original records and fusion weights.
+`tests/evidence.rs` covers whole-document replay, source entries and independent-source fusion.
+
 Readiness checks bodices, set-in sleeves, trousers, gathered trousers and hats, including
 pass-over, closed-cuff, nappy and elastic-waist options. Missing, conflicting, prior-only and
 overly uncertain required evidence blocks readiness; optional evidence yields advisories.

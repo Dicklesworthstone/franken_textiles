@@ -49,6 +49,9 @@ fn body_report(wearer: &Wearer, fit: &TapeFit) -> Value {
                 json!({
                     "target_mm": r.target_mm, "body_mm": r.body_mm,
                     "residual_mm": r.body_mm - r.target_mm,
+                    "sigma_mm": r.sigma_mm,
+                    "effective_sigma_mm": r.effective_sigma_mm,
+                    "normalized_residual": (r.body_mm - r.target_mm) / r.effective_sigma_mm,
                 }),
             )
         })
@@ -102,7 +105,8 @@ pub fn inspect_body(
             return Err("the body check needs the wearer's age (months)".into());
         }
         let wearer = Wearer::from_measurements(&data).map_err(|e| e.message)?;
-        let fit = fit_tape(model, &wearer, &tape_targets(&data), &Pose::drape())
+        let targets = tape_targets(&data).map_err(|e| e.message)?;
+        let fit = fit_tape(model, &wearer, &targets, &Pose::drape())
             .map_err(|e| e.message)?;
         body_report(&wearer, &fit)
     };
@@ -246,7 +250,8 @@ fn fold_on_source(
         (shape.params, Value::Object(description))
     } else {
         let wearer = Wearer::from_measurements(measurements).map_err(m)?;
-        let fit = fit_tape(model, &wearer, &tape_targets(measurements), &pose).map_err(m)?;
+        let targets = tape_targets(measurements).map_err(m)?;
+        let fit = fit_tape(model, &wearer, &targets, &pose).map_err(m)?;
         progress(&format!(
             "body: fitted in {} iterations, {:.2} kg",
             fit.iterations, fit.mass_kg
@@ -314,11 +319,15 @@ mod tests {
                     name: "chest".into(),
                     target_mm: 102.0,
                     body_mm: 100.0004,
+                    sigma_mm: Some(12.0),
+                    effective_sigma_mm: 12.0,
                 },
                 TapeResidual {
                     name: "arm_length".into(),
                     target_mm: 200.0,
                     body_mm: 200.0000000003,
+                    sigma_mm: None,
+                    effective_sigma_mm: 2.0,
                 },
             ],
             free: std::array::from_fn(|_| 0.0),
@@ -332,6 +341,12 @@ mod tests {
             assert_eq!(row["target_mm"], r.target_mm);
             assert_eq!(row["body_mm"], r.body_mm);
             assert_eq!(row["residual_mm"], r.body_mm - r.target_mm);
+            assert_eq!(row["sigma_mm"], json!(r.sigma_mm));
+            assert_eq!(row["effective_sigma_mm"], r.effective_sigma_mm);
+            assert_eq!(
+                row["normalized_residual"],
+                (r.body_mm - r.target_mm) / r.effective_sigma_mm
+            );
         }
         assert!(got["fit"]["tape"]["chest"]["residual_mm"].as_f64().unwrap() < 0.0);
         assert!(

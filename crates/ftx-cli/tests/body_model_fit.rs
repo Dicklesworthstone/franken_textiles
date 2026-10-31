@@ -120,7 +120,7 @@ fn unmeasured_readings_come_back_as_model_fit() {
     let fit = ftx_body::fit_tape(
         &model,
         &wearer,
-        &ftx_body::tape_targets(&data),
+        &ftx_body::tape_targets(&data).unwrap(),
         &Pose::drape(),
     )
     .unwrap();
@@ -136,7 +136,9 @@ fn unmeasured_readings_come_back_as_model_fit() {
             check["body"]["fit"]["tape"][&residual.name],
             json!({
             "target_mm":residual.target_mm,"body_mm":residual.body_mm,
-            "residual_mm":residual.body_mm-residual.target_mm})
+            "residual_mm":residual.body_mm-residual.target_mm,
+            "sigma_mm":residual.sigma_mm,"effective_sigma_mm":residual.effective_sigma_mm,
+            "normalized_residual":(residual.body_mm-residual.target_mm)/residual.effective_sigma_mm})
         );
     }
     if let Some(dir) = std::env::var_os("FTX_BODY_CHECK_PRODUCTION_DIR") {

@@ -917,7 +917,7 @@ impl SurfaceHistory {
                     "The mechanical_coupling uses these exact reference-owned remaining and incoming/outgoing masses. Its independent prescribed-velocity model retains momentum, bulk energy and inelastic mixing dissipation. This thermal ledger contains sensible and latent enthalpy only; it receives no inferred mixing heat or wet-property change."
                 );
             }
-            if coupling["schema"] == "ftx-coupled-liquid-mechanics-result/6" {
+            if result["mechanical_coupling"]["schema"] == "ftx-coupled-liquid-mechanics-result/6" {
                 result["scope"] = json!(
                     "First-order accepted-step liquid exchange with scheduled phase-specific incoming velocities and qualified outgoing recoil. Incoming supply and condensation mix once with the previous welded mass. Evaporation and drainage then leave at their independently scheduled velocities relative to the post-mixing cloth, and retained cloth/liquid recoils to conserve momentum. Bulk outgoing kinetic energy, incoming mixing dissipation and nonnegative outgoing separation work remain explicit mechanical boundary terms, separate from thermal sensible/latent heat. Whole-motion failure rolls back every history. No inferred jet-pressure law, runoff direction, wet constitutive law or empirical garment claim."
                 );

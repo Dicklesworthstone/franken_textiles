@@ -4189,7 +4189,8 @@ test('primary workshop preserves signed body-fit precision, escapes targets and 
   p.e.foldGo.handlers.click();request=p.last('fold').request;
   const residual=100.0004-100;
   const report={settled:true,gating:[],body:{provenance:'MODEL_FIT',mass_kg:10.0003,fit:{
-    tape:{chest:{target_mm:100,body_mm:100.0004,residual_mm:residual},
+    tape:{chest:{target_mm:100,body_mm:100.0004,residual_mm:residual,
+      sigma_mm:7.5,effective_sigma_mm:7.5,normalized_residual:residual/7.5},
       '<img src=x onerror=boom>':{target_mm:100,body_mm:99.9996,residual_mm:-0.0004},
       unavailable:{target_mm:null}},
     weight_kg:{target_kg:10.0001,body_kg:10.0003,residual_kg:10.0003-10.0001}}}};
@@ -4198,6 +4199,9 @@ test('primary workshop preserves signed body-fit precision, escapes targets and 
   const html=p.e.foldSummary.innerHTML;
   assert.match(html,/MODEL_FIT/);assert.ok(html.includes('+'+String(residual)));
   assert.ok(html.includes('100.0004'));assert.ok(html.includes('-0.0004'));
+  assert.match(html,/Supplied σ mm/);assert.match(html,/Residual \/ fit scale/);
+  assert.ok(html.includes('+'+String(residual/7.5)));assert.ok(html.includes('>7.5<'));
+  assert.match(html,/not supplied/);assert.match(html,/diagnostics, not confidence intervals/);
   assert.ok(html.includes('&lt;img'));assert.equal(html.includes('<img src=x'),false);
   assert.ok((html.match(/unavailable/g)||[]).length>=3);
   assert.ok(html.includes('+'+String(10.0003-10.0001)));
@@ -4219,9 +4223,11 @@ test('primary workshop retains exact accepted-fit sources and invalidates replac
   p.e.foldGo.handlers.click();const msg=p.last('fold');
   assert.equal(msg.bodyFit,raw);assert.equal(msg.bodyFitConsent,true);assert.equal(msg.armDeg,50);
   const report={settled:true,body:{mass_kg:9,shape_source:{kind:'accepted_multi_frame_fit'},
-    measurement_comparison:[{name:'chest',target_mm:100,body_mm:100.0001,residual_mm:0.0001}]}};
+    measurement_comparison:[{name:'chest',target_mm:100,body_mm:100.0001,residual_mm:0.0001,sigma_mm:4.5}]}};
   p.emit({type:'folded',request:msg.request,report,reportText:JSON.stringify(report),viewer:'<html/>',bodyFitText:raw});
   assert.match(p.e.foldSummary.innerHTML,/without refitting/);assert.match(p.e.foldSummary.innerHTML,/\+0\.0001/);
+  assert.ok(p.e.foldSummary.innerHTML.includes('>4.5<'));
+  assert.equal(p.e.foldSummary.innerHTML.includes('Residual / fit scale'),false);
   assert.match(p.e.foldSummary.innerHTML,/Original accepted body fit/);
   assert.ok((await Promise.all([...p.live.values()].map(b=>b.text()))).includes(raw));
   assert.equal(p.e.resStatus.textContent,readiness);

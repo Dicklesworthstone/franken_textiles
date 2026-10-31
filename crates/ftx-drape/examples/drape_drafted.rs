@@ -81,8 +81,8 @@ fn main() {
         .unwrap_or_else(|r| panic!("{r}"));
     let wearer = Wearer::from_measurements(meas).unwrap_or_else(|r| panic!("{r}"));
     let pose = Pose::drape();
-    let fit =
-        fit_tape(&model, &wearer, &tape_targets(meas), &pose).unwrap_or_else(|r| panic!("{r}"));
+    let fit = fit_tape(&model, &wearer, &tape_targets(meas).unwrap(), &pose)
+        .unwrap_or_else(|r| panic!("{r}"));
     let rest = model.rest(&fit.params).unwrap();
     let posed = model
         .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())

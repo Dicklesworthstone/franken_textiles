@@ -487,12 +487,18 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     const number = (v, signed = false) => typeof v === "number" && Number.isFinite(v)
       ? (signed && v > 0 ? "+" : "") + esc(v) : "unavailable";
     const rows = Object.entries(tape).map(([name, r]) => `<tr><td>${esc(human(name))}</td>`
-      + `<td>${number(r?.target_mm)}</td><td>${number(r?.body_mm)}</td><td>${number(r?.residual_mm, true)}</td></tr>`).join("");
+      + `<td>${number(r?.target_mm)}</td><td>${number(r?.body_mm)}</td><td>${number(r?.residual_mm, true)}</td>`
+      + `<td>${r?.sigma_mm == null ? "not supplied" : number(r.sigma_mm)}</td>`
+      + (imported ? "" : `<td>${number(r?.effective_sigma_mm)}</td><td>${number(r?.normalized_residual, true)}</td>`)
+      + "</tr>").join("");
     const weight = body.fit?.weight_kg;
     return `<details open><summary>Body-fitting residuals (MODEL_FIT)</summary>`
       + (imported ? "<p>Accepted image-fit shape reused without refitting. Image poses are not reused. Original image residuals remain in the saved report; the table compares current supplied targets.</p>" : "")
       + `<p>Body predictions are model estimates. Supplied targets may include chart priors; these differences do not establish measurement readiness or physical fit.</p>`
-      + (rows ? `<div class="scroll"><table><tr><th>Supplied target</th><th>Target mm</th><th>Body mm (MODEL_FIT)</th><th>Body − target mm</th></tr>${rows}</table></div>` : "<p>No supplied tape targets.</p>")
+      + (rows ? `<div class="scroll"><table><tr><th>Supplied target</th><th>Target mm</th><th>Body mm (MODEL_FIT)</th><th>Body − target mm</th><th>Supplied σ mm</th>`
+        + (imported ? "" : "<th>Fit scale mm</th><th>Residual / fit scale</th>")
+        + `</tr>${rows}</table></div>` : "<p>No supplied tape targets.</p>")
+      + (imported ? "" : "<p>The fit scale is the larger of supplied uncertainty and the existing tape-fitting tolerance. Missing uncertainty uses that tolerance. Scaled residuals are diagnostics, not confidence intervals.</p>")
       + `<p>Model mass: ${number(body.mass_kg)} kg.</p>`
       + (weight ? `<p>Supplied weight: ${number(weight.target_kg)} kg; model: ${number(weight.body_kg)} kg; body − target: ${number(weight.residual_kg, true)} kg.</p>` : "")
       + "</details>";

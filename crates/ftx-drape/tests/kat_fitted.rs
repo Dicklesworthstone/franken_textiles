@@ -46,7 +46,7 @@ fn drape_result(
     let fit = fit_tape(
         model,
         &Wearer::from_measurements(meas).unwrap(),
-        &tape_targets(meas),
+        &tape_targets(meas).unwrap(),
         &pose,
     )
     .unwrap();
@@ -115,7 +115,7 @@ fn clothing_proxy_retains_source_vertices_and_passes_strict_admission() {
     let fit = fit_tape(
         &model,
         &Wearer::from_measurements(meas).unwrap(),
-        &tape_targets(meas),
+        &tape_targets(meas).unwrap(),
         &pose,
     )
     .unwrap();
@@ -349,7 +349,7 @@ fn kat9_fitted_pipeline_digest() {
     let fit = fit_tape(
         &model,
         &Wearer::from_measurements(meas).unwrap(),
-        &tape_targets(meas),
+        &tape_targets(meas).unwrap(),
         &pose,
     )
     .unwrap();

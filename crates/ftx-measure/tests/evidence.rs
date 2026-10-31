@@ -1,7 +1,7 @@
 //! Known answers from spec 02 D.5, plus refusal and boundary regressions. All values synthetic.
 
 use ftx_measure::{
-    NAMES, canonical_name, catalogue, date_day, definition, fuse_one, make_record,
+    NAMES, canonical_name, catalogue, date_day, definition, fuse, fuse_one, make_record,
     normalize_record, parse_value, validate,
 };
 use serde_json::{Value, json};
@@ -90,6 +90,43 @@ fn independent_sources_and_optional_prior_match_d5() {
     let f = fuse_one("chest", &[tape], Some(&p), true).unwrap().unwrap();
     assert_eq!(f["value_mm"], 549.0);
     assert_eq!(f["sigma_mm"], 9.5);
+}
+
+#[test]
+fn fusion_preserves_positive_uncertainty_below_display_precision() {
+    for (name, value, sigma, displayed, key) in [
+        ("chest", 550.0, 0.01, 0.01, "sigma_mm"),
+        ("chest", 550.0, 1e-200, 1e-200, "sigma_mm"),
+        ("shoulder_slope_deg", 18.0, 0.001, 0.001, "sigma_deg"),
+        ("chest", 550.0, 1.234, 1.2, "sigma_mm"),
+    ] {
+        let data = json!({"schema":"fabric-measurements/1", "wearer":{},
+            "records":[record(name, value, sigma, "MEASURED_TAPE")]});
+        let fused = fuse(&data, false).unwrap();
+        assert_eq!(fused["records"], data["records"]);
+        assert_eq!(fused["fused"][name][key], displayed);
+        assert_eq!(fused["fused"][name]["sources"][0][key], displayed);
+        let saved: Value = serde_json::from_str(&fused.to_string()).unwrap();
+        assert_eq!(fuse(&saved, false).unwrap(), fused);
+    }
+
+    let fused = fuse_one(
+        "chest",
+        &[
+            chest(550.0, 0.01, "MEASURED_TAPE"),
+            chest(550.0, 0.01, "PHOTO_ESTIMATED"),
+        ],
+        None,
+        false,
+    )
+    .unwrap()
+    .unwrap();
+    let expected = 0.01 / 2.0_f64.sqrt();
+    assert_eq!(fused["sigma_mm"], expected);
+    for source in fused["sources"].as_array().unwrap() {
+        assert_eq!(source["sigma_mm"], 0.01);
+        assert_eq!(source["weight"], 0.5);
+    }
 }
 
 #[test]

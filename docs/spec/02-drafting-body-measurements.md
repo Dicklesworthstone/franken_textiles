@@ -514,6 +514,11 @@ Repeats never shrink σ below the stated value (they are not treated as independ
 #### A.6.3 `fuse_one(name, observations, prior, use_prior)`
 
 Rounding: values and σ to 1 decimal (2 for degrees); weights to 4 decimals.
+Native exception `fusion-positive-sigma`: when that rounding would turn a finite positive σ into
+zero, retain the actual unrounded σ in both the fused entry and its source entries. The reference's
+rounding otherwise erases valid uncertainty (for example, 0.01 mm), which then contradicts positive-σ
+admission in downstream body fitting. Ordinary nonzero rounded values are unchanged; no minimum σ
+or new uncertainty is invented. Original records and fusion calculations remain unchanged.
 1. Collapse repeats (flags carried).
 2. Bounds: the prior's `p1_p99` if present, else prior value ± 2.326 × prior σ.
 3. No observations and no prior → no entry.
