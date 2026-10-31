@@ -648,6 +648,21 @@ The complete mechanical policy participates in protocol comparability whenever a
 motion; changes to velocity or its source cannot silently compare as the same experiment.
 Static drape and manufacturing-only consumers retain their independent protocol identities.
 
+Water version 4 additionally admits independently qualified, stock-limited prescribed drainage.
+Its complete supply and drainage schedules bind every retained instance and physical interval;
+condensation remains optional and independently qualified. Reference area owns drainage demand.
+Admission integrates that demand without rerunning transport, reconciles separate evaporated and
+drained inventories per patch and sample, bounds liquid sensible export by the qualified temperature
+domain, and includes it exactly once in the combined energy ledger without latent energy.
+`textile_water_drained_mass_kg` is a nominal admitted objective with no inferred statistical bounds.
+All four incoming mechanical models retain their existing schema and velocity law, including
+separate supplied-liquid/condensed-vapor velocities in `/4`. Their full `drained_liquid_mass_kg`
+and compact `drained_liquid_kg` fields are present only for admitted drainage, including zero at
+initial admission. Evaporation retains its own counter; aggregate outgoing mass equals evaporation
+plus drainage, with co-moving bulk export after incoming mixing. Missing phase fields, invented
+enthalpy, demand excess or stale source policy refuse the dependent comparison. The complete
+water request already binds the drainage source and schedule in protocol comparability.
+
 **Scoped material-direction requirements.** `material_strain` and `motion_material_strain` admit raw
 dimensionless `[E11, E22, 2E12]` from the production membrane frame. Six static signed min/max metrics
 cover warp, weft and engineering shear; the `motion_` prefix requires the initial state and every

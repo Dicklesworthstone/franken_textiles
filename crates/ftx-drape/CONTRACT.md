@@ -155,7 +155,7 @@ energy to the existing outgoing ledger. Dry cloth and accessory receipts remain 
 thermal/water state, material histories and numerical caches together. Tests cover growing-mass
 analytic convergence, simultaneous nonuniform flow, next-substep feedback, condensation/re-evaporation,
 late failure with attached trim, and actual native/portable named-case objective admission.
-Drainage, relative flow velocity, noninvariant wet laws and measured wet-garment qualification
+Relative outgoing flow velocity, noninvariant wet laws and measured wet-garment qualification
 remain outside this bounded coupling.
 
 `ftx-coupled-liquid-mechanics/2` additionally qualifies one finite incoming world velocity per
@@ -179,7 +179,7 @@ Phase mass must reconcile to aggregate incoming mass before mutation. Opposing m
 not cancel incoming kinetic energy or nonnegative mixing loss. Result schema `/4` retains the
 qualification and existing separate mechanical ledger. Independent known answers, Galilean and
 whole-motion rollback tests and native/portable named-case replay cover this numerical closure.
-Phase-specific time-varying streams, drainage, pinned-coordinate impulses, heat deposition and
+Phase-specific time-varying streams, pinned-coordinate impulses, heat deposition and
 empirical wet-garment claims remain open.
 
 Published schema `ftx-coupled-liquid-mechanics/3`, model `scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1`,
@@ -192,6 +192,16 @@ directions affects actual solver velocity and the next cloth step. Complete sche
 native/portable study receipts, comparison protocols and browser reports. No interpolation,
 rain direction, separate liquid/vapor velocities or new wet-material qualification is inferred.
 Phase-specific streams stay on schema `/4` and result `/4`. Scheduled intervals stay on schema `/3` and result `/3`. Their fields cannot be combined. Each result retains the full exact qualification.
+
+All four incoming exchange models additionally admit explicitly qualified water `/4` drainage.
+Accepted thermal increments preserve evaporation and liquid drainage separately while their sum
+updates reference-owned inertia and exports co-moving momentum, kinetic and gravitational energy
+after incoming mixing. Optional `drained_liquid_mass_kg` (full) and `drained_liquid_kg` (summary)
+include initialization zero only when drainage is admitted. Evaporation fields retain vapor mass;
+`exchange.outgoing_mass_kg` includes both outgoing phases. Missing/malformed phase ledgers refuse
+atomically. Evaporation-only qualification still rejects drainage. Independent conservation and
+whole-motion late-refusal replay cover the numerical closure, including scheduled and separate
+liquid/vapor incoming velocities; these are not measured wet-textile qualifications.
 
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
@@ -693,6 +703,21 @@ Comparison admission checks the complete source/material/patch inventory and rec
 enthalpy from each interval's condensed mass and declared vapor temperature. Existing v1/v2
 positive-only semantics remain unchanged. Analytic warming, dry/wet reversals, reference-area
 accounting, time refinement, rollback and native/portable scenario replay qualify software only.
+
+**Source-qualified prescribed drainage** (`study::heat::surface_water`, `ftx-vc2`).
+Version 4 requires separately sourced liquid supply and drainage, and optionally admits the same
+condensation qualification as version 3. Per-instance, per-keyframe drainage demand uses reference
+area; evaporation still uses current area. Evaporation and drainage share incoming flow in their
+potential-rate ratio at empty stock, and joint dryout splits the complete available inventory
+without inventing or losing a positive phase. Remaining liquid capacity enters the actual implicit
+thermal solve. Drained liquid exports sensible enthalpy at the old inner-cell temperature and
+declared reference, with no latent term. Final/sample/patch result `/4` adds drained mass and liquid
+sensible export, preserving vapor and condensation ledgers. Insufficient drainage still refuses
+qualified maximum-loading overflow; it never invents runoff. Full rollback, independent phase and
+energy balances, source admission, and the `textile_water_drained_mass_kg` decision metric cover
+this prescribed numerical capability. Gravity runoff, capillarity, wet constitutive changes and
+empirical whole-garment fit remain outside it. Water `/1`–`/3` reject drainage fields and retain
+their published behavior.
 
 **Qualified centerline thermal bridges** (`thermal::steady::coverage::bridges`).
 

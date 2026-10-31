@@ -767,6 +767,200 @@ fn exchanging_case(condensation: bool) -> (Alternative, Value, Value, Value) {
     (a, d, s, m)
 }
 
+fn draining_case(condensation: bool) -> (Alternative, Value, Value, Value) {
+    let (a, mut d, s, mut m) = exchanging_case(condensation);
+    let h = &mut m["transient_surface"]["result"];
+    let policy = &mut h["request"]["surface_water"];
+    policy["schema"] = json!("ftx-textile-surface-water/4");
+    policy["drainage"] = json!({"schema":"ftx-textile-liquid-drainage/1",
+        "bindings":{"front":{"rate_kg_m2_s":[4e-6]},"back":{"rate_kg_m2_s":[0.]}},
+        "source":{"reference":"test:prescribed-drainage","accessed_on":"2026-10-31",
+            "note":"Synthetic drainage accounting, not empirical runoff evidence"},
+        "evidence":"estimate","allow_estimates":true,"method":"Prescribed synthetic liquid export",
+        "qualification":"Stock-limited co-moving drainage at old inner-cell temperature; proportional demand sharing on empty cloth"});
+    h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+    // Reclassify part of the independently balanced outgoing mass as liquid. Its sensible
+    // enthalpy is unchanged, but it has no evaporative latent term.
+    let drained = 4e-6 * 0.001;
+    let evaporated = h["surface_water"]["evaporated_liquid_kg"].as_f64().unwrap() - drained;
+    let sensible = drained * 4200. * 20.;
+    let net = h["net_boundary_energy_j"].as_f64().unwrap() - drained * 2500000.;
+    for path in ["/surface_water", "/trace/0/surface_water"] {
+        let row = h.pointer_mut(path).unwrap();
+        row["schema"] = json!("ftx-textile-surface-water-result/4");
+        row["drained_liquid_kg"] = json!(drained);
+        row["exported_liquid_sensible_energy_j"] = json!(sensible);
+        row["evaporated_liquid_kg"] = json!(evaporated);
+        row["latent_energy_j"] = json!(evaporated * 2500000.);
+        row["exported_vapor_sensible_energy_j"] = json!(evaporated * 4200. * 20.);
+    }
+    for (index, patch) in h["surface_water"]["patches"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        patch["drained_liquid_kg"] = json!(if index == 0 { drained } else { 0. });
+        patch["exported_liquid_sensible_energy_j"] = json!(if index == 0 { sensible } else { 0. });
+        patch["evaporated_liquid_kg"] = json!(if index == 0 { evaporated } else { 0. });
+    }
+    h["net_boundary_energy_j"] = json!(net);
+    h["outside_energy_j"] = json!(-net);
+    h["trace"][0]["net_boundary_energy_j"] = json!(net);
+    h["trace"][0]["outside_energy_j"] = json!(-net);
+    h["trace"][0]["mechanical_coupling"]["drained_liquid_kg"] = json!(drained);
+    h["trace"][0]["mechanical_coupling"]["evaporated_liquid_kg"] = json!(evaporated);
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    for path in [
+        "/liquid_mechanics",
+        "/transient_surface/result/mechanical_coupling",
+    ] {
+        let report = m.pointer_mut(path).unwrap();
+        report["drained_liquid_mass_kg"] = json!(drained);
+        report["evaporated_liquid_mass_kg"] = json!(evaporated);
+    }
+    m["initial_sample"]["liquid_mechanics"]["drained_liquid_mass_kg"] = json!(0.);
+    (a, d, s, m)
+}
+
+#[test]
+fn drainage_retains_separate_liquid_enthalpy_and_both_mechanical_outflow_channels() {
+    for condensation in [false, true] {
+        for incoming_model in 0..4 {
+            let (a, mut d, s, mut m) = draining_case(condensation);
+            match incoming_model {
+                1 => prescribe_incoming_velocity(&mut d, &mut m),
+                2 => schedule_incoming_velocity(&mut d, &mut m),
+                3 => qualify_incoming_velocities(&mut d, &mut m, true),
+                _ => {}
+            }
+            let heat = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap_or_else(|r| {
+                panic!("condensation={condensation} incoming_model={incoming_model}: {r:?}")
+            });
+            let admitted = Numerical {
+                cutting_program: None,
+                finite_stock_program: None,
+                cutting_job_program: None,
+                drape: &s,
+                material_strain: None,
+                contact_loads: None,
+                vapor_surface: &Value::Null,
+                vapor_coverage: None,
+                motion: &m,
+                motion_material_strain: None,
+                motion_contact_loads: None,
+                motion_vapor_coverage: None,
+                motion_wet_film: None,
+                transient_surface: Some(heat),
+                transient_coverage: None,
+            };
+            let metric = Metric::TextileWaterDrainedMassKg;
+            assert_eq!(metric.consumer(), Consumer::TransientSurface);
+            assert_eq!(metric.unit(None), "kg");
+            assert!(!metric.supports_bounds());
+            assert_eq!(metric.value(&a, &admitted), Some(4e-6 * 0.001));
+            assert_eq!(
+                serde_json::to_value(metric).unwrap(),
+                "textile_water_drained_mass_kg"
+            );
+            let water = &m["transient_surface"]["result"]["surface_water"];
+            let mechanics = &m["liquid_mechanics"];
+            assert_eq!(
+                mechanics["drained_liquid_mass_kg"],
+                water["drained_liquid_kg"]
+            );
+            assert!(near(
+                mechanics["exchange"]["outgoing_mass_kg"].as_f64().unwrap(),
+                water["evaporated_liquid_kg"].as_f64().unwrap()
+                    + water["drained_liquid_kg"].as_f64().unwrap(),
+                1e-8
+            ));
+            assert_eq!(
+                water["latent_energy_j"].as_f64().unwrap(),
+                water["evaporated_liquid_kg"].as_f64().unwrap() * 2500000.
+            );
+        }
+    }
+}
+
+#[test]
+fn drainage_requires_source_complete_schedules_and_consistent_phase_ledgers() {
+    for mutation in 0..14 {
+        let (a, mut d, s, mut m) = draining_case(true);
+        let h = &mut m["transient_surface"]["result"];
+        match mutation {
+            0 => h["request"]["surface_water"]["drainage"]["source"] = Value::Null,
+            1 => h["request"]["surface_water"]["drainage"]["qualification"] = json!(" "),
+            2 => h["request"]["surface_water"]["drainage"]["allow_estimates"] = json!(false),
+            3 => {
+                h["request"]["surface_water"]["drainage"]["bindings"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("back");
+            }
+            4 => {
+                h["request"]["surface_water"]["drainage"]["bindings"]["front"]["rate_kg_m2_s"] =
+                    json!([4e-6, 4e-6])
+            }
+            5 => {
+                h["request"]["surface_water"]["drainage"]["bindings"]["front"]["rate_kg_m2_s"] =
+                    json!([-1.])
+            }
+            6 => h["request"]["surface_water"]["schema"] = json!("ftx-textile-surface-water/3"),
+            7 => {
+                h["request"]["surface_water"]["drainage"]["bindings"]["front"]["rate_kg_m2_s"] =
+                    json!([1e-6])
+            }
+            8 => h["surface_water"]["patches"][0]["evaporated_liquid_kg"] = json!(1e-8),
+            9 => h["surface_water"]["patches"][0]["exported_liquid_sensible_energy_j"] = json!(1.),
+            10 => {
+                h["trace"][0]["surface_water"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("drained_liquid_kg");
+            }
+            11 => h["mechanical_coupling"]["drained_liquid_mass_kg"] = json!(0.),
+            12 => h["mechanical_coupling"]["evaporated_liquid_mass_kg"] = json!(1e-8),
+            13 => h["mechanical_coupling"]["exchange"]["outgoing_mass_kg"] = json!(6e-9),
+            _ => unreachable!(),
+        }
+        h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+        d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "mutation={mutation}"
+        );
+    }
+}
+
+#[test]
+fn drainage_demand_respects_reference_area_and_every_physical_interval() {
+    let (_, _, _, m) = draining_case(false);
+    let water = &m["transient_surface"]["result"]["request"]["surface_water"];
+    let mut request = water["drainage"].clone();
+    request["bindings"]["front"]["rate_kg_m2_s"] = json!([2., 0., 4.]);
+    request["bindings"]["back"]["rate_kg_m2_s"] = json!([0., 3., 1.]);
+    let motion = json!({"duration_s":6.,"keyframes":[{"time_s":1.},{"time_s":3.},{"time_s":6.}]});
+    let drainage =
+        Drainage::new(&request, water["bindings"].as_object().unwrap(), &motion).unwrap();
+    let areas = BTreeMap::from([("front", 0.25), ("back", 0.5)]);
+    assert_eq!(drainage.integral("front", 0., 6.).unwrap(), 14.);
+    assert_eq!(drainage.integral("back", 0., 6.).unwrap(), 9.);
+    assert_eq!(drainage.demand(&areas, 0., 6.).unwrap(), 8.);
+    assert_eq!(drainage.demand(&areas, 0.5, 4.).unwrap(), 4.75);
+    assert_eq!(drainage.demand(&areas, 1., 3.).unwrap(), 3.);
+    assert_eq!(drainage.demand(&areas, 6., 6.).unwrap(), 0.);
+    for (from, to) in [
+        (-1., 1.),
+        (2., 1.),
+        (0., 7.),
+        (f64::NAN, 1.),
+        (0., f64::INFINITY),
+    ] {
+        assert!(drainage.demand(&areas, from, to).is_err());
+    }
+}
+
 fn prescribe_incoming_velocity(d: &mut Value, m: &mut Value) {
     qualify_incoming_velocities(d, m, false);
 }

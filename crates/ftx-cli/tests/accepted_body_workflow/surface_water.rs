@@ -781,6 +781,97 @@ fn condensation_and_reevaporation_replay_through_actual_selected_body_decisions(
 }
 
 #[test]
+fn drained_textile_water_replays_in_native_portable_and_named_case_decisions() {
+    let (pattern, mut study, mut single) = inputs();
+    let water = &mut single["motion"]["transient_surface"]["surface_water"];
+    water["schema"] = json!("ftx-textile-surface-water/4");
+    water
+        .as_object_mut()
+        .unwrap()
+        .remove("replenishment_kg_m2_s");
+    water["bindings"]["band"]["initial_liquid_kg_m2"] = json!(0.02);
+    water["maximum_liquid_loading_kg_m2"] = json!(0.1);
+    water["qualification"] =
+        json!("Synthetic fixed dry thermal and vapor laws across [-20,80] C and [0,0.1] kg/m2");
+    water["supply"] = json!({"schema":"ftx-textile-liquid-supply/1",
+        "bindings":{"band":{"rate_kg_m2_s":[0.02],"temperature_c":[30.]}},
+        "source":{"reference":"test:drained-selected-body-feed","accessed_on":"2026-10-30",
+            "note":"Synthetic liquid delivery for replay, not measured wearer transfer"},
+        "evidence":"estimate","allow_estimates":true,"method":"Prescribed reference-area feed"});
+    water["drainage"] = json!({"schema":"ftx-textile-liquid-drainage/1",
+        "bindings":{"band":{"rate_kg_m2_s":[0.01]}},
+        "source":{"reference":"test:drained-selected-body-outflow","accessed_on":"2026-10-30",
+            "note":"Synthetic prescribed outflow, not measured textile runoff"},
+        "evidence":"estimate","allow_estimates":true,"method":"Independent reference-area removal",
+        "qualification":"Co-moving stock-limited drainage at old inner-cell temperature; proportional evaporation and drainage at empty stock"});
+    study["comparison"]["objectives"] = json!([
+        {"metric":"textile_water_drained_mass_kg","direction":"minimize"}]);
+    study["comparison"]["constraints"][0] =
+        json!({"metric":"textile_water_remaining_mass_kg","minimum":0.});
+    qualify_mechanics(&pattern, &study, &mut single, true);
+    replay(
+        &pattern,
+        &study,
+        single,
+        "FTX_DRAINED_WATER_MECHANICS_REPLAY",
+        |report| {
+            let simulated = &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
+            let motion = &simulated["motion"]["result"];
+            let heat = &motion["transient_surface"]["result"];
+            let water = &heat["surface_water"];
+            let mechanics = &motion["liquid_mechanics"];
+            assert_eq!(water["schema"], "ftx-textile-surface-water-result/4");
+            assert_eq!(heat["mechanical_coupling"], *mechanics);
+            let evaporated = water["evaporated_liquid_kg"].as_f64().unwrap();
+            let drained = water["drained_liquid_kg"].as_f64().unwrap();
+            assert!(evaporated > 0. && drained > 0.);
+            assert!(
+                (mechanics["evaporated_liquid_mass_kg"].as_f64().unwrap() - evaporated).abs()
+                    < 1e-14
+            );
+            assert!(
+                (mechanics["drained_liquid_mass_kg"].as_f64().unwrap() - drained).abs() < 1e-14
+            );
+            assert!(
+                (mechanics["exchange"]["outgoing_mass_kg"].as_f64().unwrap()
+                    - evaporated
+                    - drained)
+                    .abs()
+                    < 1e-14
+            );
+            for sample in heat["trace"].as_array().unwrap() {
+                let w = &sample["surface_water"];
+                let e = w["evaporated_liquid_kg"].as_f64().unwrap();
+                let d = w["drained_liquid_kg"].as_f64().unwrap();
+                let balance = w["remaining_liquid_kg"].as_f64().unwrap() + e + d
+                    - w["initial_liquid_kg"].as_f64().unwrap()
+                    - w["supplied_liquid_kg"].as_f64().unwrap();
+                assert!(balance.abs() < 1e-14);
+                assert!(
+                    (sample["mechanical_coupling"]["drained_liquid_kg"]
+                        .as_f64()
+                        .unwrap()
+                        - d)
+                        .abs()
+                        < 1e-14
+                );
+                assert!(sample["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+            }
+            assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+            assert_eq!(
+                keyed(&report["comparison"]["alternatives"], "qualified")["readings"]["textile_water_drained_mass_kg"]
+                    ["value"],
+                water["drained_liquid_kg"]
+            );
+            assert_eq!(
+                keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"]["status"],
+                "refused"
+            );
+        },
+    );
+}
+
+#[test]
 fn supplied_textile_water_replays_in_native_commands_and_portable_scenario_matrices() {
     let (pattern, mut study, mut single) = inputs();
     single["material_strain"] = json!({"schema":"ftx-material-strain/1",

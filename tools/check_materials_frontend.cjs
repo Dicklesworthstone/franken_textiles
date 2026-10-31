@@ -2138,6 +2138,23 @@ test('routed specialist cells show actual operations, serialized garment transfe
       assert.match(visibleText(s),/Feasible replacement baseline/);
       routing.optimality_proven=true; routing.budget_exhausted=false; routing.baseline_replaced=false;
     }
+    routing.optimality_proven=false;
+    routing.thread_order_search={currency:'USD',selected_order_cost:0,completion_deadline_milliseconds:12600,
+      order_evaluations:7,unresolved_assignments:0,order_budget_exhausted:false,optimality_proven:true};
+    await p.e[op].onclick();p.emit(report);
+    assert.deepEqual(plain(table('routed thread-order cost and proof').children[2].children.map(n=>n.textContent)),
+      ['USD','0','12.6','7','0','No','Yes']);
+    assert.match(visibleText(s),/Minimum selected thread order cost proved/);
+    assert.match(visibleText(s),/minimum completion time is not proved/);
+    assert.match(visibleText(s),/Cost proof and minimum completion-time proof are independent/);
+    routing.thread_order_search={currency:'USD',selected_order_cost:null,order_evaluations:1,
+      unresolved_assignments:2,order_budget_exhausted:true,optimality_proven:false};
+    await p.e[op].onclick();p.emit(report);
+    assert.deepEqual(plain(table('routed thread-order cost and proof').children[2].children.map(n=>n.textContent)),
+      ['USD','Unavailable','None declared','1','2','Yes','No']);
+    assert.match(visibleText(s),/minimum selected thread order cost is not proved/);
+    assert.match(visibleText(s),/order search reached its declared evaluation limit/);
+    delete routing.thread_order_search;routing.optimality_proven=true;
     const calendars={model:'nonpreemptive_resource_windows/1',resources:{
       finish:[{start_milliseconds:0,end_milliseconds:5300},{start_milliseconds:6000,end_milliseconds:12600}],
       'one-mover':[{start_milliseconds:0,end_milliseconds:10300}]},source:{note:'<qualified calendar evidence>'}};
@@ -7840,6 +7857,66 @@ test('evaporation and incoming liquid mechanics expose separate mass and bulk tr
   assert.equal(table('A: liquid exchange momentum and energy residuals'),undefined);
   assert.match(visibleText(s),/coupled liquid mechanics left its source domain/);
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('prescribed textile drainage displays separate liquid mass and sensible export and withdraws refused histories', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const report=scenarioReport();
+  const policy={schema:'ftx-textile-surface-water/4',drainage:{schema:'ftx-textile-liquid-drainage/1',
+    bindings:{front:{rate_kg_m2_s:[0.015]}},source:{reference:'<independently qualified drainage source>'},
+    qualification:'Stock-limited co-moving liquid drainage'}};
+  report.scenario.scenario={motion:{transient_surface:{surface_water:policy}}};
+  const evaluation=report.simulations.find(row=>row.key==='A').evaluation.result;
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+  for(const condensation of [false,true]) {
+    const remaining=condensation?0.03:0.025;
+    const water={schema:'ftx-textile-surface-water-result/4',request:policy,
+      initial_liquid_kg:0.05,supplied_liquid_kg:0.01,evaporated_liquid_kg:0.02,drained_liquid_kg:0.015,
+      remaining_liquid_kg:remaining,mass_balance_error_kg:0,dryout_events:0,
+      latent_energy_j:50000,exported_vapor_sensible_energy_j:1680,exported_liquid_sensible_energy_j:1260,
+      liquid_stored_change_j:-1995,supplied_liquid_sensible_energy_j:1260,balance_error_j:0};
+    if(condensation) Object.assign(water,{condensed_liquid_kg:0.005,condensation_latent_energy_j:12500,
+      incoming_vapor_sensible_energy_j:840,liquid_stored_change_j:-1554});
+    const mechanics={schema:'ftx-coupled-liquid-mechanics-result/4',substrate_and_attached_mass_kg:0.2,
+      initial_liquid_mass_kg:0.05,remaining_liquid_mass_kg:remaining,evaporated_liquid_mass_kg:0.02,
+      drained_liquid_mass_kg:0.015,total_inertial_mass_kg:0.2+remaining,mass_balance_residual_kg:0,
+      exported_momentum_kg_m_s:[0.035,0,0],exported_kinetic_energy_j:0.0175,exported_gravitational_energy_j:0,
+      transfer_momentum_residual_kg_m_s:[0,0,0],transfer_kinetic_residual_j:0,transfer_gravitational_residual_j:0,
+      exchange:{incoming_mass_kg:condensation?0.015:0.01,outgoing_mass_kg:0.035,
+        initial_momentum_kg_m_s:[0.05,0,0],initial_kinetic_energy_j:0.025,initial_gravitational_energy_j:0,
+        incoming_momentum_kg_m_s:[condensation?0.015:0.01,0,0],incoming_kinetic_energy_j:condensation?0.0075:0.005,
+        incoming_gravitational_energy_j:0,mixing_dissipation_j:0}};
+    const heat={duration_s:1,thermal_steps:4,trace:[{temperature_range_c:[20,21]}],
+      surface_water:water,mechanical_coupling:mechanics};
+    evaluation.motion=outcome({samples:[{}],keyframes:[],transient_surface:outcome(heat),liquid_mechanics:mechanics});
+    const raw=JSON.stringify(report);
+    await p.e.scenario.onclick();p.emit(report,[{name:'drainage.json',text:raw,mime:'application/json'}],raw);
+    const mass=table(`textile surface liquid — conserved ${condensation?'initial, supplied and condensed':'initial and supplied'} inventory`);
+    assert.deepEqual(plain(mass.children[2].children.map(n=>n.textContent)),
+      ['0.05','0.01',...(condensation?['0.005']:[]),'0.02','0.015',condensation?'0.03':'0.025','0','0']);
+    assert.ok(mass.children[1].children.some(n=>n.textContent==='Drained liquid (kg)'));
+    const energy=table('textile evaporation and sensible energy');
+    assert.equal(energy.children[1].children[2].textContent,'Exported liquid sensible energy (J)');
+    assert.equal(energy.children[2].children[2].textContent,'1260');
+    assert.deepEqual(plain(table('prescribed incoming liquid transfer — separate from thermal energy').children[4].children.map(n=>n.textContent)),
+      ['Outgoing vapor and drained liquid','0.035','0.035, 0, 0','0.0175','0']);
+    assert.match(visibleText(s),/Drained liquid exports sensible enthalpy.*with no latent energy/);
+    assert.match(visibleText(s),/limited by available liquid/);
+    assert.match(visibleText(s),/No overflow or runoff law is inferred/);
+    assert.doesNotMatch(visibleText(s),/Drainage.*remain unsupported/);
+    const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='A: textile liquid source, exact patches and canonical vapor paths (display only)');
+    source.open=true;source.handlers.toggle();assert.match(visibleText(source),/<independently qualified drainage source>/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    const download=descendants(s).find(n=>n.download==='drainage.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+  }
+  evaluation.motion=refused('prescribed drainage left its independently qualified domain');
+  await p.e.scenario.onclick();p.emit(report);
+  assert.equal(table('textile evaporation and sensible energy'),undefined);
+  assert.equal(table('prescribed incoming liquid transfer — separate from thermal energy'),undefined);
+  assert.match(visibleText(s),/prescribed drainage left its independently qualified domain/);
+  p.e.scenarioRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
 });
 
 test('supplied textile water displays delivery and incoming enthalpy separately through rewetting and refusals', async () => {

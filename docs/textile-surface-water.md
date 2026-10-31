@@ -1,4 +1,4 @@
-# Textile-owned free liquid, evaporation and condensation
+# Textile-owned free liquid, evaporation, condensation and drainage
 
 ## Liquid exchange coupled to cloth motion
 
@@ -6,10 +6,11 @@ An optional `motion.transient_surface.mechanical_coupling` qualification connect
 water to ordinary accepted mechanical steps. The original `ftx-evaporating-liquid-mechanics/1`
 qualification remains limited to initial-liquid water `/1` and evaporation. A separate
 `ftx-coupled-liquid-mechanics/1` qualification also admits supplied liquid and condensed vapor,
-using water `/1`, `/2` or `/3`. Both bind every retained material instance and the complete
+using water `/1`, `/2`, `/3` or `/4`, including prescribed liquid drainage in water `/4`.
+Both bind every retained material instance and the complete
 material/interface report, and explicitly qualify frozen membrane, bending and contact behavior
 over the entire thermal temperature and liquid-loading domains. No dry constitutive law is
-silently promoted to a wet law. Drainage, pinned cloth coordinates and material that already
+silently promoted to a wet law. Pinned cloth coordinates and material that already
 contains fixed retained-liquid inertia remain outside these models.
 
 The existing dry drape supplies the initial geometry and velocity. At motion time zero,
@@ -70,7 +71,8 @@ Bidirectional results use `ftx-coupled-liquid-mechanics-result/1`. The existing 
 `exchange` object records cumulative `incoming_mass_kg`, `outgoing_mass_kg`, initial admitted
 liquid momentum/kinetic/gravitational energy, and the corresponding cumulative incoming quantities.
 Each retained thermal trace row includes the same compact mechanical ledger. Its incoming mass
-must equal supplied plus condensed water; its outgoing mass must equal evaporation. Every source
+must equal supplied plus condensed water; its outgoing mass must equal evaporation plus any
+qualified liquid drainage. Every source
 triangle independently satisfies `remaining = previous + incoming - outgoing` before any solver
 mass changes. Small floating-point transfer residuals stay visible; unrepresentable positive
 transfers refuse. Existing attached-mass receipts keep dry `cloth_mass_kg` and accessory sources,
@@ -103,7 +105,7 @@ v_new = (m v + sum(a_i u_i)) / (m + sum(a_i))
 D_mix = 0.5 m |v - v_new|² + sum(0.5 a_i |u_i - v_new|²)
 ```
 
-Outgoing evaporation then leaves at `v_new`. The thermal inventory still owns the final mass;
+Outgoing evaporation and qualified drained liquid then leave at `v_new`. The thermal inventory still owns the final mass;
 equal incoming/outgoing mass therefore changes momentum even when no liquid remains. Stable
 relative-momentum arithmetic preserves an exactly co-moving stream without creating an impulse,
 and squared relative speeds make mixing dissipation nonnegative without cancellation or clipping.
@@ -122,7 +124,7 @@ Galilean invariance, exact co-moving behavior and overflow rollback. Constant-ra
 reproduces the independent control-volume momentum solution and converges to its logarithmic
 position history under mechanical-step refinement. Actual sewn motion with attached accessories
 checks a late thermal failure restores the complete pre-motion state and that replay is identical.
-These are software and numerical guarantees, not rain interception, drainage, measured wet laws,
+These are software and numerical guarantees, not rain interception, inferred runoff, measured wet laws,
 damage or real garment validation. A changing source velocity requires a separately supported
 qualification.
 
@@ -143,7 +145,7 @@ reject the new field. All material, source, domain and consent requirements abov
 The thermal adapter retains the accepted supplied and condensed increments separately, then
 lumps each through the real weld map. Their sum must reconcile to aggregate incoming mass before
 any state changes. Both phase streams enter the same vertex mixing equation above, together with
-all neighboring material instances; evaporation leaves only after that single mixing operation.
+all neighboring material instances; evaporation and qualified liquid drainage leave only after that single mixing operation.
 Opposing stream momenta can cancel while their kinetic energies and mixing dissipation remain
 positive. No averaged source velocity replaces these separate energy terms.
 
@@ -151,7 +153,7 @@ Results use `ftx-coupled-liquid-mechanics-result/4`, retain both qualified veloc
 same cumulative mechanical ledger as version 2. Thermal reports retain separate supplied and
 condensed mass. Mixing work remains separate from thermal enthalpy. Independent welded-vertex,
 opposing-stream, Galilean and rollback tests, plus native/portable named-case replay, exercise this
-numerical capability. Phase-specific time-varying velocities, drainage and empirical wet-fabric behavior
+numerical capability. Phase-specific time-varying velocities and empirical wet-fabric behavior
 remain unsupported. Schema `/3` stays the published scheduled-interval contract in the next section; this phase-specific contract does not reuse it.
 
 ### Changing incoming velocity across keyframe intervals
@@ -184,7 +186,7 @@ transfer arithmetic. Schedule changes enter the next actual cloth step; whole-mo
 restores the original solver and histories. Comparison protocol identity includes the exact
 mechanical qualification for motion-dependent consumers, while static and manufacturing
 comparisons remain independent. Native, portable and browser reports retain the original
-schedule. This extension supplies no drainage, rain interception, phase-specific flow, mixing
+schedule. Drainage requires the independent water `/4` source below. This velocity extension supplies no rain interception, phase-specific flow, mixing
 heat, new wet constitutive law or empirical garment qualification. Phase-specific supply and condensation velocities are schema `/4`, not a second `/3` model. Combining `/3` and `/4` fields refuses.
 
 ## Thermal water model
@@ -194,6 +196,7 @@ together with the existing independent-sheet temperature history. Version 1 star
 inventory. Version 2 also admits independently sourced delivery rates and incoming liquid temperatures.
 Version 3 adds independently qualified condensation and re-evaporation, including incoming vapor
 sensible energy and latent release.
+Version 4 admits independently sourced, stock-limited prescribed drainage, with optional condensation.
 Evaporation removes latent energy from that textile/liquid system, so cooling changes subsequent
 vapor demand. Water remains attached to its source material triangles as the cloth moves.
 
@@ -213,7 +216,7 @@ defaulted from fiber names, a saturation formula or a different measured conditi
 
 | Field | Contract |
 | --- | --- |
-| `schema` | `ftx-textile-surface-water/1` for initial-only liquid; `/2` for prescribed supply; `/3` for supplied liquid and qualified reverse phase transfer |
+| `schema` | `ftx-textile-surface-water/1` for initial-only liquid; `/2` for prescribed supply; `/3` for supplied liquid and qualified reverse phase transfer; `/4` for supply and prescribed drainage, with optional qualified condensation |
 | `model` | `inner_cell_equilibrium_free_film_frozen_properties/1` |
 | `bindings` | Map containing every retained instance name, including mirrored instances separately |
 | `bindings.<instance>.material_sha256` | Exact normalized source material hash already used by mechanics and dry heat |
@@ -226,8 +229,9 @@ defaulted from fiber names, a saturation formula or a different measured conditi
 | `outside_vapor_pressure_pa` | Nonnegative ambient pressure for each mechanical keyframe interval |
 | `inside_film_resistance_m2_pa_w` | Positive declared vapor film before the material Ret |
 | `outside_film_resistance_m2_pa_w` | Positive declared vapor film after the material Ret |
-| `replenishment_kg_m2_s` | Version 1 requires exactly zero; versions 2/3 omit this field and require `supply` |
-| `condensation` | Version 3 requires the independently qualified reverse-transfer object described below; versions 1/2 forbid it |
+| `replenishment_kg_m2_s` | Version 1 requires exactly zero; versions 2/3/4 omit this field and require `supply` |
+| `condensation` | Required in version 3, optional in version 4, forbidden in versions 1/2; independently qualified reverse-transfer object below |
+| `drainage` | Required in version 4, forbidden in versions 1/2/3; independently qualified prescribed liquid-export object below |
 | `source` | Existing `{reference, accessed_on, note}` provenance object |
 | `evidence` | `measured`, `published` or `estimate` for the explicit coupling inputs |
 | `allow_estimates` | Independent opt-in required for `estimate`; never relaxes a material selection's evidence policy |
@@ -437,6 +441,76 @@ drainage or absorbed-water law. Mechanical water mass requires the separate inco
 qualification above. Refinement remains necessary when pressure
 reverses within a thermal step.
 
+## Prescribed liquid drainage
+
+Use water `schema: "ftx-textile-surface-water/4"`, retain the complete version-2 `supply`, and
+add an independent drainage qualification. `condensation` is optional; omitting it retains the
+same condensation refusals as version 2. Supply must remain explicit even when every rate is zero.
+This example is synthetic and supplies no empirical runoff law:
+
+```json
+"drainage": {
+  "schema": "ftx-textile-liquid-drainage/1",
+  "bindings": {
+    "front": { "rate_kg_m2_s": [0.001, 0.002] },
+    "back": { "rate_kg_m2_s": [0.0, 0.001] }
+  },
+  "source": {
+    "reference": "test:synthetic-prescribed-drainage",
+    "accessed_on": "2026-10-31",
+    "note": "Illustrative boundary input, not measured textile drainage"
+  },
+  "evidence": "estimate",
+  "allow_estimates": true,
+  "method": "Explicit reference-area liquid export demand",
+  "qualification": "Stock-limited co-moving drainage at the old inner-cell temperature, with proportional evaporation/drainage sharing on empty cloth"
+}
+```
+
+Every retained instance, including dry and mirrored instances, needs exactly one binding and one
+finite nonnegative rate per physical keyframe interval. Rates use source-triangle **reference
+area**, independently of the current area used for vapor transport. This source, evidence,
+estimate consent, method and qualification are independent of the supply and material sources.
+The qualification explicitly covers the stock limit, co-moving liquid export, sensible enthalpy
+convention and competition with evaporation.
+
+For one frozen thermal substep, let `I` be supplied plus condensed input, `E` evaporative demand,
+and `D` prescribed drainage demand, all in kg/s. Wet inventory changes at `I - E - D`. A net
+depleting patch splits exactly at `liquid / (E + D - I)` before continuing with zero stock.
+On empty cloth, available incoming mass is shared proportionally between `E` and `D` when their
+combined demand exceeds `I`. Excess inflow can rewet the patch. Neither phase can export water
+that is unavailable. The complete loading cap still applies: insufficient drainage refuses the
+interval instead of silently discarding overflow.
+
+Drained liquid exports `mass * liquid_specific_heat_j_kg_k * (old_inner_temperature -
+enthalpy_reference_c)`. It carries **no latent term**. Water result `/4` adds cumulative
+`drained_liquid_kg` and `exported_liquid_sensible_energy_j` to every retained water sample,
+final total and per-patch result. The separate balances are:
+
+```text
+remaining + evaporated + drained = initial + supplied + condensed
+dry_storage + liquid_storage + exported_vapor_sensible + exported_liquid_sensible
+  + evaporative_latent = net_boundary + qualified_material_heat
+  + supplied_sensible + incoming_vapor_sensible + condensation_latent
+```
+
+All four incoming/outgoing mechanical models can carry drainage. Their schema continues to
+identify the incoming velocity law, including separate supply/condensation velocities in mechanical
+`/4`. The evaporation-only mechanical model refuses drainage. Full mechanical reports add
+`drained_liquid_mass_kg`; compact samples add `drained_liquid_kg`. These fields are explicit,
+including zero at admission, only for a drainage request. Existing evaporation counters continue
+to mean evaporation, while `exchange.outgoing_mass_kg` is evaporation plus drainage. Both outgoing
+phases share the co-moving endpoint velocity after incoming mixing and retain a single bulk
+momentum/kinetic/gravitational export ledger, separate from thermal enthalpy.
+
+The nominal `textile_water_drained_mass_kg` objective or inclusive constraint uses the admitted
+complete history. Comparison admission checks exact source bindings, rates over each physical
+interval, reference-area demand limits, separate phase mass totals, sensible enthalpy within the
+qualified temperature domain, and agreement with every mechanical sample. The complete water
+policy participates in protocol identity. These checks do not infer gravity-driven runoff,
+rain interception, wicking, absorbed-water transport, wet constitutive changes or empirical
+garment performance.
+
 ## Reports and scope
 
 The available transient heat result retains the full policy at `request.surface_water` and a
@@ -456,12 +530,12 @@ and fields and cannot silently enable a feed.
 
 Each retained thermal sample includes cumulative water and energy quantities. The existing top-level
 `stored_change_j` remains **dry textile sensible storage**. With surface water enabled, top-level
-`balance_error_j` includes liquid storage, vapor sensible export and latent energy as shown above.
+`balance_error_j` includes liquid storage, vapor and drainage sensible export and latent energy as shown above.
 Temperatures and boundary fluxes are actual results of that coupled equation. Nominal transient-surface
 comparisons admit matching source-qualified histories after canonical material/Ret replay, retained
 patch/reference ownership, cumulative mass/latent/enthalpy consistency and the full source/boundary
 balance. Sampled temperature and boundary metrics plus textile evaporated/remaining mass and latent
-energy are available; supplied-mass admission requires matching version 2/3 receipts and independent
+energy are available; supplied-mass admission requires matching version 2/3/4 receipts and independent
 schedule reconstruction. These comparisons do not propagate water or thermal bounds.
 
 The separate `vapor_coverage_history.wet_film` belongs to a prescribed **body** reservoir. Its latent

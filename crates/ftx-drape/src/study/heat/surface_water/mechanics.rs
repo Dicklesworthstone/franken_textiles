@@ -11,6 +11,8 @@ pub(super) struct IntervalFlow {
     pub(super) supplied: Vec<f64>,
     pub(super) condensed: Vec<f64>,
     pub(super) outgoing: Vec<f64>,
+    pub(super) evaporated: Vec<f64>,
+    pub(super) drained: Vec<f64>,
 }
 
 impl IntervalFlow {
@@ -30,6 +32,9 @@ impl IntervalFlow {
             add_positive(&mut self.supplied[i], plan.supplied[i])?;
             add_positive(&mut self.condensed[i], plan.condensed[i])?;
             add_positive(&mut self.outgoing[i], plan.evaporated[i])?;
+            add_positive(&mut self.outgoing[i], plan.drained[i])?;
+            add_positive(&mut self.evaporated[i], plan.evaporated[i])?;
+            add_positive(&mut self.drained[i], plan.drained[i])?;
         }
         Ok(())
     }
@@ -42,6 +47,8 @@ impl Water {
             supplied: vec![0.; self.remaining.len()],
             condensed: vec![0.; self.remaining.len()],
             outgoing: vec![0.; self.remaining.len()],
+            evaporated: vec![0.; self.remaining.len()],
+            drained: vec![0.; self.remaining.len()],
         });
     }
 
@@ -59,7 +66,14 @@ impl Water {
             &self.remaining,
             &flow.incoming,
             [&flow.supplied, &flow.condensed],
-            &flow.outgoing,
+            crate::liquid_mass::Outgoing {
+                evaporated: &flow.evaporated,
+                drained: self
+                    .request
+                    .drainage
+                    .as_ref()
+                    .map(|_| flow.drained.as_slice()),
+            },
             temperatures,
             Some(interval),
         )

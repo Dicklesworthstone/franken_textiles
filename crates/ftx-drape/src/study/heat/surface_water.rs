@@ -60,6 +60,36 @@ pub struct Supply {
     pub method: String,
 }
 
+/// Prescribed drainage demand on one instance, constant within each mechanical interval.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrainageBinding {
+    /// Nonnegative kg/(reference m²·s), limited by available liquid inventory.
+    pub rate_kg_m2_s: Vec<f64>,
+}
+
+/// Independently qualified liquid removal, with no inferred runoff or capillary law.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Drainage {
+    /// Must be `ftx-textile-liquid-drainage/1`.
+    pub schema: String,
+    /// Every water-bound instance, including explicit zero demands.
+    pub bindings: BTreeMap<String, DrainageBinding>,
+    /// Provenance for the imposed drainage histories and outgoing liquid state.
+    pub source: Source,
+    /// Evidence independent of supply, condensation and material characterization.
+    pub evidence: Evidence,
+    /// Explicit consent for estimated drainage inputs.
+    #[serde(default)]
+    pub allow_estimates: bool,
+    /// Source method for the reference-area drainage demands.
+    pub method: String,
+    /// Source basis for stock-limited removal at the old inner-cell temperature and co-moving
+    /// velocity, including proportional evaporation/drainage demand at empty stock.
+    pub qualification: String,
+}
+
 /// Explicit reverse transport and phase-change qualification for the same locked textile.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -90,7 +120,8 @@ pub struct Condensation {
 #[serde(deny_unknown_fields)]
 pub struct Request {
     /// Version 1 is initial-only; version 2 requires supply; version 3 additionally admits
-    /// independently qualified condensation and subsequent re-evaporation.
+    /// independently qualified condensation. Version 4 requires supply and drainage, with
+    /// independently qualified condensation optional.
     pub schema: String,
     /// Must be `inner_cell_equilibrium_free_film_frozen_properties/1`.
     pub model: String,
@@ -113,15 +144,18 @@ pub struct Request {
     pub inside_film_resistance_m2_pa_w: f64,
     /// Positive declared film resistance after the textile Ret, m²·Pa/W.
     pub outside_film_resistance_m2_pa_w: f64,
-    /// Version 1 requires exactly zero; versions 2/3 omit this scalar in favor of `supply`.
+    /// Version 1 requires exactly zero; later versions omit this scalar in favor of `supply`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replenishment_kg_m2_s: Option<f64>,
-    /// Required by versions 2/3 and forbidden by version 1. Zero delivery remains explicit.
+    /// Required by versions 2/3/4 and forbidden by version 1. Zero delivery remains explicit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supply: Option<Supply>,
-    /// Required by version 3 and forbidden by earlier versions.
+    /// Required by version 3, optional in version 4 and forbidden by earlier versions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condensation: Option<Condensation>,
+    /// Required by version 4 and forbidden by earlier versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drainage: Option<Drainage>,
     /// Provenance for all fluid/boundary values and this exact material-domain qualification.
     pub source: Source,
     /// Independent of the evidence and estimate policy of each selected material.
@@ -144,16 +178,24 @@ impl Request {
                 self.replenishment_kg_m2_s == Some(0.)
                     && self.supply.is_none()
                     && self.condensation.is_none()
+                    && self.drainage.is_none()
             }
             "ftx-textile-surface-water/2" => {
                 self.replenishment_kg_m2_s.is_none()
                     && self.supply.is_some()
                     && self.condensation.is_none()
+                    && self.drainage.is_none()
             }
             "ftx-textile-surface-water/3" => {
                 self.replenishment_kg_m2_s.is_none()
                     && self.supply.is_some()
                     && self.condensation.is_some()
+                    && self.drainage.is_none()
+            }
+            "ftx-textile-surface-water/4" => {
+                self.replenishment_kg_m2_s.is_none()
+                    && self.supply.is_some()
+                    && self.drainage.is_some()
             }
             _ => false,
         };
@@ -232,6 +274,27 @@ impl Request {
                 "textile liquid supply needs complete instance/interval rates and qualified incoming temperatures, source metadata and its own estimate consent",
             ));
         }
+        if let Some(drainage) = &self.drainage
+            && (drainage.schema != "ftx-textile-liquid-drainage/1"
+                || drainage.bindings.keys().ne(self.bindings.keys())
+                || !text(&drainage.source.reference)
+                || !text(&drainage.source.note)
+                || drainage.source.accessed_on.len() != 10
+                || !text(&drainage.method)
+                || !text(&drainage.qualification)
+                || (drainage.evidence == Evidence::Estimate && !drainage.allow_estimates)
+                || drainage.bindings.values().any(|binding| {
+                    binding.rate_kg_m2_s.len() != intervals
+                        || binding
+                            .rate_kg_m2_s
+                            .iter()
+                            .any(|v| !v.is_finite() || *v < 0.)
+                }))
+        {
+            return Err(invalid(
+                "textile drainage needs complete instance/interval demands, independently admitted source evidence and qualified stock-limited co-moving sensible outflow",
+            ));
+        }
         if let Some(condensation) = &self.condensation
             && (condensation.schema != "ftx-textile-condensation/1"
                 || condensation.vapor_temperature_c.len() != intervals
@@ -281,6 +344,8 @@ pub(super) struct Water {
     initial: Vec<f64>,
     remaining: Vec<f64>,
     evaporated: Vec<f64>,
+    drained: Vec<f64>,
+    drained_sensible_j: Vec<f64>,
     supplied: Vec<f64>,
     supplied_sensible_j: Vec<f64>,
     condensed: Vec<f64>,
@@ -298,6 +363,8 @@ pub(super) struct Plan {
     pub seconds: f64,
     remaining: Vec<f64>,
     evaporated: Vec<f64>,
+    drained: Vec<f64>,
+    drained_sensible_j: Vec<f64>,
     supplied: Vec<f64>,
     supplied_sensible_j: Vec<f64>,
     supplied_old_sensible_j: f64,
@@ -333,6 +400,31 @@ fn positive_sum(values: &[f64]) -> Result<f64, Refusal> {
         add_positive(&mut total, value)?;
     }
     Ok(total)
+}
+
+// Share available mass in proportion to demands. Computing the smaller channel directly and
+// the larger as a remainder conserves the exact dryout inventory without erasing either phase.
+fn split_outflow(total: f64, evaporation: f64, drainage: f64) -> Result<(f64, f64), Refusal> {
+    let demand = evaporation + drainage;
+    if !total.is_finite() || total < 0. || !demand.is_finite() || demand <= 0. {
+        return Err(invalid("stock-limited liquid outflow is unrepresentable"));
+    }
+    if total == 0. {
+        return Ok((0., 0.));
+    }
+    let (e, d) = if evaporation <= drainage {
+        let e = total * (evaporation / demand);
+        (e, total - e)
+    } else {
+        let d = total * (drainage / demand);
+        (total - d, d)
+    };
+    if (evaporation > 0. && e <= 0.) || (drainage > 0. && d <= 0.) {
+        return Err(invalid(
+            "stock-limited outflow loses a positive phase transfer",
+        ));
+    }
+    Ok((e, d))
 }
 
 impl Water {
@@ -437,6 +529,8 @@ impl Water {
             instances: patch_instances,
             remaining: initial.clone(),
             evaporated: vec![0.; initial.len()],
+            drained: vec![0.; initial.len()],
+            drained_sensible_j: vec![0.; initial.len()],
             supplied: vec![0.; initial.len()],
             supplied_sensible_j: vec![0.; initial.len()],
             condensed: vec![0.; initial.len()],
@@ -485,6 +579,18 @@ impl Water {
                 }
                 None => (0., old.temperature_c()[i][0]),
             };
+            let drainage_rate = self.request.drainage.as_ref().map_or(0., |drainage| {
+                drainage.bindings[&self.instances[i]].rate_kg_m2_s[interval]
+            });
+            let drainage_rate = drainage_rate * patch.reference_area_m2;
+            if !drainage_rate.is_finite()
+                || self.request.drainage.as_ref().is_some_and(|drainage| {
+                    drainage.bindings[&self.instances[i]].rate_kg_m2_s[interval] > 0.
+                        && drainage_rate <= 0.
+                })
+            {
+                return Err(invalid("reference-area drainage demand is unrepresentable"));
+            }
             let potential_rate = if self.remaining[i] == 0.
                 && supply_rate == 0.
                 && self.request.condensation.is_none()
@@ -517,12 +623,28 @@ impl Water {
             };
             // At zero inventory, freshly delivered liquid can evaporate continuously but no
             // unmet potential may create negative storage. A positive net delivery rewets it.
-            let rate = if self.remaining[i] == 0. {
+            let mut rate = if self.remaining[i] == 0. && drainage_rate == 0. {
                 potential_rate.max(0.).min(supply_rate)
             } else {
                 potential_rate.max(0.)
             };
             let condensation_rate = (-potential_rate).max(0.);
+            let mut drainage_rate = drainage_rate;
+            let incoming_rate = supply_rate + condensation_rate;
+            let outgoing_rate = rate + drainage_rate;
+            if !incoming_rate.is_finite()
+                || !outgoing_rate.is_finite()
+                || (rate > 0.
+                    && drainage_rate > 0.
+                    && (outgoing_rate <= rate || outgoing_rate <= drainage_rate))
+            {
+                return Err(invalid(
+                    "combined liquid transfer rates lose a positive term",
+                ));
+            }
+            if self.remaining[i] == 0. && drainage_rate > 0. && outgoing_rate > incoming_rate {
+                (rate, drainage_rate) = split_outflow(incoming_rate, rate, drainage_rate)?;
+            }
             let vapor_temperature = self
                 .request
                 .condensation
@@ -530,8 +652,8 @@ impl Water {
                 .map_or(old.temperature_c()[i][0], |c| {
                     c.vapor_temperature_c[interval]
                 });
-            let dry_time = if self.remaining[i] > 0. && rate > supply_rate {
-                self.remaining[i] / (rate - supply_rate)
+            let dry_time = if self.remaining[i] > 0. && rate + drainage_rate > incoming_rate {
+                self.remaining[i] / (rate + drainage_rate - incoming_rate)
             } else {
                 f64::INFINITY
             };
@@ -542,6 +664,7 @@ impl Water {
                 supply_temperature,
                 condensation_rate,
                 vapor_temperature,
+                drainage_rate,
             ));
             dry_times.push(dry_time);
         }
@@ -552,6 +675,8 @@ impl Water {
             seconds,
             remaining: Vec::new(),
             evaporated: Vec::new(),
+            drained: Vec::new(),
+            drained_sensible_j: Vec::new(),
             supplied: Vec::new(),
             supplied_sensible_j: Vec::new(),
             supplied_old_sensible_j: 0.,
@@ -565,20 +690,42 @@ impl Water {
             exported_sensible_j: 0.,
             dryout_events: 0,
         };
-        for (i, (rate, supply_rate, supply_temperature, condensation_rate, vapor_temperature)) in
-            rates.into_iter().enumerate()
+        for (
+            i,
+            (
+                rate,
+                supply_rate,
+                supply_temperature,
+                condensation_rate,
+                vapor_temperature,
+                drainage_rate,
+            ),
+        ) in rates.into_iter().enumerate()
         {
             let supplied = supply_rate * seconds;
             let condensed = condensation_rate * seconds;
-            let evaporated = if dry_times[i] == seconds {
-                self.remaining[i] + supplied
+            let (evaporated, drained) = if drainage_rate > 0. {
+                let available = self.remaining[i] + (supplied + condensed);
+                if dry_times[i] == seconds
+                    || (self.remaining[i] == 0.
+                        && rate + drainage_rate == supply_rate + condensation_rate)
+                {
+                    split_outflow(available, rate, drainage_rate)?
+                } else {
+                    (rate * seconds, drainage_rate * seconds)
+                }
+            } else if dry_times[i] == seconds {
+                (self.remaining[i] + supplied, 0.)
             } else if self.remaining[i] == 0. && rate == supply_rate {
-                supplied
+                (supplied, 0.)
             } else {
-                rate * seconds
+                (rate * seconds, 0.)
             };
+            let outgoing = evaporated + drained;
             let remaining = if dry_times[i] == seconds {
                 0.
+            } else if drained > 0. {
+                self.remaining[i] + (supplied + condensed - outgoing)
             } else if supply_rate == 0. {
                 if condensed == 0. {
                     self.remaining[i] - evaporated
@@ -595,7 +742,7 @@ impl Water {
                 self.request.maximum_liquid_loading_kg_m2 * model.patches()[i].reference_area_m2;
             if self.request.supply.is_some() && (!maximum.is_finite() || remaining > maximum) {
                 return Err(invalid(
-                    "liquid supply or condensation exceeds the qualified reference-area loading domain; no overflow or drainage law is declared",
+                    "liquid supply or condensation exceeds the qualified reference-area loading domain after admitted drainage; no extra overflow is inferred",
                 ));
             }
             if !remaining.is_finite()
@@ -603,6 +750,12 @@ impl Water {
                 || !supplied.is_finite()
                 || !condensed.is_finite()
                 || !evaporated.is_finite()
+                || !drained.is_finite()
+                || !outgoing.is_finite()
+                || (drainage_rate > 0. && drained <= 0.)
+                || (evaporated > 0.
+                    && drained > 0.
+                    && (outgoing <= evaporated || outgoing <= drained))
                 || (supply_rate > 0. && supplied <= 0.)
                 || (condensation_rate > 0. && condensed <= 0.)
                 || !latent.is_finite()
@@ -610,9 +763,9 @@ impl Water {
                 || !capacity.is_finite()
                 || (rate > 0. && (evaporated <= 0. || latent <= 0.))
                 || (condensed > 0. && condensation_latent <= 0.)
-                || (supplied + condensed > evaporated && remaining <= self.remaining[i])
-                || (supplied + condensed < evaporated && remaining >= self.remaining[i])
-                || (dry_times[i] == seconds && evaporated <= supplied)
+                || (supplied + condensed > outgoing && remaining <= self.remaining[i])
+                || (supplied + condensed < outgoing && remaining >= self.remaining[i])
+                || (dry_times[i] == seconds && outgoing <= supplied + condensed)
                 || (remaining > 0. && capacity <= 0.)
             {
                 return Err(invalid(
@@ -622,6 +775,12 @@ impl Water {
             plan.dryout_events += usize::from(self.remaining[i] > 0. && remaining == 0.);
             plan.remaining.push(remaining);
             plan.evaporated.push(evaporated);
+            plan.drained.push(drained);
+            plan.drained_sensible_j.push(
+                drained
+                    * self.request.liquid_specific_heat_j_kg_k
+                    * (old.temperature_c()[i][0] - self.request.enthalpy_reference_c),
+            );
             plan.supplied.push(supplied);
             plan.condensed.push(condensed);
             plan.capacity_j_k.push(capacity);
@@ -650,6 +809,7 @@ impl Water {
                 * (old.temperature_c()[i][0] - self.request.enthalpy_reference_c);
         }
         if !plan.exported_sensible_j.is_finite()
+            || plan.drained_sensible_j.iter().any(|v| !v.is_finite())
             || !plan.supplied_old_sensible_j.is_finite()
             || !plan.condensed_old_sensible_j.is_finite()
             || plan.supplied_sensible_j.iter().any(|v| !v.is_finite())
@@ -698,7 +858,10 @@ impl Water {
         // The solver includes signed latent heat and incoming liquid/vapor mixing at T_old.
         // Subtract the old-temperature sensible part of both incoming masses to reconcile their
         // complete reference enthalpy, including the liquid capacity that now belongs to them.
-        let error = next.stored_change_j + liquid_step + plan.exported_sensible_j
+        let error = next.stored_change_j
+            + liquid_step
+            + plan.exported_sensible_j
+            + plan.drained_sensible_j.iter().sum::<f64>()
             - plan.seconds * (next.inside_heat_w - next.outside_heat_w)
             - next.supplied_heat_j
             - plan.supplied_old_sensible_j
@@ -707,6 +870,7 @@ impl Water {
             + next.stored_change_j.abs()
             + liquid_step.abs()
             + plan.exported_sensible_j.abs()
+            + plan.drained_sensible_j.iter().map(|v| v.abs()).sum::<f64>()
             + next.supplied_heat_j.abs()
             + plan.supplied_old_sensible_j.abs()
             + plan.condensed_old_sensible_j.abs();
@@ -725,6 +889,21 @@ impl Water {
         self.dryout_events += plan.dryout_events;
         for (total, increment) in self.evaporated.iter_mut().zip(plan.evaporated) {
             add_positive(total, increment)?;
+        }
+        for (total, increment) in self.drained.iter_mut().zip(plan.drained) {
+            add_positive(total, increment)?;
+        }
+        for (total, increment) in self
+            .drained_sensible_j
+            .iter_mut()
+            .zip(plan.drained_sensible_j)
+        {
+            *total += increment;
+            if !total.is_finite() {
+                return Err(invalid(
+                    "cumulative drained liquid sensible enthalpy overflows",
+                ));
+            }
         }
         for (total, increment) in self.supplied.iter_mut().zip(plan.supplied) {
             add_positive(total, increment)?;
@@ -763,7 +942,10 @@ impl Water {
     }
 
     pub(super) fn energy_correction_j(&self) -> f64 {
-        self.liquid_stored_j + self.exported_sensible_j + self.latent_j
+        self.liquid_stored_j
+            + self.exported_sensible_j
+            + self.latent_j
+            + self.drained_sensible_j.iter().sum::<f64>()
             - self.supplied_sensible_j.iter().sum::<f64>()
             - self.condensation_latent_j
             - self.incoming_vapor_sensible_j.iter().sum::<f64>()
@@ -778,11 +960,13 @@ impl Water {
         let initial = positive_sum(&self.initial)?;
         let remaining = positive_sum(&self.remaining)?;
         let evaporated = positive_sum(&self.evaporated)?;
+        let drained = positive_sum(&self.drained)?;
+        let drained_sensible: f64 = self.drained_sensible_j.iter().sum();
         let supplied = positive_sum(&self.supplied)?;
         let supplied_sensible: f64 = self.supplied_sensible_j.iter().sum();
         let condensed = positive_sum(&self.condensed)?;
         let incoming_sensible: f64 = self.incoming_vapor_sensible_j.iter().sum();
-        let error = remaining + evaporated - initial - supplied - condensed;
+        let error = remaining + evaporated + drained - initial - supplied - condensed;
         let reconstructed: f64 = self
             .initial
             .iter()
@@ -799,6 +983,8 @@ impl Water {
             initial,
             remaining,
             evaporated,
+            drained,
+            drained_sensible,
             supplied,
             supplied_sensible,
             condensed,
@@ -841,6 +1027,11 @@ impl Water {
             result["condensation_latent_energy_j"] = json!(self.condensation_latent_j);
             result["incoming_vapor_sensible_energy_j"] = json!(incoming_sensible);
         }
+        if self.request.drainage.is_some() {
+            result["schema"] = json!("ftx-textile-surface-water-result/4");
+            result["drained_liquid_kg"] = json!(drained);
+            result["exported_liquid_sensible_energy_j"] = json!(drained_sensible);
+        }
         if full {
             result["request"] = json!(self.request);
             result["unit_pressure_networks"] = json!(self.networks);
@@ -874,6 +1065,17 @@ impl Water {
             result["scope"] = json!(
                 "Source-qualified initial free liquid shares the inner textile cell temperature. Frozen dry thermal laws and effective Ret are explicitly qualified over the authored temperature/loading domain. Dry storage integrates the selected constant or temperature-dependent specific heat against reference mass; remaining liquid adds its own sensible capacity. Pressure and vapor sensible export sample each substep's initial temperature; dry conduction is implicit. Earliest dryout splits the step and the dry remainder uses the same heat solver. Reference area owns water; current area conducts vapor. No replenishment, condensation, sorption, wicking, absorbed moisture, wet-property inference, added mechanical mass, body-water transfer or empirical/comfort claim. Time/space refinement remains required."
             );
+            if self.request.drainage.is_some() {
+                for (i, patch) in result["patches"]
+                    .as_array_mut()
+                    .expect("patch array")
+                    .iter_mut()
+                    .enumerate()
+                {
+                    patch["drained_liquid_kg"] = json!(self.drained[i]);
+                    patch["exported_liquid_sensible_energy_j"] = json!(self.drained_sensible_j[i]);
+                }
+            }
             if self.request.supply.is_some() {
                 result["scope"] = json!(
                     "Source-qualified free liquid shares the inner textile cell temperature. An independently sourced piecewise-constant delivery specifies reference-area mass rates and incoming liquid temperatures for every instance and interval. Supplied sensible enthalpy enters the same conservative thermal balance. Pressure and vapor sensible export sample old inner-cell temperature; implicit heat uses remaining liquid capacity. Net depletion splits at exact dryout; dry liquid supply can sustain limited evaporation or rewet the patch. Reference area owns liquid and delivery; current area conducts vapor. Qualified loading-domain overflow refuses without drainage or clamping. No condensation, sorption, wicking, absorbed moisture, wet-property inference, added mechanical mass, body-water transfer or empirical/comfort claim. Time/space refinement remains required."
@@ -884,6 +1086,11 @@ impl Water {
                     "Source-qualified bidirectional free-film exchange uses the exact locked Ret network, with independent reverse-transport, wet/dry nucleation and effective enthalpy qualification. Negative pressure difference condenses vapor onto reference-owned liquid and releases latent heat; positive difference evaporates available liquid, including previously condensed water. Incoming vapor uses the explicit interval temperature and the same cp_liquid*(T-reference) effective sensible convention as outgoing vapor; constant latent heat is additional. It is not an inferred vapor heat capacity. Current area controls transfer; reference area owns water and delivery. The existing thermal solver conserves dry/liquid storage, signed boundary and mechanical heat, incoming liquid/vapor enthalpy and outgoing vapor enthalpy. Qualified loading/temperature overflow refuses transactionally without drainage or clamping. No sorption, wicking, absorbed moisture, wet-property inference, added mechanical mass, body-water transfer, whole-layer/wearer condensation or empirical/comfort claim. Time/space refinement remains required."
                 );
             }
+        }
+        if full && self.request.drainage.is_some() {
+            result["scope"] = json!(
+                "Source-qualified free liquid with independent reference-area supply and drainage demands. Optional condensation requires reverse-transfer qualification. Current area conducts vapor; reference area owns supply and drainage. Empty-stock input is shared proportionally between evaporation and drainage demands, and net depletion splits at exact dryout. Drained liquid exports old-inner-cell sensible enthalpy without latent heat; implicit heat uses remaining capacity. Unsupported loading or temperature refuses without inferred overflow. Optional mechanics separately retains co-moving outgoing momentum and bulk energy. No inferred runoff, inter-patch transport, sorption, wet-property change, body transfer or empirical garment claim; refinement remains necessary."
+            );
         }
         Ok(result)
     }

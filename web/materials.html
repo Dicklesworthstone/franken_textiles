@@ -655,7 +655,17 @@ transport, dry/wet nucleation and the effective enthalpy model. Condensed water 
 triangle and can re-evaporate; exceeding the qualified loading cap refuses the interval. Metrics
 <code>textile_water_condensed_mass_kg</code> and <code>textile_water_condensation_latent_energy_j</code> retain
 condensed mass and released heat separately from evaporative losses. This does not infer absorbed moisture,
-drainage, wet mechanical mass or a measured garment prediction.</p>
+an inferred runoff law, wet mechanical mass or a measured garment prediction.</p>
+<p class="note">Use <code>ftx-textile-surface-water/4</code> for independently qualified prescribed drainage.
+Keep the explicit <code>supply</code>, add <code>drainage</code> with schema <code>ftx-textile-liquid-drainage/1</code>,
+and supply exact instance bindings with nonnegative <code>rate_kg_m2_s</code> arrays for every physical keyframe interval.
+The drainage source, evidence, estimate consent, method and qualification must explicitly cover stock-limited co-moving export
+at the old inner-cell temperature and proportional demand sharing on empty cloth. <code>condensation</code> is optional.
+Reference area owns the drainage demand. Liquid drainage and evaporation retain separate mass totals;
+drained liquid exports sensible enthalpy without latent energy. Insufficient drainage still refuses the loading cap.
+The nominal <code>textile_water_drained_mass_kg</code> metric requires the complete admitted water and energy history.
+All four incoming mechanical models can carry the combined vapor/liquid outflow, retaining their existing incoming velocity laws.
+The evaporation-only mechanical model refuses drainage. No gravity-driven runoff, wicking or empirical wet law is inferred.</p>
 <p class="note">Scenario comparisons require a settled initial drape with clear gating. Static heat, strain and simulated-cloth-mass objectives describe
 that initial frame. Motion objectives additionally require complete, converged continuation; the final moving state need not be at rest.
 Signed surface power and body-coverage power have different bases and are not interchangeable.

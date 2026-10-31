@@ -4338,8 +4338,18 @@ variable-mass oscillator refinement, sewn heterogeneous/accessory ownership, who
 comparison tampering and both native commands cover supplied and condensing single/named-case studies.
 See [textile-surface-water.md](docs/textile-surface-water.md). Initial water is explicitly admitted
 co-moving after a dry drape. The first-order endpoint model requires mechanical time-step refinement;
-relative flow impact, drainage, inferred wet constitutive changes, pinned-coordinate exchange impulses
+relative outgoing flow, inferred wet constitutive changes, pinned-coordinate exchange impulses
 and empirical wet-garment qualification remain outside this model and under the open parent work.
+
+The explicit water `/4` extension additionally admits separately source-qualified reference-area
+drainage demands alongside supply and optional condensation. Empty stock divides available flow
+between evaporation and drainage in their potential-rate ratio; exact dryout consumes only available
+inventory. Liquid drainage exports old-temperature sensible enthalpy without latent heat, changes
+the actual remaining thermal capacity and feeds the same next-step mechanical inertia. Separate
+evaporated/drained counters, combined co-moving bulk export, source/interval admission and the
+`textile_water_drained_mass_kg` objective compose with all four incoming mechanical models. This is
+prescribed outflow, not an inferred gravity-runoff or wet-material law; broader empirical acceptance
+remains open under `ftx-vc2.3`.
 
 ### 25.122 Guide adaptive alterations with actual material-bound consumer results
 
@@ -4663,7 +4673,7 @@ mechanical keyframe interval, while schema `/4` prescribes separate constant sup
 condensed-vapor velocities. Their fields and model tags are exclusive; phase-specific schedules
 remain unsupported. The phase-specific work is tracked by `ftx-vc2.3.3` and the broader work by
 `ftx-vc2.3`. Independent conservation and step-refinement checks establish numerical closure;
-measured wet response, rain interception, drainage, changing wet constitutive laws, mixing-heat
+measured wet response, rain interception, relative outgoing velocity, changing wet constitutive laws, mixing-heat
 partition and empirical garment agreement remain separate work.
 
 ### 25.140 Turn material-aware markers into qualified cold-knife path plans

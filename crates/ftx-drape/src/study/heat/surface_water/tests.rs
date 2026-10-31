@@ -363,6 +363,211 @@ fn condensing_fixture(
 }
 
 #[test]
+fn drainage_exports_only_liquid_sensible_heat_and_uses_reference_area() {
+    for area in [0.5, 1.] {
+        let mut h = with_drainage(supplied_fixture(0.1, 0.5, vec![0.], vec![20.]), vec![0.02]);
+        fixed_pressure(&mut h, 4000.);
+        advance(&mut h, area, 2.).unwrap();
+        let w = h.water.as_ref().unwrap();
+        near(h.state.temperature_c()[0][0], 20.);
+        near(w.remaining[0], 0.03);
+        near(w.drained[0], 0.02); // .02 kg/(reference m² s) * .5 m² * 2 s.
+        assert_eq!(w.evaporated, vec![0.]);
+        assert_eq!(w.latent_j, 0.);
+        near(w.drained_sensible_j[0], 400.);
+        near(w.liquid_stored_j, -400.);
+        near(h.balance_error_j(), 0.);
+        let report = w.snapshot(h.state.temperature_c(), true, 0.).unwrap();
+        assert_eq!(report["schema"], "ftx-textile-surface-water-result/4");
+        near(
+            report["patches"][0]["exported_liquid_sensible_energy_j"]
+                .as_f64()
+                .unwrap(),
+            400.,
+        );
+        assert!(report.get("condensed_liquid_kg").is_none());
+    }
+}
+
+fn with_drainage(mut history: SurfaceHistory, rates: Vec<f64>) -> SurfaceHistory {
+    let mut request = history.water.as_ref().unwrap().request.clone();
+    request.schema = "ftx-textile-surface-water/4".into();
+    request.drainage = Some(serde_json::from_value(json!({
+        "schema":"ftx-textile-liquid-drainage/1", "bindings":{"sheet":{"rate_kg_m2_s":rates}},
+        "source":{"reference":"test:prescribed-drainage","accessed_on":"2026-10-30",
+            "note":"Synthetic outflow; not measured runoff"},
+        "evidence":"estimate","allow_estimates":true,"method":"Independent reference-area removal",
+        "qualification":"Stock-limited co-moving liquid at old inner-cell temperature; evaporation and drainage proportionally share incoming flow at empty stock"
+    })).unwrap());
+    request
+        .validate(request.outside_vapor_pressure_pa.len())
+        .unwrap();
+    history.water.as_mut().unwrap().request = request.clone();
+    history.request.surface_water = Some(request);
+    history
+}
+
+fn fixed_pressure(history: &mut SurfaceHistory, ambient: f64) {
+    for request in [
+        &mut history.water.as_mut().unwrap().request,
+        history.request.surface_water.as_mut().unwrap(),
+    ] {
+        request.wet_vapor_pressure_pa = vec![[-20., 4000.], [80., 4000.]];
+        request.outside_vapor_pressure_pa.fill(ambient);
+    }
+}
+
+#[test]
+fn evaporation_and_drainage_share_empty_stock_and_split_exact_dryout() {
+    for (loading, expected_e, expected_d, dryouts) in
+        [(0.05, 0.021, 0.014, 1), (0., 0.006, 0.004, 0)]
+    {
+        for step in [2., 0.125] {
+            let mut h = with_drainage(
+                supplied_fixture(loading, step, vec![0.01], vec![20.]),
+                vec![0.02],
+            );
+            fixed_pressure(&mut h, 1000.);
+            h.water.as_mut().unwrap().begin_mechanical_interval();
+            // E=.015, D=.01 and I=.005 kg/s. Wet .025 kg dries at1.25s; empty input splits3:2.
+            advance(&mut h, 0.5, 2.).unwrap();
+            let w = h.water.as_ref().unwrap();
+            assert_eq!(w.remaining, vec![0.]);
+            near(w.evaporated[0], expected_e);
+            near(w.drained[0], expected_d);
+            near(w.latent_j, expected_e * 10000.);
+            assert_eq!(w.dryout_events, dryouts);
+            let flow = w.mechanical_flow.as_ref().unwrap();
+            near(flow.incoming[0], 0.01);
+            near(flow.outgoing[0], 0.5 * loading + 0.01);
+            near(flow.evaporated[0], expected_e);
+            near(flow.drained[0], expected_d);
+            near(h.balance_error_j(), 0.);
+        }
+    }
+}
+
+#[test]
+fn condensation_and_drainage_keep_phase_heat_and_sensible_reference_independent() {
+    let mut h = with_drainage(
+        condensing_fixture(0., 1., vec![6000.], vec![40.]),
+        vec![0.01],
+    );
+    fixed_pressure(&mut h, 6000.);
+    let mut shifted = h.clone();
+    shifted.water.as_mut().unwrap().request.enthalpy_reference_c = 100.;
+    shifted
+        .request
+        .surface_water
+        .as_mut()
+        .unwrap()
+        .enthalpy_reference_c = 100.;
+    for current in [&mut h, &mut shifted] {
+        advance(current, 0.5, 1.).unwrap();
+        let w = current.water.as_ref().unwrap();
+        // .01 kg vapor enters, .005 kg drains at20 C. Latent100J + mixing200J heat105J/K.
+        near(
+            current.state.temperature_c()[0][0],
+            20. + 300. / (100. + 5. + 1. / 1.2),
+        );
+        near(w.condensed[0], 0.01);
+        near(w.drained[0], 0.005);
+        near(w.remaining[0], 0.005);
+        near(w.condensation_latent_j, 100.);
+        assert_eq!(w.latent_j, 0.);
+        near(current.balance_error_j(), 0.);
+    }
+    assert_eq!(h.state.temperature_c(), shifted.state.temperature_c());
+    near(
+        shifted.water.as_ref().unwrap().drained_sensible_j[0]
+            - h.water.as_ref().unwrap().drained_sensible_j[0],
+        -500.,
+    );
+}
+
+#[test]
+fn insufficient_drainage_refuses_overflow_and_rolls_back_all_thermal_state() {
+    let mut h = with_drainage(supplied_fixture(0., 0.5, vec![0.15], vec![20.]), vec![0.01]);
+    fixed_pressure(&mut h, 1000.);
+    let initial = h
+        .water
+        .as_ref()
+        .unwrap()
+        .snapshot(h.state.temperature_c(), true, 0.)
+        .unwrap();
+    assert!(advance(&mut h, 0.5, 1.).is_err());
+    assert_eq!(h.time_s, 0.);
+    assert_eq!(h.state.temperature_c(), &[vec![20.]]);
+    assert_eq!(
+        h.water
+            .as_ref()
+            .unwrap()
+            .snapshot(h.state.temperature_c(), true, 0.)
+            .unwrap(),
+        initial
+    );
+    assert_eq!(h.thermal_steps, 0);
+}
+
+#[test]
+fn drainage_requires_complete_source_and_zero_demand_preserves_legacy_history() {
+    let mut old = condensing_fixture(0.03, 0.25, vec![6000.], vec![40.]);
+    let mut new = with_drainage(old.clone(), vec![0.]);
+    let valid = new.water.as_ref().unwrap().request.clone();
+    for case in 0..8 {
+        let mut q = valid.clone();
+        match case {
+            0 => q.drainage = None,
+            1 => q.schema = "ftx-textile-surface-water/3".into(),
+            2 => q.drainage.as_mut().unwrap().bindings.clear(),
+            3 => q
+                .drainage
+                .as_mut()
+                .unwrap()
+                .bindings
+                .get_mut("sheet")
+                .unwrap()
+                .rate_kg_m2_s
+                .clear(),
+            4 => {
+                q.drainage
+                    .as_mut()
+                    .unwrap()
+                    .bindings
+                    .get_mut("sheet")
+                    .unwrap()
+                    .rate_kg_m2_s[0] = -1.
+            }
+            5 => {
+                q.drainage
+                    .as_mut()
+                    .unwrap()
+                    .bindings
+                    .get_mut("sheet")
+                    .unwrap()
+                    .rate_kg_m2_s[0] = f64::NAN
+            }
+            6 => q.drainage.as_mut().unwrap().allow_estimates = false,
+            _ => q.drainage.as_mut().unwrap().qualification.clear(),
+        }
+        assert!(q.validate(1).is_err(), "invalid drainage case {case}");
+    }
+    for current in [&mut old, &mut new] {
+        advance(current, 0.5, 1.).unwrap();
+    }
+    assert_eq!(old.state.temperature_c(), new.state.temperature_c());
+    assert_eq!(old.stored_j, new.stored_j);
+    assert_eq!(old.thermal_steps, new.thermal_steps);
+    let (a, b) = (old.water.unwrap(), new.water.unwrap());
+    assert_eq!(a.remaining, b.remaining);
+    assert_eq!(a.evaporated, b.evaporated);
+    assert_eq!(a.condensed, b.condensed);
+    assert_eq!(a.latent_j, b.latent_j);
+    assert_eq!(a.liquid_stored_j, b.liquid_stored_j);
+    assert_eq!(b.drained, vec![0.]);
+}
+
+#[test]
 fn condensation_warms_a_dry_textile_and_conserves_incoming_vapor_enthalpy() {
     let mut history = condensing_fixture(0., 1., vec![6000.], vec![40.]);
     // T_old=20 gives p_wet=4000 Pa. R=10, area=.5 and L=10000 => .01 kg enters.
