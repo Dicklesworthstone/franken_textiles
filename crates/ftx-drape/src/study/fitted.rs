@@ -867,8 +867,17 @@ mod tests {
         let rows = b.report["residuals"].as_array().unwrap();
         assert!(rows[0]["residual_mm"].as_f64().unwrap() > 1000.0);
         assert!(rows.iter().all(|r| r["used_to_refit"] == false));
-        assert_eq!(b.report["tape_evaluation"]["status"], "refused");
-        assert!(rows[1]["body_mm"].is_null()); // the synthetic rig lacks complete tape sections
+        assert_eq!(b.report["tape_evaluation"]["status"], "partial");
+        // Missing head/limb sections do not erase the independently known regular-polygon waist.
+        let waist = 32.0 * 140.0 * ftx_core::det::sin_cos(std::f64::consts::PI / 16.0).0;
+        let row = rows.iter().find(|r| r["name"] == "waist").unwrap();
+        assert!((row["body_mm"].as_f64().unwrap() - waist).abs() < 1e-9);
+        assert!((row["residual_mm"].as_f64().unwrap() - (waist - 500.0)).abs() < 1e-9);
+        let missing = b.report["tape_evaluation"]["unavailable_fields"]
+            .as_array()
+            .unwrap();
+        assert!(!missing.is_empty());
+        assert!(!missing.contains(&json!("waist")));
     }
 
     #[test]

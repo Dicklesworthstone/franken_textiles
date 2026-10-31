@@ -1312,6 +1312,51 @@ mod tests {
     }
 
     #[test]
+    fn constant_velocity_schedule_preserves_existing_exchange_arithmetic() {
+        let velocity = Vec3::new(-1., 2., 0.5);
+        let mut constant = solver();
+        let mut scheduled = solver();
+        initialize_prescribed(&mut constant, &[0., 0.], &[velocity; 2]);
+        let mut q = scheduled_qualification();
+        q.bindings
+            .get_mut("sheet")
+            .unwrap()
+            .incoming_velocity_world_m_s_by_interval = Some(vec![velocity; 2]);
+        let domains = vec![q.bindings["sheet"].clone(); 2];
+        start_with_exchange(
+            &mut scheduled,
+            q,
+            domains,
+            &[0., 0.],
+            &[vec![20.], vec![20.]],
+            true,
+        )
+        .unwrap();
+        for interval in [0, 0, 1, 1] {
+            let a = constant
+                .exchange_liquid(
+                    &[0., 0.],
+                    &[0.03, 0.06],
+                    &[0.03, 0.06],
+                    &[vec![20.], vec![20.]],
+                )
+                .unwrap();
+            let b = scheduled
+                .exchange_liquid_in_interval(
+                    &[0., 0.],
+                    &[0.03, 0.06],
+                    &[0.03, 0.06],
+                    &[vec![20.], vec![20.]],
+                    Some(interval),
+                )
+                .unwrap();
+            assert_eq!(constant.v, scheduled.v);
+            assert_eq!(constant.model.mass, scheduled.model.mass);
+            assert_eq!(a.summary(), b.summary());
+        }
+    }
+
+    #[test]
     fn schedules_require_complete_unambiguous_intervals_and_preserve_state_on_refusal() {
         let original = scheduled_qualification();
         original.validate_exchange_intervals(2).unwrap();
