@@ -3,6 +3,8 @@
 **Latest comprehensive assessment:** [2026-10-30, source `d58ba010`](#2026-10-30-comprehensive-reality-check).
 Earlier findings and follow-through below are retained as dated evidence; the latest assessment
 states which are resolved, current, failed or still unverified.
+The [2026-10-31 body and runtime follow-through](#2026-10-31-body-and-runtime-follow-through)
+records the recovered admitted asset, complete-surface reference and current garment execution.
 
 Assessed source: `main` at `6410556378514874274e77c304efd0d4e2200a73`.
 This initial assessment and delivery plan is not release certification. It preceded product changes;
@@ -3224,3 +3226,77 @@ the compiler/test commands still identify `d58ba010`, and no Rust implementation
 
 This pass changes existing assessment/contract evidence and Beads only. It does not alter Rust
 implementation, oracle fixtures, model pins or physical data, and does not complete G5.
+
+## 2026-10-31 body and runtime follow-through
+
+`ftx-onn.25`, product commit `5450ae7`, removes the missing-asset execution blocker above.
+The existing 152,042,752-byte Anny file was recovered; its unchanged full-file, array and label
+hashes and sparse reconstruction were verified. It and the independently captured full-surface
+reference stay outside Git; [PIN.md](../tools/body-model/PIN.md) records identities and replay.
+Both are now verified in the local default `~/.cache/franken_textiles/` as well as the retained
+remote caches, so ordinary native loading no longer depends on the temporary RAM copy.
+All 438,976 rest/posed vertices for the original sixteen inputs agree with pinned Python Anny:
+maximum error 1.405e-15 m at the unchanged 1e-9 m tolerance. An unsampled-coordinate mutation
+fails the same comparator. The body lane executes 44 tests, including all nine data-dependent cases.
+
+Actual garment execution exposed self-intersections in the upstream detailed face. The shared
+`clothing_skin` helper reuses dominant-bone trimming and centroid caps for wrists, feet and the
+paired levator05 facial regions. Retained source vertices do not move; complete measurement and
+display skin remain intact. CLI, qualification, studies, motion and browser fold reports retain
+the selected approximation and explicitly deny physical qualification. The detailed-source
+negative still refuses; the proxy passes the unchanged strict audit. All fifteen optimized
+contact/elastic/fitted tests, three real-model CLI workflows and the real-model qualification
+workflow pass, with original assertions, tolerance and fitted-garment digest unchanged.
+
+On the subsequent merged implementation (`690e4d6`; later tracking-only commits through
+`7acc648`), release checks cover all ten packages: **2,974 passed, zero failed, 29 default ignores**
+across 301 test targets and nine doctest targets. Five examples compile. Every command below ran
+through RCH and terminated with exit 0; counts are passed/failed/ignored, without duplicate lanes.
+
+| Cargo command | Result targets | Counts |
+|---|---:|---:|
+| `cargo test -p ftx-core -p ftx-body --release --locked -j2 --no-fail-fast` | 7 | 94/0/9 |
+| `cargo test -p ftx-pattern --release --locked -j2 --no-fail-fast` | 51 | 478/0/0 |
+| `cargo test -p ftx-drape --release --locked -j1 --no-fail-fast` | 61 | 744/0/6 |
+| `cargo test -p ftx-measure -p ftx-trace --release --locked --offline -j2 --no-fail-fast` | 24 | 203/0/0 |
+| `cargo test -p ftx-cli --release --locked --offline -j2 --no-fail-fast` | 69 | 465/0/14 |
+| `cargo test -p ftx-wasm --release --locked --offline -j2 --no-fail-fast` | 31 | 180/0/0 |
+| `cargo test -p ftx-conformance --release --locked --offline -j2 --no-fail-fast` | 30 | 63/0/0 |
+| `cargo test -p ftx-export --release --locked --offline -j2 --no-fail-fast` | 37 | 747/0/0 |
+
+Large workspace attempts reached RCH's 1,800-second deadline and are incomplete; these package runs
+retain every enabled target without changing gates. Nineteen ignored body/drape/qualification
+cases pass explicitly in the lanes above; nine optional OpenCV and one FFmpeg case remain unrun.
+
+Compiler commands complete with exit 0 (Cargo compilation uses RCH):
+
+| Command | Result |
+|---|---|
+| `cargo fmt --check` | PASS |
+| `cargo clippy --workspace --all-targets --locked -j2 -- -D warnings` | PASS |
+| `cargo build --release --locked -j2 --target wasm32-unknown-unknown -p ftx-wasm` | PASS |
+| `cargo build -p ftx-cli --bin ftx --release --locked -j2 --message-format=json,json-render-diagnostics` | PASS |
+
+Fresh actual Chromium/native replay passes all 77 checks: both garments settle without gates,
+viewer bytes match native, offline controls render, and requests remain local GETs without uploads.
+This is fresh solo verification, not independent peer review. UBS's focused scan completed with
+existing findings; reviewed changed-line findings yielded no new production true positive, and
+no clean-scan claim is made.
+
+Normal debug coverage also completes all 310 result targets: **2,970 passed, zero failed,
+33 default ignores**. The extra four ignores are the existing expensive cantilever/contact
+known answers, all executed successfully in release. The nonCLI workspace command times out
+with exit 137 during portable tests; its completed first 202 native targets cover the other
+eight packages (2,325 passed, 19 ignored). A separate full `ftx-wasm` command passes 180 tests
+across 31 targets. The accepted-body CLI target passes all 39 cases before the owned CLI command
+is interrupted (130); a new command includes both CLI binaries and every other integration
+target from locked Cargo metadata (68 targets, 426 passed, 14 ignored). Eight remaining
+documentation targets complete separately. Partial portable cells and repeated CLI cells are
+excluded from this aggregate. The original whole commands remain incomplete, not green.
+Pinned-worker admission refusals are retained; automatic CLI selection retries from hz3's
+source-initialization refusal (73, before compilation) to hz4, where the final batch exits 0.
+The ten optional OpenCV/FFmpeg cases remain unexecuted; no ignore or numerical gate was relaxed.
+
+These results establish bounded numerical parity and executable integration, not anatomical
+adequacy, empirical fabric/contact qualification, real-person fit, a new speed claim or G5.
+The material, capture, anatomy, muslin, scope/budget and release tasks above remain open.
