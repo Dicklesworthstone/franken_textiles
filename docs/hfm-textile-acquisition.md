@@ -54,7 +54,11 @@ consent. The declared grouping tolerance is not a solver extrapolation permissio
 The matching thickness comes from that same file and carries that exact specimen and
 conditioning. It is instrument-reported full specimen thickness, not an inferred single
 ply thickness or a compression law. No density file is automatically joined by a similar
-name. In particular, HFM `Spc Heat` in **J/(m3 K)** is volumetric heat capacity, not the
+name. `conditions.gauge_scope` marks this contact-plate observation for the shared
+unloaded-clearance guard: it cannot supply free-sheet sewing or cutter clearance.
+Its thermal observation remains available. Existing frozen selections stay immutable;
+re-importing carries the corrected qualification into a new selection.
+In particular, HFM `Spc Heat` in **J/(m3 K)** is volumetric heat capacity, not the
 specific heat **J/(kg K)** consumed by the transient model; that table deliberately
 refuses this conductivity importer. A source-backed conversion needs matched density
 and its conditioning/geometry evidence.

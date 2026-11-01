@@ -222,6 +222,7 @@ def convert(entry: dict, raw: bytes) -> tuple[dict, dict]:
         fail("instrument Sample Name differs from the exact reviewed specimen identity")
     observations = grouped(run, policy["maximum_deviation_c"])
     conditions = {"specimen": run.sample_name, "conditioning": entry["conditioning"],
+                  "gauge_scope": "Full HFM specimen between instrument contact plates; pressure and unloaded clearance unqualified",
                   "instrument": run.instrument, "instrument_serial": run.instrument_serial,
                   "source_sha256": digest,
                   "scope": "One HFM run; pressure, ply count and lot linkage are not established by this import"}

@@ -11,6 +11,7 @@
           "bounds": null,
           "conditions": {
             "conditioning": "FSRI Dry group; published HFM protocol dries at 105 C for at least 48 h to stable mass; test moisture, pressure, ply count and lot unqualified",
+            "gauge_scope": "Full HFM specimen between instrument contact plates; pressure and unloaded clearance unqualified",
             "instrument": "F200s",
             "instrument_serial": "2522",
             "scope": "One HFM run; pressure, ply count and lot linkage are not established by this import",
@@ -43,6 +44,7 @@
         "conductivity": {
           "conditions": {
             "conditioning": "FSRI Dry group; published HFM protocol dries at 105 C for at least 48 h to stable mass; test moisture, pressure, ply count and lot unqualified",
+            "gauge_scope": "Full HFM specimen between instrument contact plates; pressure and unloaded clearance unqualified",
             "instrument": "F200s",
             "instrument_serial": "2522",
             "reading_counts_by_temperature": "{\"15.0\": 3, \"65.0\": 3}",
@@ -83,6 +85,7 @@
           "bounds": null,
           "conditions": {
             "conditioning": "FSRI Wet group, interpreted as unconditioned as-received under the published HFM sequence; test moisture, pressure, ply count and lot unqualified",
+            "gauge_scope": "Full HFM specimen between instrument contact plates; pressure and unloaded clearance unqualified",
             "instrument": "F200s",
             "instrument_serial": "2522",
             "scope": "One HFM run; pressure, ply count and lot linkage are not established by this import",
@@ -115,6 +118,7 @@
         "conductivity": {
           "conditions": {
             "conditioning": "FSRI Wet group, interpreted as unconditioned as-received under the published HFM sequence; test moisture, pressure, ply count and lot unqualified",
+            "gauge_scope": "Full HFM specimen between instrument contact plates; pressure and unloaded clearance unqualified",
             "instrument": "F200s",
             "instrument_serial": "2522",
             "reading_counts_by_temperature": "{\"15.0\": 3, \"65.0\": 3}",

@@ -26,6 +26,9 @@ class HfmSourceTests(unittest.TestCase):
         self.assertEqual(catalog, bundled)
         # Independent sums from the six printed results, not the importer's grouping function.
         dry, wet = catalog["materials"]
+        for material in (dry, wet):
+            self.assertIn("gauge_scope", material["properties"]["thickness"]["conditions"])
+            self.assertNotIn("unloaded_thickness", material["properties"])
         self.assertAlmostEqual(dry["thermal_response"]["conductivity"]["points"][0]["mean"],
                                (0.02232 + 0.02276 + 0.02282) / 3, places=15)
         self.assertAlmostEqual(wet["thermal_response"]["conductivity"]["points"][1]["mean"],
