@@ -3640,6 +3640,7 @@ fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Val
         if endpoint["time_s"] != frame["time_s"]
             || endpoint["time_s"] != sample["time_s"]
             || endpoint["arm_abduction_deg"] != frame["arm_abduction_deg"]
+            || endpoint["leg_pose"] != frame["leg_pose"]
             || !sample["positions_m"].is_array()
             || !sample["body_positions_m"].is_array()
             || endpoint["positions_sha256"].as_str() != Some(hash(&sample["positions_m"])?.as_str())

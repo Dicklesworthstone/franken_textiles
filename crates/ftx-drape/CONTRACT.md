@@ -75,6 +75,19 @@ shape and reference geometry, and immutable flat-fit context adds only its compu
 occupancy refuses before simulation. Target source/uncertainty is retained without promoting chart
 priors to measurements or adding nappy material, friction, mass, thermal or vapor properties.
 
+**Articulated garment continuation.** A material-study motion keyframe may add
+`leg_pose: {posture: "seated" | "squat", fraction: 0..1}`. It scales the existing body model's
+leg-joint rotations independently of the stated arm angle, on the same selected occupied shape.
+Each endpoint is absolute; an omitted leg pose means standing. Existing arm-only requests retain
+their serialized form. Reports and comparison admission bind the exact requested posture and
+fraction. Intermediate accepted steps follow the existing checked linear vertex chords; short
+authored pose increments approximate articulation, without an anatomical trajectory or chair/floor
+contact claim. Full body-surface, continuous collision and rollback checks remain mandatory.
+Motion trials retain body topology and refit their geometry query indices using the bottom-up
+FrankenSim `fs-query` algorithm pinned in `bvh.rs`; geometry and all indices publish together.
+Brute-force/rebuilt-body equivalence and actual sewn-cloth continuation tests cover this reuse;
+no runtime speedup or physical fit is inferred.
+
 **Declared simulation coverage.** `garment::simulation_scope` validates all instance and seam
 references and requires explicit placement on each instance whose `sim` is not false. Missing
 placement refuses before production meshing, including disconnected panels. Explicit exclusions

@@ -2977,3 +2977,133 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         }
     }
 }
+
+#[test]
+fn seated_and_squat_continuation_replays_native_and_portable_with_occupied_shape() {
+    use ftx_wasm::materials::scenario::on_model;
+
+    let dir = setup();
+    let bytes = model_bytes_with_locals(true, &["buttocks-volume-incr", "hip-scale-depth-incr"]);
+    let digest = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let mut accepted = receipt(&digest);
+    accepted["solution"]["anny_parameters"]["local_changes"] = json!([0.0, 0.0]);
+    let bare_seat = 3200.0 * ftx_core::det::sin_cos(std::f64::consts::PI / 16.0).0;
+    let body = json!({"schema":"ftx-scenario-body/1","accepted_body_fit":accepted,
+        "arm_abduction_deg":35.0,"measurements":{"wearer":{"nappies":true},
+            "fused":{"seat_over_nappy":{"value_mm":bare_seat + 60.0,"sigma_mm":5.0}}}});
+    let mut pattern: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+    ))
+    .unwrap();
+    let width = std::f64::consts::TAU * 180.0;
+    pattern["pieces"][0]["vertices"]["b"][0] = json!(width);
+    pattern["pieces"][0]["vertices"]["c"][0] = json!(width);
+    pattern["pieces"][0]["placement"]["radius_mm"] = json!(180.0);
+    pattern["pieces"][0]["placement"]["x0"] = json!(width / 2.0);
+    let study = json!({"schema":"ftx-material-study/1","variants":[{"key":"baseline",
+        "changes":{"schema":"ftx-material-bindings/1","default":pattern["fabric"]["material"]}}],
+        "cutting":{"copies":1,"gap_mm":1.0,"edge_margin_mm":0.0,"end_margin_mm":0.0}});
+    let scenario = json!({"schema":"ftx-drape-scenario/1",
+        "options":{"spacing":100.0,"sew_steps":3,"drape_steps":3,"step":0.001},
+        "fit_spec":{},"max_mesh_points":4096,"max_vertex_frames":1000000,
+        "motion":{"schema":"ftx-drape-motion/1","keyframes":[
+            {"time_s":0.002,"arm_abduction_deg":35.0,"leg_pose":{"posture":"seated","fraction":0.0001}},
+            {"time_s":0.004,"arm_abduction_deg":35.0,"leg_pose":{"posture":"squat","fraction":0.0002}},
+            {"time_s":0.006,"arm_abduction_deg":35.0}],
+            "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000}});
+    let portable: Value = serde_json::from_str(
+        &on_model(
+            &model,
+            &digest,
+            &pattern.to_string(),
+            &study.to_string(),
+            &scenario.to_string(),
+            &body.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    for (name, value) in [
+        ("pattern.json", &pattern),
+        ("study.json", &study),
+        ("scenario.json", &scenario),
+        ("body-input.json", &body),
+    ] {
+        save(&dir.join(name), value);
+    }
+    for (binary, prefix) in [
+        (
+            env!("CARGO_BIN_EXE_ftx"),
+            vec!["--json", "materials", "scenario-study"],
+        ),
+        (env!("CARGO_BIN_EXE_ftx-materials"), vec!["scenario-study"]),
+    ] {
+        let output = Command::new(binary)
+            .current_dir(&dir)
+            .args(prefix)
+            .args([
+                "pattern.json",
+                "study.json",
+                "scenario.json",
+                "body-input.json",
+                "model.ftxbody",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} / {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(native.get("result").unwrap_or(&native), &portable);
+    }
+    let selected = &portable["scenario"]["body_fit"];
+    assert_eq!(selected["source_fit"], accepted);
+    assert_eq!(
+        selected["shape_parameters"],
+        accepted["solution"]["anny_parameters"]
+    );
+    assert!(
+        (selected["nappy_occupancy"]["achieved_seat_mm"]
+            .as_f64()
+            .unwrap()
+            - bare_seat
+            - 60.0)
+            .abs()
+            < 1e-8
+    );
+    assert_ne!(selected["shape_sha256"], selected["occupied_shape_sha256"]);
+    let motion = &portable["simulations"][0]["evaluation"]["result"]["motion"];
+    assert_eq!(motion["status"], "available", "{motion}");
+    let motion = &motion["result"];
+    let samples = motion["samples"].as_array().unwrap();
+    assert_eq!(samples.len(), 6);
+    assert_ne!(
+        samples[1]["body_positions_m"],
+        motion["initial_sample"]["body_positions_m"]
+    );
+    assert_ne!(
+        samples[1]["body_positions_m"],
+        samples[3]["body_positions_m"]
+    );
+    assert_eq!(
+        samples[5]["body_positions_m"],
+        motion["initial_sample"]["body_positions_m"]
+    );
+    for i in 0..2 {
+        assert_eq!(
+            motion["keyframes"][i]["leg_pose"],
+            scenario["motion"]["keyframes"][i]["leg_pose"]
+        );
+    }
+    assert!(motion["keyframes"][2].get("leg_pose").is_none());
+    assert_eq!(motion["continuous_contact_checked"], true);
+    assert_eq!(motion["physical_validation_claim"], false);
+    assert_eq!(read(&dir.join("body-input.json")), body);
+    assert_eq!(std::fs::read(dir.join("model.ftxbody")).unwrap(), bytes);
+}

@@ -10,8 +10,14 @@
 //! the output is sorted.
 //! The owning body-query adapter returns sorted leaf supersets, with the caller's exact box and
 //! narrow-phase tests retained; it reuses this tree instead of allocating a grid over empty space.
+//!
+//! Immutable-topology refit is adapted from frankensim
+//! `crates/fs-query/src/features/triangles.rs`, `PreparedTriangleSurface::refit_bounds`, at commit
+//! `d1aea97c310fa4b6767e975af8c126f450e9f71f` (same author, MIT + OpenAI/Anthropic rider). The
+//! bottom-up bound update retains this crate's box representation and sorted queries; geometry is
+//! validated before publishing a new index. No source workspace dependency or cancellation adapter.
 
-use ftx_core::Vec3;
+use ftx_core::{Refusal, RefusalCode, Vec3};
 
 /// Features per leaf.
 const LEAF_SIZE: usize = 8;
@@ -54,6 +60,48 @@ impl QueryBvh {
             order: bvh.order,
             nodes: bvh.nodes,
         }
+    }
+
+    /// Update primitive bounds while retaining the original leaf ownership and tree topology.
+    /// The returned index is independent; any invalid input leaves the old geometry index intact.
+    pub(crate) fn refitted(&self, boxes: &[Aabb]) -> Result<Self, Refusal> {
+        if boxes.len() != self.order.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "body query refit requires unchanged primitive count",
+            ));
+        }
+        for &(lo, hi) in boxes {
+            if !lo.is_finite() || !hi.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "body query refit requires finite bounds",
+                ));
+            }
+            if (0..3).any(|k| lo[k] > hi[k]) {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "body query refit requires ordered bounds",
+                ));
+            }
+        }
+        let mut next = self.clone();
+        // Parents precede their children in build_node, so reverse traversal visits each child
+        // before its parent. Primitive identities remain unchanged even across old split planes.
+        for id in (0..next.nodes.len()).rev() {
+            next.nodes[id].bounds = match next.nodes[id].kind {
+                Kind::Leaf { start, len } => {
+                    let ids = &next.order[start..start + len];
+                    ids[1..]
+                        .iter()
+                        .fold(boxes[ids[0]], |bounds, &i| merged(bounds, boxes[i]))
+                }
+                Kind::Internal { left, right } => {
+                    merged(next.nodes[left].bounds, next.nodes[right].bounds)
+                }
+            };
+        }
+        Ok(next)
     }
 
     pub(crate) fn query(&self, bounds: Aabb, out: &mut Vec<usize>) {
@@ -352,6 +400,48 @@ mod tests {
         bvh.query((Vec3::new(1.0, 1.0, 1.0), Vec3::ZERO), &mut actual);
         assert!(actual.is_empty());
         QueryBvh::build(&[]).query((Vec3::ZERO, Vec3::ZERO), &mut actual);
+        assert!(actual.is_empty());
+    }
+
+    #[test]
+    fn refitted_queries_match_brute_force_across_original_split_planes() {
+        let boxes = scatter(129, 19);
+        let mut tree = QueryBvh::build(&boxes);
+        let original_order = tree.order.clone();
+        let mut actual = Vec::new();
+        for phase in 1..=3 {
+            // Reassign every primitive's location, then move the whole collection outside its
+            // original extent. Reusing old leaf or internal bounds would lose real candidates.
+            let shift = Vec3::new(10.0 * phase as f64, -3.0, 2.0 * phase as f64);
+            let moved: Vec<_> = (0..boxes.len())
+                .map(|i| {
+                    let (lo, hi) = boxes[(37 * i + 11 * phase) % boxes.len()];
+                    (lo + shift, hi + shift)
+                })
+                .collect();
+            tree = tree.refitted(&moved).unwrap();
+            assert_eq!(tree.order, original_order);
+            for query in moved.iter().copied().chain([(moved[0].1, moved[0].1)]) {
+                tree.query(query, &mut actual);
+                assert!(actual.windows(2).all(|w| w[0] < w[1]));
+                actual.retain(|&i| overlaps(moved[i], query));
+                let expected: Vec<_> = (0..moved.len())
+                    .filter(|&i| overlaps(moved[i], query))
+                    .collect();
+                assert_eq!(actual, expected);
+            }
+        }
+        assert!(tree.refitted(&boxes[..128]).is_err());
+        let mut invalid = boxes.clone();
+        invalid[0].0.x = f64::NAN;
+        assert_eq!(
+            tree.refitted(&invalid).unwrap_err().code,
+            RefusalCode::NonFinite
+        );
+        invalid[0] = (Vec3::new(1.0, 1.0, 1.0), Vec3::ZERO);
+        assert!(tree.refitted(&invalid).is_err());
+        let empty = QueryBvh::build(&[]).refitted(&[]).unwrap();
+        empty.query((Vec3::ZERO, Vec3::ZERO), &mut actual);
         assert!(actual.is_empty());
     }
 }

@@ -378,7 +378,23 @@ impl FittedBody {
         for keyframe in &request.keyframes {
             let mut pose = Pose::drape();
             pose.arm_abduction_deg = Some(keyframe.arm_abduction_deg);
-            let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
+            let mut deltas = pose_deltas(model, &rest, &pose, 1.0)?;
+            if let Some(legs) = keyframe.leg_pose {
+                let leg_pose = Pose {
+                    legs: match legs.posture {
+                        motion::LegPosture::Seated => ftx_body::Legs::Seated,
+                        motion::LegPosture::Squat => ftx_body::Legs::Squat,
+                    },
+                    ..Pose::rest()
+                };
+                let leg_deltas = pose_deltas(model, &rest, &leg_pose, legs.fraction)?;
+                // Arm straightening/abduction stays complete while only the disjoint leg joints
+                // ramp. Reuse the source pose definitions rather than duplicating bone names/angles.
+                for joint in ftx_body::joint_rotations(model, &rest, &leg_pose)? {
+                    deltas[joint.bone] = leg_deltas[joint.bone];
+                }
+            }
+            let posed = model.pose(&rest, &deltas)?;
             let skin = clothing_skin(model, &posed.vertices)?;
             if skin.triangles != self.collision.triangles
                 || skin.source_vertex != self.collision.source_vertex
@@ -877,6 +893,210 @@ mod tests {
                 .unwrap()
                 .sha256()
         );
+    }
+
+    #[test]
+    fn seated_and_squat_paths_continue_real_cloth_and_restore_the_solver_after_a_late_refusal() {
+        use crate::study::{Scenario, heat};
+        use ftx_body::kinematics::Affine;
+
+        let model = model();
+        let digest = "a".repeat(64);
+        let fitted = FittedBody::prepare(&model, &digest, &request()).unwrap();
+        let original_body_report = fitted.report.clone();
+        let body = fitted.body();
+        let rest = model.rest(&fitted.params).unwrap();
+        let mut pattern: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+        ))
+        .unwrap();
+        let width = std::f64::consts::TAU * 138.0;
+        pattern["pieces"][0]["vertices"]["b"][0] = json!(width);
+        pattern["pieces"][0]["vertices"]["c"][0] = json!(width);
+        pattern["pieces"][0]["placement"]["radius_mm"] = json!(150.0);
+        pattern["pieces"][0]["placement"]["x0"] = json!(width / 2.0);
+        pattern["pieces"][0]["placement"]["y0"] =
+            json!(body.frames.landmark_h("torso", "waist").unwrap() - 100.0);
+        let pattern = ftx_pattern::Pattern::from_json(&pattern.to_string()).unwrap();
+        let mut scenario: Scenario = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-scenario.json"
+        ))
+        .unwrap();
+        scenario.options.spacing = 40.0;
+        scenario.options.sew_steps = 12;
+        scenario.options.drape_steps = 12;
+        scenario.options.step = 0.0025;
+        scenario.surface = None;
+        scenario.coverage = None;
+        let mut run = crate::run::drape(
+            &pattern,
+            &scenario.fit_spec,
+            &body,
+            &scenario.options,
+            |_| {},
+        )
+        .unwrap();
+        let original = run.scene.solver.clone();
+        let count = body.collision.0.len() + original.x.len();
+        for (posture, hip, knee, foot) in [
+            ("seated", -90.0_f64, 90.0_f64, 0.0_f64),
+            ("squat", -100.0, 110.0, -10.0),
+        ] {
+            let request: motion::Request =
+                serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
+                "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.0,
+                    "leg_pose":{"posture":posture,"fraction":0.0001}},
+                    {"time_s":0.004,"arm_abduction_deg":35.0,
+                    "leg_pose":{"posture":posture,"fraction":0.0002}}],
+                "max_step_s":0.001,"max_trials":16,"max_pairs":100000,
+                "max_sample_vertices":10000}))
+                .unwrap();
+            let path = fitted.motion_path(&model, &digest, &request).unwrap();
+            // Independently spell out the source joint angles, retaining all original arm deltas.
+            let mut expected = Vec::new();
+            for key in &request.keyframes {
+                let mut deltas = pose_deltas(&model, &rest, &Pose::drape(), 1.0).unwrap();
+                for side in ["L", "R"] {
+                    for (name, degrees) in
+                        [("upperleg01", hip), ("lowerleg01", knee), ("foot", foot)]
+                    {
+                        let bone = model.bone_index(&format!("{name}.{side}")).unwrap();
+                        let axis = rest.bone_frames[bone]
+                            .m
+                            .transpose()
+                            .mul_vec(Vec3::new(1.0, 0.0, 0.0));
+                        deltas[bone] = Affine::from_rotvec(
+                            axis * (degrees.to_radians() * key.leg_pose.unwrap().fraction),
+                            Vec3::ZERO,
+                        );
+                    }
+                }
+                let posed = model.pose(&rest, &deltas).unwrap();
+                expected.push(clothing_skin(&model, &posed.vertices).unwrap().vertices);
+            }
+            let independent =
+                motion::Path::new(&request, body.collision, expected.clone()).unwrap();
+            assert_eq!(path.sha256(), independent.sha256());
+            assert_ne!(expected[0], body.collision.0);
+            assert_ne!(expected[0], expected[1]);
+            // Arm-only omission and an explicit zero leg fraction retain the original geometry.
+            let mut standing = request.clone();
+            for key in &mut standing.keyframes {
+                key.leg_pose = None;
+            }
+            let held = motion::Path::new(
+                &standing,
+                body.collision,
+                vec![body.collision.0.to_vec(); 2],
+            )
+            .unwrap();
+            assert_eq!(
+                fitted
+                    .motion_path(&model, &digest, &standing)
+                    .unwrap()
+                    .sha256(),
+                held.sha256()
+            );
+
+            run.scene.solver = original.clone();
+            let continued = motion::evaluate(
+                &request,
+                &path,
+                &scenario,
+                &body,
+                &mut run,
+                &mut heat::Budget::default(),
+                None,
+                None,
+                |_| {},
+            )
+            .unwrap();
+            let samples = continued["samples"].as_array().unwrap();
+            assert_eq!(samples.len(), 4);
+            assert_eq!(samples[1]["body_positions_m"], json!(expected[0]));
+            assert_eq!(samples[3]["body_positions_m"], json!(expected[1]));
+            assert_eq!(
+                continued["keyframes"][0]["leg_pose"],
+                json!(request.keyframes[0].leg_pose)
+            );
+            assert_eq!(continued["continuous_contact_checked"], true);
+            assert_ne!(run.scene.solver.x, original.x);
+            let moved = run.scene.solver.x.clone();
+            run.scene.solver = original.clone();
+            motion::evaluate(
+                &standing,
+                &held,
+                &scenario,
+                &body,
+                &mut run,
+                &mut heat::Budget::default(),
+                None,
+                None,
+                |_| {},
+            )
+            .unwrap();
+            assert_ne!(
+                run.scene.solver.x, moved,
+                "the leg collider must affect the sewn cloth"
+            );
+
+            // The first leg segment fits the budget and has already changed real cloth. A failure
+            // before the second segment must restore every solver state and replay the same result.
+            let mut limited = request.clone();
+            limited.max_sample_vertices = 3 * count;
+            let limited_path = fitted.motion_path(&model, &digest, &limited).unwrap();
+            run.scene.solver = original.clone();
+            let refusal = motion::evaluate(
+                &limited,
+                &limited_path,
+                &scenario,
+                &body,
+                &mut run,
+                &mut heat::Budget::default(),
+                None,
+                None,
+                |_| {},
+            )
+            .unwrap_err();
+            assert!(
+                refusal
+                    .message
+                    .contains("whole-trajectory motion budget exhausted"),
+                "{refusal:?}"
+            );
+            assert_eq!(run.scene.solver.x, original.x);
+            assert_eq!(run.scene.solver.v, original.v);
+            assert_eq!(
+                run.scene.solver.contact.as_ref().unwrap().body.vertices,
+                original.contact.as_ref().unwrap().body.vertices
+            );
+            assert_eq!(
+                run.scene.solver.relaxation_report().unwrap(),
+                original.relaxation_report().unwrap()
+            );
+            assert_eq!(
+                run.scene.solver.bending_plasticity_report().unwrap(),
+                original.bending_plasticity_report().unwrap()
+            );
+            assert_eq!(
+                run.scene.solver.membrane_plasticity_report().unwrap(),
+                original.membrane_plasticity_report().unwrap()
+            );
+            let replay = motion::evaluate(
+                &request,
+                &path,
+                &scenario,
+                &body,
+                &mut run,
+                &mut heat::Budget::default(),
+                None,
+                None,
+                |_| {},
+            )
+            .unwrap();
+            assert_eq!(replay, continued);
+            assert_eq!(fitted.report, original_body_report);
+        }
     }
 
     #[test]
