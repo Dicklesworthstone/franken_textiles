@@ -1277,6 +1277,44 @@ test('material supplemental worker delegates fusion and feeds the same result to
   const refusedWorker=await workerModule({bindings});const refused=await refusedWorker.send({type:'exports',measurements:'{}',measurementSources:'[]',measurementConsent:true});
   assert.equal(refused.type,'error');assert.match(refused.message,/duplicate evidence/);assert.equal(calls.length,count);
 });
+test('compiled WASM active material admission preserves dormant sources and actual contact requirements',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const fixture=name=>JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials',name),'utf8'));
+    const source=fixture('synthetic-sewing-pattern.json'),complete=fixture('synthetic-friction-sliding.json').target.materials[0];
+    const label={...structuredClone(source.pieces[0]),id:'excluded_label',sim:false};source.pieces.push(label);
+    const w=await workerModule({bindings:ftx});
+    for(const sameSheet of [true,false]) {
+      const sheet=structuredClone(complete);
+      if(!sameSheet)delete sheet.record.properties.friction_self;
+      const changes=JSON.stringify({schema:'ftx-material-bindings/1',default:{id:'mit.raw-2013.08a'},pieces:{front:sheet,back:sheet}});
+      const result=await w.send({type:'bind',pattern:JSON.stringify(source),changes});assert.equal(result.type,'result',result.message);
+      const r=result.result,bodyOnly=r.drape_materials_without_self_contact,contact=r.drape_materials_with_self_contact;
+      assert.equal(bodyOnly.ready,true,JSON.stringify(bodyOnly));assert.equal(contact.ready,sameSheet,JSON.stringify(contact));
+      assert.equal(r.geometry_changed,false);assert.deepEqual(plain(r.pattern.seams),source.seams);
+      const pieces=plain(r.pattern.pieces);
+      for(let i=0;i<source.pieces.length;i++)for(const field of ['vertices','edges','sim'])assert.deepEqual(pieces[i][field],source.pieces[i][field]);
+      assert.equal(r.pieces.length,3,'The excluded cloth source remains in the manufacturing binding');
+      const materials=bodyOnly.value,excluded=materials.pieces.find(piece=>piece.piece_id==='excluded_label');
+      assert.equal(excluded.mechanics_consumed,false);assert.equal(excluded.exclusion_reason,'sim_false');
+      assert.equal(materials.contact_material_order.length,1);assert.equal(materials.self_friction_matrix,null);
+      const active=materials.records[materials.contact_material_order[0]];
+      assert.equal(active.mechanics.friction_self,sameSheet?complete.record.properties.friction_self.value:null);
+      if(!sameSheet){assert.match(contact.refusal.message,/friction_self/);assert.equal(contact.value,undefined);}
+      assert.equal(result.files.find(file=>file.name==='pattern.json').text,r.pattern_json);
+      const reactivated=structuredClone(source);reactivated.pieces[2].sim=true;
+      const blocked=await w.send({type:'bind',pattern:JSON.stringify(reactivated),changes});assert.equal(blocked.type,'result',blocked.message);
+      for(const field of ['drape_materials_without_self_contact','drape_materials_with_self_contact']) {
+        assert.equal(blocked.result[field].ready,false);assert.equal(blocked.result[field].value,undefined);
+        assert.match(blocked.result[field].refusal.message,/missing textile property/);
+      }
+      const stale=JSON.parse(changes);stale.pieces.excluded_label={id:'mit.raw-2013.08a',expected_sha256:'0'.repeat(64)};
+      const refused=await w.send({type:'bind',pattern:JSON.stringify(source),changes:JSON.stringify(stale)});
+      assert.equal(refused.type,'error');assert.equal(refused.files,undefined);assert.match(refused.message,/SHA|sha|digest/);
+    }
+  });
 test('compiled WASM material supplemental photo evidence matches the ordinary round and retains refusals',
   {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
