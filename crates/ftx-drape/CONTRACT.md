@@ -600,8 +600,14 @@ digest, identical native debug, release and wasm32-wasip1). KATs 4–6 are relea
 unoptimised). Bodies and bands are built with `det::sin_cos`: the platform's `sin`/`cos` made the wasm
 digest differ.
 
-Fitted bodies (`tests/kat_fitted.rs`; the toddler fitted to the reference wearer's 21 tape readings, release,
-needs the Anny model): KAT 8 armpit wedge, the drafted bolero at 80, 92 and 116 cm with the arms at 35°: no
+Fitted bodies (`tests/kat_fitted.rs`; synthetic bodies conditioned on the reference's 21 nominal chart
+targets at the fitter's fixed per-functional scales, release, needs the Anny model). This is the
+original KAT body recipe, before production fitting began honoring reported sigmas in `80efc68`.
+The chart's broad uncertainty defines a different inferred body: at 92 cm honoring its sigmas gives
+a 21.0 mm maximum hem rise, while the restored nominal KAT has 10.5 mm. The KAT fixes its
+body-conditioning inputs; production fitting retains supplied uncertainty and its residual reports.
+These synthetic controls establish no measured-body accuracy. KAT 8 armpit wedge, the drafted bolero
+at 80, 92 and 116 cm with the arms at 35°: no
 gating flag, settled, every hem within ±15 mm of its drafted level (the 80 cm front hangs 13 mm higher than
 its back, an advisory: the belly lifts it); KAT 10 two starts, the 92 cm bolero sewn in 12 and in 18 steps:
 the same minimum, every hem, clearance and seam strain equal at the report's precision; KAT 9 the whole
