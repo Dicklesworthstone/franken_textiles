@@ -775,6 +775,24 @@ enthalpy from each interval's condensed mass and declared vapor temperature. Exi
 positive-only semantics remain unchanged. Analytic warming, dry/wet reversals, reference-area
 accounting, time refinement, rollback and native/portable scenario replay qualify software only.
 
+**Finite shared textile vapor reservoir** (`study::heat::surface_water::reservoir`, `ftx-vc2`).
+Version 5 independently qualifies one well-mixed isothermal inventory with an explicit constant
+vapor capacitance, pressure domain and initial mass. Supplied liquid and reverse transfer remain
+independently qualified; drainage is optional. Prescribed outside pressure is absent, and all
+incoming vapor temperatures equal the reservoir temperature. Every tentative pressure retries the
+same accepted liquid and thermal owners, using one common earliest-dryout duration for all patches.
+An ordered, bounded search preserves the first admissible dryout root when duration depends on
+pressure. Accepted actual evaporation minus condensation balances reservoir storage before the
+existing implicit heat solve runs. Pressure probes consume the existing whole-history cell-step
+budget even when discarded or followed by rollback. Loose caller tolerances cannot create vapor.
+Trace and final result `/5` retain the complete liquid ledger plus reservoir mass, pressure, signed
+enthalpy receipts, isothermal heat removal, clock, probe count and residuals. Comparison admission
+checks those owners and source domains independently. The thermostat exchange explicitly closes
+the effective constant-latent/cp_liquid energy model; no gas heat capacity, fog, sorption or body
+water source is inferred. The accepted-state probe and compensated sum mechanisms are adapted
+filewise from FrankenSim commit `d1aea97c310fa4b6767e975af8c126f450e9f71f`, with provenance in the
+module. Existing versions 1–4 keep their arithmetic and prescribed-pressure semantics.
+
 **Source-qualified prescribed drainage** (`study::heat::surface_water`, `ftx-vc2`).
 Version 4 requires separately sourced liquid supply and drainage, and optionally admits the same
 condensation qualification as version 3. Per-instance, per-keyframe drainage demand uses reference

@@ -872,6 +872,204 @@ fn drained_textile_water_replays_in_native_portable_and_named_case_decisions() {
 }
 
 #[test]
+fn finite_vapor_inventory_replays_humidity_feedback_and_coupled_ledgers_in_native_and_portable_decisions()
+ {
+    use ftx_wasm::materials::scenario::on_model;
+
+    let (pattern, mut study, mut single) = inputs();
+    let capacitance = 1e-15;
+    let initial_pressure = 1000.0;
+    let initial_vapor = capacitance * initial_pressure;
+    let reservoir = json!({"schema":"ftx-textile-vapor-reservoir/1",
+        "model":"isothermal_constant_vapor_capacitance/1",
+        "vapor_capacitance_kg_pa":capacitance,"initial_vapor_mass_kg":initial_vapor,
+        "temperature_c":20.,"pressure_domain_pa":[0.,10000.],
+        "max_iterations":128,"mass_tolerance_kg":1e-18,
+        "source":{"reference":"test:selected-body-finite-vapor","accessed_on":"2026-11-01",
+            "note":"Synthetic tiny isothermal inventory for an exhaustion control; no measured atmosphere or textile claim"},
+        "evidence":"estimate","allow_estimates":true,"method":"Explicit finite mass per pressure and fixed effective enthalpy",
+        "qualification":"Artificial well-mixed constant capacitance over [0,10000] Pa at 20 C, with constant latent plus cp_liquid effective sensible enthalpy; no gas heat capacity or inferred ideal-gas law"});
+    let water = &mut single["motion"]["transient_surface"]["surface_water"];
+    water["schema"] = json!("ftx-textile-surface-water/5");
+    water
+        .as_object_mut()
+        .unwrap()
+        .remove("replenishment_kg_m2_s");
+    water
+        .as_object_mut()
+        .unwrap()
+        .remove("outside_vapor_pressure_pa");
+    water["bindings"]["band"]["initial_liquid_kg_m2"] = json!(0.);
+    // The constant zero curve isolates the inventory feedback from temperature-dependent vapor
+    // pressure. It is an artificial constitutive control, not a physical saturation-pressure law.
+    water["wet_vapor_pressure_pa"] = json!([[-20., 0.], [80., 0.]]);
+    water["qualification"] = json!(
+        "Synthetic fixed dry laws and artificial zero wet pressure over [-20,80] C and [0,1e-5] kg/m2; not measured condensation"
+    );
+    water["supply"] = json!({"schema":"ftx-textile-liquid-supply/1",
+        "bindings":{"band":{"rate_kg_m2_s":[0.],"temperature_c":[20.]}},
+        "source":{"reference":"test:finite-vapor-zero-feed","accessed_on":"2026-11-01",
+            "note":"Explicit zero liquid delivery isolates the shared finite vapor stock"},
+        "evidence":"estimate","allow_estimates":true,"method":"Declared zero co-moving liquid feed"});
+    water["condensation"] = json!({"schema":"ftx-textile-condensation/1","vapor_temperature_c":[20.],
+        "source":{"reference":"test:finite-vapor-condensation","accessed_on":"2026-11-01",
+            "note":"Synthetic reverse Ret, wet/dry nucleation and effective vapor enthalpy only"},
+        "evidence":"estimate","allow_estimates":true,"method":"Artificial bidirectional free-film transfer",
+        "qualification":"Exact artificial Ret in both directions across the declared pressure, temperature and loading domains; constant latent plus cp_liquid sensible convention"});
+    water["vapor_reservoir"] = reservoir.clone();
+    let material_lock = water["bindings"]["band"]["material_sha256"].clone();
+    study["comparison"]["objectives"] = json!([
+        {"metric":"textile_water_condensed_mass_kg","direction":"minimize"}]);
+    study["comparison"]["constraints"][0] =
+        json!({"metric":"textile_water_remaining_mass_kg","minimum":0.});
+    qualify_mechanics(&pattern, &study, &mut single, true);
+
+    // The same real sewn geometry and source-qualified Ret against a fixed-pressure atmosphere
+    // would draw far more than the finite initial stock. This is a production numerical control.
+    let mut infinite = single.clone();
+    let water = &mut infinite["motion"]["transient_surface"]["surface_water"];
+    water["schema"] = json!("ftx-textile-surface-water/3");
+    water.as_object_mut().unwrap().remove("vapor_reservoir");
+    water["outside_vapor_pressure_pa"] = json!([initial_pressure]);
+    let bytes = model_bytes_with_rig(true);
+    let digest = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let body = json!({"schema":"ftx-scenario-body/1","accepted_body_fit":receipt(&digest),
+        "arm_abduction_deg":35.0});
+    let baseline: Value = serde_json::from_str(
+        &on_model(
+            &model,
+            &digest,
+            &pattern,
+            &study.to_string(),
+            &infinite.to_string(),
+            &body.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let original = &keyed(&baseline["simulations"], "qualified")["evaluation"]["result"];
+    let baseline_motion = &original["motion"];
+    assert_eq!(baseline_motion["status"], "available", "{baseline_motion}");
+    let baseline_water = &baseline_motion["result"]["transient_surface"]["result"]["surface_water"];
+    assert!(baseline_water["condensed_liquid_kg"].as_f64().unwrap() > 100. * initial_vapor);
+
+    replay(
+        &pattern,
+        &study,
+        single,
+        "FTX_FINITE_VAPOR_RESERVOIR_REPLAY",
+        |report| {
+            let simulated = &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
+            let motion = &simulated["motion"]["result"];
+            let heat = &motion["transient_surface"]["result"];
+            let water = &heat["surface_water"];
+            let gas = &water["vapor_reservoir"];
+            let mechanics = &motion["liquid_mechanics"];
+            assert_eq!(water["schema"], "ftx-textile-surface-water-result/5");
+            assert_eq!(water["request"]["vapor_reservoir"], reservoir);
+            assert!(water["request"].get("outside_vapor_pressure_pa").is_none());
+            assert_eq!(
+                water["request"]["bindings"]["band"]["material_sha256"],
+                material_lock
+            );
+            assert_eq!(heat["mechanical_coupling"], *mechanics);
+            assert_eq!(
+                mechanics["qualification"],
+                heat["request"]["mechanical_coupling"]
+            );
+            assert_eq!(
+                simulated["drape"]["material"],
+                original["drape"]["material"]
+            );
+            assert_eq!(simulated["positions_sha256"], original["positions_sha256"]);
+            assert_eq!(
+                report["scenario"]["body_fit"],
+                baseline["scenario"]["body_fit"]
+            );
+            assert_eq!(
+                report["scenario"]["body_geometry_sha256"],
+                baseline["scenario"]["body_geometry_sha256"]
+            );
+            assert_eq!(
+                motion["initial_sample"]["body_positions_m"],
+                baseline_motion["result"]["initial_sample"]["body_positions_m"]
+            );
+
+            let condensed = water["condensed_liquid_kg"].as_f64().unwrap();
+            assert!(condensed > 0.99 * initial_vapor && condensed <= initial_vapor);
+            assert!(gas["remaining_vapor_mass_kg"].as_f64().unwrap() < initial_vapor * 1e-6);
+            assert!(gas["vapor_pressure_pa"].as_f64().unwrap() < 0.001);
+            assert_eq!(gas["elapsed_seconds"], motion["duration_s"]);
+            assert_eq!(water["initial_liquid_kg"], 0.);
+            assert_eq!(water["supplied_liquid_kg"], 0.);
+            assert_eq!(water["evaporated_liquid_kg"], 0.);
+            assert!(
+                (mechanics["remaining_liquid_mass_kg"].as_f64().unwrap() - condensed).abs() < 1e-23
+            );
+            assert!(
+                (mechanics["exchange"]["incoming_mass_kg"].as_f64().unwrap() - condensed).abs()
+                    < 1e-23
+            );
+            assert_eq!(mechanics["exchange"]["outgoing_mass_kg"], 0.);
+
+            let trace = heat["trace"].as_array().unwrap();
+            assert!(trace.len() >= 2);
+            let first_condensed = trace[0]["surface_water"]["condensed_liquid_kg"]
+                .as_f64()
+                .unwrap();
+            assert!(first_condensed > 0.);
+            assert!(
+                condensed - first_condensed < first_condensed * 0.01,
+                "depleted humidity must throttle subsequent condensation"
+            );
+            let mut previous_pressure = initial_pressure;
+            for sample in trace.iter().chain(std::iter::once(heat)) {
+                let w = &sample["surface_water"];
+                let gas = &w["vapor_reservoir"];
+                let remaining_vapor = gas["remaining_vapor_mass_kg"].as_f64().unwrap();
+                let pressure = gas["vapor_pressure_pa"].as_f64().unwrap();
+                assert!(pressure >= 0. && pressure <= previous_pressure);
+                previous_pressure = pressure;
+                assert!((remaining_vapor - capacitance * pressure).abs() < 1e-25);
+                let mass_error =
+                    remaining_vapor + w["remaining_liquid_kg"].as_f64().unwrap() - initial_vapor;
+                assert!(
+                    mass_error.abs() < 1e-23,
+                    "combined vapor/liquid inventory {mass_error}"
+                );
+                assert!(gas["mass_balance_error_kg"].as_f64().unwrap().abs() < 1e-23);
+                let vapor_storage = gas["vapor_enthalpy_change_j"].as_f64().unwrap();
+                let thermostat = gas["isothermal_heat_removed_j"].as_f64().unwrap();
+                let incoming = gas["net_vapor_enthalpy_received_j"].as_f64().unwrap();
+                assert!((vapor_storage + thermostat - incoming).abs() < 1e-15);
+                let energy_error = sample["stored_change_j"].as_f64().unwrap()
+                    + w["liquid_stored_change_j"].as_f64().unwrap()
+                    + vapor_storage
+                    + thermostat
+                    - sample["net_boundary_energy_j"].as_f64().unwrap();
+                assert!(
+                    energy_error.abs() < 1e-8,
+                    "combined cloth/liquid/vapor energy {energy_error}"
+                );
+                assert!(sample["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+            }
+            assert_eq!(
+                keyed(&report["comparison"]["alternatives"], "qualified")["readings"]["textile_water_condensed_mass_kg"]
+                    ["value"],
+                water["condensed_liquid_kg"]
+            );
+            assert_eq!(
+                keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"]["status"],
+                "refused"
+            );
+            assert_eq!(heat["physical_validation_claim"], false);
+        },
+    );
+}
+
+#[test]
 fn supplied_textile_water_replays_in_native_commands_and_portable_scenario_matrices() {
     let (pattern, mut study, mut single) = inputs();
     single["material_strain"] = json!({"schema":"ftx-material-strain/1",

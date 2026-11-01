@@ -652,8 +652,10 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
     }
     if (h?.surface_water) {
       const water = h.surface_water;
-      const draining = water.schema === "ftx-textile-surface-water-result/4";
-      const condensing = water.schema === "ftx-textile-surface-water-result/3" ||
+      const finiteVapor = water.schema === "ftx-textile-surface-water-result/5";
+      const draining = water.schema === "ftx-textile-surface-water-result/4" ||
+        finiteVapor && typeof water.drained_liquid_kg === "number";
+      const condensing = finiteVapor || water.schema === "ftx-textile-surface-water-result/3" ||
         draining && typeof water.condensed_liquid_kg === "number";
       const supplied = draining || condensing || water.schema === "ftx-textile-surface-water-result/2";
       const mass = table(parent, `${key}: textile surface liquid — conserved ${condensing ? "initial, supplied and condensed" : supplied ? "initial and supplied" : "initial"} inventory`,
@@ -673,6 +675,20 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         ...(draining ? [metric(water.exported_liquid_sensible_energy_j)] : []),
         metric(water.liquid_stored_change_j), ...(supplied ? [metric(water.supplied_liquid_sensible_energy_j)] : []),
         ...(condensing ? [metric(water.condensation_latent_energy_j), metric(water.incoming_vapor_sensible_energy_j)] : []), metric(water.balance_error_j)]);
+      if (finiteVapor) {
+        const vapor = water.vapor_reservoir;
+        const inventory = table(parent, `${key}: finite shared vapor inventory and pressure`,
+          ["Initial vapor (kg)", "Remaining vapor (kg)", "Net vapor received (kg)", "Mass residual (kg)",
+            "Initial vapor pressure (Pa)", "Vapor pressure (Pa)"]);
+        cells(inventory, [metric(vapor?.initial_vapor_mass_kg), metric(vapor?.remaining_vapor_mass_kg),
+          metric(vapor?.net_vapor_received_kg), metric(vapor?.mass_balance_error_kg),
+          metric(vapor?.initial_vapor_pressure_pa), metric(vapor?.vapor_pressure_pa)]);
+        const reservoirEnergy = table(parent, `${key}: finite vapor energy and fixed-temperature heat exchange`,
+          ["Vapor enthalpy change (J)", "Net vapor enthalpy received (J)",
+            "Isothermal heat removed (J)", "Enthalpy residual (J)"]);
+        cells(reservoirEnergy, [metric(vapor?.vapor_enthalpy_change_j), metric(vapor?.net_vapor_enthalpy_received_j),
+          metric(vapor?.isothermal_heat_removed_j), metric(vapor?.enthalpy_balance_error_j)]);
+      }
       const scope = document.createElement("p");
       scope.textContent = "This explicitly sourced free liquid shares the inner textile cell temperature. Evaporation cools that cell, " +
         "and the temperature feeds the declared vapor-pressure table. " +
@@ -681,6 +697,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         "The combined balance includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, " +
         "against boundary energy plus qualified material heat" + (supplied ? " and incoming liquid sensible energy. Loading beyond the qualified cap refuses the interval. " : ". The initial-only model has zero replenishment. ") +
         (condensing ? "Independently qualified reverse vapor transfer can condense on dry or wet cloth and later re-evaporate. Condensation latent release and incoming vapor sensible enthalpy are separate energy inputs; the effective enthalpy convention remains explicit in the source policy. " : "") +
+        (finiteVapor ? "All textile patches share one finite vapor inventory: evaporation raises its pressure and condensation consumes available vapor. The source explicitly fixes vapor capacitance and temperature. Isothermal heat removed is the signed heat exchange needed to hold that temperature; it is separate from textile boundary heat. No gas volume, heat capacity or body moisture source is inferred. " : "") +
         (draining ? "Independently sourced drainage demand uses reference material area and is limited by available liquid. Drained liquid exports sensible enthalpy at the old inner-cell temperature with no latent energy; empty cloth shares available inflow proportionally between evaporation and drainage demands. No overflow or runoff law is inferred. " : "") +
         (h.mechanical_coupling?.exchange ? `Qualified supplied liquid, condensed vapor, evaporation${draining ? " and drainage" : ""} update cloth inertia and gravity after every accepted interval. ` :
           h.mechanical_coupling ? "Qualified evaporation updates cloth inertia and gravity after every accepted interval; co-moving vapor removes its own momentum without accelerating the remaining cloth. " :

@@ -8307,6 +8307,58 @@ test('prescribed textile drainage displays separate liquid mass and sensible exp
   p.e.scenarioRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
 });
 
+test('finite shared vapor displays humidity feedback and fixed-temperature heat with optional drainage', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const report=scenarioReport();
+  const policy={schema:'ftx-textile-surface-water/5',vapor_reservoir:{
+    schema:'ftx-textile-vapor-reservoir/1',source:{reference:'<qualified finite vapor source>'}}};
+  report.scenario.scenario={motion:{transient_surface:{surface_water:policy}}};
+  const evaluation=report.simulations.find(row=>row.key==='A').evaluation.result;
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+  for(const drainage of [false,true]) {
+    const water={schema:'ftx-textile-surface-water-result/5',request:policy,
+      initial_liquid_kg:0,supplied_liquid_kg:0.001,condensed_liquid_kg:0.004,evaporated_liquid_kg:0.003,
+      remaining_liquid_kg:drainage?0.0015:0.002,mass_balance_error_kg:0,dryout_events:0,
+      latent_energy_j:7500,exported_vapor_sensible_energy_j:252,liquid_stored_change_j:drainage?126:168,
+      supplied_liquid_sensible_energy_j:84,condensation_latent_energy_j:10000,
+      incoming_vapor_sensible_energy_j:504,balance_error_j:0,
+      vapor_reservoir:{schema:'ftx-textile-vapor-reservoir-result/1',initial_vapor_mass_kg:0.002,
+        remaining_vapor_mass_kg:0.001,net_vapor_received_kg:-0.001,mass_balance_error_kg:0,
+        initial_vapor_pressure_pa:800,vapor_pressure_pa:400,vapor_enthalpy_change_j:-2626,
+        net_vapor_enthalpy_received_j:-2752,isothermal_heat_removed_j:-126,enthalpy_balance_error_j:0,
+        elapsed_seconds:1,pressure_trials:42,maximum_step_mass_residual_kg:1e-16}};
+    if(drainage) Object.assign(water,{drained_liquid_kg:0.0005,exported_liquid_sensible_energy_j:42});
+    evaluation.motion=outcome({samples:[{}],keyframes:[],transient_surface:outcome({duration_s:1,
+      thermal_steps:4,trace:[{temperature_range_c:[20,21]}],surface_water:water})});
+    await p.e.scenario.onclick();p.emit(report);
+    const mass=table('textile surface liquid — conserved initial, supplied and condensed inventory');
+    assert.deepEqual(plain(mass.children[2].children.map(n=>n.textContent)),
+      ['0','0.001','0.004','0.003',...(drainage?['0.0005']:[]),drainage?'0.0015':'0.002','0','0']);
+    assert.equal(mass.children[1].children.some(n=>n.textContent==='Drained liquid (kg)'),drainage);
+    assert.deepEqual(plain(table('textile evaporation and sensible energy').children[2].children.map(n=>n.textContent)),
+      ['7500','252',...(drainage?['42']:[]),drainage?'126':'168','84','10000','504','0']);
+    assert.deepEqual(plain(table('finite shared vapor inventory and pressure').children[2].children.map(n=>n.textContent)),
+      ['0.002','0.001','-0.001','0','800','400']);
+    assert.deepEqual(plain(table('finite vapor energy and fixed-temperature heat exchange').children[2].children.map(n=>n.textContent)),
+      ['-2626','-2752','-126','0']);
+    assert.match(visibleText(s),/evaporation raises its pressure and condensation consumes available vapor/);
+    assert.match(visibleText(s),/signed heat exchange needed to hold that temperature/);
+    const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===
+      'A: textile liquid source, exact patches and canonical vapor paths (display only)');
+    source.open=true;source.handlers.toggle();
+    assert.match(visibleText(source),/<qualified finite vapor source>/);
+    assert.match(visibleText(source),/pressure_trials/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  evaluation.motion=refused('finite vapor reservoir left its qualified pressure domain');
+  await p.e.scenario.onclick();p.emit(report);
+  assert.equal(table('finite shared vapor inventory and pressure'),undefined);
+  assert.equal(table('finite vapor energy and fixed-temperature heat exchange'),undefined);
+  assert.match(visibleText(s),/finite vapor reservoir left its qualified pressure domain/);
+  p.e.scenarioRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+});
+
 test('supplied textile water displays delivery and incoming enthalpy separately through rewetting and refusals', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const report=scenarioReport(); report.scenario.scenario={motion:{transient_surface:{surface_water:{schema:'ftx-textile-surface-water/2'}}}};
@@ -10184,7 +10236,7 @@ test('compiled WASM routed shared fixtures and attending workers replay exact na
   });
 
 test('compiled WASM evaporating, supplied and condensing textile-water objectives, moving mass and incoming momentum replay native commands and named scenarios',
-  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY || process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY || process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY || process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY || process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY)}, async()=>{
+  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY || process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY || process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY || process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY || process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY || process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY)}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
@@ -10200,8 +10252,10 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
         [process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY,'supplied-phase-impulse-mechanics'],
         [process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY,'condensing-phase-impulse-mechanics'],
         [process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY,'supplied-scheduled-impulse-mechanics'],
+        [process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY,'condensing-finite-mechanics'],
         [process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY,'condensing-scheduled-impulse-mechanics']].filter(([dir])=>dir)) {
         const prescribed=kind.includes('impulse');
+        const finite=kind.includes('finite');
         const phases=kind.includes('phase'),scheduled=kind.includes('scheduled');
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8');
         const bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
@@ -10225,9 +10279,31 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
             assert.ok(readings.transient_surface_final_min_temperature_c.value<20);
             assert.equal(readings.textile_water_remaining_mass_kg.value,0);
           }
-          assert.ok(readings.textile_water_evaporated_mass_kg.value>0);
+          if(finite) assert.equal(readings.textile_water_evaporated_mass_kg.value,0);
+          else assert.ok(readings.textile_water_evaporated_mass_kg.value>0);
           const motion=report.simulations.find(row=>row.key==='qualified').evaluation.result.motion.result;
           const heat=motion.transient_surface.result;
+          if(finite) {
+            const water=heat.surface_water,gas=water.vapor_reservoir,source=water.request.vapor_reservoir;
+            assert.equal(water.schema,'ftx-textile-surface-water-result/5');
+            assert.equal(gas.schema,'ftx-textile-vapor-reservoir-result/1');
+            assert.equal(water.request.outside_vapor_pressure_pa,undefined);
+            assert.ok(water.condensed_liquid_kg>0.99*source.initial_vapor_mass_kg);
+            assert.ok(water.condensed_liquid_kg<=source.initial_vapor_mass_kg);
+            assert.ok(gas.remaining_vapor_mass_kg<1e-6*source.initial_vapor_mass_kg);
+            assert.ok(gas.vapor_pressure_pa<0.001);assert.equal(gas.elapsed_seconds,motion.duration_s);
+            let previousPressure=source.initial_vapor_mass_kg/source.vapor_capacitance_kg_pa;
+            for(const sample of [...heat.trace,heat]) {
+              const w=sample.surface_water,g=w.vapor_reservoir;
+              assert.ok(g.vapor_pressure_pa>=0&&g.vapor_pressure_pa<=previousPressure);previousPressure=g.vapor_pressure_pa;
+              assert.ok(Math.abs(g.remaining_vapor_mass_kg-source.vapor_capacitance_kg_pa*g.vapor_pressure_pa)<1e-25);
+              assert.ok(Math.abs(g.remaining_vapor_mass_kg+w.remaining_liquid_kg-source.initial_vapor_mass_kg)<1e-23);
+              assert.ok(Math.abs(g.mass_balance_error_kg)<1e-23);
+              assert.ok(Math.abs(g.vapor_enthalpy_change_j+g.isothermal_heat_removed_j-g.net_vapor_enthalpy_received_j)<1e-15);
+              assert.ok(Math.abs(sample.stored_change_j+w.liquid_stored_change_j+g.vapor_enthalpy_change_j+
+                g.isothermal_heat_removed_j-sample.net_boundary_energy_j)<1e-8);
+            }
+          }
           if(kind.startsWith('condensing')) assert.ok(heat.surface_water.condensation_latent_energy_j>0);
           if(kind==='variable') {
             assert.ok(heat.model.columns.length>0);
@@ -10288,7 +10364,8 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
                 assert.ok(Math.abs(mechanics.transfer_kinetic_residual_j)<1e-12);
               } else assert.equal(mechanics.exchange.mixing_dissipation_j,undefined);
             }
-            assert.ok(mechanics.exported_kinetic_energy_j>0);
+            if(finite) assert.equal(mechanics.exported_kinetic_energy_j,0);
+            else assert.ok(mechanics.exported_kinetic_energy_j>0);
             assert.ok(Math.abs(mechanics.mass_balance_residual_kg)<1e-14);
             assert.equal(motion.initial_sample.liquid_mechanics.remaining_liquid_mass_kg,mechanics.initial_liquid_mass_kg);
             assert.equal(missing.status,'refused');
