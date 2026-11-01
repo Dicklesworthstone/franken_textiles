@@ -376,9 +376,14 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                     Ok(domain) => json!({"ready":true,"temperature_domain_c":domain}),
                     Err(refusal) => json!({"ready":false,"refusal":refusal}),
                 };
+                let sewing = match selected.unloaded_thickness() {
+                    Ok(quantity) => json!({"ready":true,"value":quantity.value}),
+                    Err(refusal) => json!({"ready":false,"refusal":refusal}),
+                };
                 json!({"schema":"ftx-material-detail/1", "material":selected.material(),
                     "mechanics_missing":missing, "sha256":selected.sha256(),
                     "mechanics_ready":selected.mechanics().is_ok(),
+                    "sewing_thickness_m":sewing,
                     "steady_conduction":readiness(steady),"transient_thermal":readiness(transient),
                     "thermal_ready":selected.thermal_resistance().is_ok()})
             };

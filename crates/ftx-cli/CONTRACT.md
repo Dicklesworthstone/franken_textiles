@@ -333,6 +333,13 @@ at that age (`out_of_range`; other measurements out of reach stay residuals in `
 **No claims.** Legacy round parity and rendered movies; Blender pixel parity; a body that matches the
 wearer anywhere but the fitted measurements; performance at arbitrary garment sizes or requested poses.
 
+Both native material `show` commands report `sewing_thickness_m` through the shared
+unloaded-thickness authority, independently of mechanical and thermal readiness. A ready
+`value` is the admitted nominal observation in metres; source bounds remain in the material,
+and actual manufacturing clearance uses their upper endpoint. This compatibility/admission
+result is not measured machine qualification. Pressure/gauge observations and unapproved
+estimates retain their structured refusals without hiding the original material or heat data.
+
 ## Measurement evidence commands
 
 `measure catalogue|prior|init|add|validate|fuse|ready|reference|calib-sheet|calibrate-camera|photo-scale|sheet-pose|measure-photo|girth-from-section|triangulate|bundle-adjust|fit-body|still-window|video-select`

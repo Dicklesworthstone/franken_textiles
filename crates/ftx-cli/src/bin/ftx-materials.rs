@@ -396,9 +396,14 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
                 Ok(domain) => json!({"ready":true,"temperature_domain_c":domain}),
                 Err(refusal) => json!({"ready":false,"refusal":refusal}),
             };
+            let sewing = match snapshot.unloaded_thickness() {
+                Ok(quantity) => json!({"ready":true,"value":quantity.value}),
+                Err(refusal) => json!({"ready":false,"refusal":refusal}),
+            };
             Ok(
                 json!({"snapshot":snapshot,"selection":snapshot.frozen_selection(),
                 "missing_mechanics":snapshot.material().missing_mechanics(),
+                "sewing_thickness_m":sewing,
                 "steady_conduction":readiness(steady),"transient_thermal":readiness(transient),
                 "simulation_ready":simulation_readiness(&snapshot).is_ok()}),
             )

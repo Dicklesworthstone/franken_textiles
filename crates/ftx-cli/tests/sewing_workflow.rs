@@ -213,6 +213,61 @@ fn measured_specimens_are_discoverable_without_a_false_drape_readiness_claim() {
 }
 
 #[test]
+fn native_inspection_reports_shared_unloaded_thickness_admission() {
+    for (id, estimated, nominal) in [
+        ("nist/7282/cotton-duck", false, Some(0.00132)),
+        ("tandy_cow_garment_9114_71", true, Some(0.0007)),
+        ("fsri/hfm/cotton-sheet/dry/220330-r1", false, None),
+        ("fsri/hfm/cotton-sheet/wet/220318-r1", false, None),
+        ("demey/2025/cotton-jersey", false, None),
+        ("mit.fabric-2013.08", false, None),
+    ] {
+        for allowed in [false, true] {
+            let mut main = Command::new(env!("CARGO_BIN_EXE_ftx"));
+            main.args(["materials", "show", id, "--json"]);
+            let mut companion = Command::new(env!("CARGO_BIN_EXE_ftx-materials"));
+            companion.args(["show", id]);
+            if allowed {
+                main.arg("--allow-estimates");
+                companion.arg("--allow-estimates");
+            }
+            let reports = [main.output().unwrap(), companion.output().unwrap()];
+            let portable: Value = serde_json::from_str(
+                &ftx_wasm::materials::inspect(
+                    &json!({"id":id,"allow_estimates":allowed}).to_string(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            for (i, output) in reports.iter().enumerate() {
+                assert!(output.status.success(), "{id}: {output:?}");
+                let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+                let report = if i == 0 {
+                    assert_eq!(envelope["ok"], true);
+                    &envelope["result"]
+                } else {
+                    &envelope
+                };
+                let sewing = &report["sewing_thickness_m"];
+                assert_eq!(sewing, &portable["capabilities"]["sewing_thickness_m"]);
+                let ready = nominal.is_some() && (!estimated || allowed);
+                assert_eq!(sewing["ready"], ready, "{id}, estimates={allowed}");
+                if ready {
+                    assert_eq!(sewing["value"], nominal.unwrap());
+                } else {
+                    assert_eq!(sewing["refusal"]["code"], "invalid_document");
+                    assert!(sewing.get("value").is_none());
+                }
+                if id.starts_with("fsri/hfm/") {
+                    assert_eq!(report["steady_conduction"]["ready"], allowed);
+                    assert_eq!(report["transient_thermal"]["ready"], false);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn multipass_cli_expands_every_directed_stitch_and_matches_library() {
     let p = fixture("synthetic-sewing-pattern.json");
     let o = fixture("synthetic-sewing-multipass-options.json");
