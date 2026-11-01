@@ -1437,15 +1437,7 @@ impl Solver {
                 "settling needs finite positive time/speed limits, h_max >= h0, and a nonzero quiet window within the step budget",
             ));
         }
-        if self.relaxation.is_some()
-            || self.plasticity.is_some()
-            || self.membrane_plasticity.is_some()
-        {
-            return Err(Refusal::new(
-                RefusalCode::OutOfRange,
-                "speed-only settling cannot certify material history; use explicit time steps and inspect stress and irreversible strain/curvature",
-            ));
-        }
+        self.check_settling_history()?;
         let mut rep = SettleReport {
             h: h0,
             ..SettleReport::default()
@@ -1467,6 +1459,20 @@ impl Solver {
             }
         }
         Ok(rep)
+    }
+
+    /// An automatic stopping time cannot select a constitutive history duration or loading path.
+    pub(crate) fn check_settling_history(&self) -> Result<(), Refusal> {
+        if self.relaxation.is_some()
+            || self.plasticity.is_some()
+            || self.membrane_plasticity.is_some()
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "speed-only settling cannot certify material history; use explicit time steps and inspect stress and irreversible strain/curvature",
+            ));
+        }
+        Ok(())
     }
 
     /// Minimises `Ψ − Σ mᵢ g·xᵢ` from the current positions (equilibrium under gravity) and zeroes the

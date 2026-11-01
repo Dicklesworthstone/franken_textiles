@@ -224,6 +224,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       <p class="row"><label><input type="checkbox" id="selfContact" checked> cloth self-contact</label>
         <label><input type="checkbox" id="twoStart"> compare a second sewing path</label>
         <button id="foldGo" disabled>Fold it up</button></p>
+      <p class="row"><label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
+        <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
+        <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label></p>
+      <p class="mut">Leg fraction moves from standing (0) to the full selected posture (1), keeping the fitted shape and arm angle.
+        Extra settling continues the sewn garment until its quiet window or the step limit; 0 keeps the fixed schedule.
+        History-dependent materials require a fixed-duration run and refuse automatic settling.</p>
       <p class="mut">The optional comparison runs a second full solve at 18 sewing steps versus the
         ordinary 12-step path. It can roughly double fold time. Agreement is sensitivity evidence,
         not a confidence interval, unique-equilibrium proof or physical-fit claim.</p>
@@ -797,10 +803,22 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         + (gating.length ? "<br>" + gating.map(esc).join("<br>") : "")
         + (advisory.length ? `<br><span class="mut">${advisory.map(esc).join("<br>")}</span>` : "")
         + path + bodyFitSummary(r.body);
+      if (r.body?.legs || r.body?.leg_fraction !== undefined) {
+        $("foldSummary").innerHTML += `<br>Leg posture: ${esc(r.body.legs || "standing")}, fraction ${esc(r.body.leg_fraction ?? 1)}`;
+      }
+      if (r.numerical?.settling) {
+        const tail = r.numerical.settling;
+        $("foldSummary").innerHTML += `<br>Extra settling: ${esc(tail.steps)} / ${esc(tail.max_steps)} steps, ${esc(tail.duration_s)} s; ${esc(tail.stop_reason)}. Total gravity duration: ${esc(tail.gravity_duration_s)} s.`;
+      }
       const u = URL.createObjectURL(new Blob([msg.viewer], { type: "text/html" }));
       const ru = URL.createObjectURL(new Blob([msg.reportText], { type: "application/json" }));
       foldUrls.push(u, ru);
       $("foldSummary").innerHTML += `<br><a download="fold_viewer.html" href="${u}">fold_viewer.html</a> · <a download="sim_report.json" href="${ru}">sim_report.json</a>`;
+      if (typeof msg.settingsText === "string") {
+        const settings = URL.createObjectURL(new Blob([msg.settingsText], { type: "application/json" }));
+        foldUrls.push(settings);
+        $("foldSummary").innerHTML += ` · <a download="fold-settings.json" href="${settings}">fold-settings.json</a>`;
+      }
       if (typeof msg.bodyFitText === "string") {
         const source = URL.createObjectURL(new Blob([msg.bodyFitText], { type: "application/json" }));
         foldUrls.push(source);
@@ -868,6 +886,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change", invalidateFold);
   $("twoStart").addEventListener("change", invalidateFold);
+  for (const id of ["drapeLegs", "drapeLegFraction", "maxSettleSteps"]) {
+    for (const event of ["input", "change"]) $(id).addEventListener(event, invalidateFold);
+  }
   $("resetStyle").addEventListener("click", () => {
     $("style").value = JSON.stringify(info[program].style, null, 1); store.set("style-" + program, null); invalidateRound();
   });
@@ -947,6 +968,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (bodyFitText !== null && $("bodyArmDeg").value.trim() === "") {
       showError("Supply the drape arm angle for the imported body."); return;
     }
+    if ($("drapeLegFraction").value.trim() === "" || $("maxSettleSteps").value.trim() === "") {
+      showError("Supply a leg fraction and maximum extra settling steps."); return;
+    }
     foldRequest = ++nextRequest;
     folding = true; foldButton(); dropFold();
     $("errorBox").classList.add("hidden");
@@ -954,7 +978,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     worker.postMessage({ type: "fold", request: foldRequest, round: roundRequest, body: bodyRequest,
       selfContactMm: $("selfContact").checked ? 2 : 0, twoStart: $("twoStart").checked,
       bodyFit: bodyFitText, bodyFitConsent: $("bodyFitConsent").checked,
-      armDeg: Number($("bodyArmDeg").value) });
+      armDeg: Number($("bodyArmDeg").value), legs: $("drapeLegs").value,
+      legFraction: Number($("drapeLegFraction").value), maxSettleSteps: Number($("maxSettleSteps").value) });
   });
   const traceOrigin=new URL(location.href).origin;
   if(traceToken && /^[0-9a-f]{32}$/.test(traceToken) && traceOrigin!=="null" && window.opener) {

@@ -105,7 +105,15 @@ A-pose 35°, also 50° and arms up 150°). Legs about +X: seated = hips −90°,
 knees +110°, feet −10° (trunk upright). Straight arms (`Pose::drape`, A-pose 35° with them): Anny's rest
 elbow is bent about 46° with the forearm forward, so `upperarm02` turns onto `upperarm01`'s line and
 `lowerarm01` onto `upperarm02`'s, and a straight sleeve can contain the arm (a bent-elbow start crossed the
-forearm). A ramp scales every φ by t. Nappy of size s:
+forearm). A ramp scales every φ by t.
+
+The independent `Pose.leg_fraction` (finite, inclusive 0..1; default 1) scales only the selected
+seated/squat hip, knee and ankle rotations. Arms retain their specified abduction and straightening,
+so small explicit flexion endpoints do not inadvertently move the arms back toward rest. Zero is
+the standing leg geometry; one is the existing complete posture. This is a kinematic control,
+not a measured movement, anatomical correction or guarantee that a cloth trajectory is admissible.
+
+Nappy of size s:
 `buttocks-volume-incr` += s, `hip-scale-depth-incr` += s/2 (s = 1 adds about 113 mm to a 2.5-year-old's
 torso seat girth); `calibrate_nappy` bisects `s` (`0..=2.0`) so `seat_girth` on the posed body matches a
 taped `seat_over_nappy` target within 0.01 mm, refusing targets outside the reachable range. The skin is

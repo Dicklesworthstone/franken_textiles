@@ -82,6 +82,7 @@ fn drape_poses_match_the_package() {
         });
         let params = nappy_local_changes(&m, &base, inp["nappy"].as_f64().unwrap()).unwrap();
         let pose = Pose {
+            leg_fraction: 1.0,
             arm_abduction_deg: inp["arm_abduction_deg"].as_f64(),
             legs: match inp["legs"].as_str().unwrap() {
                 "standing" => Legs::Standing,

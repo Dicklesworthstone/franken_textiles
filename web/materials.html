@@ -261,6 +261,12 @@ Current measurements remain the independent export and readiness evidence. Model
 drape do not establish physical fit. Body-dependent studies below have an explicit source choice.</p>
 </details>
 <label><input id="selfContact" type="checkbox" checked> Enable cloth self-contact (requires unlike-material pair evidence)</label>
+<label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
+<label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
+<label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label>
+<p class="note">Leg fraction moves from standing (0) to the full selected posture (1), keeping the fitted shape and arm angle.
+Extra settling continues the sewn garment until its quiet window or the step limit; 0 keeps the fixed schedule.
+History-dependent materials require a fixed-duration run and refuse automatic settling.</p>
 <button id="fold" data-command="fold" disabled>Re-drape on this body</button>
 </div><div>
 <h3>Cutting, purchasing and sewing</h3>
@@ -271,6 +277,9 @@ drape do not establish physical fit. Body-dependent studies below have an explic
 to allow checked raised-tool detours. The positive offset places candidate waypoints around fixture bounds;
 the supplied tool envelopes still determine clearance. Previews and modeled travel times include the selected
 detours and return. A bounded search can refuse without proving that every possible route is blocked.</p>
+<p class="note">Set <code>program.stock_loading: [{"marker":0,"lower_left_mm":[20,10]}]</code> to place a marker's
+whole stock bounding box at an explicit machine-bed location. Marker indices start at 0. The entire stock must fit the bed;
+cuts, fixtures and raised travel use the retained translation. Omit this option for the existing origin placement.</p>
 <p class="note">Set <code>width_basis: "reported_lower_bound"</code> to plan inside the lower endpoint of each roll material's
 source-reported width range. Missing bounds refuse this option. The preview and report retain the narrower layout boundary;
 marker length and purchasing are recomputed. Nominal purchase width, invoiced area and nominal stock mass keep their original
@@ -523,14 +532,20 @@ The selected <strong>Body source for body-dependent studies</strong> governs eve
 section-3 measurements at 35°. Accepted-shape mode uses the original report and ordinary arm angle above,
 with explicit wearer association and optional current measurements. It needs no separately authored request file.
 Separate-request mode instead owns its measurements, optional <code>accepted_body_fit</code> report and
-<code>arm_abduction_deg</code> (0–180°, default 35°); section-3 report, pose and measurement edits do not alter that request.
+<code>arm_abduction_deg</code> (0–180°, default 35°), <code>legs</code> (<code>standing</code>, <code>seated</code>, <code>squat</code>)
+and <code>leg_fraction</code> (0–1, default 1); section-3 report, pose and measurement edits do not alter that request.
 Accepted shapes must match the exact model and are never refitted; optional tapes report residuals only.
 An absent or malformed selected source refuses without switching to another source. Choose measurement mode explicitly
 to return to tape fitting. Original source text is retained in the downloaded <code>body-input.json</code> for replay.
 The scenario itself owns the fit specification, numerical options, surface conditions and body-coverage policy;
-the single-preview fit, self-contact checkbox and thermal files above do not override it. Shape selection runs once;
-the chosen standing straight-arm pose does not change that shape. Each alternative gets a fresh production drape and
+the single-preview fit, leg posture, settling budget, self-contact checkbox and thermal files above do not override it. Shape selection runs once;
+the chosen garment pose does not change that shape. Each alternative gets a fresh production drape and
 current-geometry heat evaluation. Without a <code>motion</code> request this remains a static pose.</p>
+<p class="note">Motion keyframes accept an arm angle and optional <code>leg_pose: {"posture":"seated","fraction":0.5}</code>
+with posture <code>seated</code> or <code>squat</code> and a fraction from 0 to 1.
+Each endpoint keeps the fitted shape and continues the sewn cloth. Omitted <code>leg_pose</code> selects standing at that endpoint.
+Use short pose increments: the checked path follows vertex chords between endpoints and can refuse intersecting geometry.
+Scenario <code>options.max_settle_steps</code> reserves a bounded optional tail for the initial drape, before motion begins.</p>
 <p class="note">Optional scenario <code>vapor_coverage</code> computes layer paths from each new drape, using explicit
 body-triangle IDs, instance-to-layer names, geometric projection settings and vapor-pressure boundaries.
 The result reports covered-region potential transfer separately from uncovered body area and unassigned cloth.

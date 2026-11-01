@@ -416,6 +416,37 @@ fn independent_casings_drive_joint_physics_and_replay_without_merging_grip_or_lo
         .as_array()
         .unwrap();
     assert_eq!(windows.len(), 2);
+    let continued = prepared
+        .drape(
+            &json!({}),
+            &body(&skin),
+            &DrapeOptions {
+                max_settle_steps: 4,
+                ..opts
+            },
+            |_| {},
+        )
+        .unwrap();
+    assert!(continued.drape.steps > opts.drape_steps);
+    for window in continued.report["elastic_observation_windows"]
+        .as_array()
+        .unwrap()
+    {
+        assert_eq!(
+            window["window"]["duration_s"],
+            continued.drape.steps as f64 * opts.step
+        );
+        assert_eq!(window["window"]["samples"], continued.drape.steps + 1);
+        assert_eq!(
+            window["declared_hold"]["first_gravity_step"],
+            continued.drape.steps - 1
+        );
+        assert_eq!(
+            window["declared_hold"]["last_gravity_step"],
+            continued.drape.steps
+        );
+        assert_eq!(window["declared_hold"]["duration_s"], 2. * opts.step);
+    }
     for (i, group) in run.scene.elastic_groups.iter().enumerate() {
         assert_eq!(windows[i]["instance"], casings[i].instance);
         let hold = &windows[i]["declared_hold"];

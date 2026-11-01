@@ -996,10 +996,10 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
     transientHeatComparison(parent, row.key, result, initial?.motion || evaluation, requested);
     motionVaporComparison(op, parent, row.key, index, result, initial?.motion || evaluation, requested, filePrefix);
     if (!result) continue;
-    const endpoints = table(parent, `${row.key}: endpoint steady snapshots — not transient heat`, ["Time (s)", "Arm angle (degrees)",
+    const endpoints = table(parent, `${row.key}: endpoint steady snapshots — not transient heat`, ["Time (s)", "Arm angle (degrees)", "Leg posture", "Leg fraction",
       "Surface heat", "Signed surface power (W)", "Body coverage", "Signed coverage power (W)"]);
     for (const endpoint of result.keyframes) {
-      cells(endpoints, [metric(endpoint.time_s), metric(endpoint.arm_abduction_deg), state(endpoint.surface),
+      cells(endpoints, [metric(endpoint.time_s), metric(endpoint.arm_abduction_deg), endpoint.leg_pose?.posture || "standing", endpoint.leg_pose ? metric(endpoint.leg_pose.fraction) : "—", state(endpoint.surface),
         metric(available(endpoint.surface)?.steady?.power_w), state(endpoint.coverage), metric(available(endpoint.coverage)?.steady?.power_w)]);
       steadyHeatBounds(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s independent sheets`, available(endpoint.surface));
       steadyHeatBounds(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s body coverage`, available(endpoint.coverage));
@@ -1854,6 +1854,17 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
       "The waypoint offset controls the bounded candidate search; it does not add measured clearance evidence or establish a globally shortest route. " +
       "Cutting paths, their directions and the internal-before-exterior phases remain unchanged.";
     parent.append(routing);
+  }
+  const loaded = (program.markers || []).filter(marker => marker.loading);
+  if (loaded.length) {
+    const placements = table(parent, `${label}: explicit stock loading`,
+      ["Marker", "Stock lower-left on bed (mm)", "Marker-to-machine translation (mm)", "Whole stock bounds on bed (mm)"]);
+    for (const marker of loaded) {
+      cells(placements, [String(marker.marker + 1),
+        marker.loading.lower_left_mm.map(metric).join(", "),
+        marker.loading.marker_to_machine_offset_mm.map(metric).join(", "),
+        marker.loading.stock_bounds_mm.map(metric).join(", ")]);
+    }
   }
   const finite = (program.markers || []).filter(marker => marker.finite_stock);
   if (finite.length) {
@@ -3364,6 +3375,7 @@ function show(op, msg) {
       op === "stripHistory" ? stripHistoryResult(s.comparison, r) :
       ["stripAcquisition", "stripExperiment", "stripFit"].includes(op) ? stripResult(s.comparison, op, r) :
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis,
+        legs: r.body?.legs || "standing", leg_fraction: r.body?.leg_fraction ?? 1, settling: r.numerical?.settling,
         body_source: r.body?.shape_source || "Tape-fitted MODEL_FIT shape", body_fit: r.body?.fit,
         measurement_comparison: r.body?.measurement_comparison } :
       op === "cut" ? { pattern_sha256: r.pattern_sha256, maximum_marker_length_m: r.options?.maximum_marker_length_m,
@@ -3626,6 +3638,12 @@ async function execute(op) {
       msg.pattern = bound.pattern_json;
       if (op === "fold" || op === "exports") { msg.measurements = await measurementInput(msg); msg.fit = await read("fit"); }
       if (op === "fold") {
+        if ($("drapeLegFraction").value.trim() === "" || $("maxSettleSteps").value.trim() === "") {
+          throw Error("Supply a leg fraction and maximum extra settling steps.");
+        }
+        msg.legs = $("drapeLegs").value;
+        msg.legFraction = Number($("drapeLegFraction").value);
+        msg.maxSettleSteps = Number($("maxSettleSteps").value);
         if (has("bodyFitFile")) {
           if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before draping.");
           const angle = acceptedBodyAngle();
@@ -3855,6 +3873,7 @@ $("supplementalConsent").addEventListener("change", () => supplementalChanged(fa
 $("clearSupplemental").onclick = () => { $("supplementalFiles").value = ""; supplementalChanged(true); };
 for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
+  drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
@@ -3869,6 +3888,9 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
     }
     invalidate([...keys, ...bodyDependentStudies(id)], ["measurements", "fit", "body", "selfContact", "scenarioBody"].includes(id));
   });
+}
+for (const id of ["drapeLegFraction", "maxSettleSteps"]) {
+  $(id).addEventListener("input", () => invalidate(["fold", "heat", "vaporSurface", "coverage"], true));
 }
 $("bodyFitFile").addEventListener("change", () => {
   ++roundRead; roundToken = null; window.opener = null; roundFiles.delete("bodyFitFile");

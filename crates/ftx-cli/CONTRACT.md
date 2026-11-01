@@ -6,6 +6,16 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
 `ftx annotate`, `ftx scale-fit`, `ftx audit`, `ftx render`, `ftx viewer`, `ftx report`, `ftx sim-points`,
 `ftx outfit`, `ftx materials` and immutable `ftx round` workspaces with their local review.
 
+**Garment pose and continuation.** `ftx drape` and `ftx round --sim|--stills` accept
+`--legs standing|seated|squat`, `--leg-fraction 0..1`, and `--max-settle-steps 0..256`.
+Defaults retain the standing pose, full leg fraction and fixed sewing/gravity schedule. Leg
+posture is independent of `--arm-deg`; fitting and nappy calibration retain their reference pose.
+Extra settling continues the same sewn cloth at the original time step until the shared numerical
+quiet window or the declared cap. Reports and animations retain all accepted steps and actual
+duration, including both starts when requested. Invalid settings refuse before file I/O. History
+laws that require a declared duration refuse automatic settling through the shared solver guard.
+The fixed chest-band qualification schedule remains unchanged.
+
 **Commands.**
 - `ftx measure fit-start-review INPUT --model MODEL --out NEW_DIR [--silhouettes MANIFEST] [--json]`:
   inspect every declared shared shape and frame pose through the ordinary native model before

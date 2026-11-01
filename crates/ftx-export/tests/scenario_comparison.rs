@@ -599,6 +599,44 @@ fn partial_stale_and_unchecked_motion_cannot_win_even_with_protocol_override() {
 }
 
 #[test]
+fn explicit_leg_poses_must_match_the_requested_motion_before_comparison() {
+    let request = motion_request();
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let mut source = motion_descriptor();
+    source["scenario"]["motion"]["keyframes"][0]["leg_pose"] =
+        json!({"posture":"seated","fraction":0.25});
+    source["scenario"]["motion"]["keyframes"][1]["leg_pose"] =
+        json!({"posture":"squat","fraction":0.5});
+    for mismatch in [false, true] {
+        let report = request
+            .evaluate_with(&pattern, &source, |key, pattern| {
+                let mut result = synthetic_motion(pattern, 5.0);
+                for i in 0..2 {
+                    result["motion"]["result"]["keyframes"][i]["leg_pose"] =
+                        source["scenario"]["motion"]["keyframes"][i]["leg_pose"].clone();
+                }
+                if mismatch && key == "a" {
+                    result["motion"]["result"]["keyframes"][1]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("leg_pose");
+                }
+                Ok(result)
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            if mismatch {
+                json!(["b"])
+            } else {
+                json!(["a", "b"])
+            }
+        );
+    }
+}
+
+#[test]
 fn motion_comparison_requires_every_requested_leg_posture_and_fraction() {
     let request = motion_request();
     let pattern = Pattern::from_json(PATTERN).unwrap();

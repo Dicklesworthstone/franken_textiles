@@ -31,6 +31,281 @@ fn model_bytes() -> Vec<u8> {
 }
 
 #[test]
+fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
+    use ftx_body::{Legs, Phenotype, Pose, clothing_skin, joint_rotations, pose_deltas};
+    use ftx_drape::study::fitted::{BodyRequest, FittedBody};
+
+    let bytes = model_bytes_with_rig(true);
+    let digest = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let accepted = receipt(&digest);
+    let params = model.params(Phenotype {
+        gender: 1.0,
+        age: ftx_body::age_parameter_for_years(2.5),
+        height: 0.6,
+        ..Phenotype::default()
+    });
+    let rest = model.rest(&params).unwrap();
+    let standing_rotations = joint_rotations(&model, &rest, &Pose::drape()).unwrap();
+    let standing = model
+        .pose(
+            &rest,
+            &pose_deltas(&model, &rest, &Pose::drape(), 1.0).unwrap(),
+        )
+        .unwrap();
+    // The fixture has real upper-leg weights. Check the authored hip/knee/ankle angles independently,
+    // actual moved skin and unchanged arm transforms, rather than accepting posture metadata alone.
+    for legs in [Legs::Seated, Legs::Squat] {
+        for fraction in [0.0, 0.25, 1.0] {
+            let mut pose = Pose::drape();
+            pose.legs = legs;
+            pose.leg_fraction = fraction;
+            let rotations = joint_rotations(&model, &rest, &pose).unwrap();
+            assert_eq!(
+                &rotations[..standing_rotations.len()],
+                standing_rotations.as_slice()
+            );
+            for side in ["L", "R"] {
+                let angles = if legs == Legs::Seated {
+                    [
+                        -std::f64::consts::FRAC_PI_2,
+                        std::f64::consts::FRAC_PI_2,
+                        0.0,
+                    ]
+                } else {
+                    [
+                        -5.0 * std::f64::consts::PI / 9.0,
+                        11.0 * std::f64::consts::PI / 18.0,
+                        -std::f64::consts::PI / 18.0,
+                    ]
+                };
+                for (name, angle) in ["upperleg01", "lowerleg01", "foot"].into_iter().zip(angles) {
+                    let bone = model.bone_index(&format!("{name}.{side}")).unwrap();
+                    let actual = rotations
+                        .iter()
+                        .find(|rotation| rotation.bone == bone)
+                        .map_or(0.0, |rotation| rotation.angle);
+                    assert!((actual - angle * fraction).abs() < 1e-15);
+                }
+            }
+            let posed = model
+                .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+                .unwrap();
+            for bone in 1..=8 {
+                assert_eq!(posed.transforms[bone], standing.transforms[bone]);
+            }
+            for (i, &bone) in model.data().vertex_bone_indices.iter().enumerate() {
+                if [9, 12].contains(&bone) && fraction > 0.0 {
+                    assert!((posed.vertices[i] - standing.vertices[i]).norm() > 1e-6);
+                } else {
+                    assert_eq!(posed.vertices[i], standing.vertices[i]);
+                }
+            }
+        }
+    }
+    for fraction in [f64::NAN, f64::INFINITY, -0.01, 1.01] {
+        let mut pose = Pose::drape();
+        pose.legs = Legs::Seated;
+        pose.leg_fraction = fraction;
+        assert!(pose.validate().is_err());
+    }
+
+    let measurements = json!({"wearer":{"stature_mm":1111.0}});
+    let body_input = json!({"schema":"ftx-scenario-body/1","accepted_body_fit":accepted,
+        "measurements":measurements,"arm_abduction_deg":35.0,"legs":"seated","leg_fraction":0.001});
+    let selected =
+        FittedBody::prepare(&model, &digest, &BodyRequest::read(&body_input).unwrap()).unwrap();
+    assert_eq!(
+        selected.report["shape_parameters"],
+        accepted["solution"]["anny_parameters"]
+    );
+    let mut pattern: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+    ))
+    .unwrap();
+    let width = std::f64::consts::TAU * 180.0;
+    pattern["pieces"][0]["vertices"]["b"][0] = json!(width);
+    pattern["pieces"][0]["vertices"]["c"][0] = json!(width);
+    pattern["pieces"][0]["placement"]["radius_mm"] = json!(180.0);
+    pattern["pieces"][0]["placement"]["x0"] = json!(width / 2.0);
+    let study = json!({"schema":"ftx-material-study/1","variants":[
+        {"key":"baseline","changes":{"schema":"ftx-material-bindings/1","default":pattern["fabric"]["material"]}}],
+        "cutting":{"copies":1,"gap_mm":1.0,"edge_margin_mm":0.0,"end_margin_mm":0.0}});
+    let scenario = json!({"schema":"ftx-drape-scenario/1",
+        "options":{"spacing":100.0,"sew_steps":3,"drape_steps":3,"step":0.001},
+        "fit_spec":{},"max_mesh_points":4096,"max_vertex_frames":1000000,
+        "motion":{"schema":"ftx-drape-motion/1","keyframes":[
+            {"time_s":0.002,"arm_abduction_deg":35.0,"leg_pose":{"posture":"seated","fraction":0.002}},
+            {"time_s":0.004,"arm_abduction_deg":35.0,"leg_pose":{"posture":"squat","fraction":0.003}}],
+            "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000}});
+    let portable: Value = serde_json::from_str(
+        &ftx_wasm::materials::scenario::on_model(
+            &model,
+            &digest,
+            &pattern.to_string(),
+            &study.to_string(),
+            &scenario.to_string(),
+            &body_input.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(portable["scenario"]["body_fit"]["source_fit"], accepted);
+    assert_eq!(
+        portable["scenario"]["body_fit"]["shape_sha256"],
+        selected.report["shape_sha256"]
+    );
+    assert_eq!(
+        portable["scenario"]["body_fit"]["residuals"][0]["residual_mm"],
+        189.0
+    );
+    assert_eq!(portable["scenario"]["body_fit"]["pose"]["legs"], "seated");
+    let simulation = &portable["simulations"][0]["evaluation"];
+    assert_eq!(simulation["status"], "available", "{simulation}");
+    let moving = &simulation["result"]["motion"];
+    assert_eq!(moving["status"], "available", "{moving}");
+    let moving = &moving["result"];
+    assert_eq!(
+        moving["initial_sample"]["body_positions_m"],
+        json!(selected.body().collision.0)
+    );
+    assert_ne!(
+        moving["final_positions_sha256"],
+        moving["initial_positions_sha256"]
+    );
+    for (i, (legs, fraction)) in [(Legs::Seated, 0.002), (Legs::Squat, 0.003)]
+        .into_iter()
+        .enumerate()
+    {
+        let endpoint = &moving["keyframes"][i];
+        assert_eq!(endpoint["leg_pose"]["posture"], json!(legs));
+        assert_eq!(endpoint["leg_pose"]["fraction"], fraction);
+        let mut pose = Pose::drape();
+        pose.legs = legs;
+        pose.leg_fraction = fraction;
+        let posed = model
+            .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+            .unwrap();
+        let skin = clothing_skin(&model, &posed.vertices).unwrap();
+        let sample = &moving["samples"][endpoint["sample_index"].as_u64().unwrap() as usize];
+        assert_eq!(sample["body_positions_m"], json!(skin.vertices));
+        assert_ne!(
+            sample["body_positions_m"],
+            moving["initial_sample"]["body_positions_m"]
+        );
+    }
+    assert_eq!(moving["physical_validation_claim"], false);
+    let dir = setup();
+    eprintln!("leg-posture replay artifacts: {}", dir.display());
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    for (name, value) in [
+        ("pattern.json", &pattern),
+        ("study.json", &study),
+        ("scenario.json", &scenario),
+        ("body-input.json", &body_input),
+        ("accepted.json", &accepted),
+        ("m.json", &measurements),
+        ("leg-motion-report.json", &portable),
+    ] {
+        save(&dir.join(name), value);
+    }
+    for (binary, prefix) in [
+        (
+            env!("CARGO_BIN_EXE_ftx"),
+            &["--json", "materials", "scenario-study"][..],
+        ),
+        (env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"][..]),
+    ] {
+        let output = Command::new(binary)
+            .current_dir(&dir)
+            .args(prefix)
+            .args([
+                "pattern.json",
+                "study.json",
+                "scenario.json",
+                "body-input.json",
+                "model.ftxbody",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report.get("result").unwrap_or(&report), &portable);
+    }
+
+    // The ordinary native and configured portable folds share the same pose and bounded settling
+    // options. An extra gravity cap is not a claim that these two steps make the garment settle.
+    let raw = serde_json::to_string_pretty(&accepted).unwrap();
+    let settings = ftx_wasm::fold::FoldSettings {
+        legs: Legs::Seated,
+        leg_fraction: 0.001,
+        max_settle_steps: 2,
+        ..ftx_wasm::fold::FoldSettings::default()
+    };
+    let source = ftx_wasm::fold::BodyFitSource {
+        model_sha256: &digest,
+        report: &raw,
+        arm_deg: 35.0,
+    };
+    let folded = ftx_wasm::fold::fold_up_configured(
+        &model,
+        &pattern,
+        &measurements,
+        &json!({"points":[]}),
+        settings,
+        Some(&source),
+        |_| {},
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "drape",
+            "pattern.json",
+            "--body-fit",
+            "accepted.json",
+            "--measurements",
+            "m.json",
+            "--model",
+            "model.ftxbody",
+            "--legs",
+            "seated",
+            "--leg-fraction",
+            "0.001",
+            "--max-settle-steps",
+            "2",
+            "--out",
+            "leg-fold",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        matches!(output.status.code(), Some(0 | 2)),
+        "{} / {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut native = read(&dir.join("leg-fold/sim_report.json"));
+    for field in ["pattern", "wall_s", "measurements_sha256"] {
+        native.as_object_mut().unwrap().remove(field);
+    }
+    assert_eq!(native, folded.report);
+    assert_eq!(native["body"]["legs"], "seated");
+    assert_eq!(native["body"]["leg_fraction"], 0.001);
+    assert_eq!(native["numerical"]["settling"]["max_steps"], 2);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("leg-fold/fold_viewer.html")).unwrap(),
+        folded.viewer
+    );
+}
+
+#[test]
 fn nappy_occupancy_preserves_bare_evidence_and_drives_native_portable_and_motion_geometry() {
     use ftx_body::{Pose, Wearer, fit_tape, nappy_occupancy, pose_deltas, tape_targets};
     use ftx_drape::study::{
@@ -144,11 +419,21 @@ fn nappy_occupancy_preserves_bare_evidence_and_drives_native_portable_and_motion
     assert_eq!(study.body().display.0, displayed.vertices);
     assert_eq!(study.body().display.1, displayed.triangles);
     let motion: motion::Request = serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
-        "keyframes":[{"time_s":0.01,"arm_abduction_deg":51.0},{"time_s":0.02,"arm_abduction_deg":52.0}],
-        "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000})).unwrap();
+        "keyframes":[{"time_s":0.01,"arm_abduction_deg":51.0,
+            "leg_pose":{"posture":"seated","fraction":0.001}},
+            {"time_s":0.02,"arm_abduction_deg":52.0,
+            "leg_pose":{"posture":"squat","fraction":0.002}}],
+        "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000}))
+    .unwrap();
     let mut endpoints = Vec::new();
     for key in &motion.keyframes {
         pose.arm_abduction_deg = Some(key.arm_abduction_deg);
+        let legs = key.leg_pose.unwrap();
+        pose.legs = match legs.posture {
+            motion::LegPosture::Seated => ftx_body::Legs::Seated,
+            motion::LegPosture::Squat => ftx_body::Legs::Squat,
+        };
+        pose.leg_fraction = legs.fraction;
         let posed = model
             .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
             .unwrap();

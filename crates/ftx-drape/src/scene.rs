@@ -1129,6 +1129,23 @@ pub struct PhaseReport {
     pub samples: Vec<PhaseStep>,
 }
 
+impl PhaseReport {
+    /// Continue one phase without discarding accepted solver/contact samples or final diagnostics.
+    pub(crate) fn append(&mut self, next: Self) {
+        self.steps += next.steps;
+        self.iterations += next.iterations;
+        self.unconverged += next.unconverged;
+        self.factorizations += next.factorizations;
+        self.ccd_limited += next.ccd_limited;
+        self.halvings += next.halvings;
+        self.projected_iterations += next.projected_iterations;
+        self.pcg_iterations += next.pcg_iterations;
+        self.max_speed = next.max_speed;
+        self.thickness = next.thickness;
+        self.samples.extend(next.samples);
+    }
+}
+
 /// Runs `steps` implicit steps of `h` seconds under `gravity` (m/s², along −z), calling `frame` after
 /// each with the step index and the mesh-vertex positions.
 ///

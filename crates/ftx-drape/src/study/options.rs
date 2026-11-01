@@ -38,6 +38,8 @@ struct Options {
     sew_steps: usize,
     drape_steps: usize,
     #[serde(skip_serializing_if = "is_zero")]
+    max_settle_steps: usize,
+    #[serde(skip_serializing_if = "is_zero")]
     elastic_hold_steps: usize,
     step: f64,
     tol: f64,
@@ -77,6 +79,23 @@ mod tests {
             serde_json::from_value::<DrapeOptions>(ordinary)
                 .unwrap()
                 .elastic_hold_steps,
+            0
+        );
+    }
+
+    #[test]
+    fn settling_is_opt_in_and_its_explicit_cap_round_trips() {
+        let ordinary = serde_json::to_value(DrapeOptions::default()).unwrap();
+        assert!(ordinary.get("max_settle_steps").is_none());
+        let mut declared = ordinary.clone();
+        declared["max_settle_steps"] = serde_json::json!(32);
+        let options: DrapeOptions = serde_json::from_value(declared.clone()).unwrap();
+        options.validate().unwrap();
+        assert_eq!(serde_json::to_value(options).unwrap(), declared);
+        assert_eq!(
+            serde_json::from_value::<DrapeOptions>(ordinary)
+                .unwrap()
+                .max_settle_steps,
             0
         );
     }

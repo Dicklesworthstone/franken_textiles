@@ -75,6 +75,14 @@ shape and reference geometry, and immutable flat-fit context adds only its compu
 occupancy refuses before simulation. Target source/uncertainty is retained without promoting chart
 priors to measurements or adding nappy material, friction, mass, thermal or vapor properties.
 
+**Selected-body posture.** Scenario bodies can select initial `legs`
+(`standing`, `seated`, `squat`) and finite `leg_fraction` in 0..1 independently of straight-arm
+abduction. Defaults are standing/1 and remain omitted from serialization, preserving the original
+standing workflows and identities. The source shape, reference measurements and calibrated nappy
+occupancy stay fixed while the initial garment placement uses the requested posture. The existing
+surface and collision gates still decide whether that setup can run. No implicit standing substitute,
+anatomical correction or empirical rise/seat-fit claim is introduced.
+
 **Articulated garment continuation.** A material-study motion keyframe may add
 `leg_pose: {posture: "seated" | "squat", fraction: 0..1}`. It scales the existing body model's
 leg-joint rotations independently of the stated arm angle, on the same selected occupied shape.
@@ -111,8 +119,20 @@ positions, velocities, contact lag and linear-solver caches. `PhaseReport.sample
 steps' Newton diagnostics and instantaneous maximum vertex speeds. Native drape reports expose these
 under `numerical`; gravity draping additionally requires three consecutive accepted steps at at most
 1 mm/s, otherwise a numerical-settling gating flag propagates to CLI, round and browser consumers.
-The fixed phase schedule is not automatically extended. Sewing-only qualification reports numerical
-settledness as unavailable. The reference's top-level `settled` and other oracle metrics retain their
+The fixed phase schedule remains unchanged unless `max_settle_steps` explicitly requests up to
+256 additional gravity steps. The tail continues the same sewn solver, source material, inertia,
+contact state and fixed time step; it stops at the existing three-endpoint quiet window or its cap.
+Already-quiet runs add no steps. Material relaxation and permanent membrane/bending histories refuse
+automatic stopping before sewing, using the same admission as `Solver::settle`; a speed threshold
+cannot choose their constitutive duration or loading path. The accepted tail remains part of the
+gravity phase in diagnostics, contact samples, animation, thermal source geometry and casing windows.
+`numerical.settling` retains the requested cap, accepted extra steps, extra/total gravity durations,
+`quiet_window` or `step_limit` stop reason and cap exhaustion. Exhaustion retains the unsettled gate.
+Scenario work reserves the full tail before starting, within the existing 256-step total limit;
+two-start comparisons apply the same cap independently and retain both actual schedules. Zero omits
+the new option and report block, preserving existing schedules and wire output. Sewing-only
+qualification without a tail reports numerical settledness as unavailable. The reference's top-level
+`settled` and other oracle metrics retain their
 legacy window-mean definition; they do not override the numerical gate. Neither criterion certifies
 static stress equilibrium, material-history relaxation or real-person fit. Historical timings and
 verdicts below predate this stricter acceptance boundary and require fresh production-model checks.
@@ -141,7 +161,8 @@ settling; it is not contact-point slip or a stationary hold experiment. The idea
 remains separate. These outputs establish no measured pressure, comfort or real-person fit.
 An explicit `elastic_hold_steps` (CLI `--elastic-hold-steps`, also forwarded by `round --sim`)
 selects the last N accepted gravity intervals without adding steps or changing physics. N may not
-exceed `drape_steps`; zero requests no hold window and is omitted from serialized scenario options.
+exceed the declared base `drape_steps`; zero requests no hold window and is omitted from serialized
+scenario options. With a settling tail, the window uses the last N actually accepted gravity steps.
 The report retains duration, step indices, sampled displacement, maximum vertex speed and whether
 every accepted endpoint is at most 1 mm/s. A moving window remains visible with false quietness;
 it cannot become a stationary hold, stress-equilibrium or fit claim by selecting it.

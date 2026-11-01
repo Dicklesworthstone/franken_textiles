@@ -127,7 +127,15 @@ fn fixed_retained_liquid_changes_sewn_weight_and_inertia_without_double_counting
     assert_eq!(result.report, run(wet).unwrap().report);
     let mut with_extra = loaded();
     with_extra["fabric"]["material"] = wet_sheet();
-    let extra_result = run(with_extra).unwrap();
+    let extra_result = run_with_options(
+        with_extra,
+        DrapeOptions {
+            max_settle_steps: 4,
+            ..options()
+        },
+    )
+    .unwrap();
+    assert_eq!(extra_result.report["numerical"]["settling"]["steps"], 4);
     let receipt = extra_result
         .scene
         .solver
@@ -296,7 +304,15 @@ fn both_static_strip_consumers_require_the_selected_wet_response_but_not_dry_mas
 fn evaporating_liquid_preserves_the_actual_attached_source_and_welded_inventory() {
     use ftx_core::receipt::sha256_hex;
     use ftx_drape::liquid_mass::{Qualification, bind};
-    let mut result = run(loaded()).unwrap();
+    let mut result = run_with_options(
+        loaded(),
+        DrapeOptions {
+            max_settle_steps: 4,
+            ..options()
+        },
+    )
+    .unwrap();
+    assert_eq!(result.report["numerical"]["settling"]["steps"], 4);
     let original = result
         .scene
         .solver
@@ -428,6 +444,20 @@ fn body() -> Body {
 }
 
 fn run(raw: Value) -> Result<DrapeRun, Refusal> {
+    run_with_options(raw, options())
+}
+
+fn options() -> DrapeOptions {
+    DrapeOptions {
+        spacing: 24.,
+        sew_steps: 3,
+        drape_steps: 3,
+        step: 0.001,
+        ..DrapeOptions::default()
+    }
+}
+
+fn run_with_options(raw: Value, options: DrapeOptions) -> Result<DrapeRun, Refusal> {
     let body = body();
     drape(
         &Pattern::new(raw),
@@ -438,13 +468,7 @@ fn run(raw: Value) -> Result<DrapeRun, Refusal> {
             display: (&body.vertices, &body.triangles),
             arm_deg: 35.,
         },
-        &DrapeOptions {
-            spacing: 24.,
-            sew_steps: 3,
-            drape_steps: 3,
-            step: 0.001,
-            ..DrapeOptions::default()
-        },
+        &options,
         |_| {},
     )
 }
