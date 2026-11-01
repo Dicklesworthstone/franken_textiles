@@ -12,6 +12,7 @@
 // --adaptive-proof DIR checks guarded Pareto studies on the real page against retained native reports.
 // --sewing-selection-proof DIR checks native captured fixed-route requests through direct recipe selection.
 // --mixed-cutting-proof DIR checks complete and process-refused native mixed cutting jobs on the real page.
+// --guided-study-proof checks shortlist authoring, actual native/WASM studies and generated-request replay.
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
@@ -32,6 +33,7 @@ const stripProof = stripIndex < 0 ? null : path.resolve(process.argv[stripIndex 
 const outfitProof = process.argv.includes('--outfit-proof');
 const compressionProof = process.argv.includes('--compression-proof');
 const purchasingProof = process.argv.includes('--purchasing-proof');
+const guidedStudyProof = process.argv.includes('--guided-study-proof');
 const areaIndex = process.argv.indexOf('--area-proof');
 if (areaIndex >= 0 && !process.argv[areaIndex + 1]) throw Error('--area-proof requires a native capture directory');
 const areaProof = areaIndex < 0 ? null : path.resolve(process.argv[areaIndex + 1]);
@@ -50,7 +52,7 @@ const sewingSelectionProof = sewingSelectionIndex < 0 ? null : path.resolve(proc
 const mixedCuttingIndex = process.argv.indexOf('--mixed-cutting-proof');
 if (mixedCuttingIndex >= 0 && !process.argv[mixedCuttingIndex + 1]) throw Error('--mixed-cutting-proof requires the native finite-knife capture directory');
 const mixedCuttingProof = mixedCuttingIndex < 0 ? null : path.resolve(process.argv[mixedCuttingIndex + 1]);
-assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,areaProof,swatchAreaProof,fitProof,adaptiveProof,sewingSelectionProof,mixedCuttingProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
+assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,guidedStudyProof,areaProof,swatchAreaProof,fitProof,adaptiveProof,sewingSelectionProof,mixedCuttingProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -100,6 +102,90 @@ const server = http.createServer((req, res) => {
   try {
     await page.goto(origin); await page.click('a[href="materials.html"]');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (guidedStudyProof) {
+      const original=fs.readFileSync(fixture('synthetic-sewing-pattern.json'),'utf8'), identities=new Map();
+      await page.setInputFiles('#patternFile',fixture('synthetic-sewing-pattern.json'));
+      await page.waitForFunction(()=>!document.getElementById('bind').disabled);
+      for(const [key,width,density] of [['wide',0.1,0.2],['narrow',0.06,0.3],['missing-width',null,0.4]]) {
+        const selection=sheet(width ?? 0.1,0.4);
+        selection.id=selection.record.id=`synthetic-guided-${key}`;
+        selection.record.properties.areal_density.value=density;
+        selection.record.properties.areal_density.bounds=[density-0.02,density+0.02];
+        if(width===null)delete selection.record.properties.width;
+        await page.fill('#selection',JSON.stringify(selection));assert.equal(await run('inspect'),'');
+        const snapshot=JSON.parse(await page.textContent('#detail'));
+        assert.match(snapshot.sha256,/^[0-9a-f]{64}$/);assert.equal(snapshot.authored.id,selection.id);
+        identities.set(key,snapshot.sha256);
+        await page.fill('#studyCandidateName',key);await page.click('#addStudyCandidate');
+      }
+      assert.equal(await page.inputValue('#studyMode'),'guided');
+      assert.match(await page.textContent('#studyCandidateCount'),/3 frozen material choices/);
+      await page.check('#guidedMass');await page.check('#guidedInventoryComplete');await page.check('#guidedMassGoal');
+      const verify=async label=>{
+        assert.equal(await run('study'),'');
+        const source=await download('original-pattern.json'),request=await download('study-request.json'),raw=await download('material-study.json');
+        assert.equal(source,original);
+        const patternFile=path.join(work,`${label}-pattern.json`),requestFile=path.join(work,`${label}-request.json`);
+        fs.writeFileSync(patternFile,source,{flag:'wx'});fs.writeFileSync(requestFile,request,{flag:'wx'});
+        fs.writeFileSync(path.join(work,`${label}-report.json`),raw,{flag:'wx'});
+        const report=JSON.parse(raw),authored=JSON.parse(request);
+        assert.deepEqual(report,JSON.parse(invoke('study',patternFile,requestFile)));
+        assert.deepEqual(authored.variants[0],{key:'baseline',changes:{schema:'ftx-material-bindings/1'}});
+        assert.equal(report.alternatives.length,4);
+        for(const [index,row] of report.alternatives.entries())if(row.binding.status==='available') {
+          assert.equal(await download(`alternative-${index+1}-pattern.json`),row.binding.result.pattern_json);
+        }
+        for(const variant of authored.variants.slice(1)) {
+          const selections=variant.changes.default ? [variant.changes.default] : Object.values(variant.changes.pieces);
+          assert.ok(selections.length>0);
+          for(const selection of selections)assert.equal(selection.expected_sha256,identities.get(variant.key));
+        }
+        return {report,authored,request,requestFile};
+      };
+      const nominal=await verify('guided-default');
+      assert.deepEqual(nominal.authored.comparison.objectives.map(x=>x.metric),['stock_area_m2','assembly_mass_kg']);
+      for(const key of ['wide','narrow']) {
+        const row=nominal.report.alternatives.find(x=>x.key===key);
+        assert.equal(row.cutting.status,'available');assert.ok(row.metrics.assembly_mass_kg>0);
+      }
+      const missing=nominal.report.alternatives.find(x=>x.key==='missing-width');
+      assert.equal(missing.cutting.status,'refused');assert.equal(missing.assembly_mass.status,'available');assert.ok(missing.metrics.assembly_mass_kg>0);
+      assert.equal(nominal.report.comparison.alternatives.find(x=>x.key==='missing-width').eligible,false);
+      await page.selectOption('#studyTarget','pieces');await page.selectOption('#studyPieces',['back']);
+      assert.equal(await page.locator('a[download="material-study.json"]').count(),0);
+      const named=await verify('guided-named-piece');
+      for(const variant of named.authored.variants.slice(1))assert.deepEqual(Object.keys(variant.changes.pieces),['back']);
+      const changed=named.report.alternatives.find(x=>x.key==='wide').binding.result.pattern;
+      assert.equal(changed.fabric.material.id,JSON.parse(original).fabric.material.id);
+      assert.deepEqual(changed.pieces.find(p=>p.id==='front'),JSON.parse(original).pieces.find(p=>p.id==='front'));
+      assert.equal(changed.pieces.find(p=>p.id==='back').fabric.material.expected_sha256,identities.get('wide'));
+      await page.selectOption('#studyTarget','all');await page.uncheck('#guidedCutting');await page.selectOption('#guidedBasis','reported_bounds');
+      const ranged=await verify('guided-bounded-mass');
+      assert.equal(Object.hasOwn(ranged.authored,'cutting'),false);
+      assert.equal(ranged.authored.comparison.basis,'reported_bounds');
+      for(const key of identities.keys()) {
+        const row=ranged.report.comparison.alternatives.find(x=>x.key===key);
+        assert.equal(row.eligible,true);assert.equal(row.readings.assembly_mass_kg.reported_bounds.length,2);
+        assert.ok(row.readings.assembly_mass_kg.reported_bounds[0]<row.readings.assembly_mass_kg.value);
+      }
+      await page.setViewportSize({width:390,height:844});await page.locator('#materialComparison').scrollIntoViewIfNeeded();
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'Mobile workbench must not overflow horizontally');
+      await page.screenshot({path:path.join(work,'guided-study-mobile.png')});await page.setViewportSize({width:1280,height:900});
+      await page.uncheck('#guidedInventoryComplete');
+      assert.equal(await page.locator('a[download="study-request.json"]').count(),0);
+      assert.match(await run('study'),/complete inventory/);assert.equal(await page.locator('a[download="material-study.json"]').count(),0);
+      await page.setInputFiles('#studyRequest',nominal.requestFile);
+      assert.equal(await page.inputValue('#studyMode'),'file');assert.equal(await run('study'),'');
+      assert.equal(await download('study-request.json'),nominal.request);
+      assert.deepEqual(JSON.parse(await download('material-study.json')),nominal.report);
+      await input('patternFile',{...JSON.parse(original),meta:{note:'Changed synthetic source'}});
+      assert.equal(await page.locator('a[download="material-study.json"]').count(),0);
+      assert.equal(await page.locator('a[download="alternative-1-pattern.json"]').count(),0);
+      assert.match(await page.textContent('#studyCandidateCount'),/No comparison materials/);
+      assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(methods.every(m=>m==='GET'));
+      console.log('PASS: guided Chromium shortlist matches complete native/WASM studies for default and named-piece assignments, independent cutting refusal and bounded assembly mass; exact identities/downloads, advanced replay, input withdrawal and mobile layout verified. Synthetic software evidence only. Artifacts:',work);
+      return;
+    }
     if (mixedCuttingProof) {
       const source=name=>fs.readFileSync(path.join(mixedCuttingProof,name),'utf8');
       const output=name=>page.locator(`#outputs a[download="${name}"]`).evaluate(async a=>await(await fetch(a.href)).text());

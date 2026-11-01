@@ -1223,6 +1223,7 @@ class Element {
 async function pageModule({roundToken=null}={}) {
   const html = read('materials.html');
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
+  Object.defineProperty(e.studyPieces,'selectedOptions',{get:()=>e.studyPieces.children.filter(option=>option.selected)});
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
     const el = e[/id="([^"]+)"/.exec(m[1])[1]]; el.dataset = { command: /data-command="([^"]+)"/.exec(m[1])[1] }; return el;
@@ -1241,12 +1242,15 @@ async function pageModule({roundToken=null}={}) {
   const window={opener,location:{href:'https://unit.invalid/materials.html'+(roundToken?'?roundImport='+roundToken:'')},
     open:url=>{const messages=[],target={closed:false,postMessage:(data,origin)=>messages.push({data,origin})};popups.push({url,target,messages});return target;},
     addEventListener:(name,fn)=>{const old=windowEvents[name];windowEvents[name]=old?(...args)=>Promise.all([old(...args),fn(...args)]):fn;}};
-  const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder,crypto:require('node:crypto').webcrypto, document: {
+  const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder, TextEncoder,crypto:require('node:crypto').webcrypto, document: {
     getElementById: id => { assert.ok(e[id], `HTML missing ${id}`); return e[id]; },
     querySelectorAll: () => commands, createElement: tag => Object.assign(new Element(), { tag }),
   }, window });
   const module = new vm.SourceTextModule(read('materials-page.js'), { context, initializeImportMeta: m => { m.url = 'https://unit.invalid/materials-page.js'; } });
-  await module.link(() => { throw Error('unexpected import'); }); await module.evaluate();
+  await module.link(specifier => {
+    assert.equal(specifier, './materials-study-builder.js', 'unexpected material page import');
+    return new vm.SourceTextModule(read('materials-study-builder.js'), { context });
+  }); await module.evaluate();
   const current = () => workers.at(-1), ready = () => current().emit({ type: 'ready' }); ready();
   const select = (id, text = '{}') => { e[id].files = [{ name: `${id}.json`, size: text.length, text: async () => text }]; };
   const emit = (result, files = [], reportText = JSON.stringify(result)) => current().emit({ type: 'result', request: current().messages.at(-1).request, result, files, reportText });
@@ -5240,6 +5244,239 @@ function addChoice(p, group, choice, pieces = ['front']) {
   for (const option of p.e.combinationPieces.children) option.selected = pieces?.includes(option.value) || false;
   p.e.addCombination.onclick();
 }
+
+// Exact source transport doubles; canonical material qualification is tested by the Rust/WASM lanes.
+const guidedSelection = (lock = 'a', id = '<reviewed cloth>') =>
+  ` {"id":${JSON.stringify(id)},"expected_sha256":"${lock.repeat(64)}","allow_estimates":false,"record":{"id":${JSON.stringify(id)},"fixture":{"coefficient":1.0,"signed":-0.0,"sample":18446744073709551615}}}\r\n`;
+function guidedControls(p) {
+  Object.assign(p.e.studyMode, {value:'guided'});
+  p.e.studyTarget.value='default';p.e.guidedBasis.value='nominal';
+  p.e.guidedCutting.checked=true;p.e.guidedAreaGoal.checked=true;
+  p.e.guidedCopies.value='1';p.e.guidedGap.value='2';p.e.guidedEdge.value='5';p.e.guidedEnd.value='10';
+  p.e.studyMode.handlers.change();
+}
+async function addGuidedSelection(p, raw = guidedSelection(), key = '') {
+  p.e.selection.value=raw;p.e.selection.handlers.input();await p.e.inspect.onclick();
+  const selection=JSON.parse(raw);
+  p.emit({selection,selection_json:raw,snapshot:selection.record,capabilities:{}});
+  p.e.studyCandidateName.value=key;p.e.addStudyCandidate.onclick();
+}
+
+test('guided studies retain immutable inspected sources, an explicit baseline and exact downloadable requests', async () => {
+  const p=await pageModule(),original=' {"pieces":[{"id":"front"},{"id":"lining"}],"coefficient":1.0,"signed":-0.0,"sample":18446744073709551615}\r\n';
+  p.select('patternFile',original);await p.e.patternFile.onchange();guidedControls(p);
+  assert.equal(p.e.study.disabled,true);
+  const raw=guidedSelection();await addGuidedSelection(p,raw,'<source & evidence>');
+  assert.equal(p.e.study.disabled,false,p.e.error.textContent);
+  assert.equal(p.e.addStudyCandidate.disabled,false);
+  p.e.selection.value='{"id":"uninspected replacement"}';p.e.selection.handlers.input();
+  assert.equal(p.e.addStudyCandidate.disabled,true);
+  p.e.addStudyCandidate.onclick();
+  assert.match(visibleText(p.e.studyCandidates),/<source & evidence>/);
+  assert.doesNotMatch(visibleText(p.e.studyCandidates),/uninspected replacement/);
+  p.e.studyOnBody.checked=true;
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);assert.equal(sent.pattern,original);
+  assert.equal(sent.onBody,false,'Guided manufacturing must not silently require a body source');
+  assert.ok(sent.studyRequest.includes(raw));
+  const request=JSON.parse(sent.studyRequest);
+  assert.equal(request.schema,'ftx-material-study/1');assert.equal(request.variants.length,2);
+  assert.deepEqual(plain(request.variants[0]),{key:'baseline',changes:{schema:'ftx-material-bindings/1'}});
+  assert.equal(request.variants[1].key,'<source & evidence>');
+  assert.deepEqual(request.variants[1].changes.default,JSON.parse(raw));
+  assert.deepEqual(plain(request.cutting),{copies:1,gap_mm:2,edge_margin_mm:5,end_margin_mm:10});
+  assert.equal(Object.hasOwn(request,'assembly_mass'),false);
+  assert.equal(Object.hasOwn(request,'design_fit'),false);
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_study:(pattern,input)=>{
+    assert.equal(pattern,original);assert.equal(input,sent.studyRequest);
+    return JSON.stringify(studyReport([studyRow('baseline'),studyRow('<source & evidence>')]));
+  }}});
+  const result=await w.send(sent);assert.equal(result.type,'result',result.message);p.current().emit(result);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  for(const [name,value] of [['study-request.json',sent.studyRequest],['original-pattern.json',original]]) {
+    const download=descendants(s).find(n=>n.download===name);
+    assert.ok(download,name);assert.equal(await p.blobs.get(download.href).text(),value);
+  }
+  assert.equal(descendants(p.e.studyCandidates).some(n=>'innerHTML' in n),false);
+  p.windowEvents.pagehide();assert.equal(p.live.size,0);
+});
+
+test('guided comparison targets preserve the distinction between defaults, all pieces and selected pieces', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);const raw=guidedSelection();
+  await addGuidedSelection(p,raw,'reviewed');
+  for(const [mode,ids] of [['default',null],['all',['front','lining']],['pieces',['lining']]]) {
+    p.e.studyTarget.value=mode;p.e.studyTarget.handlers.change();
+    for(const option of p.e.studyPieces.children)option.selected=ids?.includes(option.value)??false;
+    p.e.studyPieces.handlers.change();
+    await p.e.study.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'study',p.e.error.textContent);
+    const variant=JSON.parse(sent.studyRequest).variants[1];
+    if(ids===null) {
+      assert.deepEqual(variant.changes.default,JSON.parse(raw));
+      assert.equal(Object.hasOwn(variant.changes,'pieces'),false);
+    } else {
+      assert.equal(Object.hasOwn(variant.changes,'default'),false);
+      assert.deepEqual(Object.keys(variant.changes.pieces),ids);
+      for(const id of ids)assert.deepEqual(variant.changes.pieces[id],JSON.parse(raw));
+    }
+    assert.equal(sent.pattern,JSON.stringify({pieces:[{id:'front'},{id:'lining'}]}));
+    p.emit(studyReport());
+  }
+  for(const option of p.e.studyPieces.children)option.selected=false;
+  p.e.studyPieces.handlers.change();const before=p.current().messages.length;
+  await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/piece/i);
+});
+
+test('guided shortlists reject duplicate names and snapshots while retaining distinct revisions of one material', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);
+  await addGuidedSelection(p,guidedSelection('a'),'first');
+  await addGuidedSelection(p,guidedSelection('a'),'duplicate');
+  assert.match(p.e.error.textContent,/already|duplicate/i);
+  await addGuidedSelection(p,guidedSelection('b'),'first');
+  assert.match(p.e.error.textContent,/name|unique|already/i);
+  await addGuidedSelection(p,guidedSelection('b'),'baseline');
+  assert.match(p.e.error.textContent,/baseline|reserved/i);
+  await addGuidedSelection(p,guidedSelection('b'),'second revision');
+  await p.e.study.onclick();const request=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.deepEqual(request.variants.map(v=>v.key),['baseline','first','second revision']);
+  assert.equal(request.variants[1].changes.default.id,request.variants[2].changes.default.id);
+  assert.notEqual(request.variants[1].changes.default.expected_sha256,request.variants[2].changes.default.expected_sha256);
+});
+
+test('guided garment-mass-only comparison uses explicit complete inventory without roll-cutting inputs', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+  p.e.guidedCutting.checked=false;p.e.guidedCutting.handlers.change();
+  p.e.guidedMass.checked=true;p.e.guidedMass.handlers.change();
+  p.e.guidedInventoryComplete.checked=true;p.e.guidedInventoryComplete.handlers.change();
+  p.e.guidedMassGoal.checked=true;p.e.guidedMassGoal.handlers.change();
+  p.e.guidedBasis.value='reported_bounds';p.e.guidedBasis.handlers.change();
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);
+  const request=JSON.parse(sent.studyRequest);
+  assert.equal(Object.hasOwn(request,'cutting'),false);
+  assert.deepEqual(request.assembly_mass,{schema:'ftx-assembly-mass/1',inventory_complete:true,extras:[]});
+  assert.equal(request.comparison.basis,'reported_bounds');
+  assert.deepEqual(request.comparison.objectives,[{metric:'assembly_mass_kg',direction:'minimize'}]);
+  p.emit(studyReport());
+  p.e.guidedInventoryComplete.checked=false;p.e.guidedInventoryComplete.handlers.change();
+  const before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/complete inventory/i);
+});
+
+test('guided choices reach body scenarios without a study file and preserve the separate body request', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);const raw=guidedSelection();await addGuidedSelection(p,raw);
+  const scenario=' {"options":{"self_contact":null},"source":-0.0}\r\n';
+  const body=' {"schema":"ftx-scenario-body/1","source":{"value":1.0,"sample":18446744073709551615}}\r\n';
+  p.select('scenarioRequest',scenario);p.e.scenarioRequest.handlers.change();
+  p.select('scenarioBody',body);p.e.scenarioBody.handlers.change();
+  p.e.studyBodySource.value='request';p.e.studyBodySource.handlers.change();
+  p.e.body.files=[new Blob([new Uint8Array([2,4,6])])];p.e.body.handlers.change();
+  assert.equal(p.e.studyRequest.files.length,0);assert.equal(p.e.scenario.disabled,false);
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.studyRequest.includes(raw));
+  assert.equal(JSON.parse(sent.studyRequest).variants[0].key,'baseline');
+  assert.equal(sent.scenarioRequest,scenario);assert.equal(sent.measurements,body);
+  assert.deepEqual([...new Uint8Array(sent.bytes)],[2,4,6]);
+  p.emit(scenarioReport(),[{name:'study-request.json',text:sent.studyRequest},{name:'body-input.json',text:body}]);
+  const s=section(p,'Fresh drape and heat alternatives');assert.equal(s.hidden,false);
+  const link=descendants(s).find(n=>n.download==='body-input.json');
+  assert.equal(await p.blobs.get(link.href).text(),body);
+  p.e.guidedGap.value='3';p.e.guidedGap.handlers.input();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+});
+
+test('switching guided and complete-file study modes preserves each source without mixing policies', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);const raw=guidedSelection();
+  await addGuidedSelection(p,raw,'shortlisted');
+  const uploaded=' \r\n{"schema":"ftx-material-study/1","variants":[],"source":{"value":1.0,"signed":-0.0,"integer":18446744073709551615}}\r\n';
+  p.select('studyRequest',uploaded);p.e.studyRequest.handlers.change();
+  for(const mode of ['file','guided','file']) {
+    p.e.studyMode.value=mode;p.e.studyMode.handlers.change();
+    assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+    assert.equal(p.live.size,0);
+    await p.e.study.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'study',p.e.error.textContent);
+    if(mode==='file')assert.equal(sent.studyRequest,uploaded);
+    else {assert.ok(sent.studyRequest.includes(raw));assert.equal(Object.hasOwn(JSON.parse(sent.studyRequest),'source'),false);}
+    p.emit(studyReport(),[{name:'study-request.json',text:sent.studyRequest,mime:'application/json'}]);
+    assert.ok(p.live.size>0);
+  }
+});
+
+test('guided inventory reads cannot publish after edits, cancellation or source replacement', async () => {
+  const inventory=' {"schema":"ftx-assembly-mass/1","inventory_complete":false,"extras":[{"id":"source-bound extra","count":1.0,"source":{"signed":-0.0,"sample":18446744073709551615}}]}\r\n';
+  for(const change of ['quantity','target','inventory','remove','mode','pattern','cancel']) {
+    const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+    p.e.guidedMass.checked=true;p.e.guidedMass.handlers.change();p.select('guidedInventory',inventory);
+    p.e.guidedInventory.handlers.change();
+    const delay=deferred();let reading=false;
+    p.e.guidedInventory.files[0].text=()=>{reading=true;return delay.promise;};
+    const old=p.current(),running=p.e.study.onclick();assert.equal(reading,true,change);
+    if(change==='quantity'){p.e.guidedCopies.value='2';p.e.guidedCopies.handlers.input();}
+    else if(change==='target'){p.e.studyTarget.value='all';p.e.studyTarget.handlers.change();}
+    else if(change==='inventory')p.e.guidedInventory.handlers.change();
+    else if(change==='remove')descendants(p.e.studyCandidates).find(n=>n.tag==='button').onclick();
+    else if(change==='mode'){p.e.studyMode.value='file';p.e.studyMode.handlers.change();}
+    else if(change==='pattern')await p.load();
+    else p.e.cancel.onclick();
+    assert.equal(old.dead,true,change);p.ready();delay.resolve(inventory);await running;
+    assert.equal(old.messages.filter(m=>m.type==='study').length,0,change);
+    old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});
+    assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true,change);
+    assert.equal(p.live.size,0,change);
+  }
+  const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+  p.e.guidedMass.checked=true;p.select('guidedInventory',inventory);p.e.guidedInventory.handlers.change();
+  await p.e.study.onclick();assert.ok(p.current().messages.at(-1).studyRequest.includes(inventory));
+});
+
+test('guided edits withdraw current comparisons and reject late worker results and stale adoption actions', async () => {
+  for(const change of ['goal','copies','clear','remove','cancel']) {
+    const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+    await p.e.study.onclick();p.emit(studyReport(),[{name:'study-request.json',text:'{}'}]);
+    const s=section(p,'Fixed-pattern manufacturing alternatives');
+    const adoption=descendants(s).find(n=>n.tag==='button'&&n.textContent==='Use A pattern');
+    await p.e.study.onclick();const old=p.current(),request=old.messages.at(-1).request;
+    if(change==='goal'){p.e.guidedStockMassGoal.checked=true;p.e.guidedStockMassGoal.handlers.change();}
+    else if(change==='copies'){p.e.guidedCopies.value='3';p.e.guidedCopies.handlers.input();}
+    else if(change==='clear')p.e.clearStudyCandidates.onclick();
+    else if(change==='remove')descendants(p.e.studyCandidates).find(n=>n.tag==='button').onclick();
+    else p.e.cancel.onclick();
+    assert.equal(old.dead,true,change);p.ready();
+    old.emit({type:'result',request,result:studyReport(),files:[{name:'late.json',text:'{}'}]});
+    assert.equal(s.hidden,true,change);assert.equal(p.live.size,0,change);
+    const patternName=p.e.patternName.textContent;adoption.onclick();assert.equal(p.e.patternName.textContent,patternName,change);
+  }
+});
+
+test('guided pattern replacement and candidate adoption clear the shortlist while retaining exact received body sources', async () => {
+  const token='6'.repeat(32),p=await pageModule({roundToken:token});
+  const original=' {"pieces":[{"id":"front"},{"id":"lining"}],"integer":18446744073709551615}\r\n';
+  const measurements=' {"length":1.0}\r\n',fit=' {"points":[],"signed":-0.0}\r\n',bodyFit=' {"schema":"ftx-body-fit/1","value":1.0}\r\n';
+  const model=new Blob([new Uint8Array([3,5,7])]);
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-round-sources',token,
+    files:{pattern:new Blob([original]),measurements:new Blob([measurements]),fit:new Blob([fit])},
+    bodySource:{model,fit:new Blob([bodyFit]),armDeg:48}}});
+  guidedControls(p);await addGuidedSelection(p);p.e.bodyFitConsent.checked=true;
+  await p.e.study.onclick();assert.equal(p.current().messages.at(-1).pattern,original);
+  const raw=' {"pieces":[{"id":"adopted"}],"value":1.0,"signed":-0.0}\r\n';
+  p.emit(studyReport([studyRow('chosen',raw)]));
+  descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(n=>n.tag==='button'&&n.textContent==='Use chosen pattern').onclick();
+  assert.equal(p.e.studyCandidates.children.length,0);assert.equal(p.e.study.disabled,true);
+  assert.deepEqual(p.e.studyPieces.children.map(o=>o.value),['adopted']);
+  assert.equal(p.e.bodyFitConsent.checked,false);
+  await p.e.bind.onclick();assert.equal(p.current().messages.at(-1).pattern,raw);
+  p.emit({pattern_json:raw,pieces:[],pattern_sha256:'adopted-lock'});
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();await p.e.fold.onclick();
+  const folded=p.current().messages.at(-1);
+  assert.equal(folded.pattern,raw);assert.equal(folded.bodyFit,bodyFit);
+  assert.equal(folded.measurements,measurements);assert.equal(folded.fit,fit);assert.equal(folded.armDeg,48);
+  assert.deepEqual([...new Uint8Array(folded.bytes)],[3,5,7]);
+  p.e.cancel.onclick();p.ready();await addGuidedSelection(p,guidedSelection('b'));
+  await p.load();
+  assert.equal(p.e.studyCandidates.children.length,0);assert.equal(p.e.study.disabled,true);
+  assert.deepEqual(p.e.studyPieces.children.map(o=>o.value),['front','lining']);
+});
 
 test('combination controls retain frozen selections and exact policy/pair numbers for native study evaluation', async () => {
   for (const schema of ['ftx-material-study/1','ftx-design-study/1']) {

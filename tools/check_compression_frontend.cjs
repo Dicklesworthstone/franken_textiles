@@ -61,7 +61,10 @@ async function pageModule() {
   }, window: { location: { href: 'https://unit.invalid/materials.html' }, opener: null,
     addEventListener: (name, fn) => { windowEvents[name] = fn; } } });
   const module = new vm.SourceTextModule(read('materials-page.js'), { context, initializeImportMeta: m => { m.url = 'https://unit.invalid/materials-page.js'; } });
-  await module.link(() => { throw Error('unexpected import'); }); await module.evaluate();
+  await module.link(specifier => {
+    assert.equal(specifier, './materials-study-builder.js', 'unexpected material page import');
+    return new vm.SourceTextModule(read('materials-study-builder.js'), { context });
+  }); await module.evaluate();
   const current = () => workers.at(-1), ready = () => current().emit({ type: 'ready' }); ready();
   const select = (id, text = '{}') => { e[id].files = [{ name: `${id}.json`, size: text.length, text: async () => text }]; };
   const emit = (result, files = [], reportText = JSON.stringify(result)) => current().emit({ type: 'result', request: current().messages.at(-1).request, result, files, reportText });

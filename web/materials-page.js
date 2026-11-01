@@ -1,4 +1,6 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
+import { buildMaterialStudyRequest } from "./materials-study-builder.js";
+
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "stockIdentities", "stockPrice", "cutJob", "price", "sew"];
@@ -20,6 +22,8 @@ let interfaceChange = null, interfaceRead = 0, interfaceReady = true;
 let calibratedPair = null;
 const pieceChanges = new Map(), urls = new Map();
 const combinationGroups = new Map();
+const studyCandidates = [];
+let studyCandidateSequence = 0;
 const outfitTargets = new Map();
 const sections = new Map();
 for (const op of operations) {
@@ -40,6 +44,7 @@ for (const op of operations) {
 }
 const text = value => JSON.stringify(value, null, 2);
 const has = id => roundFiles.has(id) || !!$(id).files.length;
+const guidedStudyMode = () => $("studyMode").value === "guided";
 const studyBodyMode = () => $("studyBodySource").value || "measurements";
 function studyBodyReady() {
   const mode = studyBodyMode();
@@ -55,6 +60,7 @@ function bodyDependentStudies(id) {
   return used ? ["scenario", ...($("studyOnBody").checked ? ["study"] : [])] : [];
 }
 function controls() {
+  const guided = guidedStudyMode();
   for (const el of commands) el.disabled = !ready || !!pending;
   for (const section of sections.values()) {
     for (const button of section.adoptions) button.disabled = !ready || !!pending;
@@ -65,6 +71,18 @@ function controls() {
   $("reset").disabled = !!pending || !source;
   $("addCombination").disabled = !!pending || !source || !inspected;
   $("clearCombinations").disabled = !!pending || !combinationGroups.size;
+  $("addStudyCandidate").disabled = !ready || !!pending || !source || !inspected || studyCandidates.length >= 7;
+  $("clearStudyCandidates").disabled = !studyCandidates.length;
+  $("guidedStudy").hidden = !guided;
+  $("studyFileControls").hidden = guided;
+  $("studyPieces").disabled = !source || $("studyTarget").value !== "pieces";
+  for (const id of ["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAreaGoal", "guidedStockMassGoal"]) {
+    $(id).disabled = !$("guidedCutting").checked;
+  }
+  $("guidedInventory").disabled = !$("guidedMass").checked;
+  $("guidedInventoryComplete").disabled = !$("guidedMass").checked || has("guidedInventory");
+  $("guidedMassGoal").disabled = !$("guidedMass").checked;
+  $("studyOnBody").disabled = guided;
   $("clearInterfaces").disabled = interfaceChange === null && interfaceReady;
   for (const op of boundOperations) $(op).disabled ||= !bound;
   $("screen").disabled ||= !has("screenRequest");
@@ -87,10 +105,11 @@ function controls() {
   $("stageInterface").disabled ||= !source || !interfaceReady || !calibratedPair;
   $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
   for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
-  $("study").disabled ||= !source || !has("studyRequest");
-  if ($("studyOnBody").checked) $("study").disabled ||= !has("body") || !studyBodyReady();
-  $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || !studyBodyReady();
-  if ($("combinationMode").checked && !combinationGroups.size) {
+  const studyReady = guided ? studyCandidates.length > 0 : has("studyRequest");
+  $("study").disabled ||= !source || !studyReady;
+  if (!guided && $("studyOnBody").checked) $("study").disabled ||= !has("body") || !studyBodyReady();
+  $("scenario").disabled ||= !source || !studyReady || !has("scenarioRequest") || !has("body") || !studyBodyReady();
+  if (!guided && $("combinationMode").checked && !combinationGroups.size) {
     $("study").disabled = true; $("scenario").disabled = true;
   }
   $("exports").disabled ||= !has("measurements") || !has("fit");
@@ -3575,6 +3594,62 @@ function changes() {
   return `{"schema":"ftx-material-bindings/1","default":${defaultChange || "null"},"pieces":{${pieces}}${interfaces}}`;
 }
 function edits() { $("edits").textContent = text(JSON.parse(changes())); }
+function showStudyCandidates() {
+  const parent = $("studyCandidates"); parent.replaceChildren();
+  for (const candidate of studyCandidates) {
+    const row = document.createElement("div"), label = document.createElement("span"), remove = document.createElement("button");
+    row.className = "study-choice";
+    const selection = JSON.parse(candidate.selection); // Display only; the retained string is the input authority.
+    label.textContent = `${candidate.key}: ${selection.id} (${selection.allow_estimates ? "estimates explicitly admitted" : "estimates disabled"})`;
+    remove.type = "button"; remove.textContent = `Remove ${candidate.key}`;
+    remove.onclick = () => {
+      const index = studyCandidates.indexOf(candidate);
+      if (index < 0) return;
+      studyCandidates.splice(index, 1); showStudyCandidates();
+      if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
+    };
+    row.append(label, remove); parent.append(row);
+  }
+  $("studyCandidateCount").textContent = studyCandidates.length ?
+    `${studyCandidates.length} frozen material choice${studyCandidates.length === 1 ? "" : "s"} plus the original baseline; limit seven choices.` :
+    "No comparison materials added. Load a pattern, then inspect and add materials in section 1.";
+}
+async function guidedStudyInput() {
+  if (!source) throw Error("Load the original pattern first.");
+  const number = (id, label) => {
+    const raw = $(id).value.trim();
+    if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
+    return Number(raw);
+  };
+  const scope = $("studyTarget").value;
+  const target = scope === "default" ? { scope: "default" } : scope === "all" ?
+    { scope: "pieces", ids: source.pieces.map(p => p.id) } : scope === "pieces" ?
+      { scope: "pieces", ids: Array.from($("studyPieces").selectedOptions, option => option.value) } : null;
+  if (!target) throw Error("Choose the pattern assignment to compare.");
+  const allowance = $("guidedAllowance").value.trim() ?
+    { seam_allowance_mm: number("guidedAllowance", "seam allowance in millimetres") } : {};
+  const cutting = $("guidedCutting").checked ? {
+    copies: number("guidedCopies", "whole garment copy count"), gap_mm: number("guidedGap", "piece gap in millimetres"),
+    edge_margin_mm: number("guidedEdge", "side margin in millimetres"), end_margin_mm: number("guidedEnd", "end margin in millimetres"),
+    ...allowance,
+  } : undefined;
+  const objectives = [["guidedAreaGoal", "stock_area_m2"], ["guidedStockMassGoal", "stock_mass_kg"],
+    ["guidedMassGoal", "assembly_mass_kg"]].filter(([id]) => $(id).checked).map(([, metric]) => ({ metric, direction: "minimize" }));
+  // Snapshot every control before the optional asynchronous inventory read. execute() admits the
+  // result only while its request ID remains current; no download or visible state is made here.
+  const input = { candidates: studyCandidates.map(candidate => ({ ...candidate })), target,
+    pieceIds: source.pieces.map(p => p.id), ...(cutting ? { cutting } : {}), objectives, basis: $("guidedBasis").value };
+  if ($("guidedMass").checked) {
+    if (has("guidedInventory")) {
+      const raw = await read("guidedInventory");
+      if (Object.hasOwn(allowance, "seam_allowance_mm") && JSON.parse(raw)?.seam_allowance_mm !== allowance.seam_allowance_mm) {
+        throw Error("The inventory file must use the same explicit seam allowance override.");
+      }
+      input.assemblyMass = raw;
+    } else input.assemblyMass = { schema: "ftx-assembly-mass/1", inventory_complete: $("guidedInventoryComplete").checked, extras: [], ...allowance };
+  }
+  return buildMaterialStudyRequest(input);
+}
 function showCombinations() {
   const parent = $("combinationGroups"); parent.replaceChildren();
   let count = combinationGroups.size ? 1 : 0;
@@ -3597,6 +3672,7 @@ function showCombinations() {
   $("combinationCount").textContent = count ? `${count} complete material combination${count === 1 ? "" : "s"}; limit 32.` : "No material choices added.";
 }
 async function studyInput() {
+  if (guidedStudyMode()) return guidedStudyInput();
   const raw = await read("studyRequest");
   if (!$("combinationMode").checked) return raw;
   const policy = JSON.parse(raw);
@@ -3689,7 +3765,7 @@ async function execute(op) {
       if (!sourceText) throw Error("Load the original pattern first.");
       // Alternatives always start at the original, never the currently bound single-material preview.
       msg.pattern = sourceText; msg.studyRequest = await studyInput();
-      if (op === "study") msg.onBody = $("studyOnBody").checked;
+      if (op === "study") msg.onBody = !guidedStudyMode() && $("studyOnBody").checked;
       if (op === "scenario" || msg.onBody) {
         if (op === "scenario") msg.scenarioRequest = await read("scenarioRequest");
         msg.measurements = await studyBodyInput(msg);
@@ -3747,6 +3823,42 @@ async function execute(op) {
   }
 }
 for (const el of commands) el.onclick = () => execute(el.dataset.command);
+$("addStudyCandidate").onclick = () => {
+  if (!source || !inspected || pending) return;
+  try {
+    if (studyCandidates.length >= 7) throw Error("Keep at most seven material choices plus the original baseline.");
+    let key = $("studyCandidateName").value.trim();
+    if (!key) {
+      do { key = `material-${++studyCandidateSequence}`; } while (studyCandidates.some(candidate => candidate.key === key));
+    }
+    if (key === "baseline" || studyCandidates.some(candidate => candidate.key === key)) {
+      throw Error("Choose a unique comparison name other than baseline.");
+    }
+    if (studyCandidates.some(candidate => candidate.selection === inspected)) {
+      throw Error("This exact inspected selection is already in the shortlist.");
+    }
+    studyCandidates.push({ key, selection: inspected });
+    $("studyCandidateName").value = ""; $("studyMode").value = "guided";
+    showStudyCandidates(); invalidate(["study", "scenario"], true);
+  } catch (e) { error(String(e.message || e)); }
+};
+$("clearStudyCandidates").onclick = () => {
+  studyCandidates.length = 0; showStudyCandidates();
+  if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
+};
+$("studyMode").addEventListener("change", () => invalidate(["study", "scenario"], true));
+for (const id of ["studyTarget", "studyPieces", "guidedCutting", "guidedMass", "guidedInventoryComplete", "guidedInventory",
+  "guidedAreaGoal", "guidedStockMassGoal", "guidedMassGoal", "guidedBasis", "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance"]) {
+  const changed = () => {
+    if (id === "guidedCutting" && !$(id).checked) {
+      $("guidedAreaGoal").checked = false; $("guidedStockMassGoal").checked = false;
+    }
+    if (id === "guidedMass" && !$(id).checked) $("guidedMassGoal").checked = false;
+    if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
+  };
+  $(id).addEventListener("change", changed);
+  if (["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance"].includes(id)) $(id).addEventListener("input", changed);
+}
 $("rollPreview").addEventListener("change", () => invalidate(["cut"]));
 $("cancel").onclick = () => { cancelPhotoReturn(); start(); $("status").textContent = "Cancelled; reloading local engine."; };
 $("catalog").onchange = () => {
@@ -3789,7 +3901,7 @@ function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
     garments.forEach((garment, i) => group(`@garment:${i}`, `${garment.id} — every source piece`, Object.values(garment.pieces)));
   }
   for (const p of data.pieces) {
-    for (const target of ["target", "combinationPieces"]) {
+    for (const target of ["target", "combinationPieces", "studyPieces"]) {
       const o = document.createElement("option"); o.value = p.id; o.textContent = p.id; $(target).append(o);
     }
   }
@@ -3801,6 +3913,7 @@ function resetPatternInput(keepImport = false) {
   defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
   outfitTargets.clear();
   combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
+  studyCandidates.length = 0; studyCandidateSequence = 0; showStudyCandidates(); $("studyPieces").replaceChildren();
   invalidate(["bodyCheck", "bind", ...boundOperations, "study", "scenario", "outfit", ...(keepImport ? [] : ["garmentcode"])]);
   $("patternName").textContent = "No pattern loaded.";
   $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
@@ -3982,6 +4095,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
+    if (id === "studyRequest") $("studyMode").value = "file";
     if (id === "measurements" || id === "body") cancelPhotoReturn();
     if (id === "fit") clearImportFit();
     if (id === "measurements") $("supplementalConsent").checked = false;
