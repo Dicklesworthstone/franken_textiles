@@ -64,9 +64,14 @@ and its conditioning/geometry evidence.
 `fsri-manifest.json` replays two **factual header/results transcriptions**, not complete
 upstream telemetry exports. The source note records the pinned upstream revision and
 original Git blob identity; the manifest SHA-256 locks the actual UTF-8 excerpt bytes.
-The source filenames retain `Dry` and `Wet`; neither token establishes moisture content
-or the complete conditioning history. These are separate records, not a controlled
-before/after moisture experiment.
+The source filenames retain `Dry` and `Wet`. The pinned
+[Technical Reference Guide, HFM sample preparation](https://github.com/ulfsri/fsri_materials_database/blob/a432697e4b7d40f642b5cc8f384506439ebb32df/04_Documentation/Technical_Reference_Guide/FSRI_MaP_Tech_Guide.tex#L289-L295)
+describes unconditioned as-received tests, followed by oven drying at 105 C for at least
+48 hours until mass stabilizes. The records now carry this protocol and its source
+identity. Mapping the `Wet` group to that as-received stage is an explicit protocol
+interpretation, not a measured water loading. Neither group establishes moisture at
+each test temperature, contact pressure, ply count or lot identity. These are separate
+records, not a controlled before/after moisture experiment.
 
 | Built-in ID | Instrument thickness | Mean conductivity at nominal 15 / 65 C (W/m K) |
 | --- | --- | --- |
@@ -106,3 +111,14 @@ Matched mass/area, ply count, pressure, lot linkage, thermal history and indepen
 held-out validation remain necessary for a qualified garment model. Drape readiness,
 transient readiness, temperature ratings, flammability, cut protection and robot
 execution are not established by successfully importing a conductivity table.
+
+The 2026-11-01 source review also checked the pinned dry cotton-sheet R1 heat-capacity
+export and density CSV. The conductivity run reports 0.30 mm, while the heat-capacity
+run reports 0.27 mm and volumetric `Spc Heat` in J/(m3 K). The upstream processing script
+divides pooled volumetric observations by a conditioning-group mean density; that does
+not establish the matched specimen/geometry conversion required here. The guide's
+nominal 200 mm square also permits smaller specimens with surrounding filler, so it
+cannot supply an unreported actual area. Specific heat, areal mass and transient
+readiness remain unavailable in these records. The reviewed guide has SHA-256
+`9df19964f73ea1a6bcdaa930da954def5d422bf41b6127eb5806219e0cc42726`;
+raw instrument excerpts, their hashes and all conductivity readings are unchanged.

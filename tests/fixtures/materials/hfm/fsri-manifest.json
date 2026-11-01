@@ -9,11 +9,11 @@
       "sha256": "f501f8bd36c14fd062087f0b54176408b8e408c2344b61e4e2cb9d35c69048e7",
       "source": {
         "reference": "https://github.com/ulfsri/fsri_materials_database/blob/a432697e4b7d40f642b5cc8f384506439ebb32df/01_Data/Cotton_Sheet/HFM/Cotton_Sheet_HFM_Dry_conductivity_220330_R1.tst",
-        "accessed_on": "2026-10-15",
-        "note": "McKinnon, Weinschenk, Dow, DiDomizio and Madrzykowski, FSRI Materials and Products Database (2023). Upstream git blob 899253ffc79b62493734bc137cf8956a85febffd. UTF-8 factual transcription of identity, instrument thickness, corner measurements and all six results rows; NOT the complete original UTF-16 export or its byte hash. Block telemetry and calibration history are not reproduced. Nominal-degree grouping retains this run separately from pooled website means."
+        "accessed_on": "2026-11-01",
+        "note": "McKinnon, Weinschenk, Dow, DiDomizio and Madrzykowski, FSRI Materials and Products Database (2023). Upstream git blob 899253ffc79b62493734bc137cf8956a85febffd. UTF-8 factual transcription of identity, instrument thickness, corner measurements and all six results rows; NOT the complete original UTF-16 export or its byte hash. Block telemetry and calibration history are not reproduced. Nominal-degree grouping retains this run separately from pooled website means. Conditioning protocol: https://github.com/ulfsri/fsri_materials_database/blob/a432697e4b7d40f642b5cc8f384506439ebb32df/04_Documentation/Technical_Reference_Guide/FSRI_MaP_Tech_Guide.tex#L289-L295 (SHA-256 9df19964f73ea1a6bcdaa930da954def5d422bf41b6127eb5806219e0cc42726). Group conditioning is interpreted from the published HFM sequence, not a measured water loading."
       },
       "sample_name": "Cotton_Fitted_Sheet_HFM_Dry_Conductivity_220330_R1",
-      "conditioning": "FSRI Dry source token; moisture content, pressure, ply count and detailed conditioning history unqualified in this excerpt",
+      "conditioning": "FSRI Dry group; published HFM protocol dries at 105 C for at least 48 h to stable mass; test moisture, pressure, ply count and lot unqualified",
       "temperature_grouping": {
         "method": "within_run_nearest_integer_c",
         "maximum_deviation_c": 0.1
@@ -28,11 +28,11 @@
       "sha256": "f4bf5698854ea8995796b6d469aaffb212385acefccf6cb5387172a85bf810a1",
       "source": {
         "reference": "https://github.com/ulfsri/fsri_materials_database/blob/a432697e4b7d40f642b5cc8f384506439ebb32df/01_Data/Cotton_Sheet/HFM/Cotton_Sheet_HFM_Wet_conductivity_220318_R1.tst",
-        "accessed_on": "2026-10-15",
-        "note": "McKinnon, Weinschenk, Dow, DiDomizio and Madrzykowski, FSRI Materials and Products Database (2023). Upstream git blob 8ca5af619fd9584be859db87c0b2cd0b76f7855a. UTF-8 factual transcription of identity, instrument thickness, corner measurements and all six results rows; NOT the complete original UTF-16 export or its byte hash. Block telemetry and calibration history are not reproduced. Nominal-degree grouping retains this run separately from pooled website means."
+        "accessed_on": "2026-11-01",
+        "note": "McKinnon, Weinschenk, Dow, DiDomizio and Madrzykowski, FSRI Materials and Products Database (2023). Upstream git blob 8ca5af619fd9584be859db87c0b2cd0b76f7855a. UTF-8 factual transcription of identity, instrument thickness, corner measurements and all six results rows; NOT the complete original UTF-16 export or its byte hash. Block telemetry and calibration history are not reproduced. Nominal-degree grouping retains this run separately from pooled website means. Conditioning protocol: https://github.com/ulfsri/fsri_materials_database/blob/a432697e4b7d40f642b5cc8f384506439ebb32df/04_Documentation/Technical_Reference_Guide/FSRI_MaP_Tech_Guide.tex#L289-L295 (SHA-256 9df19964f73ea1a6bcdaa930da954def5d422bf41b6127eb5806219e0cc42726). Group conditioning is interpreted from the published HFM sequence, not a measured water loading."
       },
       "sample_name": "Cotton_Fitted_Sheet_HFM_Wet_Conductivity_220318_R1",
-      "conditioning": "FSRI Wet source token; moisture content, pressure, ply count and detailed conditioning history unqualified in this excerpt",
+      "conditioning": "FSRI Wet group, interpreted as unconditioned as-received under the published HFM sequence; test moisture, pressure, ply count and lot unqualified",
       "temperature_grouping": {
         "method": "within_run_nearest_integer_c",
         "maximum_deviation_c": 0.1
