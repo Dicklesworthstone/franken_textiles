@@ -45,6 +45,16 @@ evidence and physical-value checks. Enabling self-contact requires the complete 
 unlike-sheet table before meshing. Source freezing and flat drafting/export do not require unused
 mechanical properties; their own consumers enforce the capabilities they actually use.
 
+Per-piece drape admission compiles mechanics only for source pieces not explicitly
+marked `sim:false`. Excluded selections and unused defaults still pass canonical source,
+unit, shape and digest validation and remain in the receipt; they cannot add contact
+offsets, require phantom pair friction or contribute constitutive histories. Supplied
+interface observations remain validated against all declared piece snapshots, while the
+active matrix covers only simulated sources. Every active piece needs its own complete
+selection or a complete inherited default. Missing placement never implies exclusion.
+Uniform legacy active cloth can retain excluded source selections without changing its
+legacy numerical path or becoming characterized. Cutting/BOM scope remains independent.
+
 The extensible property map also admits test-qualified tensile/tear/cut resistance, abrasion cycles,
 flammability results, ignition and decomposition observations, thermal conductivity/resistance, vapor
 resistance, air permeability, absorbency, shrinkage, colorfastness, UV performance, yarn tex/denier,

@@ -20,6 +20,26 @@ fn default_sample_vertices() -> usize {
     500_000
 }
 
+/// Existing source-model leg posture. This supplies joint rotations, not anatomical qualification.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LegPosture {
+    /// Hip −90° and knee +90° about the rest body's +X axis.
+    Seated,
+    /// Hip −100°, knee +110° and foot −10°; the trunk remains upright.
+    Squat,
+}
+
+/// Absolute leg pose at one endpoint, independent of its arm abduction and straightening.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegPose {
+    /// Which existing body posture to approach from standing.
+    pub posture: LegPosture,
+    /// Fraction of the posture's joint rotations, finite and in 0..=1.
+    pub fraction: f64,
+}
+
 /// A source-model endpoint. Between endpoints the checked solver follows linear vertex chords,
 /// not an inferred anatomical joint trajectory. Use short pose increments to approximate a turn.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -29,6 +49,10 @@ pub struct Keyframe {
     pub time_s: f64,
     /// Standing straight-arm angle from vertical, in degrees, 0..=180.
     pub arm_abduction_deg: f64,
+    /// Optional seated/squat leg rotation. Omission keeps standing legs at this endpoint;
+    /// this is not an increment from the previous endpoint. The root does not translate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leg_pose: Option<LegPose>,
 }
 
 /// Bounded prescribed motion following the scenario's fresh initial drape.
@@ -94,6 +118,13 @@ impl Request {
             {
                 return Err(invalid(
                     "motion needs increasing times through 60 s and finite standing angles in 0..=180 degrees",
+                ));
+            }
+            if frame.leg_pose.is_some_and(|pose| {
+                !pose.fraction.is_finite() || !(0.0..=1.0).contains(&pose.fraction)
+            }) {
+                return Err(invalid(
+                    "motion leg-pose fractions must be finite and in 0..=1",
                 ));
             }
             minimum_trials += ((frame.time_s - previous) / self.max_step_s - 1e-12).ceil();
@@ -513,6 +544,9 @@ fn evaluate_path(
             "sample_index":samples.len()-1,"positions_sha256":hash(&run.scene.solver.x)?,
             "body_collision_sha256":hash(&(&path.vertices[i],body.collision.1))?,
             "surface":surface,"coverage":coverage});
+        if let Some(pose) = frame.leg_pose {
+            endpoint["leg_pose"] = json!(pose);
+        }
         if let Some(conditions) = &scenario.vapor_surface {
             endpoint["vapor_surface"] = outcome(conditions.evaluate(&snapshot));
         }
@@ -641,6 +675,39 @@ fn evaluate_path(
 mod tests {
     use super::*;
     use crate::{PartFrame, scene::PartFrames};
+
+    #[test]
+    fn leg_keyframes_preserve_legacy_serialization_and_refuse_invalid_postures() {
+        let source = json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.01,"arm_abduction_deg":35.0}],
+            "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000});
+        let legacy: Request = serde_json::from_value(source.clone()).unwrap();
+        legacy.validate().unwrap();
+        assert_eq!(serde_json::to_value(&legacy).unwrap(), source);
+        for posture in ["seated", "squat"] {
+            for fraction in [0.0, 0.25, 1.0] {
+                let mut value = source.clone();
+                value["keyframes"][0]["leg_pose"] = json!({"posture":posture,"fraction":fraction});
+                let request: Request = serde_json::from_value(value.clone()).unwrap();
+                request.validate().unwrap();
+                assert_eq!(serde_json::to_value(&request).unwrap(), value);
+                for bad in [-0.01, 1.01, f64::NAN, f64::INFINITY] {
+                    let mut invalid = request.clone();
+                    invalid.keyframes[0].leg_pose.as_mut().unwrap().fraction = bad;
+                    assert!(invalid.validate().is_err());
+                }
+            }
+        }
+        for pose in [
+            json!({"posture":"walking","fraction":0.5}),
+            json!({"posture":"seated"}),
+            json!({"posture":"seated","fraction":0.5,"root_drop_m":0.1}),
+        ] {
+            let mut value = source.clone();
+            value["keyframes"][0]["leg_pose"] = pose;
+            assert!(serde_json::from_value::<Request>(value).is_err());
+        }
+    }
 
     struct Form;
     impl PartFrames for Form {

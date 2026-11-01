@@ -119,6 +119,12 @@ newly estimated measurement uncertainty. They use the already-computed TapeFit, 
 Only requested tape readings must be available to fit the body. Unavailable unrequested sections
 remain absent from `readings_mm`; `tape_evaluation` identifies partial coverage and its exact
 `unavailable_fields`. A missing requested section refuses instead of dropping its constraint.
+Explicit `wearer.nappies: true` requires fused `seat_over_nappy` and applies the same separately
+reported calibrated occupancy used by native body export and material studies. Bare shape/source,
+mass and fit residuals remain intact. `nappy_occupancy` retains the original target evidence and
+occupied reference geometry; `readings_mm.seat_over_nappy` is its computed MODEL_FIT seat. Every
+requested pose reuses the one 35-degree calibration. Missing/unreachable active targets refuse
+instead of falling back to bare geometry; no nappy material properties or readiness are inferred.
 The wasm boundary adds the exact loaded model and saved measurement document hashes.
 The page shows residuals beside the cloth verdict, with unavailable data explicit; existing fold
 invalidation withdraws both. Targets can be priors, and these diagnostics supply no new measured

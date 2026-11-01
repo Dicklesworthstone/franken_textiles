@@ -372,7 +372,7 @@ pub fn drape(
             (|| {
                 let piece = pattern.instance(&e.instance)?.piece_index;
                 let field = material.contact_materials.as_ref()?;
-                Some(field.surfaces[field.piece_ids[piece]].friction_body)
+                Some(field.surfaces[field.piece_ids[piece]?].friction_body)
             })()
             .unwrap_or(opts.contact.mu)
         })
@@ -415,7 +415,7 @@ pub fn drape(
                     .piece_index;
                 json!({"instance":id, "piece_index":p,
                 "record_sha256":report["material"]["pieces"][p]["record_sha256"],
-                "rest_area_m2":area[i], "mass_kg":area[i]*fabrics[p].areal_kg_m2})
+                "rest_area_m2":area[i], "mass_kg":area[i]*fabrics[p].expect("retained instance has an active sheet").areal_kg_m2})
             })
             .collect();
         report["material"]["instances"] = json!(instances);

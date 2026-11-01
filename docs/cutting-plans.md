@@ -125,7 +125,7 @@ and geometry hashes, applied recipe, thickness interval and every raised-tool tr
 `ordering: "nearest_path"` compares unchanged path starts within each phase under one shared bounded
 candidate budget. An unfinished candidate or a candidate with longer travel retains the complete
 baseline; the heuristic never claims a shortest-path proof. `ordering: "authored"` performs no
-search. Optional `geometry_work_limit` bounds validation separately (one million by default,
+ordering search. Optional `geometry_work_limit` bounds validation separately (one million by default,
 at most twenty million); exhausting validation refuses instead of emitting an unchecked path.
 Both budgets are shared by every marker. Material/design studies reserve the complete configured
 limits across all alternatives or adaptive probe slots, capped at two million search comparisons and
@@ -164,11 +164,79 @@ must admit that exact configuration. The program retains the original policy in
 outward-rounded bounds do not introduce a physical padding distance. Geometric work shares the existing
 `geometry_work_limit` across all fixtures and markers. Missing evidence, blocked cuts or a blocked
 authored traversal produce an independent `program_refusal`, preserving valid nesting and purchasing.
-The planner does not route around obstacles. When a nearest-path candidate is blocked but the
+Without the opt-in routing policy below, raised moves stay straight. When a nearest-path candidate is blocked but the
 complete authored baseline is clear, it keeps that baseline and reports the obstruction in
 `program.markers[].candidate_clearance_refusal`. Exhausting geometric validation always refuses
 the process; it never publishes an unchecked candidate. Omission makes no tool/fixture clearance
 claim and keeps the existing machine digest.
+
+### Checked detours for raised moves
+
+An otherwise qualified job can be blocked solely by a straight raised move across a clamp. Set
+`program.travel_routing` to `{"model":"fixture_box_visibility/1","waypoint_offset_mm":1.0}`
+to search checked detours using the existing qualified fixture/tool geometry. The positive offset
+is an explicit **search choice**, not a recommended safety distance: it places candidate corners
+beyond each fixture bounding box plus the raised-tool radius. Only candidate points inside the
+machine bed are used. Every complete connecting chord must pass the original exact circular sweep;
+no fixture, tool radius, cutting point, path direction or qualification is changed. A clear direct
+move stays direct. Blocked cuts or endpoints still refuse.
+
+The finite corner graph and deterministic search are conservative: a missing route does not prove
+that every possible path is blocked, and an accepted route carries no globally shortest-path claim.
+Node generation, candidate comparisons, checked links and final selected sweeps share the existing
+search/geometry budgets across all markers. Failure to complete the authored cut order's raised
+routes refuses the process. Once that baseline is complete, an unfinished or worse optional ordering
+candidate keeps it; geometry-budget exhaustion always refuses instead of retaining unchecked output.
+
+The report retains `travel_routing`. Each run keeps `travel_mm` as its original endpoints and adds
+ordered intermediate `travel_waypoints_mm` only when needed; the final return similarly adds
+`return_waypoints_mm`. All points are in the machine frame. Every chord contributes to travel length,
+modeled time and material-study objectives. Roll and finite-stock SVG previews use the **full bed**
+in this mode, showing stationary fixtures and complete selected raised routes, including a detour
+outside the fabric footprint and the final return. Finite stock retains its explicit loading
+translation. Omission preserves the original report and preview formats. This remains planar
+constant-speed planning, with no new acceleration, 3D motion, measured cutting or execution claim.
+
+### Explicit stock locations on the bed
+
+A fixed machine fixture can obstruct the default stock position even when the same complete
+marker fits elsewhere on the bed. Optional `program.stock_loading` places individual whole stock
+items at authored machine-frame locations without moving pieces within their markers:
+
+```json
+"stock_loading": [
+  { "marker": 0, "lower_left_mm": [200.0, 100.0] },
+  { "marker": 1, "lower_left_mm": [200.0, 200.0] }
+]
+```
+
+Each `marker` is an index in the final plan's complete roll or finite-stock marker array. Entries
+must be unique, reference existing markers and use finite nonnegative bed coordinates; at most
+4096 entries are accepted. Unlisted markers retain their original origin placement. For a roll,
+the authored position is its marker-to-machine translation. For a finite hide or remnant, it is
+the new position of the complete stock bounding-box lower-left corner: the actual translation also
+subtracts that bounding box's original minimum coordinates. Unused finite stock may have a retained
+request but produces no loaded receipt, path, time or bed-fit requirement until allocated.
+
+The **entire** loaded stock must fit. Roll width uses the source's upper reported bound when present,
+even when lower-bound nesting or nominal purchasing uses a smaller width. Finite loading retains
+the complete outline, defects, previous occupied regions and quality zones. Cuts, path directions,
+instance/copy identities and nesting are unchanged; cut sweeps, raised routes and the final return
+are checked in the translated machine frame. The same optional detour policy can route around
+fixtures after this translation. Existing source qualifications and shared work budgets still apply.
+
+The program retains the exact `stock_loading` request. Each explicitly loaded, used marker gains
+`loading.lower_left_mm`, `loading.marker_to_machine_offset_mm` and `loading.stock_bounds_mm`
+(`[xmin,ymin,xmax,ymax]`, all in machine millimetres). Its geometry hash includes the translation;
+material and machine hashes are unchanged. Complete translated travel contributes to modeled time
+and material-study comparisons, whose source admission binds the request, source envelope, loading
+receipt and cut endpoints. Such comparisons retain the loading policy as part of their protocol.
+
+With loading enabled, previews show the full bed, the translated stock and annotations, fixtures
+when supplied, and complete selected raised routes. Roll previews additionally outline the full
+source-width envelope. Omission or an empty list preserves the original reports and previews.
+These are authored geometric placements: no physical registration accuracy, loading time, holding
+force or new workholding qualification is inferred, and no device execution is authorized.
 
 ## Dated purchasing observations
 

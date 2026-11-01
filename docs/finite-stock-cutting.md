@@ -150,7 +150,10 @@ observation changes the material identity and requires a matching process qualif
 
 The geometric allocation remains in its original emitted marker frame. For knife planning, each
 used physical stock item is independently loaded with the lower-left corner of its **complete**
-axis-aligned marker bounding box at the machine-bed origin. This is a reported translation, with
+axis-aligned marker bounding box at the machine-bed origin by default. Optional
+`options.program.stock_loading: [{"marker":0,"lower_left_mm":[20,10]}]` instead locates that
+whole-stock corner at the authored machine coordinates. Unlisted items keep their default position;
+indices refer to the complete marker inventory, including unused items. This is a reported translation, with
 no additional rotation, reflection, clipping or movement of individual pieces. A scanner's negative
 or offset coordinates therefore remain valid source coordinates. The entire stock must fit the
 declared bed, even when its newly allocated pieces occupy a smaller area.
@@ -167,6 +170,9 @@ Its `markers` array contains used items in their original inventory order. Each 
   the full affine map from the authored stock coordinates to the modeled bed.
 - `geometry_sha256`: the exact final marker transform, outline, defects, occupied regions, zones,
   placements and loading offset. This is distinct from the source-stock and material identities.
+- Optional `loading`: the explicit `lower_left_mm`, `marker_to_machine_offset_mm` and complete
+  machine-frame `stock_bounds_mm` envelope. It agrees with `finite_stock`'s transform. The program
+  retains the complete authored `stock_loading` request; unused stock creates no loading receipt.
 - The same complete `baseline` and `selected` traversal fields as a roll program: original
   placement/feature references, piece/instance/copy identities, bed-coordinate travel and cut
   endpoints, complete path lengths, and separate cut, travel and lift/lower durations.
@@ -176,6 +182,15 @@ Directions and starting vertices remain unchanged. Stock boundaries, defects, ea
 named quality regions are inventory constraints, **not additional knife paths**. Residual-stock
 replay treats earlier exterior cuts as occupied space and emits only the newly allocated cuts.
 The exact stock and geometry hashes change when this consumed inventory changes.
+
+Explicit loading can clear a fixed fixture that blocks the default origin placement. The complete
+translated stock, including defects, previous cuts and zones, must stay on the bed; fitting only the
+new pieces is insufficient. Source-qualified cutting and raised-tool sweeps are replayed in the
+loaded machine frame, including optional detours and final return. Previews show the full bed and
+translate stock geometry and annotations exactly once. Complete travel changes modeled time while
+the cut length and source inventory remain unchanged. See
+[explicit stock locations](cutting-plans.md#explicit-stock-locations-on-the-bed) for the request,
+source bindings and limits. No measured registration, loading duration or grip adequacy is inferred.
 
 ### Independent availability and limits
 
@@ -194,10 +209,15 @@ there is no separate hide toolpath implementation in an adapter.
 
 Geometry validation and ordering work are shared across all used items in one program. An unfinished
 nearest-path candidate retains the complete authored baseline. Reported durations include only
-declared constant-rate cutting, raised-tool straight travel and lift/lower phases; loading,
+declared constant-rate cutting, every retained raised-travel chord and lift/lower phases; loading,
 registration, workholding, acceleration, corner/blade dynamics and inspection are not modeled.
 The emitted placement is not a measured machine registration. No cutter command is transmitted,
 no empirical cycle-time or cut-quality claim is made, and hardware execution remains unauthorized.
+
+Optional `program.travel_routing` uses the shared [checked detour policy](cutting-plans.md#checked-detours-for-raised-moves).
+Reported intermediate points and final returns use the loaded machine frame. In this mode the SVG
+shows the full bed, applies the retained stock translation once, and includes every selected raised
+leg and fixture; travel outside the stock footprint is not clipped from review.
 
 ## Browser integration
 

@@ -203,6 +203,105 @@ fn both_binaries_replace_heterogeneous_materials_and_pairs_with_exact_core_and_f
 }
 
 #[test]
+fn inactive_partial_sheets_and_unused_defaults_keep_active_drape_and_cut_inventory_independent() {
+    let (mut pattern, _) = inputs();
+    // Both simulated panels have explicit, characterized selections. The same authored garment
+    // also contains a real cut piece deliberately omitted from cloth simulation.
+    pattern["pieces"][0]["fabric"] = json!({"material":pattern["fabric"]["material"]});
+    let mut label = pattern["pieces"][0].clone();
+    label["id"] = json!("label");
+    label["sim"] = json!(false);
+    pattern["pieces"].as_array_mut().unwrap().push(label);
+    let changes = json!({"schema":"ftx-material-bindings/1",
+        "default":{"id":"mit.raw-2013.08a"},
+        "pieces":{"label":{"id":"mit.raw-2013.08a"}}});
+    let pattern_bytes = serde_json::to_vec_pretty(&pattern).unwrap();
+    let changes_bytes = serde_json::to_vec_pretty(&changes).unwrap();
+    let portable: Value = serde_json::from_str(
+        &ftx_wasm::materials::bind(
+            std::str::from_utf8(&pattern_bytes).unwrap(),
+            std::str::from_utf8(&changes_bytes).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for field in [
+        "drape_materials_without_self_contact",
+        "drape_materials_with_self_contact",
+    ] {
+        assert_eq!(portable[field]["ready"], true, "{portable}");
+    }
+    let bound = Pattern::new(portable["pattern"].clone());
+    assert_eq!(bound.raw()["seams"], pattern["seams"]);
+    for i in 0..3 {
+        assert_eq!(
+            bound.raw()["pieces"][i]["vertices"],
+            pattern["pieces"][i]["vertices"]
+        );
+        assert_eq!(
+            bound.raw()["pieces"][i]["edges"],
+            pattern["pieces"][i]["edges"]
+        );
+    }
+    let frozen: ftx_pattern::material_catalog::Selection =
+        serde_json::from_value(bound.raw()["pieces"][2]["fabric"]["material"].clone()).unwrap();
+    let linen = textile_import::catalog().unwrap().resolve(&frozen).unwrap();
+    assert!(!linen.material().properties.contains_key("warp_stiffness"));
+    assert!(!linen.material().properties.contains_key("friction_self"));
+    // sim:false is a drape exclusion, never permission to omit a piece from the physical BOM.
+    let inventory = ftx_export::assembly_mass::Request {
+        schema: "ftx-assembly-mass/1".into(),
+        inventory_complete: true,
+        extras: Vec::new(),
+        seam_allowance_mm: Some(0.0),
+    }
+    .evaluate(&bound)
+    .unwrap();
+    assert_eq!(inventory.pieces.len(), 3);
+    let label = inventory
+        .pieces
+        .iter()
+        .find(|p| p.piece == "label")
+        .unwrap();
+    assert!(
+        (label.mass.kg.unwrap() - 0.002 * linen.material().properties["areal_density"].value).abs()
+            < 1e-15
+    );
+    assert!(inventory.assembly_mass.kg.is_some());
+
+    let dir = workspace();
+    write(&dir, "pattern.json", &pattern_bytes);
+    write(&dir, "changes.json", &changes_bytes);
+    for unified in [false, true] {
+        let out = format!("partial-inactive-{unified}.json");
+        let result = success(&run(&dir, unified, &out), unified);
+        for (field, expected) in portable.as_object().unwrap() {
+            assert_eq!(&result[field], expected, "native/portable field {field}");
+        }
+        assert_eq!(
+            fs::read(dir.join(&out)).unwrap(),
+            portable["pattern_json"].as_str().unwrap().as_bytes()
+        );
+    }
+    assert_eq!(fs::read(dir.join("pattern.json")).unwrap(), pattern_bytes);
+    assert_eq!(fs::read(dir.join("changes.json")).unwrap(), changes_bytes);
+
+    // The same incomplete observation becomes a real blocker when the piece is simulated.
+    pattern["pieces"][2]["sim"] = json!(true);
+    let active: Value = serde_json::from_str(
+        &ftx_wasm::materials::bind(&pattern.to_string(), &changes.to_string()).unwrap(),
+    )
+    .unwrap();
+    for field in [
+        "drape_materials_without_self_contact",
+        "drape_materials_with_self_contact",
+    ] {
+        assert_eq!(active[field]["ready"], false);
+        assert!(active[field].get("value").is_none());
+    }
+}
+
+#[test]
 fn stale_explicit_pairs_refuse_before_creating_output_in_either_binary() {
     let (pattern, mut changes) = inputs();
     changes["interfaces"] = pattern["fabric"]["interfaces"].clone();

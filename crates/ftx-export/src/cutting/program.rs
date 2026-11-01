@@ -1,6 +1,7 @@
 //! Source-qualified cold-knife path planning on the existing final roll/finite-stock geometry.
 //! Every internal cut precedes every exterior release. Paths retain their authored start and
-//! direction; raised-tool travel may be reordered, but kerf and machine trajectories are not inferred.
+//! direction; raised-tool travel may be reordered or explicitly routed around qualified planar
+//! fixtures. Kerf, acceleration and three-dimensional machine trajectories are not inferred.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -36,6 +37,28 @@ pub enum Ordering {
     Authored,
     /// Bounded nearest authored start; retain the complete baseline if the candidate travels farther.
     NearestPath,
+}
+
+/// Opt-in conservative routing of raised moves using the already qualified planar tool/fixtures.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TravelRouting {
+    /// `fixture_box_visibility/1`: checked straight links between expanded fixture-box corners.
+    pub model: String,
+    /// Positive additional offset of candidate corners beyond the raised-tool radius, in mm.
+    /// This chooses the search graph, not a physical safety margin or a new tool envelope.
+    pub waypoint_offset_mm: f64,
+}
+
+/// Authored location of one complete stock item on the machine bed, without changing its marker.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StockLoading {
+    /// Index in the final roll or finite-stock marker array, including unused finite-stock entries.
+    pub marker: usize,
+    /// Machine-frame location of the whole stock bounding-box lower-left corner, in mm.
+    /// This is a modeled translation, not measured registration or a workholding qualification.
+    pub lower_left_mm: Vec2,
 }
 
 /// Explicit cold-knife configuration. A qualification locks every field, not just its display ID.
@@ -148,6 +171,13 @@ pub struct Policy {
     /// Default authored order, or bounded nearest-path heuristic.
     #[serde(default)]
     pub ordering: Ordering,
+    /// Optional checked detours around the machine's qualified stationary fixtures. Omission
+    /// retains straight raised travel; cutting paths and their authored endpoints never change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub travel_routing: Option<TravelRouting>,
+    /// Optional complete-stock locations; unlisted markers retain their origin-based placement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stock_loading: Vec<StockLoading>,
     /// Shared candidate-comparison budget across all markers, in 1..=2000000.
     pub work_limit: usize,
     /// Shared geometric-validation budget across all markers, in 1..=20000000.
@@ -179,8 +209,12 @@ pub struct Run {
     pub copy: usize,
     /// Closed paths finish at their unchanged first point; open slits finish at their last point.
     pub closed: bool,
-    /// Raised-tool straight segment from the preceding path end (or marker start).
+    /// Raised-tool endpoints from the preceding path end (or marker start).
     pub travel_mm: [Vec2; 2],
+    /// Intermediate machine-frame vertices of a checked detour, in traversal order. Omission
+    /// means the original straight move; these points are never cutting coordinates.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub travel_waypoints_mm: Vec<Vec2>,
     /// Exact beginning and end of the cut, retaining source traversal direction.
     pub cut_endpoints_mm: [Vec2; 2],
     /// Complete polyline length, including the closing edge exactly once, in mm.
@@ -192,8 +226,11 @@ pub struct Run {
 pub struct Traversal {
     /// Every declared internal path followed by every physical exterior exactly once.
     pub runs: Vec<Run>,
-    /// Optional final raised-tool travel; no cutting occurs along this segment.
+    /// Optional final raised-tool endpoints; no cutting occurs during this return.
     pub return_mm: Option<[Vec2; 2]>,
+    /// Intermediate machine-frame vertices of the requested final raised return.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub return_waypoints_mm: Vec<Vec2>,
     /// Total complete cut length, in mm.
     pub cut_length_mm: f64,
     /// Total raised-tool travel including requested return, in mm.
@@ -208,6 +245,83 @@ pub struct Traversal {
     pub modeled_path_seconds: f64,
 }
 
+impl Run {
+    /// Complete raised-tool polyline in machine-frame millimetres, including both endpoints.
+    pub fn travel_points(&self) -> impl Iterator<Item = Vec2> + '_ {
+        std::iter::once(self.travel_mm[0])
+            .chain(self.travel_waypoints_mm.iter().copied())
+            .chain(std::iter::once(self.travel_mm[1]))
+    }
+}
+
+impl Traversal {
+    /// Complete requested final raised return in machine-frame millimetres.
+    pub fn return_points(&self) -> impl Iterator<Item = Vec2> + '_ {
+        self.return_mm
+            .iter()
+            .map(|p| p[0])
+            .chain(self.return_waypoints_mm.iter().copied())
+            .chain(self.return_mm.iter().map(|p| p[1]))
+    }
+
+    /// Recompute all retained raised legs, including detours and the final return, in mm.
+    /// This checks finite connected coordinates, not source applicability or fixture clearance.
+    ///
+    /// # Errors
+    /// Empty/disconnected traversal, orphan return vertices, or non-finite length/coordinates.
+    pub fn checked_travel_length(&self) -> Result<f64, Refusal> {
+        let first = self
+            .runs
+            .first()
+            .ok_or_else(|| bad("knife traversal has no cutting paths"))?;
+        let mut position = first.travel_mm[0];
+        let mut length = 0.;
+        for run in &self.runs {
+            if run.travel_mm[0] != position
+                || run.travel_mm[1] != run.cut_endpoints_mm[0]
+                || run.cut_endpoints_mm.iter().any(|p| !p.is_finite())
+            {
+                return Err(bad(
+                    "knife raised travel is disconnected from its cutting paths",
+                ));
+            }
+            length += raised_length(run.travel_points())?;
+            position = run.cut_endpoints_mm[1];
+        }
+        if let Some([start, end]) = self.return_mm {
+            if start != position || end != first.travel_mm[0] {
+                return Err(bad("knife final return is disconnected from its traversal"));
+            }
+            length += raised_length(self.return_points())?;
+        } else if !self.return_waypoints_mm.is_empty() {
+            return Err(bad("knife return waypoints require a final return"));
+        }
+        if !length.is_finite() {
+            return Err(bad("knife raised-travel length overflows"));
+        }
+        Ok(length)
+    }
+}
+
+fn raised_length(mut points: impl Iterator<Item = Vec2>) -> Result<f64, Refusal> {
+    let mut previous = points
+        .next()
+        .filter(|p| p.is_finite())
+        .ok_or_else(|| bad("knife raised travel needs finite coordinates"))?;
+    let mut length = 0.;
+    for point in points {
+        if !point.is_finite() {
+            return Err(bad("knife raised travel needs finite coordinates"));
+        }
+        length += previous.dist(point);
+        previous = point;
+    }
+    if !length.is_finite() {
+        return Err(bad("knife raised-travel length overflows"));
+    }
+    Ok(length)
+}
+
 /// The exact physical hide/remnant and its explicitly reported modeled loading position.
 #[derive(Clone, Debug, Serialize)]
 pub struct FiniteStock {
@@ -216,10 +330,22 @@ pub struct FiniteStock {
     /// Exact frozen stock entry, including material, original geometry, sources and prior cuts.
     pub stock_sha256: String,
     /// Translation from unchanged final marker coordinates into the machine bed, in mm.
-    /// The complete stock bounding-box lower-left corner is placed at the bed origin.
+    /// The complete stock bounding-box lower-left corner uses the authored location or bed origin.
     pub marker_to_machine_offset_mm: Vec2,
     /// Composed rigid affine transform from original stock coordinates to the modeled machine bed.
     pub source_to_machine: [[f64; 3]; 2],
+}
+
+/// Retained translation of an explicitly positioned whole stock item, with its complete envelope.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Loading {
+    /// Authored machine-frame lower-left position, in mm.
+    pub lower_left_mm: Vec2,
+    /// Translation applied to every unchanged marker path and annotation, in mm.
+    pub marker_to_machine_offset_mm: Vec2,
+    /// Complete loaded stock envelope [xmin, ymin, xmax, ymax], in mm. Roll width uses the source's
+    /// upper reported bound when present, independently of the narrower layout/purchase basis.
+    pub stock_bounds_mm: [f64; 4],
 }
 
 /// Complete baseline and selected traversal for one exact material marker.
@@ -230,6 +356,9 @@ pub struct Marker {
     /// Present only for individually inventoried finite stock; no stock boundary is cut.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finite_stock: Option<FiniteStock>,
+    /// Present only for an explicitly authored loading; default output keeps its original fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loading: Option<Loading>,
     /// Full unchanged material identity.
     pub material_sha256: String,
     /// Digest of all final placements, including directions, internal cuts, copies and transforms.
@@ -244,7 +373,7 @@ pub struct Marker {
     pub selected: Traversal,
     /// Whether a complete nearest-path candidate strictly improved on the baseline.
     pub improved: bool,
-    /// A complete ordering candidate crossed a declared fixture, so the checked baseline was kept.
+    /// A candidate could not complete its checked raised route, so the checked baseline was kept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidate_clearance_refusal: Option<Refusal>,
 }
@@ -259,9 +388,15 @@ pub struct Report {
     /// Exact optional source geometry checked against both baseline and selected traversals.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fixture_clearance: Option<FixtureClearance>,
+    /// Exact optional raised-move routing policy, independent of physical source qualification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub travel_routing: Option<TravelRouting>,
+    /// Exact authored locations, including any unused finite stocks which produce no toolpaths.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stock_loading: Vec<StockLoading>,
     /// Complete marker-specific programs, in the original material/marker order.
     pub markers: Vec<Marker>,
-    /// Actual bounded nearest-path candidate comparisons shared by every marker.
+    /// Actual bounded ordering and routing search work shared by every marker.
     pub search_work: usize,
     /// Actual geometric-validation work shared by every marker, independently of ordering search.
     pub geometry_work: usize,
@@ -374,33 +509,202 @@ impl FixtureClearance {
         cutting: bool,
         work: &mut geometry::Work,
     ) -> Result<(), Refusal> {
+        if let Some(fixture) = self.blocking_fixture([a, b], cutting, work)? {
+            return Err(bad(format!(
+                "knife {} tool envelope touches or crosses fixture {}, or strict clearance could not be resolved numerically",
+                if cutting { "cutting" } else { "raised-travel" },
+                fixture.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn blocking_fixture(
+        &self,
+        [a, b]: [Vec2; 2],
+        cutting: bool,
+        work: &mut geometry::Work,
+    ) -> Result<Option<&Fixture>, Refusal> {
         let radius = if cutting {
             self.cutting_radius_mm
         } else {
             self.raised_radius_mm
         };
         for fixture in &self.fixtures {
-            geometry_result(
-                geometry::swept_disk_clear(a, b, radius, &fixture.outline_mm, work),
-                &format!(
-                    "knife {} tool envelope touches or crosses fixture {}, or strict clearance could not be resolved numerically",
-                    if cutting { "cutting" } else { "raised-travel" },
-                    fixture.id
-                ),
-            )?;
+            if !geometry::swept_disk_clear(a, b, radius, &fixture.outline_mm, work)
+                .ok_or_else(budget)?
+            {
+                return Ok(Some(fixture));
+            }
         }
-        Ok(())
+        Ok(None)
     }
 
     fn check_travel(&self, route: &Traversal, work: &mut geometry::Work) -> Result<(), Refusal> {
         for run in &route.runs {
-            self.check_segment(run.travel_mm, false, work)?;
+            for segment in raised_segments(run.travel_points()) {
+                self.check_segment(segment, false, work)?;
+            }
         }
-        if let Some(segment) = route.return_mm {
+        for segment in raised_segments(route.return_points()) {
             self.check_segment(segment, false, work)?;
         }
         Ok(())
     }
+}
+
+fn raised_segments(points: impl Iterator<Item = Vec2>) -> impl Iterator<Item = [Vec2; 2]> {
+    let mut previous = None;
+    points.filter_map(move |point| {
+        let segment = previous.map(|p| [p, point]);
+        previous = Some(point);
+        segment
+    })
+}
+
+impl TravelRouting {
+    fn nodes(
+        &self,
+        machine: &Machine,
+        clearance: &FixtureClearance,
+        search: &mut geometry::Work,
+        geometry: &mut geometry::Work,
+    ) -> Result<Vec<Vec2>, Refusal> {
+        let offset = clearance.raised_radius_mm + self.waypoint_offset_mm;
+        let mut nodes = Vec::with_capacity(clearance.fixtures.len() * 4);
+        for fixture in &clearance.fixtures {
+            geometry
+                .spend(fixture.outline_mm.len())
+                .ok_or_else(budget)?;
+            let b = bbox(&fixture.outline_mm)?;
+            // Outward rounding is numerical containment, not an extra physical clearance.
+            let (left, right) = ((b[0] - offset).next_down(), (b[2] + offset).next_up());
+            let (bottom, top) = ((b[1] - offset).next_down(), (b[3] + offset).next_up());
+            for point in [
+                Vec2::new(left, bottom),
+                Vec2::new(right, bottom),
+                Vec2::new(right, top),
+                Vec2::new(left, top),
+            ] {
+                search.spend(1).ok_or_else(budget)?;
+                if on_bed(point, machine) {
+                    nodes.push(point);
+                }
+            }
+        }
+        Ok(nodes)
+    }
+}
+
+fn detour(
+    endpoints: [Vec2; 2],
+    corners: &[Vec2],
+    clearance: &FixtureClearance,
+    search: &mut geometry::Work,
+    geometry: &mut geometry::Work,
+) -> Result<Vec<Vec2>, Refusal> {
+    if clearance
+        .blocking_fixture(endpoints, false, geometry)?
+        .is_none()
+    {
+        return Ok(Vec::new());
+    }
+    // A blocked endpoint cannot be repaired by translating an authored cut or the machine start.
+    for point in endpoints {
+        clearance.check_segment([point, point], false, geometry)?;
+    }
+    let nodes: Vec<_> = endpoints
+        .into_iter()
+        .chain(corners.iter().copied())
+        .collect();
+    search.spend(nodes.len()).ok_or_else(budget)?;
+    let mut distance = vec![f64::INFINITY; nodes.len()];
+    let mut previous = vec![usize::MAX; nodes.len()];
+    let mut settled = vec![false; nodes.len()];
+    distance[0] = 0.;
+    loop {
+        let mut best: Option<usize> = None;
+        for i in 0..nodes.len() {
+            search.spend(1).ok_or_else(budget)?;
+            if !settled[i]
+                && distance[i].is_finite()
+                && best.is_none_or(|old| distance[i] < distance[old])
+            {
+                best = Some(i);
+            }
+        }
+        let Some(i) = best else {
+            return Err(bad(
+                "no complete checked raised-travel route in the conservative fixture-corner graph; this does not prove general path infeasibility",
+            ));
+        };
+        if i == 1 {
+            break;
+        }
+        settled[i] = true;
+        for j in 0..nodes.len() {
+            search.spend(1).ok_or_else(budget)?;
+            if settled[j] || i == j {
+                continue;
+            }
+            let candidate = distance[i] + nodes[i].dist(nodes[j]);
+            if candidate < distance[j]
+                && clearance
+                    .blocking_fixture([nodes[i], nodes[j]], false, geometry)?
+                    .is_none()
+            {
+                distance[j] = candidate;
+                previous[j] = i;
+            }
+        }
+    }
+    let mut path = Vec::new();
+    let mut node = previous[1];
+    while node != 0 {
+        search.spend(1).ok_or_else(budget)?;
+        path.push(nodes[node]);
+        node = previous[node];
+    }
+    path.reverse();
+    Ok(path)
+}
+
+fn admit_travel(
+    route: &mut Traversal,
+    machine: &Machine,
+    corners: Option<&[Vec2]>,
+    search: &mut geometry::Work,
+    geometry: &mut geometry::Work,
+) -> Result<(), Refusal> {
+    let Some(clearance) = &machine.fixture_clearance else {
+        return Ok(());
+    };
+    if let Some(corners) = corners {
+        for run in &mut route.runs {
+            run.travel_waypoints_mm = detour(run.travel_mm, corners, clearance, search, geometry)?;
+        }
+        if let Some(endpoints) = route.return_mm {
+            route.return_waypoints_mm = detour(endpoints, corners, clearance, search, geometry)?;
+        }
+        let points = route
+            .runs
+            .iter()
+            .fold(route.return_waypoints_mm.len(), |n, run| {
+                n.saturating_add(run.travel_waypoints_mm.len().saturating_add(2))
+            });
+        geometry
+            .spend(points.saturating_add(2))
+            .ok_or_else(budget)?;
+        route.travel_length_mm = route.checked_travel_length()?;
+        route.travel_seconds = route.travel_length_mm / machine.travel_mm_s;
+        route.modeled_path_seconds =
+            route.cutting_seconds + route.travel_seconds + route.lift_lower_seconds;
+        if !route.modeled_path_seconds.is_finite() {
+            return Err(bad("knife routed timing arithmetic overflows"));
+        }
+    }
+    // Recheck the complete retained route, including every selected intermediate and final return.
+    clearance.check_travel(route, geometry)
 }
 
 impl Policy {
@@ -419,6 +723,26 @@ impl Policy {
         {
             return Err(bad(
                 "invalid cold-knife machine, model or timing configuration",
+            ));
+        }
+        if let Some(routing) = &self.travel_routing
+            && (routing.model != "fixture_box_visibility/1"
+                || !positive(routing.waypoint_offset_mm)
+                || routing.waypoint_offset_mm > 1_000_000.0
+                || m.fixture_clearance.is_none())
+        {
+            return Err(bad(
+                "raised-travel routing requires qualified fixture geometry, fixture_box_visibility/1 and a positive waypoint_offset_mm up to 1000000",
+            ));
+        }
+        let mut loaded_markers = BTreeSet::new();
+        if self.stock_loading.len() > 4096
+            || self.stock_loading.iter().any(|loading| {
+                !loaded_markers.insert(loading.marker) || !on_bed(loading.lower_left_mm, m)
+            })
+        {
+            return Err(bad(
+                "stock loading needs at most 4096 unique marker indices and finite lower-left positions on the machine bed",
             ));
         }
         if !(1..=MAX_SEARCH_WORK).contains(&self.work_limit)
@@ -533,6 +857,7 @@ impl Path<'_> {
 #[derive(Clone, Copy)]
 struct Envelope {
     size_mm: [f64; 2],
+    origin_mm: Vec2,
     offset: Option<Vec2>,
 }
 
@@ -568,8 +893,20 @@ impl MarkerSource<'_> {
     fn frame(
         &self,
         machine: &Machine,
+        loading: Option<&StockLoading>,
         work: &mut geometry::Work,
-    ) -> Result<(Envelope, Option<FiniteStock>, String), Refusal> {
+    ) -> Result<(Envelope, Option<FiniteStock>, Option<Loading>, String), Refusal> {
+        let origin = loading.map_or(Vec2::ZERO, |loading| loading.lower_left_mm);
+        let receipt = |offset, size: [f64; 2]| {
+            loading.map(|_| Loading {
+                lower_left_mm: origin,
+                marker_to_machine_offset_mm: offset,
+                stock_bounds_mm: [origin.x, origin.y, origin.x + size[0], origin.y + size[1]],
+            })
+        };
+        if loading.is_some() {
+            work.spend(2).ok_or_else(budget)?;
+        }
         match self {
             Self::Roll(_, marker) => {
                 let width = marker
@@ -591,8 +928,8 @@ impl MarkerSource<'_> {
                 if !positive(width)
                     || !positive(stock_width)
                     || !positive(length)
-                    || stock_width > machine.bed_mm[0]
-                    || length > machine.bed_mm[1]
+                    || !on_bed(origin, machine)
+                    || !on_bed(origin + Vec2::new(stock_width, length), machine)
                 {
                     return Err(bad(
                         "complete roll marker exceeds the declared knife bed; repartition the marker explicitly",
@@ -601,19 +938,29 @@ impl MarkerSource<'_> {
                 Ok((
                     Envelope {
                         size_mm: [width, length],
-                        offset: None,
+                        origin_mm: origin,
+                        offset: loading.map(|_| origin),
                     },
                     None,
-                    digest(&marker.placements)?,
+                    receipt(origin, [stock_width, length]),
+                    if loading.is_some() {
+                        digest(&(&marker.placements, origin))?
+                    } else {
+                        digest(&marker.placements)?
+                    },
                 ))
             }
             Self::Finite(_, marker, original) => {
                 let b = bbox(&marker.outline_mm)?;
-                let offset = Vec2::new(-b[0], -b[1]);
+                let offset = if loading.is_some() {
+                    origin - Vec2::new(b[0], b[1])
+                } else {
+                    Vec2::new(-b[0], -b[1])
+                };
                 let size_mm = [b[2] - b[0], b[3] - b[1]];
                 if size_mm.iter().any(|&v| !positive(v))
-                    || size_mm[0] > machine.bed_mm[0]
-                    || size_mm[1] > machine.bed_mm[1]
+                    || !on_bed(origin, machine)
+                    || !on_bed(origin + Vec2::new(size_mm[0], size_mm[1]), machine)
                 {
                     return Err(bad(
                         "complete finite stock exceeds the declared knife bed; a fitting cut-piece subset cannot shrink the physical hide or remnant",
@@ -657,9 +1004,11 @@ impl MarkerSource<'_> {
                 Ok((
                     Envelope {
                         size_mm,
+                        origin_mm: origin,
                         offset: Some(offset),
                     },
                     Some(identity),
+                    receipt(offset, size_mm),
                     geometry_sha256,
                 ))
             }
@@ -743,8 +1092,10 @@ fn paths<'a>(
                     || points.iter().any(|&p| {
                         let loaded = envelope.offset.map_or(p, |d| p + d);
                         !on_bed(loaded, machine)
-                            || loaded.x > envelope.size_mm[0]
-                            || loaded.y > envelope.size_mm[1]
+                            || loaded.x < envelope.origin_mm.x
+                            || loaded.y < envelope.origin_mm.y
+                            || loaded.x > envelope.origin_mm.x + envelope.size_mm[0]
+                            || loaded.y > envelope.origin_mm.y + envelope.size_mm[1]
                     })
                     || edges(points, closed).any(|(a, b)| !positive(a.dist(b)))
                 {
@@ -841,6 +1192,7 @@ fn traversal(
             copy: piece.copy,
             closed: path.closed,
             travel_mm: [position, path.start()],
+            travel_waypoints_mm: Vec::new(),
             cut_endpoints_mm: [path.start(), path.end()],
             cut_length_mm: path.length,
         });
@@ -865,6 +1217,7 @@ fn traversal(
     Ok(Traversal {
         runs,
         return_mm,
+        return_waypoints_mm: Vec::new(),
         cut_length_mm,
         travel_length_mm,
         cutting_seconds,
@@ -913,6 +1266,14 @@ fn nearest(paths: &[Path<'_>], machine: &Machine, work: &mut geometry::Work) -> 
 /// Missing/mismatched process evidence, unsupported drills or material state, unqualified thickness,
 /// invalid/oversized geometry, or exhaustion of the fixed geometric validation budget.
 pub(super) fn build(plan: &CutPlan, policy: &Policy) -> Result<Report, Refusal> {
+    if policy.stock_loading.len() > 4096
+        || policy
+            .stock_loading
+            .iter()
+            .any(|loading| loading.marker >= plan.rolls.len())
+    {
+        return Err(bad("stock loading names an unknown roll marker"));
+    }
     let sources = plan
         .rolls
         .iter()
@@ -927,6 +1288,14 @@ pub(super) fn build_finite(plan: &stock::Plan, policy: &Policy) -> Result<Report
         return Err(bad(
             "knife program lost finite-stock inventory correspondence",
         ));
+    }
+    if policy.stock_loading.len() > 4096
+        || policy
+            .stock_loading
+            .iter()
+            .any(|loading| loading.marker >= plan.markers().len())
+    {
+        return Err(bad("stock loading names an unknown finite-stock marker"));
     }
     let sources = plan
         .markers()
@@ -946,10 +1315,34 @@ fn build_markers(
 ) -> Result<Report, Refusal> {
     let (machine_sha256, recipes) = policy.validate()?;
     let mut geometry_work = geometry::Work::new(policy.geometry_work_limit);
+    geometry_work
+        .spend(policy.stock_loading.len())
+        .ok_or_else(budget)?;
+    let loading: BTreeMap<_, _> = policy
+        .stock_loading
+        .iter()
+        .map(|item| (item.marker, item))
+        .collect();
     if let Some(clearance) = &policy.machine.fixture_clearance {
         clearance.validate(&mut geometry_work)?;
     }
     let mut search_work = geometry::Work::new(policy.work_limit);
+    let corners = policy
+        .travel_routing
+        .as_ref()
+        .map(|routing| {
+            routing.nodes(
+                &policy.machine,
+                policy
+                    .machine
+                    .fixture_clearance
+                    .as_ref()
+                    .expect("routing policy requires fixtures"),
+                &mut search_work,
+                &mut geometry_work,
+            )
+        })
+        .transpose()?;
     let mut markers = Vec::with_capacity(sources.len());
     if sources.is_empty() || sources.len() > 4096 {
         return Err(budget());
@@ -971,21 +1364,31 @@ fn build_markers(
                 "full source thickness range exceeds the knife process or machine envelope",
             ));
         }
-        let (envelope, finite_stock, geometry_sha256) =
-            source.frame(&policy.machine, &mut geometry_work)?;
+        if !loading.is_empty() {
+            geometry_work.spend(1).ok_or_else(budget)?;
+        }
+        let (envelope, finite_stock, loading, geometry_sha256) = source.frame(
+            &policy.machine,
+            loading.get(&source.index()).copied(),
+            &mut geometry_work,
+        )?;
         let placements = source.placements();
         let paths = paths(placements, envelope, &policy.machine, &mut geometry_work)?;
         let baseline_order: Vec<_> = (0..paths.len()).collect();
-        let baseline = traversal(
+        let mut baseline = traversal(
             placements,
             &paths,
             &baseline_order,
             &policy.machine,
             q.feed_mm_s,
         )?;
-        if let Some(clearance) = &policy.machine.fixture_clearance {
-            clearance.check_travel(&baseline, &mut geometry_work)?;
-        }
+        admit_travel(
+            &mut baseline,
+            &policy.machine,
+            corners.as_deref(),
+            &mut search_work,
+            &mut geometry_work,
+        )?;
         let mut candidate = if policy.ordering == Ordering::NearestPath {
             nearest(&paths, &policy.machine, &mut search_work)
                 .map(|order| traversal(placements, &paths, &order, &policy.machine, q.feed_mm_s))
@@ -994,11 +1397,18 @@ fn build_markers(
             None
         };
         let mut candidate_clearance_refusal = None;
-        if let Some(clearance) = &policy.machine.fixture_clearance
-            && let Some(route) = &candidate
-            && let Err(refusal) = clearance.check_travel(route, &mut geometry_work)
+        if let Some(route) = &mut candidate
+            && let Err(refusal) = admit_travel(
+                route,
+                &policy.machine,
+                corners.as_deref(),
+                &mut search_work,
+                &mut geometry_work,
+            )
         {
-            if refusal.code == RefusalCode::BudgetExceeded {
+            if refusal.code == RefusalCode::BudgetExceeded
+                && !(search_work.exhausted && !geometry_work.exhausted)
+            {
                 return Err(refusal);
             }
             candidate_clearance_refusal = Some(refusal);
@@ -1015,6 +1425,7 @@ fn build_markers(
         markers.push(Marker {
             marker: source.index(),
             finite_stock,
+            loading,
             material_sha256: material.sha256().into(),
             geometry_sha256,
             qualification: q.id.clone(),
@@ -1033,6 +1444,8 @@ fn build_markers(
         },
         machine_sha256,
         fixture_clearance: policy.machine.fixture_clearance.clone(),
+        travel_routing: policy.travel_routing.clone(),
+        stock_loading: policy.stock_loading.clone(),
         markers,
         search_work: search_work.used,
         geometry_work: geometry_work.used,
@@ -1044,18 +1457,29 @@ fn build_markers(
             let mut limits = vec![
                 "Single-ply cold-knife planning uses exact final marker paths. All internal paths finish before exterior releases; paths retain their authored start, direction and closing edge.",
                 "Source qualifications are exact material and full machine locks. A changed textile, finish, thickness, blade, bed or timing configuration requires new applicable process evidence.",
-                "Modeled time includes only constant-rate cutting, raised-tool straight travel and explicit lift/lower cycles. Acceleration, corner slowing, blade turning, loading, workholding changes and inspection are not inferred.",
+                if policy.travel_routing.is_some() {
+                    "Modeled time includes only constant-rate cutting, every retained raised-travel chord and explicit lift/lower cycles. Acceleration, corner slowing, blade turning, loading, workholding changes and inspection are not inferred."
+                } else {
+                    "Modeled time includes only constant-rate cutting, raised-tool straight travel and explicit lift/lower cycles. Acceleration, corner slowing, blade turning, loading, workholding changes and inspection are not inferred."
+                },
                 "No kerf compensation, common-line cutting, drill operation, thermal processing, three-dimensional tool/body collision check, measured cut quality, physical cycle-time claim or hardware execution authorization.",
                 "Nearest-path ordering is a bounded heuristic; an unfinished or longer candidate retains the complete authored baseline, without a shortest-path proof.",
             ];
             if policy.machine.fixture_clearance.is_some() {
-                limits.push("Declared fixed machine-frame fixtures are checked against complete cutting and raised-travel circular envelopes, including the final return. Touching and numerically unresolved strict clearance refuse, without adding a physical margin. The complete authored baseline must clear every fixture; a blocked ordering candidate falls back to that checked baseline. No automatic routing, fixture motion, grip strength, registration or 3D clearance is inferred.");
+                if policy.travel_routing.is_some() {
+                    limits.push("Raised moves use checked straight links through a conservative expanded fixture-box corner graph, including the final return. The explicit waypoint offset chooses candidate vertices, not a new physical clearance margin. Every retained chord passes the original exact tool/fixture sweep; cutting paths, starts and directions remain unchanged. Failure to find a complete checked route refuses that candidate and proves no general infeasibility or globally shortest path. No fixture motion, grip strength, registration or 3D clearance is inferred.");
+                } else {
+                    limits.push("Declared fixed machine-frame fixtures are checked against complete cutting and raised-travel circular envelopes, including the final return. Touching and numerically unresolved strict clearance refuse, without adding a physical margin. The complete authored baseline must clear every fixture; a blocked ordering candidate falls back to that checked baseline. No automatic routing, fixture motion, grip strength, registration or 3D clearance is inferred.");
+                }
             } else {
                 limits.push(
                     "No fixture geometry was supplied; tool/fixture clearance was not evaluated.",
                 );
             }
-            if finite {
+            if !policy.stock_loading.is_empty() {
+                limits.push("Explicit stock loading translates the complete stock envelope, unchanged cuts and annotations to the authored lower-left machine position. Unlisted markers retain origin placement; unused finite stocks create no toolpaths. No physical registration accuracy, loading time, grip adequacy or workholding qualification is inferred.");
+            }
+            if finite && policy.stock_loading.is_empty() {
                 limits.push("Each used physical stock item is independently loaded with its complete marker bounding-box lower-left corner at the bed origin. The reported translation preserves source orientation, all defects and prior occupied regions; stock boundaries, defects, occupied areas and zones are not cutting paths. This modeled loading position is not measured machine registration or workholding qualification.");
             }
             limits

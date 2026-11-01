@@ -64,7 +64,7 @@ identity without changing an accepted shape. The original `body_input` is retain
 
 Without `scenario.motion`, these are independent **static standing poses**, not a motion experiment.
 The optional continuation below starts at that selected pose and keeps its shape fixed. Seated/squat
-placement is not silently approximated by an arm-angle change. Invalid source/setup results remain
+motion is selected explicitly on its keyframes; the initial garment is still sewn standing. Invalid source/setup results remain
 per-simulation refusals while independent manufacturing results survive. No previous body's drape
 or temperature field is substituted.
 
@@ -178,6 +178,28 @@ are the same standing straight-arm convention as the body input. An unchanged an
 time is an explicit hold. Endpoint skins are generated once from the exact selected shape and
 source-model digest. No tape fit or accepted-shape adjustment occurs between endpoints or materials.
 Collision topology and vertex order must remain unchanged.
+
+Each keyframe may also supply `"leg_pose":{"posture":"seated","fraction":0.25}` or the
+same object with `"posture":"squat"`. The finite fraction must be in `0..1`; zero retains
+the standing legs and one applies the existing model's complete posture. Intermediate fractions
+scale only its hip, knee and foot rotations. Arms retain the separately specified abduction and
+straightening, so bending the legs does not undo the initial sleeve pose. Omission means standing
+legs at that endpoint, including when returning from a preceding bend. Fractions and postures are
+absolute endpoint choices, not cumulative adjustments. Unknown postures and invalid fractions refuse.
+
+The existing seated posture uses hip −90° and knee +90°; squat uses hip −100°, knee +110° and foot
+−10°, about the source rest body's +X axis. The trunk stays upright and the model root stays fixed:
+these are prescribed joint movements, without inferred floor contact, chair support or root descent.
+Author short explicit increments through the desired bend and return. The shared solver retains
+its surface/contact checks, budgets and whole-trajectory rollback. These are the existing linear
+blend skinning poses, including their known crotch webbing and volume loss; adding a motion route
+does not qualify anatomical pose validity, real rise/seat ease or physical garment fit.
+
+The same scenario JSON reaches both native material-study commands and the browser's scenario
+input. Reports retain each requested `leg_pose` beside its endpoint time, arm angle and exact
+collision geometry; motion comparisons reject a missing or changed requested leg posture. Existing
+arm-only inputs keep their standing behavior and serialized source identities. Calibrated nappy
+occupancy follows the same fixed occupied shape through every endpoint without recalibration.
 
 Between endpoints, the existing transactional motion kernel follows **linear body-vertex chords**,
 using adaptive implicit cloth substeps, relative body/cloth friction and continuous collision checks.

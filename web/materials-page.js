@@ -1049,6 +1049,25 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
     motionSamples(parent, row.key, result);
   }
 }
+function nappyOccupancyResult(parent, occupancy) {
+  if (!occupancy) return;
+  const t = table(parent, "Nappy geometry proxy — MODEL_FIT",
+    ["Target seat over nappy (mm)", "Bare seat (mm)", "Occupied seat (mm)", "Occupied − target (mm)", "Supplied σ (mm)"]);
+  cells(t, [metric(occupancy.target_mm), metric(occupancy.bare_seat_mm), metric(occupancy.achieved_seat_mm),
+    metric(occupancy.residual_mm), occupancy.sigma_mm == null ? "Not supplied" : metric(occupancy.sigma_mm)]);
+  const flags = Array.isArray(occupancy.target_source?.flags)
+    ? occupancy.target_source.flags.filter(flag => typeof flag === "string") : [];
+  const evidence = document.createElement("p");
+  evidence.textContent = `Target evidence: ${occupancy.target_source?.primary_provenance || "Not supplied"}` +
+    (flags.length ? `; ${flags.join(", ")}` : "") + ".";
+  parent.append(evidence);
+  const note = document.createElement("p");
+  note.textContent = "Calibrated once in the fixed reference pose and reused for contact, display and movement. " +
+    "Bare body parameters, model mass and fitting evidence stay unchanged. The target retains its source flags; " +
+    "a chart target remains a prior. This geometry proxy supplies no nappy mass, material properties or physical-fit evidence.";
+  parent.append(note);
+  detail(parent, "Nappy target evidence and occupied geometry identity (display only)", occupancy);
+}
 function comparison(op, r, parent = sections.get(op).comparison, { skipManufacturing = false, filePrefix = "", casePolicies = {} } = {}) {
   if (op === "screen") {
     screening(parent, r);
@@ -1062,6 +1081,7 @@ function comparison(op, r, parent = sections.get(op).comparison, { skipManufactu
   const study = r.manufacturing || r;
   if (!skipManufacturing) manufacturingComparison(op, parent, study, r.comparison, casePolicies);
   if (r.manufacturing) {
+    nappyOccupancyResult(parent, r.scenario?.body_fit?.nappy_occupancy);
     const simulations = new Map(r.simulations.map(row => [row.key, row.evaluation]));
     const sim = table(parent, "Initial static-drape results — review drape flags before interpreting heat", ["Alternative", "Drape",
       "Gating clear", "Cloth mass (kg)", "Surface heat", "Signed surface power (W)", "Body coverage", "Signed coverage power (W)"]);
@@ -1815,7 +1835,25 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
     cells(t, [String(marker.marker + 1), marker.qualification, metric(route?.runs?.length),
       metric(route?.cut_length_mm), metric(route?.travel_length_mm), metric(route?.cutting_seconds),
       metric(route?.travel_seconds), metric(route?.lift_lower_seconds), metric(route?.modeled_path_seconds),
-      marker.improved ? "Shorter complete traversal" : "Complete authored traversal"]);
+      marker.improved ? "Shorter complete traversal" :
+        program.travel_routing ? "Complete authored cut order" : "Complete authored traversal"]);
+  }
+  if (program.travel_routing) {
+    const routes = table(parent, `${label}: raised-tool fixture routing`,
+      ["Marker", "Waypoint offset (mm)", "Detoured moves before cuts", "Intermediate travel points", "Return points"]);
+    for (const marker of program.markers || []) {
+      const route = marker.selected;
+      const waypoints = (route?.runs || []).map(run => run.travel_waypoints_mm?.length || 0);
+      cells(routes, [String(marker.marker + 1), metric(program.travel_routing.waypoint_offset_mm),
+        metric(waypoints.filter(count => count > 0).length), metric(waypoints.reduce((sum, count) => sum + count, 0)),
+        metric(route?.return_waypoints_mm?.length || 0)]);
+    }
+    const routing = document.createElement("p");
+    routing.textContent = "Raised-tool routes retain every intermediate point in the machine frame and use the qualified tool and fixture geometry. " +
+      "The SVG preview shows the complete bed and selected travel routes. Reported travel distances and times include every detour and requested return. " +
+      "The waypoint offset controls the bounded candidate search; it does not add measured clearance evidence or establish a globally shortest route. " +
+      "Cutting paths, their directions and the internal-before-exterior phases remain unchanged.";
+    parent.append(routing);
   }
   const finite = (program.markers || []).filter(marker => marker.finite_stock);
   if (finite.length) {
@@ -3318,6 +3356,7 @@ function show(op, msg) {
     if (op === "cut" || op === "stock") {
       knifeProgramResult(s.comparison, r.program, op === "stock" ? "Finite-stock plan" : "Cutting plan", r.program_refusal);
     }
+    if (op === "fold") nappyOccupancyResult(s.comparison, r.body?.nappy_occupancy);
     if (op === "cutJob") cuttingJobComparison(op, s.comparison,
       [{ key: "Current bound pattern", cutting_job: { status: "available", result: r } }], false);
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :

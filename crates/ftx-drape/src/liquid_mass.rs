@@ -3,7 +3,7 @@
 //! qualify incoming liquid and condensed vapor, either co-moving or at prescribed world velocities.
 //! Inelastic mixing work stays separate from thermal heat; drainage and wet laws are not inferred.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_pattern::material_catalog::{ResolvedMaterial, Selection};
@@ -1035,6 +1035,37 @@ fn check_source_contact(
         .as_bool()
         .ok_or_else(|| invalid("missing qualified self-contact policy"))?;
     let per_piece = material["basis"] == "per_piece_characterization";
+    let (declared_hashes, active_hashes): (Vec<String>, Vec<String>) = if per_piece {
+        let pieces = material["pieces"]
+            .as_array()
+            .filter(|pieces| pieces.len() <= 4096)
+            .ok_or_else(|| invalid("missing qualified source-piece material bindings"))?;
+        let mut declared = BTreeSet::new();
+        let mut active = BTreeSet::new();
+        for piece in pieces {
+            let excluded = piece["mechanics_consumed"] == false;
+            if excluded && piece["exclusion_reason"] != "sim_false" {
+                return Err(invalid("unqualified source-piece mechanics exclusion"));
+            }
+            match piece["record_sha256"].as_str() {
+                Some(hash) => {
+                    declared.insert(hash.to_owned());
+                    if !excluded {
+                        active.insert(hash.to_owned());
+                    }
+                }
+                None if piece["record_sha256"].is_null() && excluded => {}
+                None => return Err(invalid("missing qualified source-piece material identity")),
+            }
+        }
+        (declared.into_iter().collect(), active.into_iter().collect())
+    } else {
+        let hashes: Vec<_> = records
+            .iter()
+            .map(|record| record.sha256().to_owned())
+            .collect();
+        (hashes.clone(), hashes)
+    };
     let hashes: Vec<String> = if per_piece {
         serde_json::from_value(material["contact_material_order"].clone())
             .map_err(|e| invalid(format!("qualified contact identities: {e}")))?
@@ -1044,15 +1075,19 @@ fn check_source_contact(
     if hashes.is_empty() || hashes.len() > 64 || hashes.windows(2).any(|h| h[0] >= h[1]) {
         return Err(invalid("invalid qualified contact material order"));
     }
+    // The contact field is assembled before welding. An active panel can lose all its triangles
+    // to seam collapse, but source-only defaults and sim:false pieces never enter that field.
+    if hashes != active_hashes {
+        return Err(invalid(
+            "qualified contact identities differ from the retained active sheets",
+        ));
+    }
     let mut mechanics = Vec::with_capacity(hashes.len());
     for hash in &hashes {
-        if let Some(record) = records.iter().find(|r| r.sha256() == hash) {
+        if let Some(record) = records.iter().find(|record| record.sha256() == hash) {
             mechanics.push(record.mechanics_for_contacts(enabled)?);
             continue;
         }
-        // Unplaced pieces still contribute to the canonical contact envelope and interface table.
-        // Resolve their frozen snapshots as well; a live catalog or displayed coefficient is not
-        // an authority for the source law that this qualification permits us to retain.
         let receipt = &material["records"][hash]["record"];
         let authored: ftx_pattern::materials::Material =
             serde_json::from_value(receipt["authored"].clone())
@@ -1093,8 +1128,23 @@ fn check_source_contact(
         })
         .collect();
     let friction: Option<Vec<Vec<f64>>> = if per_piece {
-        serde_json::from_value(material["self_friction_matrix"].clone())
-            .map_err(|e| invalid(format!("qualified contact interfaces: {e}")))?
+        let diagonal: Vec<_> = mechanics.iter().map(|m| m.friction_self).collect();
+        let resolved = crate::material::interfaces::resolve(
+            material.get("interfaces"),
+            &hashes,
+            &diagonal,
+            &declared_hashes,
+            enabled,
+        )?;
+        let reported: Option<Vec<Vec<f64>>> =
+            serde_json::from_value(material["self_friction_matrix"].clone())
+                .map_err(|e| invalid(format!("qualified contact interfaces: {e}")))?;
+        if reported != resolved.matrix {
+            return Err(invalid(
+                "qualified contact matrix differs from its source interface observations",
+            ));
+        }
+        resolved.matrix
     } else if enabled {
         Some(vec![vec![mechanics[0].friction_self.ok_or_else(|| {
             invalid("qualified self-contact requires same-sheet friction evidence")
@@ -1938,13 +1988,14 @@ mod tests {
         let condensed = [0.08, 0.2];
         let mut expected_momentum = Vec3::ZERO;
         let mut expected_kinetic = 0.;
-        for interval in 0..2 {
-            for i in 0..2 {
-                expected_momentum += schedules[i][interval].supply * supplied[i]
-                    + schedules[i][interval].condensation * condensed[i];
+        for (interval, _) in schedules[0].iter().enumerate() {
+            for (i, schedule) in schedules.iter().enumerate() {
+                let phases = &schedule[interval];
+                expected_momentum +=
+                    phases.supply * supplied[i] + phases.condensation * condensed[i];
                 expected_kinetic += 0.5
-                    * (supplied[i] * schedules[i][interval].supply.norm2()
-                        + condensed[i] * schedules[i][interval].condensation.norm2());
+                    * (supplied[i] * phases.supply.norm2()
+                        + condensed[i] * phases.condensation.norm2());
             }
             let report = s
                 .exchange_liquid_streams_in_interval(
@@ -3085,6 +3136,191 @@ mod tests {
             .is_err()
         );
         assert_eq!(format!("{:?}", false_claim.scene.solver), before);
+    }
+
+    fn piece_source_run(excluded: bool) -> (DrapeRun, Qualification) {
+        let (mut run, mut qualification) = source_run();
+        let mut raw: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+        ))
+        .unwrap();
+        raw["pieces"][0]["id"] = json!("sheet");
+        let mut other = raw["pieces"][0].clone();
+        other["id"] = json!("other");
+        other["fabric"] = raw["fabric"].clone();
+        other["fabric"]["material"]["id"] = json!("other-sheet");
+        other["fabric"]["material"]["record"]["id"] = json!("other-sheet");
+        let other_hash = ftx_pattern::textile_import::resolve_fabric(&other["fabric"])
+            .unwrap()
+            .unwrap()
+            .sha256()
+            .to_owned();
+        let first_hash = run.report["material"]["record_sha256"].clone();
+        raw["pieces"].as_array_mut().unwrap().push(other);
+        raw["fabric"]["interfaces"] = json!([{
+            "materials":[first_hash,other_hash],
+            "friction":{"value":0.4,"unit":"1","source":"test","evidence":"estimate",
+                "method":"Synthetic pairwise friction, not measured textile evidence"},
+            "sources":{"test":{"reference":"test:liquid-interfaces","accessed_on":"2026-10-31",
+                "note":"Synthetic source-replay regression"}},"allow_estimates":true
+        }]);
+        if excluded {
+            let mut piece = raw["pieces"][1].clone();
+            piece["id"] = json!("excluded");
+            piece["sim"] = json!(false);
+            piece["fabric"]["material"]["id"] = json!("excluded-sheet");
+            piece["fabric"]["material"]["record"]["id"] = json!("excluded-sheet");
+            piece["fabric"]["material"]["record"]["properties"] = json!({});
+            raw["pieces"].as_array_mut().unwrap().push(piece);
+        }
+        let material = crate::material::resolve(
+            &ftx_pattern::Pattern::new(raw),
+            &crate::run::DrapeOptions {
+                self_contact: Some(crate::run::DrapeOptions::default().contact),
+                ..crate::run::DrapeOptions::default()
+            },
+        )
+        .unwrap();
+        let hashes: Vec<String> =
+            serde_json::from_value(material.report["contact_material_order"].clone()).unwrap();
+        let triangle_ids = [first_hash.as_str().unwrap(), &other_hash]
+            .map(|hash| hashes.binary_search_by(|h| h.as_str().cmp(hash)).unwrap());
+        let friction: Vec<Vec<f64>> =
+            serde_json::from_value(material.report["self_friction_matrix"].clone()).unwrap();
+        let solver = &mut run.scene.solver;
+        solver.contact = Some(
+            solver
+                .contact
+                .take()
+                .unwrap()
+                .with_surface_materials(
+                    &solver.x,
+                    &triangle_ids,
+                    &[SurfaceMaterial {
+                        half_thickness_m: material.options.contact.thickness,
+                        friction_body: material.options.contact.mu,
+                    }; 2],
+                    Some(&friction),
+                )
+                .unwrap()
+                .with_self_contact(&solver.x, material.options.self_contact.unwrap())
+                .unwrap(),
+        );
+        run.scene.mesh.instances = vec!["sheet".into(), "other".into()];
+        run.scene.triangle_owner = vec![0, 1];
+        run.report["material"] = material.report;
+        run.report["material"]["instances"] = json!([
+            {"instance":"sheet","record_sha256":first_hash},
+            {"instance":"other","record_sha256":other_hash}
+        ]);
+        let mut domain = qualification.bindings["sheet"].clone();
+        domain.material_sha256 = other_hash;
+        qualification.bindings.insert("other".into(), domain);
+        qualification.material_report_sha256 =
+            sha256_hex(&serde_json::to_vec(&run.report["material"]).unwrap());
+        (run, qualification)
+    }
+
+    #[test]
+    fn liquid_source_replay_reconstructs_pair_friction_from_qualified_observations() {
+        for mutation in 0..3 {
+            let (mut run, mut qualification) = piece_source_run(false);
+            match mutation {
+                0 => run.report["material"]["interfaces"] = json!([]),
+                1 => run.report["material"]["interfaces"][0]["friction"]["value"] = json!(0.8),
+                _ => run.report["material"]["interfaces"][0]["allow_estimates"] = json!(false),
+            }
+            qualification.material_report_sha256 =
+                sha256_hex(&serde_json::to_vec(&run.report["material"]).unwrap());
+            let before = format!("{:?}", run.scene.solver);
+            assert!(
+                bind(
+                    &mut run,
+                    &qualification,
+                    &[0.12, 0.24],
+                    &[vec![20.], vec![20.]]
+                )
+                .is_err(),
+                "interface source mutation {mutation} must not be authorized by cached coefficients"
+            );
+            assert_eq!(format!("{:?}", run.scene.solver), before);
+        }
+        let (mut run, qualification) = piece_source_run(false);
+        bind(
+            &mut run,
+            &qualification,
+            &[0.12, 0.24],
+            &[vec![20.], vec![20.]],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn liquid_source_replay_does_not_require_mechanics_for_excluded_pieces() {
+        let (mut active, active_qualification) = piece_source_run(false);
+        let (mut with_excluded, excluded_qualification) = piece_source_run(true);
+        assert_eq!(
+            active.report["material"]["contact_material_order"],
+            with_excluded.report["material"]["contact_material_order"]
+        );
+        assert_eq!(
+            with_excluded.report["material"]["pieces"][2]["mechanics_consumed"],
+            false
+        );
+        for (run, qualification) in [
+            (&mut active, &active_qualification),
+            (&mut with_excluded, &excluded_qualification),
+        ] {
+            bind(run, qualification, &[0.12, 0.24], &[vec![20.], vec![20.]]).unwrap();
+            let report = run
+                .scene
+                .solver
+                .evaporate_liquid(&[0.06, 0.12], &[vec![20.], vec![20.]])
+                .unwrap();
+            assert!(report.mass_balance_residual_kg.abs() < 1e-15);
+            assert!(report.transfer_momentum_residual_kg_m_s.norm() < 1e-15);
+        }
+        assert_eq!(
+            active.scene.solver.model.mass,
+            with_excluded.scene.solver.model.mass
+        );
+        assert_eq!(active.scene.solver.v, with_excluded.scene.solver.v);
+    }
+
+    #[test]
+    fn liquid_source_replay_retains_active_contact_sources_after_panel_collapse() {
+        let (mut run, qualification) = piece_source_run(false);
+        // Welding can remove an active panel's triangles. Its source field was assembled before
+        // collapse and must remain verifiable without treating it as a sim:false exclusion.
+        run.scene.triangle_owner = vec![0, 0];
+        let material = &run.report["material"];
+        let first_hash = material["instances"][0]["record_sha256"].as_str().unwrap();
+        let first_id = material["contact_material_order"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|hash| hash == first_hash)
+            .unwrap();
+        let friction: Vec<Vec<f64>> =
+            serde_json::from_value(material["self_friction_matrix"].clone()).unwrap();
+        let solver = &mut run.scene.solver;
+        let contact = solver.contact.take().unwrap();
+        let surface = SurfaceMaterial {
+            half_thickness_m: contact.params.thickness,
+            friction_body: contact.params.mu,
+        };
+        solver.contact = Some(
+            contact
+                .with_surface_materials(&solver.x, &[first_id; 2], &[surface; 2], Some(&friction))
+                .unwrap(),
+        );
+        bind(
+            &mut run,
+            &qualification,
+            &[0.12, 0.24],
+            &[vec![20.], vec![20.]],
+        )
+        .unwrap();
     }
 
     #[test]

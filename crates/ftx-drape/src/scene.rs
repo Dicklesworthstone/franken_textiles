@@ -673,7 +673,7 @@ fn build_scene_inner(
     compression: f64,
     contact: ContactParams,
     elastics: &[ElasticCasing],
-    piece_fabrics: Option<&[Fabric]>,
+    piece_fabrics: Option<&[Option<Fabric>]>,
     response: Option<&ftx_pattern::material_response::CompiledMembrane>,
     piece_responses: Option<&[Option<ftx_pattern::material_response::CompiledMembrane>]>,
     contact_materials: Option<&crate::material::ContactMaterials>,
@@ -697,7 +697,8 @@ fn build_scene_inner(
                     materials
                         .get(instance.piece_index)
                         .copied()
-                        .ok_or_else(|| bad(format!("no material for instance {id}")))
+                        .flatten()
+                        .ok_or_else(|| bad(format!("no active material for instance {id}")))
                 })
                 .collect::<Result<_, Refusal>>()
         })
@@ -962,9 +963,14 @@ fn build_scene_inner(
                     .instance(&mesh.instances[owner])
                     .expect("resolved instance")
                     .piece_index;
-                field.piece_ids[piece]
+                field
+                    .piece_ids
+                    .get(piece)
+                    .copied()
+                    .flatten()
+                    .ok_or_else(|| bad("retained triangle has no active contact material".into()))
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
         let bound = solver
             .contact
             .take()

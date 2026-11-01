@@ -4336,6 +4336,9 @@ test('primary workshop preserves signed body-fit precision, escapes targets and 
   p.e.foldGo.handlers.click();request=p.last('fold').request;
   const residual=100.0004-100;
   const report={settled:true,gating:[],body:{provenance:'MODEL_FIT',mass_kg:10.0003,
+    nappy_occupancy:{model:'anny_seat_proxy/1',target_mm:680,bare_seat_mm:630,achieved_seat_mm:680.0002,
+      residual_mm:0.0002,sigma_mm:25,target_source:{primary_provenance:'CHART_PRIOR',flags:['PRIOR_ONLY','<script>']},
+      occupied_reference_geometry_sha256:'occupied-source',physical_validation_claim:false},
     tape_evaluation:{status:'PARTIAL',unavailable_fields:['head','shoulder_length','<script>']},fit:{
     tape:{chest:{target_mm:100,body_mm:100.0004,residual_mm:residual,
       sigma_mm:7.5,effective_sigma_mm:7.5,normalized_residual:residual/7.5},
@@ -4356,6 +4359,10 @@ test('primary workshop preserves signed body-fit precision, escapes targets and 
   assert.match(html,/do not establish measurement readiness or physical fit/);
   assert.match(html,/Unavailable model predictions: head, shoulder length, &lt;script&gt;/i);
   assert.match(html,/No value is inferred for a missing section/);
+  assert.match(html,/Nappy geometry proxy/);assert.match(html,/680\.0002/);assert.match(html,/\+0\.0002/);
+  assert.match(html,/Target evidence: CHART_PRIOR; PRIOR_ONLY, &lt;script&gt;/);
+  assert.match(html,/Bare body parameters, model mass and fitting residuals stay unchanged/);
+  assert.match(html,/A chart target remains a prior/);
   assert.equal(html.includes('<script>'),false);
   assert.equal(p.e.resStatus.textContent,readiness);
   assert.equal(await [...p.live.values()].find(b=>b.type==='application/json').text(),raw);
@@ -4695,6 +4702,34 @@ function scenarioInputs(p) {
   p.select('measurements', '{"length":10.0}'); p.select('body');
   p.e.body.files[0].arrayBuffer = async () => new ArrayBuffer(8); p.e.body.handlers.change();
 }
+
+test('nappy occupancy stays separate from bare body evidence in fold and scenario presentation', async () => {
+  // Transport/display control; actual calibration and geometry are covered by native workflows.
+  const occupancy={model:'anny_seat_proxy/1',target_mm:680,bare_seat_mm:630,achieved_seat_mm:680.0002,
+    residual_mm:0.0002,sigma_mm:25,target_source:{primary_provenance:'CHART_PRIOR',flags:['PRIOR_ONLY','<literal source>']},
+    occupied_reference_geometry_sha256:'occupied-reference',physical_validation_claim:false};
+  for (const op of ['fold','scenario']) {
+    const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);p.select('fit');
+    await p.e[op].onclick();
+    const report=op==='fold'?{settled:true,body:{mass_kg:10,shape_source:{refitted:false},
+      fit:{weight_kg:{body_kg:10}},nappy_occupancy:occupancy}}:scenarioReport();
+    if(op==='scenario')report.scenario.body_fit={body_mass_kg:10,shape_sha256:'bare-shape',nappy_occupancy:occupancy};
+    const raw=` ${JSON.stringify(report)}\n`;
+    p.emit(report,[{name:'occupancy-report.json',text:raw,mime:'application/json'}]);
+    const s=section(p,op==='fold'?'fold':'Fresh drape and heat alternatives');
+    const table=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes('Nappy geometry proxy'));
+    assert.deepEqual(plain(table.children[2].children.map(n=>n.textContent)),['680','630','680.0002','0.0002','25']);
+    assert.match(visibleText(s),/Bare body parameters, model mass and fitting evidence stay unchanged/);
+    assert.match(visibleText(s),/CHART_PRIOR/);assert.match(visibleText(s),/PRIOR_ONLY/);
+    const evidence=descendants(s).find(n=>n.tag==='details'&&visibleText(n).includes('Nappy target evidence'));
+    evidence.open=true;evidence.handlers.toggle();
+    assert.match(visibleText(s),/occupied-reference/);assert.match(visibleText(s),/<literal source>/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    const link=descendants(s).find(n=>n.download==='occupancy-report.json');
+    assert.equal(await p.blobs.get(link.href).text(),raw);
+    p.e.measurements.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.has(link.href),false);
+  }
+});
 
 test('named scenario matrices share manufacturing, retain native case decisions and publish distinct exact replays', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
@@ -5038,6 +5073,7 @@ test('qualified knife programs retain exact process scope and independent refusa
     const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
     assert.deepEqual(plain(table(`${label}: material-qualified knife paths`).children[2].children.map(n=>n.textContent)),
       ['2','<independent knife observation>','2','480','120','4.8','0.6','0.4','5.8','Complete authored traversal']);
+    assert.equal(table(`${label}: raised-tool fixture routing`),undefined);
     if(finite) {
       assert.deepEqual(plain(table(`${label}: physical stock and machine placement`).children[2].children.map(n=>n.textContent)),
         ['2','<exact hide>','<exact physical stock>','-10, 25']);
@@ -5079,6 +5115,59 @@ test('qualified knife programs retain exact process scope and independent refusa
   assert.equal(section(p,'stock').hidden,true);
   assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
+test('fixture detours retain actual travel totals, intermediate points and source downloads until inputs or admission change', async () => {
+  for (const op of ['cut','stock','study']) {
+    const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);
+    const options=' {"program":{"travel_routing":{"model":"fixture_box_visibility/1","waypoint_offset_mm":0.3750}}}\n';
+    p.select('cutOptions',options);p.select('stockRequest');
+    // Renderer doubles deliberately retain producer totals; JavaScript must not replace detours
+    // with endpoint chords or re-derive geometry/clearance from this display-only input.
+    const selected={runs:[
+      {travel_mm:[[10,30],[90,30]],travel_waypoints_mm:[[20,45],[80,45]]},
+      {travel_mm:[[90,30],[90,40]]},
+      {travel_mm:[[90,40],[10,40]],travel_waypoints_mm:[[50,70]]}],
+      return_mm:[[10,40],[10,30]],return_waypoints_mm:[[5,45],[5,25]],
+      cut_length_mm:480,travel_length_mm:123.456,cutting_seconds:4.8,travel_seconds:1.23456,
+      lift_lower_seconds:0.6,modeled_path_seconds:6.63456};
+    const program={schema:'ftx-knife-cut-program/1',
+      travel_routing:{model:'fixture_box_visibility/1',waypoint_offset_mm:0.375},
+      markers:[{marker:0,qualification:'<retained fixture recipe>',selected,baseline:selected,improved:false}]};
+    const plan=op==='stock'?{schema:'ftx-finite-stock-plan/1',used_stock_count:1,
+      markers:[{id:'<hide>',placements:[{}]}],program}:
+      {schema:'ftx-roll-cut-plan/1',rolls:[{}],program};
+    const row=studyRow('detoured');row.cutting=outcome(plan);
+    const report=op==='study'?studyReport([row]):plan;
+    await p.e[op].onclick();
+    if(op==='cut')assert.equal(p.current().messages.at(-1).options,options);
+    const raw=` ${JSON.stringify(report).replace('"waypoint_offset_mm":0.375','"waypoint_offset_mm":0.3750')}\n`;
+    p.emit(report,[{name:'detoured-plan.json',text:raw,mime:'application/json'}],raw);
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':op);
+    const label=op==='cut'?'Cutting plan':op==='stock'?'Finite-stock plan':'detoured';
+    const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+    assert.deepEqual(plain(table(`${label}: raised-tool fixture routing`).children[2].children.map(n=>n.textContent)),
+      ['1','0.375','2','3','2']);
+    const totals=table(`${label}: material-qualified knife paths`).children[2].children.map(n=>n.textContent);
+    assert.equal(totals[4],'123.456');assert.equal(totals[9],'Complete authored cut order');
+    assert.match(visibleText(s),/times include every detour and requested return/);
+    assert.match(visibleText(s),/does not add measured clearance evidence/);
+    const details=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===`${label}: exact knife paths, material locks and process limits (display only)`);
+    details.open=true;details.handlers.toggle();
+    assert.match(visibleText(details),/travel_waypoints_mm/);
+    assert.match(visibleText(details),/return_waypoints_mm/);
+    const download=descendants(s).find(n=>n.download==='detoured-plan.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    delete plan.program;plan.program_refusal={message:'No complete checked fixture route'};
+    await p.e[op].onclick();p.emit(report);
+    assert.equal(table(`${label}: raised-tool fixture routing`),undefined);
+    assert.equal(table(`${label}: material-qualified knife paths`),undefined);
+    assert.match(visibleText(s),/No complete checked fixture route/);
+    assert.equal(p.live.has(download.href),false);
+    p.e[op==='cut'?'cutOptions':op==='stock'?'stockRequest':'studyRequest'].handlers.change();
+    assert.equal(s.hidden,true);
+  }
 });
 
 test('cutting objectives retain roll finite and complete-job scope without converting refusal to zero', async () => {

@@ -8,7 +8,7 @@
 use ftx_core::{Refusal, RefusalCode, Vec3};
 
 use crate::collider::audit_surface;
-use crate::{Body, SolveReport, Solver};
+use crate::{SolveReport, Solver};
 
 /// Work and temporal-resolution policy. These are numerical limits, not fitted fabric data.
 #[derive(Clone, Copy, Debug)]
@@ -117,7 +117,7 @@ fn regular_path(start: &[Vec3], end: &[Vec3], tris: &[[usize; 3]]) -> bool {
 /// guessed here. Prescribed work can increase cloth energy; this is not a free-system energy test.
 ///
 /// The existing frankensim-derived BVH, sparse LDLT/Newton, material, self-contact and friction
-/// kernels are reused. Body meshes are rebuilt at accepted candidates rather than refitted in place.
+/// kernels are reused. Candidate bodies retain their topology and refit their geometry query trees.
 /// Rejects motion it cannot complete within the stated budgets. Caller-visible state is unchanged
 /// on ANY error, including late errors after internally accepted steps. The initial, target and
 /// trial body surfaces are audited for self-intersection with exact shared-feature predicates.
@@ -275,7 +275,6 @@ pub(crate) fn advance_body_coupled<S: Clone>(
     }
     let start_body = original.body.vertices.clone();
     let triangles = original.body.triangles.clone();
-    let min_cell = original.params.dhat;
     let plastic_count = if capture.plastic {
         solver
             .membrane_plastic_dissipation_j()?
@@ -384,7 +383,8 @@ pub(crate) fn advance_body_coupled<S: Clone>(
             .contact
             .as_mut()
             .expect("checked collider is retained")
-            .body = Body::new(end, triangles.clone(), min_cell)?;
+            .body
+            .refit_vertices(end)?;
         let solved = trial.step_at_body(h, Some(&previous_body));
         let solve = match solved {
             Ok(r)

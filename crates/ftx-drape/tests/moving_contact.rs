@@ -279,6 +279,32 @@ fn late_motion_failures_roll_back_every_solver_and_collider_field() {
         RefusalCode::NonFinite
     );
     assert_eq!(format!("{s:?}"), before);
+
+    // Once a valid motion has converted/refitted the body indices, late failure must preserve
+    // those live indices too. A subsequent valid retry must still transport the same cloth.
+    advance_body(&mut s, &target, 0.2, MotionOptions::default()).unwrap();
+    let after_motion = format!("{s:?}");
+    let next: Vec<_> = target
+        .iter()
+        .map(|p| *p + Vec3::new(0.002, 0.0, 0.0))
+        .collect();
+    assert_eq!(
+        advance_body(
+            &mut s,
+            &next,
+            0.2,
+            MotionOptions {
+                max_trials: 1,
+                ..MotionOptions::default()
+            },
+        )
+        .unwrap_err()
+        .code,
+        RefusalCode::BudgetExceeded
+    );
+    assert_eq!(format!("{s:?}"), after_motion);
+    advance_body(&mut s, &next, 0.2, MotionOptions::default()).unwrap();
+    assert_eq!(s.contact.as_ref().unwrap().body.vertices, next);
 }
 
 #[test]
@@ -407,6 +433,18 @@ fn crossing_body_keyframes_refuse_even_when_both_endpoints_are_valid() {
 #[test]
 fn body_crossing_between_all_nominal_samples_is_refused_transactionally() {
     let mut s = separated_body_patches();
+    // Enter with an already-refitted collider, then retain continuous rejection through a
+    // second motion whose intermediate body crossing is absent from every nominal sample.
+    let warm: Vec<_> = s
+        .contact
+        .as_ref()
+        .unwrap()
+        .body
+        .vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0.1, 0.0, 0.0))
+        .collect();
+    advance_body(&mut s, &warm, 0.04, MotionOptions::default()).unwrap();
     let initial = s.contact.as_ref().unwrap().body.vertices.clone();
     let mut target = initial.clone();
     // The moving patch crosses the static patch at t=0.37, not at any nominal endpoint.

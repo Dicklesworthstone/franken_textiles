@@ -542,6 +542,7 @@ fn partial_stale_and_unchecked_motion_cannot_win_even_with_protocol_override() {
         "endpoint_count",
         "index",
         "pose",
+        "leg_pose",
         "cloth",
         "body",
         "trials",
@@ -570,6 +571,9 @@ fn partial_stale_and_unchecked_motion_cannot_win_even_with_protocol_override() {
                     }
                     "index" => m["keyframes"][1]["sample_index"] = json!(0),
                     "pose" => m["keyframes"][1]["arm_abduction_deg"] = json!(44.),
+                    "leg_pose" => {
+                        m["keyframes"][1]["leg_pose"] = json!({"posture":"seated","fraction":0.5})
+                    }
                     "cloth" => m["keyframes"][1]["positions_sha256"] = json!("stale"),
                     "body" => m["keyframes"][1]["body_collision_sha256"] = json!("stale"),
                     "trials" => m["trials"] = json!(0),
@@ -591,6 +595,51 @@ fn partial_stale_and_unchecked_motion_cannot_win_even_with_protocol_override() {
             report["manufacturing"]["alternatives"][0]["cutting"]["status"],
             "available"
         );
+    }
+}
+
+#[test]
+fn motion_comparison_requires_every_requested_leg_posture_and_fraction() {
+    let request = motion_request();
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    for posture in ["seated", "squat"] {
+        let pose = json!({"posture":posture,"fraction":0.25});
+        let mut descriptor = motion_descriptor();
+        descriptor["scenario"]["motion"]["keyframes"][0]["leg_pose"] = pose.clone();
+        for fault in ["none", "missing", "posture", "fraction"] {
+            let report = request
+                .evaluate_with(&pattern, &descriptor, |key, p| {
+                    let mut result = synthetic_motion(p, 1.0);
+                    result["motion"]["result"]["keyframes"][0]["leg_pose"] = pose.clone();
+                    if key == "a" {
+                        let recorded = &mut result["motion"]["result"]["keyframes"][0]["leg_pose"];
+                        match fault {
+                            "missing" => *recorded = Value::Null,
+                            "posture" => {
+                                recorded["posture"] = json!(if posture == "seated" {
+                                    "squat"
+                                } else {
+                                    "seated"
+                                })
+                            }
+                            "fraction" => recorded["fraction"] = json!(0.5),
+                            _ => {}
+                        }
+                    }
+                    Ok(result)
+                })
+                .unwrap();
+            let report = serde_json::to_value(report).unwrap();
+            assert_eq!(
+                report["comparison"]["frontier"],
+                if fault == "none" {
+                    json!(["a", "b"])
+                } else {
+                    json!(["b"])
+                },
+                "{posture}/{fault}"
+            );
+        }
     }
 }
 

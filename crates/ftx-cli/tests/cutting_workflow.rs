@@ -238,7 +238,20 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
     }
     // The same optional source-qualified fixture policy crosses both real binaries and the
     // portable boundary; obstruction withdraws only the process, never the ordinary markers.
-    for blocked in [false, true] {
+    for (blocked, routed, loaded) in [
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+        (true, false, true),
+    ] {
+        options["program"]
+            .as_object_mut()
+            .unwrap()
+            .remove("travel_routing");
+        options["program"]
+            .as_object_mut()
+            .unwrap()
+            .remove("stock_loading");
         let fixture = if blocked {
             json!([[7.9, 11.9], [8.1, 11.9], [8.1, 12.1], [7.9, 12.1]])
         } else {
@@ -257,6 +270,17 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
         let lock = machine_sha256(&machine).unwrap();
         for q in options["program"]["qualifications"].as_array_mut().unwrap() {
             q["machine_sha256"] = json!(lock);
+        }
+        if routed {
+            options["program"]["travel_routing"] = json!({
+                "model":"fixture_box_visibility/1", "waypoint_offset_mm":1.
+            });
+        }
+        if loaded {
+            options["program"]["stock_loading"] = json!([
+                {"marker":0,"lower_left_mm":[200.,100.]},
+                {"marker":1,"lower_left_mm":[200.,200.]}
+            ]);
         }
         w.write("options.json", &options);
         let portable: Value = serde_json::from_str(
@@ -279,7 +303,7 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
         let primary: Value = serde_json::from_slice(&primary.stdout).unwrap();
         assert_eq!(primary["result"], portable);
         assert_eq!(portable["rolls"], baseline["rolls"]);
-        if blocked {
+        if blocked && !routed && !loaded {
             assert!(portable.get("program").is_none());
             assert!(
                 portable["program_refusal"]["message"]
@@ -292,6 +316,80 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
                 portable["program"]["fixture_clearance"],
                 options["program"]["machine"]["fixture_clearance"]
             );
+            if routed {
+                assert!(
+                    portable["program"]["markers"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|marker| {
+                            marker["selected"]["runs"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|run| {
+                                    run["travel_waypoints_mm"]
+                                        .as_array()
+                                        .is_some_and(|p| !p.is_empty())
+                                })
+                        })
+                );
+            }
+            if routed || loaded {
+                let job: Value = serde_json::from_str(
+                    &ftx_wasm::manufacturing::roll_job(&p.to_string(), &options.to_string(), 0)
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(job["plan_json"].as_str().unwrap()).unwrap(),
+                    portable
+                );
+                let svg = job["preview_svg"].as_str().unwrap();
+                assert!(svg.contains("knife-raised-travel"));
+                assert!(svg.contains("viewBox=\"0 0 500 500\""));
+                if loaded {
+                    assert_eq!(
+                        portable["program"]["stock_loading"],
+                        options["program"]["stock_loading"]
+                    );
+                    assert_eq!(
+                        portable["program"]["markers"][0]["loading"]["lower_left_mm"],
+                        json!([200., 100.])
+                    );
+                    assert!(svg.contains("id=\"stock-loading\" transform=\"translate(200 100)\""));
+                    let mut loaded_study = study.clone();
+                    loaded_study["cutting"] = options.clone();
+                    let study_result: Value = serde_json::from_str(
+                        &ftx_wasm::materials::study(&p.to_string(), &loaded_study.to_string())
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    let qualified = study_result["alternatives"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|row| row["key"] == "qualified")
+                        .unwrap();
+                    assert_eq!(
+                        qualified["cutting"]["result"]["program"],
+                        portable["program"]
+                    );
+                }
+                if let Some(capture) = std::env::var_os("FTX_KNIFE_PROGRAM_REPLAY") {
+                    let capture = PathBuf::from(capture);
+                    let prefix = if loaded { "loading" } else { "detour" };
+                    for (suffix, value) in [("options.json", &options), ("report.json", &portable)]
+                    {
+                        fs::write(
+                            capture.join(format!("{prefix}-{suffix}")),
+                            serde_json::to_vec(value).unwrap(),
+                        )
+                        .unwrap();
+                    }
+                    fs::write(capture.join(format!("{prefix}-preview.svg")), svg).unwrap();
+                }
+            }
         }
     }
 }

@@ -255,6 +255,186 @@ fn cached_producer_receipts_reject_changed_metrics_sources_and_partial_or_retarg
 }
 
 #[test]
+fn material_decisions_use_complete_detours_and_reject_changed_routes_or_routing_policy() {
+    let (pattern, mut request) = fixture("cutting");
+    let policy = request.cutting.as_mut().unwrap().program.as_mut().unwrap();
+    policy.machine.start_mm = ftx_core::Vec2::new(150., 30.);
+    policy.machine.fixture_clearance = Some(
+        serde_json::from_value(json!({
+            "model":"planar_disk_sweep/1","cutting_radius_mm":0.2,"raised_radius_mm":0.2,
+            "fixtures":[{"id":"wall","outline_mm":[[100,0],[110,0],[110,200],[100,200]]}],
+            "source":{"reference":"test:study-detour","accessed_on":"2026-10-30",
+                "note":"Synthetic fixture and circular envelopes"},
+            "method":"Declared machine-frame geometry, not measured process qualification",
+            "evidence":"estimate","allow_estimates":true
+        }))
+        .unwrap(),
+    );
+    let machine = program::machine_sha256(&policy.machine).unwrap();
+    for qualification in &mut policy.qualifications {
+        qualification.machine_sha256.clone_from(&machine);
+    }
+    let blocked = request.evaluate(&pattern).unwrap();
+    assert!(
+        row(&blocked, "fast")
+            .metrics
+            .cutting_modeled_path_seconds
+            .is_none()
+    );
+    request
+        .cutting
+        .as_mut()
+        .unwrap()
+        .program
+        .as_mut()
+        .unwrap()
+        .travel_routing = Some(program::TravelRouting {
+        model: "fixture_box_visibility/1".into(),
+        waypoint_offset_mm: 1.,
+    });
+    let report = request.evaluate(&pattern).unwrap();
+    assert_eq!(report.comparison.as_ref().unwrap().frontier, ["fast"]);
+    let actual = row(&report, "fast");
+    let plan = actual.cutting.value().unwrap();
+    let route = &plan.program.as_ref().unwrap().markers[0].selected;
+    let straight: f64 = route
+        .runs
+        .iter()
+        .map(|r| r.travel_mm[0].dist(r.travel_mm[1]))
+        .chain(route.return_mm.iter().map(|[a, b]| a.dist(*b)))
+        .sum();
+    assert!(route.travel_length_mm > straight);
+    assert_eq!(
+        actual.metrics.cutting_raised_travel_length_m,
+        Some(route.checked_travel_length().unwrap() / 1000.)
+    );
+    assert_eq!(
+        admit(actual, Consumer::CuttingProgram)
+            .unwrap()
+            .totals
+            .seconds,
+        route.modeled_path_seconds
+    );
+    for changed_policy in [false, true] {
+        let mut changed = actual.clone();
+        let Outcome::Available { result: plan } = &mut changed.cutting else {
+            unreachable!()
+        };
+        if changed_policy {
+            plan.options
+                .program
+                .as_mut()
+                .unwrap()
+                .travel_routing
+                .as_mut()
+                .unwrap()
+                .waypoint_offset_mm = 2.;
+        } else {
+            plan.program.as_mut().unwrap().markers[0].selected.runs[0]
+                .travel_waypoints_mm
+                .pop()
+                .unwrap();
+        }
+        let decision = rerank(&request, &[changed]);
+        assert!(!decision.alternatives[0].eligible);
+        assert!(decision.alternatives[0].readings.is_empty());
+    }
+}
+
+#[test]
+fn authored_loading_reaches_all_cutting_consumers_and_binds_the_complete_stock_frame() {
+    for (route, consumer) in [
+        ("cutting", Consumer::CuttingProgram),
+        ("finite_stock", Consumer::FiniteStockProgram),
+        ("cutting_job", Consumer::CuttingJobProgram),
+    ] {
+        let (pattern, mut request) = fixture(route);
+        let origin = request.evaluate(&pattern).unwrap();
+        let configure = |policy: &mut program::Policy, count| {
+            policy.stock_loading = (0..count)
+                .map(|marker| program::StockLoading {
+                    marker,
+                    lower_left_mm: Vec2::new(20., 30.),
+                })
+                .collect();
+        };
+        if let Some(options) = &mut request.cutting {
+            configure(options.program.as_mut().unwrap(), 1);
+        }
+        if let Some(finite) = &mut request.finite_stock {
+            configure(finite.options.program.as_mut().unwrap(), 3);
+        }
+        if let Some(job) = &mut request.cutting_job {
+            configure(job.roll.as_mut().unwrap().program.as_mut().unwrap(), 1);
+            configure(
+                job.finite_stock
+                    .as_mut()
+                    .unwrap()
+                    .options
+                    .program
+                    .as_mut()
+                    .unwrap(),
+                3,
+            );
+        }
+        let moved = request.evaluate(&pattern).unwrap();
+        assert_eq!(moved.comparison.as_ref().unwrap().frontier, ["fast"]);
+        let actual = row(&moved, "fast");
+        let before = admit(row(&origin, "fast"), consumer).unwrap();
+        let after = admit(actual, consumer).unwrap();
+        assert_eq!(before.totals.cut_m, after.totals.cut_m);
+        assert!(after.totals.travel_m > before.totals.travel_m);
+        assert!(after.totals.seconds > before.totals.seconds);
+        assert_ne!(before.protocol, after.protocol);
+        if route != "cutting" {
+            continue;
+        }
+        let plan = actual.cutting.value().unwrap();
+        assert_eq!(
+            after.totals.travel_m,
+            plan.program.as_ref().unwrap().markers[0]
+                .selected
+                .checked_travel_length()
+                .unwrap()
+                / 1000.
+        );
+        for defect in 0..5 {
+            let mut changed = actual.clone();
+            let Outcome::Available { result: plan } = &mut changed.cutting else {
+                unreachable!()
+            };
+            let marker = &mut plan.program.as_mut().unwrap().markers[0];
+            match defect {
+                0 => marker.loading.as_mut().unwrap().lower_left_mm.x += 1.,
+                1 => {
+                    marker
+                        .loading
+                        .as_mut()
+                        .unwrap()
+                        .marker_to_machine_offset_mm
+                        .x += 1.
+                }
+                2 => marker.loading.as_mut().unwrap().stock_bounds_mm[2] -= 1.,
+                3 => {
+                    plan.options.program.as_mut().unwrap().stock_loading[0]
+                        .lower_left_mm
+                        .x += 1.
+                }
+                _ => marker.selected.runs[0].cut_endpoints_mm[0].x += 1.,
+            }
+            assert!(
+                roll(plan, &plan.pattern_sha256).is_err(),
+                "producer admission {defect}"
+            );
+            assert!(
+                !rerank(&request, &[changed]).alternatives[0].eligible,
+                "cached admission {defect}"
+            );
+        }
+    }
+}
+
+#[test]
 fn complete_mixed_jobs_add_each_engaged_route_once_and_never_admit_a_partial_total() {
     let (pattern, request) = fixture("cutting_job");
     let report = request.evaluate(&pattern).unwrap();

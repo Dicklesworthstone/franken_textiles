@@ -79,7 +79,7 @@ fn relock(policy: &mut Policy) {
         q.machine_sha256.clone_from(&sha);
     }
 }
-fn value(x: &impl serde::Serialize) -> Value {
+fn value(x: &(impl serde::Serialize + ?Sized)) -> Value {
     serde_json::to_value(x).unwrap()
 }
 fn near(a: f64, b: f64) {
@@ -171,6 +171,95 @@ fn complete_hide_paths_keep_geometry_and_cut_features_before_release_in_a_report
 }
 
 #[test]
+fn authored_finite_loading_translates_the_whole_inventory_and_preserves_source_identity() {
+    let (p, mut r) = inputs();
+    r.stocks[0].zones = serde_json::from_value(json!([{
+        "id":"review-zone","outline_mm":[[-140,90],[-80,90],[-80,170],[-140,170]],
+        "geometry_source":{"reference":"test:loaded-zone","accessed_on":"2026-10-31",
+            "note":"Synthetic region retained with the whole stock"}
+    }]))
+    .unwrap();
+    qualify(&p, &mut r);
+    let origin = r.build(&p).unwrap();
+    assert!(
+        value(origin.program().unwrap())
+            .get("stock_loading")
+            .is_none()
+    );
+    r.options.program.as_mut().unwrap().stock_loading = vec![program::StockLoading {
+        marker: 0,
+        lower_left_mm: Vec2::new(20., 10.),
+    }];
+    let loaded = r.build(&p).unwrap();
+    assert_eq!(value(loaded.markers()), value(origin.markers()));
+    let marker = &loaded.program().unwrap().markers[0];
+    let before = &origin.program().unwrap().markers[0];
+    let loading = marker.loading.as_ref().unwrap();
+    assert_eq!(loading.lower_left_mm, Vec2::new(20., 10.));
+    assert_eq!(loading.marker_to_machine_offset_mm, Vec2::new(170., -70.));
+    assert_eq!(loading.stock_bounds_mm, [20., 10., 130., 150.]);
+    let frame = marker.finite_stock.as_ref().unwrap();
+    assert_eq!(
+        frame.marker_to_machine_offset_mm,
+        loading.marker_to_machine_offset_mm
+    );
+    assert_eq!(
+        frame.stock_sha256,
+        before.finite_stock.as_ref().unwrap().stock_sha256
+    );
+    assert_ne!(marker.geometry_sha256, before.geometry_sha256);
+    near(marker.selected.cut_length_mm, before.selected.cut_length_mm);
+    for (run, original) in marker.selected.runs.iter().zip(&before.selected.runs) {
+        assert_eq!(
+            run.cut_endpoints_mm,
+            original
+                .cut_endpoints_mm
+                .map(|point| point + Vec2::new(20., 10.))
+        );
+        assert_eq!(value(&run.path), value(&original.path));
+    }
+    let item = &loaded.markers()[0];
+    for point in item
+        .outline_mm
+        .iter()
+        .chain(item.defects_mm.iter().flatten())
+        .chain(item.occupied_mm.iter().flatten())
+        .chain(item.zones.iter().flat_map(|zone| &zone.outline_mm))
+    {
+        let point = *point + loading.marker_to_machine_offset_mm;
+        assert!((20. ..=130.).contains(&point.x) && (10. ..=150.).contains(&point.y));
+    }
+    let source = r.stocks[0].outline_mm[0];
+    let a = frame.source_to_machine;
+    assert_eq!(
+        Vec2::new(
+            a[0][0] * source.x + a[0][1] * source.y + a[0][2],
+            a[1][0] * source.x + a[1][1] * source.y + a[1][2]
+        ),
+        Vec2::new(20., 10.)
+    );
+    let svg = ftx_export::cutting::preview::stock_svg(&loaded, 0).unwrap();
+    assert!(svg.contains("viewBox=\"0 0 160 160\""));
+    assert!(svg.contains("translate(170 -70)"));
+    assert!(svg.contains("id=\"stock-defects\"") && svg.contains("id=\"stock-occupied\""));
+    assert!(svg.contains("review-zone") && svg.contains("data-phase=\"raised-return\""));
+    // The allocated cut subset still fits, but the complete 110 mm stock would cross the bed.
+    r.options.program.as_mut().unwrap().stock_loading[0]
+        .lower_left_mm
+        .x = 60.;
+    let refused = r.build(&p).unwrap();
+    assert!(refused.program().is_none());
+    assert!(
+        refused
+            .program_refusal()
+            .unwrap()
+            .message
+            .contains("complete finite stock")
+    );
+    assert_eq!(value(refused.markers()), value(loaded.markers()));
+}
+
+#[test]
 fn fixtures_are_checked_in_the_loaded_machine_frame_for_translated_hides() {
     let (p, mut r) = inputs();
     qualify(&p, &mut r);
@@ -185,6 +274,7 @@ fn fixtures_are_checked_in_the_loaded_machine_frame_for_translated_hides() {
     let midpoint = (placement.cut_mm[0] + placement.cut_mm[1]) * 0.5 + offset;
     assert!(midpoint.x >= 0. && midpoint.y >= 0.);
     let policy = r.options.program.as_mut().unwrap();
+    policy.machine.bed_mm = [500., 500.];
     policy.machine.fixture_clearance = Some(
         serde_json::from_value(json!({
             "model":"planar_disk_sweep/1","cutting_radius_mm":0.1,"raised_radius_mm":0.1,
@@ -209,6 +299,18 @@ fn fixtures_are_checked_in_the_loaded_machine_frame_for_translated_hides() {
             .contains("cutting tool envelope")
     );
     assert_eq!(value(&blocked.markers()), value(&clear.markers()));
+    r.options.program.as_mut().unwrap().stock_loading = vec![program::StockLoading {
+        marker: 0,
+        lower_left_mm: Vec2::new(200., 100.),
+    }];
+    let repositioned = r.build(&p).unwrap();
+    assert!(
+        repositioned.program().is_some(),
+        "{:?}",
+        repositioned.program_refusal()
+    );
+    assert_eq!(value(repositioned.markers()), value(clear.markers()));
+    r.options.program.as_mut().unwrap().stock_loading.clear();
     // Original source coordinates are far from the loaded machine-frame cut, so confusing the
     // two frames would miss the obstruction above. Moving that same fixture away admits the cut.
     let policy = r.options.program.as_mut().unwrap();
@@ -218,6 +320,79 @@ fn fixtures_are_checked_in_the_loaded_machine_frame_for_translated_hides() {
     }
     relock(policy);
     assert!(r.build(&p).unwrap().program().is_some());
+}
+
+#[test]
+fn translated_hide_detours_and_return_are_visible_beyond_the_stock_in_the_full_bed() {
+    let p = pattern(vec![piece("front", 40., 60.)]);
+    let mut r = request(vec![stock(
+        "hide-001",
+        material("hide", "hide"),
+        -150.,
+        80.,
+        110.,
+        140.,
+    )]);
+    qualify(&p, &mut r);
+    let original = r.build(&p).unwrap();
+    let policy = r.options.program.as_mut().unwrap();
+    policy.machine.start_mm = Vec2::new(150., 30.);
+    policy.machine.fixture_clearance = Some(
+        serde_json::from_value(json!({
+            "model":"planar_disk_sweep/1","cutting_radius_mm":0.2,"raised_radius_mm":0.2,
+            "fixtures":[{"id":"raised-wall","outline_mm":[[100,0],[110,0],[110,145],[100,145]]}],
+            "source":{"reference":"test:finite-detour","accessed_on":"2026-10-30",
+                "note":"Synthetic planar wall and tool envelopes"},
+            "method":"Known loaded machine-frame geometry at both declared elevations",
+            "evidence":"estimate","allow_estimates":true
+        }))
+        .unwrap(),
+    );
+    relock(policy);
+    assert!(r.build(&p).unwrap().program().is_none());
+    r.options.program.as_mut().unwrap().travel_routing = Some(program::TravelRouting {
+        model: "fixture_box_visibility/1".into(),
+        waypoint_offset_mm: 1.,
+    });
+    let plan = r.build(&p).unwrap();
+    assert_eq!(value(&plan.markers()), value(&original.markers()));
+    let report = plan.program().unwrap();
+    let marker = &report.markers[0];
+    assert_eq!(
+        marker
+            .finite_stock
+            .as_ref()
+            .unwrap()
+            .marker_to_machine_offset_mm,
+        Vec2::new(150., -80.)
+    );
+    assert_eq!(
+        marker.finite_stock.as_ref().unwrap().stock_sha256,
+        original.program().unwrap().markers[0]
+            .finite_stock
+            .as_ref()
+            .unwrap()
+            .stock_sha256
+    );
+    assert!(
+        marker.selected.runs[0]
+            .travel_waypoints_mm
+            .iter()
+            .all(|p| p.y > 140. && p.y < 160.)
+    );
+    assert_eq!(marker.selected.runs[0].travel_waypoints_mm.len(), 2);
+    assert_eq!(marker.selected.return_waypoints_mm.len(), 2);
+    near(
+        marker.selected.checked_travel_length().unwrap(),
+        marker.selected.travel_length_mm,
+    );
+    let svg = ftx_export::cutting::preview::stock_svg(&plan, 0).unwrap();
+    assert!(svg.contains("viewBox=\"0 0 160 160\""));
+    assert!(svg.contains("translate(0 160) scale(1 -1)"));
+    assert!(svg.contains("translate(150 -80)"));
+    assert!(svg.contains("L111.2 146.2 L98.8 146.2"));
+    assert!(svg.contains("data-phase=\"raised-return\""));
+    assert_eq!(value(&plan), value(&plan.request().build(&p).unwrap()));
 }
 
 #[test]
@@ -333,6 +508,35 @@ fn unused_stock_needs_no_process_and_both_work_limits_are_shared_by_all_loaded_i
         assert_eq!(value(&row.selected), value(&row.baseline));
         assert_eq!(row.selected.runs.len(), 1);
     }
+    r.options.program.as_mut().unwrap().stock_loading = vec![
+        program::StockLoading {
+            marker: 0,
+            lower_left_mm: Vec2::new(100., 100.),
+        },
+        program::StockLoading {
+            marker: 2,
+            lower_left_mm: Vec2::new(20., 10.),
+        },
+    ];
+    let moved = r.build(&p).unwrap();
+    let moved_report = moved.program().unwrap();
+    assert_eq!(
+        moved_report
+            .markers
+            .iter()
+            .map(|m| m.marker)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert!(moved_report.markers[0].loading.is_none());
+    assert!(moved_report.markers[1].loading.is_some());
+    assert_eq!(value(&moved_report.markers[0]), value(&report.markers[0]));
+    assert!(
+        !ftx_export::cutting::preview::stock_svg(&moved, 0)
+            .unwrap()
+            .contains("machine-bed")
+    );
+    assert_eq!(moved_report.stock_loading.len(), 2);
     r.options.program.as_mut().unwrap().geometry_work_limit = 1;
     let refused = r.build(&p).unwrap();
     assert!(refused.program().is_none());

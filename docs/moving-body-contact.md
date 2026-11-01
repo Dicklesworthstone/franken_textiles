@@ -38,6 +38,9 @@ The material workbench's motion inspector selects exact retained samples, displa
 their physical timestamps and uses one fixed metric scale across the trajectory.
 See `docs/material-scenario-studies.md` for source-model endpoint requests and the
 independent motion, steady-heat and transient-heat consumers.
+Those endpoint requests support separately declared arm angles and fractional seated/squat leg
+postures. They reuse the existing joint rotations and occupied source shape while retaining the
+standing sewn start, unchanged cloth history and all contact/rollback checks described below.
 
 ## Static scene admission
 

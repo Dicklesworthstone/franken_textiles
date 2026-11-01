@@ -174,6 +174,23 @@ impl Grid {
         })
     }
 
+    // A moving body's first update converts a dense grid to the existing owning BVH. Later
+    // updates reuse its immutable primitive ordering instead of rediscovering a spatial partition.
+    fn refitted(&self, boxes: &[(Vec3, Vec3)]) -> Result<Self, Refusal> {
+        let tree = match &self.fallback {
+            Some(tree) => tree.refitted(boxes)?,
+            None => QueryBvh::build(boxes),
+        };
+        Ok(Self {
+            cell: 1.0,
+            lo: [0; 3],
+            dims: [0; 3],
+            start: Vec::new(),
+            ids: Vec::new(),
+            fallback: Some(tree),
+        })
+    }
+
     fn dense(boxes: &[(Vec3, Vec3)], cell: f64) -> Option<Self> {
         // These cap only the choice of accelerator, never the geometry or returned candidates.
         const MAX_CELLS: usize = 1 << 20;
@@ -382,6 +399,42 @@ impl Body {
             tri_box,
             edge_box,
         })
+    }
+
+    /// Refit an already-admitted fixed-topology body for a prescribed-motion trial. Its triangles,
+    /// unique edges and closure are retained; surface/trajectory admission remains the caller's
+    /// responsibility. Geometry and all three query indices commit together, only after validation.
+    pub(crate) fn refit_vertices(&mut self, vertices: Vec<Vec3>) -> Result<(), Refusal> {
+        if vertices.len() != self.vertices.len()
+            || self.edges.iter().flatten().any(|&i| i >= vertices.len())
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "body refit requires unchanged vertex and edge topology",
+            ));
+        }
+        validate_mesh(&vertices, &self.triangles)?;
+        let tri_box: Vec<_> = self
+            .triangles
+            .iter()
+            .map(|t| aabb(&t.map(|i| vertices[i])))
+            .collect();
+        let edge_box: Vec<_> = self
+            .edges
+            .iter()
+            .map(|e| aabb(&e.map(|i| vertices[i])))
+            .collect();
+        let vert_box: Vec<_> = vertices.iter().map(|&p| (p, p)).collect();
+        let tri_grid = self.tri_grid.refitted(&tri_box)?;
+        let edge_grid = self.edge_grid.refitted(&edge_box)?;
+        let vert_grid = self.vert_grid.refitted(&vert_box)?;
+        self.vertices = vertices;
+        self.tri_box = tri_box;
+        self.edge_box = edge_box;
+        self.tri_grid = tri_grid;
+        self.edge_grid = edge_grid;
+        self.vert_grid = vert_grid;
+        Ok(())
     }
 
     /// Winding number of the surface about `p` (Van Oosterom–Strackee solid angles): about 1 inside a
@@ -1634,6 +1687,78 @@ mod tests {
             kappa: 10.0,
             mu: 0.3,
             eps_v: 1e-3,
+        }
+    }
+
+    #[test]
+    fn body_refit_matches_rebuild_and_commits_geometry_with_all_query_indices() {
+        let patch = [
+            Vec3::ZERO,
+            Vec3::new(0.04, 0.0, 0.0),
+            Vec3::new(0.0, 0.04, 0.0),
+        ];
+        let positions = |phase: usize| {
+            (0..20)
+                .flat_map(|i| {
+                    let location = (7 * i + 3 * phase) % 20;
+                    let origin = Vec3::new(
+                        (location % 5) as f64 * 0.25 + phase as f64 * 5.0,
+                        (location / 5) as f64 * 0.25,
+                        (location % 3) as f64 * 0.01,
+                    );
+                    patch.map(|p| p + origin)
+                })
+                .collect::<Vec<_>>()
+        };
+        let triangles: Vec<_> = (0..20).map(|i| [3 * i, 3 * i + 1, 3 * i + 2]).collect();
+        let mut body = Body::new(positions(0), triangles.clone(), 0.01).unwrap();
+        let original_edges = body.edges.clone();
+        for phase in 1..=3 {
+            // First convert the dense grids; then move primitives between the cached BVH leaves.
+            body.refit_vertices(positions(phase)).unwrap();
+            assert_eq!(body.triangles, triangles);
+            assert_eq!(body.edges, original_edges);
+            let rebuilt = Body::new(body.vertices.clone(), triangles.clone(), 0.01).unwrap();
+            assert_eq!(body.closed, rebuilt.closed);
+            let c = Contact::new(body.clone(), params(), vec![[0, 1, 2]], |_, _| 0.04);
+            let reference = Contact::new(rebuilt, params(), vec![[0, 1, 2]], |_, _| 0.04);
+            for &t in &triangles {
+                let x = t.map(|i| body.vertices[i] + Vec3::new(0.0, 0.0, 0.002));
+                let movement = [Vec3::new(0.3, 0.1, 0.0); 3];
+                for sweep in [None, Some(movement.as_slice())] {
+                    assert_eq!(
+                        c.candidates(&x, sweep, 0.01),
+                        reference.candidates(&x, sweep, 0.01)
+                    );
+                }
+                assert_eq!(c.closest_pair(&x, 0.01), reference.closest_pair(&x, 0.01));
+                let touching = t.map(|i| body.vertices[i]);
+                assert_eq!(
+                    c.crossings(&touching, 10),
+                    reference.crossings(&touching, 10)
+                );
+                let target: Vec<_> = body
+                    .vertices
+                    .iter()
+                    .map(|p| *p + Vec3::new(0.0, 0.0, 0.004))
+                    .collect();
+                let swept = c.motion_bound(&x, &x, &target, 10_000).unwrap();
+                assert!(swept.fraction < 0.375);
+                assert_eq!(
+                    swept,
+                    reference.motion_bound(&x, &x, &target, 10_000).unwrap()
+                );
+            }
+
+            let before = format!("{body:?}");
+            let mut nonfinite = body.vertices.clone();
+            nonfinite[0].z = f64::NAN;
+            let mut collapsed = body.vertices.clone();
+            collapsed[0] = collapsed[1];
+            for invalid in [body.vertices[..59].to_vec(), nonfinite, collapsed] {
+                assert!(body.refit_vertices(invalid).is_err());
+                assert_eq!(format!("{body:?}"), before);
+            }
         }
     }
 
