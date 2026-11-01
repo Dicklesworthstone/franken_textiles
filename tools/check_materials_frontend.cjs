@@ -2103,6 +2103,38 @@ test('treatment page uses the current bound basis, displays measured changes and
   assert.equal(p.current().messages.at(-1).pattern,report.pattern_json);
 });
 
+test('treated outfit adoption retains correspondence, self-contact and current wearer inputs', async () => {
+  const p=await pageModule(),imported=outfitImport(),report=treatmentReport(true);
+  p.select('patternFile',imported.request_json);await p.e.patternFile.onchange();p.emit(imported);
+  p.e.patternFile.value='original-outfit.json';
+  const measurements=' {"length":1.0,"x":-0.0}\n',fit=' {"points":[]}\n',bodyFit=' {"accepted":true,"x":-0.0}\n';
+  p.select('measurements',measurements);p.e.measurements.handlers.change();p.select('fit',fit);
+  p.e.body.files=[new Blob([new Uint8Array([2,4,6])])];p.e.body.handlers.change();
+  p.e.bodyFitFile.files=[new Blob([bodyFit])];p.e.bodyFitFile.handlers.change();
+  p.e.bodyArmDeg.value='48';p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();
+  report.source_pattern_json=imported.pattern_json;
+  report.pattern_json=' '+imported.pattern_json.replace('1.0','2.0')+'\r\n';
+  p.select('treatmentRequest','{"schema":"ftx-pattern-treatment/1"}');
+  await p.e.treatment.onclick();p.emit(report);
+  const messages=p.current().messages.length;p.e.useTreatment.onclick();
+  assert.equal(p.current().messages.length,messages,'Adoption does not run a consumer');
+  assert.equal(p.e.selfContact.checked,true);assert.equal(p.e.selfContact.disabled,true);
+  assert.equal(p.e.patternFile.value,'');assert.equal(p.e.bodyFitConsent.checked,false);
+  assert.deepEqual(p.e.target.children.slice(1).map(c=>c.value),
+    ['@outfit','@garment:0','@garment:1','inner::band','outer::band']);
+  await p.e.bind.onclick();const binding=p.current().messages.at(-1);
+  assert.equal(binding.pattern,report.pattern_json);
+  assert.deepEqual(plain(binding.outfit),{request_json:imported.request_json,composition_json:imported.composition_json});
+  assert.deepEqual(plain(JSON.parse(binding.changes)),{schema:'ftx-material-bindings/1',default:null,pieces:{}});
+  p.emit({pattern_json:report.pattern_json,pieces:[],pattern_sha256:'treated-lock'});
+  assert.equal(p.e.fold.disabled,true);p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();
+  await p.e.fold.onclick();const folded=p.current().messages.at(-1);
+  assert.equal(folded.pattern,report.pattern_json);assert.equal(folded.selfContactMm,2);
+  assert.deepEqual(plain(folded.outfit),plain(binding.outfit));
+  assert.equal(folded.measurements,measurements);assert.equal(folded.fit,fit);assert.equal(folded.bodyFit,bodyFit);
+  assert.equal(folded.armDeg,48);assert.deepEqual([...new Uint8Array(folded.bytes)],[2,4,6]);
+});
+
 test('request, source pattern and material assignment changes withdraw prepared treatment adoption', async () => {
   for (const change of ['request','source','material']) {
     const p=await pageModule(); await p.load(); await p.inspect('replacement');
