@@ -15,6 +15,7 @@ let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
 let roundRead = 0, roundToken = new URL(window.location.href).searchParams.get("roundImport");
 const roundFiles = new Map();
+let photoEvidence = null, photoTransfer = null, photoProblem = null;
 let interfaceChange = null, interfaceRead = 0, interfaceReady = true;
 let calibratedPair = null;
 const pieceChanges = new Map(), urls = new Map();
@@ -3476,7 +3477,10 @@ function acceptedBodyAngle() {
   return Number(angle);
 }
 async function measurementInput(msg) {
+  if (photoTransfer) throw Error("Finish the photo return or clear additional measurements before checking.");
+  if (photoProblem) throw Error(photoProblem);
   const files = Array.from($("supplementalFiles").files || []);
+  if (photoEvidence) files.unshift(photoEvidence);
   if (files.length && !$("supplementalConsent").checked) throw Error("Confirm that every added file describes this same wearer.");
   if (files.length > 8 || files.reduce((sum, f) => sum + f.size, 0) > 16 * 1024 * 1024) {
     throw Error("Choose at most 8 additional measurement files, 16 MiB combined.");
@@ -3503,7 +3507,7 @@ async function studyBodyInput(msg) {
   if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before running body-dependent studies.");
   const angle = acceptedBodyAngle(), fit = await read("bodyFitFile");
   const measurements = has("measurements") ? await measurementInput(msg) : "{}";
-  if (!has("measurements") && $("supplementalFiles").files.length) throw Error("Choose primary measurements before adding evidence.");
+  if (!has("measurements") && (photoEvidence || photoTransfer || photoProblem || $("supplementalFiles").files.length)) throw Error("Choose primary measurements before adding evidence.");
   if (msg.measurementSources !== undefined) {
     msg.measurementPrimary = measurements; msg.measurementAcceptedFit = fit; msg.measurementArmDeg = angle;
   }
@@ -3613,7 +3617,7 @@ async function execute(op) {
     }
     else if (op === "thermalHistory") msg.thermalRequest = await read("thermalRequest");
     else if (op === "bodyCheck") {
-      if (!has("measurements") && $("supplementalFiles").files.length) throw Error("Choose primary measurements before adding evidence.");
+      if (!has("measurements") && (photoEvidence || photoTransfer || photoProblem || $("supplementalFiles").files.length)) throw Error("Choose primary measurements before adding evidence.");
       msg.measurements = has("measurements") ? await measurementInput(msg) : "{}";
       if (has("bodyFitFile")) {
         if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before checking.");
@@ -3708,7 +3712,7 @@ async function execute(op) {
 }
 for (const el of commands) el.onclick = () => execute(el.dataset.command);
 $("rollPreview").addEventListener("change", () => invalidate(["cut"]));
-$("cancel").onclick = () => { start(); $("status").textContent = "Cancelled; reloading local engine."; };
+$("cancel").onclick = () => { cancelPhotoReturn(); start(); $("status").textContent = "Cancelled; reloading local engine."; };
 $("catalog").onchange = () => {
   if (!$("catalog").value) return;
   invalidateThermalPoint();
@@ -3755,6 +3759,7 @@ function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
   }
 }
 function resetPatternInput(keepImport = false) {
+  cancelPhotoReturn();
   ++patternRead; source = null; sourceText = null; outfit = null; adoptedImport = false;
   $("bodyFitConsent").checked = false;
   defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
@@ -3892,9 +3897,47 @@ function supplementalChanged(resetConsent) {
   $("bodyFitConsent").checked = false;
   invalidate(["bodyCheck", "exports", "fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies("measurements")], true);
 }
+function cancelPhotoReturn() {
+  if (!photoTransfer) return;
+  photoTransfer.target.postMessage({type:"ftx-materials-photo-cancelled",token:photoTransfer.token},new URL(import.meta.url).origin);
+  photoTransfer = null;
+  $("photoEvidenceNote").textContent = "Photo return cancelled. Open the photo tool again or add a downloaded file.";
+}
+function clearPhotoEvidence() {
+  cancelPhotoReturn(); photoEvidence = null; photoProblem = null;
+  clear(["photoEvidence"]); $("photoEvidenceFiles").replaceChildren(); $("photoEvidenceNote").hidden = true;
+}
+$("openPhoto").onclick = () => {
+  if (photoTransfer && !photoTransfer.target.closed) { error("Finish or close the current photo tab before opening another."); return; }
+  const token = Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,"0")).join("");
+  const url = new URL("photo.html",import.meta.url); url.searchParams.set("materialsReturn",token);
+  const target = window.open(url.href,"_blank");
+  if (!target) { error("Photo popup blocked. Open the photo tool and add its downloaded photo-measurements.json instead."); return; }
+  clearPhotoEvidence(); photoTransfer = {target,token}; supplementalChanged(true);
+  $("photoEvidenceNote").hidden = false;
+  $("photoEvidenceNote").textContent = "Waiting for the photo tool. Return current records there, then review the same-wearer confirmation here. Clear additional measurements cancels this return.";
+};
+window.addEventListener("message",event=>{
+  const transfer = photoTransfer, m = event.data, origin = new URL(import.meta.url).origin;
+  if (!transfer || event.origin !== origin || event.source !== transfer.target || m?.token !== transfer.token) return;
+  if (m.type === "ftx-photo-records-offer" && !transfer.offered) {
+    transfer.offered = true; transfer.target.postMessage({type:"ftx-photo-records-ready",token:transfer.token},origin); return;
+  }
+  if (m.type !== "ftx-photo-records-cancelled" && !(m.type === "ftx-photo-records" && transfer.offered)) return;
+  photoTransfer = null; supplementalChanged(true);
+  if (m.type === "ftx-photo-records-cancelled" || !(m.records instanceof Blob) || m.records.size > 16*1024*1024) {
+    photoProblem = "Photo return refused or changed. Clear additional measurements, then measure again or add a downloaded file.";
+    $("photoEvidenceNote").textContent = photoProblem;
+    transfer.target.postMessage({type:"ftx-materials-photo-cancelled",token:transfer.token},origin); return;
+  }
+  photoEvidence = m.records;
+  link("photoEvidence",$("photoEvidenceFiles"),{name:"photo-measurements.json",bytes:photoEvidence,mime:"application/json"});
+  $("photoEvidenceNote").textContent = "Photo records received. Review the original download and confirm this same wearer before checking. They remain PHOTO_ESTIMATED; readiness and physical fit remain separate.";
+  transfer.target.postMessage({type:"ftx-materials-photo-received",token:transfer.token},origin);
+});
 $("supplementalFiles").addEventListener("change", () => supplementalChanged(true));
 $("supplementalConsent").addEventListener("change", () => supplementalChanged(false));
-$("clearSupplemental").onclick = () => { $("supplementalFiles").value = ""; supplementalChanged(true); };
+$("clearSupplemental").onclick = () => { clearPhotoEvidence(); $("supplementalFiles").value = ""; supplementalChanged(true); };
 for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["bodyCheck","fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
@@ -3902,6 +3945,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
+    if (id === "measurements" || id === "body") cancelPhotoReturn();
     if (id === "fit") clearImportFit();
     if (id === "measurements") $("supplementalConsent").checked = false;
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
@@ -3952,6 +3996,7 @@ function clearImportFit() {
   clear(["importFit"]); $("importFitFiles").replaceChildren(); $("importFitNote").hidden = true;
 }
 function clearRoundSources() {
+  cancelPhotoReturn();
   clearImportFit();
   ++roundRead; roundToken = null; roundFiles.clear(); window.opener = null;
   $("supplementalConsent").checked = false;
@@ -4021,5 +4066,5 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
   });
   sender.postMessage({ type: "ftx-round-sources-ready", token: roundToken }, roundOrigin);
 } else roundToken = null;
-window.addEventListener("pagehide", () => { clearRoundSources(); ++epoch; worker?.terminate(); clear(["bind", ...operations]); });
+window.addEventListener("pagehide", () => { clearPhotoEvidence(); clearRoundSources(); ++epoch; worker?.terminate(); clear(["bind", ...operations]); });
 start();

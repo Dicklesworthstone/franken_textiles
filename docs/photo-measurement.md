@@ -15,6 +15,14 @@ then **Draft and check**. This uses the ordinary supplemental-file fusion, uncer
 conflict and readiness checks; a photo length supplies neither a girth nor READY status.
 The transfer does not run a round or select a body. **Clear added files** removes it.
 
+From an existing Material Workbench session, choose **Measure a photo for this wearer** under
+additional evidence. After measuring, **Return records to Material Workbench** sends the exact
+current photo-record file back to that session. Its pattern, materials, primary measurements and
+model stay selected. Review the original download and confirm the same wearer again before using
+the records. Source changes or cancellation withdraw a pending return; closing the photo tab
+refuses that return. Clear additional measurements to remove its received snapshot or refusal.
+PHOTO_ESTIMATED records retain the ordinary fusion, uncertainty, count and byte limits.
+
 The tabs use the same origin, opener window and a one-use request token. No records
 enter browser storage or a server. Edits, cancellation or a source change before the
 receiving tab requests the file cancel the pending transfer; an already received file

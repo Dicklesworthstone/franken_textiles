@@ -237,6 +237,8 @@ It does not replace the inspected material selection. Freeze selections &amp; bi
 <h3>Fit, exports and mechanical drape</h3>
 <label>Measurements JSON <input id="measurements" type="file" accept=".json,application/json"></label>
 <details><summary>Add measurement evidence for this wearer</summary>
+<button id="openPhoto" type="button">Measure a photo for this wearer</button>
+<p id="photoEvidenceNote" class="note" hidden></p><div id="photoEvidenceFiles" class="links"></div>
 <label>Additional measurements <input id="supplementalFiles" type="file" multiple accept=".json,application/json"></label>
 <label><input id="supplementalConsent" type="checkbox"> I have checked that every added file describes this same wearer</label>
 <button id="clearSupplemental" type="button">Clear additional measurements</button>

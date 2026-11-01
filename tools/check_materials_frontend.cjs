@@ -1152,10 +1152,11 @@ async function pageModule({roundToken=null}={}) {
   class LocalURL extends URL {}
   LocalURL.createObjectURL = blob => { const id = `blob:${++next}`; live.add(id); blobs.set(id, blob); return id; };
   LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true); blobs.delete(id); };
-  const openerMessages=[],opener={postMessage:(data,origin)=>openerMessages.push({data,origin})};
+  const openerMessages=[],opener={postMessage:(data,origin)=>openerMessages.push({data,origin})},popups=[];
   const window={opener,location:{href:'https://unit.invalid/materials.html'+(roundToken?'?roundImport='+roundToken:'')},
-    addEventListener:(name,fn)=>{windowEvents[name]=fn;}};
-  const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder, document: {
+    open:url=>{const messages=[],target={closed:false,postMessage:(data,origin)=>messages.push({data,origin})};popups.push({url,target,messages});return target;},
+    addEventListener:(name,fn)=>{const old=windowEvents[name];windowEvents[name]=old?(...args)=>Promise.all([old(...args),fn(...args)]):fn;}};
+  const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder,crypto:require('node:crypto').webcrypto, document: {
     getElementById: id => { assert.ok(e[id], `HTML missing ${id}`); return e[id]; },
     querySelectorAll: () => commands, createElement: tag => Object.assign(new Element(), { tag }),
   }, window });
@@ -1169,8 +1170,65 @@ async function pageModule({roundToken=null}={}) {
   const inspect = async id => { e.selection.value = JSON.stringify({ id }); e.selection.handlers.input(); await e.inspect.onclick(); emit({ selection: { id, expected_sha256: 'locked' }, capabilities: {}, snapshot: { id } }); };
   const bind = async () => { await e.bind.onclick(); emit({ pattern, pattern_json:JSON.stringify(pattern), pieces: [], pattern_sha256: 'test' }, [{ name: 'pattern.json', text: '{}', mime: 'application/json' }]); };
   return { e, current, workers, ready, select, emit, load, inspect, bind, live, blobs, windowEvents,
-    opener,openerMessages,hasOpener:()=>!!window.opener };
+    opener,openerMessages,window,popups,hasOpener:()=>!!window.opener };
 }
+function offerMaterialPhoto(p,records) {
+  const popup=p.popups.at(-1),token=new URL(popup.url).searchParams.get('materialsReturn');
+  const send=data=>p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{token,...data}});
+  send({type:'ftx-photo-records-offer'});send({type:'ftx-photo-records',records});return {popup,token,send};
+}
+test('material photo return preserves the active session and exact records behind fresh wearer consent',async()=>{
+  const p=await pageModule();await p.load();await p.inspect('cloth');await p.bind();p.select('measurements');p.select('fit');
+  const model=new Blob([new Uint8Array([1])]);p.e.body.files=[model];p.e.body.handlers.change();
+  const retained=[p.e.patternName.textContent,p.e.selection.value,p.e.boundSummary.textContent,p.e.measurements.files[0],p.e.fit.files[0]];
+  p.e.supplementalConsent.checked=true;p.e.openPhoto.onclick();p.e.openPhoto.onclick();assert.equal(p.popups.length,1);
+  const popup=p.popups[0],token=new URL(popup.url).searchParams.get('materialsReturn'),records=new Blob([' {"seed":18446744073709551615,"records":[]}\r\n']);
+  assert.match(token,/^[0-9a-f]{32}$/);assert.equal(p.e.supplementalConsent.checked,false);
+  for(const [origin,source,data] of [['https://foreign.invalid',popup.target,{token}],['https://unit.invalid',{}, {token}],['https://unit.invalid',popup.target,{token:'wrong'}]]) {
+    p.windowEvents.message({origin,source,data:{type:'ftx-photo-records-offer',...data}});assert.equal(popup.messages.length,0);
+  }
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{type:'ftx-photo-records',token,records}});assert.equal(p.e.photoEvidenceFiles.children.length,0);
+  await p.e.bodyCheck.onclick();assert.match(p.e.error.textContent,/Finish the photo return/);
+  const returned=offerMaterialPhoto(p,records);assert.deepEqual(popup.messages.map(m=>m.data.type),['ftx-photo-records-ready','ftx-materials-photo-received']);
+  assert.equal(p.e.photoEvidenceFiles.children.length,1);assert.equal(await p.blobs.get(p.e.photoEvidenceFiles.children[0].href).text(),await records.text());
+  returned.send({type:'ftx-photo-records',records:new Blob(['{bad'])});assert.equal(p.e.photoEvidenceFiles.children.length,1);
+  assert.deepEqual([p.e.patternName.textContent,p.e.selection.value,p.e.boundSummary.textContent,p.e.measurements.files[0],p.e.fit.files[0]],retained);assert.equal(p.e.body.files[0],model);
+  await p.e.bodyCheck.onclick();assert.match(p.e.error.textContent,/same wearer/);
+  p.e.supplementalConsent.checked=true;p.e.supplementalConsent.handlers.change();await p.e.bodyCheck.onclick();
+  assert.equal(p.current().messages.at(-1).measurementSources,JSON.stringify([await records.text()]));
+  assert.match(p.e.photoEvidenceNote.textContent,/PHOTO_ESTIMATED/);
+});
+test('material photo return is cancelled by wearer-source replacement, clear, pattern replacement and page exit',async()=>{
+  for(const change of ['measurements','body','pattern','clear','cancel','pagehide']) {
+    const p=await pageModule();p.e.openPhoto.onclick();const popup=p.popups[0];
+    if(change==='measurements'||change==='body')p.e[change].handlers.change();
+    else if(change==='pattern')await p.load();else if(change==='clear')p.e.clearSupplemental.onclick();
+    else if(change==='cancel')p.e.cancel.onclick();else p.windowEvents.pagehide();
+    assert.equal(popup.messages[0].data.type,'ftx-materials-photo-cancelled',change);
+    offerMaterialPhoto(p,new Blob(['{}']));assert.equal(p.e.photoEvidenceFiles.children.length,0,change);
+  }
+  const p=await pageModule();p.e.openPhoto.onclick();offerMaterialPhoto(p,new Blob(['{}']));const previous=[...p.live];
+  p.e.openPhoto.onclick();assert.equal(p.e.photoEvidenceFiles.children.length,0);assert.ok(previous.every(u=>!p.live.has(u)));
+});
+test('material photo return refuses invalid replacements and shares supplemental budgets without fallback',async()=>{
+  for(const records of [null,new Blob(['x'.repeat(16*1024*1024+1)])]) {
+    const p=await pageModule();p.select('measurements');p.e.body.files=[new Blob([new Uint8Array([1])])];p.e.body.handlers.change();
+    p.e.openPhoto.onclick();offerMaterialPhoto(p,records);p.e.supplementalConsent.checked=true;await p.e.bodyCheck.onclick();
+    assert.match(p.e.error.textContent,/Photo return refused/);assert.equal(p.current().messages.length,0);
+    p.e.clearSupplemental.onclick();await p.e.bodyCheck.onclick();assert.equal(p.current().messages.at(-1).measurementSources,undefined);
+  }
+  const p=await pageModule();p.select('measurements');p.e.body.files=[new Blob([new Uint8Array([1])])];p.e.body.handlers.change();
+  p.e.openPhoto.onclick();offerMaterialPhoto(p,new Blob(['{}']));p.e.supplementalFiles.files=Array.from({length:8},()=>new Blob(['{}']));
+  p.e.supplementalConsent.checked=true;await p.e.bodyCheck.onclick();assert.match(p.e.error.textContent,/at most 8/);assert.equal(p.current().messages.length,0);
+  p.e.supplementalFiles.files.pop();await p.e.bodyCheck.onclick();assert.equal(JSON.parse(p.current().messages.at(-1).measurementSources).length,8);p.emit(materialBodyCheck());
+  p.e.clearSupplemental.onclick();p.e.supplementalFiles.files=[];p.e.openPhoto.onclick();offerMaterialPhoto(p,new Blob([new Uint8Array([0xc0,0xaf])]));
+  p.e.supplementalConsent.checked=true;const before=p.current().messages.length;await p.e.bodyCheck.onclick();
+  assert.equal(p.current().messages.length,before);assert.equal(p.e.error.hidden,false);
+});
+test('material photo return preserves previous evidence when a popup is blocked',async()=>{
+  const p=await pageModule();p.e.openPhoto.onclick();offerMaterialPhoto(p,new Blob(['{}']));const retained=[...p.live];
+  p.window.open=()=>null;p.e.openPhoto.onclick();assert.match(p.e.error.textContent,/popup blocked/);assert.ok(retained.every(u=>p.live.has(u)));assert.equal(p.e.photoEvidenceFiles.children.length,1);
+});
 // Transport/display double only. Actual compiled-model/native checks are separate.
 function materialBodyCheck(imported=false) {
   const row={target_mm:100,body_mm:100.0004,residual_mm:100.0004-100,sigma_mm:7.5,effective_sigma_mm:7.5,normalized_residual:(100.0004-100)/7.5};

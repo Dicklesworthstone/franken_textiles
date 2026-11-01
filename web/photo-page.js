@@ -4,6 +4,10 @@ let sourceUrls = [], resultUrls = [], draftUrls = [];
 let pointSource = null;
 let importedOptions = null;
 let photoRecords = null, workbenchTransfer = null;
+const materialsOrigin = new URL(import.meta.url).origin;
+let materialsToken = new URL(window.location.href).searchParams.get("materialsReturn");
+let materialsTarget = materialsToken && /^[0-9a-f]{32}$/.test(materialsToken) && materialsOrigin !== "null" ? window.opener : null;
+$("returnMaterials").hidden = !materialsTarget;
 let cameraWorker = null, cameraTicket = 0, cameraBusy = false, cameraResult = null, generatedCalibration = null;
 const cameraUrls = [];
 const status = text => {$("status").textContent=text;};
@@ -42,6 +46,7 @@ function controls() {
   $("analyze").disabled=busy || cameraBusy || !$("photo").files.length || (charuco && !$("sheet").files.length);
   $("measure").disabled=busy || cameraBusy || scale?.ok !== true || pending.length>0;
   $("openWorkbench").disabled=busy || cameraBusy || photoRecords===null;
+  $("returnMaterials").disabled=busy || cameraBusy || photoRecords===null || !materialsTarget;
   $("pointFile").disabled=!bitmap || scale?.ok!==true;
   $("draftFile").disabled=cameraBusy || !bitmap || scale?.ok!==true;
   $("saveDraft").disabled=busy || cameraBusy || !bitmap || scale?.ok!==true || pending.length>0;
@@ -436,13 +441,35 @@ $("openWorkbench").onclick=()=>{
   workbenchTransfer={target,token,records:photoRecords};
   status("Workbench opened. Choose primary measurements and confirm the same wearer before checking.");
 };
+$("returnMaterials").onclick=()=>{
+  if(busy || cameraBusy || !photoRecords || !materialsTarget) return;
+  if(materialsTarget.closed) {status("Material Workbench closed. Download the photo records instead.");return;}
+  if(workbenchTransfer && !workbenchTransfer.target.closed) {status("Finish the pending Workbench handoff first.");return;}
+  workbenchTransfer={target:materialsTarget,token:materialsToken,records:photoRecords};
+  materialsTarget.postMessage({type:"ftx-photo-records-offer",token:materialsToken},materialsOrigin);
+  status("Returning current photo records to Material Workbench…");
+};
 window.addEventListener("message",event=>{
-  const transfer=workbenchTransfer,origin=new URL(import.meta.url).origin,m=event.data;
+  const m=event.data;
+  if(materialsTarget && event.origin===materialsOrigin && event.source===materialsTarget && m?.token===materialsToken &&
+    ["ftx-materials-photo-cancelled","ftx-materials-photo-received"].includes(m.type)) {
+    if(workbenchTransfer?.target===materialsTarget) workbenchTransfer=null;
+    materialsTarget=null;materialsToken=null;window.opener=null;controls();
+    status(m.type==="ftx-materials-photo-received" ? "Photo records received by Material Workbench. Review them there and confirm the same wearer." :
+      "Material Workbench cancelled this return. Reopen the photo tool there or download the current records.");return;
+  }
+  const transfer=workbenchTransfer,origin=new URL(import.meta.url).origin;
   if(!transfer || event.origin!==origin || event.source!==transfer.target ||
     m?.type!=="ftx-photo-records-ready" || m.token!==transfer.token) return;
   transfer.target.postMessage(transfer.records ? {type:"ftx-photo-records",token:transfer.token,records:transfer.records} :
     {type:"ftx-photo-records-cancelled",token:transfer.token},origin);
   workbenchTransfer=null;
 });
-window.addEventListener("pagehide",()=>{withdrawCamera(); withdraw(true);});
+window.addEventListener("pagehide",()=>{
+  if(materialsTarget) {
+    materialsTarget.postMessage({type:"ftx-photo-records-cancelled",token:materialsToken},materialsOrigin);
+    materialsTarget=null;materialsToken=null;window.opener=null;
+  }
+  withdrawCamera(); withdraw(true);
+});
 controls();

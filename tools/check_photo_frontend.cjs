@@ -77,7 +77,7 @@ class Element {
   getContext(){return {drawImage(){},beginPath(){},moveTo(){},lineTo(){},closePath(){},stroke(){},arc(){},fill(){}};}
 }
 const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text);return {name,size:bytes.length,arrayBuffer:async()=>bytes.buffer};};
-async function photoPage({decode}={}) {
+async function photoPage({decode,materialsToken=null}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
   for(const id of ['pointFile','optionsFile','draftFile'])if(e[id])e[id].type='file';e.points.type='textarea';
@@ -93,11 +93,12 @@ async function photoPage({decode}={}) {
   LocalURL.createObjectURL=blob=>{const u=`blob:${++serial}`;urls.set(u,blob);return u;};
   LocalURL.revokeObjectURL=u=>{assert.equal(urls.delete(u),true);};
   const bitmap=()=>({width:1600,height:1200,close(){closed.push(this);}});
+  const openerMessages=[],opener={closed:false,postMessage:(data,origin)=>openerMessages.push({data,origin})};
   const context=vm.createContext({Worker,URL:LocalURL,Blob,TextDecoder,JSON,Number,Set,Uint8Array,
     createImageBitmap:decode || (async()=>bitmap()),
     document:{getElementById:id=>{assert.ok(e[id],`missing photo control ${id}`);return e[id];},createElement:()=>new Element()},
     crypto:{getRandomValues:a=>a.fill(7)},
-    window:{addEventListener:(name,fn)=>{windowEvents[name]=fn;},open:url=>{
+    window:{opener,location:{href:'https://unit.invalid/photo.html'+(materialsToken?'?materialsReturn='+materialsToken:'')},addEventListener:(name,fn)=>{windowEvents[name]=fn;},open:url=>{
       const messages=[],target={closed:false,postMessage:(data,origin)=>messages.push({data,origin})};
       popups.push({url,target,messages});return target;
     }},
@@ -122,7 +123,7 @@ async function photoPage({decode}={}) {
     e.cameraImages.files=[file('first pixels','first.png'),file('second pixels','second.png')];e.cameraMode.handlers.change();
   }
   async function calibrate(report=cameraReport()){await e.cameraRun.onclick();const w=current();await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(report)});return w;}
-  return {e,workers,urls,closed,current,select,analyze,measure,scaleResult,bitmap,selectCamera,calibrate,windowEvents,popups};
+  return {e,workers,urls,closed,current,select,analyze,measure,scaleResult,bitmap,selectCamera,calibrate,windowEvents,popups,opener,openerMessages};
 }
 
 test('photo records handoff transfers only the current exact measurement snapshot once to its own tab',async()=>{
@@ -145,6 +146,31 @@ test('photo records handoff transfers only the current exact measurement snapsho
   assert.equal(stale.messages[0].data.type,'ftx-photo-records-cancelled');
 });
 
+test('photo material return offers only a current exact snapshot to its initiating session',async()=>{
+  const token='ab'.repeat(16),p=await photoPage({materialsToken:token});assert.equal(p.e.returnMaterials.hidden,false);assert.equal(p.e.returnMaterials.disabled,true);
+  p.select();await p.analyze();await p.measure();const raw=p.e.report.textContent;p.e.returnMaterials.onclick();
+  assert.equal(p.openerMessages[0].data.type,'ftx-photo-records-offer');p.e.returnMaterials.onclick();assert.equal(p.openerMessages.length,1);
+  for(const [origin,source] of [['https://foreign.invalid',p.opener],['https://unit.invalid',{}]]) {
+    p.windowEvents.message({origin,source,data:{type:'ftx-photo-records-ready',token}});assert.equal(p.openerMessages.length,1);
+  }
+  p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-photo-records-ready',token}});
+  assert.equal(await p.openerMessages[1].data.records.text(),raw);
+  p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-materials-photo-received',token}});
+  assert.equal(p.e.returnMaterials.disabled,true);assert.match(p.e.status.textContent,/received by Material Workbench/);
+  p.e.returnMaterials.onclick();assert.equal(p.openerMessages.length,2);
+});
+test('photo material return withdraws changed snapshots and closes the one-use return on cancellation or exit',async()=>{
+  const token='ab'.repeat(16),p=await photoPage({materialsToken:token});p.select();await p.analyze();await p.measure();
+  p.e.returnMaterials.onclick();p.e.points.handlers.input();
+  p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-photo-records-ready',token}});
+  assert.equal(p.openerMessages[1].data.type,'ftx-photo-records-cancelled');
+  p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-materials-photo-cancelled',token}});
+  assert.equal(p.e.returnMaterials.disabled,true);assert.match(p.e.status.textContent,/cancelled this return/);
+  const exited=await photoPage({materialsToken:token});exited.windowEvents.pagehide();assert.equal(exited.openerMessages[0].data.type,'ftx-photo-records-cancelled');
+  const closed=await photoPage({materialsToken:token});closed.select();await closed.analyze();await closed.measure();closed.opener.closed=true;
+  closed.e.returnMaterials.onclick();assert.equal(closed.openerMessages.length,0);assert.match(closed.e.status.textContent,/closed/);
+  assert.equal((await photoPage()).e.returnMaterials.hidden,true);
+});
 test('photo controls retain exact local documents and explicitly asserted capture settings',async()=>{
   const p=await photoPage();p.select();await p.analyze();
   const m=p.current().messages[0];

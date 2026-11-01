@@ -73,6 +73,14 @@ reset association; **Clear additional measurements** explicitly returns to prima
 Refused supplements remain selected until corrected or cleared. PHOTO_ESTIMATED and MODEL_FIT
 remain distinct from direct measurements, and neither added evidence nor a computed body proves fit.
 
+**Measure a photo for this wearer** opens the local photo tool while keeping this session's pattern,
+material choices, primary measurements and model. After measuring, choose **Return records to
+Material Workbench**, then review the original photo-record download and confirm the same wearer
+here. Returned records share the eight-file/16 MiB supplemental budget and ordinary fusion path.
+Changing the primary measurements, model or pattern cancels a pending return. Closing the photo
+tab or returning refused evidence blocks its use until cleared or replaced; no old photo is reused.
+**Clear additional measurements** removes the returned snapshot and any manually selected supplements.
+
 **Check body against measurement targets** runs the existing body-check engine without a garment,
 material binding or fit contract. Select the model and measurements, or associate an accepted
 image-fit report explicitly. Supplemental files use the ordinary fusion path. The table retains
