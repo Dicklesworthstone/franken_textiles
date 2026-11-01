@@ -232,7 +232,7 @@ It does not replace the inspected material selection. Freeze selections &amp; bi
 <div id="boundSummary"></div><div id="bindFiles" class="links"></div>
 </section></div>
 <section><h2>3. Recompute supported consumers</h2>
-<p>All operations below use the current bound pattern. Each checks its own missing-data and geometry constraints; changing inputs withdraws affected outputs immediately.</p>
+<p>The body check uses only its selected body evidence. Garment operations use the current bound pattern. Each checks its own missing-data and geometry constraints; changing inputs withdraws affected outputs immediately.</p>
 <div class="grid"><div>
 <h3>Fit, exports and mechanical drape</h3>
 <label>Measurements JSON <input id="measurements" type="file" accept=".json,application/json"></label>
@@ -250,7 +250,7 @@ use their own evidence. Added records do not establish readiness or physical fit
 <button id="exports" data-command="exports" disabled>Validate &amp; regenerate exports</button>
 <label>Local converted body model (.ftxbody) <input id="body" type="file" accept=".ftxbody"></label>
 <p id="receivedBodyNote" class="note" hidden></p><div id="receivedBodyFiles" class="links"></div>
-<details><summary>Reuse an accepted image-fit shape for this drape</summary>
+<details><summary>Reuse an accepted image-fit shape for body checks and draping</summary>
 <label>Accepted fit JSON <input id="bodyFitFile" type="file" accept=".json,application/json"></label>
 <button id="clearBodyFit" type="button" disabled>Clear accepted fit and use tape fitting</button>
 <label><input id="bodyFitConsent" type="checkbox"> I associate this accepted fit with the current wearer</label>
@@ -260,6 +260,10 @@ image-frame poses are not garment poses. A refused report or start never falls b
 Current measurements remain the independent export and readiness evidence. Model predictions and a successful
 drape do not establish physical fit. Body-dependent studies below have an explicit source choice.</p>
 </details>
+<button id="bodyCheck" data-command="bodyCheck" disabled>Check body against measurement targets</button>
+<p class="note">Needs the body model and measurements, or an explicitly associated accepted fit. No garment or
+material binding is needed. Comparisons use the model's measurement pose; drape angle and contact remain separate.
+Predictions remain MODEL_FIT. Differences, missing sections and a successful check do not establish readiness or physical fit.</p>
 <label><input id="selfContact" type="checkbox" checked> Enable cloth self-contact (requires unlike-material pair evidence)</label>
 <button id="fold" data-command="fold" disabled>Re-drape on this body</button>
 </div><div>

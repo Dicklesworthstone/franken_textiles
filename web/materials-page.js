@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "stockIdentities", "stockPrice", "cutJob", "price", "sew"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "treatment", "vapor", "calibrate",
-  "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode"];
+  "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode", "bodyCheck"];
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
@@ -31,7 +31,7 @@ for (const op of operations) {
     stripHistory: "Strip loading and recovery", vaporSurface: "Vapor transfer on this drape",
     stripFit: "Clamped-strip identification", outfit: "Imported joint outfit", cutJob: "Complete mixed cutting job",
     stockIdentities: "Exact physical-stock identities", stockPrice: "Whole-item finite-stock prices",
-    garmentcode: "Imported GarmentCode pattern — review required" })[op] || op;
+    garmentcode: "Imported GarmentCode pattern — review required", bodyCheck: "Body target comparison" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
   section.append(title, summary, comparison, links); $("outputs").append(section);
@@ -93,6 +93,8 @@ function controls() {
     $("study").disabled = true; $("scenario").disabled = true;
   }
   $("exports").disabled ||= !has("measurements") || !has("fit");
+  $("bodyCheck").disabled ||= !has("body") || (!has("measurements") && !has("bodyFitFile")) ||
+    (has("bodyFitFile") && !$("bodyFitConsent").checked);
   $("fold").disabled ||= !has("measurements") || !has("fit") || !has("body");
   $("fold").disabled ||= has("bodyFitFile") && !$("bodyFitConsent").checked;
   $("clearBodyFit").disabled = !has("bodyFitFile");
@@ -182,6 +184,35 @@ const state = outcome => outcome?.status === "available" ? "Available" :
   outcome?.status === "not_requested" ? "Not requested" : outcome?.status === "refused" ?
   `Refused: ${outcome.refusal?.message || "See report"}` : "Unavailable";
 const metric = value => typeof value === "number" && Number.isFinite(value) ? String(value) : "Unknown";
+function bodyCheckResult(parent, report) {
+  const body = report.body, imported = body.shape_source?.kind === "accepted_multi_frame_fit";
+  const note = document.createElement("p");
+  note.textContent = (imported ? "Accepted image-fit shape reused without refitting. " : "Body fitted to the supplied targets. ") +
+    "Predictions are MODEL_FIT. Targets may include priors. No cloth was simulated; these differences do not change measurement readiness or establish physical fit.";
+  parent.append(note);
+  const rows = imported ? body.measurement_comparison || [] :
+    Object.entries(body.fit?.tape || {}).map(([name, row]) => ({ name, ...row }));
+  const t = table(parent, "Model predictions compared with supplied targets", ["Target", "Target mm", "Body mm (MODEL_FIT)",
+    "Body − target mm", "Supplied σ mm", ...(imported ? [] : ["Fit scale mm", "Residual / fit scale"])]);
+  const signed = value => typeof value === "number" && Number.isFinite(value) ? (value > 0 ? "+" : "") + value : "Unavailable";
+  for (const row of rows) cells(t, [row.name, metric(row.target_mm), metric(row.body_mm), signed(row.residual_mm),
+    row.sigma_mm == null ? "Not supplied" : metric(row.sigma_mm),
+    ...(imported ? [] : [metric(row.effective_sigma_mm), signed(row.normalized_residual)])]);
+  if (!rows.length) { const empty = document.createElement("p"); empty.textContent = "No supplied tape targets to compare."; parent.append(empty); }
+  const unavailable = body.tape_evaluation?.unavailable_fields;
+  if (Array.isArray(unavailable) && unavailable.length) {
+    const missing = document.createElement("p"); missing.textContent = "Unavailable model predictions: " + unavailable.join(", ") + ". No missing section is inferred."; parent.append(missing);
+  }
+  if (body.tape_evaluation?.status === "UNAVAILABLE") {
+    const failed = document.createElement("p"); failed.textContent = "Model tape evaluation unavailable: " +
+      (body.tape_evaluation.reason || "See the original report."); parent.append(failed);
+  }
+  if (!imported) {
+    const scale = document.createElement("p"); scale.textContent = "Fit scale is the larger of supplied uncertainty and the existing fitting tolerance. Scaled residuals are diagnostics, not confidence intervals."; parent.append(scale);
+  }
+  return { body_source: imported ? "Accepted shape, no refit" : "Tape-fitted MODEL_FIT shape",
+    model_mass_kg: body.mass_kg, fit_iterations: body.fit?.iterations, cloth_simulated: report.cloth_simulated };
+}
 const vaporMetric = (result, name) => metric(result?.[name]) +
   (result?.reported_bounds?.[name] ? `; reported range [${result.reported_bounds[name].map(metric).join(", ")}]` : "");
 function vaporBoundsNote(parent, result, label = "Vapor source bounds") {
@@ -3360,6 +3391,7 @@ function show(op, msg) {
     if (op === "cutJob") cuttingJobComparison(op, s.comparison,
       [{ key: "Current bound pattern", cutting_job: { status: "available", result: r } }], false);
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
+      op === "bodyCheck" ? bodyCheckResult(s.comparison, r) :
       op === "calibrate" ? calibrationResult(s.comparison, r) :
       op === "stripHistory" ? stripHistoryResult(s.comparison, r) :
       ["stripAcquisition", "stripExperiment", "stripFit"].includes(op) ? stripResult(s.comparison, op, r) :
@@ -3580,6 +3612,16 @@ async function execute(op) {
       msg.selection = $("selection").value; msg.temperatureC = Number($("thermalPointTemperature").value);
     }
     else if (op === "thermalHistory") msg.thermalRequest = await read("thermalRequest");
+    else if (op === "bodyCheck") {
+      if (!has("measurements") && $("supplementalFiles").files.length) throw Error("Choose primary measurements before adding evidence.");
+      msg.measurements = has("measurements") ? await measurementInput(msg) : "{}";
+      if (has("bodyFitFile")) {
+        if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before checking.");
+        msg.bodyFit = await read("bodyFitFile"); msg.bodyFitConsent = true;
+      }
+      if (!has("measurements") && !has("bodyFitFile")) throw Error("Choose measurements or an associated accepted fit before checking.");
+      msg.bytes = await read("body", true);
+    }
     else if (op === "garmentcode") {
       msg.source = await readGarmentcode("garmentcodeSource");
       if (has("garmentcodeAnnotations")) msg.annotations = await readGarmentcode("garmentcodeAnnotations");
@@ -3718,7 +3760,7 @@ function resetPatternInput(keepImport = false) {
   defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
   outfitTargets.clear();
   combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
-  invalidate(["bind", ...boundOperations, "study", "scenario", "outfit", ...(keepImport ? [] : ["garmentcode"])]);
+  invalidate(["bodyCheck", "bind", ...boundOperations, "study", "scenario", "outfit", ...(keepImport ? [] : ["garmentcode"])]);
   $("patternName").textContent = "No pattern loaded.";
   $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
   base.textContent = "Pattern default (preserve explicit piece choices)"; $("target").append(base);
@@ -3848,13 +3890,13 @@ for (const [id, operation] of [["compressionRequest", "pressure"], ["compression
 function supplementalChanged(resetConsent) {
   if (resetConsent) $("supplementalConsent").checked = false;
   $("bodyFitConsent").checked = false;
-  invalidate(["exports", "fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies("measurements")], true);
+  invalidate(["bodyCheck", "exports", "fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies("measurements")], true);
 }
 $("supplementalFiles").addEventListener("change", () => supplementalChanged(true));
 $("supplementalConsent").addEventListener("change", () => supplementalChanged(false));
 $("clearSupplemental").onclick = () => { $("supplementalFiles").value = ""; supplementalChanged(true); };
-for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
-  body:["fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
+for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
+  body:["bodyCheck","fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
@@ -3874,19 +3916,19 @@ $("bodyFitFile").addEventListener("change", () => {
   ++roundRead; roundToken = null; window.opener = null; roundFiles.delete("bodyFitFile");
   showReceivedBody();
   $("bodyFitConsent").checked = false;
-  invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies("bodyFitFile")], true);
+  invalidate(["bodyCheck", "fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies("bodyFitFile")], true);
 });
 for (const id of ["bodyFitConsent", "bodyArmDeg"]) {
   $(id).addEventListener(id === "bodyArmDeg" ? "input" : "change", () => {
     ++roundRead; roundToken = null; window.opener = null;
-    invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
+    invalidate([...(id === "bodyFitConsent" ? ["bodyCheck"] : []), "fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
   });
 }
 $("clearBodyFit").onclick = () => {
   ++roundRead; roundToken = null; window.opener = null;
   $("bodyFitFile").value = ""; roundFiles.delete("bodyFitFile"); $("bodyFitConsent").checked = false;
   showReceivedBody();
-  invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies("bodyFitFile")], true);
+  invalidate(["bodyCheck", "fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies("bodyFitFile")], true);
 };
 $("studyOnBody").addEventListener("change", () => invalidate(["study"], true));
 $("studyBodySource").addEventListener("change", () => invalidate(["scenario", ...($("studyOnBody").checked ? ["study"] : [])], true));

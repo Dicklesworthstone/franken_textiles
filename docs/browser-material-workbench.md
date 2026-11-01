@@ -73,7 +73,16 @@ reset association; **Clear additional measurements** explicitly returns to prima
 Refused supplements remain selected until corrected or cleared. PHOTO_ESTIMATED and MODEL_FIT
 remain distinct from direct measurements, and neither added evidence nor a computed body proves fit.
 
-The remaining operations consume this same bound pattern:
+**Check body against measurement targets** runs the existing body-check engine without a garment,
+material binding or fit contract. Select the model and measurements, or associate an accepted
+image-fit report explicitly. Supplemental files use the ordinary fusion path. The table retains
+unrounded model/target differences, supplied uncertainty, fitting scales and unavailable sections;
+accepted shapes are compared without refitting. Downloads preserve the exact report, measurement
+document and optional original accepted report. Body/evidence/association edits withdraw results.
+The comparison uses the model's measurement pose; drape angle and contact controls remain separate.
+MODEL_FIT predictions and a successful check do not change readiness or establish physical fit.
+
+The garment operations consume this same bound pattern:
 
 | Operation | Additional local inputs | Existing authority and output |
 |---|---|---|

@@ -124,7 +124,7 @@ self.onmessage = async ({ data: msg }) => {
     budget(msg);
     if (msg.measurementSources !== undefined) {
       if (msg.measurementConsent !== true) throw Error("Associate additional measurements with this same wearer explicitly.");
-      if (!["exports", "fold", "scenario"].includes(msg.type) && !(msg.type === "study" && msg.onBody)) {
+      if (!["exports", "fold", "scenario", "bodyCheck"].includes(msg.type) && !(msg.type === "study" && msg.onBody)) {
         throw Error("Additional measurements require a consumer using the selected body evidence.");
       }
       if (typeof msg.measurementSources !== "string") throw Error("Additional measurements must be original JSON text strings.");
@@ -418,6 +418,26 @@ self.onmessage = async ({ data: msg }) => {
         files = [file("pattern.json", result.pattern_json), file("material-bindings.json", raw),
           file("material-changes.json", msg.changes), file("original-pattern.json", msg.pattern)];
         break;
+      case "bodyCheck": {
+        if (typeof ftx.inspect_body !== "function") throw Error("Rebuild web/pkg: missing body-target check.");
+        if (typeof msg.measurements !== "string" || new TextEncoder().encode(msg.measurements).byteLength > 16 * 1024 * 1024) {
+          throw Error("Body-check measurements must be JSON text of at most 16 MiB.");
+        }
+        if (msg.bodyFit != null) {
+          if (typeof msg.bodyFit !== "string" || new TextEncoder().encode(msg.bodyFit).byteLength > 16 * 1024 * 1024) {
+            throw Error("Accepted body-fit report must be JSON text of at most 16 MiB.");
+          }
+          if (msg.bodyFitConsent !== true) throw Error("Associate the accepted fit with this wearer before checking.");
+        }
+        const model = new ftx.WebBody(new Uint8Array(msg.bytes));
+        try { raw = ftx.inspect_body(model, msg.measurements, msg.bodyFit ?? undefined); }
+        finally { model.free(); }
+        result = json(raw);
+        if (result.schema !== "ftx-body-check/1" || result.cloth_simulated !== false || !result.body) throw Error("Incomplete body check; no current result published.");
+        files = [file("body_check.json", raw), file("measurements.json", msg.measurements)];
+        if (msg.bodyFit != null) files.push(file("body_fit.json", msg.bodyFit));
+        break;
+      }
       case "fold": {
         const imported = msg.bodyFit != null;
         if (imported) {

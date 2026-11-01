@@ -1171,6 +1171,132 @@ async function pageModule({roundToken=null}={}) {
   return { e, current, workers, ready, select, emit, load, inspect, bind, live, blobs, windowEvents,
     opener,openerMessages,hasOpener:()=>!!window.opener };
 }
+// Transport/display double only. Actual compiled-model/native checks are separate.
+function materialBodyCheck(imported=false) {
+  const row={target_mm:100,body_mm:100.0004,residual_mm:100.0004-100,sigma_mm:7.5,effective_sigma_mm:7.5,normalized_residual:(100.0004-100)/7.5};
+  return {schema:'ftx-body-check/1',cloth_simulated:false,measurements_sha256:'evidence-lock',body:{
+    provenance:'MODEL_FIT',model_sha256:'model-lock',mass_kg:10.0003,tape_evaluation:{unavailable_fields:['missing_section']},
+    ...(imported?{shape_source:{kind:'accepted_multi_frame_fit'},measurement_comparison:[{name:'chest',...row}]}:{fit:{iterations:4,tape:{chest:row}}})}};
+}
+test('material body check needs only body evidence and displays original precision without readiness or cloth claims',async()=>{
+  const p=await pageModule();assert.equal(p.e.bodyCheck.disabled,true);
+  const measurements=' {"wearer":{"age_months":30},"fused":{"chest":{"value":100.0}}}\n';
+  p.select('measurements',measurements);p.e.measurements.handlers.change();
+  p.e.body.files=[new Blob([new Uint8Array([1,2,3])])];p.e.body.handlers.change();
+  assert.equal(p.e.bodyCheck.disabled,false);assert.equal(p.e.fold.disabled,true);assert.equal(p.e.bind.disabled,true);
+  await p.e.bodyCheck.onclick();const msg=p.current().messages.at(-1);
+  assert.equal(msg.type,'bodyCheck');assert.equal(msg.measurements,measurements);assert.equal(msg.pattern,undefined);assert.equal(msg.fit,undefined);
+  assert.deepEqual([...new Uint8Array(msg.bytes)],[1,2,3]);
+  const report=materialBodyCheck(),raw=' '+JSON.stringify(report)+'\n';p.emit(report,[{name:'body_check.json',text:raw},{name:'measurements.json',text:measurements}]);
+  const s=section(p,'Body target comparison'),display=visibleText(s);
+  for(const value of ['MODEL_FIT','100.0004','+'+String(100.0004-100),'7.5','missing_section','No cloth','not confidence intervals'])assert.ok(display.includes(value),value);
+  const file=descendants(s).find(el=>el.download==='body_check.json');assert.equal(await p.blobs.get(file.href).text(),raw);
+  const old=[...p.live];p.e.measurements.handlers.change();assert.equal(s.hidden,true);assert.ok(old.every(url=>!p.live.has(url)));
+});
+test('material body check preserves accepted-only sources, requires association and never falls back after a bad replacement',async()=>{
+  const p=await pageModule();p.e.body.files=[new Blob([new Uint8Array([1])])];p.e.body.handlers.change();
+  const accepted=' {"schema":"ftx-body-fit/1","seed":18446744073709551615,"x":-0.0}\n';
+  p.e.bodyFitFile.files=[new Blob([accepted])];p.e.bodyFitFile.handlers.change();assert.equal(p.e.bodyCheck.disabled,true);
+  await p.e.bodyCheck.onclick();assert.equal(p.current().messages.length,0);assert.match(p.e.error.textContent,/Associate/);
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();p.e.bodyArmDeg.value='invalid';
+  assert.equal(p.e.bodyCheck.disabled,false);await p.e.bodyCheck.onclick();const msg=p.current().messages.at(-1);
+  assert.equal(msg.measurements,'{}');assert.equal(msg.bodyFit,accepted);assert.equal(msg.bodyFitConsent,true);assert.equal(msg.armDeg,undefined);
+  const report=materialBodyCheck(true);report.body.tape_evaluation={status:'UNAVAILABLE',reason:'Synthetic section evaluation refusal'};
+  report.body.measurement_comparison[0].body_mm=null;report.body.measurement_comparison[0].residual_mm=null;
+  p.emit(report,[{name:'body_fit.json',text:accepted}]);
+  const s=section(p,'Body target comparison');assert.match(visibleText(s),/without refitting/);assert.equal(visibleText(s).includes('Residual / fit scale'),false);
+  assert.match(visibleText(s),/Model tape evaluation unavailable: Synthetic section evaluation refusal/);
+  assert.match(visibleText(s),/Unknown/);assert.match(visibleText(s),/Unavailable/);
+  const count=p.current().messages.length;p.e.bodyFitFile.files=[new Blob(['{'])];p.e.bodyFitFile.handlers.change();
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();await p.e.bodyCheck.onclick();
+  assert.equal(p.current().messages.length,count);assert.equal(s.hidden,true);assert.equal(p.e.error.hidden,false);
+  p.e.bodyFitFile.files=[];p.e.clearBodyFit.onclick();assert.equal(p.e.bodyCheck.disabled,true);
+  p.select('measurements');p.e.measurements.handlers.change();assert.equal(p.e.bodyCheck.disabled,false);
+});
+test('material body check cancels superseded reads and withdraws results when wearer sources change',async()=>{
+  for(const change of ['body','measurements','supplemental','accepted','association','pattern','cancel']) {
+    const p=await pageModule();p.select('measurements');const delay=deferred();let reading=false;
+    p.e.body.files=[{size:1,arrayBuffer:()=>{reading=true;return delay.promise;}}];p.e.body.handlers.change();
+    const old=p.current(),running=p.e.bodyCheck.onclick();while(!reading)await new Promise(resolve=>setImmediate(resolve));
+    if(change==='body')p.e.body.handlers.change();
+    else if(change==='measurements')p.e.measurements.handlers.change();
+    else if(change==='supplemental')p.e.supplementalFiles.handlers.change();
+    else if(change==='accepted')p.e.bodyFitFile.handlers.change();
+    else if(change==='association')p.e.bodyFitConsent.handlers.change();
+    else if(change==='pattern')await p.load();
+    else p.e.cancel.onclick();
+    p.ready();delay.resolve(new ArrayBuffer(1));await running;assert.equal(old.dead,true,change);assert.equal(old.messages.length,0,change);assert.equal(p.current().messages.length,0,change);
+  }
+  const p=await pageModule();p.select('measurements');p.e.body.files=[new Blob([new Uint8Array([1])])];p.e.body.handlers.change();
+  await p.e.bodyCheck.onclick();const old=p.current(),request=old.messages.at(-1).request;
+  p.e.body.handlers.change();p.ready();old.emit({type:'result',request,result:materialBodyCheck(),files:[{name:'stale.json',text:'{}'}]});
+  assert.equal(section(p,'Body target comparison').hidden,true);assert.equal(p.live.size,0);
+});
+test('material body check worker preserves exact sources, frees every model and refuses invalid accepted inputs without fallback',async()=>{
+  const calls=[],freed=[],raw=' '+JSON.stringify(materialBodyCheck())+'\n';let fail=false;
+  const bindings={default:()=>Promise.resolve(),WebBody:class{constructor(){calls.push('model');}free(){freed.push('model');}},
+    inspect_body:(_body,...args)=>{calls.push(args);if(fail)throw Error('accepted shape refused');return raw;}};
+  const w=await workerModule({bindings}),measurements=' {"value":1.0}\n',accepted=' {"seed":18446744073709551615,"value":-0.0}\n';
+  for(const bodyFit of [undefined,accepted]) {
+    const r=await w.send({type:'bodyCheck',request:180,measurements,bodyFit,bodyFitConsent:true,bytes:new ArrayBuffer(1)});
+    assert.equal(r.type,'result',r.message);assert.deepEqual(calls.at(-1),[measurements,bodyFit]);
+    assert.equal(r.files[0].text,raw);assert.equal(r.files[1].text,measurements);
+    assert.equal(r.files.find(file=>file.name==='body_fit.json')?.text,bodyFit);
+  }
+  assert.equal(freed.length,2);fail=true;
+  const rejected=await w.send({type:'bodyCheck',measurements,bodyFit:accepted,bodyFitConsent:true,bytes:new ArrayBuffer(1)});
+  assert.equal(rejected.type,'error');assert.match(rejected.message,/accepted shape refused/);assert.equal(rejected.files,undefined);assert.equal(freed.length,3);
+  const count=calls.length;
+  for(const bodyFit of [accepted,42,'x'.repeat(16*1024*1024+1)]) {
+    const refused=await w.send({type:'bodyCheck',measurements,bodyFit,bodyFitConsent:false,bytes:new ArrayBuffer(1)});
+    assert.equal(refused.type,'error');assert.equal(refused.files,undefined);assert.equal(calls.length,count);
+  }
+  for(const measurements of [undefined,{},'x'.repeat(16*1024*1024+1)]) {
+    const refused=await w.send({type:'bodyCheck',measurements,bytes:new ArrayBuffer(1)});
+    assert.equal(refused.type,'error');assert.match(refused.message,/measurements must be JSON text/);assert.equal(calls.length,count);
+  }
+  const missing=await workerModule({bindings:{default:()=>Promise.resolve()}});
+  assert.match((await missing.send({type:'bodyCheck',measurements,bytes:new ArrayBuffer(1)})).message,/missing body-target/);
+});
+test('material body check uses the same supplemental fusion before checking and saving evidence',async()=>{
+  const p=await pageModule();p.select('measurements',' {"primary":1.0}\n');p.e.body.files=[new Blob([new Uint8Array([1])])];p.e.body.handlers.change();
+  const source=' \r\n{"photo_seed":18446744073709551615}\r\n';p.e.supplementalFiles.files=[new Blob([source])];p.e.supplementalFiles.handlers.change();
+  await p.e.bodyCheck.onclick();assert.equal(p.current().messages.length,0);assert.match(p.e.error.textContent,/same wearer/);
+  p.e.supplementalConsent.checked=true;p.e.supplementalConsent.handlers.change();await p.e.bodyCheck.onclick();const msg=p.current().messages.at(-1);
+  assert.equal(msg.measurementSources,JSON.stringify([source]));const calls=[],merged=' {"records":[],"measurement_imports":'+JSON.stringify([source])+'}\n';
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),measurement_file:body=>{assert.equal(JSON.parse(body).supplemental_measurements[0],source);return merged;},
+    WebBody:class{free(){}},inspect_body:(_model,measurements)=>{calls.push(measurements);return JSON.stringify(materialBodyCheck());}}});
+  const result=await w.send(msg);assert.equal(result.type,'result',result.message);assert.deepEqual(calls,[merged]);
+  assert.equal(result.files.find(file=>file.name==='measurements.json').text,merged);
+});
+test('compiled WASM material body check matches the native fitter without a garment or cloth solve',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_BODY_MODEL||!process.env.FTX_BODY_CHECK_DIR},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const bytes=fs.readFileSync(process.env.FTX_BODY_MODEL),measurements=fs.readFileSync(path.join(process.env.FTX_BODY_CHECK_DIR,'measurements.json'),'utf8');
+    const native=JSON.parse(fs.readFileSync(path.join(process.env.FTX_BODY_CHECK_DIR,'native.stdout'),'utf8')).result.body;
+    const hash=data=>require('node:crypto').createHash('sha256').update(data).digest('hex');
+    const model=new ftx.WebBody(bytes);let expected;
+    try{expected=ftx.inspect_body(model,measurements,undefined);}finally{model.free();}
+    const p=await pageModule(),w=await workerModule({bindings:ftx});p.select('measurements',measurements);p.e.body.files=[new Blob([bytes])];p.e.body.handlers.change();
+    assert.equal(p.e.bodyCheck.disabled,false);await p.e.bodyCheck.onclick();const response=await w.send(p.current().messages.at(-1));
+    assert.equal(response.type,'result',response.message);assert.equal(response.files[0].text,expected);assert.equal(response.files[1].text,measurements);p.current().emit(response);
+    const report=response.result,body=report.body;assert.equal(report.schema,'ftx-body-check/1');assert.equal(report.cloth_simulated,false);
+    assert.equal(report.measurements_sha256,hash(measurements));assert.equal(body.model_sha256,hash(bytes));assert.equal(body.provenance,'MODEL_FIT');
+    // The CLI intentionally rounds displayed readings/mass; its residuals and fit scales are raw.
+    // Keep the existing cross-target relative tolerance rather than rounding those diagnostics.
+    const close=(a,b)=>assert.ok(Math.abs(a-b)<=1e-9*(1+Math.abs(b)),`${a} != ${b}`);
+    assert.equal(body.fit.iterations,native.fit.iterations);assert.deepEqual(Object.keys(body.fit.tape),Object.keys(native.fit.tape));
+    for(const [name,row] of Object.entries(body.fit.tape))for(const key of ['target_mm','residual_mm','sigma_mm','effective_sigma_mm','normalized_residual']) {
+      const value=native.fit.tape[name][key];if(value===null)assert.equal(row[key],null);else close(row[key],value);
+    }
+    for(const [name,value] of Object.entries(body.readings_mm))assert.equal(Math.round(value*10)/10,native.readings_mm[name]);
+    assert.equal(Math.round(body.mass_kg*100)/100,native.mass_kg);assert.equal(body.age_years,native.age_years);assert.equal(body.gender,native.gender);
+    const displayed=visibleText(section(p,'Body target comparison'));assert.ok(displayed.includes(String(body.fit.tape.head.residual_mm)));assert.match(displayed,/MODEL_FIT/);
+    const refused=await w.send({type:'bodyCheck',measurements,bodyFit:'{"schema":"ftx-body-fit/1","status":"REJECTED"}',bodyFitConsent:true,bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+    assert.equal(refused.type,'error');assert.equal(refused.files,undefined);assert.match(refused.message,/not an accepted Anny shape/);
+  });
 test('material supplemental measurements preserve original text and require fresh wearer association', async () => {
   const p=await pageModule();await p.load();await p.bind();p.select('measurements');p.select('fit');
   const raw=' \r\n{"schema":"fabric-measurements/1","seed":18446744073709551615,"x":-0.0}\r\n';
