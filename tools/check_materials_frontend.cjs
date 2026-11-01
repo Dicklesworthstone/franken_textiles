@@ -784,6 +784,44 @@ test('nondefault garment pose or settling requires a configured engine instead o
     assert.deepEqual(w.freed,[]);
   }
 });
+test('compiled WASM configured drapes reproduce native posture, settling and exact viewer without changing legacy standing',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_POSE_CAPTURE_DIR},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    assert.equal(typeof ftx.fold_up_configured,'function','Current pose controls need their actual configured engine');
+    const dir=process.env.FTX_POSE_CAPTURE_DIR,load=name=>fs.readFileSync(path.join(dir,name),'utf8');
+    const bytes=fs.readFileSync(path.join(dir,'model.ftxbody')),pattern=load('pattern.json'),measurements=load('m.json'),bodyFit=load('accepted.json');
+    const expected=JSON.parse(load('leg-fold/sim_report.json'));
+    for(const field of ['pattern','wall_s'])delete expected[field]; // CLI-only carrier fields; retain the shared measurements hash.
+    const w=await workerModule({bindings:ftx}),input={type:'fold',request:320,pattern,measurements,fit:'{"points":[]}',
+      bodyFit,bodyFitConsent:true,armDeg:35,bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),
+      selfContactMm:0,legs:'seated',legFraction:0.001,maxSettleSteps:2};
+    const result=await w.send(input);assert.equal(result.type,'result',result.message);assert.deepEqual(JSON.parse(result.reportText),expected);
+    assert.equal(result.viewer,load('leg-fold/fold_viewer.html'));
+    assert.equal(result.files.find(file=>file.name==='body_fit.json').text,bodyFit);
+    assert.equal(result.files.find(file=>file.name==='sim_report.json').text,result.reportText);
+    const settings=JSON.parse(result.files.find(file=>file.name==='fold-settings.json').text);
+    assert.deepEqual(settings,{self_contact_mm:0,two_start:false,arm_abduction_deg:35,legs:'seated',leg_fraction:0.001,max_settle_steps:2});
+    assert.equal(result.result.body.shape_source.refitted,false);assert.equal(result.result.body.legs,'seated');
+    assert.equal(result.result.numerical.settling.max_steps,2);
+    const model=new ftx.WebBody(bytes),priorProgress=globalThis.ftxProgress;let legacy,configured;
+    globalThis.ftxProgress=()=>{};
+    try {
+      legacy=ftx.fold_up_with_body_fit(model,pattern,measurements,input.fit,0,false,bodyFit,35);
+      configured=ftx.fold_up_configured(model,pattern,measurements,input.fit,'{}',bodyFit);
+      assert.equal(configured.report(),legacy.report());assert.equal(configured.viewer(),legacy.viewer());
+    }finally{
+      configured?.free();legacy?.free();model.free();
+      if(priorProgress===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=priorProgress;
+    }
+    const moving=await w.send({type:'scenario',request:321,pattern,studyRequest:load('study.json'),scenarioRequest:load('scenario.json'),
+      measurements:load('body-input.json'),bytes:input.bytes});
+    assert.equal(moving.type,'result',moving.message);assert.deepEqual(JSON.parse(moving.files[0].text),JSON.parse(load('leg-motion-report.json')));
+    for(const options of [{legs:'unknown'},{legFraction:1.01},{maxSettleSteps:257},{bodyFit:'{"status":"REJECTED"}'}]) {
+      const refused=await w.send({...input,...options});assert.equal(refused.type,'error');assert.equal(refused.files,undefined);
+    }
+  });
 test('material worker rejects blocked exports, initialization failure and further work after a WASM trap', async () => {
   const e = await workerModule({ failExport: true });
   assert.equal((await e.send({ type: 'exports', pattern: '{}', fit: '{}', measurements: '{}' })).type, 'error');
