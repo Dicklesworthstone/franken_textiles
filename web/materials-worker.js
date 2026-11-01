@@ -446,17 +446,36 @@ self.onmessage = async ({ data: msg }) => {
           }
           if (msg.bodyFitConsent !== true) throw Error("Associate the accepted fit with this wearer before draping.");
           if (!Number.isFinite(msg.armDeg) || msg.armDeg < 0 || msg.armDeg > 180) throw Error("Supply a finite drape arm angle from 0 to 180 degrees.");
-          if (typeof ftx.fold_up_with_body_fit !== "function") throw Error("Rebuild web/pkg: missing accepted-body drape engine.");
+        }
+        const settings = { self_contact_mm: msg.selfContactMm ?? 0, two_start: false,
+          arm_abduction_deg: imported ? msg.armDeg : 35, legs: msg.legs ?? "standing",
+          leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0 };
+        if (!["standing", "seated", "squat"].includes(settings.legs) ||
+            !Number.isFinite(settings.leg_fraction) || settings.leg_fraction < 0 || settings.leg_fraction > 1) {
+          throw Error("Choose standing, seated or squat legs and a finite leg fraction from 0 to 1.");
+        }
+        if (!Number.isSafeInteger(settings.max_settle_steps) || settings.max_settle_steps < 0 || settings.max_settle_steps > 256) {
+          throw Error("Maximum extra settling steps must be a whole number from 0 to 256.");
+        }
+        const configured = settings.legs !== "standing" || settings.leg_fraction !== 1 || settings.max_settle_steps !== 0;
+        if (configured && typeof ftx.fold_up_configured !== "function") {
+          throw Error("Rebuild web/pkg: missing configured pose and settling drape engine.");
+        }
+        if (!configured && imported && typeof ftx.fold_up_with_body_fit !== "function") {
+          throw Error("Rebuild web/pkg: missing accepted-body drape engine.");
         }
         const model = new ftx.WebBody(new Uint8Array(msg.bytes));
         try {
-          const fold = imported
+          const fold = configured
+            ? ftx.fold_up_configured(model, msg.pattern, msg.measurements, msg.fit, JSON.stringify(settings), imported ? msg.bodyFit : undefined)
+            : imported
             ? ftx.fold_up_with_body_fit(model, msg.pattern, msg.measurements, msg.fit, msg.selfContactMm, false, msg.bodyFit, msg.armDeg)
             : ftx.fold_up(model, msg.pattern, msg.measurements, msg.fit, msg.selfContactMm, false);
           try { reportText = fold.report(); result = json(reportText); viewer = fold.viewer(); }
           finally { fold.free(); }
         } finally { model.free(); }
         files = [file("sim_report.json", reportText), file("fold_viewer.html", viewer, "text/html")];
+        if (configured) files.push(file("fold-settings.json", JSON.stringify(settings)));
         if (msg.measurementSources !== undefined) files.push(file("measurements.json", msg.measurements));
         if (imported) files.push(file("body_fit.json", msg.bodyFit));
         break;

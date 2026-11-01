@@ -362,6 +362,619 @@ fn condensing_fixture(
     history
 }
 
+fn finite_fixture(loading: f64, step: f64, capacitance: f64, pressure: f64) -> SurfaceHistory {
+    let mut history = condensing_fixture(loading, step, vec![pressure], vec![20.]);
+    let mut request = history.water.as_ref().unwrap().request.clone();
+    request.schema = "ftx-textile-surface-water/5".into();
+    request.outside_vapor_pressure_pa.clear();
+    request.vapor_reservoir = Some(serde_json::from_value(json!({
+        "schema":"ftx-textile-vapor-reservoir/1", "model":"isothermal_constant_vapor_capacitance/1",
+        "vapor_capacitance_kg_pa":capacitance, "initial_vapor_mass_kg":capacitance*pressure,
+        "temperature_c":20., "pressure_domain_pa":[0.,10000.],
+        "max_iterations":128, "mass_tolerance_kg":1e-12,
+        "source":{"reference":"test:finite-vapor-inventory","accessed_on":"2026-10-31",
+            "note":"Synthetic well-mixed isothermal vapor capacitance; no measured atmosphere or textile claim"},
+        "evidence":"estimate", "allow_estimates":true,
+        "method":"Artificial constant pressure capacitance and retained effective vapor enthalpy",
+        "qualification":"Synthetic storage over the complete pressure domain, with the existing constant-latent plus cp_liquid effective sensible convention; no fog or inferred ideal-gas law"
+    })).unwrap());
+    request.validate(1).unwrap();
+    let water = history.water.as_mut().unwrap();
+    water.vapor_reservoir =
+        Some(reservoir::State::new(request.vapor_reservoir.as_ref().unwrap()).unwrap());
+    water.request = request.clone();
+    history.request.surface_water = Some(request);
+    history
+}
+
+fn constant_wet_pressure(history: &mut SurfaceHistory, pressure: f64) {
+    let mut request = history.water.as_ref().unwrap().request.clone();
+    request.wet_vapor_pressure_pa = vec![[-20., pressure], [80., pressure]];
+    request.validate(1).unwrap();
+    history.water.as_mut().unwrap().request = request.clone();
+    history.request.surface_water = Some(request);
+}
+
+fn finite_snapshot(history: &SurfaceHistory) -> Value {
+    history
+        .water
+        .as_ref()
+        .unwrap()
+        .snapshot(history.state.temperature_c(), true, 0.)
+        .unwrap()
+}
+
+fn finite_energy_balance(history: &SurfaceHistory) {
+    let water = history.water.as_ref().unwrap();
+    let report = finite_snapshot(history);
+    let gas = &report["vapor_reservoir"];
+    let energy = |key: &str| gas[key].as_f64().unwrap();
+    near(
+        energy("vapor_enthalpy_change_j") + energy("isothermal_heat_removed_j"),
+        water.latent_j + water.exported_sensible_j
+            - water.condensation_latent_j
+            - water.incoming_vapor_sensible_j.iter().sum::<f64>(),
+    );
+    near(
+        history.stored_j
+            + water.liquid_stored_j
+            + energy("vapor_enthalpy_change_j")
+            + energy("isothermal_heat_removed_j")
+            + water.drained_sensible_j.iter().sum::<f64>()
+            - water.supplied_sensible_j.iter().sum::<f64>(),
+        history.inside_j - history.outside_j,
+    );
+    assert!(energy("mass_balance_error_kg").abs() < 1e-12);
+    assert!(energy("enthalpy_balance_error_j").abs() < 1e-10);
+}
+
+#[test]
+fn finite_vapor_pressure_and_original_thermal_step_match_independent_one_cell_equations() {
+    let mut history = finite_fixture(0.1, 1., 1e-5, 1000.);
+    constant_wet_pressure(&mut history, 4000.);
+    // k=A/(Ret*L)=.5/(10*10000). Eliminate the shared reservoir equation independently.
+    let k = 5e-6;
+    let expected_pressure = (1e-5 * 1000. + k * 4000.) / (1e-5 + k);
+    let evaporated = 1e-5 * (expected_pressure - 1000.);
+    let remaining = 0.05 - evaporated;
+    let expected_temperature = 20. - evaporated * 10000. / (100. + remaining * 1000. + 1. / 1.2);
+    advance(&mut history, 0.5, 1.).unwrap();
+    let result = finite_snapshot(&history);
+    assert_eq!(result["schema"], "ftx-textile-surface-water-result/5");
+    near(
+        result["vapor_reservoir"]["vapor_pressure_pa"]
+            .as_f64()
+            .unwrap(),
+        expected_pressure,
+    );
+    near(result["remaining_liquid_kg"].as_f64().unwrap(), remaining);
+    near(history.state.temperature_c()[0][0], expected_temperature);
+    near(
+        result["vapor_reservoir"]["elapsed_seconds"]
+            .as_f64()
+            .unwrap(),
+        1.,
+    );
+    assert!(
+        result["vapor_reservoir"]["pressure_trials"]
+            .as_u64()
+            .unwrap()
+            > 3
+    );
+    assert!(result["request"].get("outside_vapor_pressure_pa").is_none());
+    finite_energy_balance(&history);
+}
+
+#[test]
+fn finite_vapor_condensation_cannot_overdraw_even_under_a_loose_mass_tolerance() {
+    for initial_pressure in [0., 1000.] {
+        let mut history = finite_fixture(0., 1., 1e-9, initial_pressure);
+        constant_wet_pressure(&mut history, 0.);
+        for request in [
+            history.request.surface_water.as_mut().unwrap(),
+            &mut history.water.as_mut().unwrap().request,
+        ] {
+            request.vapor_reservoir.as_mut().unwrap().mass_tolerance_kg = 1.;
+        }
+        advance(&mut history, 0.5, 1.).unwrap();
+        let result = finite_snapshot(&history);
+        let gas = &result["vapor_reservoir"];
+        let expected_pressure = 1e-9 * initial_pressure / (1e-9 + 5e-6);
+        near(
+            gas["vapor_pressure_pa"].as_f64().unwrap(),
+            expected_pressure,
+        );
+        let initial = 1e-9 * initial_pressure;
+        let condensed = result["condensed_liquid_kg"].as_f64().unwrap();
+        assert!(condensed <= initial);
+        assert!(
+            (gas["remaining_vapor_mass_kg"].as_f64().unwrap() + condensed - initial).abs() < 1e-18
+        );
+        if initial_pressure == 0. {
+            assert_eq!(condensed, 0.);
+            assert_eq!(gas["remaining_vapor_mass_kg"], 0.);
+        } else {
+            assert!(condensed > 0.999 * initial);
+            assert!(gas["vapor_pressure_pa"].as_f64().unwrap() < 1.);
+        }
+        finite_energy_balance(&history);
+    }
+}
+
+#[test]
+fn finite_vapor_dryout_uses_one_implicit_event_clock_and_refines_to_the_continuous_limit() {
+    let mut coarse = finite_fixture(0.015, 1., 1e-5, 1000.);
+    constant_wet_pressure(&mut coarse, 4000.);
+    let plan = coarse
+        .water
+        .as_ref()
+        .unwrap()
+        .plan(&coarse.model, &coarse.state, &geometry(0.5), 0, 1.)
+        .unwrap();
+    // At depletion: p=p0+M/C=1750, hence dt=M/[k*(pw-p)]=2/3 s.
+    near(plan.seconds, 2. / 3.);
+    assert_eq!(plan.remaining, vec![0.]);
+    near(plan.evaporated[0], 0.0075);
+    advance(&mut coarse, 0.5, 1.).unwrap();
+    assert_eq!(coarse.water.as_ref().unwrap().dryout_events, 1);
+    near(
+        finite_snapshot(&coarse)["vapor_reservoir"]["elapsed_seconds"]
+            .as_f64()
+            .unwrap(),
+        1.,
+    );
+    finite_energy_balance(&coarse);
+
+    let continuous = -2.0_f64 * 0.75_f64.ln();
+    let mut errors = Vec::new();
+    for subdivisions in [4, 16, 64, 256] {
+        let mut history = finite_fixture(0.015, 1., 1e-5, 1000.);
+        constant_wet_pressure(&mut history, 4000.);
+        let mut elapsed = 0.;
+        let boundary = super::super::boundary(history.request.boundaries[0]).unwrap();
+        while history.water.as_ref().unwrap().remaining[0] > 0. {
+            assert!(elapsed < 1.);
+            let plan = history
+                .water
+                .as_ref()
+                .unwrap()
+                .plan(
+                    &history.model,
+                    &history.state,
+                    &geometry(0.5),
+                    0,
+                    1. / f64::from(subdivisions),
+                )
+                .unwrap();
+            let dt = plan.seconds;
+            let heat: Vec<_> = plan.liquid_heat_j.iter().map(|&q| vec![q]).collect();
+            let mut next = history
+                .model
+                .advance_with_liquid(
+                    &history.state,
+                    &geometry(0.5),
+                    dt,
+                    &[boundary],
+                    None,
+                    &heat,
+                    &plan.capacity_j_k,
+                )
+                .unwrap();
+            history
+                .water
+                .as_mut()
+                .unwrap()
+                .accept(&history.state, &mut next, plan, 0)
+                .unwrap();
+            history.state = next.state;
+            elapsed += dt;
+        }
+        near(
+            finite_snapshot(&history)["vapor_reservoir"]["elapsed_seconds"]
+                .as_f64()
+                .unwrap(),
+            elapsed,
+        );
+        errors.push((elapsed - continuous).abs());
+    }
+    assert!(
+        errors.windows(2).all(|pair| pair[1] < 0.4 * pair[0]),
+        "{errors:?}"
+    );
+    assert!(errors[3] < 0.001, "{errors:?}");
+
+    // More liquid than the chamber can receive at equilibrium cannot all evaporate. A bracket
+    // probe above the balanced pressure may exceed liquid loading; only its balanced endpoint
+    // enters the original source-qualified thermal solve.
+    let mut equilibrium = finite_fixture(0.1, 20., 1e-5, 1000.);
+    constant_wet_pressure(&mut equilibrium, 4000.);
+    advance(&mut equilibrium, 0.5, 20.).unwrap();
+    assert!(equilibrium.water.as_ref().unwrap().remaining[0] > 0.02);
+    assert_eq!(equilibrium.water.as_ref().unwrap().dryout_events, 0);
+    finite_energy_balance(&equilibrium);
+}
+
+#[test]
+fn finite_vapor_joins_hot_and_cold_textile_patches_through_one_inventory() {
+    let base = finite_fixture(0.04, 0.25, 1e-5, 4010.);
+    let source = base.model.snapshot()["columns"][0]["layers"][0].clone();
+    let selection: Selection = serde_json::from_value(json!({
+        "id":source["authored"]["id"], "record":source["authored"],
+        "allow_estimates":true,"expected_sha256":source["sha256"]
+    }))
+    .unwrap();
+    let record = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    }
+    .resolve(&selection)
+    .unwrap();
+    let model = Surface::new(
+        vec![DryThermalModel::new(vec![record.clone()], vec![], 1).unwrap()],
+        6,
+        vec![
+            Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+            Patch {
+                vertices: [3, 4, 5],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+        ],
+    )
+    .unwrap();
+    let positions = [
+        Vec3::ZERO,
+        Vec3::new(1., 0., 0.),
+        Vec3::new(0., 1., 0.),
+        Vec3::new(2., 0., 0.),
+        Vec3::new(3., 0., 0.),
+        Vec3::new(2., 1., 0.),
+    ];
+    let request = base.request.surface_water.as_ref().unwrap().clone();
+    let water =
+        Water::from_materials(request, &model, &[record], &["sheet".into()], &[0, 0], 20.).unwrap();
+    let mut history = SurfaceHistory::new(base.request, model).unwrap();
+    history.water = Some(water);
+    let boundary = super::super::boundary(history.request.boundaries[0]).unwrap();
+    // Create an actual source-admitted unequal thermal field with equal/opposite energy, so its
+    // total initial dry/liquid enthalpy is still the uniform-20 reference used by the history.
+    history.state = history
+        .model
+        .advance_with_liquid(
+            &history.state,
+            &positions,
+            0.1,
+            &[boundary],
+            None,
+            &[vec![100.], vec![-100.]],
+            &[0., 0.],
+        )
+        .unwrap()
+        .state;
+    near(
+        history.state.temperature_c()[0][0] + history.state.temperature_c()[1][0],
+        40.,
+    );
+    let pressures: Vec<_> = history
+        .state
+        .temperature_c()
+        .iter()
+        .map(|t| {
+            history
+                .water
+                .as_ref()
+                .unwrap()
+                .request
+                .pressure(t[0])
+                .unwrap()
+        })
+        .collect();
+    let expected =
+        (1e-5 * 4010. + 0.25 * 5e-6 * (pressures[0] + pressures[1])) / (1e-5 + 0.25 * 1e-5);
+    history
+        .advance(&positions, 0.25, 0, 0, None, None, None)
+        .unwrap();
+    let water = history.water.as_ref().unwrap();
+    assert!(water.evaporated[0] > 0. && water.condensed[1] > 0.);
+    assert_eq!(water.condensed[0], 0.);
+    assert_eq!(water.evaporated[1], 0.);
+    near(
+        finite_snapshot(&history)["vapor_reservoir"]["vapor_pressure_pa"]
+            .as_f64()
+            .unwrap(),
+        expected,
+    );
+    near(water.evaporated[0], 0.25 * 5e-6 * (pressures[0] - expected));
+    near(water.condensed[1], 0.25 * 5e-6 * (expected - pressures[1]));
+    finite_energy_balance(&history);
+}
+
+#[test]
+fn finite_vapor_selects_early_cold_patch_dryout_before_a_later_rewetting_root() {
+    let base = finite_fixture(0.04, 10., 5e-6, 0.);
+    let source = base.model.snapshot()["columns"][0]["layers"][0].clone();
+    let selection: Selection = serde_json::from_value(json!({
+        "id":source["authored"]["id"], "record":source["authored"],
+        "allow_estimates":true,"expected_sha256":source["sha256"]
+    }))
+    .unwrap();
+    let record = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    }
+    .resolve(&selection)
+    .unwrap();
+    let model = Surface::new(
+        vec![DryThermalModel::new(vec![record.clone()], vec![], 1).unwrap()],
+        6,
+        vec![
+            Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+            Patch {
+                vertices: [3, 4, 5],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+        ],
+    )
+    .unwrap();
+    let positions = [
+        Vec3::ZERO,
+        Vec3::new(1., 0., 0.),
+        Vec3::new(0., 1., 0.),
+        Vec3::new(2., 0., 0.),
+        Vec3::new(3., 0., 0.),
+        Vec3::new(2., 1., 0.),
+    ];
+    let boundary = super::super::boundary(base.request.boundaries[0]).unwrap();
+    let initial = model.initial(20.).unwrap();
+    let old = model
+        .advance_with_liquid(
+            &initial,
+            &positions,
+            0.1,
+            &[boundary],
+            None,
+            &[vec![100.], vec![-100.]],
+            &[0., 0.],
+        )
+        .unwrap()
+        .state;
+    let mut request = base.request.surface_water.as_ref().unwrap().clone();
+    let mut hot = request.bindings["sheet"].clone();
+    hot.initial_liquid_kg_m2 = 1.;
+    let mut cold = hot.clone();
+    cold.initial_liquid_kg_m2 = 0.0001;
+    request.bindings = BTreeMap::from([("hot".into(), hot), ("cold".into(), cold)]);
+    let supply = request.supply.as_mut().unwrap();
+    let zero = supply.bindings["sheet"].clone();
+    supply.bindings = BTreeMap::from([("hot".into(), zero.clone()), ("cold".into(), zero)]);
+    request.maximum_liquid_loading_kg_m2 = 2.;
+    request.qualification = "Synthetic fixed Ret and dry thermal laws over the explicit pressure table and [0,2] kg per reference square metre; no physical textile assertion".into();
+    request.wet_vapor_pressure_pa = vec![
+        [-20., 0.],
+        [old.temperature_c()[1][0], 1000.],
+        [old.temperature_c()[0][0], 10000.],
+        [80., 10000.],
+    ];
+    let water = Water::from_materials(
+        request,
+        &model,
+        &[record],
+        &["hot".into(), "cold".into()],
+        &[0, 1],
+        20.,
+    )
+    .unwrap();
+
+    // In units of 1000 Pa and .005 kg: C=k_hot=k_cold=1, wet pressures 10 and 1,
+    // cold mass .01. The first event solves p²-1.02p+.11=0. A later full-duration
+    // root 110/21 also balances vapor, but has incorrectly skipped cold depletion and rewetting.
+    let expected_pressure = 1000. * (1.02_f64 - (1.02_f64 * 1.02 - 0.44).sqrt()) / 2.;
+    let expected_time = 0.01 / (1. - expected_pressure / 1000.);
+    let later = water
+        .plan_at_pressure(&model, &old, &positions, 0, 10., 110000. / 21., false)
+        .unwrap();
+    near(later.seconds, 10.);
+    assert!(later.condensed[1] > 0.);
+    near(
+        later.evaporated.iter().sum::<f64>() - later.condensed.iter().sum::<f64>(),
+        5e-6 * (110000. / 21.),
+    );
+
+    let first = water.plan(&model, &old, &positions, 0, 10.).unwrap();
+    near(first.seconds, expected_time);
+    assert!(first.seconds < 0.02);
+    assert_eq!(first.remaining[1], 0.);
+    assert!(first.remaining[0] > 0.);
+    assert_eq!(first.condensed, vec![0., 0.]);
+    near(first.evaporated[1], 0.00005);
+    near(
+        first.evaporated.iter().sum::<f64>() / 5e-6,
+        expected_pressure,
+    );
+}
+
+#[test]
+fn finite_vapor_requires_independent_source_and_preserves_existing_reservoir_modes() {
+    let finite = finite_fixture(0.1, 1., 1e-5, 1000.);
+    let input = serde_json::to_value(finite.request.surface_water.as_ref().unwrap()).unwrap();
+    for case in 0..12 {
+        let mut invalid = input.clone();
+        match case {
+            0 => invalid["vapor_reservoir"]["source"]["note"] = json!(""),
+            1 => invalid["vapor_reservoir"]["allow_estimates"] = json!(false),
+            2 => invalid["vapor_reservoir"]["vapor_capacitance_kg_pa"] = json!(0.),
+            3 => invalid["vapor_reservoir"]["initial_vapor_mass_kg"] = json!(-1.),
+            4 => invalid["vapor_reservoir"]["pressure_domain_pa"] = json!([2000., 3000.]),
+            5 => invalid["vapor_reservoir"]["max_iterations"] = json!(0),
+            6 => invalid["vapor_reservoir"]["mass_tolerance_kg"] = json!(0.),
+            7 => invalid["vapor_reservoir"]["temperature_c"] = json!(21.),
+            8 => invalid["outside_vapor_pressure_pa"] = json!([1000.]),
+            9 => invalid["vapor_reservoir"] = Value::Null,
+            10 => invalid["supply"] = Value::Null,
+            _ => invalid["condensation"] = Value::Null,
+        }
+        let request: Request = serde_json::from_value(invalid).unwrap();
+        assert!(
+            request.validate(1).is_err(),
+            "invalid reservoir case {case}"
+        );
+    }
+    for mut history in [
+        fixture(0.05, 0.1),
+        supplied_fixture(0.05, 0.1, vec![0.], vec![20.]),
+        condensing_fixture(0.05, 0.1, vec![1000.], vec![20.]),
+        with_drainage(
+            condensing_fixture(0.05, 0.1, vec![1000.], vec![20.]),
+            vec![0.],
+        ),
+    ] {
+        let mut with_reservoir = history.request.surface_water.as_ref().unwrap().clone();
+        with_reservoir.vapor_reservoir = finite
+            .request
+            .surface_water
+            .as_ref()
+            .unwrap()
+            .vapor_reservoir
+            .clone();
+        assert!(with_reservoir.validate(1).is_err());
+        advance(&mut history, 0.5, 0.1).unwrap();
+        let result = finite_snapshot(&history);
+        assert!(result.get("vapor_reservoir").is_none());
+        assert!(result["request"].get("vapor_reservoir").is_none());
+    }
+}
+
+#[test]
+fn finite_vapor_iteration_domain_and_late_thermal_failures_roll_back_all_owners() {
+    for case in 0..5 {
+        let mut history = finite_fixture(0.1, 0.1, 1e-5, 1000.);
+        constant_wet_pressure(&mut history, 4000.);
+        match case {
+            0 => {
+                for request in [
+                    history.request.surface_water.as_mut().unwrap(),
+                    &mut history.water.as_mut().unwrap().request,
+                ] {
+                    request.vapor_reservoir.as_mut().unwrap().max_iterations = 1;
+                }
+            }
+            1 => {
+                for request in [
+                    history.request.surface_water.as_mut().unwrap(),
+                    &mut history.water.as_mut().unwrap().request,
+                ] {
+                    request.vapor_reservoir.as_mut().unwrap().pressure_domain_pa = [0., 1050.];
+                }
+            }
+            2 => history = variable_fixture(history, 1, [0.0025; 2], [19.5, 60.]),
+            3 => history.request.max_cell_steps = 1,
+            _ => {
+                history = finite_fixture(0., 1., 1e-5, 6000.);
+                constant_wet_pressure(&mut history, 4000.);
+                for request in [
+                    history.request.surface_water.as_mut().unwrap(),
+                    &mut history.water.as_mut().unwrap().request,
+                ] {
+                    request.maximum_liquid_loading_kg_m2 = 0.001;
+                }
+            }
+        }
+        let before = finite_snapshot(&history);
+        assert!(
+            advance(&mut history, 0.5, 1.).is_err(),
+            "finite refusal case {case}"
+        );
+        assert_eq!(history.state.temperature_c(), &[vec![20.]]);
+        assert_eq!(history.time_s, 0.);
+        assert_eq!(history.thermal_steps, 0);
+        let mut after = finite_snapshot(&history);
+        let probes = after["vapor_reservoir"]["pressure_trials"]
+            .as_u64()
+            .unwrap() as usize;
+        assert_eq!(history.cell_steps, probes * history.model.cells());
+        assert_eq!(probes == 0, case == 3);
+        // Physical inventories, enthalpy and time roll back; work already performed does not.
+        after["vapor_reservoir"]["pressure_trials"] =
+            before["vapor_reservoir"]["pressure_trials"].clone();
+        assert_eq!(after, before);
+    }
+}
+
+#[test]
+fn finite_vapor_pressure_probes_share_heat_budget_and_failed_retries_do_not_refund_them() {
+    let mut history = finite_fixture(0.1, 1., 1e-5, 1000.);
+    constant_wet_pressure(&mut history, 4000.);
+    history.request.max_cell_steps = 4;
+    for _ in 0..2 {
+        assert!(advance(&mut history, 0.5, 1.).is_err());
+        assert_eq!(history.cell_steps, 3);
+        assert_eq!(history.pressure_cell_steps, 3);
+        assert_eq!(history.time_s, 0.);
+        assert_eq!(history.state.temperature_c(), &[vec![20.]]);
+        let report = finite_snapshot(&history);
+        assert_eq!(report["vapor_reservoir"]["pressure_trials"], 3);
+        assert_eq!(report["vapor_reservoir"]["remaining_vapor_mass_kg"], 0.01);
+        assert_eq!(report["remaining_liquid_kg"], 0.05);
+    }
+    history.request.max_cell_steps = 1000;
+    advance(&mut history, 0.5, 1.).unwrap();
+    let probes = finite_snapshot(&history)["vapor_reservoir"]["pressure_trials"]
+        .as_u64()
+        .unwrap() as usize;
+    assert!(probes > 3);
+    assert_eq!(history.thermal_steps, 1);
+    assert_eq!(history.cell_steps, probes + 1);
+    finite_energy_balance(&history);
+}
+
+#[test]
+fn finite_vapor_enthalpy_reference_changes_no_temperature_or_thermostat_heat() {
+    let mut base = finite_fixture(0.1, 0.25, 1e-5, 1000.);
+    constant_wet_pressure(&mut base, 4000.);
+    let mut shifted = base.clone();
+    shifted
+        .request
+        .surface_water
+        .as_mut()
+        .unwrap()
+        .enthalpy_reference_c = 50.;
+    shifted.water.as_mut().unwrap().request.enthalpy_reference_c = 50.;
+    advance(&mut base, 0.5, 1.).unwrap();
+    advance(&mut shifted, 0.5, 1.).unwrap();
+    assert_eq!(base.state.temperature_c(), shifted.state.temperature_c());
+    let a = finite_snapshot(&base);
+    let b = finite_snapshot(&shifted);
+    assert_eq!(
+        a["vapor_reservoir"]["remaining_vapor_mass_kg"],
+        b["vapor_reservoir"]["remaining_vapor_mass_kg"]
+    );
+    near(
+        a["vapor_reservoir"]["isothermal_heat_removed_j"]
+            .as_f64()
+            .unwrap(),
+        b["vapor_reservoir"]["isothermal_heat_removed_j"]
+            .as_f64()
+            .unwrap(),
+    );
+    assert!(
+        a["vapor_reservoir"]["isothermal_heat_removed_j"]
+            .as_f64()
+            .unwrap()
+            < 0.
+    );
+    finite_energy_balance(&base);
+    finite_energy_balance(&shifted);
+}
+
 #[test]
 fn drainage_exports_only_liquid_sensible_heat_and_uses_reference_area() {
     for area in [0.5, 1.] {

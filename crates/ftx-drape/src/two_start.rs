@@ -283,7 +283,7 @@ fn attach(
         .as_object_mut()
         .ok_or_else(|| invalid("alternate report must be an object"))?
         .remove("animation");
-    let comparison = json!({
+    let mut comparison = json!({
         "schema": "ftx-two-start/1", "method": "two_sewing_durations", "sampled_paths": 2,
         "status": if flags.is_empty() { "WITHIN_BOUNDS" } else { "REVIEW_REQUIRED" },
         "policy": policy.json(),
@@ -295,6 +295,9 @@ fn attach(
         "alternate_report": alternate_report, "animation": "primary run only",
         "no_claim": "Two sewing paths, not distinct placements, a statistical confidence interval, a unique-equilibrium proof or real-wearer fit. Bounds are review policy, not calibrated accuracy.",
     });
+    if opts.max_settle_steps > 0 {
+        comparison["shared_settings"]["max_settle_steps"] = json!(opts.max_settle_steps);
+    }
     for f in &flags {
         flag(&mut primary.report, f)?;
     }

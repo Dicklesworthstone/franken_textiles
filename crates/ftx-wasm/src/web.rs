@@ -481,6 +481,47 @@ pub fn fold_up_with_body_fit(
     .map_err(|e| JsError::new(&e))
 }
 
+/// Drape either body source with explicit garment pose and bounded settling settings.
+///
+/// # Errors
+/// Unknown or invalid settings, inconsistent accepted source, or a refused cloth solve.
+#[wasm_bindgen]
+pub fn fold_up_configured(
+    body: &WebBody,
+    pattern: &str,
+    measurements: &str,
+    fit_spec: &str,
+    settings_json: &str,
+    body_fit: Option<String>,
+) -> Result<WebFold, JsError> {
+    let settings: fold::FoldSettings = serde_json::from_str(settings_json)
+        .map_err(|e| JsError::new(&format!("fold settings: {e}")))?;
+    let source = body_fit.as_deref().map(|report| fold::BodyFitSource {
+        model_sha256: &body.source_sha256,
+        report,
+        arm_deg: settings.arm_abduction_deg,
+    });
+    let parse = |s: &str| -> Result<serde_json::Value, JsError> {
+        serde_json::from_str(s).map_err(|e| JsError::new(&e.to_string()))
+    };
+    fold::fold_up_configured(
+        &body.inner,
+        &parse(pattern)?,
+        &parse(measurements)?,
+        &parse(fit_spec)?,
+        settings,
+        source.as_ref(),
+        ftx_progress,
+    )
+    .map(|mut inner| {
+        inner.report["body"]["model_sha256"] = serde_json::json!(body.source_sha256);
+        inner.report["measurements_sha256"] =
+            serde_json::json!(ftx_core::receipt::sha256_hex(measurements.as_bytes()));
+        WebFold { inner }
+    })
+    .map_err(|e| JsError::new(&e))
+}
+
 /// Local source-locked sewing plan, including explicit multi-pass, reverse-feed and backtack recipes.
 ///
 /// # Errors

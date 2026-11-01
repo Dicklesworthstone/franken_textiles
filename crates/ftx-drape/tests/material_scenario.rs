@@ -888,6 +888,63 @@ fn budgets_and_identity_are_checked_before_a_solver_starts() {
     );
 }
 
+#[test]
+fn settling_reserves_its_full_cap_and_reuses_the_production_result() {
+    let form = form();
+    let body = body(&form);
+    let pattern = pattern();
+    let ordinary = scenario();
+    let baseline = Session::new(&ordinary, &body)
+        .unwrap()
+        .evaluate(&pattern, |_| {})
+        .unwrap();
+    let base_frames = ordinary.options.sew_steps
+        + ordinary.options.drape_steps
+        + ftx_drape::animation::FOLD_FRAMES
+        + ftx_drape::animation::ZIP_FRAMES
+        + 4;
+    let base_charge = baseline["charged_vertex_frames"].as_u64().unwrap() as usize;
+    let points = base_charge / base_frames;
+    let mut requested = ordinary.clone();
+    requested.options.max_settle_steps = 4;
+    assert_ne!(
+        Session::new(&ordinary, &body).unwrap().descriptor(),
+        Session::new(&requested, &body).unwrap().descriptor()
+    );
+    requested.max_vertex_frames = base_charge + points * 4 - 1;
+    let mut called = false;
+    let refusal = Session::new(&requested, &body)
+        .unwrap()
+        .evaluate(&pattern, |_| called = true)
+        .unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::BudgetExceeded);
+    assert!(
+        !called,
+        "reserve the complete tail before starting the drape"
+    );
+    requested.max_vertex_frames += 1;
+    let result = Session::new(&requested, &body)
+        .unwrap()
+        .evaluate(&pattern, |_| {})
+        .unwrap();
+    let direct = drape(
+        &pattern,
+        &requested.fit_spec,
+        &body,
+        &requested.options,
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(result["charged_vertex_frames"], base_charge + points * 4);
+    assert_eq!(result["drape"], direct.report);
+    assert_eq!(result["positions_m"], json!(direct.scene.solver.x));
+    requested.options.max_settle_steps = 251;
+    assert_eq!(
+        requested.validate().unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+}
+
 fn motion_scenario() -> Scenario {
     let mut s = scenario();
     s.max_vertex_frames = 2_000_000;

@@ -1,5 +1,18 @@
 # ftx-wasm
 
+**Configured garment drapes.** `fold::fold_up_configured` and the browser export
+`fold_up_configured(body, pattern, measurements, fit_spec, settings_json, body_fit?)`
+accept explicit `self_contact_mm`, `two_start`, `arm_abduction_deg`, `legs`
+(`standing`, `seated`, `squat`), `leg_fraction` (0..=1), and `max_settle_steps` (0..=256).
+Omitted settings mean 0 mm self-contact, one start, 35° arms, standing legs, full leg fraction,
+and no additional settling. Unknown fields and invalid values refuse. Imported body reports remain
+exact source text; the configured arm angle must agree with `BodyFitSource.arm_deg` in Rust calls.
+Tape fitting and nappy calibration keep their reference pose; requested poses change only garment
+placement, collision and display geometry. The bounded settling tail continues the sewn state at
+the original time step, retains its actual duration, and obeys the shared history-law restrictions.
+Legacy fold exports retain their signatures and default behavior. Browser callers require the new
+export for nondefault leg/settling settings, so older bundles cannot silently discard them.
+
 **Purpose.** FrankenTextiles in the browser (plan §15): the page's round behind a thin `wasm-bindgen`
 boundary, replacing the skill's Pyodide page. `page` is the reference's `webapp.py` (`program_info`,
 `form_fields`, `body_file`, `run`): a body from a size chart, tape readings or a measurements file; a

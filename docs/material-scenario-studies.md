@@ -22,15 +22,21 @@ The body input may be a legacy measurement document or an explicit `ftx-scenario
 Legacy measurements keep the existing tape-fit behavior: require `wearer.age_months`, fit once in
 the standard 35-degree straight-arm reference pose, and reuse that shape for every material.
 An explicit request can instead reuse an accepted multi-frame shape **without fitting again**,
-and independently choose the standing straight-arm abduction angle. No material enters body fitting.
+and independently choose arm abduction and leg posture. No material enters body fitting.
 
-## Body evidence and independent standing poses
+## Body evidence and independent poses
 
 `ftx-scenario-body/1` accepts `measurements` (default `{}`), optional `accepted_body_fit`, and
-`arm_abduction_deg` (default 35, finite, inclusive range 0..180). Unknown fields refuse. Omit
+`arm_abduction_deg` (default 35, finite, inclusive range 0..180), `legs` (`standing`, `seated`, or
+`squat`; default `standing`), and `leg_fraction` (finite, inclusive range 0..1; default 1).
+The fraction scales only the selected leg rotations: zero leaves standing legs, one reaches the
+existing complete posture, and intermediate values let the garment follow smaller explicit bends.
+Arms stay at the requested straight-arm abduction. Unknown fields refuse. Omit
 `accepted_body_fit` to perform a tape fit; an explicitly null, rejected or inconsistent report
 refuses instead of falling back. Changing the requested pose never changes the tape-fitting
-reference pose or the accepted shape parameters.
+reference pose or the accepted shape parameters. Nappy occupancy is also calibrated once in its
+fixed reference pose and retained across all requested postures. Omitted posture fields preserve
+the previous standing request serialization and behavior.
 
 To reuse a fit, put the **complete intact `ftx-body-fit/1` report** in `accepted_body_fit`, not its
 filename or the CLI envelope. For example, this creates a new request while retaining the report's
@@ -62,9 +68,9 @@ canonical parsed-JSON digest, and the requested `pose`. A pose change retains th
 but changes the body/scenario identity and reruns cloth and heat. Additional tapes change evidence
 identity without changing an accepted shape. The original `body_input` is retained for replay.
 
-Without `scenario.motion`, these are independent **static standing poses**, not a motion experiment.
-The optional continuation below starts at that selected pose and keeps its shape fixed. Seated/squat
-motion is selected explicitly on its keyframes; the initial garment is still sewn standing. Invalid source/setup results remain
+Without `scenario.motion`, these are independent **static poses**, not a motion experiment.
+The optional continuation below starts at the selected initial pose and keeps its shape fixed.
+Seated/squat motion is selected explicitly on its keyframes. Invalid source/setup results remain
 per-simulation refusals while independent manufacturing results survive. No previous body's drape
 or temperature field is substituted.
 
@@ -174,8 +180,8 @@ movement, recommended garment test duration or an anatomical acceptance case:
 ```
 
 Times are cumulative physical seconds **after the initial drape**, strictly increasing; angles
-are the same standing straight-arm convention as the body input. An unchanged angle at a later
-time is an explicit hold. Endpoint skins are generated once from the exact selected shape and
+use the same straight-arm convention as the body input. An unchanged full pose at a later time
+is an explicit hold. Endpoint skins are generated once from the exact selected shape and
 source-model digest. No tape fit or accepted-shape adjustment occurs between endpoints or materials.
 Collision topology and vertex order must remain unchanged.
 
@@ -204,8 +210,9 @@ occupancy follows the same fixed occupied shape through every endpoint without r
 Between endpoints, the existing transactional motion kernel follows **linear body-vertex chords**,
 using adaptive implicit cloth substeps, relative body/cloth friction and continuous collision checks.
 These chords are not interpolated anatomical joint rotations. Large increments can distort a body
-or refuse; author suitably short source-model pose increments. Body self-intersections are not
-certified. The solver continues the initial cloth's positions, velocities and constitutive history;
+or refuse; author suitably short source-model pose increments. The ordinary geometric surface and
+continuous-collision checks still apply; a requested seated or squat path never falls back to standing.
+The solver continues the initial cloth's positions, velocities and constitutive history;
 it does not place, weld, settle or zero velocities again at each keyframe. Each material alternative
 still begins with a separate fresh initial drape. An unfinished physical-thickness ramp refuses motion.
 
@@ -779,7 +786,7 @@ worker, with cancellation. Load the **original** pattern in section 2 and the st
 section 4; a prior single-preview binding is neither required nor used. For scenarios, also select
 the measurements and converted body in section 3 and the scenario request in section 4. The scenario
 owns its fit/numerical/thermal policy; the separate single-preview controls do not override it.
-For an accepted fit or another standing arm angle, load the optional **body-source request** in
+For an accepted fit or another arm/leg pose, load the optional **body-source request** in
 section 4. It replaces only the scenario's measurement input, not other preview controls; shared
 measurement files are no longer needed for that scenario. Clearing the optional file restores
 legacy tape input. Changing the file withdraws previous results and cancels stale reads/work.
@@ -855,9 +862,10 @@ and target compilation alone is not WASM
 execution parity. Converted anatomical Anny assets were unavailable during this delivery.
 
 `ftx-ms2` stays open for propagated uncertainty, finishing effects and empirical inventory/garment-mass
-acceptance, expanded body/pose policies, two-way thermal coupling, qualified motion objectives and
-physical acceptance of the nominal comparison path. Standing-arm motion continuation is available;
-it does not establish an anatomical or empirical ride-up experiment.
+acceptance, independent body/pose qualification, two-way thermal coupling, qualified motion objectives and
+physical acceptance of the nominal comparison path. Straight-arm and explicitly fractioned seated/squat
+motion continuation are available within the existing geometric admission gates; they do not establish
+an anatomical or empirical ride-up/seat-fit experiment.
 Complete declared pre-finishing assembly accounting is available; it cannot discover an omitted component.
 Synthetic coupons and numerical conservation
 are not measured linen/leather/knit garment validation. No warmth rating, empirical fit,

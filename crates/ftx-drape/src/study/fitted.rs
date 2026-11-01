@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, BodyParams, NappyOccupancy, Pose, SkinMesh, TAPE_FIELDS, Wearer,
+    AnnyModel, BodyFrames, BodyParams, Legs, NappyOccupancy, Pose, SkinMesh, TAPE_FIELDS, Wearer,
     accepted_shape::AcceptedShape, clothing_skin, fit_tape, partial_tape_readings, pose_deltas,
     skin_mesh, tape_targets,
 };
@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use super::{budget, hash, invalid, motion};
 use crate::run::DrapeBody;
 
-/// Body evidence and an independently authored standing pose. No material can alter this request.
+/// Body evidence and an independently authored pose. No material can alter this request.
 /// Legacy measurement documents still select a single tape fit at the standard measurement pose.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,9 +27,18 @@ pub struct BodyRequest {
     /// Intact `ftx-body-fit/1` report for the same model. Invalid receipts never fall back to tape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_body_fit: Option<Value>,
-    /// Standing straight-arm abduction from vertical, degrees in 0..=180. Not a motion trajectory.
+    /// Straight-arm abduction from vertical, degrees in 0..=180. Not a motion trajectory.
     #[serde(default = "default_arm_angle")]
     pub arm_abduction_deg: f64,
+    /// Selected leg posture, independent of arm abduction. Omission preserves standing.
+    #[serde(default, skip_serializing_if = "Legs::is_standing")]
+    pub legs: Legs,
+    /// Fraction of the selected leg rotations, 0..=1. Omission preserves the complete posture.
+    #[serde(
+        default = "full_leg_fraction",
+        skip_serializing_if = "is_full_leg_fraction"
+    )]
+    pub leg_fraction: f64,
 }
 
 fn empty_measurements() -> Value {
@@ -37,6 +46,12 @@ fn empty_measurements() -> Value {
 }
 fn default_arm_angle() -> f64 {
     Pose::A_POSE_DEG
+}
+fn full_leg_fraction() -> f64 {
+    1.0
+}
+fn is_full_leg_fraction(fraction: &f64) -> bool {
+    *fraction == 1.0
 }
 
 impl BodyRequest {
@@ -59,9 +74,14 @@ impl BodyRequest {
                 serde_json::from_value::<Self>(input.clone()).map_err(|e| invalid(e.to_string()))?
             }
             None | Some("fabric-measurements/1") => {
-                if ["accepted_body_fit", "arm_abduction_deg"]
-                    .iter()
-                    .any(|k| input.get(k).is_some())
+                if [
+                    "accepted_body_fit",
+                    "arm_abduction_deg",
+                    "legs",
+                    "leg_fraction",
+                ]
+                .iter()
+                .any(|k| input.get(k).is_some())
                     || input.get("schema").is_some_and(|v| !v.is_string())
                 {
                     return Err(invalid(
@@ -73,6 +93,8 @@ impl BodyRequest {
                     measurements: input.clone(),
                     accepted_body_fit: None,
                     arm_abduction_deg: default_arm_angle(),
+                    legs: Legs::Standing,
+                    leg_fraction: 1.0,
                 }
             }
             _ => {
@@ -99,6 +121,9 @@ impl BodyRequest {
             return Err(invalid(
                 "scenario arm abduction must be finite and in 0..=180 degrees",
             ));
+        }
+        if !(0.0..=1.0).contains(&self.leg_fraction) {
+            return Err(invalid("scenario leg fraction must be finite and in 0..=1"));
         }
         let m = &self.measurements;
         if m.get("schema")
@@ -216,6 +241,8 @@ impl FittedBody {
             measurements: measurements.clone(),
             accepted_body_fit: None,
             arm_abduction_deg: default_arm_angle(),
+            legs: Legs::Standing,
+            leg_fraction: 1.0,
         };
         Self::prepare(model, "", &request)
     }
@@ -242,6 +269,8 @@ impl FittedBody {
             .map_or(&params, |occupied| &occupied.params);
         let mut pose = Pose::drape();
         pose.arm_abduction_deg = Some(request.arm_abduction_deg);
+        pose.legs = request.legs;
+        pose.leg_fraction = request.leg_fraction;
         let rest = model.rest(occupied_params)?;
         let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
         let collision = clothing_skin(model, &posed.vertices)?;
@@ -258,6 +287,13 @@ impl FittedBody {
         }
         report["pose"] =
             json!({"kind":"standing_straight_arm", "arm_abduction_deg":request.arm_abduction_deg});
+        if !request.legs.is_standing() {
+            report["pose"]["kind"] = json!("straight_arm_with_leg_posture");
+            report["pose"]["legs"] = json!(request.legs);
+        }
+        if request.leg_fraction != 1.0 {
+            report["pose"]["leg_fraction"] = json!(request.leg_fraction);
+        }
         report["body_provenance"] = json!("MODEL_FIT");
         report["body_contact_proxy"] = collision.contact_proxy_basis();
         report["physical_validation_claim"] = json!(false);
@@ -378,23 +414,15 @@ impl FittedBody {
         for keyframe in &request.keyframes {
             let mut pose = Pose::drape();
             pose.arm_abduction_deg = Some(keyframe.arm_abduction_deg);
-            let mut deltas = pose_deltas(model, &rest, &pose, 1.0)?;
             if let Some(legs) = keyframe.leg_pose {
-                let leg_pose = Pose {
-                    legs: match legs.posture {
-                        motion::LegPosture::Seated => ftx_body::Legs::Seated,
-                        motion::LegPosture::Squat => ftx_body::Legs::Squat,
-                    },
-                    ..Pose::rest()
+                pose.legs = match legs.posture {
+                    motion::LegPosture::Seated => Legs::Seated,
+                    motion::LegPosture::Squat => Legs::Squat,
                 };
-                let leg_deltas = pose_deltas(model, &rest, &leg_pose, legs.fraction)?;
-                // Arm straightening/abduction stays complete while only the disjoint leg joints
-                // ramp. Reuse the source pose definitions rather than duplicating bone names/angles.
-                for joint in ftx_body::joint_rotations(model, &rest, &leg_pose)? {
-                    deltas[joint.bone] = leg_deltas[joint.bone];
-                }
+                // Scale only the source leg rotations; arm abduction and straightening stay fixed.
+                pose.leg_fraction = legs.fraction;
             }
-            let posed = model.pose(&rest, &deltas)?;
+            let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
             let skin = clothing_skin(model, &posed.vertices)?;
             if skin.triangles != self.collision.triangles
                 || skin.source_vertex != self.collision.source_vertex
@@ -798,6 +826,8 @@ mod tests {
         let mut fitted = FittedBody::prepare(&model, &digest, &request).unwrap();
         let flat = fitted.flat_fit_body(&model, &digest).unwrap();
         request.arm_abduction_deg = 50.0;
+        request.legs = Legs::Seated;
+        request.leg_fraction = 0.05;
         let reposed = FittedBody::prepare(&model, &digest, &request).unwrap();
         assert_ne!(fitted.collision.vertices, reposed.collision.vertices);
         let again = reposed.flat_fit_body(&model, &digest).unwrap();
@@ -857,16 +887,39 @@ mod tests {
         let fitted = FittedBody::prepare(&model, &digest, &req).unwrap();
         let original_report = fitted.report.clone();
         let motion: motion::Request = serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
-            "keyframes":[{"time_s":0.01,"arm_abduction_deg":36.0},
-                {"time_s":0.02,"arm_abduction_deg":37.0}],
+            "keyframes":[{"time_s":0.01,"arm_abduction_deg":36.0,
+                "leg_pose":{"posture":"seated","fraction":0.05}},
+                {"time_s":0.02,"arm_abduction_deg":37.0,
+                "leg_pose":{"posture":"squat","fraction":0.1}}],
             "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000}))
         .unwrap();
         let actual = fitted.motion_path(&model, &digest, &motion).unwrap();
         let mut endpoints = Vec::new();
         for keyframe in &motion.keyframes {
             req.arm_abduction_deg = keyframe.arm_abduction_deg;
+            let legs = keyframe.leg_pose.unwrap();
+            req.legs = match legs.posture {
+                motion::LegPosture::Seated => Legs::Seated,
+                motion::LegPosture::Squat => Legs::Squat,
+            };
+            req.leg_fraction = legs.fraction;
             let posed = FittedBody::prepare(&model, &digest, &req).unwrap();
             assert_eq!(posed.report["shape_sha256"], fitted.report["shape_sha256"]);
+            assert_eq!(posed.report["pose"]["legs"], json!(req.legs));
+            assert_eq!(posed.report["pose"]["leg_fraction"], legs.fraction);
+            assert!(
+                fitted
+                    .collision
+                    .source_vertex
+                    .iter()
+                    .enumerate()
+                    .any(|(i, &source)| {
+                        source < model.data().vertex_bone_indices.len()
+                            && [9, 12].contains(&model.data().vertex_bone_indices[source])
+                            && posed.collision.vertices[i] != fitted.collision.vertices[i]
+                    }),
+                "the fixture must move actual leg-skinned vertices"
+            );
             endpoints.push(posed.collision.vertices);
         }
         let expected = motion::Path::new(&motion, fitted.body().collision, endpoints).unwrap();
@@ -885,7 +938,7 @@ mod tests {
                 .is_err()
         );
         let mut changed = motion.clone();
-        changed.keyframes[0].arm_abduction_deg = 35.5;
+        changed.keyframes[0].leg_pose.as_mut().unwrap().fraction = 0.06;
         assert_ne!(
             actual.sha256(),
             fitted
@@ -1161,7 +1214,10 @@ mod tests {
             json!({"accepted_body_fit":{}}),
             json!({"schema":"ftx-scenario-body/1","accepted_body_fit":null}),
             json!({"schema":"ftx-scenario-body/1","arm_abduction_deg":181}),
-            json!({"schema":"ftx-scenario-body/1","legs":"seated"}),
+            json!({"schema":"ftx-scenario-body/1","legs":"kneeling"}),
+            json!({"schema":"ftx-scenario-body/1","leg_fraction":1.01}),
+            json!({"schema":"ftx-scenario-body/1","leg_fraction":null}),
+            json!({"legs":"seated"}),
             json!({"schema":"ftx-scenario-body/1","measurements":null}),
             json!({"wearer":{"age_months":-1}}),
             json!({"fused":{"waist":{"value_mm":"500"}}}),
@@ -1173,8 +1229,12 @@ mod tests {
         assert_eq!(req.measurements, legacy);
         assert!(req.accepted_body_fit.is_none());
         assert_eq!(req.arm_abduction_deg, 35.0);
+        assert_eq!(req.legs, Legs::Standing);
+        assert_eq!(req.leg_fraction, 1.0);
         let replay = serde_json::to_value(&req).unwrap();
         assert!(replay.get("accepted_body_fit").is_none());
+        assert!(replay.get("legs").is_none());
+        assert!(replay.get("leg_fraction").is_none());
         assert_eq!(BodyRequest::read(&replay).unwrap().measurements, legacy);
     }
 

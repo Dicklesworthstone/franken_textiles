@@ -3,14 +3,15 @@
 //! fit report), with the body model read from bytes the page was given and the fold-up viewer page as text.
 
 use ftx_body::{
-    AnnyData, AnnyModel, BodyFrames, Pose, TAPE_FIELDS, TapeFit, Wearer, clothing_skin, fit_tape,
-    pose_deltas, skin_mesh, tape_targets,
+    AnnyData, AnnyModel, BodyFrames, Legs, Pose, TAPE_FIELDS, TapeFit, Wearer, clothing_skin,
+    fit_tape, pose_deltas, skin_mesh, tape_targets,
 };
 use ftx_drape::{
     run::{DrapeBody, DrapeOptions, drape, viewer},
     two_start::TwoStartOptions,
 };
 use ftx_pattern::Pattern;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 /// The viewer page's template (the pinned renderer and fold-up frames are embedded).
@@ -145,9 +146,10 @@ pub fn fold_up(
         pattern,
         measurements,
         fit_spec,
-        FoldOptions {
+        FoldSettings {
             self_contact_mm,
             two_start,
+            ..FoldSettings::default()
         },
         None,
         progress,
@@ -173,6 +175,38 @@ pub struct FoldOptions {
     pub two_start: bool,
 }
 
+/// Explicit garment pose and bounded continuation, shared by native and browser adapters.
+/// Defaults preserve the ordinary standing drape with no extra settling steps.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FoldSettings {
+    /// Cloth self-contact thickness in millimetres; zero disables self-contact.
+    pub self_contact_mm: f64,
+    /// Compare the default second sewing duration at the same placement.
+    pub two_start: bool,
+    /// Arm angle independent of the leg posture and of the tape-fit reference pose.
+    pub arm_abduction_deg: f64,
+    /// Standing, seated or squat leg rotations on the same fitted shape.
+    pub legs: Legs,
+    /// Fraction of the selected leg rotations, from standing (0) to the full posture (1).
+    pub leg_fraction: f64,
+    /// Maximum extra gravity steps, stopping early only at the shared quiet-window criterion.
+    pub max_settle_steps: usize,
+}
+
+impl Default for FoldSettings {
+    fn default() -> Self {
+        Self {
+            self_contact_mm: 0.0,
+            two_start: false,
+            arm_abduction_deg: Pose::A_POSE_DEG,
+            legs: Legs::Standing,
+            leg_fraction: 1.0,
+            max_settle_steps: 0,
+        }
+    }
+}
+
 /// Drape the exact accepted shape without tape fitting. The model must be array-verified.
 ///
 /// # Errors
@@ -192,8 +226,41 @@ pub fn fold_up_with_body_fit(
         pattern,
         measurements,
         fit_spec,
-        options,
+        FoldSettings {
+            self_contact_mm: options.self_contact_mm,
+            two_start: options.two_start,
+            arm_abduction_deg: source.arm_deg,
+            ..FoldSettings::default()
+        },
         Some(source),
+        progress,
+    )
+}
+
+/// Drape the selected shape with explicit pose and settling settings. If supplied, the accepted
+/// source's arm angle must match the configured pose; its exact report remains authoritative.
+///
+/// # Errors
+/// Invalid settings, an inconsistent accepted source, unavailable geometry or a refused solve.
+pub fn fold_up_configured(
+    model: &AnnyModel,
+    pattern: &Value,
+    measurements: &Value,
+    fit_spec: &Value,
+    settings: FoldSettings,
+    source: Option<&BodyFitSource<'_>>,
+    progress: impl FnMut(&str),
+) -> Result<Fold, String> {
+    if source.is_some_and(|source| source.arm_deg != settings.arm_abduction_deg) {
+        return Err("accepted source arm angle must match the configured garment pose".into());
+    }
+    fold_on_source(
+        model,
+        pattern,
+        measurements,
+        fit_spec,
+        settings,
+        source,
         progress,
     )
 }
@@ -204,15 +271,24 @@ fn fold_on_source(
     pattern: &Value,
     measurements: &Value,
     fit_spec: &Value,
-    options: FoldOptions,
+    options: FoldSettings,
     source: Option<&BodyFitSource<'_>>,
     mut progress: impl FnMut(&str),
 ) -> Result<Fold, String> {
-    let FoldOptions {
+    let FoldSettings {
         self_contact_mm,
         two_start,
+        arm_abduction_deg,
+        legs,
+        leg_fraction,
+        max_settle_steps,
     } = options;
     let m = |r: ftx_core::Refusal| r.message;
+    let mut pose = Pose::drape();
+    pose.arm_abduction_deg = Some(arm_abduction_deg);
+    pose.legs = legs;
+    pose.leg_fraction = leg_fraction;
+    pose.validate().map_err(m)?;
     let pat = Pattern::new(pattern.clone());
     ftx_drape::garment::simulation_scope(&pat).map_err(m)?;
     if source.is_none() && !measurements["wearer"]["age_months"].is_number() {
@@ -221,12 +297,16 @@ fn fold_on_source(
     if !self_contact_mm.is_finite() || self_contact_mm < 0.0 {
         return Err("self-contact thickness must be finite and nonnegative".into());
     }
-    let mut opts = DrapeOptions::default();
+    let mut opts = DrapeOptions {
+        max_settle_steps,
+        ..DrapeOptions::default()
+    };
     if self_contact_mm > 0.0 {
         let mut p = opts.contact;
         p.thickness = self_contact_mm * 1e-3;
         opts.self_contact = Some(p);
     }
+    opts.validate().map_err(m)?;
     ftx_drape::material::resolve(&pat, &opts).map_err(m)?;
     // Occupancy and the bare fitter must consume the same current evidence, including in direct
     // portable calls that have not passed through a saved round.
@@ -241,12 +321,7 @@ fn fold_on_source(
     } else {
         measurements.clone()
     };
-    let mut pose = Pose::drape();
     let (params, mut description) = if let Some(source) = source {
-        if !source.arm_deg.is_finite() || !(0.0..=180.0).contains(&source.arm_deg) {
-            return Err("arm angle must be finite and between 0 and 180 degrees".into());
-        }
-        pose.arm_abduction_deg = Some(source.arm_deg);
         let (shape, mut description) = ftx_body::accepted_shape::prepare(
             model,
             source.model_sha256,
@@ -258,7 +333,7 @@ fn fold_on_source(
             "pose".into(),
             json!(format!(
                 "drape: arms at {}° and straight, hands and feet left out of contact",
-                source.arm_deg
+                arm_abduction_deg
             )),
         );
         progress("body: reusing accepted image-fit shape without tape refitting");
@@ -266,7 +341,7 @@ fn fold_on_source(
     } else {
         let wearer = Wearer::from_measurements(&data).map_err(m)?;
         let targets = tape_targets(&data).map_err(m)?;
-        let fit = fit_tape(model, &wearer, &targets, &pose).map_err(m)?;
+        let fit = fit_tape(model, &wearer, &targets, &Pose::drape()).map_err(m)?;
         progress(&format!(
             "body: fitted in {} iterations, {:.2} kg",
             fit.iterations, fit.mass_kg
@@ -274,6 +349,17 @@ fn fold_on_source(
         let description = body_report(&wearer, &fit);
         (fit.params, description)
     };
+    if !legs.is_standing() {
+        description["legs"] = json!(legs);
+    }
+    if leg_fraction != 1.0 {
+        description["leg_fraction"] = json!(leg_fraction);
+    }
+    if source.is_none() && arm_abduction_deg != Pose::A_POSE_DEG {
+        description["pose"] = json!(format!(
+            "drape: arms at {arm_abduction_deg}° and straight, hands and feet left out of contact"
+        ));
+    }
     let occupancy = ftx_body::nappy_occupancy(model, &params, &data).map_err(m)?;
     let occupied_params = occupancy
         .as_ref()

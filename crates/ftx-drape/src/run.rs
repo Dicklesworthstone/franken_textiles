@@ -24,6 +24,9 @@ use crate::start::{edge_strain, face_edges};
 /// Standard gravity (m/s²) of the drape phase.
 pub const GRAVITY: f64 = 9.81;
 
+const SETTLE_SPEED_M_S: f64 = 1e-3;
+const SETTLE_QUIET_STEPS: usize = 3;
+
 /// The body a run drapes on.
 pub struct DrapeBody<'a> {
     /// Part frames, landmarks and section radii.
@@ -45,6 +48,9 @@ pub struct DrapeOptions {
     pub sew_steps: usize,
     /// Steps under gravity.
     pub drape_steps: usize,
+    /// Optional additional gravity steps, at the same time step, until the existing numerical
+    /// quiet window is reached. Zero preserves the fixed schedule; history laws refuse this tail.
+    pub max_settle_steps: usize,
     /// Report-only hold window: last N accepted gravity steps; zero means not requested.
     pub elastic_hold_steps: usize,
     /// Time step (s).
@@ -88,6 +94,7 @@ impl Default for DrapeOptions {
             spacing: 12.0,
             sew_steps: 12,
             drape_steps: 36,
+            max_settle_steps: 0,
             elastic_hold_steps: 0,
             step: 1.0 / 24.0,
             tol: 1e-3,
@@ -151,16 +158,34 @@ impl DrapeOptions {
                 "the elastic stiffness EA must be 0 (no elastic) or positive",
             ));
         }
+        if self.max_settle_steps > 256 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "the optional settling tail is limited to 256 additional gravity steps",
+            ));
+        }
         let total = self
             .sew_steps
             .checked_add(self.drape_steps)
-            .filter(|n| n.checked_add(FOLD_FRAMES + ZIP_FRAMES).is_some())
+            .filter(|n| {
+                n.checked_add(self.max_settle_steps)
+                    .and_then(|n| n.checked_add(FOLD_FRAMES + ZIP_FRAMES))
+                    .is_some()
+            })
             .ok_or_else(|| {
                 Refusal::new(
                     RefusalCode::BudgetExceeded,
                     "animation frame count overflows",
                 )
             })?;
+        if self.max_settle_steps > 0
+            && !((self.drape_steps + self.max_settle_steps) as f64 * self.step).is_finite()
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "the declared gravity and settling duration must be finite",
+            ));
+        }
         if total < MIN_FRAMES {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -308,6 +333,9 @@ pub fn drape(
     }
     scene.solver.tol = opts.tol;
     scene.solver.pcg_iters = opts.pcg_iters;
+    if opts.max_settle_steps > 0 {
+        scene.solver.check_settling_history()?;
+    }
     progress(&format!(
         "start: {} vertices ({} after welding), relaxed {} iterations to p95 strain {:.3}",
         scene.mesh.verts2d.len(),
@@ -339,13 +367,34 @@ pub fn drape(
         ));
         phases.push(rep);
     }
-    let (sew, drape) = (phases[0].clone(), phases[1].clone());
+    let (sew, mut drape) = (phases[0].clone(), phases[1].clone());
+    if opts.max_settle_steps > 0 {
+        for _ in 0..opts.max_settle_steps {
+            if consecutive_quiet_steps(&drape) >= SETTLE_QUIET_STEPS {
+                break;
+            }
+            let step = run_phase(&mut scene, 1, opts.step, GRAVITY, |_, x| {
+                frames.push(x.to_vec());
+            })?;
+            drape.append(step);
+        }
+        progress(&format!(
+            "settling: {} additional gravity steps, {} consecutive quiet endpoints, max speed {:.4} m/s",
+            drape.steps - opts.drape_steps,
+            consecutive_quiet_steps(&drape),
+            drape.max_speed
+        ));
+    }
     let fold = FoldUp {
         frames,
         fold: FOLD_FRAMES,
         zip: ZIP_FRAMES,
         sew: opts.sew_steps,
-        drape: opts.drape_steps,
+        drape: drape.steps,
+    };
+    let executed_options = DrapeOptions {
+        drape_steps: drape.steps,
+        ..*opts
     };
 
     // Metrics against the collision body, levels from the body's frames.
@@ -381,7 +430,7 @@ pub fn drape(
         &mut report,
         &scene,
         &fabric,
-        opts,
+        &executed_options,
         body.arm_deg,
         pattern,
         &casing_mu,
@@ -389,7 +438,14 @@ pub fn drape(
     add_numerical_report(&mut report, &sew, &drape, opts);
     add_simulation_scope(&mut report, scope);
     report["material"] = material.report;
-    add_casing_windows(&mut report, &scene, &fold, &initial_positions, &drape, opts);
+    add_casing_windows(
+        &mut report,
+        &scene,
+        &fold,
+        &initial_positions,
+        &drape,
+        &executed_options,
+    );
     if let Some(fabrics) = &material.piece_fabrics {
         report["fabric"] = json!({"basis":"per_piece", "see":"material.records"});
         let mut area = vec![0.0; scene.mesh.instances.len()];
@@ -499,28 +555,30 @@ pub fn drape(
 }
 
 /// Preserve reference metrics; native acceptance additionally requires a quiet instantaneous tail.
+fn consecutive_quiet_steps(phase: &PhaseReport) -> usize {
+    phase
+        .samples
+        .iter()
+        .rev()
+        .take_while(|s| s.solve.converged && s.max_speed_m_s <= SETTLE_SPEED_M_S)
+        .count()
+}
+
 fn add_numerical_report(
     report: &mut Value,
     sew: &PhaseReport,
     drape: &PhaseReport,
     opts: &DrapeOptions,
 ) {
-    const SPEED_M_S: f64 = 1e-3;
-    const QUIET_STEPS: usize = 3;
-    let quiet = drape
-        .samples
-        .iter()
-        .rev()
-        .take_while(|s| s.solve.converged && s.max_speed_m_s <= SPEED_M_S)
-        .count();
+    let quiet = consecutive_quiet_steps(drape);
     let gravity_simulated = drape.steps > 0;
-    let settled = gravity_simulated.then_some(quiet >= QUIET_STEPS);
+    let settled = gravity_simulated.then_some(quiet >= SETTLE_QUIET_STEPS);
     report["numerical"] = json!({
         "step_acceptance":"every Newton solve converged; stalled steps are refused without advancing the accepted state",
         "newton_correction_speed_tolerance_m_s":opts.tol,
         "time_step_s":opts.step,
-        "velocity_tolerance_m_s":SPEED_M_S,
-        "required_quiet_steps":QUIET_STEPS,
+        "velocity_tolerance_m_s":SETTLE_SPEED_M_S,
+        "required_quiet_steps":SETTLE_QUIET_STEPS,
         "consecutive_quiet_steps":quiet,
         "gravity_simulated":gravity_simulated,
         "settled":settled,
@@ -528,9 +586,18 @@ fn add_numerical_report(
         "drape":drape,
         "basis":"Newton correction/h and instantaneous speed; reference settled remains the legacy window-drift metric, not static stress equilibrium or real fit"
     });
+    if opts.max_settle_steps > 0 {
+        let steps = drape.steps - opts.drape_steps;
+        report["numerical"]["settling"] = json!({
+            "max_steps":opts.max_settle_steps,"steps":steps,"duration_s":steps as f64 * opts.step,
+            "gravity_steps":drape.steps,"gravity_duration_s":drape.steps as f64 * opts.step,
+            "stop_reason":if settled == Some(true) { "quiet_window" } else { "step_limit" },
+            "cap_exhausted":settled != Some(true) && steps == opts.max_settle_steps,
+        });
+    }
     if settled == Some(false) {
         let flag = format!(
-            "not numerically settled (maximum speed {} m/s; need {QUIET_STEPS} consecutive steps <= {SPEED_M_S} m/s): rerun with more drape steps",
+            "not numerically settled (maximum speed {} m/s; need {SETTLE_QUIET_STEPS} consecutive steps <= {SETTLE_SPEED_M_S} m/s): rerun with more drape steps",
             drape.max_speed
         );
         for key in ["flags", "gating"] {
@@ -1146,6 +1213,15 @@ mod self_contact_tests {
             },
             DrapeOptions {
                 sew_steps: usize::MAX,
+                ..default
+            },
+            DrapeOptions {
+                max_settle_steps: 257,
+                ..default
+            },
+            DrapeOptions {
+                step: f64::MAX,
+                max_settle_steps: 1,
                 ..default
             },
             DrapeOptions {

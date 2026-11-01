@@ -47,7 +47,7 @@ pub struct LegPose {
 pub struct Keyframe {
     /// Cumulative physical seconds since the end of the initial drape, strictly increasing.
     pub time_s: f64,
-    /// Standing straight-arm angle from vertical, in degrees, 0..=180.
+    /// Straight-arm angle from vertical, in degrees, 0..=180.
     pub arm_abduction_deg: f64,
     /// Optional seated/squat leg rotation. Omission keeps standing legs at this endpoint;
     /// this is not an increment from the previous endpoint. The root does not translate.
@@ -675,6 +675,47 @@ fn evaluate_path(
 mod tests {
     use super::*;
     use crate::{PartFrame, scene::PartFrames};
+
+    #[test]
+    fn legacy_motion_pose_bytes_survive_and_leg_controls_are_bounded() {
+        let legacy = json!({"time_s":0.1,"arm_abduction_deg":40.0});
+        let frame: Keyframe = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(frame.leg_pose.is_none());
+        assert_eq!(
+            serde_json::to_string(&frame).unwrap(),
+            r#"{"time_s":0.1,"arm_abduction_deg":40.0}"#
+        );
+        let explicit: Keyframe = serde_json::from_value(json!({"time_s":0.1,
+            "arm_abduction_deg":40.0,"leg_pose":null}))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_vec(&frame).unwrap(),
+            serde_json::to_vec(&explicit).unwrap()
+        );
+        for extra in [
+            json!({"legs":"standing"}),
+            json!({"leg_fraction":1.0}),
+            json!({"leg_pose":{"posture":"seated","fraction":null}}),
+        ] {
+            let mut value = legacy.clone();
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert!(serde_json::from_value::<Keyframe>(value).is_err());
+        }
+        let mut request: Request = serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[legacy],"max_step_s":0.1,"max_trials":1,"max_pairs":100,
+            "max_sample_vertices":100}))
+        .unwrap();
+        for fraction in [f64::NAN, f64::INFINITY, -0.01, 1.01] {
+            request.keyframes[0].leg_pose = Some(LegPose {
+                posture: LegPosture::Seated,
+                fraction,
+            });
+            assert!(request.validate().is_err());
+        }
+    }
 
     #[test]
     fn leg_keyframes_preserve_legacy_serialization_and_refuse_invalid_postures() {

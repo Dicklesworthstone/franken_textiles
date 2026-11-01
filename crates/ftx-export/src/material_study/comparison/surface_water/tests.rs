@@ -823,6 +823,269 @@ fn draining_case(condensation: bool) -> (Alternative, Value, Value, Value) {
     (a, d, s, m)
 }
 
+fn finite_reservoir_case(draining: bool, mechanical: bool) -> (Alternative, Value, Value, Value) {
+    let (a, mut d, s, mut m) = if draining {
+        draining_case(true)
+    } else if mechanical {
+        exchanging_case(true)
+    } else {
+        condensing_case()
+    };
+    let h = &mut m["transient_surface"]["result"];
+    let policy = &mut h["request"]["surface_water"];
+    policy["schema"] = json!("ftx-textile-surface-water/5");
+    policy
+        .as_object_mut()
+        .unwrap()
+        .remove("outside_vapor_pressure_pa");
+    policy["vapor_reservoir"] = json!({
+        "schema":"ftx-textile-vapor-reservoir/1",
+        "model":"isothermal_constant_vapor_capacitance/1",
+        "vapor_capacitance_kg_pa":1e-9,"initial_vapor_mass_kg":1e-6,"temperature_c":40.,
+        "pressure_domain_pa":[0.,5000.],"max_iterations":96,"mass_tolerance_kg":1e-16,
+        "source":{"reference":"test:finite-vapor-admission","accessed_on":"2026-11-01",
+            "note":"Synthetic inventory and effective-enthalpy identities; not empirical gas data"},
+        "evidence":"estimate","allow_estimates":true,"method":"Synthetic finite storage",
+        "qualification":"Explicit constant capacitance, isothermal storage and effective vapor enthalpy"});
+    h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+    let w = &h["surface_water"];
+    let received =
+        w["evaporated_liquid_kg"].as_f64().unwrap() - w["condensed_liquid_kg"].as_f64().unwrap();
+    let mass = 1e-6 + received;
+    let residual = mass - 1e-6 - received;
+    let change = (2500000. + 4200. * 40.) * (mass - 1e-6);
+    let received_j = w["latent_energy_j"].as_f64().unwrap()
+        + w["exported_vapor_sensible_energy_j"].as_f64().unwrap()
+        - w["condensation_latent_energy_j"].as_f64().unwrap()
+        - w["incoming_vapor_sensible_energy_j"].as_f64().unwrap();
+    let removed_j = received_j - change;
+    let reservoir = json!({"schema":"ftx-textile-vapor-reservoir-result/1",
+        "initial_vapor_mass_kg":1e-6,"remaining_vapor_mass_kg":mass,
+        "initial_vapor_pressure_pa":1e-6/1e-9,"vapor_pressure_pa":mass/1e-9,
+        "net_vapor_received_kg":received,"mass_balance_error_kg":residual,
+        "vapor_enthalpy_change_j":change,"net_vapor_enthalpy_received_j":received_j,
+        "isothermal_heat_removed_j":removed_j,"enthalpy_balance_error_j":change+removed_j-received_j,
+        "elapsed_seconds":1.,"pressure_trials":64,"maximum_step_mass_residual_kg":residual.abs()});
+    for path in ["/surface_water", "/trace/0/surface_water"] {
+        let row = h.pointer_mut(path).unwrap();
+        row["schema"] = json!("ftx-textile-surface-water-result/5");
+        row["vapor_reservoir"] = reservoir.clone();
+    }
+    // Two patches with two cells each, two heated substeps and 64 actual pressure probes.
+    h["cell_steps"] = json!(4 * (2 * 129 + 64));
+    h["request"]["max_cell_steps"] = json!(2000);
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    (a, d, s, m)
+}
+
+#[test]
+fn finite_vapor_inventory_admits_with_optional_drainage_and_existing_mechanical_exchange() {
+    for (draining, mechanical) in [(false, false), (false, true), (true, true)] {
+        let (a, d, s, m) = finite_reservoir_case(draining, mechanical);
+        admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap_or_else(|error| {
+            panic!("drainage={draining}, mechanics={mechanical}: {error:?}")
+        });
+    }
+    let (a, mut d, s, mut m) = finite_reservoir_case(false, false);
+    let h = &mut m["transient_surface"]["result"];
+    h["request"]["surface_water"]["outside_vapor_pressure_pa"] = json!([]);
+    h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+}
+
+#[test]
+fn finite_vapor_retry_work_remains_admissible_only_when_fully_charged() {
+    let (a, mut d, s, mut m) = finite_reservoir_case(false, false);
+    let h = &mut m["transient_surface"]["result"];
+    // Failed attempts can spend more probes than the two committed steps' iteration limits.
+    // Their physical histories rolled back, but the same whole-history work budget still pays.
+    h["surface_water"]["vapor_reservoir"]["pressure_trials"] = json!(500);
+    h["trace"][0]["surface_water"]["vapor_reservoir"]["pressure_trials"] = json!(500);
+    h["cell_steps"] = json!(4 * (2 * 129 + 500));
+    h["request"]["max_cell_steps"] = json!(3500);
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+    for actual_work in [4 * (2 * 129 + 64), 3501] {
+        let mut changed = m.clone();
+        changed["transient_surface"]["result"]["cell_steps"] = json!(actual_work);
+        assert!(admit_heat(&a, &d, &s, &changed, Consumer::TransientSurface).is_err());
+    }
+}
+
+#[test]
+fn every_retained_finite_vapor_field_is_required_and_checked() {
+    let (a, d, s, m) = finite_reservoir_case(true, true);
+    for path in [
+        "/surface_water/vapor_reservoir",
+        "/trace/0/surface_water/vapor_reservoir",
+    ] {
+        for field in [
+            "initial_vapor_mass_kg",
+            "remaining_vapor_mass_kg",
+            "initial_vapor_pressure_pa",
+            "vapor_pressure_pa",
+            "net_vapor_received_kg",
+            "mass_balance_error_kg",
+            "vapor_enthalpy_change_j",
+            "net_vapor_enthalpy_received_j",
+            "isothermal_heat_removed_j",
+            "enthalpy_balance_error_j",
+            "elapsed_seconds",
+            "pressure_trials",
+            "maximum_step_mass_residual_kg",
+        ] {
+            for missing in [false, true] {
+                let mut changed = m.clone();
+                let report = changed["transient_surface"]["result"]
+                    .pointer_mut(path)
+                    .unwrap();
+                if missing {
+                    report.as_object_mut().unwrap().remove(field);
+                } else if field == "pressure_trials" {
+                    report[field] = json!(65);
+                } else {
+                    report[field] = json!(report[field].as_f64().unwrap() + 1.);
+                }
+                assert!(
+                    admit_heat(&a, &d, &s, &changed, Consumer::TransientSurface).is_err(),
+                    "{path}.{field}, missing={missing}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn finite_vapor_reconciles_external_water_and_work_instead_of_only_internal_equalities() {
+    let (a, d, s, m) = finite_reservoir_case(false, false);
+    for mutation in 0..4 {
+        let mut changed = m.clone();
+        let h = &mut changed["transient_surface"]["result"];
+        for path in [
+            "/surface_water/vapor_reservoir",
+            "/trace/0/surface_water/vapor_reservoir",
+        ] {
+            let r = h.pointer_mut(path).unwrap();
+            match mutation {
+                0 => {
+                    // Reconcile every internal reservoir identity after inventing incoming vapor.
+                    // The independently retained textile transfer must still reject this stock.
+                    let mass = r["remaining_vapor_mass_kg"].as_f64().unwrap() + 1e-7;
+                    let change = (2500000. + 4200. * 40.) * (mass - 1e-6);
+                    r["remaining_vapor_mass_kg"] = json!(mass);
+                    r["vapor_pressure_pa"] = json!(mass / 1e-9);
+                    r["net_vapor_received_kg"] = json!(mass - 1e-6);
+                    r["mass_balance_error_kg"] = json!(0.);
+                    r["vapor_enthalpy_change_j"] = json!(change);
+                    r["isothermal_heat_removed_j"] =
+                        json!(r["net_vapor_enthalpy_received_j"].as_f64().unwrap() - change);
+                    r["enthalpy_balance_error_j"] = json!(0.);
+                }
+                1 => {
+                    r["vapor_enthalpy_change_j"] =
+                        json!(r["vapor_enthalpy_change_j"].as_f64().unwrap() + 1.);
+                    r["isothermal_heat_removed_j"] =
+                        json!(r["isothermal_heat_removed_j"].as_f64().unwrap() - 1.);
+                }
+                2 => r["pressure_trials"] = json!(0),
+                _ => r["pressure_trials"] = json!(65),
+            }
+        }
+        assert!(
+            admit_heat(&a, &d, &s, &changed, Consumer::TransientSurface).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn finite_vapor_requires_its_exact_source_domain_and_single_pressure_authority() {
+    let (a, d, s, m) = finite_reservoir_case(false, false);
+    for (path, value) in [
+        (
+            "/vapor_reservoir/schema",
+            json!("ftx-textile-vapor-reservoir/2"),
+        ),
+        ("/vapor_reservoir/model", json!("ideal_gas")),
+        ("/vapor_reservoir/vapor_capacitance_kg_pa", json!(0.)),
+        ("/vapor_reservoir/initial_vapor_mass_kg", json!(-1.)),
+        ("/vapor_reservoir/temperature_c", json!(39.)),
+        ("/vapor_reservoir/pressure_domain_pa", json!([0., 900.])),
+        ("/vapor_reservoir/pressure_domain_pa", json!([5000., 0.])),
+        ("/vapor_reservoir/max_iterations", json!(0)),
+        ("/vapor_reservoir/max_iterations", json!(129)),
+        ("/vapor_reservoir/mass_tolerance_kg", json!(0.)),
+        ("/vapor_reservoir/source/reference", json!("")),
+        ("/vapor_reservoir/source/note", json!("")),
+        ("/vapor_reservoir/source/accessed_on", json!("missing")),
+        ("/vapor_reservoir/method", json!("")),
+        ("/vapor_reservoir/qualification", json!("")),
+        ("/vapor_reservoir/allow_estimates", json!(false)),
+        ("/supply", Value::Null),
+        ("/condensation", Value::Null),
+        ("/vapor_reservoir", Value::Null),
+    ] {
+        let mut changed = m.clone();
+        let mut descriptor = d.clone();
+        let h = &mut changed["transient_surface"]["result"];
+        *h["request"]["surface_water"].pointer_mut(path).unwrap() = value;
+        h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+        descriptor["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+        assert!(
+            admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err(),
+            "{path}"
+        );
+    }
+    for ambient in [json!([1000.]), Value::Null] {
+        let mut changed = m.clone();
+        let mut descriptor = d.clone();
+        let h = &mut changed["transient_surface"]["result"];
+        h["request"]["surface_water"]["outside_vapor_pressure_pa"] = ambient;
+        h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+        descriptor["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+        assert!(admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err());
+    }
+    let mut changed = m.clone();
+    changed["transient_surface"]["result"]["surface_water"]["request"]["vapor_reservoir"]["source"]
+        ["reference"] = json!("test:other-source");
+    assert!(admit_heat(&a, &d, &s, &changed, Consumer::TransientSurface).is_err());
+}
+
+#[test]
+fn legacy_water_schemas_do_not_accept_an_unrequested_vapor_owner() {
+    let (_, _, _, finite_case) = finite_reservoir_case(false, false);
+    for (a, d, s, m) in [
+        case(),
+        supplied_case(),
+        condensing_case(),
+        draining_case(true),
+    ] {
+        assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+        for policy_field in [false, true] {
+            for value in [
+                Value::Null,
+                json!({"schema":"ftx-textile-vapor-reservoir-result/1"}),
+            ] {
+                let mut changed = m.clone();
+                let mut descriptor = d.clone();
+                let h = &mut changed["transient_surface"]["result"];
+                if policy_field {
+                    h["request"]["surface_water"]["vapor_reservoir"] = finite_case["transient_surface"]["result"]["request"]["surface_water"]["vapor_reservoir"].clone();
+                    h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+                    descriptor["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+                } else {
+                    h["surface_water"]["vapor_reservoir"] = value.clone();
+                    h["trace"][0]["surface_water"]["vapor_reservoir"] = value;
+                }
+                assert!(
+                    admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err()
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn drainage_retains_separate_liquid_enthalpy_and_both_mechanical_outflow_channels() {
     for condensation in [false, true] {

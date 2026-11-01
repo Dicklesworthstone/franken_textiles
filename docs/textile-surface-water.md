@@ -262,6 +262,8 @@ inventory. Version 2 also admits independently sourced delivery rates and incomi
 Version 3 adds independently qualified condensation and re-evaporation, including incoming vapor
 sensible energy and latent release.
 Version 4 admits independently sourced, stock-limited prescribed drainage, with optional condensation.
+Version 5 closes evaporation and condensation against one independently sourced finite vapor inventory
+shared by every textile patch, with optional prescribed drainage.
 Evaporation removes latent energy from that textile/liquid system, so cooling changes subsequent
 vapor demand. Water remains attached to its source material triangles as the cloth moves.
 
@@ -281,7 +283,7 @@ defaulted from fiber names, a saturation formula or a different measured conditi
 
 | Field | Contract |
 | --- | --- |
-| `schema` | `ftx-textile-surface-water/1` for initial-only liquid; `/2` for prescribed supply; `/3` for supplied liquid and qualified reverse phase transfer; `/4` for supply and prescribed drainage, with optional qualified condensation |
+| `schema` | `ftx-textile-surface-water/1` for initial-only liquid; `/2` for prescribed supply; `/3` for supplied liquid and qualified reverse phase transfer; `/4` for supply and prescribed drainage, with optional qualified condensation; `/5` for supply, condensation and a finite shared vapor reservoir, with optional drainage |
 | `model` | `inner_cell_equilibrium_free_film_frozen_properties/1` |
 | `bindings` | Map containing every retained instance name, including mirrored instances separately |
 | `bindings.<instance>.material_sha256` | Exact normalized source material hash already used by mechanics and dry heat |
@@ -291,12 +293,13 @@ defaulted from fiber names, a saturation formula or a different measured conditi
 | `latent_heat_j_kg` | Positive constant latent energy relative to liquid at the sampled temperature |
 | `enthalpy_reference_c` | Explicit common reference for liquid storage and exported sensible enthalpy |
 | `wet_vapor_pressure_pa` | 2–128 `[temperature_c, pressure_pa]` knots; temperature strictly increases, pressure is nonnegative and nondecreasing |
-| `outside_vapor_pressure_pa` | Nonnegative ambient pressure for each mechanical keyframe interval |
+| `outside_vapor_pressure_pa` | Nonnegative ambient pressure for each mechanical keyframe interval in versions 1–4; omit or use an empty array in version 5, whose reservoir solves pressure |
 | `inside_film_resistance_m2_pa_w` | Positive declared vapor film before the material Ret |
 | `outside_film_resistance_m2_pa_w` | Positive declared vapor film after the material Ret |
-| `replenishment_kg_m2_s` | Version 1 requires exactly zero; versions 2/3/4 omit this field and require `supply` |
-| `condensation` | Required in version 3, optional in version 4, forbidden in versions 1/2; independently qualified reverse-transfer object below |
-| `drainage` | Required in version 4, forbidden in versions 1/2/3; independently qualified prescribed liquid-export object below |
+| `replenishment_kg_m2_s` | Version 1 requires exactly zero; versions 2/3/4/5 omit this field and require `supply` |
+| `condensation` | Required in versions 3/5, optional in version 4, forbidden in versions 1/2; independently qualified reverse-transfer object below |
+| `drainage` | Required in version 4, optional in version 5, forbidden in versions 1/2/3; independently qualified prescribed liquid-export object below |
+| `vapor_reservoir` | Required only in version 5; independently qualified finite inventory and pressure law below |
 | `source` | Existing `{reference, accessed_on, note}` provenance object |
 | `evidence` | `measured`, `published` or `estimate` for the explicit coupling inputs |
 | `allow_estimates` | Independent opt-in required for `estimate`; never relaxes a material selection's evidence policy |
@@ -576,6 +579,85 @@ policy participates in protocol identity. These checks do not infer gravity-driv
 rain interception, wicking, absorbed-water transport, wet constitutive changes or empirical
 garment performance.
 
+## Finite shared vapor reservoir
+
+Version 5 replaces prescribed outside pressure with a finite, well-mixed, fixed-temperature vapor
+inventory. Every retained textile patch exchanges water with this same owner. Evaporation raises its
+pressure, condensation consumes its inventory, and patches can transfer water through the shared
+vapor without duplicating stock. The model requires an independently sourced constant vapor
+capacitance `C`, with `mass = C * pressure`; it does not infer enclosure volume, an ideal-gas law,
+gas heat capacity or moisture capacity from a material name.
+
+Set water `schema` to `ftx-textile-surface-water/5`, retain independently qualified `supply` and
+`condensation`, omit `outside_vapor_pressure_pa`, and add this nested object. These numbers are a
+synthetic software example, not a qualified atmosphere or fabric experiment:
+
+```json
+"vapor_reservoir": {
+  "schema": "ftx-textile-vapor-reservoir/1",
+  "model": "isothermal_constant_vapor_capacitance/1",
+  "vapor_capacitance_kg_pa": 0.000001,
+  "initial_vapor_mass_kg": 0.001,
+  "temperature_c": 20.0,
+  "pressure_domain_pa": [0.0, 10000.0],
+  "max_iterations": 96,
+  "mass_tolerance_kg": 0.000000000001,
+  "source": {
+    "reference": "test:synthetic-finite-vapor",
+    "accessed_on": "2026-11-01",
+    "note": "Illustrative constant storage law; no empirical qualification"
+  },
+  "evidence": "estimate",
+  "allow_estimates": true,
+  "method": "Explicit finite mass and source-qualified constant vapor capacitance",
+  "qualification": "Synthetic well-mixed isothermal inventory, declared pressure domain and the existing constant-latent plus cp_liquid effective vapor enthalpy convention"
+}
+```
+
+Every entry in `condensation.vapor_temperature_c` must equal the reservoir temperature. The initial
+pressure `initial_vapor_mass_kg / vapor_capacitance_kg_pa` must lie in the declared closed pressure
+domain. Supply remains explicit even when all rates are zero; drainage remains independently
+qualified and optional. Versions 1–4 retain their prescribed-pressure semantics and reject a reservoir.
+
+At each thermal substep, every pressure trial starts from the same accepted liquid inventory and
+textile temperatures. The solver balances `m_v1 - m_v0 = evaporated - condensed` using actual patch
+transfers at the trial pressure. All patches share the earliest liquid-depletion time for that trial.
+Because dryout time itself changes with pressure, an ordered search must find the earliest admissible
+event; ordinary bisection over the entire pressure range could skip it. The accepted plan then enters
+the existing implicit thermal solver once. The bounded solve refuses unresolved events, exhausted
+iterations, unrepresentable transfers and pressure/loading-domain departures. Every pressure probe
+counts against the existing whole-history cell-step allowance, including discarded or failed probes.
+Thermal or mechanical failure rolls back the complete affected physical interval.
+
+The finite solve adapts accepted-state pressure trials and compensated signed inventory sums from
+[FrankenSim's finite moisture atmosphere](https://github.com/Dicklesworthstone/frankensim/blob/d1aea97c310fa4b6767e975af8c126f450e9f71f/crates/fs-couple/src/moisture/atmosphere.rs)
+and [reservoir adapter](https://github.com/Dicklesworthstone/frankensim/blob/d1aea97c310fa4b6767e975af8c126f450e9f71f/crates/fs-couple/src/moisture/reservoir.rs),
+pinned at `d1aea97c310fa4b6767e975af8c126f450e9f71f`. It retains this project's free-film and thermal
+models; it does not import a second diffusion or thermal engine.
+
+Result `ftx-textile-surface-water-result/5` retains the complete supplied/condensed/evaporated liquid
+ledger and any explicit drainage. Each trace sample and the final receipt add `vapor_reservoir`
+with schema `ftx-textile-vapor-reservoir-result/1`: initial/remaining vapor mass and pressure, signed
+`net_vapor_received_kg`, `mass_balance_error_kg`, `elapsed_seconds`, `pressure_trials`, and
+`maximum_step_mass_residual_kg`. A caller's loose mass tolerance cannot authorize nonexistent vapor;
+inventory-scaled roundoff and actual available stock must also pass.
+Accepted vapor mass comes from the actual phase transfers, so pressure-iteration error cannot
+accumulate as artificial water loss. The maximum step residual reports that separate pressure
+closure defect; `mass_balance_error_kg` reports the physical inventory balance.
+
+The existing effective vapor enthalpy is `h_v = L + cp_liquid * (T_reservoir - T_reference)`.
+The reservoir records `vapor_enthalpy_change_j = h_v * (m_v1 - m_v0)` and the signed net enthalpy
+received from textile evaporation minus condensation. Their difference is
+`isothermal_heat_removed_j`: positive heat leaves the reservoir to hold its declared temperature,
+while a negative value supplies heat. `enthalpy_balance_error_j` checks storage plus that heat exchange
+against net received enthalpy. This explicit thermostat term keeps the combined textile/reservoir
+energy account closed; it is separate from textile boundary heat and bulk mechanical transfer.
+The browser displays both reservoir ledgers. Comparison admission checks the source, inventory,
+pressure, enthalpy, elapsed time and work receipts before admitting any dependent objective.
+
+No absorbed moisture, sorption, in-plane wicking, droplet/fog phase, changing wet material law,
+body-to-textile water delivery, thermoregulation or empirical garment qualification is inferred.
+
 ## Reports and scope
 
 The available transient heat result retains the full policy at `request.surface_water` and a
@@ -600,7 +682,7 @@ Temperatures and boundary fluxes are actual results of that coupled equation. No
 comparisons admit matching source-qualified histories after canonical material/Ret replay, retained
 patch/reference ownership, cumulative mass/latent/enthalpy consistency and the full source/boundary
 balance. Sampled temperature and boundary metrics plus textile evaporated/remaining mass and latent
-energy are available; supplied-mass admission requires matching version 2/3/4 receipts and independent
+energy are available; supplied-mass admission requires matching version 2/3/4/5 receipts and independent
 schedule reconstruction. These comparisons do not propagate water or thermal bounds.
 
 The separate `vapor_coverage_history.wet_film` belongs to a prescribed **body** reservoir. Its latent

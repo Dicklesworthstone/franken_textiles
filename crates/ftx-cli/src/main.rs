@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, FREE, Pose, TAPE_FIELDS, TapeFit, Wearer, clothing_skin,
+    AnnyModel, BodyFrames, FREE, Legs, Pose, TAPE_FIELDS, TapeFit, Wearer, clothing_skin,
     default_model_path, fit_tape, pose_deltas, skin_mesh, tape_targets,
 };
 use ftx_core::Vec3;
@@ -57,12 +57,13 @@ const USAGE: &str = "usage:
   ftx draft PROGRAM --measurements M --ws WS [--style S.json] [--fabric F.json] [--update-measurements] [--as-of DATE] [--no-priors] [--json]
   ftx validate PATTERN --measurements M [--fit F] [--json]
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
-            [--sim|--stills] [--body-fit REPORT] [--arm-deg DEG] [--res WIDTHxHEIGHT]
+            [--sim|--stills] [--body-fit REPORT] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N] [--res WIDTHxHEIGHT]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--self-contact-mm MM] [--self-mu MU] [--json]
+            [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N]
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
@@ -661,6 +662,7 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
     for (name, slot) in [
         ("sew", &mut opts.sew_steps),
         ("drape", &mut opts.drape_steps),
+        ("max-settle-steps", &mut opts.max_settle_steps),
         ("elastic-hold-steps", &mut opts.elastic_hold_steps),
     ] {
         if let Some(v) = args.options.get(name) {
@@ -694,7 +696,7 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
     Ok(opts)
 }
 
-/// Pose the same fitted body at the requested angle; do not change its tape-fit reference pose.
+/// Pose the same fitted body; do not change its tape-fit reference pose.
 fn drape_pose(args: &Args) -> Result<Pose, Refusal> {
     let mut pose = Pose::drape();
     if let Some(value) = args.options.get("arm-deg") {
@@ -710,6 +712,20 @@ fn drape_pose(args: &Args) -> Result<Pose, Refusal> {
         }
         pose.arm_abduction_deg = Some(angle);
     }
+    if let Some(value) = args.options.get("legs") {
+        pose.legs = match value.as_str() {
+            "standing" => Legs::Standing,
+            "seated" => Legs::Seated,
+            "squat" => Legs::Squat,
+            _ => return Err(bad_input("--legs must be standing, seated or squat")),
+        };
+    }
+    if let Some(value) = args.options.get("leg-fraction") {
+        pose.leg_fraction = value
+            .parse()
+            .map_err(|_| bad_input("--leg-fraction must be a finite number in 0..=1"))?;
+    }
+    pose.validate()?;
     Ok(pose)
 }
 
@@ -757,6 +773,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "fit",
             "sew",
             "drape",
+            "max-settle-steps",
             "model",
             "self-contact-mm",
             "spacing-mm",
@@ -764,6 +781,8 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "elastic-ea",
             "elastic-hold-steps",
             "arm-deg",
+            "legs",
+            "leg-fraction",
             "body-fit",
             "two-start-sew",
             "fabric",
@@ -863,6 +882,12 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 body.arm_deg
             )),
         );
+        if !pose.legs.is_standing() {
+            b.insert("legs".into(), json!(pose.legs));
+        }
+        if pose.leg_fraction != 1.0 {
+            b.insert("leg_fraction".into(), json!(pose.leg_fraction));
+        }
         o.insert("body".into(), Value::Object(b));
     }
     let html = viewer(&run, &pattern, &body, VIEWER_TEMPLATE).map_err(bad_input)?;
@@ -1288,6 +1313,47 @@ mod tests {
         for angle in ["NaN", "inf", "-0.1", "180.1", "arms-up"] {
             let args =
                 parse(&["drape", "absent.json", "--arm-deg", angle].map(String::from)).unwrap();
+            assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
+        }
+    }
+
+    #[test]
+    fn leg_pose_and_settling_controls_are_independent_and_validate_before_io() {
+        let args = parse(
+            &[
+                "drape",
+                "--arm-deg",
+                "50",
+                "--legs",
+                "seated",
+                "--leg-fraction",
+                "0.5",
+                "--max-settle-steps",
+                "24",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let pose = drape_pose(&args).unwrap();
+        assert_eq!(pose.arm_abduction_deg, Some(50.0));
+        assert_eq!(pose.legs, Legs::Seated);
+        assert_eq!(pose.leg_fraction, 0.5);
+        assert_eq!(drape_options(&args).unwrap().max_settle_steps, 24);
+        for (flag, value) in [
+            ("legs", "kneeling"),
+            ("leg-fraction", "NaN"),
+            ("leg-fraction", "-0.1"),
+            ("leg-fraction", "1.1"),
+            ("max-settle-steps", "1.5"),
+            ("max-settle-steps", "257"),
+        ] {
+            let args = parse(&[
+                "drape".into(),
+                "absent.json".into(),
+                format!("--{flag}"),
+                value.into(),
+            ])
+            .unwrap();
             assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
         }
     }

@@ -733,6 +733,11 @@ test('material fold reuses the exact accepted shape and pose, with explicit asso
       called.push(args.slice(1));
       if (args[6] === 'refused') throw Error('accepted shape or model identity refused');
       return { report: () => '{"body":{"shape_source":{"refitted":false}},"raw":-0.0}', viewer: () => '<html/>', free() { freed.push('fold'); } };
+    },
+    fold_up_configured: (...args) => {
+      called.push(args.slice(1));
+      if (args[5] === 'refused') throw Error('configured source refused');
+      return { report: () => '{"numerical":{"settling":{"steps":2}},"raw":-0.0}', viewer: () => '<html/>', free() { freed.push('fold'); } };
     }
   } });
   const input = { type:'fold', bytes:new ArrayBuffer(1), pattern:'{"x":1.0}', measurements:'{"x":-0.0}', fit:'{}', selfContactMm:2,
@@ -754,6 +759,30 @@ test('material fold reuses the exact accepted shape and pose, with explicit asso
   const tape = await w.send({ ...input, bodyFit:null });
   assert.equal(tape.type, 'result'); assert.equal(called.at(-1), 'tape');
   assert.equal(tape.files.some(f => f.name === 'body_fit.json'), false);
+  for (const bodyFit of [raw, null]) {
+    const result = await w.send({ ...input, bodyFit, bodyFitConsent:true, legs:'seated', legFraction:0.5, maxSettleSteps:2 });
+    assert.equal(result.type,'result',result.message);
+    const call=called.at(-1), settings=JSON.parse(call[3]);
+    assert.deepEqual(settings,{self_contact_mm:2,two_start:false,arm_abduction_deg:bodyFit?50:35,legs:'seated',leg_fraction:0.5,max_settle_steps:2});
+    assert.equal(call[4],bodyFit??undefined);
+    assert.equal(result.files.find(f=>f.name==='fold-settings.json').text,call[3]);
+    assert.equal(result.files.find(f=>f.name==='sim_report.json').text,result.reportText);
+    assert.deepEqual(freed.slice(-2),['fold','body']);
+  }
+  const before=called.length;
+  for(const options of [{legs:'unknown'},{legFraction:NaN},{legFraction:1.01},{maxSettleSteps:1.5},{maxSettleSteps:257}]) {
+    assert.equal((await w.send({...input,bodyFit:null,...options})).type,'error');
+    assert.equal(called.length,before,'Invalid continuation settings refuse before loading the model');
+  }
+  assert.match((await w.send({...input,bodyFit:'refused',bodyFitConsent:true,legs:'squat'})).message,/configured source refused/);
+});
+test('nondefault garment pose or settling requires a configured engine instead of falling back to a legacy fold', async () => {
+  const w=await workerModule();
+  for(const options of [{legs:'seated'},{legFraction:0.25},{maxSettleSteps:2}]) {
+    const r=await w.send({type:'fold',bytes:new ArrayBuffer(1),pattern:'{}',measurements:'{}',fit:'{}',...options});
+    assert.match(r.message,/missing configured pose and settling/);
+    assert.deepEqual(w.freed,[]);
+  }
 });
 test('material worker rejects blocked exports, initialization failure and further work after a WASM trap', async () => {
   const e = await workerModule({ failExport: true });
@@ -1139,6 +1168,7 @@ class Element {
 async function pageModule({roundToken=null}={}) {
   const html = read('materials.html');
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
+  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
     const el = e[/id="([^"]+)"/.exec(m[1])[1]]; el.dataset = { command: /data-command="([^"]+)"/.exec(m[1])[1] }; return el;
   });
@@ -1540,6 +1570,24 @@ test('compiled WASM material supplemental photo evidence matches the ordinary ro
       assert.equal(refused.type,'error');assert.match(refused.message,reason);assert.equal(refused.files,undefined);
     }
   });
+test('material pose and settling controls retain their request and withdraw obsolete drapes while editing', async () => {
+  const p=await pageModule();await p.load();await p.bind();p.select('measurements');p.select('fit');
+  p.e.body.files=[new Blob([new Uint8Array([1])])];
+  const kept=p.live.size;
+  p.e.drapeLegs.value='squat';p.e.drapeLegFraction.value='0.5';p.e.maxSettleSteps.value='8';
+  const report={settled:false,body:{legs:'squat',leg_fraction:0.5},numerical:{settling:{max_steps:8,steps:8,duration_s:1/3,stop_reason:'step_limit',cap_exhausted:true}}};
+  for(const [id,event] of [['drapeLegs','change'],['drapeLegFraction','input'],['maxSettleSteps','input']]) {
+    await p.e.fold.onclick();const msg=p.current().messages.at(-1);
+    assert.equal(msg.legs,'squat');assert.equal(msg.legFraction,0.5);assert.equal(msg.maxSettleSteps,8);
+    p.emit(report,[{name:'sim_report.json',text:JSON.stringify(report),mime:'application/json'}]);
+    const s=section(p,'fold'),summary=JSON.parse(s.children[1].textContent);
+    assert.equal(summary.legs,'squat');assert.equal(summary.leg_fraction,0.5);
+    assert.deepEqual(summary.settling,report.numerical.settling);assert.ok(p.live.size>kept);
+    p.e[id].handlers[event]();assert.equal(s.hidden,true);assert.equal(p.live.size,kept);
+  }
+  p.e.maxSettleSteps.value='';const count=p.current().messages.length;await p.e.fold.onclick();
+  assert.match(p.e.error.textContent,/Supply a leg fraction/);assert.equal(p.current().messages.length,count);
+});
 test('material accepted-body controls preserve source text and withdraw stale body, pose and downstream results', async () => {
   const p = await pageModule(); await p.load(); await p.bind();
   p.select('measurements'); p.select('fit'); p.e.body.files = [new Blob([new Uint8Array([1,2,3])])];
@@ -4071,7 +4119,10 @@ test('drafting worker discards refused replacements, frees failed rounds and che
     fold_up:()=>{calls.push('fold');return {report:()=>'{"gating":[]}',viewer:()=>'<html/>',free:()=>freed.push('fold')};},
     fold_up_with_body_fit:(_body,_pattern,_measurements,_fit,mm,twoStart,source,angle)=>{
       calls.push({source,mm,twoStart,angle});if(source==='refused')throw Error('import refused');
-      return {report:()=>'{"body":{"provenance":"MODEL_FIT"}}',viewer:()=>'<html/>',free:()=>freed.push('import')};}};
+      return {report:()=>'{"body":{"provenance":"MODEL_FIT"}}',viewer:()=>'<html/>',free:()=>freed.push('import')};},
+    fold_up_configured:(_body,_pattern,_measurements,_fit,settings,source)=>{
+      calls.push({settings:JSON.parse(settings),source});if(source==='refused')throw Error('configured source refused');
+      return {report:()=>'{"numerical":{"settling":{"steps":2}},"raw":-0.0}',viewer:()=>'<html/>',free:()=>freed.push('configured')};}};
   const context=vm.createContext({JSON,Date,TextDecoder,Uint8Array,WebAssembly,Error,self:{},onmessage:null,postMessage:m=>sent.push(m)});
   const imports=new vm.SyntheticModule(Object.keys(values),function(){for(const[n,v]of Object.entries(values))this.setExport(n,v);},{context});
   await imports.link(()=>{});await imports.evaluate();
@@ -4104,6 +4155,15 @@ test('drafting worker discards refused replacements, frees failed rounds and che
   assert.deepEqual(calls.at(-1),{source:exact,mm:2,twoStart:false,angle:50});
   assert.equal((await fold({bodyFit:exact,bodyFitConsent:true,armDeg:50,selfContactMm:2,twoStart:true})).type,'folded');
   assert.deepEqual(calls.at(-1),{source:exact,mm:2,twoStart:true,angle:50});
+  const posed=await fold({bodyFit:exact,bodyFitConsent:true,armDeg:50,selfContactMm:2,twoStart:true,legs:'squat',legFraction:0.25,maxSettleSteps:2});
+  assert.equal(posed.type,'folded');assert.equal(posed.bodyFitText,exact);
+  assert.deepEqual(calls.at(-1),{source:exact,settings:{self_contact_mm:2,two_start:true,arm_abduction_deg:50,legs:'squat',leg_fraction:0.25,max_settle_steps:2}});
+  assert.deepEqual(JSON.parse(posed.settingsText),calls.at(-1).settings);
+  assert.equal(posed.reportText,'{"numerical":{"settling":{"steps":2}},"raw":-0.0}');
+  const count=calls.length;
+  for(const options of [{legs:'kneeling'},{legFraction:Infinity},{maxSettleSteps:-1},{maxSettleSteps:257}]) {
+    assert.equal((await fold(options)).type,'error');assert.equal(calls.length,count);
+  }
   const tapeCalls=calls.filter(x=>x==='fold').length;
   assert.match((await fold({bodyFit:'refused',bodyFitConsent:true,armDeg:50})).message,/import refused/);
   assert.equal(calls.filter(x=>x==='fold').length,tapeCalls); // never fall back on import failure
@@ -4130,6 +4190,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
 function draftingPage({traceToken=null,photoToken=null,audit=false}={}) {
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
+  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   for(const el of Object.values(e)) {
     el.addEventListener=(name,fn)=>{const previous=el.handlers[name];el.handlers[name]=(...args)=>{
       const a=previous?.(...args),b=fn(...args);return Promise.all([a,b]);};};
@@ -5355,7 +5416,9 @@ test('fixture detours retain actual travel totals, intermediate points and sourc
       lift_lower_seconds:0.6,modeled_path_seconds:6.63456};
     const program={schema:'ftx-knife-cut-program/1',
       travel_routing:{model:'fixture_box_visibility/1',waypoint_offset_mm:0.375},
-      markers:[{marker:0,qualification:'<retained fixture recipe>',selected,baseline:selected,improved:false}]};
+      stock_loading:[{marker:0,lower_left_mm:[20,10]}],
+      markers:[{marker:0,qualification:'<retained fixture recipe>',selected,baseline:selected,improved:false,
+        loading:{lower_left_mm:[20,10],marker_to_machine_offset_mm:[170,-70],stock_bounds_mm:[20,10,130,150]}}]};
     const plan=op==='stock'?{schema:'ftx-finite-stock-plan/1',used_stock_count:1,
       markers:[{id:'<hide>',placements:[{}]}],program}:
       {schema:'ftx-roll-cut-plan/1',rolls:[{}],program};
@@ -5370,6 +5433,8 @@ test('fixture detours retain actual travel totals, intermediate points and sourc
     const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
     assert.deepEqual(plain(table(`${label}: raised-tool fixture routing`).children[2].children.map(n=>n.textContent)),
       ['1','0.375','2','3','2']);
+    assert.deepEqual(plain(table(`${label}: explicit stock loading`).children[2].children.map(n=>n.textContent)),
+      ['1','20, 10','170, -70','20, 10, 130, 150']);
     const totals=table(`${label}: material-qualified knife paths`).children[2].children.map(n=>n.textContent);
     assert.equal(totals[4],'123.456');assert.equal(totals[9],'Complete authored cut order');
     assert.match(visibleText(s),/times include every detour and requested return/);
@@ -5384,6 +5449,7 @@ test('fixture detours retain actual travel totals, intermediate points and sourc
     delete plan.program;plan.program_refusal={message:'No complete checked fixture route'};
     await p.e[op].onclick();p.emit(report);
     assert.equal(table(`${label}: raised-tool fixture routing`),undefined);
+    assert.equal(table(`${label}: explicit stock loading`),undefined);
     assert.equal(table(`${label}: material-qualified knife paths`),undefined);
     assert.match(visibleText(s),/No complete checked fixture route/);
     assert.equal(p.live.has(download.href),false);
@@ -6430,7 +6496,7 @@ test('motion displays complete continuation separately from initial static heat 
   const initial = report.simulations.find(r => r.key === 'A').evaluation.result;
   initial.motion = outcome({ duration_s: 1, samples: [{}, {}], trials: 3, initial_drape_gating: [],
     path_sha256: 'exact-motion-source', metrics: { max_absolute_edge_strain_pct: 7.25 },
-    keyframes: [{ time_s: 1, arm_abduction_deg: 40, surface: outcome({ steady: { power_w: -2.5 } }),
+    keyframes: [{ time_s: 1, arm_abduction_deg: 40, leg_pose:{posture:'seated',fraction:0.5}, surface: outcome({ steady: { power_w: -2.5 } }),
       coverage: refused('<missing endpoint coverage>') }], thermal_basis: 'steady snapshots only' });
   p.emit(report);
   const s = section(p, 'Fresh drape and heat alternatives');
@@ -6441,7 +6507,7 @@ test('motion displays complete continuation separately from initial static heat 
   assert.match(table('Prescribed motion').children[3].children[1].textContent, /missing mechanics/);
   assert.equal(table('Prescribed motion').children[3].children[3].textContent, 'Unknown');
   assert.deepEqual(plain(table('A: endpoint').children[2].children.map(n => n.textContent)),
-    ['1', '40', 'Available', '-2.5', 'Refused: <missing endpoint coverage>', 'Unknown']);
+    ['1', '40', 'seated', '0.5', 'Available', '-2.5', 'Refused: <missing endpoint coverage>', 'Unknown']);
   const d = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('A: motion identities'));
   d.open = true; d.handlers.toggle(); assert.match(visibleText(d), /exact-motion-source/);
   assert.match(visibleText(s), /not transient heat/); assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
@@ -8463,6 +8529,58 @@ test('prescribed textile drainage displays separate liquid mass and sensible exp
   p.e.scenarioRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
 });
 
+test('finite shared vapor displays humidity feedback and fixed-temperature heat with optional drainage', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const report=scenarioReport();
+  const policy={schema:'ftx-textile-surface-water/5',vapor_reservoir:{
+    schema:'ftx-textile-vapor-reservoir/1',source:{reference:'<qualified finite vapor source>'}}};
+  report.scenario.scenario={motion:{transient_surface:{surface_water:policy}}};
+  const evaluation=report.simulations.find(row=>row.key==='A').evaluation.result;
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+  for(const drainage of [false,true]) {
+    const water={schema:'ftx-textile-surface-water-result/5',request:policy,
+      initial_liquid_kg:0,supplied_liquid_kg:0.001,condensed_liquid_kg:0.004,evaporated_liquid_kg:0.003,
+      remaining_liquid_kg:drainage?0.0015:0.002,mass_balance_error_kg:0,dryout_events:0,
+      latent_energy_j:7500,exported_vapor_sensible_energy_j:252,liquid_stored_change_j:drainage?126:168,
+      supplied_liquid_sensible_energy_j:84,condensation_latent_energy_j:10000,
+      incoming_vapor_sensible_energy_j:504,balance_error_j:0,
+      vapor_reservoir:{schema:'ftx-textile-vapor-reservoir-result/1',initial_vapor_mass_kg:0.002,
+        remaining_vapor_mass_kg:0.001,net_vapor_received_kg:-0.001,mass_balance_error_kg:0,
+        initial_vapor_pressure_pa:800,vapor_pressure_pa:400,vapor_enthalpy_change_j:-2626,
+        net_vapor_enthalpy_received_j:-2752,isothermal_heat_removed_j:-126,enthalpy_balance_error_j:0,
+        elapsed_seconds:1,pressure_trials:42,maximum_step_mass_residual_kg:1e-16}};
+    if(drainage) Object.assign(water,{drained_liquid_kg:0.0005,exported_liquid_sensible_energy_j:42});
+    evaluation.motion=outcome({samples:[{}],keyframes:[],transient_surface:outcome({duration_s:1,
+      thermal_steps:4,trace:[{temperature_range_c:[20,21]}],surface_water:water})});
+    await p.e.scenario.onclick();p.emit(report);
+    const mass=table('textile surface liquid — conserved initial, supplied and condensed inventory');
+    assert.deepEqual(plain(mass.children[2].children.map(n=>n.textContent)),
+      ['0','0.001','0.004','0.003',...(drainage?['0.0005']:[]),drainage?'0.0015':'0.002','0','0']);
+    assert.equal(mass.children[1].children.some(n=>n.textContent==='Drained liquid (kg)'),drainage);
+    assert.deepEqual(plain(table('textile evaporation and sensible energy').children[2].children.map(n=>n.textContent)),
+      ['7500','252',...(drainage?['42']:[]),drainage?'126':'168','84','10000','504','0']);
+    assert.deepEqual(plain(table('finite shared vapor inventory and pressure').children[2].children.map(n=>n.textContent)),
+      ['0.002','0.001','-0.001','0','800','400']);
+    assert.deepEqual(plain(table('finite vapor energy and fixed-temperature heat exchange').children[2].children.map(n=>n.textContent)),
+      ['-2626','-2752','-126','0']);
+    assert.match(visibleText(s),/evaporation raises its pressure and condensation consumes available vapor/);
+    assert.match(visibleText(s),/signed heat exchange needed to hold that temperature/);
+    const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===
+      'A: textile liquid source, exact patches and canonical vapor paths (display only)');
+    source.open=true;source.handlers.toggle();
+    assert.match(visibleText(source),/<qualified finite vapor source>/);
+    assert.match(visibleText(source),/pressure_trials/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  evaluation.motion=refused('finite vapor reservoir left its qualified pressure domain');
+  await p.e.scenario.onclick();p.emit(report);
+  assert.equal(table('finite shared vapor inventory and pressure'),undefined);
+  assert.equal(table('finite vapor energy and fixed-temperature heat exchange'),undefined);
+  assert.match(visibleText(s),/finite vapor reservoir left its qualified pressure domain/);
+  p.e.scenarioRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+});
+
 test('supplied textile water displays delivery and incoming enthalpy separately through rewetting and refusals', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const report=scenarioReport(); report.scenario.scenario={motion:{transient_surface:{surface_water:{schema:'ftx-textile-surface-water/2'}}}};
@@ -10340,7 +10458,7 @@ test('compiled WASM routed shared fixtures and attending workers replay exact na
   });
 
 test('compiled WASM evaporating, supplied and condensing textile-water objectives, moving mass and incoming momentum replay native commands and named scenarios',
-  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY || process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY || process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY || process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY || process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY)}, async()=>{
+  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY || process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY || process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY || process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY || process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY || process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY)}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
@@ -10356,8 +10474,10 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
         [process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY,'supplied-phase-impulse-mechanics'],
         [process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY,'condensing-phase-impulse-mechanics'],
         [process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY,'supplied-scheduled-impulse-mechanics'],
+        [process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY,'condensing-finite-mechanics'],
         [process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY,'condensing-scheduled-impulse-mechanics']].filter(([dir])=>dir)) {
         const prescribed=kind.includes('impulse');
+        const finite=kind.includes('finite');
         const phases=kind.includes('phase'),scheduled=kind.includes('scheduled');
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8');
         const bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
@@ -10381,9 +10501,31 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
             assert.ok(readings.transient_surface_final_min_temperature_c.value<20);
             assert.equal(readings.textile_water_remaining_mass_kg.value,0);
           }
-          assert.ok(readings.textile_water_evaporated_mass_kg.value>0);
+          if(finite) assert.equal(readings.textile_water_evaporated_mass_kg.value,0);
+          else assert.ok(readings.textile_water_evaporated_mass_kg.value>0);
           const motion=report.simulations.find(row=>row.key==='qualified').evaluation.result.motion.result;
           const heat=motion.transient_surface.result;
+          if(finite) {
+            const water=heat.surface_water,gas=water.vapor_reservoir,source=water.request.vapor_reservoir;
+            assert.equal(water.schema,'ftx-textile-surface-water-result/5');
+            assert.equal(gas.schema,'ftx-textile-vapor-reservoir-result/1');
+            assert.equal(water.request.outside_vapor_pressure_pa,undefined);
+            assert.ok(water.condensed_liquid_kg>0.99*source.initial_vapor_mass_kg);
+            assert.ok(water.condensed_liquid_kg<=source.initial_vapor_mass_kg);
+            assert.ok(gas.remaining_vapor_mass_kg<1e-6*source.initial_vapor_mass_kg);
+            assert.ok(gas.vapor_pressure_pa<0.001);assert.equal(gas.elapsed_seconds,motion.duration_s);
+            let previousPressure=source.initial_vapor_mass_kg/source.vapor_capacitance_kg_pa;
+            for(const sample of [...heat.trace,heat]) {
+              const w=sample.surface_water,g=w.vapor_reservoir;
+              assert.ok(g.vapor_pressure_pa>=0&&g.vapor_pressure_pa<=previousPressure);previousPressure=g.vapor_pressure_pa;
+              assert.ok(Math.abs(g.remaining_vapor_mass_kg-source.vapor_capacitance_kg_pa*g.vapor_pressure_pa)<1e-25);
+              assert.ok(Math.abs(g.remaining_vapor_mass_kg+w.remaining_liquid_kg-source.initial_vapor_mass_kg)<1e-23);
+              assert.ok(Math.abs(g.mass_balance_error_kg)<1e-23);
+              assert.ok(Math.abs(g.vapor_enthalpy_change_j+g.isothermal_heat_removed_j-g.net_vapor_enthalpy_received_j)<1e-15);
+              assert.ok(Math.abs(sample.stored_change_j+w.liquid_stored_change_j+g.vapor_enthalpy_change_j+
+                g.isothermal_heat_removed_j-sample.net_boundary_energy_j)<1e-8);
+            }
+          }
           if(kind.startsWith('condensing')) assert.ok(heat.surface_water.condensation_latent_energy_j>0);
           if(kind==='variable') {
             assert.ok(heat.model.columns.length>0);
@@ -10444,7 +10586,8 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
                 assert.ok(Math.abs(mechanics.transfer_kinetic_residual_j)<1e-12);
               } else assert.equal(mechanics.exchange.mixing_dissipation_j,undefined);
             }
-            assert.ok(mechanics.exported_kinetic_energy_j>0);
+            if(finite) assert.equal(mechanics.exported_kinetic_energy_j,0);
+            else assert.ok(mechanics.exported_kinetic_energy_j>0);
             assert.ok(Math.abs(mechanics.mass_balance_residual_kg)<1e-14);
             assert.equal(motion.initial_sample.liquid_mechanics.remaining_liquid_mass_kg,mechanics.initial_liquid_mass_kg);
             assert.equal(missing.status,'refused');

@@ -346,6 +346,25 @@ fn check_sewn_selection(selected: Selection) {
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.,
     };
+    let mut started = false;
+    let refusal = drape(
+        &Pattern::new(p.clone()),
+        &json!({}),
+        &body,
+        &DrapeOptions {
+            max_settle_steps: 3,
+            ..opts
+        },
+        |_| started = true,
+    )
+    .err()
+    .expect("automatic settling must not choose the qualified material history duration");
+    assert_eq!(refusal.code, RefusalCode::OutOfRange);
+    assert!(refusal.message.contains("material history"));
+    assert!(
+        !started,
+        "history admission precedes sewing and gravity steps"
+    );
     let run = drape(&Pattern::new(p.clone()), &json!({}), &body, &opts, |_| {}).unwrap();
     let history = &run.report["membrane_history"];
     assert_eq!(history["accepted_steps"], 6);

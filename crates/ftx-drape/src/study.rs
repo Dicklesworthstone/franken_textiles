@@ -158,6 +158,7 @@ impl Scenario {
                 .options
                 .sew_steps
                 .saturating_add(self.options.drape_steps)
+                .saturating_add(self.options.max_settle_steps)
                 > 256
             || self.options.lag_rounds.iter().any(|&n| n > 4)
             || self.options.pcg_iters > 128
@@ -320,6 +321,7 @@ impl<'a, 'body> Session<'a, 'body> {
         )?;
         let frames = self.scenario.options.sew_steps
             + self.scenario.options.drape_steps
+            + self.scenario.options.max_settle_steps
             + FOLD_FRAMES
             + ZIP_FRAMES
             + 4;

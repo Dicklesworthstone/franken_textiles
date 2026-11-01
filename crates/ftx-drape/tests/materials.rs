@@ -83,6 +83,141 @@ fn body() -> Body {
 }
 
 #[test]
+fn bounded_settling_replays_the_exact_source_bound_gravity_trajectory() {
+    let surface = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.,
+    };
+    let pattern = band(json!({"material":record(1.)}));
+    let options = DrapeOptions {
+        spacing: 24.,
+        sew_steps: 3,
+        drape_steps: 3,
+        max_settle_steps: 4,
+        step: 0.001,
+        ..DrapeOptions::default()
+    };
+    let limited = drape(&pattern, &json!({}), &body, &options, |_| {}).unwrap();
+    // This loose band is still falling: agreement with another trajectory must not qualify it.
+    assert_eq!(limited.report["numerical"]["settled"], false);
+    assert_eq!(limited.report["numerical"]["settling"]["steps"], 4);
+    assert_eq!(
+        limited.report["numerical"]["settling"]["cap_exhausted"],
+        true
+    );
+    assert_eq!(
+        limited.report["numerical"]["settling"]["stop_reason"],
+        "step_limit"
+    );
+    assert_eq!(limited.report["numerical"]["settling"]["duration_s"], 0.004);
+    assert_eq!(
+        limited.report["numerical"]["settling"]["gravity_duration_s"],
+        0.007
+    );
+    assert!(!limited.gating().is_empty());
+    let fixed = drape(
+        &pattern,
+        &json!({}),
+        &body,
+        &DrapeOptions {
+            drape_steps: 7,
+            max_settle_steps: 0,
+            ..options
+        },
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(limited.scene.solver.x, fixed.scene.solver.x);
+    assert_eq!(limited.scene.solver.v, fixed.scene.solver.v);
+    assert_eq!(
+        limited.scene.solver.model.mass,
+        fixed.scene.solver.model.mass
+    );
+    assert_eq!(limited.fold.frames, fixed.fold.frames);
+    assert_eq!(limited.fold.drape, 7);
+    assert_eq!(limited.report["frames"]["drape"], 7);
+    assert_eq!(limited.drape.samples.len(), 7);
+    let mut report = limited.report;
+    report["numerical"]
+        .as_object_mut()
+        .unwrap()
+        .remove("settling");
+    // Includes exact material identity, thermal source geometry, contact samples and diagnostics.
+    assert_eq!(report, fixed.report);
+}
+
+#[test]
+fn bounded_settling_stops_at_the_first_quiet_window_on_a_supporting_cone() {
+    let mut surface = body();
+    for (i, point) in surface.vertices.iter_mut().enumerate() {
+        let (radius, z) = if i < 16 { (0.06, -0.2) } else { (0.02, 0.12) };
+        point.x *= radius / 0.03;
+        point.y *= radius / 0.03;
+        point.z = z;
+    }
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.,
+    };
+    let pattern = band(json!({"material":record(1.)}));
+    let options = DrapeOptions {
+        spacing: 24.,
+        sew_steps: 6,
+        drape_steps: 0,
+        max_settle_steps: 128,
+        step: 0.04,
+        ..DrapeOptions::default()
+    };
+    let run = drape(&pattern, &json!({}), &body, &options, |_| {}).unwrap();
+    assert_eq!(
+        run.report["numerical"]["settled"], true,
+        "{}",
+        run.report["numerical"]
+    );
+    assert_eq!(
+        run.report["numerical"]["settling"]["stop_reason"],
+        "quiet_window"
+    );
+    assert_eq!(run.report["numerical"]["settling"]["cap_exhausted"], false);
+    assert!(run.drape.steps >= 3 && run.drape.steps < options.max_settle_steps);
+    assert!(
+        run.drape.samples[run.drape.steps - 3..]
+            .iter()
+            .all(|sample| { sample.solve.converged && sample.max_speed_m_s <= 1e-3 })
+    );
+    if run.drape.steps > 3 {
+        assert!(run.drape.samples[run.drape.steps - 4].max_speed_m_s > 1e-3);
+    }
+    let fixed_options = DrapeOptions {
+        drape_steps: run.drape.steps,
+        max_settle_steps: 0,
+        ..options
+    };
+    let fixed = drape(&pattern, &json!({}), &body, &fixed_options, |_| {}).unwrap();
+    assert_eq!(fixed.fold.frames, run.fold.frames);
+    assert_eq!(fixed.scene.solver.x, run.scene.solver.x);
+    assert_eq!(fixed.scene.solver.v, run.scene.solver.v);
+    let already_quiet = drape(
+        &pattern,
+        &json!({}),
+        &body,
+        &DrapeOptions {
+            max_settle_steps: 16,
+            ..fixed_options
+        },
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(already_quiet.report["numerical"]["settling"]["steps"], 0);
+    assert_eq!(already_quiet.fold.frames, fixed.fold.frames);
+}
+
+#[test]
 fn static_drape_refuses_invalid_colliders_before_placement_or_solver_work() {
     struct NoPlacement;
     impl PartFrames for NoPlacement {

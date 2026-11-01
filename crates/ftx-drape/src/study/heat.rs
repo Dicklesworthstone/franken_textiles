@@ -251,6 +251,9 @@ pub(super) struct SurfaceHistory {
     state: SurfaceState,
     time_s: f64,
     cell_steps: usize,
+    // Nonphysical pressure-search work survives a refused direct advance. The session already
+    // reserves the full whole-history allowance, including histories that never publish.
+    pressure_cell_steps: usize,
     thermal_steps: usize,
     inside_j: f64,
     outside_j: f64,
@@ -293,6 +296,7 @@ impl SurfaceHistory {
             state,
             time_s: 0.,
             cell_steps: 0,
+            pressure_cell_steps: 0,
             thermal_steps: 0,
             inside_j: 0.,
             outside_j: 0.,
@@ -478,7 +482,7 @@ impl SurfaceHistory {
         // after the complete accepted interval succeeds, including all event-driven substeps.
         if self.water.is_some() {
             let mut trial = self.clone();
-            trial.advance_inner(
+            let outcome = trial.advance_inner(
                 positions,
                 time_s,
                 interval,
@@ -486,7 +490,17 @@ impl SurfaceHistory {
                 plastic_dissipation_j,
                 relaxation_dissipation_j,
                 bending_dissipation_j,
-            )?;
+            );
+            if let Err(error) = outcome {
+                let spent = trial.pressure_cell_steps - self.pressure_cell_steps;
+                self.pressure_cell_steps = trial.pressure_cell_steps;
+                self.cell_steps += spent;
+                self.water
+                    .as_mut()
+                    .expect("transactional water history")
+                    .retain_failed_pressure_trials(spent / self.model.cells())?;
+                return Err(error);
+            }
             *self = trial;
             Ok(())
         } else {
@@ -618,10 +632,36 @@ impl SurfaceHistory {
             } else {
                 maximum_dt
             };
+            let cells = self.model.cells();
+            let thermal_work = (substep + 1) * cells * cell_cost;
+            let maximum_work = self.request.max_cell_steps;
+            if self.cell_steps + thermal_work > maximum_work {
+                return Err(budget(
+                    "surface-water pressure and heat work exhaust the whole-history cell-step budget",
+                ));
+            }
             let water_plan = self
                 .water
                 .as_ref()
-                .map(|water| water.plan(&self.model, &self.state, positions, interval, proposed_dt))
+                .map(|water| {
+                    water.plan_with_pressure_work(
+                        &self.model,
+                        &self.state,
+                        positions,
+                        interval,
+                        proposed_dt,
+                        &mut || {
+                            if self.cell_steps + thermal_work + cells > maximum_work {
+                                return Err(budget(
+                                    "finite vapor pressure trials exhaust the whole-history cell-step budget; no partial physical state published",
+                                ));
+                            }
+                            self.cell_steps += cells;
+                            self.pressure_cell_steps += cells;
+                            Ok(())
+                        },
+                    )
+                })
                 .transpose()?;
             let dt = water_plan.as_ref().map_or(proposed_dt, |plan| plan.seconds);
             let final_substep = dt == seconds - elapsed;

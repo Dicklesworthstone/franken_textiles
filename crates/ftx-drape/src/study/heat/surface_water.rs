@@ -20,6 +20,9 @@ use crate::{
 };
 
 mod mechanics;
+mod reservoir;
+
+pub use reservoir::Request as VaporReservoir;
 
 /// Source-locked initial loading on every retained instance, including explicitly dry instances.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -138,7 +141,9 @@ pub struct Request {
     /// Source-qualified wet pressure: [°C, Pa], strictly increasing temperature, nondecreasing
     /// pressure. Piecewise linear, 2..=128 knots, no extrapolation or inferred saturation law.
     pub wet_vapor_pressure_pa: Vec<[f64; 2]>,
-    /// Explicit ambient vapor pressure per mechanical keyframe interval, Pa.
+    /// Explicit ambient vapor pressure per mechanical keyframe interval, Pa. Version 5 omits
+    /// this vector because one finite reservoir supplies the shared evolving pressure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outside_vapor_pressure_pa: Vec<f64>,
     /// Positive declared film resistance before the textile Ret, m²·Pa/W.
     pub inside_film_resistance_m2_pa_w: f64,
@@ -156,6 +161,10 @@ pub struct Request {
     /// Required by version 4 and forbidden by earlier versions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drainage: Option<Drainage>,
+    /// Required only by version 5, together with explicit supply and condensation. Drainage
+    /// remains optional. The same sourced finite atmosphere serves every retained patch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vapor_reservoir: Option<VaporReservoir>,
     /// Provenance for all fluid/boundary values and this exact material-domain qualification.
     pub source: Source,
     /// Independent of the evidence and estimate policy of each selected material.
@@ -197,9 +206,17 @@ impl Request {
                     && self.supply.is_some()
                     && self.drainage.is_some()
             }
+            "ftx-textile-surface-water/5" => {
+                self.replenishment_kg_m2_s.is_none()
+                    && self.supply.is_some()
+                    && self.condensation.is_some()
+                    && self.vapor_reservoir.is_some()
+            }
             _ => false,
         };
         if !version_valid
+            || intervals == 0
+            || (self.schema == "ftx-textile-surface-water/5") != self.vapor_reservoir.is_some()
             || self.model != "inner_cell_equilibrium_free_film_frozen_properties/1"
             || self.bindings.is_empty()
             || self.bindings.len() > 65_536
@@ -214,7 +231,11 @@ impl Request {
             ]
             .iter()
             .any(|v| !v.is_finite() || *v <= 0.)
-            || self.outside_vapor_pressure_pa.len() != intervals
+            || if self.vapor_reservoir.is_some() {
+                !self.outside_vapor_pressure_pa.is_empty()
+            } else {
+                self.outside_vapor_pressure_pa.len() != intervals
+            }
             || self
                 .outside_vapor_pressure_pa
                 .iter()
@@ -313,6 +334,20 @@ impl Request {
                 "condensation needs qualified interval vapor temperatures, independently admitted reverse transport, wet/dry phase-change and effective enthalpy evidence",
             ));
         }
+        if let Some(reservoir) = &self.vapor_reservoir {
+            reservoir.validate()?;
+            self.pressure(reservoir.temperature_c)?;
+            if self.condensation.as_ref().is_none_or(|condensation| {
+                condensation
+                    .vapor_temperature_c
+                    .iter()
+                    .any(|&temperature| temperature != reservoir.temperature_c)
+            }) {
+                return Err(invalid(
+                    "finite vapor condensation must use the source-qualified fixed reservoir temperature in every interval",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -357,10 +392,14 @@ pub(super) struct Water {
     liquid_stored_j: f64,
     dryout_events: usize,
     mechanical_flow: Option<mechanics::IntervalFlow>,
+    vapor_reservoir: Option<reservoir::State>,
 }
 
 pub(super) struct Plan {
     pub seconds: f64,
+    // For the finite-reservoir event certificate: max(k_i / initial liquid mass_i) over wet
+    // patches. Their depletion rate has exact pressure derivative -k_i in the retained Ret law.
+    dryout_time_slope_factor: f64,
     remaining: Vec<f64>,
     evaporated: Vec<f64>,
     drained: Vec<f64>,
@@ -377,6 +416,7 @@ pub(super) struct Plan {
     pub liquid_heat_j: Vec<f64>,
     exported_sensible_j: f64,
     dryout_events: usize,
+    vapor_reservoir: Option<reservoir::State>,
 }
 
 fn add_positive(total: &mut f64, increment: f64) -> Result<(), Refusal> {
@@ -428,6 +468,15 @@ fn split_outflow(total: f64, evaporation: f64, drainage: f64) -> Result<(f64, f6
 }
 
 impl Water {
+    pub(super) fn retain_failed_pressure_trials(&mut self, trials: usize) -> Result<(), Refusal> {
+        if let Some(reservoir) = &mut self.vapor_reservoir {
+            reservoir.retain_failed_trials(trials)?;
+        } else if trials != 0 {
+            return Err(invalid("pressure work has no finite vapor reservoir"));
+        }
+        Ok(())
+    }
+
     pub(super) fn remaining_liquid_kg(&self) -> &[f64] {
         &self.remaining
     }
@@ -461,7 +510,16 @@ impl Water {
         owners: &[usize],
         initial_c: f64,
     ) -> Result<Self, Refusal> {
-        request.validate(request.outside_vapor_pressure_pa.len())?;
+        let intervals = request.vapor_reservoir.as_ref().map_or_else(
+            || request.outside_vapor_pressure_pa.len(),
+            |_| {
+                request
+                    .condensation
+                    .as_ref()
+                    .map_or(0, |c| c.vapor_temperature_c.len())
+            },
+        );
+        request.validate(intervals)?;
         request.pressure(initial_c)?;
         if instances.len() != request.bindings.len()
             || instances
@@ -523,6 +581,11 @@ impl Water {
             initial.push(mass);
             patch_instances.push(id.clone());
         }
+        let vapor_reservoir = request
+            .vapor_reservoir
+            .as_ref()
+            .map(reservoir::State::new)
+            .transpose()?;
         Ok(Self {
             request,
             networks,
@@ -543,10 +606,12 @@ impl Water {
             liquid_stored_j: 0.,
             dryout_events: 0,
             mechanical_flow: None,
+            vapor_reservoir,
         })
     }
 
-    pub(super) fn plan(
+    #[cfg(test)]
+    fn plan(
         &self,
         model: &Surface,
         old: &SurfaceState,
@@ -554,12 +619,89 @@ impl Water {
         interval: usize,
         maximum_seconds: f64,
     ) -> Result<Plan, Refusal> {
+        self.plan_with_pressure_work(
+            model,
+            old,
+            positions,
+            interval,
+            maximum_seconds,
+            &mut || Ok(()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn plan_with_pressure_work(
+        &self,
+        model: &Surface,
+        old: &SurfaceState,
+        positions: &[Vec3],
+        interval: usize,
+        maximum_seconds: f64,
+        charge_trial: &mut impl FnMut() -> Result<(), Refusal>,
+    ) -> Result<Plan, Refusal> {
+        if let Some(reservoir) = &self.vapor_reservoir {
+            let policy =
+                self.request.vapor_reservoir.as_ref().ok_or_else(|| {
+                    invalid("finite vapor state has no source-qualified reservoir")
+                })?;
+            let (mut plan, next_reservoir) = reservoir.propose(
+                policy,
+                |outside| {
+                    self.plan_at_pressure(
+                        model,
+                        old,
+                        positions,
+                        interval,
+                        maximum_seconds,
+                        outside,
+                        false,
+                    )
+                },
+                charge_trial,
+            )?;
+            // A bracket probe may have an unsupported algebraic endpoint loading. No material
+            // law is evaluated there: every probe uses the same admitted starting temperatures.
+            // Qualify the balanced endpoint before it can enter the original thermal solver.
+            for (&remaining, patch) in plan.remaining.iter().zip(model.patches()) {
+                let maximum = self.request.maximum_liquid_loading_kg_m2 * patch.reference_area_m2;
+                if !maximum.is_finite() || remaining > maximum {
+                    return Err(invalid(
+                        "finite vapor exchange exceeds the qualified reference-area liquid loading domain after admitted drainage",
+                    ));
+                }
+            }
+            plan.vapor_reservoir = Some(next_reservoir);
+            return Ok(plan);
+        }
         let outside = *self
             .request
             .outside_vapor_pressure_pa
             .get(interval)
             .ok_or_else(|| invalid("missing surface-water ambient interval"))?;
+        self.plan_at_pressure(
+            model,
+            old,
+            positions,
+            interval,
+            maximum_seconds,
+            outside,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn plan_at_pressure(
+        &self,
+        model: &Surface,
+        old: &SurfaceState,
+        positions: &[Vec3],
+        interval: usize,
+        maximum_seconds: f64,
+        outside: f64,
+        qualify_loading: bool,
+    ) -> Result<Plan, Refusal> {
         let mut seconds = maximum_seconds;
+        let mut dryout_time_slope_factor = 0.0_f64;
         let mut rates = Vec::with_capacity(self.remaining.len());
         let mut dry_times = Vec::with_capacity(self.remaining.len());
         for (i, patch) in model.patches().iter().enumerate() {
@@ -619,6 +761,16 @@ impl Water {
                         "surface-water current area or vapor rate is unrepresentable",
                     ));
                 }
+                if self.vapor_reservoir.is_some() && self.remaining[i] > 0. {
+                    let slope = self.networks[patch.column].potential_mass_flow_kg_s * area
+                        / self.remaining[i];
+                    if !slope.is_finite() || slope <= 0. {
+                        return Err(invalid(
+                            "finite vapor dryout sensitivity is unrepresentable",
+                        ));
+                    }
+                    dryout_time_slope_factor = dryout_time_slope_factor.max(slope);
+                }
                 rate
             };
             // At zero inventory, freshly delivered liquid can evaporate continuously but no
@@ -673,6 +825,7 @@ impl Water {
         }
         let mut plan = Plan {
             seconds,
+            dryout_time_slope_factor,
             remaining: Vec::new(),
             evaporated: Vec::new(),
             drained: Vec::new(),
@@ -689,6 +842,7 @@ impl Water {
             liquid_heat_j: Vec::new(),
             exported_sensible_j: 0.,
             dryout_events: 0,
+            vapor_reservoir: None,
         };
         for (
             i,
@@ -748,7 +902,10 @@ impl Water {
             let capacity = remaining * self.request.liquid_specific_heat_j_kg_k;
             let maximum =
                 self.request.maximum_liquid_loading_kg_m2 * model.patches()[i].reference_area_m2;
-            if self.request.supply.is_some() && (!maximum.is_finite() || remaining > maximum) {
+            if qualify_loading
+                && self.request.supply.is_some()
+                && (!maximum.is_finite() || remaining > maximum)
+            {
                 return Err(invalid(
                     "liquid supply or condensation exceeds the qualified reference-area loading domain after admitted drainage; no extra overflow is inferred",
                 ));
@@ -944,6 +1101,7 @@ impl Water {
             }
         }
         self.remaining = plan.remaining;
+        self.vapor_reservoir = plan.vapor_reservoir;
         next.balance_error_j = error;
         self.snapshot(next.state.temperature_c(), false, 0.)?;
         Ok(())
@@ -1040,6 +1198,14 @@ impl Water {
             result["drained_liquid_kg"] = json!(drained);
             result["exported_liquid_sensible_energy_j"] = json!(drained_sensible);
         }
+        if let Some(reservoir) = &self.vapor_reservoir {
+            let policy =
+                self.request.vapor_reservoir.as_ref().ok_or_else(|| {
+                    invalid("finite vapor state has no source-qualified reservoir")
+                })?;
+            result["schema"] = json!("ftx-textile-surface-water-result/5");
+            result["vapor_reservoir"] = reservoir.snapshot(policy, self)?;
+        }
         if full {
             result["request"] = json!(self.request);
             result["unit_pressure_networks"] = json!(self.networks);
@@ -1098,6 +1264,11 @@ impl Water {
         if full && self.request.drainage.is_some() {
             result["scope"] = json!(
                 "Source-qualified free liquid with independent reference-area supply and drainage demands. Optional condensation requires reverse-transfer qualification. Current area conducts vapor; reference area owns supply and drainage. Empty-stock input is shared proportionally between evaporation and drainage demands, and net depletion splits at exact dryout. Drained liquid exports old-inner-cell sensible enthalpy without latent heat; implicit heat uses remaining capacity. Unsupported loading or temperature refuses without inferred overflow. Optional mechanics separately retains co-moving outgoing momentum and bulk energy. No inferred runoff, inter-patch transport, sorption, wet-property change, body transfer or empirical garment claim; refinement remains necessary."
+            );
+        }
+        if full && self.vapor_reservoir.is_some() {
+            result["scope"] = json!(
+                "All retained textile patches share one independently qualified finite isothermal vapor inventory. Every pressure trial restarts the same accepted liquid and thermal states, samples old cloth temperatures and uses one common earliest-dryout duration. The implicit endpoint pressure and discrete dryout event are solved together; temporal refinement remains necessary. Actual condensation cannot overdraw the shared available vapor. Accepted liquid, reservoir and original heat states commit together. The declared constant-latent/cp_liquid effective vapor enthalpy is conserved with a separate isothermal heat-removal ledger; no gas heat capacity, fog, sorption, wicking, wet constitutive law or empirical garment response is inferred. Supply and optional drainage retain their independently sourced reference-area and sensible-enthalpy accounts."
             );
         }
         Ok(result)

@@ -134,6 +134,7 @@ fn an_unsettled_pair_is_gating_even_when_both_paths_agree() {
         spacing: 24.0,
         sew_steps: 3,
         drape_steps: 9,
+        max_settle_steps: 2,
         step: 0.02,
         ..DrapeOptions::default()
     };
@@ -142,6 +143,16 @@ fn an_unsettled_pair_is_gating_even_when_both_paths_agree() {
         ..TwoStartOptions::default()
     };
     let run = two_start::drape(&pattern(), &json!({}), &body, &opts, &policy, |_| {}).unwrap();
+    assert_eq!(
+        run.report["two_start"]["shared_settings"]["max_settle_steps"],
+        2
+    );
+    assert_eq!(run.report["two_start"]["primary"]["drape_steps"], 11);
+    assert_eq!(run.report["two_start"]["alternate"]["drape_steps"], 11);
+    assert_eq!(
+        run.report["two_start"]["alternate_report"]["numerical"]["settling"]["cap_exhausted"],
+        true
+    );
     assert_eq!(run.report["two_start"]["status"], "REVIEW_REQUIRED");
     assert!(run.gating().iter().any(|s| s.contains("has not settled")));
     assert!(

@@ -115,7 +115,8 @@ fn admit_mechanics(
         };
     }
     let water = &request["surface_water"];
-    let draining = water["schema"] == "ftx-textile-surface-water/4";
+    let draining = water["schema"] == "ftx-textile-surface-water/4"
+        || water["schema"] == "ftx-textile-surface-water/5" && !water["drainage"].is_null();
     let bindings = qualification["bindings"].as_object().ok_or_else(fail)?;
     let water_bindings = water["bindings"].as_object().ok_or_else(fail)?;
     let phase_velocities = qualification["schema"] == "ftx-coupled-liquid-mechanics/4";
@@ -142,6 +143,7 @@ fn admit_mechanics(
                     | "ftx-textile-surface-water/2"
                     | "ftx-textile-surface-water/3"
                     | "ftx-textile-surface-water/4"
+                    | "ftx-textile-surface-water/5"
             )
         ) && qualification["model"]
             == if phase_velocities {
@@ -681,6 +683,173 @@ fn accumulated_near(actual: f64, expected: f64, scale: f64, steps: u64) -> bool 
                 * scale.abs().max(actual.abs()).max(expected.abs())
 }
 
+// Independent accounting for the shared vapor owner. The pressure/transport root is never
+// solved here: each retained liquid ledger must explain this inventory and its thermostat.
+struct Reservoir {
+    capacity: f64,
+    initial_mass: f64,
+    initial_pressure: f64,
+    temperature: f64,
+    domain: [f64; 2],
+    mass_tolerance: f64,
+    effective_enthalpy: f64,
+    previous_steps: u64,
+    previous_trials: u64,
+    previous_maximum_residual: f64,
+}
+
+impl Reservoir {
+    fn new(request: &Value, cp: f64, latent: f64, reference: f64) -> Result<Self, Refusal> {
+        source(request)?;
+        let capacity = number(request, "vapor_capacitance_kg_pa")?;
+        let initial_mass = nonnegative(request, "initial_vapor_mass_kg")?;
+        let temperature = number(request, "temperature_c")?;
+        let bounds = array(request, "pressure_domain_pa")?;
+        let maximum_iterations = request["max_iterations"].as_u64().ok_or_else(fail)?;
+        let mass_tolerance = number(request, "mass_tolerance_kg")?;
+        if request["schema"] != "ftx-textile-vapor-reservoir/1"
+            || request["model"] != "isothermal_constant_vapor_capacitance/1"
+            || capacity <= 0.
+            || temperature <= -273.15
+            || bounds.len() != 2
+            || !(1..=128).contains(&maximum_iterations)
+            || mass_tolerance <= 0.
+            || request
+                .get("allow_estimates")
+                .is_some_and(|v| !v.is_boolean())
+            || !request["qualification"]
+                .as_str()
+                .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
+            || request.as_object().ok_or_else(fail)?.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "schema"
+                        | "model"
+                        | "vapor_capacitance_kg_pa"
+                        | "initial_vapor_mass_kg"
+                        | "temperature_c"
+                        | "pressure_domain_pa"
+                        | "max_iterations"
+                        | "mass_tolerance_kg"
+                        | "source"
+                        | "evidence"
+                        | "allow_estimates"
+                        | "method"
+                        | "qualification"
+                )
+            })
+        {
+            return Err(fail());
+        }
+        let domain = [
+            finite(&bounds[0]).ok_or_else(fail)?,
+            finite(&bounds[1]).ok_or_else(fail)?,
+        ];
+        let initial_pressure = initial_mass / capacity;
+        let maximum_mass = domain[1] * capacity;
+        let effective_enthalpy = latent + cp * (temperature - reference);
+        if domain[0] < 0.
+            || domain[0] >= domain[1]
+            || !initial_pressure.is_finite()
+            || initial_pressure < domain[0]
+            || initial_pressure > domain[1]
+            || (initial_mass > 0. && initial_pressure <= 0.)
+            || !maximum_mass.is_finite()
+            || maximum_mass <= 0.
+            || !effective_enthalpy.is_finite()
+        {
+            return Err(fail());
+        }
+        Ok(Self {
+            capacity,
+            initial_mass,
+            initial_pressure,
+            temperature,
+            domain,
+            mass_tolerance,
+            effective_enthalpy,
+            previous_steps: 0,
+            previous_trials: 0,
+            previous_maximum_residual: 0.,
+        })
+    }
+
+    fn admit(&mut self, water: &Value, time: f64, steps: u64) -> Result<(), Refusal> {
+        let report = &water["vapor_reservoir"];
+        let mass = nonnegative(report, "remaining_vapor_mass_kg")?;
+        let pressure = nonnegative(report, "vapor_pressure_pa")?;
+        let evaporated = nonnegative(water, "evaporated_liquid_kg")?;
+        let condensed = nonnegative(water, "condensed_liquid_kg")?;
+        let received = number(report, "net_vapor_received_kg")?;
+        let residual = number(report, "mass_balance_error_kg")?;
+        let mass_scale = mass + self.initial_mass + evaporated + condensed;
+        let available = self.initial_mass + evaporated;
+        let pressure_trials = report["pressure_trials"].as_u64().ok_or_else(fail)?;
+        let maximum_residual = nonnegative(report, "maximum_step_mass_residual_kg")?;
+        let new_steps = steps.checked_sub(self.previous_steps).ok_or_else(fail)?;
+        let new_trials = pressure_trials
+            .checked_sub(self.previous_trials)
+            .ok_or_else(fail)?;
+        // Physical old/new stock is at most initial vapor plus all evaporation so far. Trial
+        // C*p may differ from that committed stock by the reported maximum root residual.
+        // This bounds the maximum without pretending that trace samples expose every probe.
+        let step_mass_scale = 2. * available + evaporated + condensed + maximum_residual;
+        if report["schema"] != "ftx-textile-vapor-reservoir-result/1"
+            || nonnegative(report, "initial_vapor_mass_kg")? != self.initial_mass
+            || !near(
+                nonnegative(report, "initial_vapor_pressure_pa")?,
+                self.initial_pressure,
+                self.initial_pressure,
+            )
+            || !near(pressure, mass / self.capacity, pressure)
+            || pressure < self.domain[0]
+            || pressure > self.domain[1]
+            || (mass > 0. && pressure <= 0.)
+            || !near(received, evaporated - condensed, mass_scale)
+            || !near(residual, mass - self.initial_mass - received, mass_scale)
+            || residual.abs() > self.mass_tolerance.min(4096. * f64::EPSILON * mass_scale)
+            || !inside(mass, 0., available, mass_scale, steps)
+            || !inside(condensed, 0., available, mass_scale, steps)
+            || !accumulated_near(nonnegative(report, "elapsed_seconds")?, time, time, steps)
+            || new_trials < new_steps
+            || maximum_residual < self.previous_maximum_residual
+            || maximum_residual > self.mass_tolerance
+            || maximum_residual > 1024. * f64::EPSILON * step_mass_scale
+            || !step_mass_scale.is_finite()
+        {
+            return Err(fail());
+        }
+        let change = number(report, "vapor_enthalpy_change_j")?;
+        let received_j = number(report, "net_vapor_enthalpy_received_j")?;
+        let removed_j = number(report, "isothermal_heat_removed_j")?;
+        let error_j = number(report, "enthalpy_balance_error_j")?;
+        let latent = nonnegative(water, "latent_energy_j")?;
+        let exported = number(water, "exported_vapor_sensible_energy_j")?;
+        let condensation = nonnegative(water, "condensation_latent_energy_j")?;
+        let incoming = number(water, "incoming_vapor_sensible_energy_j")?;
+        let exchanged_scale = latent + exported.abs() + condensation + incoming.abs();
+        let expected_change = self.effective_enthalpy * (mass - self.initial_mass);
+        let balance_scale = change.abs() + removed_j.abs() + received_j.abs();
+        if !near(change, expected_change, expected_change)
+            || !accumulated_near(
+                received_j,
+                latent + exported - condensation - incoming,
+                exchanged_scale,
+                steps,
+            )
+            || !near(removed_j, received_j - change, balance_scale)
+            || !near(error_j, change + removed_j - received_j, balance_scale)
+            || error_j.abs() > 1024. * f64::EPSILON * balance_scale
+        {
+            return Err(fail());
+        }
+        self.previous_steps = steps;
+        self.previous_trials = pressure_trials;
+        self.previous_maximum_residual = maximum_residual;
+        Ok(())
+    }
+}
+
 /// Return the additional liquid/vapor energy on each retained sample and the final receipt.
 /// The caller reconciles this with the existing independently admitted mechanical heat sources.
 pub(super) fn admit(
@@ -703,8 +872,11 @@ pub(super) fn admit(
             Err(fail())
         };
     }
-    let draining = policy["schema"] == "ftx-textile-surface-water/4";
+    let finite_reservoir = policy["schema"] == "ftx-textile-surface-water/5";
+    let draining = policy["schema"] == "ftx-textile-surface-water/4"
+        || finite_reservoir && !policy["drainage"].is_null();
     let condensing = policy["schema"] == "ftx-textile-surface-water/3"
+        || finite_reservoir
         || draining && !policy["condensation"].is_null();
     let supplied = draining || condensing || policy["schema"] == "ftx-textile-surface-water/2";
     let version_valid = if supplied {
@@ -718,6 +890,8 @@ pub(super) fn admit(
         || !version_valid
         || condensing == policy["condensation"].is_null()
         || draining == policy["drainage"].is_null()
+        || (finite_reservoir && policy["vapor_reservoir"].is_null())
+        || (!finite_reservoir && policy.get("vapor_reservoir").is_some())
         || policy["model"] != "inner_cell_equilibrium_free_film_frozen_properties/1"
         || water["request"] != *policy
         || heat["initial_temperature_c"] != heat_request["initial_temperature_c"]
@@ -739,6 +913,9 @@ pub(super) fn admit(
     if cp <= 0. || latent <= 0. || maximum <= 0. || reference < -273.15 {
         return Err(fail());
     }
+    let mut reservoir = finite_reservoir
+        .then(|| Reservoir::new(&policy["vapor_reservoir"], cp, latent, reference))
+        .transpose()?;
     let table = array(policy, "wet_vapor_pressure_pa")?;
     if !(2..=128).contains(&table.len()) {
         return Err(fail());
@@ -780,8 +957,15 @@ pub(super) fn admit(
         }
         Err(fail())
     };
-    let ambient = array(policy, "outside_vapor_pressure_pa")?;
-    if ambient.len() != array(motion, "keyframes")?.len()
+    let intervals = array(motion, "keyframes")?.len();
+    let ambient = if finite_reservoir && policy.get("outside_vapor_pressure_pa").is_none() {
+        &[][..]
+    } else {
+        array(policy, "outside_vapor_pressure_pa")?
+    };
+    if intervals == 0
+        || (finite_reservoir && !ambient.is_empty())
+        || (!finite_reservoir && ambient.len() != intervals)
         || ambient.iter().any(|p| finite(p).is_none_or(|p| p < 0.))
     {
         return Err(fail());
@@ -804,7 +988,11 @@ pub(super) fn admit(
                     .ok_or_else(fail)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        if values.len() != ambient.len() {
+        if values.len() != intervals
+            || reservoir
+                .as_ref()
+                .is_some_and(|r| values.iter().any(|&t| t != r.temperature))
+        {
             return Err(fail());
         }
         Some(values)
@@ -1278,7 +1466,7 @@ pub(super) fn admit(
             + condensation_j
             + mechanical_heat.get(index).copied().ok_or_else(fail)?;
         let ambient_index = if std::ptr::eq(row, heat) {
-            ambient.len() - 1
+            intervals - 1
         } else {
             vapor_index(&row["interval_index"])?
         };
@@ -1351,7 +1539,9 @@ pub(super) fn admit(
             }
         }
         let mass_error = remaining + evaporated + drained - initial - supplied_mass - condensed;
-        let expected_schema = if draining {
+        let expected_schema = if finite_reservoir {
+            "ftx-textile-surface-water-result/5"
+        } else if draining {
             "ftx-textile-surface-water-result/4"
         } else if condensing {
             "ftx-textile-surface-water-result/3"
@@ -1430,6 +1620,16 @@ pub(super) fn admit(
         {
             return Err(fail());
         }
+        if let Some(reservoir) = &mut reservoir {
+            let time = if std::ptr::eq(row, heat) {
+                number(heat, "duration_s")?
+            } else {
+                number(row, "time_s")?
+            };
+            reservoir.admit(w, time, steps)?;
+        } else if w.get("vapor_reservoir").is_some() {
+            return Err(fail());
+        }
         previous = [remaining, evaporated, supplied_mass, condensed];
         previous_incoming_j = incoming_j;
         previous_drained = drained;
@@ -1459,8 +1659,41 @@ pub(super) fn admit(
         "incoming_vapor_sensible_energy_j",
         "drained_liquid_kg",
         "exported_liquid_sensible_energy_j",
+        "vapor_reservoir",
     ] {
         if water[field] != trace.last().ok_or_else(fail)?["surface_water"][field] {
+            return Err(fail());
+        }
+    }
+    if let Some(reservoir) = &reservoir {
+        // Retried histories retain failed pressure probes. They need not fit an upper bound
+        // based on committed substeps; every attempt must fit the exact charged history budget.
+        let cell_cost = if [
+            "plastic_dissipation_heat",
+            "relaxation_dissipation_heat",
+            "bending_plastic_dissipation_heat",
+        ]
+        .iter()
+        .any(|key| !heat_request[key].is_null())
+            || columns
+                .iter()
+                .any(|column| column["schema"] == "ftx-dry-thermal-model/2")
+        {
+            129
+        } else {
+            1
+        };
+        let operations = total_steps
+            .checked_mul(cell_cost)
+            .and_then(|n| n.checked_add(reservoir.previous_trials))
+            .and_then(|n| n.checked_mul(patches.len() as u64))
+            .and_then(|n| n.checked_mul(cells as u64))
+            .ok_or_else(fail)?;
+        let maximum = heat_request["max_cell_steps"].as_u64().ok_or_else(fail)?;
+        if heat["cell_steps"].as_u64() != Some(operations)
+            || !(1..=10_000_000).contains(&maximum)
+            || operations > maximum
+        {
             return Err(fail());
         }
     }

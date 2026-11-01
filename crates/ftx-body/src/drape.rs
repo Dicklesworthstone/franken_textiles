@@ -31,19 +31,40 @@
 use std::collections::BTreeMap;
 
 use ftx_core::{Refusal, RefusalCode, Vec3, det};
+use serde::{Deserialize, Serialize};
 
 use crate::kinematics::Affine;
 use crate::model::{AnnyModel, BodyParams, RestBody};
 
 /// Leg posture.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Legs {
     /// The rest legs.
+    #[default]
     Standing,
     /// Hips and knees at 90°.
     Seated,
     /// Hips 100°, knees 110°, feet level; trunk upright.
     Squat,
+}
+
+impl Legs {
+    /// Stable posture name shared by requests and reports.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Standing => "standing",
+            Self::Seated => "seated",
+            Self::Squat => "squat",
+        }
+    }
+
+    /// Omit the legacy standing default from source request serialization.
+    #[must_use]
+    pub const fn is_standing(&self) -> bool {
+        matches!(self, Self::Standing)
+    }
 }
 
 /// A drape pose.
@@ -53,6 +74,8 @@ pub struct Pose {
     pub arm_abduction_deg: Option<f64>,
     /// Leg posture.
     pub legs: Legs,
+    /// Fraction of the selected leg rotations, 0..=1. Arms are not scaled by this control.
+    pub leg_fraction: f64,
     /// Straighten both elbows (and the upper arm's twist segment) onto the upper arm's line.
     pub straight_arms: bool,
 }
@@ -69,6 +92,7 @@ impl Pose {
         Self {
             arm_abduction_deg: None,
             legs: Legs::Standing,
+            leg_fraction: 1.0,
             straight_arms: false,
         }
     }
@@ -79,6 +103,7 @@ impl Pose {
         Self {
             arm_abduction_deg: Some(deg),
             legs: Legs::Standing,
+            leg_fraction: 1.0,
             straight_arms: false,
         }
     }
@@ -95,6 +120,7 @@ impl Pose {
         Self {
             arm_abduction_deg: Some(Self::A_POSE_DEG),
             legs: Legs::Seated,
+            leg_fraction: 1.0,
             straight_arms: false,
         }
     }
@@ -105,6 +131,7 @@ impl Pose {
         Self {
             arm_abduction_deg: Some(Self::A_POSE_DEG),
             legs: Legs::Squat,
+            leg_fraction: 1.0,
             straight_arms: false,
         }
     }
@@ -116,6 +143,28 @@ impl Pose {
             straight_arms: true,
             ..Self::a_pose(Self::A_POSE_DEG)
         }
+    }
+
+    /// Check authored angles and independent leg flexion before evaluating a model.
+    ///
+    /// # Errors
+    /// Non-finite or out-of-range arm abduction or leg fraction.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        if let Some(deg) = self.arm_abduction_deg
+            && !(0.0..=180.0).contains(&deg)
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("arm abduction {deg}° is outside 0–180°"),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.leg_fraction) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("leg fraction {} is outside 0–1", self.leg_fraction),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -167,14 +216,9 @@ pub fn joint_rotations(
     rest: &RestBody,
     pose: &Pose,
 ) -> Result<Vec<JointRotation>, Refusal> {
+    pose.validate()?;
     let mut out = Vec::new();
     if let Some(deg) = pose.arm_abduction_deg {
-        if !(0.0..=180.0).contains(&deg) {
-            return Err(Refusal::new(
-                RefusalCode::OutOfRange,
-                format!("arm abduction {deg}° is outside 0–180°"),
-            ));
-        }
         for label in ["upperarm01.L", "upperarm01.R"] {
             let b = bone(model, label)?;
             let d = rest.bone_frames[b].m.col(1).normalized();
@@ -215,7 +259,7 @@ pub fn joint_rotations(
         out.push(JointRotation {
             bone: bone(model, label)?,
             axis: Vec3::new(1.0, 0.0, 0.0),
-            angle: deg.to_radians(),
+            angle: deg.to_radians() * pose.leg_fraction,
         });
     }
     Ok(out)
