@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::Refusal;
+use ftx_core::{Refusal, Vec2};
 use ftx_pattern::{Pattern, material_catalog::ResolvedMaterial};
 use serde_json::json;
 
@@ -272,6 +272,18 @@ fn roll(plan: &CutPlan, expected: &str) -> Result<Summary, Refusal> {
             .iter()
             .enumerate()
             .map(|(i, marker)| (i, &marker.material, marker.placements.as_slice())),
+        |index| {
+            let marker = &plan.rolls[index];
+            let width = marker
+                .material
+                .material()
+                .properties
+                .get("width")
+                .ok_or_else(|| invalid("knife source stock width is missing"))?
+                .bounds
+                .map_or(marker.width_m, |bounds| bounds[1]);
+            Ok([0., 0., width * 1000., marker.length_m * 1000.])
+        },
     )
 }
 
@@ -302,6 +314,19 @@ fn finite(plan: &stock::Plan, expected: &str) -> Result<Summary, Refusal> {
             .enumerate()
             .filter(|(_, marker)| !marker.placements.is_empty())
             .map(|(i, marker)| (i, &marker.material, marker.placements.as_slice())),
+        |index| {
+            Ok(plan.markers()[index].outline_mm.iter().fold(
+                [
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                    f64::NEG_INFINITY,
+                ],
+                |[xmin, ymin, xmax, ymax], p| {
+                    [xmin.min(p.x), ymin.min(p.y), xmax.max(p.x), ymax.max(p.y)]
+                },
+            ))
+        },
     )
 }
 
@@ -315,6 +340,7 @@ fn summarize<'a>(
     schema: &str,
     stock: job::StockKind,
     markers: impl Iterator<Item = (usize, &'a ResolvedMaterial, &'a [CutPlacement])>,
+    stock_bounds: impl Fn(usize) -> Result<[f64; 4], Refusal>,
 ) -> Result<Summary, Refusal> {
     let markers: BTreeMap<_, _> = markers
         .map(|(i, material, placements)| (i, (material, placements)))
@@ -326,6 +352,7 @@ fn summarize<'a>(
         || report.machine_sha256 != program::machine_sha256(&policy.machine)?
         || hash(&report.fixture_clearance)? != hash(&policy.machine.fixture_clearance)?
         || hash(&report.travel_routing)? != hash(&policy.travel_routing)?
+        || report.stock_loading != policy.stock_loading
         || markers.is_empty()
         || markers.len() != report.markers.len()
     {
@@ -342,6 +369,48 @@ fn summarize<'a>(
         if !seen.insert(marker.marker) || marker.material_sha256 != material.sha256() {
             return Err(invalid(
                 "knife program repeats or changes its exact material marker",
+            ));
+        }
+        let bounds = stock_bounds(marker.marker)?;
+        let mut loadings = policy
+            .stock_loading
+            .iter()
+            .filter(|item| item.marker == marker.marker);
+        let loading = loadings.next();
+        let origin = loading.map_or(Vec2::ZERO, |item| item.lower_left_mm);
+        let offset = match stock {
+            job::StockKind::FiniteStock => Some(if loading.is_some() {
+                origin - Vec2::new(bounds[0], bounds[1])
+            } else {
+                Vec2::new(-bounds[0], -bounds[1])
+            }),
+            job::StockKind::Roll => loading.map(|_| origin),
+        };
+        let expected_loading = loading.map(|_| program::Loading {
+            lower_left_mm: origin,
+            marker_to_machine_offset_mm: offset.unwrap(),
+            stock_bounds_mm: [
+                origin.x,
+                origin.y,
+                origin.x + (bounds[2] - bounds[0]),
+                origin.y + (bounds[3] - bounds[1]),
+            ],
+        });
+        if bounds.iter().any(|value| !value.is_finite())
+            || bounds[2] <= bounds[0]
+            || bounds[3] <= bounds[1]
+            || marker.loading != expected_loading
+            || loadings.next().is_some()
+            || (stock == job::StockKind::FiniteStock
+                && marker
+                    .finite_stock
+                    .as_ref()
+                    .map(|frame| frame.marker_to_machine_offset_mm)
+                    != offset)
+            || (stock == job::StockKind::Roll && marker.finite_stock.is_some())
+        {
+            return Err(invalid(
+                "knife effort lost its authored whole-stock loading frame",
             ));
         }
         let mut candidates = policy.qualifications.iter().filter(|q| {
@@ -380,6 +449,9 @@ fn summarize<'a>(
         if let Some(routing) = &policy.travel_routing {
             protocol["travel_routing"] = json!(routing);
         }
+        if !policy.stock_loading.is_empty() {
+            protocol["stock_loading"] = json!(policy.stock_loading);
+        }
         let protocol = hash(&protocol)?;
         let expected: BTreeSet<_> = placements
             .iter()
@@ -397,10 +469,29 @@ fn summarize<'a>(
             let placement = placements
                 .get(run.path.placement)
                 .ok_or_else(|| invalid("knife path names an unknown placement"))?;
+            let (points, closed) = match run.path.internal_cut {
+                Some(feature) => placement
+                    .internal_cut_mm
+                    .get(feature)
+                    .map(|(points, closed)| (points.as_slice(), *closed))
+                    .ok_or_else(|| invalid("knife path names an unknown internal cut"))?,
+                None => (placement.cut_mm.as_slice(), true),
+            };
+            let start = *points
+                .first()
+                .ok_or_else(|| invalid("knife path is empty"))?;
+            let end = if closed {
+                start
+            } else {
+                *points.last().unwrap()
+            };
+            let loaded = |point: Vec2| offset.map_or(point, |offset| point + offset);
             if !paths.insert((run.path.placement, run.path.internal_cut))
                 || run.piece != placement.piece
                 || run.instance != placement.instance
                 || run.copy != placement.copy
+                || run.closed != closed
+                || run.cut_endpoints_mm != [loaded(start), loaded(end)]
                 || !run.cut_length_mm.is_finite()
                 || run.cut_length_mm <= 0.
                 || (run.path.internal_cut.is_some() && exterior_started)

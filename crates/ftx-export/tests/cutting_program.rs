@@ -124,6 +124,164 @@ fn routed_fixture() -> (Pattern, CutOptions) {
 }
 
 #[test]
+fn explicit_stock_loading_enables_a_blocked_cut_and_retains_complete_machine_motion() {
+    let p = pattern(vec![piece("front", 40., 60.)]);
+    let mut opts = qualified_options(&p);
+    let origin = CutPlan::build(&p, &opts).unwrap();
+    fixture_policy(
+        &mut opts,
+        [[44.8, 34.], [45.2, 34.], [45.2, 36.], [44.8, 36.]],
+    );
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("cutting tool envelope")
+    );
+    let lock = program::machine_sha256(&opts.program.as_ref().unwrap().machine).unwrap();
+    opts.program.as_mut().unwrap().stock_loading = vec![program::StockLoading {
+        marker: 0,
+        lower_left_mm: Vec2::new(200., 100.),
+    }];
+    let plan = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(value(&plan.rolls), value(&origin.rolls));
+    assert_eq!(value(&plan), value(&CutPlan::build(&p, &opts).unwrap()));
+    let report = plan.program.as_ref().unwrap();
+    assert_eq!(report.machine_sha256, lock);
+    assert_eq!(
+        report.stock_loading,
+        opts.program.as_ref().unwrap().stock_loading
+    );
+    let marker = &report.markers[0];
+    assert_ne!(
+        marker.geometry_sha256,
+        origin.program.as_ref().unwrap().markers[0].geometry_sha256
+    );
+    assert_eq!(
+        value(&marker.loading),
+        json!({"lower_left_mm":[200.,100.],
+        "marker_to_machine_offset_mm":[200.,100.], "stock_bounds_mm":[200.,100.,320.,170.]})
+    );
+    let route = &marker.selected;
+    let end = Vec2::new(245., 105.);
+    assert_eq!(route.runs[0].cut_endpoints_mm, [end; 2]);
+    assert_eq!(route.runs[0].travel_mm, [Vec2::ZERO, end]);
+    assert_eq!(route.return_mm, Some([end, Vec2::ZERO]));
+    near(route.cut_length_mm, 200.);
+    near(route.travel_length_mm, 2. * end.norm());
+    near(route.modeled_path_seconds, 10.25 + 2. * end.norm() / 100.);
+    let svg = ftx_export::cutting::preview::svg(&plan, 0).unwrap();
+    assert!(svg.contains("viewBox=\"0 0 500 500\""));
+    assert!(svg.contains("id=\"stock-loading\" transform=\"translate(200 100)\""));
+    assert!(
+        svg.contains(
+            "id=\"loaded-stock-envelope\" x=\"200\" y=\"100\" width=\"120\" height=\"70\""
+        )
+    );
+    assert!(svg.contains("data-phase=\"raised-travel\" d=\"M0 0 L245 105 \""));
+    assert!(svg.contains("data-phase=\"raised-return\""));
+    // The additional loading/frame checks share the geometric budget and cannot be skipped.
+    let mut short = opts.clone();
+    short.program.as_mut().unwrap().geometry_work_limit = report.geometry_work - 1;
+    assert_eq!(
+        process_refusal(&p, &short).code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    let mut changed = opts;
+    changed.program.as_mut().unwrap().qualifications[0].material_sha256 = "0".repeat(64);
+    assert!(
+        process_refusal(&p, &changed)
+            .message
+            .contains("qualification")
+    );
+}
+
+#[test]
+fn stock_loading_requires_unique_existing_markers_and_the_entire_source_width_on_bed() {
+    let p = pattern(vec![piece("front", 40., 60.)]);
+    let mut raw = p.raw().clone();
+    raw["fabric"]["material"]["record"]["properties"]["width"]["bounds"] = json!([0.11, 0.13]);
+    let p = Pattern::new(raw);
+    let mut opts = qualified_options(&p);
+    opts.width_basis = ftx_export::cutting::WidthBasis::ReportedLowerBound;
+    let origin = CutPlan::build(&p, &opts).unwrap();
+    assert!(value(&origin.program).get("stock_loading").is_none());
+    let mut empty = value(&opts);
+    empty["program"]["stock_loading"] = json!([]);
+    let empty: CutOptions = serde_json::from_value(empty).unwrap();
+    assert_eq!(value(&origin), value(&CutPlan::build(&p, &empty).unwrap()));
+    assert_eq!(
+        ftx_export::cutting::preview::svg(&origin, 0).unwrap(),
+        ftx_export::cutting::preview::svg(&CutPlan::build(&p, &empty).unwrap(), 0).unwrap()
+    );
+    let item = program::StockLoading {
+        marker: 0,
+        lower_left_mm: Vec2::new(375., 0.),
+    };
+    opts.program.as_mut().unwrap().stock_loading = vec![item.clone()];
+    // The 110 mm layout and nominal 120 mm roll fit; the full upper source width of 130 mm does not.
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("complete roll marker")
+    );
+    opts.program.as_mut().unwrap().stock_loading[0]
+        .lower_left_mm
+        .x = 370.;
+    let loaded = CutPlan::build(&p, &opts).unwrap();
+    let loading = loaded.program.as_ref().unwrap().markers[0]
+        .loading
+        .as_ref()
+        .unwrap();
+    assert_eq!(loading.stock_bounds_mm, [370., 0., 500., 70.]);
+    assert!(
+        ftx_export::cutting::preview::svg(&loaded, 0)
+            .unwrap()
+            .contains("width=\"130\" height=\"70\"")
+    );
+    for entries in [
+        vec![item.clone(), item.clone()],
+        vec![program::StockLoading {
+            marker: 1,
+            ..item.clone()
+        }],
+        vec![program::StockLoading {
+            lower_left_mm: Vec2::new(-1., 0.),
+            ..item.clone()
+        }],
+        vec![program::StockLoading {
+            lower_left_mm: Vec2::new(f64::NAN, 0.),
+            ..item.clone()
+        }],
+        vec![item; 4097],
+    ] {
+        opts.program.as_mut().unwrap().stock_loading = entries;
+        assert!(process_refusal(&p, &opts).message.contains("stock loading"));
+    }
+}
+
+#[test]
+fn translated_stock_and_fixture_detours_use_one_machine_frame() {
+    let (p, mut opts) = routed_fixture();
+    opts.program.as_mut().unwrap().stock_loading = vec![program::StockLoading {
+        marker: 0,
+        lower_left_mm: Vec2::new(0., 10.),
+    }];
+    let plan = CutPlan::build(&p, &opts).unwrap();
+    let route = &plan.program.as_ref().unwrap().markers[0].selected;
+    assert_eq!(route.runs[0].cut_endpoints_mm, [Vec2::new(45., 15.); 2]);
+    assert_eq!(route.runs[0].travel_waypoints_mm.len(), 2);
+    near(route.runs[0].travel_waypoints_mm[0].y, 91.2);
+    near(route.return_waypoints_mm[0].y, 91.2);
+    near(
+        route.travel_length_mm,
+        route.checked_travel_length().unwrap(),
+    );
+    let svg = ftx_export::cutting::preview::svg(&plan, 0).unwrap();
+    assert!(svg.contains("id=\"stock-loading\" transform=\"translate(0 10)\""));
+    assert!(svg.contains("L111.2 91.2 L98.8 91.2 L45 15"));
+}
+
+#[test]
 fn checked_detours_enable_a_blocked_job_and_retain_the_return_and_full_bed_preview() {
     let (p, opts) = routed_fixture();
     let mut straight = opts.clone();

@@ -50,6 +50,17 @@ pub struct TravelRouting {
     pub waypoint_offset_mm: f64,
 }
 
+/// Authored location of one complete stock item on the machine bed, without changing its marker.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StockLoading {
+    /// Index in the final roll or finite-stock marker array, including unused finite-stock entries.
+    pub marker: usize,
+    /// Machine-frame location of the whole stock bounding-box lower-left corner, in mm.
+    /// This is a modeled translation, not measured registration or a workholding qualification.
+    pub lower_left_mm: Vec2,
+}
+
 /// Explicit cold-knife configuration. A qualification locks every field, not just its display ID.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -164,6 +175,9 @@ pub struct Policy {
     /// retains straight raised travel; cutting paths and their authored endpoints never change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub travel_routing: Option<TravelRouting>,
+    /// Optional complete-stock locations; unlisted markers retain their origin-based placement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stock_loading: Vec<StockLoading>,
     /// Shared candidate-comparison budget across all markers, in 1..=2000000.
     pub work_limit: usize,
     /// Shared geometric-validation budget across all markers, in 1..=20000000.
@@ -316,10 +330,22 @@ pub struct FiniteStock {
     /// Exact frozen stock entry, including material, original geometry, sources and prior cuts.
     pub stock_sha256: String,
     /// Translation from unchanged final marker coordinates into the machine bed, in mm.
-    /// The complete stock bounding-box lower-left corner is placed at the bed origin.
+    /// The complete stock bounding-box lower-left corner uses the authored location or bed origin.
     pub marker_to_machine_offset_mm: Vec2,
     /// Composed rigid affine transform from original stock coordinates to the modeled machine bed.
     pub source_to_machine: [[f64; 3]; 2],
+}
+
+/// Retained translation of an explicitly positioned whole stock item, with its complete envelope.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Loading {
+    /// Authored machine-frame lower-left position, in mm.
+    pub lower_left_mm: Vec2,
+    /// Translation applied to every unchanged marker path and annotation, in mm.
+    pub marker_to_machine_offset_mm: Vec2,
+    /// Complete loaded stock envelope [xmin, ymin, xmax, ymax], in mm. Roll width uses the source's
+    /// upper reported bound when present, independently of the narrower layout/purchase basis.
+    pub stock_bounds_mm: [f64; 4],
 }
 
 /// Complete baseline and selected traversal for one exact material marker.
@@ -330,6 +356,9 @@ pub struct Marker {
     /// Present only for individually inventoried finite stock; no stock boundary is cut.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finite_stock: Option<FiniteStock>,
+    /// Present only for an explicitly authored loading; default output keeps its original fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loading: Option<Loading>,
     /// Full unchanged material identity.
     pub material_sha256: String,
     /// Digest of all final placements, including directions, internal cuts, copies and transforms.
@@ -362,6 +391,9 @@ pub struct Report {
     /// Exact optional raised-move routing policy, independent of physical source qualification.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub travel_routing: Option<TravelRouting>,
+    /// Exact authored locations, including any unused finite stocks which produce no toolpaths.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stock_loading: Vec<StockLoading>,
     /// Complete marker-specific programs, in the original material/marker order.
     pub markers: Vec<Marker>,
     /// Actual bounded ordering and routing search work shared by every marker.
@@ -703,6 +735,16 @@ impl Policy {
                 "raised-travel routing requires qualified fixture geometry, fixture_box_visibility/1 and a positive waypoint_offset_mm up to 1000000",
             ));
         }
+        let mut loaded_markers = BTreeSet::new();
+        if self.stock_loading.len() > 4096
+            || self.stock_loading.iter().any(|loading| {
+                !loaded_markers.insert(loading.marker) || !on_bed(loading.lower_left_mm, m)
+            })
+        {
+            return Err(bad(
+                "stock loading needs at most 4096 unique marker indices and finite lower-left positions on the machine bed",
+            ));
+        }
         if !(1..=MAX_SEARCH_WORK).contains(&self.work_limit)
             || !(1..=MAX_GEOMETRY_WORK).contains(&self.geometry_work_limit)
             || self.qualifications.is_empty()
@@ -815,6 +857,7 @@ impl Path<'_> {
 #[derive(Clone, Copy)]
 struct Envelope {
     size_mm: [f64; 2],
+    origin_mm: Vec2,
     offset: Option<Vec2>,
 }
 
@@ -850,8 +893,20 @@ impl MarkerSource<'_> {
     fn frame(
         &self,
         machine: &Machine,
+        loading: Option<&StockLoading>,
         work: &mut geometry::Work,
-    ) -> Result<(Envelope, Option<FiniteStock>, String), Refusal> {
+    ) -> Result<(Envelope, Option<FiniteStock>, Option<Loading>, String), Refusal> {
+        let origin = loading.map_or(Vec2::ZERO, |loading| loading.lower_left_mm);
+        let receipt = |offset, size: [f64; 2]| {
+            loading.map(|_| Loading {
+                lower_left_mm: origin,
+                marker_to_machine_offset_mm: offset,
+                stock_bounds_mm: [origin.x, origin.y, origin.x + size[0], origin.y + size[1]],
+            })
+        };
+        if loading.is_some() {
+            work.spend(2).ok_or_else(budget)?;
+        }
         match self {
             Self::Roll(_, marker) => {
                 let width = marker
@@ -873,8 +928,8 @@ impl MarkerSource<'_> {
                 if !positive(width)
                     || !positive(stock_width)
                     || !positive(length)
-                    || stock_width > machine.bed_mm[0]
-                    || length > machine.bed_mm[1]
+                    || !on_bed(origin, machine)
+                    || !on_bed(origin + Vec2::new(stock_width, length), machine)
                 {
                     return Err(bad(
                         "complete roll marker exceeds the declared knife bed; repartition the marker explicitly",
@@ -883,19 +938,29 @@ impl MarkerSource<'_> {
                 Ok((
                     Envelope {
                         size_mm: [width, length],
-                        offset: None,
+                        origin_mm: origin,
+                        offset: loading.map(|_| origin),
                     },
                     None,
-                    digest(&marker.placements)?,
+                    receipt(origin, [stock_width, length]),
+                    if loading.is_some() {
+                        digest(&(&marker.placements, origin))?
+                    } else {
+                        digest(&marker.placements)?
+                    },
                 ))
             }
             Self::Finite(_, marker, original) => {
                 let b = bbox(&marker.outline_mm)?;
-                let offset = Vec2::new(-b[0], -b[1]);
+                let offset = if loading.is_some() {
+                    origin - Vec2::new(b[0], b[1])
+                } else {
+                    Vec2::new(-b[0], -b[1])
+                };
                 let size_mm = [b[2] - b[0], b[3] - b[1]];
                 if size_mm.iter().any(|&v| !positive(v))
-                    || size_mm[0] > machine.bed_mm[0]
-                    || size_mm[1] > machine.bed_mm[1]
+                    || !on_bed(origin, machine)
+                    || !on_bed(origin + Vec2::new(size_mm[0], size_mm[1]), machine)
                 {
                     return Err(bad(
                         "complete finite stock exceeds the declared knife bed; a fitting cut-piece subset cannot shrink the physical hide or remnant",
@@ -939,9 +1004,11 @@ impl MarkerSource<'_> {
                 Ok((
                     Envelope {
                         size_mm,
+                        origin_mm: origin,
                         offset: Some(offset),
                     },
                     Some(identity),
+                    receipt(offset, size_mm),
                     geometry_sha256,
                 ))
             }
@@ -1025,8 +1092,10 @@ fn paths<'a>(
                     || points.iter().any(|&p| {
                         let loaded = envelope.offset.map_or(p, |d| p + d);
                         !on_bed(loaded, machine)
-                            || loaded.x > envelope.size_mm[0]
-                            || loaded.y > envelope.size_mm[1]
+                            || loaded.x < envelope.origin_mm.x
+                            || loaded.y < envelope.origin_mm.y
+                            || loaded.x > envelope.origin_mm.x + envelope.size_mm[0]
+                            || loaded.y > envelope.origin_mm.y + envelope.size_mm[1]
                     })
                     || edges(points, closed).any(|(a, b)| !positive(a.dist(b)))
                 {
@@ -1197,6 +1266,14 @@ fn nearest(paths: &[Path<'_>], machine: &Machine, work: &mut geometry::Work) -> 
 /// Missing/mismatched process evidence, unsupported drills or material state, unqualified thickness,
 /// invalid/oversized geometry, or exhaustion of the fixed geometric validation budget.
 pub(super) fn build(plan: &CutPlan, policy: &Policy) -> Result<Report, Refusal> {
+    if policy.stock_loading.len() > 4096
+        || policy
+            .stock_loading
+            .iter()
+            .any(|loading| loading.marker >= plan.rolls.len())
+    {
+        return Err(bad("stock loading names an unknown roll marker"));
+    }
     let sources = plan
         .rolls
         .iter()
@@ -1211,6 +1288,14 @@ pub(super) fn build_finite(plan: &stock::Plan, policy: &Policy) -> Result<Report
         return Err(bad(
             "knife program lost finite-stock inventory correspondence",
         ));
+    }
+    if policy.stock_loading.len() > 4096
+        || policy
+            .stock_loading
+            .iter()
+            .any(|loading| loading.marker >= plan.markers().len())
+    {
+        return Err(bad("stock loading names an unknown finite-stock marker"));
     }
     let sources = plan
         .markers()
@@ -1230,6 +1315,14 @@ fn build_markers(
 ) -> Result<Report, Refusal> {
     let (machine_sha256, recipes) = policy.validate()?;
     let mut geometry_work = geometry::Work::new(policy.geometry_work_limit);
+    geometry_work
+        .spend(policy.stock_loading.len())
+        .ok_or_else(budget)?;
+    let loading: BTreeMap<_, _> = policy
+        .stock_loading
+        .iter()
+        .map(|item| (item.marker, item))
+        .collect();
     if let Some(clearance) = &policy.machine.fixture_clearance {
         clearance.validate(&mut geometry_work)?;
     }
@@ -1271,8 +1364,14 @@ fn build_markers(
                 "full source thickness range exceeds the knife process or machine envelope",
             ));
         }
-        let (envelope, finite_stock, geometry_sha256) =
-            source.frame(&policy.machine, &mut geometry_work)?;
+        if !loading.is_empty() {
+            geometry_work.spend(1).ok_or_else(budget)?;
+        }
+        let (envelope, finite_stock, loading, geometry_sha256) = source.frame(
+            &policy.machine,
+            loading.get(&source.index()).copied(),
+            &mut geometry_work,
+        )?;
         let placements = source.placements();
         let paths = paths(placements, envelope, &policy.machine, &mut geometry_work)?;
         let baseline_order: Vec<_> = (0..paths.len()).collect();
@@ -1326,6 +1425,7 @@ fn build_markers(
         markers.push(Marker {
             marker: source.index(),
             finite_stock,
+            loading,
             material_sha256: material.sha256().into(),
             geometry_sha256,
             qualification: q.id.clone(),
@@ -1345,6 +1445,7 @@ fn build_markers(
         machine_sha256,
         fixture_clearance: policy.machine.fixture_clearance.clone(),
         travel_routing: policy.travel_routing.clone(),
+        stock_loading: policy.stock_loading.clone(),
         markers,
         search_work: search_work.used,
         geometry_work: geometry_work.used,
@@ -1375,7 +1476,10 @@ fn build_markers(
                     "No fixture geometry was supplied; tool/fixture clearance was not evaluated.",
                 );
             }
-            if finite {
+            if !policy.stock_loading.is_empty() {
+                limits.push("Explicit stock loading translates the complete stock envelope, unchanged cuts and annotations to the authored lower-left machine position. Unlisted markers retain origin placement; unused finite stocks create no toolpaths. No physical registration accuracy, loading time, grip adequacy or workholding qualification is inferred.");
+            }
+            if finite && policy.stock_loading.is_empty() {
                 limits.push("Each used physical stock item is independently loaded with its complete marker bounding-box lower-left corner at the bed origin. The reported translation preserves source orientation, all defects and prior occupied regions; stock boundaries, defects, occupied areas and zones are not cutting paths. This modeled loading position is not measured machine registration or workholding qualification.");
             }
             limits

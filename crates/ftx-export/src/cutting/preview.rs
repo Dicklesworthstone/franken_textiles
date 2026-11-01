@@ -33,7 +33,7 @@ fn path(points: &[Vec2], closed: bool) -> String {
 struct RoutedPreview<'a> {
     marker: &'a program::Marker,
     machine: &'a program::Machine,
-    fixtures: &'a program::FixtureClearance,
+    fixtures: Option<&'a program::FixtureClearance>,
 }
 
 fn routed_preview<'a>(
@@ -41,21 +41,53 @@ fn routed_preview<'a>(
     policy: Option<&'a program::Policy>,
     index: usize,
 ) -> Result<Option<RoutedPreview<'a>>, Refusal> {
-    let Some(report) = report.filter(|r| r.travel_routing.is_some()) else {
+    let Some(report) = report.filter(|r| r.travel_routing.is_some() || !r.stock_loading.is_empty())
+    else {
         return Ok(None);
     };
     let bad = || Refusal::new(RefusalCode::InvalidDocument, "invalid routed knife preview");
     let policy = policy.ok_or_else(bad)?;
     let machine = &policy.machine;
-    let fixtures = machine.fixture_clearance.as_ref().ok_or_else(bad)?;
+    let fixtures = machine.fixture_clearance.as_ref();
     let mut markers = report.markers.iter().filter(|m| m.marker == index);
     let marker = markers.next().ok_or_else(bad)?;
     if markers.next().is_some()
         || report.travel_routing != policy.travel_routing
+        || report.stock_loading != policy.stock_loading
+        || (report.travel_routing.is_some() && fixtures.is_none())
         || report.machine_sha256 != program::machine_sha256(machine)?
         || machine.bed_mm.iter().any(|v| !v.is_finite() || *v <= 0.)
     {
         return Err(bad());
+    }
+    let mut requests = policy
+        .stock_loading
+        .iter()
+        .filter(|loading| loading.marker == index);
+    let requested = requests.next();
+    if requests.next().is_some()
+        || marker.loading.as_ref().map(|loading| loading.lower_left_mm)
+            != requested.map(|loading| loading.lower_left_mm)
+    {
+        return Err(bad());
+    }
+    if let Some(loading) = &marker.loading {
+        let [xmin, ymin, xmax, ymax] = loading.stock_bounds_mm;
+        if loading.stock_bounds_mm.iter().any(|v| !v.is_finite())
+            || !loading.marker_to_machine_offset_mm.is_finite()
+            || Vec2::new(xmin, ymin) != loading.lower_left_mm
+            || xmin < 0.
+            || ymin < 0.
+            || xmax <= xmin
+            || ymax <= ymin
+            || xmax > machine.bed_mm[0]
+            || ymax > machine.bed_mm[1]
+            || marker.finite_stock.as_ref().is_some_and(|stock| {
+                stock.marker_to_machine_offset_mm != loading.marker_to_machine_offset_mm
+            })
+        {
+            return Err(bad());
+        }
     }
     let route = &marker.selected;
     let points = route
@@ -88,7 +120,11 @@ fn knife_overlay(preview: &RoutedPreview<'_>) -> String {
     let mut out = String::from(
         "<g id=\"knife-fixtures\" fill=\"#fce4dd\" fill-opacity=\"0.6\" stroke=\"#9b3525\"><title>Qualified stationary fixture footprints; not cutting paths</title>\n",
     );
-    for fixture in &preview.fixtures.fixtures {
+    for fixture in preview
+        .fixtures
+        .into_iter()
+        .flat_map(|clearance| &clearance.fixtures)
+    {
         out.push_str(&format!(
             "<path data-fixture=\"{}\" d=\"{}\"/>\n",
             xml_escape(&fixture.id),
@@ -140,9 +176,33 @@ pub fn svg(plan: &CutPlan, roll_index: usize) -> Result<String, Refusal> {
         roll_index,
     )?;
     let [view_w, view_h] = routed.as_ref().map_or([w, h], |p| p.machine.bed_mm);
+    let loading = routed.as_ref().and_then(|p| p.marker.loading.as_ref());
+    let offset = loading.map_or(Vec2::ZERO, |loading| loading.marker_to_machine_offset_mm);
+    if let Some(loading) = loading {
+        let stock_width = roll
+            .material
+            .material()
+            .properties
+            .get("width")
+            .ok_or_else(bad)?
+            .bounds
+            .map_or(roll.width_m, |bounds| bounds[1])
+            * 1000.;
+        if offset != loading.lower_left_mm
+            || loading.stock_bounds_mm != [offset.x, offset.y, offset.x + stock_width, offset.y + h]
+        {
+            return Err(bad());
+        }
+    }
     let (ws, hs) = (fnum(w, 6), fnum(h, 6));
     let (view_ws, view_hs) = (fnum(view_w, 6), fnum(view_h, 6));
-    let stock_y = if routed.is_some() {
+    let stock_y = if loading.is_some() {
+        format!(
+            " x=\"{}\" y=\"{}\"",
+            fnum(offset.x, 6),
+            fnum(view_h - h - offset.y, 6)
+        )
+    } else if routed.is_some() {
         format!(" y=\"{}\"", fnum(view_h - h, 6))
     } else {
         String::new()
@@ -170,6 +230,14 @@ pub fn svg(plan: &CutPlan, roll_index: usize) -> Result<String, Refusal> {
         xml_escape(&plan.pattern_sha256),
         xml_escape(roll.material.sha256())
     );
+    if let Some(loading) = loading {
+        let bounds = loading.stock_bounds_mm;
+        out.push_str(&format!(
+            "<rect id=\"loaded-stock-envelope\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" stroke=\"#975000\" stroke-dasharray=\"2 1\"><title>Complete loaded stock envelope, including the upper source width bound; modeled placement only</title></rect>\n<g id=\"stock-loading\" transform=\"translate({} {})\">\n",
+            fnum(bounds[0], 6), fnum(bounds[1], 6), fnum(bounds[2]-bounds[0], 6),
+            fnum(bounds[3]-bounds[1], 6), fnum(offset.x, 6), fnum(offset.y, 6)
+        ));
+    }
     if let Some(layout) = &roll.layout_width {
         let [lo, hi] = layout.reported_bounds_m;
         let layout_mm = layout.width_m * 1000.0;
@@ -223,15 +291,26 @@ pub fn svg(plan: &CutPlan, roll_index: usize) -> Result<String, Refusal> {
         out.push_str(&format!("<path class=\"grain\" d=\"{}\" stroke-dasharray=\"2 1\" marker-end=\"url(#grain-arrow)\"/></g>\n",
             path(&p.grain_mm, false)));
     }
+    if loading.is_some() {
+        out.push_str("</g>\n");
+    }
     if let Some(preview) = &routed {
         out.push_str(&knife_overlay(preview));
     }
     out.push_str("</g>\n<g id=\"labels\" font-family=\"sans-serif\" font-size=\"3\">\n");
     for p in &roll.placements {
+        let (x, y) = if loading.is_some() {
+            (
+                p.bounds_mm[0] + offset.x + 1.0,
+                view_h - p.bounds_mm[3] - offset.y + 4.0,
+            )
+        } else {
+            (p.bounds_mm[0] + 1.0, view_h - p.bounds_mm[3] + 4.0)
+        };
         out.push_str(&format!(
             "<text x=\"{}\" y=\"{}\">{} / copy {}</text>\n",
-            fnum(p.bounds_mm[0] + 1.0, 6),
-            fnum(view_h - p.bounds_mm[3] + 4.0, 6),
+            fnum(x, 6),
+            fnum(y, 6),
             xml_escape(&p.instance),
             p.copy
         ));
@@ -293,7 +372,27 @@ pub fn stock_svg(plan: &super::stock::Plan, index: usize) -> Result<String, Refu
                 )
             })?
             .marker_to_machine_offset_mm;
-        if offset != Vec2::new(-b[0], -b[1]) {
+        let origin = preview
+            .marker
+            .loading
+            .as_ref()
+            .map_or(Vec2::ZERO, |loading| loading.lower_left_mm);
+        let expected = if preview.marker.loading.is_some() {
+            origin - Vec2::new(b[0], b[1])
+        } else {
+            Vec2::new(-b[0], -b[1])
+        };
+        if offset != expected
+            || preview.marker.loading.as_ref().is_some_and(|loading| {
+                loading.stock_bounds_mm
+                    != [
+                        origin.x,
+                        origin.y,
+                        origin.x + (b[2] - b[0]),
+                        origin.y + (b[3] - b[1]),
+                    ]
+            })
+        {
             return Err(Refusal::new(
                 RefusalCode::InvalidDocument,
                 "changed finite-stock knife loading frame",

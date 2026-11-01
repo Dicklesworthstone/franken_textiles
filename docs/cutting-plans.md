@@ -197,6 +197,47 @@ outside the fabric footprint and the final return. Finite stock retains its expl
 translation. Omission preserves the original report and preview formats. This remains planar
 constant-speed planning, with no new acceleration, 3D motion, measured cutting or execution claim.
 
+### Explicit stock locations on the bed
+
+A fixed machine fixture can obstruct the default stock position even when the same complete
+marker fits elsewhere on the bed. Optional `program.stock_loading` places individual whole stock
+items at authored machine-frame locations without moving pieces within their markers:
+
+```json
+"stock_loading": [
+  { "marker": 0, "lower_left_mm": [200.0, 100.0] },
+  { "marker": 1, "lower_left_mm": [200.0, 200.0] }
+]
+```
+
+Each `marker` is an index in the final plan's complete roll or finite-stock marker array. Entries
+must be unique, reference existing markers and use finite nonnegative bed coordinates; at most
+4096 entries are accepted. Unlisted markers retain their original origin placement. For a roll,
+the authored position is its marker-to-machine translation. For a finite hide or remnant, it is
+the new position of the complete stock bounding-box lower-left corner: the actual translation also
+subtracts that bounding box's original minimum coordinates. Unused finite stock may have a retained
+request but produces no loaded receipt, path, time or bed-fit requirement until allocated.
+
+The **entire** loaded stock must fit. Roll width uses the source's upper reported bound when present,
+even when lower-bound nesting or nominal purchasing uses a smaller width. Finite loading retains
+the complete outline, defects, previous occupied regions and quality zones. Cuts, path directions,
+instance/copy identities and nesting are unchanged; cut sweeps, raised routes and the final return
+are checked in the translated machine frame. The same optional detour policy can route around
+fixtures after this translation. Existing source qualifications and shared work budgets still apply.
+
+The program retains the exact `stock_loading` request. Each explicitly loaded, used marker gains
+`loading.lower_left_mm`, `loading.marker_to_machine_offset_mm` and `loading.stock_bounds_mm`
+(`[xmin,ymin,xmax,ymax]`, all in machine millimetres). Its geometry hash includes the translation;
+material and machine hashes are unchanged. Complete translated travel contributes to modeled time
+and material-study comparisons, whose source admission binds the request, source envelope, loading
+receipt and cut endpoints. Such comparisons retain the loading policy as part of their protocol.
+
+With loading enabled, previews show the full bed, the translated stock and annotations, fixtures
+when supplied, and complete selected raised routes. Roll previews additionally outline the full
+source-width envelope. Omission or an empty list preserves the original reports and previews.
+These are authored geometric placements: no physical registration accuracy, loading time, holding
+force or new workholding qualification is inferred, and no device execution is authorized.
+
 ## Dated purchasing observations
 
 `market.json` defines a comparable price sample, not a user-entered fabric requirement:

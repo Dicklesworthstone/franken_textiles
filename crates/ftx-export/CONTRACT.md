@@ -924,6 +924,18 @@ rollback, translated hides, source-sealed study replay and native/portable equal
 the existing cutting-program, cutting-effort and CLI workflow tests. No general route optimality,
 3D motion, physical process validation or hardware execution follows.
 
+Optional `program.stock_loading` translates each named complete stock item to an authored lower-left
+bed position without changing nesting, source geometry or cut order. Unique marker indices refer to
+the final complete inventory; unused finite stock creates no program marker. Roll fit uses the upper
+source width bound, finite fit includes the full outline, defects, occupied regions and zones, and all
+cut/raised/final-return sweeps use the same translated machine frame. Each used explicit placement
+retains the full loading envelope and offset, which joins geometry identity and material-study source
+admission/protocols; all translated motion contributes to time. Full-bed previews translate stock and
+annotations once, retain stationary fixtures, and show selected machine-frame travel. Empty/omitted
+loading preserves legacy bytes and work. Existing roll, finite, cutting-effort and native/portable
+workflow tests cover blocked-origin feasibility, source width, unused stock, transformed detours,
+changed receipts and bounded refusal. No inferred physical registration, loading time or grip claim.
+
 **Bounded split supplier orders.** Optional `market.split_orders` produces `ftx-cut-procurement/3`
 by assigning indivisible markers to current exact-material-locked offers. Each aggregated order
 reuses canonical quote rounding, capacity, continuous-cut and quantity-price evaluation. Connected
