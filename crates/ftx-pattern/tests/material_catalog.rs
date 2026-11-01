@@ -56,11 +56,9 @@ fn factual_seed_does_not_invent_physics_or_midpoints() {
             })
             .unwrap();
         assert!(selected.unloaded_thickness().is_err(), "{id}");
-        let conduction = ftx_pattern::material_thermal::ConductionLaw::from_material(
-            selected.material(),
-            true,
-        )
-        .unwrap();
+        let conduction =
+            ftx_pattern::material_thermal::ConductionLaw::from_material(selected.material(), true)
+                .unwrap();
         assert_eq!(conduction.domain(), Some([15.0, 65.0]));
         let frozen = db.resolve(&selected.frozen_selection()).unwrap();
         assert!(frozen.unloaded_thickness().is_err());
