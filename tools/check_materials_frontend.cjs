@@ -784,6 +784,23 @@ test('nondefault garment pose or settling requires a configured engine instead o
     assert.deepEqual(w.freed,[]);
   }
 });
+test('material worker forwards the second sewing path through legacy and configured drape engines', async () => {
+  const calls=[],freed=[],fold=()=>({report:()=>'{"path_spread":{}}',viewer:()=>'<html/>',free(){freed.push('fold');}});
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),WebBody:class{constructor(){calls.push(['body']);}free(){freed.push('body');}},
+    fold_up:(...args)=>{calls.push(['tape',...args.slice(1)]);return fold();},
+    fold_up_with_body_fit:(...args)=>{calls.push(['accepted',...args.slice(1)]);return fold();},
+    fold_up_configured:(...args)=>{calls.push(['configured',...args.slice(1)]);return fold();}}});
+  const input={type:'fold',bytes:new ArrayBuffer(1),pattern:'{}',measurements:'{}',fit:'{}',selfContactMm:2,twoStart:true};
+  for(const bodyFit of [null,'{}']) {
+    const result=await w.send({...input,bodyFit,bodyFitConsent:true,armDeg:35});
+    assert.equal(result.type,'result',result.message);assert.equal(calls.at(-1)[5],true);
+    const configured=await w.send({...input,bodyFit,bodyFitConsent:true,armDeg:35,legs:'seated'});
+    assert.equal(configured.type,'result',configured.message);assert.equal(JSON.parse(calls.at(-1)[4]).two_start,true);
+    assert.equal(JSON.parse(configured.files.find(f=>f.name==='fold-settings.json').text).two_start,true);
+  }
+  assert.deepEqual(freed,Array(4).fill(['fold','body']).flat());
+  const before=calls.length;assert.equal((await w.send({...input,twoStart:'true'})).type,'error');assert.equal(calls.length,before);
+});
 test('compiled WASM configured drapes reproduce native posture, settling and exact viewer without changing legacy standing',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_POSE_CAPTURE_DIR},async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
@@ -1732,6 +1749,41 @@ test('material body handoff retains exact model, report and pose until explicit 
   const old=[...p.live];p.e.clearRoundImport.onclick();
   assert.equal(p.e.bind.disabled,true);assert.equal(p.e.fold.disabled,true);assert.equal(p.e.receivedBodyNote.hidden,true);
   assert.ok(old.every(url=>!p.live.has(url)));assert.equal(p.e.bodyFitConsent.checked,false);
+});
+test('material round handoff preserves explicit drape settings through the ordinary fold request', async () => {
+  const token='8'.repeat(32),p=await pageModule({roundToken:token});
+  const settings={self_contact_mm:0,two_start:true,legs:'squat',leg_fraction:0.25,max_settle_steps:8};
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-round-sources',token,
+    files:{pattern:new Blob(['{"pieces":[{"id":"front"}]}']),measurements:new Blob(['{}']),fit:new Blob(['{}'])},
+    bodySource:{model:new Blob([new Uint8Array([1])])},drapeSettings:settings}});
+  assert.equal(p.e.selfContact.checked,false);assert.equal(p.e.twoStart.checked,true);
+  assert.equal(p.e.drapeLegs.value,'squat');assert.equal(p.e.drapeLegFraction.value,'0.25');assert.equal(p.e.maxSettleSteps.value,'8');
+  assert.equal(p.current().messages.length,0,'Transfer never starts a computation');
+  await p.bind();await p.e.fold.onclick();const msg=p.current().messages.at(-1);
+  assert.equal(msg.selfContactMm,0);assert.equal(msg.twoStart,true);assert.equal(msg.legs,'squat');
+  assert.equal(msg.legFraction,0.25);assert.equal(msg.maxSettleSteps,8);
+});
+test('material round handoff rejects malformed drape settings and receiving edits beat delayed source reads', async () => {
+  const token='9'.repeat(32),files={pattern:new Blob(['{"pieces":[]}']),measurements:new Blob(['{}']),fit:new Blob(['{}'])};
+  const settings={self_contact_mm:2,two_start:false,legs:'seated',leg_fraction:0.5,max_settle_steps:2};
+  for(const bad of [null,[],{}, {...settings,self_contact_mm:1},{...settings,two_start:'false'},
+    {...settings,legs:'unknown'},{...settings,leg_fraction:'0.5'},{...settings,leg_fraction:NaN},
+    {...settings,leg_fraction:1.01},{...settings,max_settle_steps:1.5},{...settings,max_settle_steps:257}]) {
+    const p=await pageModule({roundToken:token});
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-round-sources',token,files,drapeSettings:bad}});
+    assert.equal(p.e.bind.disabled,true);assert.match(p.e.roundImportText.textContent,/refused/i);
+    assert.equal(p.live.size,0);assert.equal(p.current().messages.length,0);
+  }
+  for(const [id,event] of [['selfContact','change'],['twoStart','change'],['drapeLegs','change'],['drapeLegFraction','input'],['maxSettleSteps','input']]) {
+    const p=await pageModule({roundToken:token}),delayed=new Blob(['{"pieces":[]}']);let release;
+    delayed.arrayBuffer=()=>new Promise(resolve=>{release=resolve;});
+    const receiving=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+      data:{type:'ftx-round-sources',token,files:{...files,pattern:delayed},drapeSettings:settings}});
+    while(!release)await new Promise(resolve=>setImmediate(resolve));
+    p.e[id].handlers[event]();release(new TextEncoder().encode('{"pieces":[]}').buffer);await receiving;
+    assert.equal(p.e.bind.disabled,true);assert.equal(p.e.drapeLegs.value,'standing','A stale packet cannot install its pose');
+    assert.equal(p.current().messages.length,0);
+  }
 });
 test('material body handoff rejects malformed context and delayed reports lose to manual body choices', async () => {
   const token='7'.repeat(32),files={pattern:new Blob(['{"pieces":[]}']),measurements:new Blob(['{}']),fit:new Blob(['{}'])};
@@ -4467,6 +4519,26 @@ test('drafting handoff snapshots the loaded model and exact accepted fit and can
     const cancelled=send(current);assert.equal(cancelled.type,'ftx-round-sources-cancelled');
     assert.equal(cancelled.files,undefined);assert.equal(cancelled.bodySource,undefined);
   }
+});
+test('drafting round handoff snapshots all drape controls, rejects invalid values and cancels pending setting edits', async () => {
+  const prepare=async()=>{
+    const p=draftingPage();await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{"pieces":[]}',measurements:'{}',fit:'{}'}});return p;
+  };
+  const send=p=>{const popup=p.popups.at(-1),token=new URL(popup.url).searchParams.get('roundImport');
+    p.windowEvents.message({origin:'https://unit.invalid',source:popup,data:{type:'ftx-round-sources-ready',token}});return popup.messages.at(-1).data;};
+  const p=await prepare();p.e.selfContact.checked=false;p.e.twoStart.checked=true;p.e.drapeLegs.value='squat';
+  p.e.drapeLegFraction.value='0.25';p.e.maxSettleSteps.value='8';await p.e.chooseMaterials.handlers.click();
+  const packet=send(p);assert.deepEqual(plain(packet.drapeSettings),{self_contact_mm:0,two_start:true,legs:'squat',leg_fraction:0.25,max_settle_steps:8});
+  for(const [id,value] of [['drapeLegs','unknown'],['drapeLegFraction',''],['drapeLegFraction','NaN'],
+    ['drapeLegFraction','-0.01'],['drapeLegFraction','1.01'],['maxSettleSteps',''],['maxSettleSteps','1.5'],['maxSettleSteps','257']]) {
+    const q=await prepare();q.e[id].value=value;await q.e.chooseMaterials.handlers.click();
+    assert.equal(q.popups.length,0,'Invalid configured sources must not open a defaulted material tab');
+  }
+  for(const [id,event] of [['selfContact','change'],['twoStart','change'],['drapeLegs','change'],['drapeLegFraction','input'],['maxSettleSteps','input']]) {
+    const q=await prepare();await q.e.chooseMaterials.handlers.click();await q.e[id].handlers[event]();
+    assert.equal(send(q).type,'ftx-round-sources-cancelled');
+  }
+  assert.equal(packet.drapeSettings.legs,'squat','Already received snapshots remain immutable');
 });
 
 test('primary workshop preserves original JSON file and style text instead of rounding numeric semantics',async()=>{

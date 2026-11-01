@@ -543,6 +543,14 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (model && model.size > 256 * 1024 * 1024) {
       status("The material workbench supports body models up to 256 MiB. This selected model cannot be transferred."); return;
     }
+    const fraction = $("drapeLegFraction").value.trim(), settling = $("maxSettleSteps").value.trim();
+    const drapeSettings = { self_contact_mm: $("selfContact").checked ? 2 : 0, two_start: $("twoStart").checked,
+      legs: $("drapeLegs").value, leg_fraction: Number(fraction), max_settle_steps: Number(settling) };
+    if (!fraction || !["standing", "seated", "squat"].includes(drapeSettings.legs) ||
+        !Number.isFinite(drapeSettings.leg_fraction) || drapeSettings.leg_fraction < 0 || drapeSettings.leg_fraction > 1 ||
+        !settling || !Number.isSafeInteger(drapeSettings.max_settle_steps) || drapeSettings.max_settle_steps < 0 || drapeSettings.max_settle_steps > 256) {
+      status("Choose a valid drape leg posture, fraction from 0 to 1 and whole settling limit from 0 to 256 before opening materials."); return;
+    }
     const bodySource = model || imported ? { model: model || null,
       fit: imported ? new Blob([bodyFitText], { type: "application/json" }) : null,
       armDeg: imported ? Number(angle) : null } : null;
@@ -550,14 +558,14 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     const url = new URL("materials.html", location.href); url.searchParams.set("roundImport", token);
     const target = window.open(url.href, "_blank");
     if (!target) { status("Allow the local material tab, or download the round ZIP and choose its three JSON files there."); return; }
-    materialTransfer = { target, token, files: materialSources, bodySource };
+    materialTransfer = { target, token, files: materialSources, bodySource, drapeSettings };
   });
   window.addEventListener("message", event => {
     const m = event.data, transfer = materialTransfer;
     if (!transfer || event.origin !== materialOrigin || event.source !== transfer.target ||
       m?.type !== "ftx-round-sources-ready" || m.token !== transfer.token) return;
     transfer.target.postMessage({ type: transfer.files ? "ftx-round-sources" : "ftx-round-sources-cancelled",
-      token: transfer.token, ...(transfer.files ? { files: transfer.files, bodySource: transfer.bodySource } : {}) }, materialOrigin);
+      token: transfer.token, ...(transfer.files ? { files: transfer.files, bodySource: transfer.bodySource, drapeSettings: transfer.drapeSettings } : {}) }, materialOrigin);
     materialTransfer = null;
   });
   window.addEventListener("pagehide", () => {
@@ -575,6 +583,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     foldUrls.forEach((u) => URL.revokeObjectURL(u)); foldUrls = [];
   }
   function invalidateFold() {
+    if (materialTransfer) materialTransfer.files = null;
     foldRequest = ++nextRequest; folding = false;
     dropFold(); dropBodyCheck(); foldButton(); status("");
   }

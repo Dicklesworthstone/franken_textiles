@@ -3707,6 +3707,7 @@ async function execute(op) {
         msg.legs = $("drapeLegs").value;
         msg.legFraction = Number($("drapeLegFraction").value);
         msg.maxSettleSteps = Number($("maxSettleSteps").value);
+        msg.twoStart = $("twoStart").checked;
         if (has("bodyFitFile")) {
           if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before draping.");
           const angle = acceptedBodyAngle();
@@ -3974,7 +3975,7 @@ $("supplementalFiles").addEventListener("change", () => supplementalChanged(true
 $("supplementalConsent").addEventListener("change", () => supplementalChanged(false));
 $("clearSupplemental").onclick = () => { clearPhotoEvidence(); $("supplementalFiles").value = ""; supplementalChanged(true); };
 for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
-  body:["bodyCheck","fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
+  body:["bodyCheck","fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], twoStart:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
@@ -3985,7 +3986,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     if (id === "fit") clearImportFit();
     if (id === "measurements") $("supplementalConsent").checked = false;
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
-    if (id === "measurements" || id === "fit" || id === "body") {
+    if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "maxSettleSteps"].includes(id)) {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
       if (id === "body") showReceivedBody();
     }
@@ -3993,7 +3994,10 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   });
 }
 for (const id of ["drapeLegFraction", "maxSettleSteps"]) {
-  $(id).addEventListener("input", () => invalidate(["fold", "heat", "vaporSurface", "coverage"], true));
+  $(id).addEventListener("input", () => {
+    ++roundRead; roundToken = null; window.opener = null;
+    invalidate(["fold", "heat", "vaporSurface", "coverage"], true);
+  });
 }
 $("bodyFitFile").addEventListener("change", () => {
   ++roundRead; roundToken = null; window.opener = null; roundFiles.delete("bodyFitFile");
@@ -4058,6 +4062,12 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
     resetPatternInput();
     try {
       if (m.type === "ftx-round-sources-cancelled") throw Error("The source round changed before transfer. Draft and check it again.");
+      const settings = m.drapeSettings;
+      if (settings !== undefined && (!settings || typeof settings !== "object" || Array.isArray(settings) ||
+          ![0, 2].includes(settings.self_contact_mm) || typeof settings.two_start !== "boolean" ||
+          !["standing", "seated", "squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
+          settings.leg_fraction < 0 || settings.leg_fraction > 1 || !Number.isSafeInteger(settings.max_settle_steps) ||
+          settings.max_settle_steps < 0 || settings.max_settle_steps > 256)) throw Error("Received drape settings are incomplete or outside the supported controls.");
       const files = new Map();
       for (const [key, id] of [["pattern", "patternFile"], ["measurements", "measurements"], ["fit", "fit"]]) {
         const blob = m.files?.[key];
@@ -4090,10 +4100,16 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       installPattern(files.get("patternFile"), "Received round pattern.json");
       for (const [id, raw] of files) roundFiles.set(id, raw);
       if (context?.fit) $("bodyArmDeg").value = String(context.armDeg);
+      if (settings !== undefined) {
+        $("selfContact").checked = settings.self_contact_mm === 2; $("twoStart").checked = settings.two_start;
+        $("drapeLegs").value = settings.legs; $("drapeLegFraction").value = String(settings.leg_fraction);
+        $("maxSettleSteps").value = String(settings.max_settle_steps);
+      }
       $("supplementalConsent").checked = false;
       $("bodyFitConsent").checked = false; showReceivedBody();
       $("roundImportText").textContent = "Received pattern.json, measurements.json and fit_spec.json. Originals retained in this tab. Review sources, then Freeze selections and bind before running a consumer. " +
         (context ? "Selected body sources also arrived; review them and confirm the accepted-fit association separately before draping. " : "Choose a body separately for draping. ") +
+        (settings !== undefined ? "Drape controls retain the source round's posture, settling, contact and sewing-path choices. " : "") +
         "Manual file choices replace received inputs.";
       controls();
     } catch (e) {

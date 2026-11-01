@@ -270,6 +270,7 @@ Predictions remain MODEL_FIT. Differences, missing sections and a successful che
 <label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
 <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
 <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label>
+<label><input id="twoStart" type="checkbox"> Compare a second sewing path (18 versus 12 sewing steps; runs a second full solve)</label>
 <p class="note">Leg fraction moves from standing (0) to the full selected posture (1), keeping the fitted shape and arm angle.
 Extra settling continues the sewn garment until its quiet window or the step limit; 0 keeps the fixed schedule.
 History-dependent materials require a fixed-duration run and refuse automatic settling.</p>

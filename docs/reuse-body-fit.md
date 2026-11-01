@@ -13,6 +13,14 @@ restores tape fitting. A rejected replacement never falls back to a previous
 shape or to tape fitting. The arm-angle control selects the ordinary drape pose,
 not an image-frame pose; a refused start remains a refusal at that angle.
 
+**Choose materials** carries the current round's exact files, selected body sources,
+leg posture/fraction, settling limit, self-contact and second sewing-path choice into
+the Material Workbench. Review the controls, bind materials, and confirm the accepted
+fit's wearer association again before draping. Changing a source control while the
+new tab is opening cancels that transfer; received snapshots stay local and unchanged.
+The optional second path runs a second full solve and reports sewing sensitivity,
+not a confidence interval or physical fit.
+
 After drafting a round, **Check body against targets** uses the loaded model without
 running cloth. It works for flat-only garments such as the fez as well as foldable
 patterns. With no accepted report selected it runs the existing tape fitter; with
