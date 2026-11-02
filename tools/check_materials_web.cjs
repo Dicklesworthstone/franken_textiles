@@ -168,6 +168,18 @@ const server = http.createServer((req, res) => {
         assert.equal(row.eligible,true);assert.equal(row.readings.assembly_mass_kg.reported_bounds.length,2);
         assert.ok(row.readings.assembly_mass_kg.reported_bounds[0]<row.readings.assembly_mass_kg.value);
       }
+      for(const [label,raw] of [['wrong-inventory','{"schema":"unsupported"}'],['malformed-inventory','{']]) {
+        await page.setInputFiles('#guidedInventory',{name:`${label}.json`,mimeType:'application/json',buffer:Buffer.from(raw)});
+        assert.equal(await page.isDisabled('#guidedInventoryComplete'),true);
+        assert.equal(await page.locator('a[download="material-study.json"]').count(),0);
+        assert.notEqual(await run('study'),'');
+        await page.click('#clearGuidedInventory');
+        assert.equal(await page.isDisabled('#guidedInventoryComplete'),false);
+        assert.equal(await page.isDisabled('#clearGuidedInventory'),true);
+        assert.match(await page.textContent('#studyCandidateCount'),/3 frozen material choices/);
+        await page.check('#guidedInventoryComplete');
+        assert.deepEqual((await verify(`cleared-${label}`)).report,ranged.report);
+      }
       await page.setViewportSize({width:390,height:844});await page.locator('#materialComparison').scrollIntoViewIfNeeded();
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'Mobile workbench must not overflow horizontally');
       await page.screenshot({path:path.join(work,'guided-study-mobile.png')});await page.setViewportSize({width:1280,height:900});
@@ -183,7 +195,7 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.locator('a[download="alternative-1-pattern.json"]').count(),0);
       assert.match(await page.textContent('#studyCandidateCount'),/No comparison materials/);
       assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(methods.every(m=>m==='GET'));
-      console.log('PASS: guided Chromium shortlist matches complete native/WASM studies for default and named-piece assignments, independent cutting refusal and bounded assembly mass; exact identities/downloads, advanced replay, input withdrawal and mobile layout verified. Synthetic software evidence only. Artifacts:',work);
+      console.log('PASS: guided Chromium shortlist matches complete native/WASM studies for default and named-piece assignments, independent cutting refusal and bounded assembly mass; exact identities/downloads, invalid-inventory recovery, advanced replay, input withdrawal and mobile layout verified. Synthetic software evidence only. Artifacts:',work);
       return;
     }
     if (mixedCuttingProof) {

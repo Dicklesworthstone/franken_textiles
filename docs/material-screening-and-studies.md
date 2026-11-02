@@ -42,7 +42,10 @@ Complete garment mass needs an explicit declaration that the pattern includes ev
 attachment, or an original `ftx-assembly-mass/1` inventory file with its own declaration and sourced
 extras. Without completeness, sheet subtotals remain available but cannot rank as whole-garment
 mass. A source without roll width may refuse cutting while retaining valid independent mass.
-The optional seam-allowance override must agree across cutting and mass.
+The optional seam-allowance override must agree across cutting and mass. For mass alone, an
+uploaded inventory keeps its own allowance when no override is entered. **Clear inventory file**
+returns to the explicit no-extras declaration without discarding the shortlist; it also cancels
+an unfinished study that was reading the removed file.
 
 **Compare manufacturing alternatives** runs the same Rust study API as an authored file. Results
 retain each refusal and include the original pattern, exact generated request, full report and

@@ -5364,6 +5364,59 @@ test('guided garment-mass-only comparison uses explicit complete inventory witho
   assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/complete inventory/i);
 });
 
+test('clearing a guided inventory recovers from malformed files and cancels pending reads without losing the shortlist', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);const raw=guidedSelection();
+  await addGuidedSelection(p,raw,'retained choice');
+  const input=p.e.guidedInventory;
+  // Only this file control needs the browser's value="" -> empty FileList behavior.
+  Object.defineProperty(input,'value',{get:()=>input.files[0]?.name||'',set:value=>{
+    assert.equal(value,'');input.files=[];
+  }});
+  p.e.guidedCutting.checked=false;p.e.guidedCutting.handlers.change();
+  p.e.guidedMass.checked=true;p.e.guidedMass.handlers.change();
+  p.e.guidedMassGoal.checked=true;p.e.guidedMassGoal.handlers.change();
+  const shortlist=visibleText(p.e.studyCandidates);
+  p.select('guidedInventory','{ malformed inventory');input.handlers.change();
+  assert.equal(p.e.guidedInventoryComplete.disabled,true);
+  assert.equal(p.e.clearGuidedInventory.disabled,false);
+  const before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/JSON/i);
+  p.e.clearGuidedInventory.onclick();
+  assert.equal(input.files.length,0);assert.equal(input.value,'');
+  assert.equal(p.e.clearGuidedInventory.disabled,true);
+  assert.equal(p.e.guidedInventoryComplete.disabled,false);
+  assert.equal(p.e.guidedInventoryComplete.checked,false,'Clearing a file must not infer complete inventory');
+  assert.equal(visibleText(p.e.studyCandidates),shortlist);
+  await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/complete inventory/i);
+  p.e.guidedInventoryComplete.checked=true;p.e.guidedInventoryComplete.handlers.change();
+  await p.e.study.onclick();const sent=p.current().messages.at(-1),request=JSON.parse(sent.studyRequest);
+  assert.equal(sent.type,'study',p.e.error.textContent);assert.ok(sent.studyRequest.includes(raw));
+  assert.equal(Object.hasOwn(request,'cutting'),false);
+  assert.deepEqual(request.assembly_mass,{schema:'ftx-assembly-mass/1',inventory_complete:true,extras:[]});
+  assert.deepEqual(request.variants.map(v=>v.key),['baseline','retained choice']);
+  p.emit(studyReport(),[{name:'study-request.json',text:sent.studyRequest}]);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');assert.equal(s.hidden,false);
+  const inventory=' {"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[]}\r\n';
+  p.select('guidedInventory',inventory);input.handlers.change();
+  assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  assert.equal(p.e.guidedInventoryComplete.disabled,true);
+  const delay=deferred();let reading=false;
+  input.files[0].text=()=>{reading=true;return delay.promise;};
+  const old=p.current(),messages=old.messages.length,running=p.e.study.onclick();
+  assert.equal(reading,true);p.e.clearGuidedInventory.onclick();
+  assert.equal(old.dead,true);assert.equal(input.files.length,0);
+  assert.equal(p.e.guidedInventoryComplete.disabled,false);
+  assert.equal(visibleText(p.e.studyCandidates),shortlist);
+  p.ready();delay.resolve(inventory);await running;
+  assert.equal(old.messages.length,messages);assert.equal(p.current().messages.length,0);
+  old.emit({type:'result',request:sent.request,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});
+  assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  await p.e.study.onclick();const retry=p.current().messages.at(-1);
+  assert.equal(retry.type,'study',p.e.error.textContent);assert.ok(retry.studyRequest.includes(raw));
+  assert.deepEqual(JSON.parse(retry.studyRequest).assembly_mass,request.assembly_mass);
+});
+
 test('guided choices reach body scenarios without a study file and preserve the separate body request', async () => {
   const p=await pageModule();await p.load();guidedControls(p);const raw=guidedSelection();await addGuidedSelection(p,raw);
   const scenario=' {"options":{"self_contact":null},"source":-0.0}\r\n';
