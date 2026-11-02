@@ -561,6 +561,7 @@ struct Mixing {
 struct Separation {
     relative_momentum: Vec<Vec3>,
     relative_kinetic: Vec<f64>,
+    world_kinetic: Vec<f64>,
 }
 
 /// Exact outgoing thermal phases. Presence of drainage is independently admitted at binding.
@@ -672,7 +673,7 @@ impl Binding {
         evaporated: &[f64],
         drained: Option<&[f64]>,
         interval: Option<usize>,
-        vertices: usize,
+        mixed_velocity: &[Vec3],
     ) -> Result<Separation, Refusal> {
         let streams = self
             .domains
@@ -687,8 +688,9 @@ impl Binding {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let mut result = Separation {
-            relative_momentum: vec![Vec3::ZERO; vertices],
-            relative_kinetic: vec![0.; vertices],
+            relative_momentum: vec![Vec3::ZERO; mixed_velocity.len()],
+            relative_kinetic: vec![0.; mixed_velocity.len()],
+            world_kinetic: vec![0.; mixed_velocity.len()],
         };
         for (element, streams) in self.original.membranes.iter().zip(&streams) {
             for &(mass, relative_velocity) in streams {
@@ -702,6 +704,10 @@ impl Binding {
                 for &vertex in &element.v {
                     result.relative_momentum[vertex] += relative_velocity * share;
                     result.relative_kinetic[vertex] += 0.5 * share * relative_velocity.norm2();
+                    // Sum actual stream energies. Expanding this square can cancel to a negative
+                    // value when outgoing water is stationary in the chosen world frame.
+                    let world_velocity = mixed_velocity[vertex] + relative_velocity;
+                    result.world_kinetic[vertex] += 0.5 * share * world_velocity.norm2();
                 }
             }
         }
@@ -709,6 +715,7 @@ impl Binding {
             || result
                 .relative_kinetic
                 .iter()
+                .chain(&result.world_kinetic)
                 .any(|value| !value.is_finite() || *value < 0.)
         {
             return Err(invalid(
@@ -1297,7 +1304,7 @@ fn start_with_exchange(
             binding.report.scope = "Source-qualified frozen mechanics with scheduled phase-specific incoming velocities and scheduled evaporation/drainage velocities relative to the post-mixing cloth. Incoming streams mix inelastically once; outgoing recoil then conserves momentum against the retained welded mass. Bulk outgoing kinetic energy and nonnegative mechanical separation work remain explicit and are not thermal heat. Initial liquid is co-moving after a dry drape. No inferred jet law, pressure thrust, wet constitutive change, heat conversion or empirical garment claim; mechanical refinement remains necessary.";
         }
     }
-    if drainage {
+    if drainage && !recoil {
         binding.report.scope = "Source-qualified frozen mechanics with explicit co-moving drainage. Incoming streams retain their qualified co-moving, prescribed, scheduled or separate-phase velocities. Evaporation and drainage have independent mass counters and leave at the common endpoint velocity after incoming mixing. Their total carried momentum and bulk kinetic/gravitational energy remain separate from thermal sensible/latent enthalpy. Initial liquid is admitted after dry drape. No inferred runoff, drainage recoil, constrained-DOF impulse, wet constitutive change, mixing heat or empirical garment claim.";
     }
     binding.update_report()?;
@@ -1580,7 +1587,12 @@ impl Solver {
             .exchange
             .as_ref()
             .is_some_and(|flow| flow.outgoing_separation_work_j.is_some())
-            .then(|| binding.outgoing_separation(evaporated, drained_phase, interval, self.v.len()))
+            .then(|| {
+                let mixing = mixing
+                    .as_ref()
+                    .ok_or_else(|| invalid("outgoing recoil requires the incoming mixing state"))?;
+                binding.outgoing_separation(evaporated, drained_phase, interval, &mixing.velocity)
+            })
             .transpose()?;
         let mut accepted_velocity = mixing
             .as_ref()
@@ -1631,9 +1643,7 @@ impl Solver {
                     let relative_momentum = separation.relative_momentum[i];
                     let relative_kinetic = separation.relative_kinetic[i];
                     let outgoing_momentum = mixed * leaving[i] + relative_momentum;
-                    let outgoing_kinetic = mixed_kinetic * leaving[i]
-                        + mixed.dot(relative_momentum)
-                        + relative_kinetic;
+                    let outgoing_kinetic = separation.world_kinetic[i];
                     let final_velocity = accepted_velocity[i];
                     let final_kinetic = 0.5 * final_velocity.norm2();
                     let work = relative_kinetic + 0.5 * relative_momentum.norm2() / next[i];
@@ -2040,6 +2050,23 @@ mod tests {
         masses: &[f64],
         outgoing: OutgoingVelocities,
     ) -> Report {
+        initialize_recoil_with_incoming(
+            solver,
+            masses,
+            IncomingVelocities {
+                supply: Vec3::ZERO,
+                condensation: Vec3::ZERO,
+            },
+            outgoing,
+        )
+    }
+
+    fn initialize_recoil_with_incoming(
+        solver: &mut Solver,
+        masses: &[f64],
+        incoming: IncomingVelocities,
+        outgoing: OutgoingVelocities,
+    ) -> Report {
         let mut q = exchange_qualification();
         q.schema = "ftx-coupled-liquid-mechanics/6".into();
         q.model =
@@ -2051,11 +2078,7 @@ mod tests {
             .enumerate()
             .map(|(i, _)| {
                 let mut domain = original.clone();
-                domain.incoming_stream_velocities_world_m_s_by_interval =
-                    Some(vec![IncomingVelocities {
-                        supply: Vec3::ZERO,
-                        condensation: Vec3::ZERO,
-                    }]);
+                domain.incoming_stream_velocities_world_m_s_by_interval = Some(vec![incoming]);
                 domain.outgoing_stream_velocities_relative_to_cloth_m_s_by_interval =
                     Some(vec![outgoing]);
                 (format!("sheet-{i}"), domain)
@@ -2073,6 +2096,109 @@ mod tests {
             true,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn outgoing_recoil_keeps_zero_and_small_world_energies_nonnegative_without_clamping() {
+        let velocity = Vec3::new(10.1, 0., 0.);
+        for offset in [0., 1e-7] {
+            let relative = -velocity + Vec3::new(offset, 0., 0.);
+            let mut s = solver();
+            s.v.fill(velocity);
+            initialize_recoil(
+                &mut s,
+                &[1.2, 0.],
+                OutgoingVelocities {
+                    evaporation: relative,
+                    drainage: Vec3::ZERO,
+                },
+            );
+            let report = s
+                .exchange_liquid_streams_in_interval(
+                    &[0.3, 0.],
+                    &[0., 0.],
+                    [&[0., 0.], &[0., 0.]],
+                    Outgoing {
+                        evaporated: &[0.9, 0.],
+                        drained: Some(&[0., 0.]),
+                    },
+                    &[vec![20.], vec![20.]],
+                    Some(0),
+                )
+                .unwrap();
+            let expected = 0.5 * 0.9 * (velocity + relative).norm2();
+            if offset == 0. {
+                assert_eq!(report.exported_kinetic_energy_j, 0.);
+            } else {
+                assert!(report.exported_kinetic_energy_j > 0.);
+                assert!((report.exported_kinetic_energy_j - expected).abs() < 1e-14 * expected);
+            }
+            assert!(report.transfer_momentum_residual_kg_m_s.norm() < 1e-12);
+            assert!(report.transfer_kinetic_residual_j.abs() < 1e-12);
+            assert!(report.exchange.unwrap().outgoing_separation_work_j.unwrap() > 0.);
+        }
+    }
+
+    #[test]
+    fn outgoing_recoil_is_galilean_consistent_after_phase_specific_mixing() {
+        let shift = Vec3::new(10.1, -3.7, 0.9);
+        let run = |boost: Vec3| {
+            let mut s = solver();
+            s.v.fill(Vec3::new(0.25, -0.5, 0.75) + boost);
+            initialize_recoil_with_incoming(
+                &mut s,
+                &[0.12, 0.24],
+                IncomingVelocities {
+                    supply: Vec3::new(0.5, 0.1, -0.3) + boost,
+                    condensation: Vec3::new(-0.2, 0.4, 0.1) + boost,
+                },
+                OutgoingVelocities {
+                    evaporation: Vec3::new(0.2, 0.1, -0.5),
+                    drainage: Vec3::new(-0.3, 0.2, 0.1),
+                },
+            );
+            let report = s
+                .exchange_liquid_streams_in_interval(
+                    &[0.14, 0.30],
+                    &[0.06, 0.12],
+                    [&[0.04, 0.03], &[0.02, 0.09]],
+                    Outgoing {
+                        evaporated: &[0.03, 0.02],
+                        drained: Some(&[0.01, 0.04]),
+                    },
+                    &[vec![20.], vec![20.]],
+                    Some(0),
+                )
+                .unwrap();
+            assert!(report.transfer_momentum_residual_kg_m_s.norm() < 1e-12);
+            assert!(report.transfer_kinetic_residual_j.abs() < 1e-12);
+            (s, report)
+        };
+        let (base, a) = run(Vec3::ZERO);
+        let (boosted, b) = run(shift);
+        assert_eq!(base.model.mass, boosted.model.mass);
+        for (a, b) in base.v.iter().zip(&boosted.v) {
+            assert!((*b - *a - shift).norm() < 1e-13);
+        }
+        let fa = a.exchange.as_ref().unwrap();
+        let fb = b.exchange.as_ref().unwrap();
+        assert_eq!(fa.outgoing_mass_kg, fb.outgoing_mass_kg);
+        assert!(
+            (b.exported_momentum_kg_m_s - a.exported_momentum_kg_m_s - shift * fa.outgoing_mass_kg)
+                .norm()
+                < 1e-13
+        );
+        let shifted_energy = a.exported_kinetic_energy_j
+            + shift.dot(a.exported_momentum_kg_m_s)
+            + 0.5 * fa.outgoing_mass_kg * shift.norm2();
+        assert!((b.exported_kinetic_energy_j - shifted_energy).abs() < 1e-12);
+        assert!(
+            (fa.mixing_dissipation_j.unwrap() - fb.mixing_dissipation_j.unwrap()).abs() < 1e-14
+        );
+        assert!(
+            (fa.outgoing_separation_work_j.unwrap() - fb.outgoing_separation_work_j.unwrap()).abs()
+                < 1e-14
+        );
     }
 
     #[test]

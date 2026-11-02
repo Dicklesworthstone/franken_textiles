@@ -627,9 +627,11 @@ fn evaluate_path(
         );
     }
     if coupled {
-        result["thermal_basis"] = json!(if result["liquid_mechanics"]["drained_liquid_mass_kg"]
-            .is_number()
+        result["thermal_basis"] = json!(if result["liquid_mechanics"]["schema"]
+            == "ftx-coupled-liquid-mechanics-result/6"
         {
+            "Accepted-step heat and source-qualified free-liquid exchange update the next mechanical interval's inertia, gravity and velocity. Independently scheduled supply and condensation mix before evaporation and drainage leave with qualified velocities relative to the post-mixing cloth; retained cloth recoils to conserve momentum. Incoming mixing loss and outgoing separation work remain explicit mechanical boundary terms, separate from thermal sensible/latent enthalpy. No jet-pressure, runoff or wet constitutive law is inferred. Steady snapshots and optional coverage heat remain separate domains."
+        } else if result["liquid_mechanics"]["drained_liquid_mass_kg"].is_number() {
             "Accepted-step heat and qualified free-liquid exchange update the next mechanical interval's inertia, gravity and velocity. Independently qualified incoming streams mix before evaporation and drainage leave at the common endpoint velocity. The outgoing phases retain distinct mass and sensible/latent labels; their combined bulk momentum and energy remain separate from thermal enthalpy. No mixing heat or runoff law is inferred. Steady snapshots and optional coverage heat remain separate domains."
         } else if matches!(
             result["liquid_mechanics"]["schema"].as_str(),
@@ -637,6 +639,7 @@ fn evaluate_path(
                 "ftx-coupled-liquid-mechanics-result/2"
                     | "ftx-coupled-liquid-mechanics-result/3"
                     | "ftx-coupled-liquid-mechanics-result/4"
+                    | "ftx-coupled-liquid-mechanics-result/5"
             )
         ) {
             "Accepted-step sheet heat and source-qualified free-liquid exchange update the next mechanical interval's inertia, gravity and velocity. Prescribed incoming streams mix inelastically before outgoing evaporation leaves at the mixed velocity. Bulk momentum, kinetic/gravitational energy and nonnegative mixing dissipation remain separate from thermal sensible/latent enthalpy; no mixing heat is inferred. Steady snapshots and optional coverage heat remain separate domains."
