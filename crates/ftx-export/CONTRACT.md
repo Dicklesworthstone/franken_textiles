@@ -663,6 +663,14 @@ plus drainage, with co-moving bulk export after incoming mixing. Missing phase f
 enthalpy, demand excess or stale source policy refuse the dependent comparison. The complete
 water request already binds the drainage source and schedule in protocol comparability.
 
+Mechanical versions `/5` and `/6` admit exact per-interval supply/condensation velocity pairs;
+`/6` also requires evaporation/drainage relative-velocity pairs for every retained instance.
+Schema/model/result identities are exclusive, as are old and new velocity fields, including
+explicit nulls. Recoil's `outgoing_separation_work_j` must be finite, nonnegative, initially zero
+and cumulative, with no increase without outgoing mass. Older versions reject that field.
+The exact policy remains part of motion-dependent comparison protocols; mechanical boundary
+work stays separate from the conservative sensible/latent thermal ledger and its objectives.
+
 **Scoped material-direction requirements.** `material_strain` and `motion_material_strain` admit raw
 dimensionless `[E11, E22, 2E12]` from the production membrane frame. Six static signed min/max metrics
 cover warp, weft and engineering shear; the `motion_` prefix requires the initial state and every

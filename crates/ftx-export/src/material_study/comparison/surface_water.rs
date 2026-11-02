@@ -20,6 +20,20 @@ fn nonnegative(v: &Value, key: &str) -> Result<f64, Refusal> {
     finite(&v[key]).filter(|v| *v >= 0.).ok_or_else(fail)
 }
 
+fn velocity(v: &Value) -> bool {
+    v.as_array()
+        .is_some_and(|v| v.len() == 3 && v.iter().all(|component| finite(component).is_some()))
+}
+
+fn velocity_pair(v: &Value, phases: [&str; 2]) -> bool {
+    v.as_object().is_some_and(|v| {
+        v.len() == 2
+            && phases
+                .iter()
+                .all(|phase| v.get(*phase).is_some_and(velocity))
+    })
+}
+
 // Water inventories can be much smaller than a kilogram. An absolute unit-sized tolerance would
 // turn missing or invented liquid into an admissible objective. Zero inventory stays exactly zero.
 fn near(a: f64, b: f64, scale: f64) -> bool {
@@ -119,18 +133,12 @@ fn admit_mechanics(
         || water["schema"] == "ftx-textile-surface-water/5" && !water["drainage"].is_null();
     let bindings = qualification["bindings"].as_object().ok_or_else(fail)?;
     let water_bindings = water["bindings"].as_object().ok_or_else(fail)?;
+    let recoil = qualification["schema"] == "ftx-coupled-liquid-mechanics/6";
+    let phase_schedule = recoil || qualification["schema"] == "ftx-coupled-liquid-mechanics/5";
     let phase_velocities = qualification["schema"] == "ftx-coupled-liquid-mechanics/4";
     let scheduled_velocity = qualification["schema"] == "ftx-coupled-liquid-mechanics/3";
-    if (phase_velocities
-        && qualification["model"]
-            != "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1")
-        || (scheduled_velocity
-            && qualification["model"]
-                != "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1")
-    {
-        return Err(fail());
-    }
-    let prescribed_velocity = phase_velocities
+    let prescribed_velocity = phase_schedule
+        || phase_velocities
         || scheduled_velocity
         || qualification["schema"] == "ftx-coupled-liquid-mechanics/2";
     let exchange =
@@ -146,7 +154,11 @@ fn admit_mechanics(
                     | "ftx-textile-surface-water/5"
             )
         ) && qualification["model"]
-            == if phase_velocities {
+            == if recoil {
+                "scheduled_phase_specific_incoming_and_outgoing_velocity_mass_exchange_frozen_mechanics/1"
+            } else if phase_schedule {
+                "scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1"
+            } else if phase_velocities {
                 "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1"
             } else if scheduled_velocity {
                 "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1"
@@ -177,65 +189,78 @@ fn admit_mechanics(
     let pressure = array(water, "wet_vapor_pressure_pa")?;
     let low = finite(&pressure.first().ok_or_else(fail)?[0]).ok_or_else(fail)?;
     let high = finite(&pressure.last().ok_or_else(fail)?[0]).ok_or_else(fail)?;
+    let intervals = if phase_schedule || scheduled_velocity {
+        let count = array(motion, "keyframes")?.len();
+        if !(1..=16).contains(&count) || array(request, "boundaries")?.len() != count {
+            return Err(fail());
+        }
+        count
+    } else {
+        0
+    };
+    let incoming_field = if phase_schedule {
+        Some("incoming_stream_velocities_world_m_s_by_interval")
+    } else if phase_velocities {
+        Some("incoming_stream_velocities_world_m_s")
+    } else if scheduled_velocity {
+        Some("incoming_velocity_world_m_s_by_interval")
+    } else if prescribed_velocity {
+        Some("incoming_velocity_world_m_s")
+    } else {
+        None
+    };
+    let outgoing_field = "outgoing_stream_velocities_relative_to_cloth_m_s_by_interval";
+    let mut recoil_has_velocity = false;
     for (instance, binding) in bindings {
         let range = array(binding, "temperature_range_c")?;
         let maximum = number(binding, "maximum_liquid_loading_kg_m2")?;
-        if phase_velocities {
-            let streams = binding["incoming_stream_velocities_world_m_s"]
-                .as_object()
-                .ok_or_else(fail)?;
-            if streams.len() != 2
-                || binding.get("incoming_velocity_world_m_s").is_some()
-                || binding
-                    .get("incoming_velocity_world_m_s_by_interval")
-                    .is_some()
-            {
+        // The producer's versions have exclusive velocity fields. Explicit null is not absence.
+        for field in [
+            "incoming_velocity_world_m_s",
+            "incoming_stream_velocities_world_m_s",
+            "incoming_velocity_world_m_s_by_interval",
+            "incoming_stream_velocities_world_m_s_by_interval",
+        ] {
+            if binding.get(field).is_some() != (incoming_field == Some(field)) {
                 return Err(fail());
             }
-            for phase in ["supply", "condensation"] {
-                let velocity = array(&binding["incoming_stream_velocities_world_m_s"], phase)?;
-                if velocity.len() != 3 || velocity.iter().any(|v| finite(v).is_none()) {
-                    return Err(fail());
-                }
-            }
-        } else if scheduled_velocity {
-            let velocities = array(binding, "incoming_velocity_world_m_s_by_interval")?;
-            let intervals = array(request, "boundaries")?.len();
-            if intervals == 0
-                || intervals > 16
-                || velocities.len() != intervals
-                || binding.get("incoming_velocity_world_m_s").is_some()
-                || binding
-                    .get("incoming_stream_velocities_world_m_s")
-                    .is_some()
-                || velocities.iter().any(|v| {
-                    v.as_array().is_none_or(|v| {
-                        v.len() != 3 || v.iter().any(|component| finite(component).is_none())
+        }
+        if binding.get(outgoing_field).is_some() != recoil {
+            return Err(fail());
+        }
+        if let Some(field) = incoming_field {
+            let valid = if phase_schedule || scheduled_velocity {
+                let values = array(binding, field)?;
+                values.len() == intervals
+                    && values.iter().all(|v| {
+                        if phase_schedule {
+                            velocity_pair(v, ["supply", "condensation"])
+                        } else {
+                            velocity(v)
+                        }
                     })
-                })
-            {
+            } else if phase_velocities {
+                velocity_pair(&binding[field], ["supply", "condensation"])
+            } else {
+                velocity(&binding[field])
+            };
+            if !valid {
                 return Err(fail());
             }
-        } else {
-            if binding
-                .get("incoming_stream_velocities_world_m_s")
-                .is_some()
-            {
+        }
+        if recoil {
+            let values = array(binding, outgoing_field)?;
+            if values.len() != intervals {
                 return Err(fail());
             }
-            if binding
-                .get("incoming_velocity_world_m_s_by_interval")
-                .is_some()
-            {
-                return Err(fail());
-            }
-            if prescribed_velocity {
-                let velocity = array(binding, "incoming_velocity_world_m_s")?;
-                if velocity.len() != 3 || velocity.iter().any(|v| finite(v).is_none()) {
+            for pair in values {
+                if !velocity_pair(pair, ["evaporation", "drainage"]) {
                     return Err(fail());
                 }
-            } else if binding.get("incoming_velocity_world_m_s").is_some() {
-                return Err(fail());
+                for phase in ["evaporation", "drainage"] {
+                    recoil_has_velocity |=
+                        array(pair, phase)?.iter().any(|v| finite(v) != Some(0.));
+                }
             }
         }
         if range.len() != 2
@@ -250,7 +275,11 @@ fn admit_mechanics(
     }
     let summary = |report: &Value| -> Result<Value, Refusal> {
         if report["schema"]
-            != if phase_velocities {
+            != if recoil {
+                "ftx-coupled-liquid-mechanics-result/6"
+            } else if phase_schedule {
+                "ftx-coupled-liquid-mechanics-result/5"
+            } else if phase_velocities {
                 "ftx-coupled-liquid-mechanics-result/4"
             } else if scheduled_velocity {
                 "ftx-coupled-liquid-mechanics-result/3"
@@ -307,6 +336,7 @@ fn admit_mechanics(
     let mut previous_outgoing = 0.;
     let mut previous_incoming_energy = 0.;
     let mut previous_mixing_dissipation = 0.;
+    let mut previous_separation_work = 0.;
     let mut previous_incoming_potential = 0.;
     let mut previous_incoming_momentum = [0.; 3];
     let mut previous_drained = 0.;
@@ -349,6 +379,20 @@ fn admit_mechanics(
                 }
                 previous_mixing_dissipation = mixing;
             } else if flow.get("mixing_dissipation_j").is_some() {
+                return Err(fail());
+            }
+            if recoil {
+                // Relative outgoing velocity requires mechanical boundary work, not thermal heat.
+                let work = nonnegative(flow, "outgoing_separation_work_j")?;
+                if work < previous_separation_work
+                    || (index == 0 && work != 0.)
+                    || (!recoil_has_velocity && work != 0.)
+                    || (outgoing == previous_outgoing && work != previous_separation_work)
+                {
+                    return Err(fail());
+                }
+                previous_separation_work = work;
+            } else if flow.get("outgoing_separation_work_j").is_some() {
                 return Err(fail());
             }
             let thermal_incoming = if index == 0 {

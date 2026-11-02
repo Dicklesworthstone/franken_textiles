@@ -250,8 +250,7 @@ Phase mass must reconcile to aggregate incoming mass before mutation. Opposing m
 not cancel incoming kinetic energy or nonnegative mixing loss. Result schema `/4` retains the
 qualification and existing separate mechanical ledger. Independent known answers, Galilean and
 whole-motion rollback tests and native/portable named-case replay cover this numerical closure.
-Phase-specific time-varying streams, pinned-coordinate impulses, heat deposition and
-empirical wet-garment claims remain open.
+Pinned-coordinate impulses, heat deposition and empirical wet-garment claims remain open.
 
 Published schema `ftx-coupled-liquid-mechanics/3`, model `scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1`,
 qualifies an explicit common incoming world velocity for every
@@ -273,6 +272,17 @@ include initialization zero only when drainage is admitted. Evaporation fields r
 atomically. Evaporation-only qualification still rejects drainage. Independent conservation and
 whole-motion late-refusal replay cover the numerical closure, including scheduled and separate
 liquid/vapor incoming velocities; these are not measured wet-textile qualifications.
+
+Version `/5` schedules separately qualified supply and condensation world velocities for every
+retained instance and keyframe interval. Version `/6` additionally schedules evaporation and
+drainage velocities relative to the post-incoming-mixing cloth. Exact accepted thermal phase
+masses drive one welded incoming mixture and the retained-mass recoil; earlier schemas reject
+the newer fields. The `/6` receipt adds nonnegative cumulative `outgoing_separation_work_j`,
+subtracted in the mechanical kinetic residual and never deposited as thermal heat. Outgoing
+kinetic energy is accumulated from each phase's actual world velocity to avoid cancellation
+when the stream is stationary in the declared frame. Complete source, schedule, transfer and
+thermal ledgers remain subject to ordinary material-study admission and whole-motion rollback.
+No inferred runoff direction, pressure thrust or wet constitutive law is introduced.
 
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface

@@ -1612,6 +1612,15 @@ energy accounting. A missing source, unsupported loading or partial history excl
 without erasing independent manufacturing results. These decisions remain nominal, without
 propagated wet-material uncertainty or empirical wearer validation.
 
+The same comparison path admits separately scheduled supply/condensation velocities from liquid
+mechanics `/5` and qualified outgoing recoil from `/6`. Every retained instance needs one complete
+phase-velocity pair per mechanical keyframe interval; `/6` also needs the complete evaporation/drainage
+relative-velocity schedule. Different policies remain distinct comparison protocols. Mixed fields,
+changed source identities, incomplete schedules or inconsistent phase/transfer ledgers exclude the
+affected consumer. The `/6` outgoing separation work must start at zero and remain nonnegative and
+cumulative; it is mechanical boundary work, never a thermal heat input or an inferred runoff law.
+The workbench displays it separately from incoming mixing loss and retains the exact source request.
+
 ## Budgets, tests and remaining gates
 
 Explicit variant `changes` can also include a complete `interfaces` replacement using the existing

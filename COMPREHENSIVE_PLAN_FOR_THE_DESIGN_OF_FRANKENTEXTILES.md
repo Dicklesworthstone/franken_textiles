@@ -4670,11 +4670,15 @@ sensible/latent heat. Existing co-moving requests retain their original semantic
 is tracked by `ftx-vc2.3.2`; see [textile-surface-water.md](docs/textile-surface-water.md).
 The bounded extensions retain that law: schema `/3` prescribes one common incoming velocity per
 mechanical keyframe interval, while schema `/4` prescribes separate constant supplied-liquid and
-condensed-vapor velocities. Their fields and model tags are exclusive; phase-specific schedules
-remain unsupported. The phase-specific work is tracked by `ftx-vc2.3.3` and the broader work by
-`ftx-vc2.3`. Independent conservation and step-refinement checks establish numerical closure;
-measured wet response, rain interception, relative outgoing velocity, changing wet constitutive laws, mixing-heat
-partition and empirical garment agreement remain separate work.
+condensed-vapor velocities. Schema `/5` independently schedules both incoming phases; `/6` also
+qualifies each outgoing phase's velocity relative to the post-mixing cloth and conserves momentum
+through retained-cloth recoil. Ordinary material and design comparisons admit these complete
+source-bound histories with exact interval schedules and independent phase/transfer checks.
+Outgoing separation work remains an explicit mechanical boundary term, separate from thermal heat.
+Their fields and model tags are exclusive. The phase-specific work is tracked by `ftx-vc2.3.3` and
+the broader work by `ftx-vc2.3`. Independent conservation and step-refinement checks establish
+numerical closure; measured wet response, rain interception, inferred runoff, changing wet
+constitutive laws, mixing-heat partition and empirical garment agreement remain separate work.
 
 ### 25.140 Turn material-aware markers into qualified cold-knife path plans
 

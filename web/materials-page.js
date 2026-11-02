@@ -763,6 +763,8 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       if (h.mechanical_coupling) {
         const m = h.mechanical_coupling, exchange = m.exchange;
         const prescribed = ["ftx-coupled-liquid-mechanics-result/2", "ftx-coupled-liquid-mechanics-result/3", "ftx-coupled-liquid-mechanics-result/4", "ftx-coupled-liquid-mechanics-result/5", "ftx-coupled-liquid-mechanics-result/6"].includes(m.schema);
+        const recoil = m.schema === "ftx-coupled-liquid-mechanics-result/6";
+        const phaseScheduled = recoil || m.schema === "ftx-coupled-liquid-mechanics-result/5";
         const inertia = table(parent, `${key}: ${exchange ? "liquid exchange" : "evaporation"} changes moving cloth mass`,
           ["Dry cloth + accessories (kg)", "Initial water (kg)", "Remaining water (kg)", "Current inertial mass (kg)", "Mass residual (kg)"]);
         cells(inertia, [metric(m.substrate_and_attached_mass_kg), metric(m.initial_liquid_mass_kg),
@@ -779,9 +781,11 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
             metric(m.exported_kinetic_energy_j), metric(m.exported_gravitational_energy_j)]);
           const residual = table(parent, `${key}: liquid exchange momentum and energy residuals`,
             ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)",
-              ...(prescribed ? ["Inelastic mixing loss (J)"] : [])]);
+              ...(prescribed ? ["Inelastic mixing loss (J)"] : []),
+              ...(recoil ? ["Outgoing separation work (J)"] : [])]);
           cells(residual, [vector(m.transfer_momentum_residual_kg_m_s), metric(m.transfer_kinetic_residual_j),
-            metric(m.transfer_gravitational_residual_j), ...(prescribed ? [metric(exchange.mixing_dissipation_j)] : [])]);
+            metric(m.transfer_gravitational_residual_j), ...(prescribed ? [metric(exchange.mixing_dissipation_j)] : []),
+            ...(recoil ? [metric(exchange.outgoing_separation_work_j)] : [])]);
         } else {
           const transfer = table(parent, `${key}: mechanical energy carried away by vapor`,
             ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)", "Kinetic transfer residual (J)"]);
@@ -792,7 +796,9 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         couplingScope.textContent = "Initial liquid is added co-moving after the dry drape; it is not a wet equilibrium. Each mechanical step uses its starting water mass, then accepted heat and liquid exchange update the next step. " +
           "Refine the mechanical time step to assess this first-order coupling. The thermal latent/sensible ledger remains separate from transferred bulk mechanical energy. " +
           (exchange ? (prescribed ?
-            `Incoming liquid and condensed vapor use the prescribed world-frame velocities; outgoing vapor${draining ? " and drained liquid leave" : " leaves"} at the mixed cloth velocity. Inelastic mixing loss is separate from thermal heat. ` :
+            `Incoming liquid and condensed vapor use ${phaseScheduled ? "their independently scheduled" : "the prescribed"} world-frame velocities. ` +
+            (recoil ? `Outgoing vapor${draining ? " and drained liquid use" : " uses"} scheduled velocities relative to the post-mixing cloth; the retained cloth recoils to conserve momentum. Inelastic mixing loss and outgoing separation work are mechanical boundary terms, separate from thermal heat. ` :
+              `The outgoing vapor${draining ? " and drained liquid leave" : " leaves"} at the mixed cloth velocity. Inelastic mixing loss is separate from thermal heat. `) :
             `Incoming liquid, condensed vapor and outgoing vapor${draining ? " and drained liquid" : ""} share the local endpoint cloth velocity under the independent source qualification. `) +
             "Equal incoming and outgoing mass retain both transfer ledgers. Signed gravitational energies keep the declared world frame. These residuals check mass transfer, not the complete motion energy balance. " :
             "Supply and condensation are unsupported in this evaporation-only mode. ") +

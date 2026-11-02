@@ -254,6 +254,13 @@ rolls back the recoil state and all ledgers. This contract supplies no jet-press
 model, runoff direction, aerodynamic coupling, measured wet constitutive behavior or empirical garment
 validation.
 
+Ordinary single-case and named-case material/design studies admit complete `/5` and `/6` histories
+through the shared comparison authority. Admission checks the exact source qualification and
+interval schedules, every retained instance, phase masses, mechanical transfers and thermal balance.
+Separation work must be finite, nonnegative, initially zero and cumulative, with no increase when
+outgoing mass is unchanged. Older models cannot carry this field. The workbench shows separation
+work beside incoming mixing loss while keeping both out of the sensible/latent energy table.
+
 ## Thermal water model
 
 `motion.transient_surface.surface_water` evolves explicitly declared **free liquid on the textile**
