@@ -285,6 +285,54 @@ local, and each body-dependent result downloads its exact `body-input.json` alon
 and scenario inputs for native replay. The Rust body/fit authority and all ordinary qualification gates
 remain authoritative; selecting an accepted numerical shape does not establish physical garment fit.
 
+### Configure fresh garment/body comparisons without a scenario file
+
+Under **Fresh body, drape and heat studies**, choose **Configure one garment/body scenario here**.
+It uses the body source selected above and the original pattern, with a new production drape for
+the baseline and every inspected material choice. Select the original section-3 fit contract, or
+explicitly choose **No fit contract — numerical comparison only**. A missing or malformed selected
+contract refuses; it never becomes an empty contract automatically.
+
+Set mesh spacing, sewing and gravity steps, time step, optional additional settling, and mesh and
+aggregate vertex-frame limits. The initial phases need at least six steps, with at most 256 steps
+including settling. The ordinary cloth–cloth contact option is explicit; joint outfits require it.
+These are numerical settings, not measured fabric thickness, friction or a runtime guarantee.
+Enable independent sheet heat to retain the exact section-3 heat conditions and evaluate each
+alternative's current geometry through the existing thermal engine.
+
+Guided material comparisons can combine the following nominal goals and inclusive maximums with
+manufacturing objectives, or run without manufacturing consumers. For a scenario-only comparison,
+clear unused manufacturing goals and limits before disabling their inputs.
+
+| Quantity | Meaning and admission |
+|---|---|
+| Simulated cloth mass (kg) | Mass of the simulated pieces; it excludes unsimulated parts. Use the separate complete-inventory assembly-mass consumer for total garment mass. |
+| Maximum absolute panel-edge strain (%) | The existing edge-based simulation metric. It is not principal strain or a physical safe-fit threshold. |
+| Signed independent sheet power (W) | Declare minimize or maximize explicitly. Negative power stays negative; minimizing signed power does not minimize its magnitude. This is not layered coverage or whole-wearer comfort. |
+
+Maximums remain active even when their objective checkbox is clear. Explicitly required drape and
+sheet-heat consumers can exclude alternatives without adding a goal. An unsettled or gating-flagged
+drape cannot qualify these comparisons. Missing mechanics, thermal evidence or work budget retains
+the native refusal and any independent manufacturing result. A reported-range assembly-mass
+objective may use an explicit nominal limit basis for these simulation guards; unsupported result
+ranges are not invented. Use **Recompute every alternative in the requested scenarios**; the
+manufacturing-only action refuses scenario goals rather than silently dropping them.
+
+The generated `study-request.json` and `scenario-request.json` retain the original fit, heat and
+material source text, alongside the exact pattern and body input downloads. Active source, goal,
+mode and numerical-setting edits withdraw stale results and cancel pending reads or worker work.
+Unconsumed section-3 files do not replace an advanced scenario's own sources. Select **Load a
+complete scenario or named matrix (advanced)** for authored motion, coverage, named cases or
+other existing scenario policies; its exact request remains authoritative.
+
+The focused compiled-engine proof uses a small synthetic sewing-only fixture with zero gravity
+steps. Five complete native/direct-WASM/worker comparisons cover signed heat direction, explicit
+maximums, aggregate budget exhaustion, scenario-only goals and independent mass after a mechanics
+refusal. This is numerical software evidence, not gravity-settled garment or physical-fit evidence.
+The runnable `tools/check_materials_web.cjs --guided-scenario-proof DIR` mode adds real-browser
+replay coverage; the session's Chromium attempts crashed before reaching its new assertions, so
+that browser proof remains unverified.
+
 Material and source data requirements are unchanged. See `material-sewing-plans.md`,
 `material-platform-progress.md`, `steady-conduction.md`, `steady-thermal-coverage.md`,
 `exterior-thermal-exchange.md`, and `textile-price-refresh.md` for their input semantics and limitations.

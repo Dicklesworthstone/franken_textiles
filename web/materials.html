@@ -705,7 +705,61 @@ it can choose a slower recipe when its order costs less. Missing channel quantit
 and an exhausted search retains a complete incumbent without claiming the least cost is proved.</p>
 </div><div>
 <h3>Fresh body, drape and heat studies</h3>
+<label>Set up the scenarios <select id="scenarioMode">
+<option value="guided">Configure one garment/body scenario here</option>
+<option value="file">Load a complete scenario or named matrix (advanced)</option>
+</select></label>
+<div id="guidedScenario">
+<p>Use the body source selected above. Every alternative receives a fresh drape on that same body and pose.
+These controls author a numerical experiment; material qualifications, convergence and result admission remain with the engine.</p>
+<label>Garment fit contract <select id="guidedScenarioFitSource">
+<option value="file">Use the original fit contract selected in section 3</option>
+<option value="none">No fit contract — numerical comparison only</option>
+</select></label>
+<p class="note">Supply the garment's own points-of-measure contract for fit reporting. Choosing no contract does not assess those targets
+or establish physical garment fit. The source document is retained unchanged.</p>
+<fieldset><legend>Drape policy and work limits</legend><div class="study-fields">
+<label>Mesh spacing (mm) <input id="guidedScenarioSpacing" type="number" min="0" step="any" value="12"></label>
+<label>Time step (s) <input id="guidedScenarioStep" type="number" min="0" step="any" value="0.041666666666666664"></label>
+<label>Sewing steps, without gravity <input id="guidedScenarioSewSteps" type="number" min="0" max="256" step="1" value="12"></label>
+<label>Gravity steps <input id="guidedScenarioDrapeSteps" type="number" min="0" max="256" step="1" value="36"></label>
+<label>Maximum extra settling steps <input id="guidedScenarioSettle" type="number" min="0" max="256" step="1" value="0"></label>
+<label>Mesh candidate budget per alternative <input id="guidedScenarioMeshBudget" type="number" min="3" max="32768" step="1" value="32768"></label>
+<label>Total vertex-frame work budget <input id="guidedScenarioFrameBudget" type="number" min="1" max="64000000" step="1" value="64000000"></label>
+</div>
+<label><input id="guidedScenarioSelfContact" type="checkbox"> Enable the ordinary cloth–cloth contact policy (2 mm numerical thickness)</label>
+<p class="note">Joint outfits require explicit cloth–cloth contact. This option uses the existing solver contact policy;
+it does not measure a fabric's thickness or friction. Source material resolution and intersection checks still apply.</p>
+<p class="note">The initial sewing and gravity phases need at least 6 steps, with at most 256 including the optional settling tail.
+The default time step is 1/24 s. Budgets bound work, not runtime or convergence. An unsettled or gating-flagged drape cannot
+qualify a drape-based comparison. Zero gravity steps describe a sewing-only experiment.</p></fieldset>
+<label><input id="guidedScenarioHeat" type="checkbox"> Evaluate independent sheet heat using the original section-3 heat conditions</label>
+<p class="note">Uses each alternative's fresh geometry and qualified thermal observations with the declared reservoir temperatures
+and boundary films. Independent sheet power is not layered body coverage, whole-wearer heat loss or a comfort score.</p>
+</div>
+<div id="scenarioFileControls" hidden>
 <label>Scenario or named matrix JSON (<code>ftx-drape-scenario/1</code> or <code>ftx-drape-scenario-matrix/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>
+</div>
+<fieldset id="guidedScenarioGoals"><legend>Garment/body goals and limits for the guided comparison</legend>
+<p>Combine these with the manufacturing goals at left, or disable manufacturing inputs for a scenario-only comparison.
+Use the scenario action below; the manufacturing-only action cannot evaluate these goals.</p>
+<div class="study-goals"><strong>Goal</strong><strong>Maximum allowed (optional)</strong>
+<label><input id="guidedDrapeMassGoal" type="checkbox"> Minimize simulated cloth mass (kg)</label>
+<input id="guidedDrapeMassLimit" type="number" min="0" step="any" aria-label="Maximum simulated cloth mass in kilograms" placeholder="No limit">
+<label><input id="guidedStrainGoal" type="checkbox"> Minimize maximum absolute panel-edge strain (%)</label>
+<input id="guidedStrainLimit" type="number" min="0" step="any" aria-label="Maximum absolute panel-edge strain percentage" placeholder="No limit">
+<label><input id="guidedHeatPowerGoal" type="checkbox"> Compare signed independent sheet heat (W)</label>
+<input id="guidedHeatPowerLimit" type="number" step="any" aria-label="Maximum signed independent sheet heat power in watts" placeholder="No limit">
+</div>
+<label>Signed heat objective <select id="guidedHeatDirection"><option value="">Choose a direction when comparing heat</option>
+<option value="minimize">Minimize signed outward power</option><option value="maximize">Maximize signed outward power</option></select></label>
+<label><input id="guidedRequireDrape" type="checkbox"> Require a numerically admissible drape, even without a drape objective</label>
+<label><input id="guidedRequireSurface" type="checkbox"> Require a complete independent sheet heat result</label>
+<p class="note">Negative power is meaningful; minimizing signed power does not minimize its magnitude. These three goals use nominal
+computed values. Simulated cloth mass excludes unsimulated parts; use complete garment mass for an explicitly complete inventory.
+Panel-edge strain is not principal strain or a safe-fit threshold. Maximums remain active without their goal checkbox.
+Use an explicit nominal limit basis at left when combining these limits with reported-range garment mass.</p>
+</fieldset>
 <label>Separate body-source request JSON (<code>ftx-scenario-body/1</code>; select its source mode above) <input id="scenarioBody" type="file" accept=".json,application/json"></label>
 <button id="scenario" data-command="scenario" disabled>Recompute every alternative in the requested scenarios</button>
 <p class="note">A named matrix evaluates the same design and material alternatives and body under 1–8 declared scenarios.
@@ -725,8 +779,9 @@ and <code>leg_fraction</code> (0–1, default 1); section-3 report, pose and mea
 Accepted shapes must match the exact model and are never refitted; optional tapes report residuals only.
 An absent or malformed selected source refuses without switching to another source. Choose measurement mode explicitly
 to return to tape fitting. Original source text is retained in the downloaded <code>body-input.json</code> for replay.
-The scenario itself owns the fit specification, numerical options, surface conditions and body-coverage policy;
-the single-preview fit, leg posture, settling budget, self-contact checkbox and thermal files above do not override it. Shape selection runs once;
+Guided setup explicitly reuses the chosen fit and sheet-heat files above. Complete-file mode retains its own original fit specification,
+numerical options, conditions and coverage policy. The single-preview leg posture, settling budget and self-contact checkbox
+do not override either scenario policy. Shape selection runs once;
 the chosen garment pose does not change that shape. Each alternative gets a fresh production drape and
 current-geometry heat evaluation. Without a <code>motion</code> request this remains a static pose.</p>
 <p class="note">Motion keyframes accept an arm angle and optional <code>leg_pose: {"posture":"seated","fraction":0.5}</code>

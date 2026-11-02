@@ -4869,6 +4869,25 @@ finite allocations, whole-item prices, refused qualifications and both mixed-job
 This advances `ftx-ms2` through existing engines; empirical nesting quality, process timing, physical
 garment fit and hardware qualification remain open.
 
+### 25.149 Author garment/body material scenarios through ordinary browser controls
+
+The workbench now authors a bounded single-scenario request from the selected body, original fit
+contract and optional independent-sheet heat conditions. Users explicitly select a numerical-only
+comparison when no fit contract is intended. Every material alternative receives a fresh production
+drape with declared mesh, stepping, contact and aggregate work limits; advanced source-file and
+named-matrix requests retain their complete original policy.
+
+Guided comparisons expose nominal simulated-cloth mass, maximum absolute panel-edge strain and
+signed sheet heat, with explicit heat direction, inclusive maximums and required consumers. These
+can run alone or alongside independent manufacturing outcomes. Rust remains the numerical and
+comparison authority; missing evidence, failed convergence and exhausted budgets stay visible.
+Original source text, exact replay requests and cancellation survive the operator workflow.
+
+This advances `ftx-ms2` without implying total-garment mass from the simulated subset, whole-wearer
+comfort from sheet power, or physical fit from strain. The focused native/WASM/worker proof is a
+small synthetic sewing-only numerical experiment. Empirical material, garment and process gates
+remain open; this slice does not add guided motion, layer-map or multi-case authoring.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

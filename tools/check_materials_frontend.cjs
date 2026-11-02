@@ -5560,6 +5560,24 @@ async function addGuidedSelection(p, raw = guidedSelection(), key = '') {
   p.emit({selection,selection_json:raw,snapshot:selection.record,capabilities:{}});
   p.e.studyCandidateName.value=key;p.e.addStudyCandidate.onclick();
 }
+async function guidedScenarioSetup(heat = false) {
+  const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+  p.e.guidedCutting.checked=false;p.e.guidedCutting.handlers.change();
+  // Explicit DOM defaults and transport fixtures; this helper makes no numerical admission claim.
+  for(const [id,value] of Object.entries({scenarioMode:'guided',guidedScenarioFitSource:'file',
+    guidedScenarioSpacing:'100',guidedScenarioSewSteps:'120',guidedScenarioDrapeSteps:'0',guidedScenarioStep:'0.001',
+    guidedScenarioSettle:'0',guidedScenarioMeshBudget:'4096',guidedScenarioFrameBudget:'25000',
+    guidedDrapeMassLimit:'',guidedStrainLimit:'',guidedHeatPowerLimit:'',guidedHeatDirection:heat?'maximize':''}))p.e[id].value=value;
+  for(const [id,checked] of Object.entries({guidedScenarioHeat:heat,guidedScenarioSelfContact:false,
+    guidedDrapeMassGoal:true,guidedStrainGoal:false,guidedHeatPowerGoal:heat,guidedRequireDrape:true,guidedRequireSurface:heat}))p.e[id].checked=checked;
+  const sources={fit:' {"points":[],"note":"café 🧵","signed":-0.0,"sample":18446744073709551615}\r\n',
+    heatConditions:' {"schema":"ftx-steady-surface-conditions/1","boundaries":[{"inside_c":20.0,"outside_c":35.0,"inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.1}]}\r\n',
+    scenarioBody:' {"schema":"ftx-scenario-body/1","measurements":{},"arm_abduction_deg":35.0}\r\n'};
+  for(const [id,raw] of Object.entries(sources)){p.select(id,raw);p.e[id].handlers.change();}
+  p.e.studyBodySource.value='request';p.e.studyBodySource.handlers.change();
+  p.e.body.files=[new Blob([new Uint8Array([2,4,6])])];p.e.body.handlers.change();
+  p.e.scenarioMode.handlers.change();return {p,sources};
+}
 
 test('guided studies retain immutable inspected sources, an explicit baseline and exact downloadable requests', async () => {
   const p=await pageModule(),original=' {"pieces":[{"id":"front"},{"id":"lining"}],"coefficient":1.0,"signed":-0.0,"sample":18446744073709551615}\r\n';
@@ -6054,6 +6072,167 @@ test('guided pattern replacement and candidate adoption clear the shortlist whil
   await p.load();
   assert.equal(p.e.studyCandidates.children.length,0);assert.equal(p.e.study.disabled,true);
   assert.deepEqual(p.e.studyPieces.children.map(o=>o.value),['front','lining']);
+});
+
+test('guided scenario-only choices reach the worker with exact sources, signed heat policy and complete request replay', async () => {
+  const {p,sources}=await guidedScenarioSetup(true);
+  p.e.guidedScenarioSelfContact.checked=true;p.e.guidedStrainGoal.checked=true;p.e.guidedHeatPowerLimit.value='-7.5';
+  assert.equal(p.e.scenario.disabled,false);assert.equal(p.e.studyRequest.files.length,0);assert.equal(p.e.scenarioRequest.files.length,0);
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.equal(sent.measurements,sources.scenarioBody);
+  assert.deepEqual([...new Uint8Array(sent.bytes)],[2,4,6]);
+  for(const raw of [sources.fit,sources.heatConditions])assert.ok(sent.scenarioRequest.includes(raw));
+  const scenario=JSON.parse(sent.scenarioRequest),study=JSON.parse(sent.studyRequest);
+  assert.deepEqual(scenario.options,{spacing:100,sew_steps:120,drape_steps:0,step:0.001,max_settle_steps:0,
+    self_contact:{dhat:0.001,thickness:0.002,kappa:100,mu:0.4,eps_v:0.001}});
+  assert.equal(scenario.max_mesh_points,4096);assert.equal(scenario.max_vertex_frames,25000);
+  for(const key of ['cutting','assembly_mass','sewing','purchasing'])assert.equal(Object.hasOwn(study,key),false);
+  assert.deepEqual(study.comparison,{basis:'nominal',allow_mixed_protocols:false,
+    objectives:[{metric:'simulated_cloth_mass_kg',direction:'minimize'},{metric:'max_absolute_edge_strain_pct',direction:'minimize'},
+      {metric:'independent_surface_power_w',direction:'maximize'}],constraints:[{metric:'independent_surface_power_w',maximum:-7.5}],
+    required_consumers:['drape','surface']});
+  let calls=0,freed=0;
+  const w=await workerModule({bindings:{default:async()=>{},WebBody:class{
+    constructor(bytes){assert.deepEqual([...bytes],[2,4,6]);}free(){freed++;}},
+    material_scenario_study:(_body,...args)=>{calls++;assert.deepEqual(args,[sent.pattern,sent.studyRequest,sent.scenarioRequest,sources.scenarioBody]);return JSON.stringify(scenarioReport());}}});
+  const result=await w.send(sent);assert.equal(result.type,'result',result.message);assert.equal(calls,1);assert.equal(freed,1);
+  p.current().emit(result);const s=section(p,'Fresh drape and heat alternatives');assert.equal(s.hidden,false);
+  for(const [name,raw] of [['original-pattern.json',sent.pattern],['study-request.json',sent.studyRequest],
+    ['scenario-request.json',sent.scenarioRequest],['body-input.json',sources.scenarioBody]]) {
+    const download=descendants(s).find(n=>n.download===name);assert.ok(download,name);
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+  }
+  p.windowEvents.pagehide();assert.equal(p.live.size,0);
+});
+
+test('guided scenarios retain finite-stock and mixed-job goals beside shared drape and signed heat requirements', async () => {
+  for(const mode of ['finite','job']) {
+    const {p,sources}=await guidedScenarioSetup(true),active=guidedStockSources(p)[mode];
+    p.e.guidedStockMode.value=mode;p.e.guidedStockMode.handlers.change();
+    p.e.guidedCutting.checked=true;p.e.guidedCutting.handlers.change();
+    p.e.guidedFiniteCountGoal.checked=true;p.e.guidedJobAreaGoal.checked=true;
+    p.e.guidedRequireFinite.checked=true;p.e.guidedRequireJob.checked=true;p.e.guidedHeatPowerLimit.value='-7.5';
+    await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.studyRequest.includes(active.raw));
+    for(const raw of [sources.fit,sources.heatConditions])assert.ok(sent.scenarioRequest.includes(raw));
+    const request=JSON.parse(sent.studyRequest),comparison=request.comparison;
+    for(const field of ['cutting','finite_stock','cutting_job'])assert.equal(Object.hasOwn(request,field),field===active.field,field);
+    assert.deepEqual(request[active.field],JSON.parse(active.raw));
+    assert.deepEqual(comparison.objectives.map(x=>x.metric).sort(),
+      [active.metric,'simulated_cloth_mass_kg','independent_surface_power_w'].sort());
+    assert.equal(comparison.objectives.find(x=>x.metric==='independent_surface_power_w').direction,'maximize');
+    assert.deepEqual(comparison.constraints,[{metric:'independent_surface_power_w',maximum:-7.5}]);
+    assert.deepEqual(comparison.required_consumers.sort(),
+      [mode==='finite'?'finite_stock':'cutting_job','drape','surface'].sort());
+  }
+});
+
+test('guided scenarios require explicit no-fit choice and refuse malformed sources, missing heat, direction or manufacturing misuse', async () => {
+  const {p}=await guidedScenarioSetup();p.e.fit.files=[];
+  let before=p.current().messages.length;await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/fit contract/i);
+  p.e.guidedScenarioFitSource.value='none';p.e.guidedScenarioFitSource.handlers.change();
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).fit_spec,{});assert.equal(Object.hasOwn(JSON.parse(sent.scenarioRequest),'surface'),false);
+  p.emit(scenarioReport());
+  for(const invalid of ['malformed-fit','array-fit','missing-heat','direction','manufacturing']) {
+    const {p}=await guidedScenarioSetup(true);
+    if(invalid==='malformed-fit')p.select('fit','{');
+    else if(invalid==='array-fit')p.select('fit','[]');
+    else if(invalid==='missing-heat')p.e.heatConditions.files=[];
+    else if(invalid==='direction')p.e.guidedHeatDirection.value='';
+    const before=p.current().messages.length;await p.e[invalid==='manufacturing'?'study':'scenario'].onclick();
+    assert.equal(p.current().messages.length,before,invalid);assert.ok(p.e.error.textContent,invalid);
+    assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true,invalid);assert.equal(p.live.size,0,invalid);
+  }
+});
+
+test('guided scenarios snapshot before reads and reject stale posts and downloads after active source or policy edits', async () => {
+  const {p,sources}=await guidedScenarioSetup(true),delay=deferred();
+  p.e.fit.files[0].arrayBuffer=async()=>new TextEncoder().encode(await delay.promise).buffer;
+  const running=p.e.scenario.onclick();
+  // Replacing properties without an edit event cannot change the already captured request.
+  p.select('heatConditions','{}');p.e.guidedScenarioSpacing.value='125';p.e.guidedHeatDirection.value='minimize';
+  delay.resolve(sources.fit);await running;const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(sources.heatConditions));
+  assert.equal(JSON.parse(sent.scenarioRequest).options.spacing,100);
+  assert.equal(JSON.parse(sent.studyRequest).comparison.objectives.at(-1).direction,'maximize');
+  for(const change of ['fit','heatConditions','spacing','goal','limit','direction','scenarioMode','studyMode','body','cancel']) {
+    const {p,sources}=await guidedScenarioSetup(true);await p.e.scenario.onclick();
+    const previous=p.current().messages.at(-1);p.emit(scenarioReport(),[{name:'scenario-request.json',text:previous.scenarioRequest}]);
+    const delay=deferred();let reading=false;
+    p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return new TextEncoder().encode(await delay.promise).buffer;};
+    const old=p.current(),before=old.messages.length,running=p.e.scenario.onclick();assert.equal(reading,true,change);
+    if(change==='spacing'){p.e.guidedScenarioSpacing.value='125';p.e.guidedScenarioSpacing.handlers.input();}
+    else if(change==='goal'){p.e.guidedStrainGoal.checked=true;p.e.guidedStrainGoal.handlers.change();}
+    else if(change==='limit'){p.e.guidedHeatPowerLimit.value='-10';p.e.guidedHeatPowerLimit.handlers.input();}
+    else if(change==='direction'){p.e.guidedHeatDirection.value='minimize';p.e.guidedHeatDirection.handlers.change();}
+    else if(change==='scenarioMode'||change==='studyMode'){p.e[change].value='file';p.e[change].handlers.change();}
+    else if(change==='cancel')p.e.cancel.onclick();
+    else p.e[change].handlers.change();
+    assert.equal(old.dead,true,change);p.ready();delay.resolve(sources.fit);await running;
+    assert.equal(old.messages.length,before,change);assert.equal(p.current().messages.length,0,change);
+    old.emit({type:'result',request:previous.request,result:scenarioReport(),files:[{name:'stale.json',text:'{}'}]});
+    assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true,change);assert.equal(p.live.size,0,change);
+  }
+});
+
+test('guided scenario sources reject invalid UTF-8, retained BOMs and combined oversize before reading or dispatch', async () => {
+  for(const invalid of ['fit-utf8','heat-utf8','fit-bom','heat-bom','budget']) {
+    const {p,sources}=await guidedScenarioSetup(true);let reads=0;
+    for(const id of ['fit','heatConditions']) {
+      const file=p.e[id].files[0],original=file.arrayBuffer;
+      file.arrayBuffer=async()=>{reads++;return original();};
+      if(invalid==='budget')file.size=9*1024*1024;
+    }
+    if(invalid!=='budget') {
+      const id=invalid.startsWith('fit')?'fit':'heatConditions';
+      const bytes=invalid.endsWith('utf8')?new Uint8Array([0x7b,0x22,0xc3,0x28,0x22,0x3a,0x31,0x7d]):
+        new TextEncoder().encode('\ufeff'+sources[id]);
+      p.e[id].files[0].arrayBuffer=async()=>{reads++;return bytes.buffer;};
+    }
+    const before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before,invalid);assert.ok(p.e.error.textContent,invalid);
+    if(invalid==='budget'){assert.equal(reads,0);assert.match(p.e.error.textContent,/16 MiB combined/);}
+    assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true,invalid);assert.equal(p.live.size,0,invalid);
+  }
+});
+
+test('inactive fit and sheet-heat files cannot cancel or replace complete-file and no-heat numerical scenarios', async () => {
+  for(const mode of ['file','guided']) {
+    const {p}=await guidedScenarioSetup();p.e.guidedScenarioFitSource.value='none';p.e.guidedScenarioFitSource.handlers.change();
+    const original=' {"schema":"ftx-drape-scenario/1","fit_spec":{},"options":{"step":0.001},"source":-0.0}\r\n';
+    if(mode==='file'){p.select('scenarioRequest',original);p.e.scenarioRequest.handlers.change();}
+    const delay=deferred();let reading=false;
+    p.e.body.files=[{size:3,arrayBuffer:async()=>{reading=true;return delay.promise;}}];
+    const old=p.current(),running=p.e.scenario.onclick();await new Promise(setImmediate);assert.equal(reading,true,mode);
+    for(const id of ['fit','heatConditions']){p.select(id,'{');p.e[id].handlers.change();}
+    assert.equal(old.dead,false,mode);assert.equal(p.current(),old,mode);
+    delay.resolve(new Uint8Array([2,4,6]).buffer);await running;const sent=old.messages.at(-1);
+    assert.equal(sent.type,'scenario',p.e.error.textContent);
+    if(mode==='file')assert.equal(sent.scenarioRequest,original);else assert.deepEqual(JSON.parse(sent.scenarioRequest).fit_spec,{});
+    p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);const live=new Set(p.live);
+    for(const id of ['fit','heatConditions'])p.e[id].handlers.change();
+    assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false,mode);assert.deepEqual(p.live,live,mode);
+  }
+});
+
+test('guided and complete-file scenario modes preserve raw advanced single and matrix requests through switching', async () => {
+  const {p,sources}=await guidedScenarioSetup();
+  const single=' {"schema":"ftx-drape-scenario/1","options":{"spacing":100.0,"sew_steps":120,"drape_steps":0,"step":0.001},"fit_spec":{"points":[],"signed":-0.0},"max_mesh_points":4096,"max_vertex_frames":25000}\r\n';
+  const matrix=' {"schema":"ftx-drape-scenario-matrix/1","max_evaluations":4,"cases":[{"key":"café 🧵","scenario":'+single+'}]}\r\n';
+  for(const original of [single,matrix]) {
+    p.select('scenarioRequest',original);p.e.scenarioRequest.handlers.change();assert.equal(p.e.scenarioMode.value,'file');
+    for(const mode of ['file','guided','file']) {
+      p.e.scenarioMode.value=mode;p.e.scenarioMode.handlers.change();assert.equal(p.live.size,0);
+      assert.equal(p.e.guidedScenario.hidden,mode!=='guided');assert.equal(p.e.scenarioFileControls.hidden,mode==='guided');
+      await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+      if(mode==='file')assert.equal(sent.scenarioRequest,original);else assert.ok(sent.scenarioRequest.includes(sources.fit));
+      p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+      const link=descendants(section(p,'Fresh drape and heat alternatives')).find(n=>n.download==='scenario-request.json');
+      assert.equal(await p.blobs.get(link.href).text(),sent.scenarioRequest);
+    }
+  }
 });
 
 test('combination controls retain frozen selections and exact policy/pair numbers for native study evaluation', async () => {
@@ -12132,6 +12311,127 @@ test('compiled WASM guided production deadlines use qualified serial and paralle
       const missed=JSON.parse(ftx.material_study(pattern,build({...state,constraints:[{metric,maximum:known-0.1,basis:'nominal'}]})));
       assert.deepEqual(missed.comparison.frontier,[]);assert.equal(missed.alternatives[0].sewing.status,'available','An unmet comparison limit does not discard an independently computed schedule');
     }
+  });
+
+// This optional lane reuses the existing tiny synthetic accepted-body fixture. It is a
+// sewing-only numerical experiment, not a gravity-settled garment or a physical fit claim.
+// FTX_GUIDED_SCENARIO_NATIVE optionally compares every complete report with ftx-materials;
+// FTX_GUIDED_SCENARIO_REPLAY retains the exact small inputs for the actual browser proof.
+test('compiled WASM guided single-body comparisons preserve signed heat, budgets and independent manufacturing',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_SCENARIO_BODY},async t=>{
+    const source=path.resolve(process.env.FTX_GUIDED_SCENARIO_BODY);
+    const original=name=>fs.readFileSync(path.join(source,name),'utf8');
+    const pattern=original('pattern.json'),body=original('body-input.json');
+    const modelBytes=fs.readFileSync(path.join(source,'model.ftxbody'));
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const module=new vm.SourceTextModule(read('materials-study-builder.js'));
+    await module.link(()=>{throw Error('Unexpected guided-builder import');});await module.evaluate();
+    const buildStudy=module.namespace.buildMaterialStudyRequest,buildScenario=module.namespace.buildMaterialScenarioRequest;
+    const changed=structuredClone(JSON.parse(pattern).fabric.material);delete changed.expected_sha256;
+    changed.id=changed.record.id='synthetic-insulating-guided-sheet';changed.record.properties.thermal_conductivity.value=0.02;
+    const freeze=value=>' \r\n'+JSON.parse(ftx.material_inspect(JSON.stringify(value))).selection_json+'\r\n';
+    const insulating=freeze(changed),missing=structuredClone(changed);
+    missing.id=missing.record.id='synthetic-no-mechanical-guided-sheet';delete missing.record.properties.warp_stiffness;
+    const noMechanics=freeze(missing);
+    const state={candidates:[{key:'insulating',selection:insulating},{key:'missing-mechanics',selection:noMechanics}],
+      target:{scope:'default'},pieceIds:['band'],assemblyMass:{schema:'ftx-assembly-mass/1',inventory_complete:true,extras:[]},
+      basis:'nominal',objectives:[{metric:'independent_surface_power_w',direction:'minimize'}],
+      requiredConsumers:['assembly_mass','drape','surface']};
+    const conditions=' {"schema":"ftx-steady-surface-conditions/1","boundaries":[{"inside_c":30.0,"outside_c":10.0,"inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}]}\r\n';
+    const inwardConditions=conditions.replace('"inside_c":30.0,"outside_c":10.0','"inside_c":10.0,"outside_c":30.0');
+    const scenarioState={allowNoFit:true,options:{spacing:100,sew_steps:120,drape_steps:0,step:0.001,max_settle_steps:0},
+      maxMeshPoints:4096,maxVertexFrames:100000,surface:conditions};
+    const studyRequest=buildStudy(state,{drape:true,surface:true}),scenarioRequest=buildScenario(scenarioState);
+    assert.ok(studyRequest.includes(insulating));assert.ok(studyRequest.includes(noMechanics));
+    assert.ok(scenarioRequest.includes(conditions),'The original heat conditions retain lexical numbers and CRLF');
+    assert.equal(JSON.parse(scenarioRequest).options.drape_steps,0,'This fixture makes no gravity-settled garment claim');
+    const replay=process.env.FTX_GUIDED_SCENARIO_REPLAY?path.resolve(process.env.FTX_GUIDED_SCENARIO_REPLAY):null;
+    const native=process.env.FTX_GUIDED_SCENARIO_NATIVE?path.resolve(process.env.FTX_GUIDED_SCENARIO_NATIVE):null;
+    const work=replay||(native?fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-guided-scenario-')):null);
+    const retain=(name,raw)=>{if(work)fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});};
+    if(replay)fs.mkdirSync(replay,{recursive:true});
+    for(const [name,raw] of Object.entries({'pattern.json':pattern,'body-input.json':body,'model.ftxbody':modelBytes,
+      'selection.json':insulating,'missing-mechanics-selection.json':noMechanics,'heat-conditions.json':conditions,
+      'inward-heat-conditions.json':inwardConditions,'study.json':studyRequest,'scenario.json':scenarioRequest}))retain(name,raw);
+    const w=await workerModule({bindings:ftx});let request=790;
+    const evaluate=async(label,study,scenario)=>{
+      const result=await w.send({type:'scenario',request:request++,pattern,studyRequest:study,scenarioRequest:scenario,
+        measurements:body,bytes:modelBytes.buffer.slice(modelBytes.byteOffset,modelBytes.byteOffset+modelBytes.byteLength)});
+      assert.equal(result.type,'result',`${label}: ${result.message}`);
+      const previous=globalThis.ftxProgress,model=new ftx.WebBody(modelBytes);globalThis.ftxProgress=()=>{};
+      try {assert.deepEqual(result.result,JSON.parse(ftx.material_scenario_study(model,pattern,study,scenario,body)),label+' worker/direct WASM');}
+      finally {model.free();if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;}
+      for(const [name,raw] of [['original-pattern.json',pattern],['study-request.json',study],
+        ['scenario-request.json',scenario],['body-input.json',body]])assert.equal(result.files.find(file=>file.name===name).text,raw);
+      const reportFile=result.files.find(file=>file.name==='material-scenario-study.json');
+      assert.deepEqual(JSON.parse(reportFile.text),result.result);
+      retain(label+'-study.json',study);retain(label+'-scenario.json',scenario);
+      if(native) {
+        const nativeReport=require('node:child_process').execFileSync(native,['scenario-study',path.join(work,'pattern.json'),
+          path.join(work,label+'-study.json'),path.join(work,label+'-scenario.json'),path.join(work,'body-input.json'),
+          path.join(work,'model.ftxbody')],{encoding:'utf8',maxBuffer:64*1024*1024});
+        assert.deepEqual(result.result,JSON.parse(nativeReport),label+' complete native/WASM/worker equality');
+      }
+      return result.result;
+    };
+    const simulation=(report,key)=>report.simulations.find(row=>row.key===key).evaluation;
+    const independentMass=report=>{
+      for(const row of report.manufacturing.alternatives) {
+        assert.equal(row.assembly_mass.status,'available',row.key+' independently retains its assembly inventory');
+        assert.ok(row.metrics.assembly_mass_kg>0);
+      }
+    };
+    const outward=await evaluate('outward',studyRequest,scenarioRequest);independentMass(outward);
+    assert.deepEqual(outward.comparison.frontier,['insulating']);
+    for(const key of ['baseline','insulating']) {
+      const evaluation=simulation(outward,key);assert.equal(evaluation.status,'available');
+      assert.equal(evaluation.result.drape.settled,true);assert.deepEqual(evaluation.result.drape.gating,[]);
+      assert.equal(evaluation.result.metrics.simulation_gating_clear,true);
+    }
+    const base=simulation(outward,'baseline').result,substitute=simulation(outward,'insulating').result;
+    assert.equal(base.metrics.cloth_mass_kg,substitute.metrics.cloth_mass_kg,'Only conductivity changes; cloth mass does not');
+    assert.deepEqual(base.drape.global_strain_pct,substitute.drape.global_strain_pct);
+    assert.ok(base.metrics.independent_surface_power_w>substitute.metrics.independent_surface_power_w);
+    assert.ok(substitute.metrics.independent_surface_power_w>0);
+    const unavailable=simulation(outward,'missing-mechanics');assert.equal(unavailable.status,'refused');
+    assert.match(unavailable.refusal.message,/missing textile property warp_stiffness/);
+    const excluded=outward.comparison.alternatives.find(row=>row.key==='missing-mechanics');
+    assert.equal(excluded.eligible,false);assert.equal(excluded.readings.independent_surface_power_w,undefined);
+
+    const inward=await evaluate('inward',studyRequest,buildScenario({...scenarioState,surface:inwardConditions}));
+    assert.deepEqual(inward.comparison.frontier,['baseline'],'Minimizing signed inward power must not silently minimize its absolute magnitude');
+    for(const key of ['baseline','insulating']) {
+      const power=simulation(inward,key).result.metrics.independent_surface_power_w;
+      assert.ok(power<0);assert.ok(Math.abs(power+simulation(outward,key).result.metrics.independent_surface_power_w)<1e-12);
+    }
+    const limited=await evaluate('heat-limit',buildStudy({...state,
+      constraints:[{metric:'independent_surface_power_w',maximum:7,basis:'nominal'}]},
+      {drape:true,surface:true}),scenarioRequest);
+    assert.deepEqual(limited.comparison.frontier,[]);independentMass(limited);
+    for(const key of ['baseline','insulating'])assert.equal(simulation(limited,key).status,'available','An unmet limit does not erase the computed drape');
+
+    const budget=await evaluate('limited-budget',studyRequest,buildScenario({...scenarioState,maxVertexFrames:25000}));
+    assert.deepEqual(budget.comparison.frontier,['baseline']);independentMass(budget);
+    assert.equal(simulation(budget,'baseline').status,'available');assert.equal(simulation(budget,'insulating').status,'refused');
+    assert.equal(simulation(budget,'insulating').refusal.code,'budget_exceeded');
+    assert.match(simulation(budget,'insulating').refusal.message,/aggregate scenario vertex-frame budget/);
+    assert.equal(budget.scenario.scenario.max_vertex_frames,25000,'The declared budget is never silently enlarged');
+
+    const onlyState={...state,objectives:[{metric:'simulated_cloth_mass_kg',direction:'minimize'},
+      {metric:'max_absolute_edge_strain_pct',direction:'minimize'}],requiredConsumers:['drape']};
+    delete onlyState.assemblyMass;const onlyScenario={...scenarioState};delete onlyScenario.surface;
+    const onlyRequest=buildStudy(onlyState,{drape:true,surface:false});
+    assert.equal(JSON.parse(onlyRequest).assembly_mass,undefined);
+    const only=await evaluate('scenario-only',onlyRequest,buildScenario(onlyScenario));
+    assert.deepEqual(only.comparison.frontier,['baseline','insulating']);
+    for(const key of ['baseline','insulating']) {
+      const readings=only.comparison.alternatives.find(row=>row.key===key).readings;
+      assert.ok(readings.simulated_cloth_mass_kg.value>0);assert.ok(readings.max_absolute_edge_strain_pct.value>=0);
+      assert.equal(readings.independent_surface_power_w,undefined);
+    }
+    t.diagnostic(`Synthetic sewing-only proof: outward power ${base.metrics.independent_surface_power_w} W -> ${substitute.metrics.independent_surface_power_w} W; ${native?'five complete native/WASM/worker reports agree':'five complete direct/worker WASM reports agree'}. No physical fit or gravity-settled garment claim.`);
   });
 
 test('compiled WASM guided finite and mixed stock studies preserve shared inventory and independent refusals',
