@@ -866,7 +866,13 @@ fn multi_frame_fit_keeps_requested_tape_targets_when_other_sections_are_unavaila
         result["input_sha256"],
         sha256_hex(&std::fs::read(dir.join("partial-input.json")).unwrap())
     );
-    assert_eq!(result["anny_configuration"], request["model"]);
+    // The report saves the decoded configuration; input_sha256 binds the original omitted fields.
+    let mut expected_configuration = request["model"].clone();
+    expected_configuration["fixed_shape"] = json!({});
+    expected_configuration["root_translation_m"] = json!([0.0, 0.0, 0.0]);
+    expected_configuration["root_rotation_rad"] = json!([0.0, 0.0, 0.0]);
+    expected_configuration["joints"] = json!({});
+    assert_eq!(result["anny_configuration"], expected_configuration);
     assert_eq!(result["model"]["measurements"], json!(["waist", "stature"]));
     assert!((result["solution"]["shape"][0].as_f64().unwrap() - 0.6).abs() < 1e-7);
     let predicted = result["solution"]["predicted_measurements_m"]
@@ -912,10 +918,18 @@ fn multi_frame_fit_keeps_requested_tape_targets_when_other_sections_are_unavaila
     );
     let output: Value = serde_json::from_slice(&output.stdout).unwrap();
     let refused = &output["result"];
-    assert_eq!(refused["status"], "REJECTED");
+    // A model callback refusal prevents convergence; REJECTED denotes failed residual checks.
+    assert_eq!(refused["status"], "NOT_CONVERGED");
     assert!(refused["solution"].is_null());
-    for attempt in refused["attempts"].as_array().unwrap() {
-        assert_eq!(attempt["status"], "REJECTED");
+    let attempts = refused["attempts"].as_array().unwrap();
+    assert_eq!(
+        attempts.len(),
+        request["fit"]["starts"].as_array().unwrap().len()
+    );
+    for attempt in attempts {
+        assert_eq!(attempt["status"], "NOT_CONVERGED");
+        assert_eq!(attempt["cost_history"], json!([]));
+        assert_eq!(attempt["checks"], json!([]));
         assert!(
             attempt["flags"]
                 .as_array()
