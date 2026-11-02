@@ -115,8 +115,9 @@ Every internal cut finishes before any exterior outline releases a piece. The pr
 regenerates, rounds, reverses, rotates the start of or compensates those paths. It preserves source
 piece, instance and physical copy IDs. Explicitly closed cutouts and open slits must be simple,
 strictly enclosed and mutually disjoint. Nested cutouts, slits in removed regions, crossing cuts,
-ambiguous closure and drills refuse instead of disappearing from the output. Drill marks are not
-silently converted to knife circles. The complete marker must fit the declared bed.
+ambiguous closure and unqualified drills refuse instead of disappearing from the output. The
+explicit drilling option below preserves holes as separate operations; they are never converted
+to knife circles. The complete marker must fit the declared bed.
 The loaded stock uses its reported upper width when present; choosing a lower-width layout does
 not make the physical roll narrower or authorize an overhanging stock envelope.
 
@@ -139,6 +140,85 @@ corner slowing, blade turning, loading, inspection and workholding changes, so i
 production cycle time**. The output always reports false physical-cutting validation and hardware
 authorization. It contains no G-code, laser/hot-wire processing, kerf compensation, three-dimensional
 collision or interlock approval. Numerical source admission and synthetic tests do not establish real cut quality.
+
+### Source-qualified through-hole drilling
+
+Patterns containing `drills: [{"p":[x,y],"d":diameter}]` can use one explicitly configured cold
+through-drill alongside the knife. Every source hole needs a complete finite point and an explicit
+positive diameter. The renderer's default diameter is not process evidence. This bounded model uses
+one fixed bit, a common knife/drill XY center, and in-place tool selection. Add `machine.drilling`
+and recompute the complete machine lock for every knife qualification. For example:
+
+```json
+"drilling": {
+  "model": "coaxial_cold_through_drill/1",
+  "tool": "synthetic-two-mm-drill",
+  "diameter_mm": 2,
+  "maximum_thickness_mm": 2,
+  "select_drill_seconds": 0.6,
+  "select_knife_seconds": 0.4
+}
+```
+
+These are **synthetic examples**, not recommended machine settings. Every material with holes also
+needs a separate `drilling` record inside its existing qualification:
+
+```json
+"drilling": {
+  "id": "synthetic-drill-coupon",
+  "thickness_mm": [0.5, 1.5],
+  "plunge_seconds": 0.3,
+  "dwell_seconds": 0.2,
+  "retract_seconds": 0.5,
+  "source": {
+    "reference": "test:synthetic-drill-cycle",
+    "accessed_on": "2026-11-01",
+    "note": "Invented software control; no physical qualification"
+  },
+  "method": "Synthetic complete retracted-to-retracted through-hole cycle",
+  "conditions": {"workholding": "Synthetic fixed support"},
+  "evidence": "estimate",
+  "allow_estimates": true
+}
+```
+
+The parent qualification locks the exact material and complete machine, including the fixed bit
+and selection times. The drilling record independently qualifies the through-hole process, full
+unloaded-thickness interval and complete plunge/dwell/retract cycle. Plunge and retraction must be
+positive; dwell and selection times may be zero. All times must be finite. Estimated drill evidence
+requires its own consent, even when the knife recipe already permits estimates.
+
+Every hole must match the bit diameter exactly. Its complete disc must stay strictly inside its
+physical part, stock and bed, outside closed internal cutouts, clear of open slits, and disjoint from
+other holes. Touching or unresolved clearance refuses. If fixtures are declared, their source-qualified
+lowered and raised tool envelopes must enclose the bit; stationary drilling and every raised move
+are checked by the same conservative geometry authority as knife paths.
+
+The complete order is: **authored holes, internal knife paths, exterior knife paths, optional raised
+return**. Hole order is not optimized. The existing knife heuristic starts from the final hole and
+retains its complete baseline when no better candidate is available. Every drill travel leg uses the
+same declared travel speed, optional acceleration profile and checked fixture detours. Tool selection
+is counted once in each direction for a used marker with holes. A marker without holes incurs neither
+drilling nor tool-selection time.
+
+The report retains the exact tool in `program.drilling`, each marker's `drill_qualification`, and
+`baseline.drills` / `selected.drills` with original placement, hole index, physical copy, machine-frame
+center, diameter and complete preceding travel. `runs` continues to contain only knife paths.
+`drilling_seconds` sums complete drill cycles; `tool_change_seconds` records the two selections.
+Both contribute to `modeled_path_seconds` alongside cutting, all raised travel and knife lift/lower
+cycles. Drilling retraction is not counted again as a knife lift. Absent drilling preserves the prior
+serialized program and machine hash.
+
+Roll, finite-stock and complete mixed-job consumers share this model. Source changes or incomplete
+hole inventory refuse the process independently of valid nesting and purchasing. Material/design
+comparisons admit every hole and timing phase, keep different drilling protocols incomparable by
+default, and allow material-specific cycle times under one admitted protocol. The canonical SVG
+distinguishes qualified holes and their complete raised travel from source annotation circles.
+
+This model does not infer a rotating tool changer, offset-head motion, spindle speed, feed/depth
+trajectories, chip handling, workholding quality or actual hole quality. It changes process planning;
+existing material-area and physical simulation consumers retain their own geometry assumptions.
+It grants no hardware execution authorization or empirical cutting validation.
 
 ### Acceleration-limited exact-stop timing
 

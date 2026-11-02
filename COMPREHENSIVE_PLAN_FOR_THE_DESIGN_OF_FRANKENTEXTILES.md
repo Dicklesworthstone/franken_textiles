@@ -4795,6 +4795,27 @@ jerk limits, blade rotation, kerf, loading/inspection time, independently measur
 and physical cut quality remain separate capabilities or qualification gates. The explicit stop
 model is not a general controller prediction, empirical cycle-time bound or hardware authorization.
 
+### 25.145 Preserve qualified drill holes through complete cutting decisions
+
+Ordinary roll, finite-stock and mixed cutting programs can now consume an explicitly configured
+cold through-drill alongside their knife. One fixed bit and common XY center require exact material
+and complete machine locks plus independently sourced drilling-cycle evidence. Complete source
+coordinates and diameters remain authoritative through mirrored/unfolded placement and stock loading;
+renderer defaults cannot supply process inputs. Whole holes must remain inside their physical parts,
+clear of other holes, internal cuts and removed voids, with declared fixture/bed checks and shared work
+limits. Unsupported inputs refuse the process independently of valid allocation and purchasing.
+
+Authored holes finish before all internal and exterior knife paths. Their complete raised travel,
+plunge/dwell/retract cycles and two per-marker tool selections contribute to the existing modeled-time
+authority. Knife ordering starts at the final hole and retains a complete checked baseline. Reports,
+canonical previews and browser results preserve hole/copy/source identity and separate timing phases.
+Material/design comparison verifies complete hole inventory and every phase without rerunning planning;
+different material cycle times may compete under the same admitted measurement protocol.
+
+This advances `ftx-tm7`. The bounded software model does not infer offset heads, rotating tool changers,
+axial/spindle trajectories, chip handling, workholding adequacy or measured cut/hole quality. Independent
+process coupons and hardware interlocks remain separate qualification and execution requirements.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

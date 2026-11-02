@@ -69,7 +69,7 @@ test('request authoring refuses missing consumers, unsupported or duplicate obje
     assert.throws(()=>build({...state(),objectives}));
   }
   const absent=state();delete absent.cutting;assert.throws(()=>build(absent),/Choose cutting/);
-  assert.throws(()=>build({...absent,assemblyMass:mass()}),/Stock objectives require/);
+  assert.throws(()=>build({...absent,assemblyMass:mass()}),/requested cutting/);
   assert.throws(()=>build({...state(),assemblyMass:{...mass(),seam_allowance_mm:4}}),/same seam allowance/);
   const both={...state(),cutting:{...cutting(),seam_allowance_mm:4},assemblyMass:{...mass(),seam_allowance_mm:4},
     objectives:[{metric:'stock_area_m2',direction:'minimize'},{metric:'stock_mass_kg',direction:'minimize'},{metric:'assembly_mass_kg',direction:'maximize'}]};
@@ -115,4 +115,129 @@ test('repeated snapshots reserve UTF-8 bytes before constructing an oversized re
   assert.throws(()=>build(input),/16 MiB/);
   input.target={scope:'default'};
   assert.ok(build(input).includes(input.candidates[0].selection));
+});
+
+const processSources = () => ({
+  cutting: ' {"copies":2,"gap_mm":2,"edge_margin_mm":5,"end_margin_mm":10,"program":{"source":{"sequence":18446744073709551615,"value":1.0,"x":-0.0}}}\r\n',
+  sewing: ' {"require_qualification":true,"production":{"copies":2},"consumables":{"purchasing":{"source":{"sequence":18446744073709551615,"x":-0.0}}}}\r\n',
+  purchasing: {
+    quotes: ' {"schema":"ftx-textile-quotes/1","source":{"label":"é 🧵","sequence":18446744073709551615,"value":1.0}}\r\n',
+    market: ' {"currency":"USD","as_of":"2026-10-01","source":{"sequence":18446744073709551615,"x":-0.0}}\r\n',
+  },
+});
+
+test('raw cutting preserves omitted native optional defaults and requires the four declared roll controls', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const source=' {\r\n"copies":1,"gap_mm":0.0,"edge_margin_mm":0.0,"end_margin_mm":0.0\r\n}\r\n';
+  const raw=build({...state(),cutting:source}),result=JSON.parse(raw);
+  assert.ok(raw.includes(source));
+  assert.deepEqual(Object.keys(result.cutting),['copies','gap_mm','edge_margin_mm','end_margin_mm']);
+  for(const key of ['width_basis','seam_allowance_mm','maximum_marker_length_m','nesting','program']) {
+    assert.equal(Object.hasOwn(result.cutting,key),false,'Native optional defaults are not inserted into the original request');
+  }
+  for(const policy of ['{}','{"program":{}}',source.replace('"copies":1,','')]) {
+    assert.throws(()=>build({...state(),cutting:policy}),/missing/);
+  }
+  for(const selection of ['{}','{"schema":"ftx-sewing-selection/6"}','{"options":[]}']) {
+    assert.throws(()=>build({...state(),sewingSelection:selection}),/complete template options/);
+  }
+});
+
+test('guided production and purchasing reuse every original policy without rewriting source numbers', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),...processSources(),cutAndSewPurchasing:true,
+    objectives:[{metric:'cut_and_sew_selected_order_cost',direction:'minimize'},
+      {metric:'sewing_modeled_production_seconds',direction:'minimize'},{metric:'cutting_modeled_path_seconds',direction:'minimize'}],
+    constraints:[{metric:'selected_observed_order_cost',minimum:0,maximum:50,basis:'nominal'}],
+    requiredConsumers:['sewing','cutting_program','cut_and_sew_purchasing']};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);
+  for(const source of [input.cutting,input.sewing,input.purchasing.quotes,input.purchasing.market])assert.ok(raw.includes(source));
+  assert.match(raw,/18446744073709551615/);assert.match(raw,/"value":1\.0/);assert.match(raw,/"x":-0\.0/);
+  assert.deepEqual(result.cutting,JSON.parse(input.cutting));assert.deepEqual(result.sewing,JSON.parse(input.sewing));
+  assert.deepEqual(result.purchasing,{quotes:JSON.parse(input.purchasing.quotes),market:JSON.parse(input.purchasing.market)});
+  assert.equal(result.cut_and_sew_purchasing,true);assert.equal(Object.hasOwn(result,'sewing_selection'),false);
+  assert.deepEqual(result.comparison,{basis:'nominal',objectives:input.objectives,constraints:input.constraints,
+    required_consumers:input.requiredConsumers,allow_mixed_protocols:false});
+});
+
+test('sewing-only selection studies preserve exact recipe searches and do not infer a cutting consumer', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input=state();delete input.cutting;
+  input.sewingSelection=' {"schema":"ftx-sewing-selection/6","options":{"consumables":{"purchasing":{}}},"max_plan_evaluations":8,"source":{"seed":18446744073709551615,"value":1.0}}\r\n';
+  input.objectives=[{metric:'sewing_parallel_makespan_seconds',direction:'minimize'},
+    {metric:'thread_required_length_m',direction:'minimize'},{metric:'thread_observed_order_cost',direction:'minimize'}];
+  input.requiredConsumers=['sewing','sewing_consumables','sewing_purchasing'];
+  const raw=build(input),result=JSON.parse(raw);assert.ok(raw.includes(input.sewingSelection));
+  assert.equal(Object.hasOwn(result,'cutting'),false);assert.equal(Object.hasOwn(result,'sewing'),false);
+  assert.equal(Object.hasOwn(result,'purchasing'),false);assert.equal(Object.hasOwn(result,'cut_and_sew_purchasing'),false);
+  assert.deepEqual(result.sewing_selection,JSON.parse(input.sewingSelection));
+  assert.throws(()=>build({...input,sewing:'{}'}),/not both/);
+  assert.throws(()=>build({...input,sewingSelection:'{"options":null}'}),/complete template options/);
+});
+
+test('manufacturing objectives and required consumers cannot omit their source inputs', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const goal=metric=>[{metric,direction:'minimize'}];
+  for(const metric of ['cutting_modeled_path_seconds','sewing_modeled_production_seconds','sewing_parallel_makespan_seconds',
+    'selected_observed_order_cost','thread_required_length_m','thread_observed_order_cost','cut_and_sew_selected_order_cost']) {
+    assert.throws(()=>build({...state(),objectives:goal(metric)}),/requires requested/);
+  }
+  for(const consumer of ['cutting_program','sewing','purchasing','sewing_consumables','sewing_purchasing','cut_and_sew_purchasing','assembly_mass']) {
+    assert.throws(()=>build({...state(),requiredConsumers:[consumer]}),/requires requested/);
+  }
+  const sewingOnly={...state(),sewing:'{}',objectives:goal('thread_required_length_m')};
+  assert.throws(()=>build(sewingOnly),/sewing_consumables/);
+  assert.throws(()=>build({...sewingOnly,sewing:'{"consumables":{}}',objectives:goal('thread_observed_order_cost')}),/sewing_purchasing/);
+  for(const extra of [{},{sewing:'{"consumables":{"purchasing":{}}}'},{purchasing:processSources().purchasing}]) {
+    assert.throws(()=>build({...state(),...extra,cutAndSewPurchasing:true}),/requires roll purchasing and sewing thread purchasing/);
+  }
+  const noCutting={...state(),...processSources()};delete noCutting.cutting;
+  assert.throws(()=>build(noCutting),/purchasing requires roll cutting/);
+  assert.throws(()=>build({...state(),...processSources(),cutAndSewPurchasing:false,objectives:goal('cut_and_sew_selected_order_cost')}),/cut_and_sew_purchasing/);
+  assert.equal(JSON.parse(build({...state(),cutAndSewPurchasing:false})).cut_and_sew_purchasing,false);
+});
+
+test('reported mass objectives compose with explicit nominal manufacturing guards and required qualification', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),...processSources(),assemblyMass:mass(),basis:'reported_bounds',
+    objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
+    constraints:[{metric:'sewing_modeled_production_seconds',maximum:3600,basis:'nominal'},
+      {metric:'selected_observed_order_cost',minimum:0,maximum:50,basis:'nominal'}],requiredConsumers:['sewing','purchasing']};
+  const result=JSON.parse(build(input));assert.deepEqual(result.comparison.constraints,input.constraints);
+  assert.deepEqual(result.comparison.required_consumers,input.requiredConsumers);
+  assert.throws(()=>build({...input,constraints:[{metric:'sewing_modeled_production_seconds',maximum:3600}]}),/assembly mass only/);
+  assert.throws(()=>build({...input,constraints:[{metric:'selected_observed_order_cost',maximum:50,basis:'reported_bounds'}]}),/assembly mass only/);
+  assert.throws(()=>build({...input,objectives:[{metric:'cutting_modeled_path_seconds',direction:'minimize'}]}),/assembly mass only/);
+  assert.equal(JSON.parse(build({...state(),constraints:[{metric:'stock_area_m2',minimum:null,maximum:2}]})).comparison.constraints[0].minimum,null);
+});
+
+test('manufacturing guards refuse ambiguous bounds, duplicate policies and malformed retained files', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const constraint of [{metric:'stock_area_m2'},{metric:'stock_area_m2',minimum:null,maximum:null},
+    {metric:'stock_area_m2',minimum:3,maximum:2},{metric:'stock_area_m2',maximum:NaN},
+    {metric:'stock_area_m2',maximum:Infinity},{metric:'stock_area_m2',maximum:'2'},
+    {metric:'stock_area_m2',maximum:undefined},{metric:'stock_area_m2',maximum:2,basis:null},
+    {metric:'stock_area_m2',maximum:2,basis:undefined},{metric:'stock_area_m2',maximum:2,basis:'guess'},
+    {metric:'stock_area_m2',maximum:2,typo:1},{metric:'wrong',maximum:2}]) {
+    assert.throws(()=>build({...state(),constraints:[constraint]}));
+  }
+  const guard={metric:'stock_area_m2',maximum:2};
+  assert.throws(()=>build({...state(),constraints:[guard,guard]}),/unique/);
+  assert.throws(()=>build({...state(),constraints:Array(65).fill(guard)}),/64/);
+  assert.throws(()=>build({...state(),requiredConsumers:['cutting','cutting']}),/unique/);
+  assert.throws(()=>build({...state(),requiredConsumers:['not_a_consumer']}),/Unsupported/);
+  assert.throws(()=>build({...state(),requiredConsumers:Array(17).fill('cutting')}),/16/);
+  for(const key of ['constraints','requiredConsumers'])for(const value of [null,{},''])assert.throws(()=>build({...state(),[key]:value}));
+  for(const key of ['sewing','sewingSelection'])for(const value of [{},'null','[]','{bad'])assert.throws(()=>build({...state(),[key]:value}));
+  for(const purchasing of [{quotes:'{}'},{quotes:{},market:'{}'},{quotes:'{}',market:'null'},
+    {quotes:'{}',market:'{}',unknown:true}])assert.throws(()=>build({...state(),purchasing}));
+  for(const value of [null,'true',1,undefined])assert.throws(()=>build({...state(),cutAndSewPurchasing:value}),/boolean/);
+  assert.throws(()=>build({...state(),cutting:{...cutting(),program:{}}}),/unsupported/,'source-bearing policies require original text');
+});
+
+test('the combined manufacturing sources share the existing UTF-8 request budget', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const raw=JSON.stringify({metadata:'é'.repeat(3*1024*1024)});
+  assert.throws(()=>build({...state(),sewing:raw,purchasing:{quotes:raw,market:raw}}),/16 MiB/);
 });

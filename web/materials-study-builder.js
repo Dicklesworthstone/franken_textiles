@@ -2,6 +2,13 @@
 export const MAX_GUIDED_STUDY_CANDIDATES = 7;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const own = (value, key) => Object.hasOwn(value, key);
+const METRIC_CONSUMERS = {
+  stock_area_m2: "cutting", stock_mass_kg: "cutting", assembly_mass_kg: "assembly_mass",
+  cutting_modeled_path_seconds: "cutting_program",
+  sewing_modeled_production_seconds: "sewing", sewing_parallel_makespan_seconds: "sewing",
+  selected_observed_order_cost: "purchasing", thread_observed_order_cost: "sewing_purchasing",
+  cut_and_sew_selected_order_cost: "cut_and_sew_purchasing", thread_required_length_m: "sewing_consumables",
+};
 
 function object(value, allowed, required, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error(`${label} must be an object.`);
@@ -51,17 +58,25 @@ function parse(raw, label) {
   try { return JSON.parse(raw); }
   catch { throw Error(`${label} must be valid JSON.`); }
 }
+function sourceObject(raw, label) {
+  const value = parse(raw, label);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw Error(`${label} must be a JSON object.`);
+  return value;
+}
 
 /**
  * Author one fixed-pattern request with an unchanged baseline and 1–7 frozen choices.
  * `pieceIds` are the current pattern's source IDs. `target` is default or named pieces.
- * `cutting` uses authored numeric roll options; `assemblyMass` is a canonical inventory
+ * `cutting` uses authored numeric roll options or an exact original policy file. Optional
+ * sewing/selection and purchasing inputs always retain their original JSON texts.
+ * `assemblyMass` is a canonical inventory
  * request (original JSON text for sourced extras, or an authored object with no extras).
- * Objectives are {metric, direction}; no data, completeness or protocol consent is inferred.
- * Returned selection/inventory text is embedded verbatim, including locked source numbers.
+ * Objectives, inclusive constraints and required consumers are explicit; no completeness or
+ * protocol consent is inferred. Original source text is embedded verbatim, including locked numbers.
  */
 export function buildMaterialStudyRequest(state) {
-  object(state, ["candidates", "target", "pieceIds", "cutting", "assemblyMass", "objectives", "basis"],
+  object(state, ["candidates", "target", "pieceIds", "cutting", "assemblyMass", "objectives", "basis",
+    "sewing", "sewingSelection", "purchasing", "cutAndSewPurchasing", "constraints", "requiredConsumers"],
     ["candidates", "target", "pieceIds", "objectives", "basis"], "Guided study");
   const pieces = uniqueNames(state.pieceIds, "Pattern source pieces", 4096);
   const target = object(state.target, ["scope", "ids"], ["scope"], "Material target");
@@ -75,13 +90,35 @@ export function buildMaterialStudyRequest(state) {
   }
   if (!["nominal", "reported_bounds"].includes(state.basis)) throw Error("Choose nominal or reported-bound comparison.");
 
-  const cutting = own(state, "cutting") ? object(state.cutting,
-    ["copies", "gap_mm", "edge_margin_mm", "end_margin_mm", "seam_allowance_mm"],
+  const rawCutting = typeof state.cutting === "string";
+  const cutting = own(state, "cutting") ? object(rawCutting ? sourceObject(state.cutting, "Cutting options") : state.cutting,
+    ["copies", "gap_mm", "edge_margin_mm", "end_margin_mm", "seam_allowance_mm",
+      ...(rawCutting ? ["width_basis", "maximum_marker_length_m", "nesting", "program"] : [])],
     ["copies", "gap_mm", "edge_margin_mm", "end_margin_mm"], "Cutting options") : null;
   if (cutting) {
     if (!Number.isSafeInteger(cutting.copies) || cutting.copies < 1 || cutting.copies > 4096) throw Error("Garment copies must be an integer from 1 to 4096.");
     for (const key of ["gap_mm", "edge_margin_mm", "end_margin_mm"]) nonnegative(cutting[key], key);
     allowance(cutting, "Cutting seam allowance");
+  }
+  if (own(state, "sewing") && own(state, "sewingSelection")) throw Error("Choose a sewing policy or recipe selection, not both.");
+  const sewing = own(state, "sewing") ? sourceObject(state.sewing, "Sewing policy") : null;
+  const selection = own(state, "sewingSelection") ? sourceObject(state.sewingSelection, "Sewing selection") : null;
+  const sewingOptions = selection ? selection.options : sewing;
+  if (selection && (!sewingOptions || typeof sewingOptions !== "object" || Array.isArray(sewingOptions))) {
+    throw Error("Sewing selection needs its complete template options.");
+  }
+  let purchasing = null;
+  if (own(state, "purchasing")) {
+    purchasing = object(state.purchasing, ["quotes", "market"], ["quotes", "market"], "Purchasing");
+    sourceObject(purchasing.quotes, "Quote book"); sourceObject(purchasing.market, "Market scope");
+    if (!cutting) throw Error("Fabric purchasing requires roll cutting.");
+  }
+  if (own(state, "cutAndSewPurchasing") && typeof state.cutAndSewPurchasing !== "boolean") {
+    throw Error("Combined fabric and thread purchasing must be an explicit boolean.");
+  }
+  const combinedPurchasing = state.cutAndSewPurchasing === true;
+  if (combinedPurchasing && (!purchasing || !sewingOptions?.consumables?.purchasing)) {
+    throw Error("Combined fabric and thread purchasing requires roll purchasing and sewing thread purchasing.");
   }
   let mass = null, massJson = null;
   if (own(state, "assemblyMass")) {
@@ -105,21 +142,59 @@ export function buildMaterialStudyRequest(state) {
     }
     massJson = raw ? state.assemblyMass : JSON.stringify(mass);
   }
-  if (!cutting && !mass) throw Error("Choose cutting or assembly mass to evaluate.");
-  if (!Array.isArray(state.objectives) || !state.objectives.length || state.objectives.length > 3) throw Error("Choose 1–3 comparison objectives.");
+  if (!cutting && !mass && !sewingOptions) throw Error("Choose cutting, sewing or assembly mass to evaluate.");
+  const consumers = {
+    cutting: !!cutting, cutting_program: !!cutting?.program,
+    sewing: !!sewingOptions, purchasing: !!purchasing,
+    sewing_consumables: !!sewingOptions?.consumables,
+    sewing_purchasing: !!sewingOptions?.consumables?.purchasing,
+    cut_and_sew_purchasing: combinedPurchasing, assembly_mass: !!mass,
+  };
+  const requireConsumer = consumer => {
+    if (typeof consumer !== "string" || !own(consumers, consumer)) throw Error(`Unsupported guided consumer: ${consumer}.`);
+    if (!consumers[consumer]) throw Error(`Comparison requires requested ${consumer} inputs.`);
+  };
+  const metric = (key, basis) => {
+    if (typeof key !== "string" || !own(METRIC_CONSUMERS, key)) throw Error(`Unsupported guided comparison metric: ${key}.`);
+    requireConsumer(METRIC_CONSUMERS[key]);
+    if (key === "assembly_mass_kg" && !mass.inventory_complete) {
+      throw Error("Assembly-mass comparison requires an explicit complete inventory declaration.");
+    }
+    if (basis === "reported_bounds" && key !== "assembly_mass_kg") {
+      throw Error("Guided reported-bound comparison supports assembly mass only; manufacturing time, stock and cost have no propagated source range. Use an explicit nominal basis for those guards.");
+    }
+  };
+  if (!Array.isArray(state.objectives) || !state.objectives.length || state.objectives.length > 16) throw Error("Choose 1–16 comparison objectives.");
   const metrics = new Set();
   for (const objective of state.objectives) {
     object(objective, ["metric", "direction"], ["metric", "direction"], "Comparison objective");
-    if (!["stock_area_m2", "stock_mass_kg", "assembly_mass_kg"].includes(objective.metric)
-      || !["minimize", "maximize"].includes(objective.direction)) throw Error("Choose a supported objective and direction.");
+    if (!["minimize", "maximize"].includes(objective.direction)) throw Error("Choose a supported objective and direction.");
     if (metrics.has(objective.metric)) throw Error("Comparison objectives must be unique.");
     metrics.add(objective.metric);
-    if (objective.metric === "assembly_mass_kg") {
-      if (!mass || !mass.inventory_complete) throw Error("Assembly-mass comparison requires an explicit complete inventory declaration.");
-    } else if (!cutting) throw Error("Stock objectives require roll cutting.");
-    if (state.basis === "reported_bounds" && objective.metric !== "assembly_mass_kg") {
-      throw Error("Guided reported-bound comparison supports assembly mass only; cutting has no propagated source range.");
+    metric(objective.metric, state.basis);
+  }
+  const constraints = own(state, "constraints") ? state.constraints : [];
+  if (!Array.isArray(constraints) || constraints.length > 64) throw Error("Choose at most 64 comparison constraints.");
+  metrics.clear();
+  for (const constraint of constraints) {
+    object(constraint, ["metric", "minimum", "maximum", "basis"], ["metric"], "Comparison constraint");
+    if (metrics.has(constraint.metric)) throw Error("Comparison constraint metrics must be unique.");
+    metrics.add(constraint.metric);
+    const basis = own(constraint, "basis") ? constraint.basis : state.basis;
+    if (!["nominal", "reported_bounds"].includes(basis)) throw Error("Choose nominal or reported-bound constraint basis.");
+    const bounds = ["minimum", "maximum"].filter(key => own(constraint, key) && constraint[key] !== null);
+    if (!bounds.length || bounds.some(key => typeof constraint[key] !== "number" || !Number.isFinite(constraint[key]))
+      || (bounds.length === 2 && constraint.minimum > constraint.maximum)) {
+      throw Error("Comparison constraints need finite ordered inclusive bounds.");
     }
+    metric(constraint.metric, basis);
+  }
+  const required = own(state, "requiredConsumers") ? state.requiredConsumers : [];
+  if (!Array.isArray(required) || required.length > 16) throw Error("Choose at most 16 required consumers.");
+  const requiredSet = new Set();
+  for (const consumer of required) {
+    if (requiredSet.has(consumer)) throw Error("Required consumers must be unique.");
+    requiredSet.add(consumer); requireConsumer(consumer);
   }
 
   const parts = []; let size = 0;
@@ -158,9 +233,16 @@ export function buildMaterialStudyRequest(state) {
     append("}}");
   }
   append("]");
-  if (cutting) append(`,"cutting":${JSON.stringify(cutting)}`);
+  if (cutting) { append(',"cutting":'); append(rawCutting ? state.cutting : JSON.stringify(cutting)); }
+  if (sewing) { append(',"sewing":'); append(state.sewing); }
+  if (selection) { append(',"sewing_selection":'); append(state.sewingSelection); }
+  if (purchasing) {
+    append(',"purchasing":{"quotes":'); append(purchasing.quotes);
+    append(',"market":'); append(purchasing.market); append("}");
+  }
+  if (own(state, "cutAndSewPurchasing")) append(`,"cut_and_sew_purchasing":${combinedPurchasing}`);
   if (massJson !== null) { append(',"assembly_mass":'); append(massJson); }
   append(`,"comparison":${JSON.stringify({ basis: state.basis, objectives: state.objectives,
-    constraints: [], required_consumers: [], allow_mixed_protocols: false })}}`);
+    constraints, required_consumers: required, allow_mixed_protocols: false })}}`);
   return parts.join("");
 }

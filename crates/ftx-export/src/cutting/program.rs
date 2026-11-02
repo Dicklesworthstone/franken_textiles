@@ -77,6 +77,24 @@ pub struct MotionProfile {
     pub travel_acceleration_mm_s2: f64,
 }
 
+/// One fixed cold through-drill sharing the knife head's XY centre and raised travel envelope.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrillingTool {
+    /// `coaxial_cold_through_drill/1`; no inferred offset, thermal tool or interchangeable bits.
+    pub model: String,
+    /// Exact bit/tool identity locked by the complete machine digest.
+    pub tool: String,
+    /// Positive physical hole diameter in mm; every authored hole must match exactly.
+    pub diameter_mm: f64,
+    /// Maximum admitted uncompressed single-ply thickness, in mm.
+    pub maximum_thickness_mm: f64,
+    /// In-place selection time from the initially selected knife to this drill, in seconds.
+    pub select_drill_seconds: f64,
+    /// In-place selection time back to the knife after the drill phase, in seconds.
+    pub select_knife_seconds: f64,
+}
+
 /// Explicit cold-knife configuration. A qualification locks every field, not just its display ID.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +126,9 @@ pub struct Machine {
     /// timing and the original machine digest; adding or changing it requires a new qualification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion_profile: Option<MotionProfile>,
+    /// Optional fixed drill; adding or changing it requires a new complete machine qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drilling: Option<DrillingTool>,
 }
 
 /// Filled, stationary exclusion polygon at both declared tool elevations.
@@ -176,13 +197,44 @@ pub struct Qualification {
     /// Separate explicit consent for an estimated process observation.
     #[serde(default)]
     pub allow_estimates: bool,
+    /// Independently sourced through-hole cycle and applicability for this exact material/machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drilling: Option<DrillQualification>,
+}
+
+/// Independently qualified fixed-bit drill cycle, beginning and ending at raised travel height.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrillQualification {
+    /// Stable drill observation identity retained by every marker that uses it.
+    pub id: String,
+    /// Qualified uncompressed single-ply thickness interval, in mm.
+    pub thickness_mm: [f64; 2],
+    /// Positive time from raised height through the complete material, in seconds.
+    pub plunge_seconds: f64,
+    /// Nonnegative full-depth dwell time, in seconds.
+    pub dwell_seconds: f64,
+    /// Positive complete retraction time back to raised travel height, in seconds.
+    pub retract_seconds: f64,
+    /// External or privately retained local drill-cycle observation.
+    pub source: Source,
+    /// Protocol defining the full cycle and the fixed tool's applicability.
+    pub method: String,
+    /// Specimen, backing, workholding, conditioning and other applicability constraints.
+    #[serde(default)]
+    pub conditions: BTreeMap<String, String>,
+    /// Evidence for drilling, independent of the parent knife observation.
+    pub evidence: Evidence,
+    /// Separate explicit consent for estimated drill process evidence.
+    #[serde(default)]
+    pub allow_estimates: bool,
 }
 
 /// Optional program policy on ordinary roll or finite-stock cutting options.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
-    /// `qualified_cold_knife_paths/1`; no laser, hot-wire, drill or inferred kerf model.
+    /// `qualified_cold_knife_paths/1`; optional explicit cold drilling, no inferred kerf or heat.
     pub model: String,
     /// Admitted machine and complete modeled timing configuration.
     pub machine: Machine,
@@ -241,9 +293,36 @@ pub struct Run {
     pub cut_length_mm: f64,
 }
 
+/// One complete qualified through-hole and its preceding raised-tool travel.
+#[derive(Clone, Debug, Serialize)]
+pub struct DrillRun {
+    /// Exact physical placement in the surrounding marker.
+    pub placement: usize,
+    /// Exact authored expanded hole index in that placement's `drills_mm` inventory.
+    pub drill: usize,
+    /// Source piece ID.
+    pub piece: String,
+    /// Expanded mirrored/unfolded physical instance ID.
+    pub instance: String,
+    /// Zero-based complete garment copy.
+    pub copy: usize,
+    /// Exact hole centre in the modeled loaded machine frame, in mm.
+    pub center_mm: Vec2,
+    /// Explicit hole diameter, exactly matching the fixed qualified bit, in mm.
+    pub diameter_mm: f64,
+    /// Raised-tool endpoints from marker start or the preceding hole centre.
+    pub travel_mm: [Vec2; 2],
+    /// Checked intermediate raised vertices in the machine frame, in traversal order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub travel_waypoints_mm: Vec<Vec2>,
+}
+
 /// A complete marker traversal. No partially cut marker is returned when optimization runs out.
 #[derive(Clone, Debug, Serialize)]
 pub struct Traversal {
+    /// Fixed authored placement/hole order, completed before every knife path.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drills: Vec<DrillRun>,
     /// Every declared internal path followed by every physical exterior exactly once.
     pub runs: Vec<Run>,
     /// Optional final raised-tool endpoints; no cutting occurs during this return.
@@ -261,8 +340,27 @@ pub struct Traversal {
     pub travel_seconds: f64,
     /// One declared lift/lower cycle per path, in seconds.
     pub lift_lower_seconds: f64,
-    /// Sum of the declared cut, travel and lift/lower phases only.
+    /// Complete plunge/dwell/retract cycles, with no additional knife lift/lower charge.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub drilling_seconds: f64,
+    /// One in-place drill selection and one knife selection for a nonempty drill phase.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub tool_change_seconds: f64,
+    /// Sum of the declared cut, travel, lift/lower, drilling and tool-selection phases.
     pub modeled_path_seconds: f64,
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
+}
+
+impl DrillRun {
+    /// Complete preceding raised-tool polyline in machine-frame millimetres.
+    pub fn travel_points(&self) -> impl Iterator<Item = Vec2> + '_ {
+        std::iter::once(self.travel_mm[0])
+            .chain(self.travel_waypoints_mm.iter().copied())
+            .chain(std::iter::once(self.travel_mm[1]))
+    }
 }
 
 impl Run {
@@ -294,8 +392,25 @@ impl Traversal {
             .runs
             .first()
             .ok_or_else(|| bad("knife traversal has no cutting paths"))?;
-        let mut position = first.travel_mm[0];
+        let start = self
+            .drills
+            .first()
+            .map_or(first.travel_mm[0], |d| d.travel_mm[0]);
+        let mut position = start;
         let mut length = 0.;
+        for drill in &self.drills {
+            if drill.travel_mm[0] != position
+                || drill.travel_mm[1] != drill.center_mm
+                || !drill.center_mm.is_finite()
+                || !positive(drill.diameter_mm)
+            {
+                return Err(bad(
+                    "drill raised travel is disconnected from its hole centres",
+                ));
+            }
+            length += raised_length(drill.travel_points())?;
+            position = drill.center_mm;
+        }
         for run in &self.runs {
             if run.travel_mm[0] != position
                 || run.travel_mm[1] != run.cut_endpoints_mm[0]
@@ -309,7 +424,13 @@ impl Traversal {
             position = run.cut_endpoints_mm[1];
         }
         if let Some([start, end]) = self.return_mm {
-            if start != position || end != first.travel_mm[0] {
+            if start != position
+                || end
+                    != self
+                        .drills
+                        .first()
+                        .map_or(first.travel_mm[0], |d| d.travel_mm[0])
+            {
                 return Err(bad("knife final return is disconnected from its traversal"));
             }
             length += raised_length(self.return_points())?;
@@ -385,6 +506,9 @@ pub struct Marker {
     pub geometry_sha256: String,
     /// Exact source qualification used, retained independently of any display name.
     pub qualification: String,
+    /// Independent drill-cycle observation, present only when this marker actually has holes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drill_qualification: Option<String>,
     /// Admitted nominal thickness or full source-reported interval, in mm.
     pub thickness_mm: [f64; 2],
     /// Complete authored two-phase traversal.
@@ -413,6 +537,9 @@ pub struct Report {
     /// Exact optional motion profile admitted by every complete machine/process qualification.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub motion_profile: Option<MotionProfile>,
+    /// Exact optional fixed drill locked by every complete machine/process qualification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drilling: Option<DrillingTool>,
     /// Exact optional raised-move routing policy, independent of physical source qualification.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub travel_routing: Option<TravelRouting>,
@@ -480,6 +607,71 @@ impl MotionProfile {
         {
             return Err(bad(
                 "knife motion profile needs trapezoidal_exact_stop/1 and finite positive cutting/travel acceleration",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl DrillingTool {
+    fn validate(&self) -> Result<(), Refusal> {
+        if self.model != "coaxial_cold_through_drill/1"
+            || !text(&self.tool)
+            || !positive(self.diameter_mm)
+            || !positive(self.diameter_mm * 0.5)
+            || self.diameter_mm * 0.5 * 2.0 != self.diameter_mm
+            || !positive(self.maximum_thickness_mm)
+            || [self.select_drill_seconds, self.select_knife_seconds]
+                .iter()
+                .any(|&v| !v.is_finite() || v < 0.0)
+            || !(self.select_drill_seconds + self.select_knife_seconds).is_finite()
+        {
+            return Err(bad(
+                "drilling needs a fixed coaxial cold through-drill, explicit positive diameter/thickness and finite nonnegative in-place selection times",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl DrillQualification {
+    /// Complete independent hole cycle; knife lift/lower time is not added to this cycle.
+    pub(crate) fn cycle_seconds(&self) -> Result<f64, Refusal> {
+        if !positive(self.plunge_seconds)
+            || !self.dwell_seconds.is_finite()
+            || self.dwell_seconds < 0.0
+            || !positive(self.retract_seconds)
+        {
+            return Err(bad(
+                "drill cycles require finite positive plunge/retract and nonnegative dwell times",
+            ));
+        }
+        let seconds = self.plunge_seconds + self.dwell_seconds + self.retract_seconds;
+        if !positive(seconds) {
+            return Err(bad("complete drill cycle time cannot be represented"));
+        }
+        Ok(seconds)
+    }
+
+    fn validate(&self) -> Result<(), Refusal> {
+        self.cycle_seconds()?;
+        if !text(&self.id)
+            || self.thickness_mm.iter().any(|&v| !positive(v))
+            || self.thickness_mm[0] > self.thickness_mm[1]
+            || !text(&self.source.reference)
+            || !text(&self.source.accessed_on)
+            || !text(&self.source.note)
+            || !text(&self.method)
+            || self.conditions.len() > 64
+            || self.conditions.iter().any(|(k, v)| !text(k) || !text(v))
+        {
+            return Err(bad(
+                "drilling needs independent complete source, method, conditions and positive thickness applicability",
+            ));
+        }
+        if self.evidence == Evidence::Estimate && !self.allow_estimates {
+            return Err(bad(
+                "estimated drill qualification requires its own explicit consent",
             ));
         }
         Ok(())
@@ -580,9 +772,15 @@ impl Machine {
         profile.validate()?;
         let mut seconds = 0.0;
         for [a, b] in traversal
-            .runs
+            .drills
             .iter()
-            .flat_map(|run| raised_segments(run.travel_points()))
+            .flat_map(|drill| raised_segments(drill.travel_points()))
+            .chain(
+                traversal
+                    .runs
+                    .iter()
+                    .flat_map(|run| raised_segments(run.travel_points())),
+            )
             .chain(raised_segments(traversal.return_points()))
         {
             let length = a.dist(b);
@@ -693,6 +891,11 @@ impl FixtureClearance {
     }
 
     fn check_travel(&self, route: &Traversal, work: &mut geometry::Work) -> Result<(), Refusal> {
+        for drill in &route.drills {
+            for segment in raised_segments(drill.travel_points()) {
+                self.check_segment(segment, false, work)?;
+            }
+        }
         for run in &route.runs {
             for segment in raised_segments(run.travel_points()) {
                 self.check_segment(segment, false, work)?;
@@ -846,6 +1049,16 @@ fn admit_travel(
         return Ok(());
     };
     if let Some(corners) = corners {
+        for drill in &mut route.drills {
+            drill.travel_waypoints_mm = detour(
+                drill.travel_mm,
+                corners,
+                machine,
+                clearance,
+                search,
+                geometry,
+            )?;
+        }
         for run in &mut route.runs {
             run.travel_waypoints_mm =
                 detour(run.travel_mm, corners, machine, clearance, search, geometry)?;
@@ -855,22 +1068,28 @@ fn admit_travel(
                 detour(endpoints, corners, machine, clearance, search, geometry)?;
         }
         let points = route
-            .runs
+            .drills
             .iter()
-            .fold(route.return_waypoints_mm.len(), |n, run| {
-                n.saturating_add(run.travel_waypoints_mm.len().saturating_add(2))
+            .fold(route.return_waypoints_mm.len(), |n, drill| {
+                n.saturating_add(drill.travel_waypoints_mm.len().saturating_add(2))
             });
+        let points = route.runs.iter().fold(points, |n, run| {
+            n.saturating_add(run.travel_waypoints_mm.len().saturating_add(2))
+        });
         geometry
             .spend(points.saturating_add(2))
             .ok_or_else(budget)?;
         route.travel_length_mm = route.checked_travel_length()?;
-        route.travel_seconds = if machine.motion_profile.is_some() {
+        route.travel_seconds = if machine.motion_profile.is_some() || !route.drills.is_empty() {
             machine.travel_seconds(route)?
         } else {
             route.travel_length_mm / machine.travel_mm_s
         };
         route.modeled_path_seconds =
             route.cutting_seconds + route.travel_seconds + route.lift_lower_seconds;
+        if !route.drills.is_empty() {
+            route.modeled_path_seconds += route.drilling_seconds + route.tool_change_seconds;
+        }
         if !route.modeled_path_seconds.is_finite() {
             return Err(bad("knife routed timing arithmetic overflows"));
         }
@@ -899,6 +1118,17 @@ impl Policy {
         }
         if let Some(profile) = &m.motion_profile {
             profile.validate()?;
+        }
+        if let Some(drilling) = &m.drilling {
+            drilling.validate()?;
+            if let Some(clearance) = &m.fixture_clearance
+                && (clearance.cutting_radius_mm < drilling.diameter_mm * 0.5
+                    || clearance.raised_radius_mm < drilling.diameter_mm * 0.5)
+            {
+                return Err(bad(
+                    "complete cutting and raised fixture envelopes must enclose the fixed drill bit",
+                ));
+            }
         }
         if let Some(routing) = &self.travel_routing
             && (routing.model != "fixture_box_visibility/1"
@@ -930,6 +1160,7 @@ impl Policy {
         let machine = machine_sha256(m)?;
         let mut recipes = BTreeMap::new();
         let mut ids = BTreeSet::new();
+        let mut drill_ids = BTreeSet::new();
         for q in &self.qualifications {
             if !text(&q.id)
                 || !ids.insert(q.id.as_str())
@@ -957,6 +1188,14 @@ impl Policy {
                     "estimated knife qualification requires its own explicit consent",
                 ));
             }
+            if let Some(drilling) = &q.drilling {
+                drilling.validate()?;
+                if m.drilling.is_none() || !drill_ids.insert(drilling.id.as_str()) {
+                    return Err(bad(
+                        "drill qualifications need the explicit machine tool and unique observation identities",
+                    ));
+                }
+            }
         }
         Ok((machine, recipes))
     }
@@ -967,16 +1206,51 @@ fn on_bed(p: Vec2, m: &Machine) -> bool {
 }
 
 pub(super) fn validate_source(pattern: &Pattern, indices: &BTreeSet<usize>) -> Result<(), Refusal> {
+    let mut drill_count = 0usize;
     for &index in indices {
         let piece = &pattern.raw()["pieces"][index];
         // The rendering/export annotation reader deliberately tolerates incomplete annotations.
         // A process program must not qualify a path after that reader has dropped source points.
-        if let Some(drills) = piece.get("drills")
-            && !drills.as_array().is_some_and(Vec::is_empty)
-        {
-            return Err(bad(
-                "knife programs do not support declared drills or malformed drill inventories",
-            ));
+        if let Some(drills) = piece.get("drills") {
+            let drills = drills
+                .as_array()
+                .ok_or_else(|| bad("declared drills must be an explicit array"))?;
+            drill_count = drill_count.checked_add(drills.len()).ok_or_else(budget)?;
+            if drill_count > MAX_PATHS {
+                return Err(budget());
+            }
+            let source = drills.iter().map(|drill| {
+                let xy = drill["p"].as_array().filter(|xy| xy.len() == 2)
+                    .ok_or_else(|| bad("drills require complete explicit finite 2D source coordinates"))?;
+                let x = xy[0].as_f64().filter(|x| x.is_finite())
+                    .ok_or_else(|| bad("drills require finite source coordinates"))?;
+                let y = xy[1].as_f64().filter(|y| y.is_finite())
+                    .ok_or_else(|| bad("drills require finite source coordinates"))?;
+                if !drill["d"].as_f64().is_some_and(positive) {
+                    return Err(bad("drills require an explicit positive diameter; the drawing default is not process evidence"));
+                }
+                Ok(Vec2::new(x, y))
+            }).collect::<Result<Vec<_>, Refusal>>()?;
+            for instance in pattern.instances.iter().filter(|i| i.piece_index == index) {
+                let maps = crate::geom::feature_maps(piece, Some(instance));
+                let mut expanded = Vec::new();
+                for point in &source {
+                    let mut images = Vec::with_capacity(maps.len());
+                    for map in &maps {
+                        let image = map.apply(*point);
+                        if !image.is_finite() {
+                            return Err(bad("expanded drill source coordinates overflow"));
+                        }
+                        // An exact self-image on the fold is one physical hole. Distinct authored
+                        // holes or merely nearby reflected images must never be silently discarded.
+                        if !images.contains(&image) {
+                            images.push(image);
+                        }
+                    }
+                    expanded.extend(images);
+                }
+                validate_distinct_drill_sources(expanded)?;
+            }
         }
         if let Some(internal) = piece.get("internal") {
             let internal = internal
@@ -1003,6 +1277,43 @@ pub(super) fn validate_source(pattern: &Pattern, indices: &BTreeSet<usize>) -> R
                 }
             }
         }
+    }
+    Ok(())
+}
+
+// The annotation renderer merges centres within 1e-6 mm. Refuse any such lossy source inventory
+// before using it for manufacturing. A sorted sweep keeps this pre-normalization check bounded
+// by O(n log n); neighbouring accepted points are separated, so each range has bounded density.
+fn validate_distinct_drill_sources(mut points: Vec<Vec2>) -> Result<(), Refusal> {
+    if points.len() > MAX_PATHS {
+        return Err(budget());
+    }
+    fn ordered(value: f64) -> u64 {
+        let bits = value.to_bits();
+        if bits >> 63 == 0 {
+            bits ^ (1 << 63)
+        } else {
+            !bits
+        }
+    }
+    points.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    let mut active = BTreeSet::new();
+    let mut first = 0;
+    for (i, p) in points.iter().enumerate() {
+        while first < i && points[first].x < (p.x - 1e-6).next_down() {
+            active.remove(&(ordered(points[first].y), first));
+            first += 1;
+        }
+        let lower = (ordered((p.y - 1e-6).next_down()), 0usize);
+        let upper = (ordered((p.y + 1e-6).next_up()), usize::MAX);
+        for &(_, j) in active.range(lower..=upper) {
+            if p.dist(points[j]) <= 1e-6 {
+                return Err(bad(
+                    "distinct authored or reflected drill holes would be lost by drawing annotation deduplication",
+                ));
+            }
+        }
+        active.insert((ordered(p.y), i));
     }
     Ok(())
 }
@@ -1233,15 +1544,16 @@ fn paths<'a>(
     work: &mut geometry::Work,
 ) -> Result<Vec<Path<'a>>, Refusal> {
     let mut paths = Vec::new();
-    let mut point_count = 0usize;
+    let drill_count = placements
+        .iter()
+        .fold(0usize, |n, p| n.saturating_add(p.drills_mm.len()));
+    if drill_count > MAX_PATHS {
+        return Err(budget());
+    }
+    let mut point_count = drill_count;
     // One complete internal phase preserves every part's exterior support until all features finish.
     for internal_phase in [true, false] {
         for (placement, piece) in placements.iter().enumerate() {
-            if !piece.drills_mm.is_empty() {
-                return Err(bad(
-                    "knife programs do not silently omit drills or turn drill marks into knife circles",
-                ));
-            }
             let sources: Vec<_> = if internal_phase {
                 piece
                     .internal_cut_mm
@@ -1260,7 +1572,8 @@ fn paths<'a>(
                     points
                 };
                 point_count = point_count.checked_add(points.len()).ok_or_else(budget)?;
-                if point_count > MAX_POINTS || paths.len() >= MAX_PATHS {
+                if point_count > MAX_POINTS || paths.len().saturating_add(drill_count) >= MAX_PATHS
+                {
                     return Err(budget());
                 }
                 if points.len() < if closed { 3 } else { 2 }
@@ -1344,15 +1657,143 @@ fn paths<'a>(
     Ok(paths)
 }
 
+fn drills(
+    source: &MarkerSource<'_>,
+    envelope: Envelope,
+    machine: &Machine,
+    paths: &[Path<'_>],
+    work: &mut geometry::Work,
+) -> Result<Vec<DrillRun>, Refusal> {
+    let placements = source.placements();
+    if placements.iter().all(|p| p.drills_mm.is_empty()) {
+        return Ok(Vec::new());
+    }
+    let tool = machine
+        .drilling
+        .as_ref()
+        .ok_or_else(|| bad("declared drills require an explicit qualified fixed drill tool"))?;
+    let radius = tool.diameter_mm * 0.5;
+    let load = |p| envelope.offset.map_or(p, |d| p + d);
+    let rectangle = |origin: Vec2, size: [f64; 2]| {
+        [
+            origin,
+            origin + Vec2::new(size[0], 0.0),
+            origin + Vec2::new(size[0], size[1]),
+            origin + Vec2::new(0.0, size[1]),
+        ]
+    };
+    let bed = rectangle(Vec2::ZERO, machine.bed_mm);
+    let stock_box = rectangle(envelope.origin_mm, envelope.size_mm);
+    let mut loaded_paths = Vec::with_capacity(paths.len());
+    let mut exteriors = vec![None; placements.len()];
+    let mut internal_paths = Vec::new();
+    for (index, path) in paths.iter().enumerate() {
+        work.spend(path.points.len()).ok_or_else(budget)?;
+        loaded_paths.push(path.points.iter().copied().map(load).collect::<Vec<_>>());
+        if path.reference.internal_cut.is_some() {
+            internal_paths.push(index);
+        } else {
+            exteriors[path.reference.placement] = Some(index);
+        }
+    }
+    let mut stock_outline = Vec::new();
+    let mut exclusions = Vec::new();
+    if let MarkerSource::Finite(_, marker, _) = source {
+        work.spend(marker.outline_mm.len()).ok_or_else(budget)?;
+        stock_outline = marker.outline_mm.iter().copied().map(load).collect();
+        for outline in marker.defects_mm.iter().chain(&marker.occupied_mm) {
+            work.spend(outline.len()).ok_or_else(budget)?;
+            exclusions.push(outline.iter().copied().map(load).collect::<Vec<_>>());
+        }
+    }
+    let mut result: Vec<DrillRun> = Vec::new();
+    let mut position = machine.start_mm;
+    for (placement, piece) in placements.iter().enumerate() {
+        for (drill, &(point, diameter)) in piece.drills_mm.iter().enumerate() {
+            work.spend(1).ok_or_else(budget)?;
+            let center = load(point);
+            if !center.is_finite() || !positive(diameter) || diameter != tool.diameter_mm {
+                return Err(bad(
+                    "every transformed drill hole needs its explicit finite centre and the exact fixed tool diameter",
+                ));
+            }
+            let exterior = exteriors[placement]
+                .ok_or_else(|| bad("drill hole lost its complete exterior path"))?;
+            for boundary in [
+                loaded_paths[exterior].as_slice(),
+                bed.as_slice(),
+                stock_box.as_slice(),
+            ] {
+                geometry_result(
+                    geometry::strict_disk_inside(center, radius, boundary, work),
+                    "complete drill hole must stay strictly inside its exterior, stock and machine bed",
+                )?;
+            }
+            if !stock_outline.is_empty() {
+                geometry_result(
+                    geometry::strict_disk_inside(center, radius, &stock_outline, work),
+                    "complete drill hole must stay strictly inside the actual finite-stock outline",
+                )?;
+            }
+            for exclusion in &exclusions {
+                geometry_result(
+                    geometry::disk_clear_path(center, radius, exclusion, true, work),
+                    "drill hole intersects a finite-stock defect or previously occupied region",
+                )?;
+            }
+            for &index in &internal_paths {
+                geometry_result(
+                    geometry::disk_clear_path(
+                        center,
+                        radius,
+                        &loaded_paths[index],
+                        paths[index].closed,
+                        work,
+                    ),
+                    "drill hole touches an internal cut or lies in a removed closed void",
+                )?;
+            }
+            for previous in &result {
+                geometry_result(
+                    geometry::equal_disks_clear(center, previous.center_mm, radius, work),
+                    "drill holes overlap, touch or cannot be certified disjoint",
+                )?;
+            }
+            if let Some(clearance) = &machine.fixture_clearance {
+                clearance.check_segment([center, center], true, work)?;
+            }
+            result.push(DrillRun {
+                placement,
+                drill,
+                piece: piece.piece.clone(),
+                instance: piece.instance.clone(),
+                copy: piece.copy,
+                center_mm: center,
+                diameter_mm: diameter,
+                travel_mm: [position, center],
+                travel_waypoints_mm: Vec::new(),
+            });
+            position = center;
+        }
+    }
+    Ok(result)
+}
+
 fn traversal(
     placements: &[CutPlacement],
     paths: &[Path<'_>],
     order: &[usize],
     machine: &Machine,
     feed: f64,
+    drills: &[DrillRun],
+    drill_cycle_seconds: f64,
 ) -> Result<Traversal, Refusal> {
     let mut position = machine.start_mm;
     let mut travel_length_mm = 0.0;
+    for drill in drills {
+        travel_length_mm += position.dist(drill.center_mm);
+        position = drill.center_mm;
+    }
     let mut cut_length_mm = 0.0;
     let mut cutting_seconds = 0.0;
     let mut runs = Vec::with_capacity(order.len());
@@ -1388,7 +1829,26 @@ fn traversal(
     }
     let travel_seconds = travel_length_mm / machine.travel_mm_s;
     let lift_lower_seconds = order.len() as f64 * machine.lift_lower_seconds;
-    let modeled_path_seconds = cutting_seconds + travel_seconds + lift_lower_seconds;
+    let (drilling_seconds, tool_change_seconds) = if drills.is_empty() {
+        (0.0, 0.0)
+    } else {
+        let tool = machine
+            .drilling
+            .as_ref()
+            .ok_or_else(|| bad("drill traversal needs its fixed tool"))?;
+        let seconds = drills.len() as f64 * drill_cycle_seconds;
+        if !positive(seconds) {
+            return Err(bad("complete drilling phase time cannot be represented"));
+        }
+        (
+            seconds,
+            tool.select_drill_seconds + tool.select_knife_seconds,
+        )
+    };
+    let mut modeled_path_seconds = cutting_seconds + travel_seconds + lift_lower_seconds;
+    if !drills.is_empty() {
+        modeled_path_seconds += drilling_seconds + tool_change_seconds;
+    }
     if !modeled_path_seconds.is_finite()
         || !travel_length_mm.is_finite()
         || !cut_length_mm.is_finite()
@@ -1396,6 +1856,7 @@ fn traversal(
         return Err(bad("knife timing/length arithmetic overflows"));
     }
     let mut traversal = Traversal {
+        drills: drills.to_vec(),
         runs,
         return_mm,
         return_waypoints_mm: Vec::new(),
@@ -1404,12 +1865,17 @@ fn traversal(
         cutting_seconds,
         travel_seconds,
         lift_lower_seconds,
+        drilling_seconds,
+        tool_change_seconds,
         modeled_path_seconds,
     };
-    if machine.motion_profile.is_some() {
+    if machine.motion_profile.is_some() || !traversal.drills.is_empty() {
         traversal.travel_seconds = machine.travel_seconds(&traversal)?;
         traversal.modeled_path_seconds =
             cutting_seconds + traversal.travel_seconds + lift_lower_seconds;
+        if !drills.is_empty() {
+            traversal.modeled_path_seconds += drilling_seconds + tool_change_seconds;
+        }
         if !traversal.modeled_path_seconds.is_finite() {
             return Err(bad("knife exact-stop timing arithmetic overflows"));
         }
@@ -1417,10 +1883,10 @@ fn traversal(
     Ok(traversal)
 }
 
-fn nearest(paths: &[Path<'_>], machine: &Machine, work: &mut geometry::Work) -> Option<Vec<usize>> {
+fn nearest(paths: &[Path<'_>], start: Vec2, work: &mut geometry::Work) -> Option<Vec<usize>> {
     let mut order = Vec::with_capacity(paths.len());
     let mut used = vec![false; paths.len()];
-    let mut position = machine.start_mm;
+    let mut position = start;
     for internal in [true, false] {
         let remaining = paths
             .iter()
@@ -1453,7 +1919,7 @@ fn nearest(paths: &[Path<'_>], machine: &Machine, work: &mut geometry::Work) -> 
 /// Ordinary [`CutPlan::build`] calls this automatically when `options.program` is present.
 ///
 /// # Errors
-/// Missing/mismatched process evidence, unsupported drills or material state, unqualified thickness,
+/// Missing/mismatched knife or drill evidence, unsupported material state, unqualified thickness,
 /// invalid/oversized geometry, or exhaustion of the fixed geometric validation budget.
 pub(super) fn build(plan: &CutPlan, policy: &Policy) -> Result<Report, Refusal> {
     if policy.stock_loading.len() > 4096
@@ -1563,7 +2029,40 @@ fn build_markers(
             &mut geometry_work,
         )?;
         let placements = source.placements();
+        let has_drills = placements.iter().any(|p| !p.drills_mm.is_empty());
+        let drill_qualification = if has_drills {
+            let tool =
+                policy.machine.drilling.as_ref().ok_or_else(|| {
+                    bad("declared drills require an explicit fixed drilling tool")
+                })?;
+            let observation = q.drilling.as_ref().ok_or_else(|| {
+                bad("declared drills require their own source-qualified drilling cycle")
+            })?;
+            if thickness_mm[0] < observation.thickness_mm[0]
+                || thickness_mm[1] > observation.thickness_mm[1]
+                || thickness_mm[1] > tool.maximum_thickness_mm
+            {
+                return Err(bad(
+                    "full source thickness range exceeds the drill observation or fixed tool envelope",
+                ));
+            }
+            Some(observation)
+        } else {
+            None
+        };
+        let drill_cycle_seconds =
+            drill_qualification.map_or(Ok(0.0), DrillQualification::cycle_seconds)?;
         let paths = paths(placements, envelope, &policy.machine, &mut geometry_work)?;
+        let drills = drills(
+            source,
+            envelope,
+            &policy.machine,
+            &paths,
+            &mut geometry_work,
+        )?;
+        let knife_start = drills
+            .last()
+            .map_or(policy.machine.start_mm, |d| d.center_mm);
         let baseline_order: Vec<_> = (0..paths.len()).collect();
         let mut baseline = traversal(
             placements,
@@ -1571,6 +2070,8 @@ fn build_markers(
             &baseline_order,
             &policy.machine,
             q.feed_mm_s,
+            &drills,
+            drill_cycle_seconds,
         )?;
         admit_travel(
             &mut baseline,
@@ -1580,8 +2081,18 @@ fn build_markers(
             &mut geometry_work,
         )?;
         let mut candidate = if policy.ordering == Ordering::NearestPath {
-            nearest(&paths, &policy.machine, &mut search_work)
-                .map(|order| traversal(placements, &paths, &order, &policy.machine, q.feed_mm_s))
+            nearest(&paths, knife_start, &mut search_work)
+                .map(|order| {
+                    traversal(
+                        placements,
+                        &paths,
+                        &order,
+                        &policy.machine,
+                        q.feed_mm_s,
+                        &drills,
+                        drill_cycle_seconds,
+                    )
+                })
                 .transpose()?
         } else {
             None
@@ -1623,6 +2134,7 @@ fn build_markers(
             material_sha256: material.sha256().into(),
             geometry_sha256,
             qualification: q.id.clone(),
+            drill_qualification: drill_qualification.map(|d| d.id.clone()),
             thickness_mm,
             baseline,
             selected,
@@ -1630,6 +2142,7 @@ fn build_markers(
             candidate_clearance_refusal,
         });
     }
+    let uses_drilling = markers.iter().any(|m| m.drill_qualification.is_some());
     Ok(Report {
         schema: if finite {
             "ftx-knife-cut-program/2"
@@ -1639,6 +2152,7 @@ fn build_markers(
         machine_sha256,
         fixture_clearance: policy.machine.fixture_clearance.clone(),
         motion_profile: policy.machine.motion_profile.clone(),
+        drilling: policy.machine.drilling.clone(),
         travel_routing: policy.travel_routing.clone(),
         stock_loading: policy.stock_loading.clone(),
         markers,
@@ -1654,18 +2168,27 @@ fn build_markers(
                 "Source qualifications are exact material and full machine locks. A changed textile, finish, thickness, blade, bed or timing configuration requires new applicable process evidence.",
                 if policy.machine.motion_profile.is_some() {
                     "Modeled time uses the source-qualified symmetric acceleration/braking profile and speed caps, with zero speed at every retained cut/travel vertex, including collinear authored vertices, detours and the final return. Triangular short moves never attain their speed cap. Lift/lower cycles are separate. No controller blending, jerk bound, blade turning, loading, workholding change or inspection time is inferred."
+                } else if uses_drilling {
+                    "Modeled time includes constant-rate knife cutting, every retained raised-travel chord, knife lift/lower cycles, complete qualified drill cycles and both in-place tool selections. Acceleration, corner slowing, blade turning, loading, workholding changes and inspection are not inferred."
                 } else if policy.travel_routing.is_some() {
                     "Modeled time includes only constant-rate cutting, every retained raised-travel chord and explicit lift/lower cycles. Acceleration, corner slowing, blade turning, loading, workholding changes and inspection are not inferred."
                 } else {
                     "Modeled time includes only constant-rate cutting, raised-tool straight travel and explicit lift/lower cycles. Acceleration, corner slowing, blade turning, loading, workholding changes and inspection are not inferred."
                 },
-                "No kerf compensation, common-line cutting, drill operation, thermal processing, three-dimensional tool/body collision check, measured cut quality, physical cycle-time claim or hardware execution authorization.",
+                if uses_drilling {
+                    "No kerf compensation, common-line cutting, thermal processing, three-dimensional tool/body collision check, measured hole or cut quality, physical cycle-time claim or hardware execution authorization."
+                } else {
+                    "No kerf compensation, common-line cutting, drill operation, thermal processing, three-dimensional tool/body collision check, measured cut quality, physical cycle-time claim or hardware execution authorization."
+                },
                 if policy.machine.motion_profile.is_some() {
                     "Nearest-path ordering is a bounded heuristic; an unfinished candidate or one without strictly lower modeled time retains the complete authored baseline. Raised detours minimize exact-stop time within their finite checked graph, without a general fastest-path proof."
                 } else {
                     "Nearest-path ordering is a bounded heuristic; an unfinished or longer candidate retains the complete authored baseline, without a shortest-path proof."
                 },
             ];
+            if uses_drilling {
+                limits.push("One fixed independently qualified coaxial cold through-drill completes all explicit holes in authored placement/hole order before knife internals and exterior releases. Every hole has the exact tool diameter and lies strictly inside usable stock and its exterior, clear of other holes, cuts and removed voids. Modeled time includes each complete plunge/dwell/retract cycle, both in-place tool selections once per used marker, and every raised drill/knife/return chord; knife lift/lower time is not charged again for holes. No bit changes, spindle dynamics, backing adequacy, chip evacuation, workholding registration or physical hole quality is inferred.");
+            }
             if policy.machine.fixture_clearance.is_some() {
                 if policy.travel_routing.is_some() {
                     limits.push("Raised moves use checked straight links through a conservative expanded fixture-box corner graph, including the final return. The explicit waypoint offset chooses candidate vertices, not a new physical clearance margin. Every retained chord passes the original exact tool/fixture sweep; cutting paths, starts and directions remain unchanged. Failure to find a complete checked route refuses that candidate and proves no general infeasibility or globally shortest path. No fixture motion, grip strength, registration or 3D clearance is inferred.");
@@ -1710,11 +2233,139 @@ mod motion_tests {
                 cutting_acceleration_mm_s2: 4.0,
                 travel_acceleration_mm_s2: 4.0,
             }),
+            drilling: None,
         }
     }
 
     fn near(actual: f64, expected: f64) {
         assert!((actual - expected).abs() <= 1e-12, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn source_drills_preserve_exact_fold_self_images_but_refuse_lost_holes() {
+        let document = json!({
+            "schema":"fabric-pattern/1","units":"mm","meta":{"sa_mm":0},
+            "pieces":[{"id":"folded","cut":{"qty":1,"on_fold":"left"},
+                "vertices":{"a":[0,0],"b":[10,0],"c":[10,20],"d":[0,20]},
+                "edges":[{"id":"bottom","from":"a","to":"b"},{"id":"right","from":"b","to":"c"},
+                    {"id":"top","from":"c","to":"d"},{"id":"left","from":"d","to":"a"}],
+                "drills":[{"p":[0,10],"d":2},{"p":[2,5],"d":2}]}],"seams":[]
+        });
+        let pattern = Pattern::new(document.clone());
+        assert_eq!(pattern.instances.len(), 1);
+        let indices = BTreeSet::from([0]);
+        validate_source(&pattern, &indices).unwrap();
+        for holes in [
+            json!([{"p":[0,10],"d":2},{"p":[0,10],"d":2}]),
+            json!([{"p":[2,5],"d":2},{"p":[-2,5],"d":2}]),
+            json!([{"p":[0.00000001,10],"d":2}]),
+            json!([{"p":[2,5]}]),
+            json!([{"p":[2,5],"d":0}]),
+            json!([{"p":[2,5,7],"d":2}]),
+        ] {
+            let mut altered = document.clone();
+            altered["pieces"][0]["drills"] = holes;
+            assert!(validate_source(&Pattern::new(altered), &indices).is_err());
+        }
+        assert_eq!(
+            validate_distinct_drill_sources(vec![Vec2::ZERO; MAX_PATHS + 1])
+                .unwrap_err()
+                .code,
+            RefusalCode::BudgetExceeded
+        );
+    }
+
+    #[test]
+    fn independent_drill_cycle_rejects_invalid_phases_and_overflow() {
+        let mut observation: DrillQualification = serde_json::from_value(json!({
+            "id":"synthetic-drill","thickness_mm":[0.5,1.5],
+            "plunge_seconds":0.3,"dwell_seconds":0.2,"retract_seconds":0.5,
+            "source":{"reference":"test:drill","accessed_on":"2026-11-02","note":"Synthetic cycle control"},
+            "method":"Complete raised-to-raised cold through-hole cycle",
+            "evidence":"estimate","allow_estimates":true
+        })).unwrap();
+        near(observation.cycle_seconds().unwrap(), 1.0);
+        observation.dwell_seconds = 0.0;
+        near(observation.cycle_seconds().unwrap(), 0.8);
+        for time in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            observation.plunge_seconds = time;
+            assert!(observation.cycle_seconds().is_err());
+        }
+        observation.plunge_seconds = f64::MAX;
+        observation.retract_seconds = f64::MAX;
+        assert!(observation.cycle_seconds().is_err());
+    }
+
+    #[test]
+    fn exact_stop_drill_travel_includes_detours_first_knife_link_and_return() {
+        let start = Vec2::ZERO;
+        let a = Vec2::new(3., 0.);
+        let b = Vec2::new(6., 0.);
+        let cut = Vec2::new(9., 0.);
+        let mut route = Traversal {
+            drills: vec![
+                DrillRun {
+                    placement: 0,
+                    drill: 0,
+                    piece: "test".into(),
+                    instance: "test".into(),
+                    copy: 0,
+                    center_mm: a,
+                    diameter_mm: 2.,
+                    travel_mm: [start, a],
+                    travel_waypoints_mm: vec![Vec2::new(1., 0.)],
+                },
+                DrillRun {
+                    placement: 0,
+                    drill: 1,
+                    piece: "test".into(),
+                    instance: "test".into(),
+                    copy: 0,
+                    center_mm: b,
+                    diameter_mm: 2.,
+                    travel_mm: [a, b],
+                    travel_waypoints_mm: vec![],
+                },
+            ],
+            runs: vec![Run {
+                path: PathRef {
+                    placement: 0,
+                    internal_cut: None,
+                },
+                piece: "test".into(),
+                instance: "test".into(),
+                copy: 0,
+                closed: true,
+                travel_mm: [b, cut],
+                travel_waypoints_mm: vec![],
+                cut_endpoints_mm: [cut, cut],
+                cut_length_mm: 1.,
+            }],
+            return_mm: Some([cut, start]),
+            return_waypoints_mm: vec![],
+            cut_length_mm: 1.,
+            travel_length_mm: 18.,
+            cutting_seconds: 0.,
+            travel_seconds: 0.,
+            lift_lower_seconds: 0.,
+            drilling_seconds: 2.,
+            tool_change_seconds: 1.,
+            modeled_path_seconds: 0.,
+        };
+        near(route.checked_travel_length().unwrap(), 18.);
+        // a=4 makes these triangular chords take sqrt(length): 1 + sqrt2 + sqrt3 + sqrt3 + 3.
+        near(
+            machine().travel_seconds(&route).unwrap(),
+            4. + 2_f64.sqrt() + 2. * 3_f64.sqrt(),
+        );
+        route.runs[0].travel_mm[0] = start;
+        assert!(route.checked_travel_length().is_err());
+        route.runs[0].travel_mm[0] = b;
+        route.drills[1].travel_mm[0] = start;
+        assert!(route.checked_travel_length().is_err());
+        route.drills[1].travel_mm[0] = a;
+        route.return_mm = Some([cut, a]);
+        assert!(route.checked_travel_length().is_err());
     }
 
     #[test]
@@ -1783,6 +2434,7 @@ mod motion_tests {
         let start = Vec2::new(0.0, 0.0);
         let end = Vec2::new(9.0, 0.0);
         let mut route = Traversal {
+            drills: Vec::new(),
             runs: vec![Run {
                 path: PathRef {
                     placement: 0,
@@ -1804,6 +2456,8 @@ mod motion_tests {
             cutting_seconds: 0.0,
             travel_seconds: 0.0,
             lift_lower_seconds: 0.0,
+            drilling_seconds: 0.0,
+            tool_change_seconds: 0.0,
             modeled_path_seconds: 0.0,
         };
         near(

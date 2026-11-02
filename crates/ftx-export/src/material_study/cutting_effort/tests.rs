@@ -90,6 +90,191 @@ fn row<'a>(report: &'a super::super::Report, key: &str) -> &'a Alternative {
         .unwrap()
 }
 
+fn drill_fixture(route: &str) -> (Pattern, Request) {
+    let (pattern, mut request) = fixture(route);
+    let mut raw = pattern.raw().clone();
+    for piece in raw["pieces"].as_array_mut().unwrap() {
+        piece["drills"] = json!([{"p":[5,20],"d":2},{"p":[15,20],"d":2}]);
+    }
+    let configure =
+        |policy: &mut program::Policy| {
+            policy.machine.drilling = Some(
+                serde_json::from_value(json!({
+                    "model":"coaxial_cold_through_drill/1","tool":"synthetic-two-mm-drill",
+                    "diameter_mm":2,"maximum_thickness_mm":2,
+                    "select_drill_seconds":0.75,"select_knife_seconds":0.25
+                }))
+                .unwrap(),
+            );
+            let machine = program::machine_sha256(&policy.machine).unwrap();
+            for q in &mut policy.qualifications {
+                q.machine_sha256.clone_from(&machine);
+                q.feed_mm_s = 40.;
+                q.drilling = Some(serde_json::from_value(json!({
+                "id":format!("drill-{}",q.id),"thickness_mm":[0.2,0.8],
+                "plunge_seconds":0.25,
+                "dwell_seconds":if q.id=="recipe-synthetic-fast" {0.5} else {2.5},
+                "retract_seconds":0.25,
+                "source":{"reference":format!("test:drill/{}",q.id),"accessed_on":"2026-11-01",
+                    "note":"Synthetic complete drill cycle; no measured performance"},
+                "method":"Synthetic full retracted-to-retracted through-hole timing",
+                "conditions":{"specimen_id":q.id,"workholding":"Synthetic fixed support"},
+                "evidence":"estimate","allow_estimates":true
+            })).unwrap());
+            }
+        };
+    if let Some(options) = &mut request.cutting {
+        configure(options.program.as_mut().unwrap());
+    }
+    if let Some(finite) = &mut request.finite_stock {
+        configure(finite.options.program.as_mut().unwrap());
+    }
+    if let Some(job) = &mut request.cutting_job {
+        configure(job.roll.as_mut().unwrap().program.as_mut().unwrap());
+        configure(
+            job.finite_stock
+                .as_mut()
+                .unwrap()
+                .options
+                .program
+                .as_mut()
+                .unwrap(),
+        );
+    }
+    (Pattern::new(raw), request)
+}
+
+#[test]
+fn qualified_drill_cycles_change_complete_roll_finite_and_mixed_job_decisions() {
+    for (route, consumer) in [
+        ("cutting", Consumer::CuttingProgram),
+        ("finite_stock", Consumer::FiniteStockProgram),
+        ("cutting_job", Consumer::CuttingJobProgram),
+    ] {
+        let (pattern, request) = drill_fixture(route);
+        let report = request.evaluate(&pattern).unwrap();
+        assert_eq!(report.comparison.as_ref().unwrap().frontier, ["fast"]);
+        let fast = admit(row(&report, "fast"), consumer).unwrap();
+        let slow = admit(row(&report, "slow"), consumer).unwrap();
+        assert_eq!(fast.protocol, slow.protocol);
+        assert_eq!(fast.totals.cut_m, slow.totals.cut_m);
+        assert_eq!(fast.totals.travel_m, slow.totals.travel_m);
+        // Two holes per part, two parts, two copies: eight cycles. Knife geometry/feed,
+        // travel and the fixed per-marker tool selections are identical for both materials.
+        assert!(near(
+            slow.totals.seconds - fast.totals.seconds,
+            8. * (3. - 1.)
+        ));
+        assert!(admit(row(&report, "missing"), consumer).is_err());
+        if route == "cutting" {
+            let plan = row(&report, "fast").cutting.value().unwrap();
+            let program = plan.program.as_ref().unwrap();
+            assert_eq!(program.markers.len(), 1);
+            let selected = &program.markers[0].selected;
+            assert_eq!(selected.drills.len(), 8);
+            assert_eq!(selected.drilling_seconds, 8.);
+            assert_eq!(selected.tool_change_seconds, 1.);
+            assert_eq!(
+                selected.runs.len(),
+                8,
+                "knife paths do not count stationary holes"
+            );
+            assert_eq!(
+                selected.runs[0].travel_mm[0],
+                selected.drills.last().unwrap().center_mm
+            );
+        }
+    }
+}
+
+#[test]
+fn drilling_admission_rejects_incomplete_holes_changed_sources_and_omitted_cycle_phases() {
+    let (pattern, request) = drill_fixture("cutting");
+    let report = request.evaluate(&pattern).unwrap();
+    let original = row(&report, "fast");
+    for defect in 0..10 {
+        let mut changed = original.clone();
+        let Outcome::Available { result: plan } = &mut changed.cutting else {
+            unreachable!()
+        };
+        let program = plan.program.as_mut().unwrap();
+        let marker = &mut program.markers[0];
+        let selected = &mut marker.selected;
+        match defect {
+            0 => {
+                selected.drills.pop().unwrap();
+            }
+            1 => selected.drills[0].center_mm.x += 1.,
+            2 => selected.drills[0].diameter_mm = 3.,
+            3 => selected.drills.swap(0, 1),
+            4 => selected.drills[0].copy += 1,
+            5 => selected.drilling_seconds = 0.,
+            6 => selected.tool_change_seconds = 0.,
+            7 => marker.drill_qualification = None,
+            8 => program.drilling = None,
+            _ => selected.drills[0].travel_mm[0].x += 1.,
+        }
+        assert!(
+            roll(plan, &plan.pattern_sha256).is_err(),
+            "producer admission {defect}"
+        );
+        let decision = rerank(&request, &[changed]);
+        assert!(
+            !decision.alternatives[0].eligible,
+            "cached admission {defect}"
+        );
+        assert!(decision.alternatives[0].readings.is_empty());
+    }
+    let mut changed = original.clone();
+    let Outcome::Available { result: plan } = &mut changed.cutting else {
+        unreachable!()
+    };
+    plan.options.program.as_mut().unwrap().qualifications[1]
+        .drilling
+        .as_mut()
+        .unwrap()
+        .source
+        .reference = "test:unreplayed-drill-source".into();
+    assert!(!rerank(&request, &[changed]).alternatives[0].eligible);
+}
+
+#[test]
+fn missing_drill_qualification_preserves_stock_and_different_drill_protocols_stay_incomparable() {
+    let (pattern, mut request) = drill_fixture("cutting");
+    request
+        .cutting
+        .as_mut()
+        .unwrap()
+        .program
+        .as_mut()
+        .unwrap()
+        .qualifications[1]
+        .drilling
+        .as_mut()
+        .unwrap()
+        .method = "Synthetic incompatible timing protocol".into();
+    let different = request.evaluate(&pattern).unwrap();
+    assert_eq!(different.comparison.as_ref().unwrap().frontier.len(), 2);
+    assert_eq!(different.comparison.as_ref().unwrap().incomparable.len(), 1);
+    request
+        .cutting
+        .as_mut()
+        .unwrap()
+        .program
+        .as_mut()
+        .unwrap()
+        .qualifications[1]
+        .drilling = None;
+    let missing = request.evaluate(&pattern).unwrap();
+    let fast = row(&missing, "fast");
+    let plan = fast.cutting.value().unwrap();
+    assert!(plan.program.is_none());
+    assert!(plan.program_refusal.is_some());
+    assert!(fast.metrics.stock_area_m2.unwrap() > 0.);
+    assert!(fast.metrics.cutting_modeled_path_seconds.is_none());
+    assert_eq!(missing.comparison.as_ref().unwrap().frontier, ["slow"]);
+}
+
 fn rerank(request: &Request, rows: &[Alternative]) -> super::super::comparison::Report {
     request.comparison.as_ref().unwrap().evaluate(
         rows,
