@@ -171,6 +171,102 @@ fn complete_hide_paths_keep_geometry_and_cut_features_before_release_in_a_report
 }
 
 #[test]
+fn finite_drills_preserve_mirrored_copies_and_loaded_source_frames_before_exterior_release() {
+    let mut pair = piece("pair", 20., 30.);
+    pair["cut"]["qty"] = json!(2);
+    pair["drills"] = json!([{"p":[5,10],"d":2}]);
+    let p = pattern(vec![pair]);
+    let mut r = request(vec![stock(
+        "hide-001",
+        material("hide", "hide"),
+        -150.,
+        80.,
+        100.,
+        80.,
+    )]);
+    r.options.copies = 2;
+    let ordinary = r.build(&p).unwrap();
+    qualify(&p, &mut r);
+    let mut raw = value(r.options.program.as_ref().unwrap());
+    raw["machine"]["drilling"] = json!({"model":"coaxial_cold_through_drill/1",
+        "tool":"synthetic-2mm-bit","diameter_mm":2.,"maximum_thickness_mm":2.,
+        "select_drill_seconds":0.6,"select_knife_seconds":0.4});
+    raw["qualifications"][0]["drilling"] = json!({"id":"synthetic-hide-drill",
+        "thickness_mm":[0.5,1.5],"plunge_seconds":0.3,"dwell_seconds":0.2,"retract_seconds":0.5,
+        "source":{"reference":"test:finite-drill","accessed_on":"2026-11-01",
+            "note":"Synthetic single-ply hide and independently declared fixed-bit cycle"},
+        "method":"Invented coaxial plunge, dwell and retract applicability; no measured process claim",
+        "evidence":"estimate","allow_estimates":true});
+    raw["stock_loading"] = json!([{"marker":0,"lower_left_mm":[20.,10.]}]);
+    r.options.program = Some(serde_json::from_value(raw).unwrap());
+    relock(r.options.program.as_mut().unwrap());
+    let plan = r.build(&p).unwrap();
+    assert_eq!(value(plan.markers()), value(ordinary.markers()));
+    assert_eq!(value(&plan), value(&plan.request().build(&p).unwrap()));
+    let report = plan
+        .program()
+        .expect("qualified finite-stock drill program");
+    let marker = &report.markers[0];
+    let frame = marker.finite_stock.as_ref().unwrap();
+    assert_eq!(frame.marker_to_machine_offset_mm, Vec2::new(170., -70.));
+    assert_eq!(
+        frame.stock_sha256,
+        finite::identities(&ordinary).unwrap()[0].stock_sha256
+    );
+    let row = value(&marker.selected);
+    let drills = row["drills"].as_array().unwrap();
+    let placements = &plan.markers()[0].placements;
+    assert_eq!(placements.len(), 4);
+    assert_eq!(drills.len(), 4);
+    let mut identities = BTreeSet::new();
+    let mut position = Vec2::ZERO;
+    let mut travel = 0.;
+    for (i, placement) in placements.iter().enumerate() {
+        let instance = p.instance(&placement.instance).unwrap();
+        let local = Vec2::new(if instance.mirrored { -5. } else { 5. }, 10.);
+        let t = placement.transform;
+        let center = Vec2::new(
+            t[0][0] * local.x + t[0][1] * local.y + t[0][2],
+            t[1][0] * local.x + t[1][1] * local.y + t[1][2],
+        ) + frame.marker_to_machine_offset_mm;
+        let actual: Vec2 = serde_json::from_value(drills[i]["center_mm"].clone()).unwrap();
+        near(actual.dist(center), 0.);
+        assert_eq!(drills[i]["placement"], i);
+        assert_eq!(drills[i]["drill"], 0);
+        assert_eq!(drills[i]["instance"], placement.instance);
+        assert_eq!(drills[i]["copy"], placement.copy);
+        assert_eq!(drills[i]["diameter_mm"], 2.);
+        identities.insert((instance.mirrored, placement.copy));
+        travel += position.dist(center);
+        position = center;
+    }
+    assert_eq!(identities.len(), 4);
+    assert_eq!(marker.selected.runs[0].travel_mm[0], position);
+    for placement in placements {
+        let start = placement.cut_mm[0] + frame.marker_to_machine_offset_mm;
+        travel += position.dist(start);
+        position = start; // Closed exteriors; stock and defect outlines are not knife paths.
+    }
+    travel += position.norm();
+    near(marker.selected.cut_length_mm, 400.);
+    near(marker.selected.cutting_seconds, 20.);
+    near(marker.selected.lift_lower_seconds, 1.);
+    near(row["drilling_seconds"].as_f64().unwrap(), 4.);
+    near(row["tool_change_seconds"].as_f64().unwrap(), 1.);
+    near(marker.selected.travel_length_mm, travel);
+    near(marker.selected.travel_seconds, travel / 100.);
+    near(marker.selected.modeled_path_seconds, 26. + travel / 100.);
+    assert!(!report.physical_cutting_validated && !report.hardware_execution_authorized);
+
+    let mut raw = value(&r);
+    raw["options"]["program"]["qualifications"][0]["drilling"] = Value::Null;
+    let unavailable: Request = serde_json::from_value(raw).unwrap();
+    let refused = unavailable.build(&p).unwrap();
+    assert!(refused.program().is_none() && refused.program_refusal().is_some());
+    assert_eq!(value(refused.markers()), value(plan.markers()));
+}
+
+#[test]
 fn authored_finite_loading_translates_the_whole_inventory_and_preserves_source_identity() {
     let (p, mut r) = inputs();
     r.stocks[0].zones = serde_json::from_value(json!([{

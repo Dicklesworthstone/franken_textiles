@@ -575,11 +575,12 @@ objective; unrelated roll-width measurements do not block a finite-stock-only co
 `finite_stock` preserves existing request identities and result fields. As with every study, choose
 and review one alternative before using its separate stock plan in a later inventory workflow.
 
-## Qualified knife effort in material and design decisions
+## Qualified cutting effort in material and design decisions
 
 Supply a qualified `cutting.program`, `finite_stock.options.program`, or a program on every
-engaged route of `cutting_job` to compare actual selected knife work. Exact textile and machine
-locks, admitted unloaded-clearance evidence and complete internal/exterior paths are required.
+engaged route of `cutting_job` to compare actual selected cutting work. Exact textile and machine
+locks, admitted unloaded-clearance evidence, complete internal/exterior paths and every declared
+hole are required. Optional drilling needs its own source-qualified cycle and exact fixed tool.
 See [cutting-plans.md](cutting-plans.md) and [finite-stock-cutting.md](finite-stock-cutting.md)
 for the shared program policy and physical stock placement.
 
@@ -621,8 +622,14 @@ Cached studies recheck source/output identity and the exposed totals without rep
 or path-order search. Fixed-pattern, scenario, named-case matrix and adaptive design comparisons
 use the same admission and readings.
 
-Time includes declared constant-rate cutting, raised travel and one lift/lower phase per path.
-It excludes loading, acceleration, blade turning and inspection, and is neither parallel makespan
+Time includes declared cutting, all raised travel and one knife lift/lower phase per knife path,
+using constant-rate or the explicitly qualified exact-stop acceleration model. Qualified drilling
+adds every plunge/dwell/retract cycle and the two per-marker tool selections; it never becomes a
+zero-length knife cut or disappears from the complete-job objective. Separate hole identities,
+diameters, source cycles, protocol and actual outputs are bound into comparison admission. Matching
+drilling protocols can compare different material-specific cycle times; changed methods or operating
+conditions remain incomparable unless mixed protocols are explicitly permitted.
+Time excludes loading, blade turning and inspection, and is neither parallel makespan
 nor measured production cycle time. A complete selected traversal remains usable when bounded
 ordering has not proved a shortest path. `reported_bounds` is unsupported for these metrics;
 no timing uncertainty, physical cutting quality or hardware authorization is inferred.

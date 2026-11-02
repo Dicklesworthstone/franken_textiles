@@ -306,11 +306,110 @@ pub(super) fn disk_inside(p: Vec2, radius: f64, outer: &[Vec2], work: &mut Work)
     Some(true)
 }
 
+// Qualified drilled holes use the same conservative strict distance authority as tool sweeps,
+// without replacing the established stock-nesting acceptance or adding a geometric tolerance.
+pub(super) fn strict_disk_inside(
+    p: Vec2,
+    radius: f64,
+    outer: &[Vec2],
+    work: &mut Work,
+) -> Option<bool> {
+    if !p.is_finite()
+        || !radius.is_finite()
+        || radius <= 0.0
+        || outer.len() < 3
+        || !inside(p, outer, work)?
+    {
+        return Some(false);
+    }
+    for (a, b) in edges(outer) {
+        work.tick()?;
+        if !sweep_point_clear(p, a, b, radius) {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
+// A closed cut removes its entire interior, whereas an open slit excludes only its actual edges.
+pub(super) fn disk_clear_path(
+    p: Vec2,
+    radius: f64,
+    path: &[Vec2],
+    closed: bool,
+    work: &mut Work,
+) -> Option<bool> {
+    if !p.is_finite()
+        || !radius.is_finite()
+        || radius <= 0.0
+        || path.len() < if closed { 3 } else { 2 }
+        || (closed && inside(p, path, work)?)
+    {
+        return Some(false);
+    }
+    for (a, b) in edges(path).take(if closed { path.len() } else { path.len() - 1 }) {
+        work.tick()?;
+        if !sweep_point_clear(p, a, b, radius) {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
+// Both holes use the same fixed bit, so the exact circle predicate avoids rounded radius sums.
+pub(super) fn equal_disks_clear(a: Vec2, b: Vec2, radius: f64, work: &mut Work) -> Option<bool> {
+    work.tick()?;
+    Some(
+        circle_diameter_margin([a.x, a.y], [b.x, b.y], radius)
+            .is_some_and(|(sign, _)| sign == Sign::Negative),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     fn poly(p: &[[f64; 2]]) -> Vec<Vec2> {
         p.iter().map(|p| Vec2::new(p[0], p[1])).collect()
+    }
+    #[test]
+    fn qualified_holes_refuse_oblique_contact_voids_and_tangent_holes() {
+        let p = Vec2::new(23., 39.);
+        let mut boundary = poly(&[[0., 0.], [42., 56.], [-20., 80.], [-50., 20.]]);
+        // The first oblique edge is exactly 5 mm away, despite rounded projected distances.
+        for _ in 0..2 {
+            assert_eq!(
+                strict_disk_inside(p, 5., &boundary, &mut Work::new(100)),
+                Some(false)
+            );
+            assert_eq!(
+                strict_disk_inside(p, 4.9999, &boundary, &mut Work::new(100)),
+                Some(true)
+            );
+            boundary.reverse();
+        }
+        let slit = poly(&[[0., 0.], [42., 56.]]);
+        assert_eq!(
+            disk_clear_path(p, 5., &slit, false, &mut Work::new(100)),
+            Some(false)
+        );
+        assert_eq!(
+            disk_clear_path(p, 4.9999, &slit, false, &mut Work::new(100)),
+            Some(true)
+        );
+        let void = poly(&[[10., 20.], [40., 20.], [40., 60.], [10., 60.]]);
+        assert_eq!(
+            disk_clear_path(p, 1., &void, true, &mut Work::new(100)),
+            Some(false)
+        );
+        assert_eq!(
+            equal_disks_clear(Vec2::ZERO, Vec2::new(3., 4.), 2.5, &mut Work::new(10)),
+            Some(false)
+        );
+        assert_eq!(
+            equal_disks_clear(Vec2::ZERO, Vec2::new(3., 4.), 2.4999, &mut Work::new(10)),
+            Some(true)
+        );
+        assert_eq!(strict_disk_inside(p, 1., &void, &mut Work::new(1)), None);
     }
     #[test]
     fn swept_disk_refuses_exact_oblique_tangency_after_scaling_and_translation() {

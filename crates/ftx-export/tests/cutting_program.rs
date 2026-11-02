@@ -120,6 +120,26 @@ fn set_motion_profile(opts: &mut CutOptions, profile: Value) {
     *machine = serde_json::from_value(raw).unwrap();
 }
 
+fn qualify_drilling(opts: &mut CutOptions) {
+    let mut raw = value(opts);
+    raw["program"]["machine"]["drilling"] = json!({
+        "model":"coaxial_cold_through_drill/1","tool":"synthetic-2mm-bit",
+        "diameter_mm":2.,"maximum_thickness_mm":2.,
+        "select_drill_seconds":0.6,"select_knife_seconds":0.4
+    });
+    for q in raw["program"]["qualifications"].as_array_mut().unwrap() {
+        q["drilling"] = json!({"id":format!("{}-drill",q["id"].as_str().unwrap()),
+            "thickness_mm":[0.5,1.5],"plunge_seconds":0.3,"dwell_seconds":0.2,
+            "retract_seconds":0.5,"evidence":"estimate","allow_estimates":true,
+            "source":{"reference":"test:cold-drill","accessed_on":"2026-11-01",
+                "note":"Synthetic coaxial tool and one-second through-hole cycle, not measured cutting quality"},
+            "method":"Independently declared plunge, dwell, retract and complete clearance for this material/tool",
+            "conditions":{"specimen":"synthetic-single-ply"}});
+    }
+    *opts = serde_json::from_value(raw).unwrap();
+    relock(opts);
+}
+
 fn routed_fixture() -> (Pattern, CutOptions) {
     let p = pattern(vec![piece("front", 40., 60.)]);
     let mut opts = qualified_options(&p);
@@ -686,6 +706,186 @@ fn complete_authored_paths_have_known_length_and_time_and_release_exteriors_last
     assert_eq!(report.search_work, 0);
     assert_eq!(p.raw(), &raw);
     assert_eq!(value(&cut), value(&CutPlan::build(&p, &options).unwrap()));
+}
+
+#[test]
+fn qualified_drills_finish_before_every_knife_path_with_independent_complete_cycle_times() {
+    let mut sheet = piece("front", 40., 60.);
+    sheet["drills"] = json!([{"p":[10,10],"d":2},{"p":[30,30],"d":2}]);
+    sheet["internal"] = json!([{"kind":"cut","closed":false,"pts":[[15,45],[25,45]]}]);
+    let p = pattern(vec![sheet]);
+    let ordinary = CutPlan::build(&p, &options()).unwrap();
+    let mut opts = qualified_options(&p);
+    qualify_drilling(&mut opts);
+    let plan = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(value(&plan.rolls), value(&ordinary.rolls));
+    assert_eq!(value(&plan), value(&CutPlan::build(&p, &opts).unwrap()));
+    let report = plan.program.as_ref().expect("qualified drilling program");
+    let report_json = value(report);
+    assert_eq!(
+        report_json["drilling"],
+        value(&opts)["program"]["machine"]["drilling"]
+    );
+    assert_eq!(
+        report_json["markers"][0]["drill_qualification"],
+        "synthetic-recipe-0-drill"
+    );
+    let route = &report.markers[0].selected;
+    let drills = report_json["markers"][0]["selected"]["drills"]
+        .as_array()
+        .unwrap();
+    assert_eq!(drills.len(), 2);
+    for (i, center) in [[15., 15.], [35., 35.]].into_iter().enumerate() {
+        assert_eq!(drills[i]["placement"], 0);
+        assert_eq!(drills[i]["drill"], i);
+        assert_eq!(drills[i]["piece"], "front");
+        assert_eq!(
+            drills[i]["instance"],
+            ordinary.rolls[0].placements[0].instance
+        );
+        assert_eq!(drills[i]["copy"], 0);
+        assert_eq!(drills[i]["center_mm"], json!(center));
+        assert_eq!(drills[i]["diameter_mm"], 2.);
+    }
+    assert_eq!(drills[0]["travel_mm"], json!([[0., 0.], [15., 15.]]));
+    assert_eq!(drills[1]["travel_mm"], json!([[15., 15.], [35., 35.]]));
+    assert_eq!(
+        route.runs[0].travel_mm,
+        [Vec2::new(35., 35.), Vec2::new(20., 50.)]
+    );
+    assert_eq!(route.runs[0].path.internal_cut, Some(0));
+    assert_eq!(route.runs[1].path.internal_cut, None);
+    near(route.cut_length_mm, 210.);
+    near(route.cutting_seconds, 10.5);
+    near(route.lift_lower_seconds, 0.5);
+    let row = &report_json["markers"][0]["selected"];
+    near(row["drilling_seconds"].as_f64().unwrap(), 2.);
+    near(row["tool_change_seconds"].as_f64().unwrap(), 1.);
+    let travel = 2. * 450.0_f64.sqrt() + 800.0_f64.sqrt() + 2250.0_f64.sqrt() + 2050.0_f64.sqrt();
+    near(route.travel_length_mm, travel);
+    near(route.checked_travel_length().unwrap(), travel);
+    near(route.travel_seconds, travel / 100.);
+    near(route.modeled_path_seconds, 14. + travel / 100.);
+    assert!(!report.physical_cutting_validated && !report.hardware_execution_authorized);
+    let mut changed = CutPlan::build(&p, &opts).unwrap();
+    changed
+        .program
+        .as_mut()
+        .unwrap()
+        .drilling
+        .as_mut()
+        .unwrap()
+        .diameter_mm = 3.;
+    assert!(ftx_export::cutting::preview::svg(&changed, 0).is_err());
+    let mut changed = CutPlan::build(&p, &opts).unwrap();
+    changed.program.as_mut().unwrap().markers[0].selected.drills[0]
+        .center_mm
+        .x += 1.;
+    assert!(ftx_export::cutting::preview::svg(&changed, 0).is_err());
+
+    let mut without_holes = p.raw().clone();
+    without_holes["pieces"][0]["drills"] = json!([]);
+    let no_drills = CutPlan::build(&Pattern::new(without_holes), &opts).unwrap();
+    let row = &value(no_drills.program.as_ref().unwrap())["markers"][0]["selected"];
+    for key in ["drills", "drilling_seconds", "tool_change_seconds"] {
+        assert!(row.get(key).is_none(), "unused drill phase must omit {key}");
+    }
+}
+
+#[test]
+fn drill_source_geometry_and_process_failures_preserve_the_ordinary_roll_marker() {
+    let mut sheet = piece("front", 40., 60.);
+    sheet["drills"] = json!([{"p":[10,10],"d":2}]);
+    let p = pattern(vec![sheet]);
+    let mut opts = qualified_options(&p);
+    qualify_drilling(&mut opts);
+    assert!(CutPlan::build(&p, &opts).unwrap().program.is_some());
+    for drills in [
+        json!([{"p":[10,10]}]),
+        json!([{"p":[10,10],"d":null}]),
+        json!([{"p":[10,10],"d":"unknown"}]),
+        json!([{"p":[10,10],"d":0}]),
+        json!([{"p":[10,10],"d":3}]),
+        json!([{"p":[1,10],"d":2}]), // Whole hole touches the exterior, although its centre is inside.
+        json!([{"p":[10,10],"d":2},{"p":[11,10],"d":2}]),
+        json!([{"p":[10,10],"d":2},{"p":[10,10],"d":2}]),
+    ] {
+        let mut raw = p.raw().clone();
+        raw["pieces"][0]["drills"] = drills;
+        assert_eq!(
+            process_refusal(&Pattern::new(raw), &opts).code,
+            ftx_core::RefusalCode::InvalidDocument
+        );
+    }
+    for internal in [
+        json!([{"kind":"cut","closed":false,"pts":[[5,10],[15,10]]}]),
+        json!([{"kind":"cut","closed":true,"pts":[[5,5],[15,5],[15,15],[5,15]]}]),
+    ] {
+        let mut raw = p.raw().clone();
+        raw["pieces"][0]["internal"] = internal;
+        assert_eq!(
+            process_refusal(&Pattern::new(raw), &opts).code,
+            ftx_core::RefusalCode::InvalidDocument
+        );
+    }
+    for path in [
+        "/program/machine/drilling/tool",
+        "/program/machine/drilling/select_drill_seconds",
+    ] {
+        let mut raw = value(&opts);
+        *raw.pointer_mut(path).unwrap() = if path.ends_with("/tool") {
+            json!("different-bit")
+        } else {
+            json!(0.7)
+        };
+        let changed: CutOptions = serde_json::from_value(raw).unwrap();
+        assert!(
+            process_refusal(&p, &changed)
+                .message
+                .contains("exact machine/material locks")
+        );
+    }
+    for (path, invalid) in [
+        ("/program/qualifications/0/drilling", Value::Null),
+        ("/program/qualifications/0/drilling/source/note", json!("")),
+        (
+            "/program/qualifications/0/drilling/allow_estimates",
+            json!(false),
+        ),
+        (
+            "/program/qualifications/0/drilling/thickness_mm",
+            json!([0.5, 1.1]),
+        ),
+        (
+            "/program/qualifications/0/drilling/plunge_seconds",
+            json!(-1.),
+        ),
+    ] {
+        let mut raw = value(&opts);
+        *raw.pointer_mut(path).unwrap() = invalid;
+        let changed: CutOptions = serde_json::from_value(raw).unwrap();
+        assert_eq!(
+            process_refusal(&p, &changed).code,
+            ftx_core::RefusalCode::InvalidDocument
+        );
+    }
+    let mut raw = value(&opts);
+    raw["program"]["machine"]["drilling"]["maximum_thickness_mm"] = json!(1.1);
+    let mut too_thick: CutOptions = serde_json::from_value(raw).unwrap();
+    relock(&mut too_thick);
+    assert_eq!(
+        process_refusal(&p, &too_thick).code,
+        ftx_core::RefusalCode::InvalidDocument
+    );
+    // A 0.2 mm knife/raised envelope cannot qualify a fixed bit with a 1 mm radius.
+    fixture_policy(
+        &mut opts,
+        [[15.7, 15.5], [15.8, 15.5], [15.8, 15.6], [15.7, 15.6]],
+    );
+    assert_eq!(
+        process_refusal(&p, &opts).code,
+        ftx_core::RefusalCode::InvalidDocument
+    );
 }
 
 #[test]

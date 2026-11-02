@@ -1,5 +1,23 @@
 # ftx-export
 
+**Qualified drilling in complete cutting programs** (`cutting::program`, `ftx-tm7`). Optional
+`machine.drilling` selects one explicit `coaxial_cold_through_drill/1` tool with exact diameter,
+maximum thickness and in-place selection times. Each consumed material additionally supplies an
+independent drilling qualification for its complete plunge/dwell/retract cycle and unloaded-thickness
+domain; its parent recipe retains the exact material/full-machine locks. Rendering defaults never
+qualify missing source hole coordinates or diameters. Whole discs remain strictly inside the physical
+part/stock/bed and disjoint from internal cuts, removed voids and one another. Qualified fixture
+envelopes enclose the bit and check stationary drilling plus all raised moves with shared bounded work.
+Authored drilling precedes all internal/exterior knife paths. Knife ordering starts at the final hole;
+every travel chord uses the existing speed/acceleration/routing authority. Complete cycles and two
+per-marker tool selections enter modeled time separately from knife lift/lower, with no double count.
+Reports preserve exact hole/copy identity, source/loaded coordinates and separate cycle/selection totals.
+Roll, finite-stock and mixed-job study admission verifies every hole and phase, seals exact outputs,
+and compares differing material cycle times only under admitted matching protocols. No-drill hashes,
+serialization and arithmetic remain unchanged. Native and portable known answers establish software
+behavior only; tool-change motion, spindle/axial trajectories, physical hole quality, workholding and
+hardware execution remain unqualified. See `docs/cutting-plans.md`.
+
 **Acceleration-limited knife timing** (`cutting::program`, `ftx-tm7`). Optional
 `machine.motion_profile` selects the source-locked `trapezoidal_exact_stop/1` process with positive
 cutting and raised-travel acceleration magnitudes. Every retained straight chord starts and ends

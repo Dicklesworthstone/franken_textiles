@@ -351,6 +351,7 @@ fn summarize<'a>(
         || report.optimality_proven
         || report.machine_sha256 != program::machine_sha256(&policy.machine)?
         || report.motion_profile != policy.machine.motion_profile
+        || hash(&report.drilling)? != hash(&policy.machine.drilling)?
         || hash(&report.fixture_clearance)? != hash(&policy.machine.fixture_clearance)?
         || hash(&report.travel_routing)? != hash(&policy.travel_routing)?
         || report.stock_loading != policy.stock_loading
@@ -453,6 +454,43 @@ fn summarize<'a>(
         if !policy.stock_loading.is_empty() {
             protocol["stock_loading"] = json!(policy.stock_loading);
         }
+        let expected_drills: Vec<_> = placements
+            .iter()
+            .enumerate()
+            .flat_map(|(placement, item)| {
+                (0..item.drills_mm.len()).map(move |drill| (placement, drill))
+            })
+            .collect();
+        let drilling = if expected_drills.is_empty() {
+            if marker.drill_qualification.is_some() {
+                return Err(invalid(
+                    "a marker without holes cannot claim a drilling qualification",
+                ));
+            }
+            None
+        } else {
+            let tool = policy.machine.drilling.as_ref().ok_or_else(|| {
+                invalid("complete cutting effort requires an explicit tool for every drill hole")
+            })?;
+            let qualified = qualification.drilling.as_ref().ok_or_else(|| {
+                invalid("complete cutting effort requires independently qualified drilling")
+            })?;
+            if marker.drill_qualification.as_deref() != Some(qualified.id.as_str()) {
+                return Err(invalid(
+                    "drilling qualification differs from the actual marker",
+                ));
+            }
+            let conditions: BTreeMap<_, _> = qualified
+                .conditions
+                .iter()
+                .filter(|(key, _)| key.as_str() != "specimen_id")
+                .collect();
+            // Actual source identities and rates are sealed in the producer receipt. Different
+            // materials may have different cycle times under one declared measurement protocol.
+            protocol["drilling"] = json!({"method":qualified.method,
+                "conditions":conditions,"evidence":qualified.evidence});
+            Some((tool, qualified))
+        };
         let protocol = hash(&protocol)?;
         let expected: BTreeSet<_> = placements
             .iter()
@@ -464,6 +502,44 @@ fn summarize<'a>(
             })
             .collect();
         let route = &marker.selected;
+        if route.drills.len() != expected_drills.len() {
+            return Err(invalid(
+                "cutting effort must retain every declared drill hole exactly once",
+            ));
+        }
+        let (drilling_seconds, tool_change_seconds) = if let Some((tool, qualified)) = drilling {
+            for (run, &(placement_index, drill_index)) in route.drills.iter().zip(&expected_drills)
+            {
+                let placement = &placements[placement_index];
+                let (center, diameter) = placement.drills_mm[drill_index];
+                let center = offset.map_or(center, |offset| center + offset);
+                if run.placement != placement_index
+                    || run.drill != drill_index
+                    || run.piece != placement.piece
+                    || run.instance != placement.instance
+                    || run.copy != placement.copy
+                    || run.center_mm != center
+                    || run.diameter_mm != diameter
+                    || run.diameter_mm != tool.diameter_mm
+                    || !center.is_finite()
+                    || !diameter.is_finite()
+                    || diameter <= 0.
+                {
+                    return Err(invalid(
+                        "drilling must retain exact physical copies, authored hole order, coordinates and diameters",
+                    ));
+                }
+            }
+            (
+                finite_sum(std::iter::repeat_n(
+                    qualified.cycle_seconds()?,
+                    route.drills.len(),
+                ))?,
+                finite_sum([tool.select_drill_seconds, tool.select_knife_seconds].into_iter())?,
+            )
+        } else {
+            (0., 0.)
+        };
         let mut paths = BTreeSet::new();
         let mut exterior_started = false;
         let mut accelerated_cutting_seconds = 0.;
@@ -525,15 +601,28 @@ fn summarize<'a>(
         } else {
             (
                 cut / qualification.feed_mm_s,
-                travel / policy.machine.travel_mm_s,
+                if route.drills.is_empty() {
+                    travel / policy.machine.travel_mm_s
+                } else {
+                    policy.machine.travel_seconds(route)?
+                },
             )
         };
         if paths != expected
             || paths.is_empty()
-            || route.runs.first().map(|run| run.travel_mm[0]) != Some(policy.machine.start_mm)
+            || route
+                .drills
+                .first()
+                .map(|run| run.travel_mm[0])
+                .or_else(|| route.runs.first().map(|run| run.travel_mm[0]))
+                != Some(policy.machine.start_mm)
             || route.return_mm.is_some() != policy.machine.return_to_start
             || (policy.travel_routing.is_none()
                 && (!route.return_waypoints_mm.is_empty()
+                    || route
+                        .drills
+                        .iter()
+                        .any(|run| !run.travel_waypoints_mm.is_empty())
                     || route
                         .runs
                         .iter()
@@ -542,12 +631,18 @@ fn summarize<'a>(
             || !near(travel, route.travel_length_mm)
             || !near(cutting_seconds, route.cutting_seconds)
             || !near(travel_seconds, route.travel_seconds)
+            || !near(drilling_seconds, route.drilling_seconds)
+            || !near(tool_change_seconds, route.tool_change_seconds)
             || !near(
                 route.runs.len() as f64 * policy.machine.lift_lower_seconds,
                 route.lift_lower_seconds,
             )
             || !near(
-                route.cutting_seconds + route.travel_seconds + route.lift_lower_seconds,
+                route.cutting_seconds
+                    + route.travel_seconds
+                    + route.lift_lower_seconds
+                    + route.drilling_seconds
+                    + route.tool_change_seconds,
                 route.modeled_path_seconds,
             )
         {

@@ -138,6 +138,14 @@ bounded nearest-path ordering, and separate geometry and ordering work limits. E
 item needs an admitted qualification for its exact material snapshot. Unused inventory needs no
 knife qualification or bed fit. No roll width is inferred or required for a finite hide.
 
+The optional source-qualified through-drill uses the same fixed tool, independently qualified cycle
+and drill-before-knife order as roll cutting. Every retained hole keeps its original placement/index,
+diameter and mirrored/unfolded center, then receives exactly the reported marker-to-machine loading
+translation. Unused stock has no drill cycles or tool-selection cost. Missing evidence, wrong bit
+diameter or invalid hole clearance refuses the process while retaining the finite-stock allocation.
+See [source-qualified drilling](cutting-plans.md#source-qualified-through-hole-drilling) for the
+request fields, separate drilling and tool-selection totals, and physical qualification boundaries.
+
 The shared [unloaded-thickness authority](spec/06-textile-materials.md#unloaded-manufacturing-clearance)
 supplies the complete source-reported thickness interval. Its upper endpoint must fit the machine
 clearance, and the whole interval must fit the qualified process range. A pressure-conditioned

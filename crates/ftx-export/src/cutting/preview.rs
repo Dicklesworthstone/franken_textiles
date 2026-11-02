@@ -33,6 +33,7 @@ fn path(points: &[Vec2], closed: bool) -> String {
 struct RoutedPreview<'a> {
     marker: &'a program::Marker,
     machine: &'a program::Machine,
+    machine_sha256: &'a str,
     fixtures: Option<&'a program::FixtureClearance>,
 }
 
@@ -40,9 +41,11 @@ fn routed_preview<'a>(
     report: Option<&'a program::Report>,
     policy: Option<&'a program::Policy>,
     index: usize,
+    placements: &[super::CutPlacement],
 ) -> Result<Option<RoutedPreview<'a>>, Refusal> {
-    let Some(report) = report.filter(|r| r.travel_routing.is_some() || !r.stock_loading.is_empty())
-    else {
+    let Some(report) = report.filter(|r| {
+        r.travel_routing.is_some() || !r.stock_loading.is_empty() || r.drilling.is_some()
+    }) else {
         return Ok(None);
     };
     let bad = || Refusal::new(RefusalCode::InvalidDocument, "invalid routed knife preview");
@@ -54,6 +57,7 @@ fn routed_preview<'a>(
     if markers.next().is_some()
         || report.travel_routing != policy.travel_routing
         || report.stock_loading != policy.stock_loading
+        || report.drilling != machine.drilling
         || (report.travel_routing.is_some() && fixtures.is_none())
         || report.machine_sha256 != program::machine_sha256(machine)?
         || machine.bed_mm.iter().any(|v| !v.is_finite() || *v <= 0.)
@@ -96,22 +100,90 @@ fn routed_preview<'a>(
         .fold(route.return_waypoints_mm.len() + 2, |n, run| {
             n.saturating_add(run.travel_waypoints_mm.len().saturating_add(2))
         });
+    let points = route.drills.iter().fold(points, |n, drill| {
+        n.saturating_add(drill.travel_waypoints_mm.len().saturating_add(3))
+    });
     if points > 1_000_000 {
         return Err(preview_budget());
     }
     route.checked_travel_length()?;
     if route
-        .runs
+        .drills
         .iter()
-        .flat_map(program::Run::travel_points)
+        .flat_map(program::DrillRun::travel_points)
+        .chain(route.runs.iter().flat_map(program::Run::travel_points))
         .chain(route.return_points())
         .any(|p| p.x < 0. || p.y < 0. || p.x > machine.bed_mm[0] || p.y > machine.bed_mm[1])
     {
         return Err(bad());
     }
+    let offset = marker.loading.as_ref().map_or_else(
+        || {
+            marker
+                .finite_stock
+                .as_ref()
+                .map_or(Vec2::ZERO, |stock| stock.marker_to_machine_offset_mm)
+        },
+        |loading| loading.marker_to_machine_offset_mm,
+    );
+    let mut expected_drills = placements.iter().enumerate().flat_map(|(i, placement)| {
+        placement
+            .drills_mm
+            .iter()
+            .enumerate()
+            .map(move |(j, drill)| (i, placement, j, drill))
+    });
+    if route.drills.is_empty() != marker.drill_qualification.is_none() {
+        return Err(bad());
+    }
+    if let Some(id) = &marker.drill_qualification {
+        let mut observations = policy
+            .qualifications
+            .iter()
+            .filter(|q| q.id == marker.qualification);
+        let qualification = observations.next().ok_or_else(bad)?;
+        if observations.next().is_some()
+            || qualification.machine_sha256 != report.machine_sha256
+            || qualification.material_sha256 != marker.material_sha256
+            || qualification.drilling.as_ref().is_none_or(|q| &q.id != id)
+        {
+            return Err(bad());
+        }
+    }
+    for drill in &route.drills {
+        let Some((placement_index, placement, drill_index, (center, diameter))) =
+            expected_drills.next()
+        else {
+            return Err(bad());
+        };
+        let tool = report.drilling.as_ref().ok_or_else(bad)?;
+        let radius = drill.diameter_mm / 2.;
+        if drill.placement != placement_index
+            || drill.drill != drill_index
+            || drill.piece != placement.piece
+            || drill.instance != placement.instance
+            || drill.copy != placement.copy
+            || drill.center_mm != *center + offset
+            || drill.diameter_mm != *diameter
+            || drill.diameter_mm != tool.diameter_mm
+            || !drill.center_mm.is_finite()
+            || !radius.is_finite()
+            || radius <= 0.
+            || drill.center_mm.x - radius < 0.
+            || drill.center_mm.y - radius < 0.
+            || drill.center_mm.x + radius > machine.bed_mm[0]
+            || drill.center_mm.y + radius > machine.bed_mm[1]
+        {
+            return Err(bad());
+        }
+    }
+    if expected_drills.next().is_some() {
+        return Err(bad());
+    }
     Ok(Some(RoutedPreview {
         marker,
         machine,
+        machine_sha256: &report.machine_sha256,
         fixtures,
     }))
 }
@@ -132,6 +204,12 @@ fn knife_overlay(preview: &RoutedPreview<'_>) -> String {
         ));
     }
     out.push_str("</g>\n<g id=\"knife-raised-travel\" fill=\"none\" stroke=\"#185cbb\" stroke-dasharray=\"1 1\"><title>Complete selected raised-tool centreline, including checked detours and final return; no hardware execution authorization</title>\n");
+    for (i, drill) in preview.marker.selected.drills.iter().enumerate() {
+        out.push_str(&format!(
+            "<path data-drill-run=\"{i}\" data-phase=\"drill-raised-travel\" d=\"{}\"/>\n",
+            path(&drill.travel_points().collect::<Vec<_>>(), false)
+        ));
+    }
     for (i, run) in preview.marker.selected.runs.iter().enumerate() {
         out.push_str(&format!(
             "<path data-run=\"{i}\" data-phase=\"raised-travel\" d=\"{}\"/>\n",
@@ -148,6 +226,24 @@ fn knife_overlay(preview: &RoutedPreview<'_>) -> String {
         ));
     }
     out.push_str("</g>\n");
+    if let (Some(tool), Some(qualification)) = (
+        &preview.machine.drilling,
+        &preview.marker.drill_qualification,
+    ) {
+        out.push_str(&format!(
+            "<g id=\"qualified-drills\" data-tool=\"{}\" data-qualification=\"{}\" data-machine-sha256=\"{}\" fill=\"#a67ac7\" fill-opacity=\"0.45\" stroke=\"#6d328d\"><title>Source-qualified through-drill operations before knife cutting; not circular knife paths</title>\n",
+            xml_escape(&tool.tool), xml_escape(qualification), xml_escape(preview.machine_sha256)
+        ));
+        for drill in &preview.marker.selected.drills {
+            out.push_str(&format!(
+                "<circle class=\"qualified-drill\" data-placement=\"{}\" data-drill=\"{}\" data-piece=\"{}\" data-instance=\"{}\" data-copy=\"{}\" cx=\"{}\" cy=\"{}\" r=\"{}\"/>\n",
+                drill.placement, drill.drill, xml_escape(&drill.piece), xml_escape(&drill.instance),
+                drill.copy, fnum(drill.center_mm.x, 6), fnum(drill.center_mm.y, 6),
+                fnum(drill.diameter_mm / 2., 6)
+            ));
+        }
+        out.push_str("</g>\n");
+    }
     out
 }
 
@@ -174,6 +270,7 @@ pub fn svg(plan: &CutPlan, roll_index: usize) -> Result<String, Refusal> {
         plan.program.as_ref(),
         plan.options.program.as_ref(),
         roll_index,
+        &roll.placements,
     )?;
     let [view_w, view_h] = routed.as_ref().map_or([w, h], |p| p.machine.bed_mm);
     let loading = routed.as_ref().and_then(|p| p.marker.loading.as_ref());
@@ -358,6 +455,7 @@ pub fn stock_svg(plan: &super::stock::Plan, index: usize) -> Result<String, Refu
             plan.program(),
             plan.request().options.program.as_ref(),
             index,
+            &marker.placements,
         )?
     };
     let (view, transform, offset, stock_frame, bed) = if let Some(preview) = &routed {
