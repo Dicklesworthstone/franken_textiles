@@ -89,6 +89,15 @@ file with no stature cannot draft a garment. The records retain PHOTO_ESTIMATED
 provenance, source image hash/orientation and decomposed conditional uncertainty;
 the capture date remains unknown. Two point clicks do not establish a girth.
 
+To estimate chest, waist or hip circumference, use **Estimate a girth from front and side
+views** below the photo results. Retain front `_width` records before changing photos, then
+retain side `_depth` records at matching anatomical levels, or load the original measurement
+downloads. Confirm the same wearer and capture conditions. The existing native section model
+propagates width, depth and uncertain shape factors; its output remains PHOTO_ESTIMATED and
+can use the ordinary workbench handoff. Tape-based shape calibration produces coefficients
+without another measurement record. See [section-girth.md](section-girth.md) for the complete
+browser/native route, source limits, shared-error assumptions and calibration independence.
+
 Source, reference mode, sidecar, calibration or capture-evidence changes remove the old
 scale, preview and measurements. Point/uncertainty
 edits remove the old measurement downloads. Cancellation terminates the disposable

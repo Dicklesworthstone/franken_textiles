@@ -5,11 +5,53 @@ to the measurement workflow. It uses the section model in spec 02 A.5: a shape-f
 ellipse, with separate width, depth and shape-factor uncertainty. The result is a
 `PHOTO_ESTIMATED` record, not an independently measured circumference or proof of fit.
 
+## Front and side photos in the browser
+
+The local **Photo measurements** page now runs this same Rust section engine. Measure a
+front photo using names such as `waist_width`, then choose **Keep current photo result as
+front widths**. Analyze the side photo, measure `waist_depth` at the matching level and choose
+**Keep current photo result as side depths**. Retained results are immutable snapshots;
+changing the photo or its clicks does not change the retained evidence. Alternatively,
+select the original measurement JSON downloads. A combined document can supply both views.
+
+In **Estimate a girth from front and side views**, review the wearer, posture, clothing and
+anatomical level, confirm the sources, choose chest/waist/hip, and calculate. The result shows
+the girth, one-sigma uncertainty and its width/depth/shape contributions. Clothing thickness
+and optional shape-factor overrides remain explicit assumptions. The page preserves the
+original source texts, hashes and options in the report and separate downloads. Raw input
+documents are not parsed and reserialized by JavaScript before reaching Rust.
+
+**Add this girth in Pattern Workbench** sends the exact ordinary measurement document to
+the existing supplemental-evidence workflow. Primary measurements, explicit wearer consent,
+fusion and the readiness gate still apply. If the page was opened by Material Workbench,
+**Return this girth to Material Workbench** uses that original session. Editing section
+sources or assumptions cancels pending calculations and handoffs; unrelated photo edits do
+not invalidate retained snapshots. Nothing is uploaded or written to browser storage.
+
+For **Calibrate the shape factor with tape**, enter the tape girth and its uncertainty.
+Download the coefficient report and enter its k ratio **and ratio sigma** under
+**Shape-factor assumptions** when estimating this wearer's other levels. Calibration
+does not add a tape or girth record, and its report cannot enter measurement handoff.
+Recreating the taped level is correlated with that tape observation, not independent evidence.
+
+Sources are limited to 16 MiB and 4,096 original records combined; options to 256 KiB.
+Conflicting wearer metadata and synthetic reference wearers refuse even after confirmation.
+The output date is unknown if either input date is unknown; otherwise it retains the older
+date. Source hashes identify retained bytes, not the physical wearer or capture conditions.
+
 ## From calibrated photo records
 
 First use `ftx measure measure-photo` to create `waist_width` and `waist_depth` records (see
 `photo-measurement.md`). A front and a side photo will normally need separate reference
-calibrations. Combine their evidence, then derive the girth:
+calibrations. Supply the two original files directly, with an explicit wearer association:
+
+```bash
+ftx measure girth-from-section --level waist --from front-photo.json \
+  --depth-from side-photo.json --same-wearer --out waist-photo.json --json
+ftx measure fuse tape-measurements.json waist-photo.json --out fused.json --json
+```
+
+The existing combined-file route remains available:
 
 ```bash
 ftx measure fuse front-photo.json side-photo.json --no-priors --out sections.json

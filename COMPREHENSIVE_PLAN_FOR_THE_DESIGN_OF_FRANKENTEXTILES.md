@@ -556,6 +556,15 @@ the page with a step/progress interface and positions handed to a Three.js view 
 converted body-model data is fetched once from the user's own installation or a CC0-clean hosted copy, never
 bundled with a person's data. Gate G4.
 
+The local photo page also joins retained front-view widths and side-view depths through the
+same `ftx-measure` section model used by native `girth-from-section`. Chest/waist/hip estimates
+retain PHOTO_ESTIMATED provenance, decomposed uncertainty, exact source documents and conservative
+dates before entering ordinary workbench fusion/readiness. The shared source checks refuse
+chart/model dimensions, conflicting evidence and contradictory wearer metadata. Tape calibration
+produces coefficients, not an additional independent measurement. This browser capability does not
+establish physical capture accuracy, anatomical validity, full multi-frame body fitting or garment fit;
+see `docs/section-girth.md` and `docs/photo-measurement.md`.
+
 ---
 
 ## 16. Workspace crates, budgets, dependency direction and dependency policy
