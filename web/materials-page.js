@@ -72,6 +72,7 @@ const guidedStudyMode = () => $("studyMode").value === "guided";
 const guidedScenarioMode = () => $("scenarioMode").value === "guided";
 const guidedStockMode = () => $("guidedStockMode").value || "roll";
 const guidedStockScope = (scope, mode) => !scope || scope === mode || (scope === "priced" && ["roll", "job"].includes(mode));
+const studyUsesBody = () => guidedStudyMode() ? $("guidedDesign").checked : $("studyOnBody").checked;
 const studyBodyMode = () => $("studyBodySource").value || "measurements";
 function studyBodyReady() {
   const mode = studyBodyMode();
@@ -84,7 +85,7 @@ function bodyDependentStudies(id) {
   const used = id === "body" || (id === "scenarioBody" && mode === "request") ||
     (id === "measurements" && (mode === "measurements" || mode === "accepted")) ||
     (["bodyFitFile", "bodyFitConsent", "bodyArmDeg"].includes(id) && mode === "accepted");
-  return used ? ["scenario", ...($("studyOnBody").checked ? ["study"] : [])] : [];
+  return used ? ["scenario", ...(studyUsesBody() ? ["study"] : [])] : [];
 }
 function guidedSourceStudies(id) {
   const scenarioSource = guidedScenarioMode() &&
@@ -92,7 +93,8 @@ function guidedSourceStudies(id) {
       (id === "heatConditions" && $("guidedScenarioHeat").checked));
   if (!guidedStudyMode()) return scenarioSource ? ["scenario"] : [];
   const mode = guidedStockMode(), cutting = $("guidedCutting").checked;
-  const used = (id === "cutOptions" && cutting && mode === "roll" && $("guidedCuttingSource").value === "file") ||
+  const used = (id === "fit" && $("guidedDesign").checked) ||
+    (id === "cutOptions" && cutting && mode === "roll" && $("guidedCuttingSource").value === "file") ||
     (id === "stockRequest" && cutting && mode === "finite") || (id === "cutJobRequest" && cutting && mode === "job") ||
     (["sewOptions", "sewOptimize"].includes(id) && $("guidedSewing").checked) ||
     (["quotes", "market"].includes(id) && mode === "roll" && $("guidedPurchasing").checked);
@@ -118,6 +120,11 @@ function controls() {
   $("scenarioFileControls").hidden = guidedScenarioMode();
   $("guidedScenarioGoals").hidden = !guided;
   $("studyPieces").disabled = !source || $("studyTarget").value !== "pieces";
+  $("guidedDesign").disabled = !source;
+  $("guidedDesignControls").hidden = !$("guidedDesign").checked;
+  for (const id of ["guidedDesignPieces", "guidedDesignAxis", "guidedDesignAt", "guidedDesignMultiplier", "guidedDesignValues", "guidedDesignMax"]) {
+    $(id).disabled = !source || !$("guidedDesign").checked;
+  }
   const stockMode = guidedStockMode(), cutting = $("guidedCutting").checked;
   for (const [mode, prefix] of [["roll", "guidedRoll"], ["finite", "guidedFinite"], ["job", "guidedJob"]]) {
     for (const suffix of ["Sources", "Goals", "Required"]) $(prefix + suffix).hidden = stockMode !== mode;
@@ -168,9 +175,9 @@ function controls() {
   $("stageInterface").disabled ||= !source || !interfaceReady || !calibratedPair;
   $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
   for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
-  const studyReady = guided ? studyCandidates.length > 0 : has("studyRequest");
+  const studyReady = guided ? studyCandidates.length > 0 && (!$("guidedDesign").checked || has("fit")) : has("studyRequest");
   $("study").disabled ||= !source || !studyReady;
-  if (!guided && $("studyOnBody").checked) $("study").disabled ||= !has("body") || !studyBodyReady();
+  if (studyUsesBody()) $("study").disabled ||= !has("body") || !studyBodyReady();
   $("scenario").disabled ||= !source || !studyReady || (!guidedScenarioMode() && !has("scenarioRequest")) || !has("body") || !studyBodyReady();
   if (!guided && $("combinationMode").checked && !combinationGroups.size) {
     $("study").disabled = true; $("scenario").disabled = true;
@@ -3830,15 +3837,29 @@ async function guidedStudyInput(scenarioRead) {
   const input = { candidates: studyCandidates.map(candidate => ({ ...candidate })), target,
     pieceIds: source.pieces.map(p => p.id), ...(cutting ? { cutting } : {}), objectives, constraints,
     requiredConsumers, basis: $("guidedBasis").value };
+  if ($("guidedDesign").checked) {
+    const values = $("guidedDesignValues").value.split(",").map(part => {
+      const raw = part.trim();
+      if (!raw || !Number.isFinite(Number(raw))) throw Error("Supply comma-separated finite alteration values in strictly increasing order.");
+      return Number(raw);
+    });
+    input.design = { pieceIds: Array.from($("guidedDesignPieces").selectedOptions, option => option.value),
+      axis: $("guidedDesignAxis").value, atMm: number("guidedDesignAt", "alteration cut coordinate in millimetres"),
+      multiplier: number("guidedDesignMultiplier", "alteration multiplier"), values,
+      maxDesigns: number("guidedDesignMax", "maximum passing altered designs") };
+  }
   const retained = [], budget = 16 * 1024 * 1024;
   let sourceBytes = 0;
   const retain = (key, id, label) => {
     const original = roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
     if (!original) throw Error(`Choose ${label} first.`);
-    sourceBytes += typeof original === "string" ? new Blob([original]).size : original.size;
+    const size = typeof original === "string" ? new Blob([original]).size : original.size;
+    if (key === "designFit" && size > 256 * 1024) throw Error("Guided alteration fit contract exceeds 256 KiB; no source was read.");
+    sourceBytes += size;
     if (sourceBytes > budget) throw Error("Guided study source files exceed 16 MiB combined; no source was read.");
     retained.push({ key, original });
   };
+  if (input.design) retain("designFit", "fit", "the original section-3 garment fit contract for linked alterations");
   if ($("guidedCutting").checked) {
     if (stockMode === "roll" && rollSource === "file") retain("cutting", "cutOptions", "the original roll-planning options in section 3");
     if (stockMode === "finite") retain("finiteStock", "stockRequest", "the original finite-stock inventory in section 3");
@@ -3857,12 +3878,15 @@ async function guidedStudyInput(scenarioRead) {
   let decodedBytes = 0;
   const [sources, scenario] = await Promise.all([Promise.all(retained.map(async ({ key, original }) => {
     const raw = typeof original === "string" ? original : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await original.arrayBuffer());
-    decodedBytes += new Blob([raw]).size;
+    const size = new Blob([raw]).size;
+    if (key === "designFit" && size > 256 * 1024) throw Error("Guided alteration fit contract exceeds 256 KiB.");
+    decodedBytes += size;
     if (decodedBytes > budget) throw Error("Guided study source files exceed 16 MiB combined.");
     JSON.parse(raw);
     return [key, raw];
   })), scenarioRead]);
   const fragments = Object.fromEntries(sources);
+  if (input.design) input.design.fitSpec = fragments.designFit;
   for (const key of ["cutting", "finiteStock", "cuttingJob", "sewing", "sewingSelection", "assemblyMass"]) {
     if (Object.hasOwn(fragments, key)) input[key] = fragments[key];
   }
@@ -3892,6 +3916,7 @@ async function scenarioInput() {
   };
   const fitSource = $("guidedScenarioFitSource").value;
   if (!["file", "none"].includes(fitSource)) throw Error("Choose the original fit contract or explicitly request a numerical study without one.");
+  const designFit = guidedStudyMode() && $("guidedDesign").checked;
   const surface = $("guidedScenarioHeat").checked;
   const input = { allowNoFit: fitSource === "none", options: {
     spacing: number("guidedScenarioSpacing", "mesh spacing in millimetres"),
@@ -3911,7 +3936,9 @@ async function scenarioInput() {
   const retained = entries.map(([key, id, label]) => {
     const original = roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
     if (!original) throw Error(`Choose ${label} first.`);
-    total += typeof original === "string" ? new Blob([original]).size : original.size;
+    const size = typeof original === "string" ? new Blob([original]).size : original.size;
+    if (key === "fitSpec" && designFit && size > 256 * 1024) throw Error("Guided alteration fit contract exceeds 256 KiB; no source was read.");
+    total += size;
     if (total > budget) throw Error("Guided scenario source files exceed 16 MiB combined; no source was read.");
     return { key, original };
   });
@@ -4038,7 +4065,7 @@ async function execute(op) {
       if (!sourceText) throw Error("Load the original pattern first.");
       // Alternatives always start at the original, never the currently bound single-material preview.
       msg.pattern = sourceText;
-      const onBody = op === "study" && !guidedStudyMode() && $("studyOnBody").checked;
+      const onBody = op === "study" && studyUsesBody();
       const scenarioRead = op === "scenario" ? scenarioInput() : Promise.resolve(null);
       const [study, scenario] = await Promise.all([studyInput(scenarioRead), scenarioRead]);
       if (pending?.id !== id) return;
@@ -4145,6 +4172,7 @@ $("clearGuidedInventory").onclick = () => {
   if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
 };
 for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
+  "guidedDesign", "guidedDesignPieces", "guidedDesignAxis", "guidedDesignAt", "guidedDesignMultiplier", "guidedDesignValues", "guidedDesignMax",
   "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis", "guidedHeatDirection",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
   ...guidedMetrics.flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]), ...guidedRequired.map(([id]) => id)]) {
@@ -4162,7 +4190,8 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
     if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
   };
   $(id).addEventListener("change", changed);
-  if (id.endsWith("Limit") || ["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance"].includes(id)) $(id).addEventListener("input", changed);
+  if (id.endsWith("Limit") || ["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
+    "guidedDesignAt", "guidedDesignMultiplier", "guidedDesignValues", "guidedDesignMax"].includes(id)) $(id).addEventListener("input", changed);
 }
 $("rollPreview").addEventListener("change", () => invalidate(["cut"]));
 $("sewPreviewCell").addEventListener("change", () => {
@@ -4199,7 +4228,13 @@ function parsePattern(raw) {
   if (!Array.isArray(data?.pieces) || data.pieces.length > 4096) throw Error("Pattern needs at most 4096 source pieces.");
   return data;
 }
+function resetGuidedDesign() {
+  $("guidedDesign").checked = false;
+  $("guidedDesignPieces").replaceChildren();
+  $("guidedDesignAt").value = ""; $("guidedDesignValues").value = "";
+}
 function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
+  resetGuidedDesign();
   source = data; sourceText = raw;
   $("patternName").textContent = `${label}: ${data.pieces.length} source pieces. Original retained.`;
   const group = (key, label, ids) => {
@@ -4212,7 +4247,7 @@ function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
     garments.forEach((garment, i) => group(`@garment:${i}`, `${garment.id} — every source piece`, Object.values(garment.pieces)));
   }
   for (const p of data.pieces) {
-    for (const target of ["target", "combinationPieces", "studyPieces"]) {
+    for (const target of ["target", "combinationPieces", "studyPieces", "guidedDesignPieces"]) {
       const o = document.createElement("option"); o.value = p.id; o.textContent = p.id; $(target).append(o);
     }
   }
@@ -4237,6 +4272,7 @@ function resetPatternInput(keepImport = false) {
   outfitTargets.clear();
   combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
   studyCandidates.length = 0; studyCandidateSequence = 0; showStudyCandidates(); $("studyPieces").replaceChildren();
+  resetGuidedDesign();
   invalidate(["bodyCheck", "bind", ...boundOperations, "study", "scenario", "outfit", ...(keepImport ? [] : ["garmentcode"])]);
   $("patternName").textContent = "No pattern loaded.";
   $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
@@ -4459,7 +4495,7 @@ $("clearBodyFit").onclick = () => {
   invalidate(["bodyCheck", "fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies("bodyFitFile")], true);
 };
 $("studyOnBody").addEventListener("change", () => invalidate(["study"], true));
-$("studyBodySource").addEventListener("change", () => invalidate(["scenario", ...($("studyOnBody").checked ? ["study"] : [])], true));
+$("studyBodySource").addEventListener("change", () => invalidate(["scenario", ...(studyUsesBody() ? ["study"] : [])], true));
 $("thermalPointTemperature").addEventListener("input", invalidateThermalPoint);
 $("thermalRequest").addEventListener("change", () => invalidate(["thermalHistory"]));
 $("clearCoverageBridges").onclick = () => { $("coverageBridges").value = ""; invalidate(["coverage"]); };

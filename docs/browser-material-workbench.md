@@ -170,6 +170,41 @@ the joint outfit's garment assignment groups and exact treated pattern, retains 
 measurement, fit and body inputs, and clears the accepted-body association for fresh confirmation
 before recomputation.
 
+### Search linked alterations against the selected body
+
+The guided study's **Fit-driven linked alterations** option searches explicit slash-and-spread values
+through the existing design engine. Load the original garment fit contract in section 3, select the
+local model and the desired study body source, then choose the source pieces to alter. Alteration
+pieces are independent of the material-assignment target. An accepted shape still requires the
+existing wearer association; a refused or missing source never falls back to another body.
+
+Choose one source-coordinate axis, a cut coordinate shared across the selected pieces, a nonzero
+multiplier, and a comma-separated list of strictly increasing values. Every selected piece receives
+the listed millimetre value times the multiplier. This is not automatically a total circumference
+adjustment. Every trial starts from the original pattern and uses canonical alteration, seam,
+outline, cut/grain and flat-fit checks; the browser does not transform geometry or repair seams.
+
+The form permits 1–16 source pieces and 1–64 values. The original fit contract must contain 1–32
+explicit points and fit within 256 KiB of UTF-8 source. All listed values are screened before
+manufacturing or simulation; **Maximum first passing altered designs** retains the first qualifying
+designs in list order. It does not choose the cheapest designs before evaluating their consumers.
+The original geometry and unchanged material each add a baseline, and the complete reserved
+geometry/material cross-product must fit within 32 alternatives. Oversized requests refuse rather
+than silently trimming the value list or material shortlist.
+
+Both comparison actions use the selected body automatically when linked alterations are enabled.
+Fresh scenarios retain the same mandatory flat-fit screening even if their separate drape-fit
+reporting is explicitly set to no contract. Existing result tables show screened refusals,
+passing-but-unselected designs, actual manufacturing/scenario outcomes and the computed frontier.
+Use a candidate's **Use … pattern** action to retain its exact evaluated geometry and material
+assignments. Loading or adopting another pattern clears the alteration controls, preventing an
+accidental second application. An advanced request retains its own authored alterations.
+
+The focused synthetic numerical test screens nine values and retains the +30 mm linked front/back
+adjustment, producing two 130 mm panels. Complete native, compiled-WASM and actual-worker reports
+match, and the selected bound pattern reproduces its retained cutting plan. That is software and
+declared-target evidence; physical wearer fit and continuous or global optimality remain separate.
+
 ### Combine reported-range objectives with nominal constraints
 
 The comparison policy's `basis` governs its objectives. Each constraint can explicitly declare
@@ -263,9 +298,10 @@ hardware execution.
 ### Reuse the selected body in manufacturing and scenario studies
 
 Section 4 has an explicit **Body source for body-dependent studies** choice. It applies to fresh
-single-scenario and named-matrix comparisons and, when **Constrain manufacturing to the selected body**
-is checked, manufacturing studies with an explicit `design_fit` contract. Every mode uses the
-section-3 model. Ordinary manufacturing with that checkbox clear needs no body input.
+single-scenario and named-matrix comparisons and automatically to guided linked alterations.
+Advanced manufacturing studies with an explicit `design_fit` contract use it when **Constrain an
+advanced manufacturing study to the selected body** is checked. Every mode uses the section-3 model.
+Fixed-pattern manufacturing without that constraint needs no body input.
 
 - **Fit section-3 measurements at 35°** uses the current measurements through the existing tape-fit authority.
 - **Reuse the accepted shape and pose selected above** uses the original accepted report, current ordinary

@@ -4888,6 +4888,24 @@ comfort from sheet power, or physical fit from strain. The focused native/WASM/w
 small synthetic sewing-only numerical experiment. Empirical material, garment and process gates
 remain open; this slice does not add guided motion, layer-map or multi-case authoring.
 
+### 25.150 Search body-constrained linked alterations through guided material controls
+
+The workbench now authors a single linked slash-and-spread variable from explicitly selected source
+pieces, a shared axis/cut coordinate, multiplier and finite value list. The original garment fit
+contract and selected body enter the existing flat-fit screening authority before retained designs
+cross the material shortlist and manufacturing or scenario consumers. Exact fit/source text is
+preserved; the browser creates no geometry, fit score or substitute body.
+
+All declared values are screened within the native limits. The authored cap selects the first
+passing designs in list order, with both original geometry and unchanged material counted in the
+32-alternative reservation. Existing reports retain rejected, unselected and evaluated outcomes.
+Adoption keeps the exact final bound pattern and clears the guided alterations before another run.
+
+This advances `ftx-ds2` through the existing engines and selected-body workflow. A synthetic linked
+front/back case reaches its late passing value and reproduces complete native/WASM/worker results
+and the selected cutting geometry. Independent measured garment validation and continuous/global
+optimality remain separate; this slice does not add guided adaptive or multi-variable authoring.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

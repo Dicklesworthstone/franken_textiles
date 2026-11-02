@@ -44,7 +44,7 @@ function uniqueNames(values, label, maximum) {
   }
   return seen;
 }
-function bytes(value) {
+function bytes(value, maximum = MAX_REQUEST_BYTES, message = "Guided study request exceeds 16 MiB.") {
   // Count UTF-8 without allocating another copy of a potentially repeated material snapshot.
   let count = 0;
   for (let i = 0; i < value.length; i++) {
@@ -54,7 +54,7 @@ function bytes(value) {
     else if (c >= 0xd800 && c <= 0xdbff && value.charCodeAt(i + 1) >= 0xdc00 && value.charCodeAt(i + 1) <= 0xdfff) {
       count += 4; i++;
     } else count += 3;
-    if (count > MAX_REQUEST_BYTES) throw Error("Guided study request exceeds 16 MiB.");
+    if (count > maximum) throw Error(message);
   }
   return count;
 }
@@ -163,8 +163,47 @@ function completeCuttingJob(value) {
   return request;
 }
 
+function linkedDesign(value, pieces, materialCount) {
+  const fields = ["pieceIds", "axis", "atMm", "multiplier", "values", "maxDesigns", "fitSpec"];
+  const design = object(value, fields, fields, "Linked design");
+  const selected = uniqueNames(design.pieceIds, "Altered source pieces", 16);
+  if ([...selected].some(id => !pieces.has(id))) throw Error("Alteration names a missing source piece.");
+  if (!["x", "y"].includes(design.axis) || typeof design.atMm !== "number" || !Number.isFinite(design.atMm) ||
+    typeof design.multiplier !== "number" || !Number.isFinite(design.multiplier) || design.multiplier === 0) {
+    throw Error("Linked alterations need an x/y axis, finite cut coordinate and finite nonzero multiplier.");
+  }
+  if (!Array.isArray(design.values) || !design.values.length || design.values.length > 64 ||
+    Array.from(design.values).some((value, index) => typeof value !== "number" || !Number.isFinite(value) ||
+      (index > 0 && design.values[index - 1] >= value))) {
+    throw Error("Linked design needs 1–64 finite strictly increasing millimetre values.");
+  }
+  for (const value of design.values) {
+    const displacement = value * design.multiplier;
+    if (!Number.isFinite(displacement) || (value !== 0 && displacement === 0)) {
+      throw Error("Linked design displacement overflows or underflows; no alteration is silently dropped.");
+    }
+  }
+  if (!Number.isSafeInteger(design.maxDesigns) || design.maxDesigns < 1 || design.maxDesigns > 31) {
+    throw Error("The passing-design allowance must be an integer from 1 to 31.");
+  }
+  if ((Math.min(design.values.length, design.maxDesigns) + 1) * materialCount > 32) {
+    throw Error("Linked design exceeds 32 expanded design/material alternatives including both baselines; reduce its passing-design allowance or material shortlist.");
+  }
+  if (typeof design.fitSpec !== "string") throw Error("Design fit contract must retain its original JSON text.");
+  bytes(design.fitSpec, 256 * 1024, "Design fit contract exceeds 256 KiB of UTF-8 source.");
+  const fit = sourceObject(design.fitSpec, "Design fit contract");
+  if ((own(fit, "schema") && fit.schema !== "fabric-fit/1") || !Array.isArray(fit.points) || !fit.points.length || fit.points.length > 32) {
+    throw Error("Design fit needs 1–32 explicit points and fabric-fit/1 when a schema is supplied.");
+  }
+  const grid = JSON.stringify({ variables: [{ key: "linked_adjustment", values_mm: design.values,
+    sites: design.pieceIds.map(piece => ({ piece, axis: design.axis, at_mm: design.atMm, multiplier: design.multiplier })) }],
+    max_designs: design.maxDesigns, fit_screening: { max_candidates: design.values.length } });
+  bytes(grid, 256 * 1024, "Linked design grid exceeds 256 KiB of authored domain data.");
+  return { grid, fitSpec: design.fitSpec };
+}
+
 /**
- * Author one fixed-pattern request with an unchanged baseline and 1–7 frozen choices.
+ * Author an unchanged baseline and 1–7 frozen choices, optionally with a linked fit-screened grid.
  * `pieceIds` are the current pattern's source IDs. `target` is default or named pieces.
  * `cutting` uses authored numeric roll options or an exact original policy file. Optional
  * `finiteStock` and `cuttingJob` retain original inventory/job JSON instead of roll cutting.
@@ -175,6 +214,8 @@ function completeCuttingJob(value) {
  * protocol consent is inferred. Original source text is embedded verbatim, including locked numbers.
  * Optional scenario context describes the separately dispatched drape/heat request, is never
  * serialized into the study, and does not enable scenario consumers in manufacturing-only calls.
+ * Optional `design` authors one shared slash-spread variable and retains the original fit contract;
+ * its selected-body dispatch and canonical geometry/fit admission remain with the caller and Rust.
  */
 export function buildMaterialStudyRequest(state, scenario) {
   if (scenario !== undefined) {
@@ -184,7 +225,7 @@ export function buildMaterialStudyRequest(state, scenario) {
     }
   }
   object(state, ["candidates", "target", "pieceIds", "cutting", "finiteStock", "cuttingJob", "assemblyMass", "objectives", "basis",
-    "sewing", "sewingSelection", "purchasing", "cutAndSewPurchasing", "constraints", "requiredConsumers"],
+    "sewing", "sewingSelection", "purchasing", "cutAndSewPurchasing", "constraints", "requiredConsumers", "design"],
     ["candidates", "target", "pieceIds", "objectives", "basis"], "Guided study");
   const pieces = uniqueNames(state.pieceIds, "Pattern source pieces", 4096);
   const target = object(state.target, ["scope", "ids"], ["scope"], "Material target");
@@ -197,6 +238,7 @@ export function buildMaterialStudyRequest(state, scenario) {
     throw Error("Add 1–7 material choices; the unchanged baseline is included separately.");
   }
   if (!["nominal", "reported_bounds"].includes(state.basis)) throw Error("Choose nominal or reported-bound comparison.");
+  const design = own(state, "design") ? linkedDesign(state.design, pieces, state.candidates.length + 1) : null;
 
   if (["cutting", "finiteStock", "cuttingJob"].filter(key => own(state, key)).length > 1) {
     throw Error("Choose one stock plan: roll cutting, finite inventory or a complete cutting job.");
@@ -326,7 +368,7 @@ export function buildMaterialStudyRequest(state, scenario) {
     if (size > MAX_REQUEST_BYTES) throw Error("Guided study request exceeds 16 MiB.");
     parts.push(value);
   };
-  append('{"schema":"ftx-material-study/1","variants":[{"key":"baseline","changes":{"schema":"ftx-material-bindings/1"}}');
+  append(`{"schema":"${design ? "ftx-design-study/1" : "ftx-material-study/1"}","variants":[{"key":"baseline","changes":{"schema":"ftx-material-bindings/1"}}`);
   const keys = new Set(["baseline"]), identities = new Set();
   for (const candidate of state.candidates) {
     object(candidate, ["key", "selection"], ["key", "selection"], "Material choice");
@@ -356,6 +398,10 @@ export function buildMaterialStudyRequest(state, scenario) {
     append("}}");
   }
   append("]");
+  if (design) {
+    append(',"design_grid":'); append(design.grid);
+    append(',"design_fit":{"fit_spec":'); append(design.fitSpec); append("}");
+  }
   if (cutting) { append(',"cutting":'); append(rawCutting ? state.cutting : JSON.stringify(cutting)); }
   if (finiteStock) { append(',"finite_stock":'); append(state.finiteStock); }
   if (cuttingJob) { append(',"cutting_job":'); append(state.cuttingJob); }

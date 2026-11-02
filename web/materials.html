@@ -387,7 +387,7 @@ Its scalar frontier is not a garment ranking. Original observations and protocol
 </select></label>
 <div id="guidedStudy">
 <p><a href="#materialCatalog">Inspect each material in section 1</a> and add it to the shortlist. The original pattern is always included as
-<strong>baseline</strong>. Each alternative changes only the assignment you choose below.</p>
+<strong>baseline</strong>. Each material choice changes the assignment you choose below. Optional linked alterations also vary the geometry.</p>
 <p id="studyCandidateCount" role="status">No comparison materials added.</p>
 <div id="studyCandidates"></div>
 <button id="clearStudyCandidates" disabled>Clear shortlist</button>
@@ -399,6 +399,32 @@ Its scalar frontier is not a garment ranking. Original observations and protocol
 <label>Source pieces <select id="studyPieces" multiple size="4" disabled aria-label="Source pieces for material comparison"></select></label>
 <p class="note">Changing the default does not replace an explicit lining or cuff material. Choose every piece or exact pieces
 to replace those assignments. Current section-2 preview edits are not part of the original baseline.</p>
+<fieldset><legend>Fit-driven linked alterations</legend>
+<label><input id="guidedDesign" type="checkbox"> Search explicitly listed slash-and-spread alterations against the selected body</label>
+<div id="guidedDesignControls" hidden>
+<label>Source pieces to alter together <select id="guidedDesignPieces" multiple size="4" disabled
+aria-label="Source pieces for linked alterations"></select></label>
+<p class="note">Choose 1–16 original source pieces independently of the material assignment above. Each uses the same cut coordinate
+on its own outline. Every design starts from the original pattern; it does not accumulate earlier alterations.</p>
+<div class="study-fields">
+<label>Source coordinate axis <select id="guidedDesignAxis"><option value="x">x</option><option value="y">y</option></select></label>
+<label>Cut coordinate on each selected piece (mm) <input id="guidedDesignAt" type="number" step="any"></label>
+<label>Value multiplier for each selected piece <input id="guidedDesignMultiplier" type="number" step="any" value="1"></label>
+<label>Maximum first passing altered designs <input id="guidedDesignMax" type="number" min="1" max="31" step="1" value="1"></label>
+</div>
+<label>Listed values, mm per selected source piece before the multiplier
+<input id="guidedDesignValues" type="text" maxlength="4096" placeholder="Enter comma-separated values in increasing order"></label>
+<p class="note">Declare 1–64 finite, strictly increasing values and a nonzero multiplier. Each piece receives its own addition of
+the listed value times that multiplier; this is not a total garment circumference adjustment. No range or alteration amount is inferred.</p>
+<p>Load the original garment fit contract in <a href="#materialConsumers">section 3</a>, with 1–32 explicit points of measure
+and a maximum file size of 256 KiB. Select the local body model and a body source below. Both comparison actions use those
+targets to screen geometry and fit before evaluating each retained design with every material choice.</p>
+<p class="note">The cap retains the first passing alterations in the listed order, not the cheapest alterations or a global optimum.
+The unchanged geometry is additional to the cap; the complete geometry × material comparison is limited to 32 rows.
+Rejected, passing-but-unselected and unvisited candidates stay visible in the report. Computed model compliance does not establish
+fit on a real wearer. Loading or adopting another pattern clears these alteration settings so spreads are not applied again.</p>
+</div>
+</fieldset>
 <fieldset><legend>Stock and cutting</legend>
 <label>Stock planning mode <select id="guidedStockMode">
 <option value="roll">Roll fabric</option>
@@ -540,7 +566,7 @@ Inactive stock modes keep their own declarations without applying them to anothe
 <div id="guidedCombinedRequired"><label><input id="guidedRequireCombined" type="checkbox"> Complete fabric + thread purchasing</label></div>
 </fieldset>
 <p class="note">The generated request, original pattern, exact material selections and full results are available for download
-after comparison. No body model is needed for these manufacturing calculations.</p>
+after comparison. Linked alterations require the selected body model; fixed-pattern manufacturing can run without one.</p>
 </div>
 <div id="studyFileControls" hidden>
 <label>Study request JSON (<code>ftx-material-study/1</code> or <code>ftx-design-study/1</code>) <input id="studyRequest" type="file" accept=".json,application/json"></label>
@@ -618,8 +644,9 @@ Up to eight groups may target disjoint source pieces, with at most one default g
 <option value="accepted">Reuse the accepted shape and pose selected above</option>
 <option value="request">Use the separate body-source request below</option>
 </select></label>
-<label><input id="studyOnBody" type="checkbox"> Constrain manufacturing to the selected body</label>
-<p class="note">Requires <code>design_fit</code> in the study, the section-3 local model and the selected body source.
+<label><input id="studyOnBody" type="checkbox"> Constrain an advanced manufacturing study to the selected body</label>
+<p class="note">Guided linked alterations use this body source automatically. An advanced study requires <code>design_fit</code>
+  in its request, the section-3 local model and the selected body source.
   The same source choice applies to fresh single-scenario and named-matrix studies. Reusing an accepted shape requires
   the wearer association above; any current section-3 measurements are compared without refitting.
   Uses the selected shape's MODEL_FIT readings without running cloth or heat.
@@ -717,7 +744,8 @@ These controls author a numerical experiment; material qualifications, convergen
 <option value="none">No fit contract — numerical comparison only</option>
 </select></label>
 <p class="note">Supply the garment's own points-of-measure contract for fit reporting. Choosing no contract does not assess those targets
-or establish physical garment fit. The source document is retained unchanged.</p>
+or establish physical garment fit. The source document is retained unchanged. Guided linked alterations still require the original
+section-3 contract for their separate design-fit screening even when this scenario reports no fit targets.</p>
 <fieldset><legend>Drape policy and work limits</legend><div class="study-fields">
 <label>Mesh spacing (mm) <input id="guidedScenarioSpacing" type="number" min="0" step="any" value="12"></label>
 <label>Time step (s) <input id="guidedScenarioStep" type="number" min="0" step="any" value="0.041666666666666664"></label>

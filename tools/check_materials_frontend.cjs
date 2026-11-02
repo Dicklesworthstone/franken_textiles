@@ -1335,7 +1335,8 @@ class Element {
 async function pageModule({roundToken=null}={}) {
   const html = read('materials.html');
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
-  Object.defineProperty(e.studyPieces,'selectedOptions',{get:()=>e.studyPieces.children.filter(option=>option.selected)});
+  for(const id of ['studyPieces','guidedDesignPieces'])
+    Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
@@ -6232,6 +6233,97 @@ test('guided and complete-file scenario modes preserve raw advanced single and m
       const link=descendants(section(p,'Fresh drape and heat alternatives')).find(n=>n.download==='scenario-request.json');
       assert.equal(await p.blobs.get(link.href).text(),sent.scenarioRequest);
     }
+  }
+});
+
+function configureGuidedDesign(p) {
+  p.e.guidedDesign.checked=true;
+  for(const [id,value] of Object.entries({guidedDesignAxis:'y',guidedDesignAt:'50',guidedDesignMultiplier:'1',
+    guidedDesignValues:'0,5,10,15,20,25,30,35,40',guidedDesignMax:'1'}))p.e[id].value=value;
+  for(const option of p.e.guidedDesignPieces.children)option.selected=true;
+  const fit=' {"schema":"fabric-fit/1","points":[{"id":"length","kind":"vertical","instance":"front","from":"a","to":"d","body":"stature","body_scale":0.1,"target_mm":[-0.1,0.0,0.1]}],"source":{"sample":18446744073709551615,"signed":-0.0,"value":1.0}}\r\n';
+  p.select('fit',fit);p.e.fit.handlers.change();p.e.guidedDesign.handlers.change();return fit;
+}
+async function guidedDesignSetup() {
+  const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+  const fit=configureGuidedDesign(p),body=' {"schema":"ftx-scenario-body/1","measurements":{},"arm_abduction_deg":35.0}\r\n';
+  p.select('scenarioBody',body);p.e.scenarioBody.handlers.change();
+  p.e.studyBodySource.value='request';p.e.studyBodySource.handlers.change();
+  p.e.body.files=[new Blob([new Uint8Array([1,3,5])])];p.e.body.handlers.change();return {p,fit,body};
+}
+
+test('guided linked designs dispatch to the selected-body authority and adopt the exact bound candidate without repeating alterations',async()=>{
+  const {p,fit,body}=await guidedDesignSetup();
+  p.e.studyTarget.value='pieces';p.e.studyTarget.handlers.change();
+  for(const option of p.e.studyPieces.children)option.selected=option.value==='lining';
+  assert.equal(p.e.study.disabled,false);await p.e.study.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.onBody,true,p.e.error.textContent);assert.equal(sent.measurements,body);
+  assert.deepEqual([...new Uint8Array(sent.bytes)],[1,3,5]);assert.ok(sent.studyRequest.includes(fit));
+  const request=JSON.parse(sent.studyRequest);assert.equal(request.schema,'ftx-design-study/1');
+  assert.deepEqual(Object.keys(request.variants[1].changes.pieces),['lining']);
+  assert.deepEqual(request.design_grid,{variables:[{key:'linked_adjustment',values_mm:[0,5,10,15,20,25,30,35,40],
+    sites:['front','lining'].map(piece=>({piece,axis:'y',at_mm:50,multiplier:1}))}],max_designs:1,fit_screening:{max_candidates:9}});
+  const candidate=' {"pieces":[{"id":"altered"}],"fabric":{"source":18446744073709551615,"value":1.0,"x":-0.0}}\r\n';
+  const report={...studyReport([studyRow('chosen',candidate)]),schema:'ftx-design-study-report/1'};let freed=0;
+  const w=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){freed++;}},
+    material_study_on_body:(_model,...args)=>{assert.deepEqual(args,[sent.pattern,sent.studyRequest,body]);return JSON.stringify(report);}}});
+  const result=await w.send(sent);assert.equal(result.type,'result',result.message);assert.equal(freed,1);p.current().emit(result);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  for(const [name,raw] of [['study-request.json',sent.studyRequest],['body-input.json',body],['original-pattern.json',sent.pattern]]) {
+    const link=descendants(s).find(n=>n.download===name);assert.ok(link,name);assert.equal(await p.blobs.get(link.href).text(),raw);
+  }
+  descendants(s).find(n=>n.tag==='button'&&n.textContent==='Use chosen pattern').onclick();
+  assert.equal(p.e.guidedDesign.checked,false);assert.equal(p.e.guidedDesignAt.value,'');assert.equal(p.e.guidedDesignValues.value,'');
+  assert.deepEqual(p.e.guidedDesignPieces.children.map(n=>n.value),['altered']);
+  assert.equal(p.e.guidedDesignPieces.selectedOptions.length,0);assert.equal(p.e.studyCandidates.children.length,0);
+  await p.e.bind.onclick();assert.equal(p.current().messages.at(-1).pattern,candidate);
+});
+
+test('guided linked designs require accepted-body association and retain their flat fit gate in numerical-only scenarios',async()=>{
+  const {p}=await guidedDesignSetup(),accepted=' {"schema":"ftx-body-fit/1","sample":18446744073709551615,"x":-0.0}\r\n';
+  p.select('bodyFitFile',accepted);p.e.bodyFitFile.handlers.change();p.e.studyBodySource.value='accepted';p.e.studyBodySource.handlers.change();
+  assert.equal(p.e.study.disabled,true);let before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/associate/i);
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();assert.equal(p.e.study.disabled,false);
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.onBody,true);assert.ok(sent.measurements.includes(accepted));
+  const old=p.current();p.e.bodyFitConsent.checked=false;p.e.bodyFitConsent.handlers.change();assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request:sent.request,result:studyReport(),files:[]});
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);assert.equal(p.live.size,0);
+  const scenario=await guidedScenarioSetup();const fit=configureGuidedDesign(scenario.p);
+  scenario.p.e.guidedScenarioFitSource.value='none';scenario.p.e.guidedScenarioFitSource.handlers.change();
+  await scenario.p.e.scenario.onclick();const msg=scenario.p.current().messages.at(-1);
+  assert.equal(msg.type,'scenario',scenario.p.e.error.textContent);assert.ok(msg.studyRequest.includes(fit));
+  assert.deepEqual(JSON.parse(msg.scenarioRequest).fit_spec,{});
+  scenario.p.emit(scenarioReport());scenario.p.e.fit.files=[];scenario.p.e.fit.handlers.change();
+  before=scenario.p.current().messages.length;await scenario.p.e.scenario.onclick();assert.equal(scenario.p.current().messages.length,before);
+  assert.match(scenario.p.e.error.textContent,/fit contract/i);
+});
+
+test('guided linked design snapshots, fit-source budgets and body edits prevent stale study dispatch',async()=>{
+  for(const change of ['values','pieces','fit','body','scenarioBody','design','mode','cancel']) {
+    const {p,fit}=await guidedDesignSetup(),delay=deferred();let reading=false;
+    p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return new TextEncoder().encode(await delay.promise).buffer;};
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();assert.equal(reading,true,change);
+    if(change==='values'){p.e.guidedDesignValues.value='0,30';p.e.guidedDesignValues.handlers.input();}
+    else if(change==='pieces')p.e.guidedDesignPieces.handlers.change();
+    else if(change==='design'){p.e.guidedDesign.checked=false;p.e.guidedDesign.handlers.change();}
+    else if(change==='mode'){p.e.studyMode.value='file';p.e.studyMode.handlers.change();}
+    else if(change==='cancel')p.e.cancel.onclick();else p.e[change].handlers.change();
+    assert.equal(old.dead,true,change);p.ready();delay.resolve(fit);await running;
+    assert.equal(old.messages.length,before,change);assert.equal(p.current().messages.length,0,change);assert.equal(p.live.size,0,change);
+  }
+  const {p,fit}=await guidedDesignSetup(),delay=deferred();
+  p.e.fit.files[0].arrayBuffer=async()=>new TextEncoder().encode(await delay.promise).buffer;
+  const running=p.e.study.onclick();p.e.guidedDesignValues.value='-10,30';p.e.guidedDesignAt.value='75';delay.resolve(fit);await running;
+  const variable=JSON.parse(p.current().messages.at(-1).studyRequest).design_grid.variables[0];
+  assert.deepEqual(variable.values_mm,[0,5,10,15,20,25,30,35,40]);assert.equal(variable.sites[0].at_mm,50);
+  for(const invalid of ['oversize','utf8','bom']) {
+    const {p,fit}=await guidedDesignSetup();let reads=0;
+    const bytes=invalid==='utf8'?new Uint8Array([0xc0,0xaf]):new TextEncoder().encode('\ufeff'+fit);
+    p.e.fit.files[0].arrayBuffer=async()=>{reads++;return bytes.buffer;};
+    if(invalid==='oversize')p.e.fit.files[0].size=256*1024+1;
+    const before=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,before,invalid);
+    assert.ok(p.e.error.textContent,invalid);if(invalid==='oversize')assert.equal(reads,0);
   }
 });
 
@@ -11490,6 +11582,51 @@ test('compiled WASM fit screening reaches the same late design and named-case fr
         assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
       }
     } finally {globalThis.ftxProgress=previousProgress;}
+  });
+
+test('compiled WASM guided linked fit search matches native selected-body results and retained cutting geometry',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_DESIGN_BODY||!process.env.FTX_GUIDED_DESIGN_NATIVE},async()=>{
+    const dir=path.resolve(process.env.FTX_GUIDED_DESIGN_BODY),input=name=>fs.readFileSync(path.join(dir,name),'utf8');
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const module=new vm.SourceTextModule(read('materials-study-builder.js'));
+    await module.link(()=>{throw Error('Unexpected guided-builder import');});await module.evaluate();
+    const pattern=input('pattern.json'),body=input('body-input.json'),authored=JSON.parse(input('study.json'));
+    const fit=' '+JSON.stringify(authored.design_fit.fit_spec).slice(0,-1)+',"lexical":{"value":1.0,"signed":-0.0,"sample":18446744073709551615}}\r\n';
+    const selection=' '+JSON.parse(ftx.material_inspect(JSON.stringify(authored.variants[0].changes.default))).selection_json+'\r\n';
+    const request=module.namespace.buildMaterialStudyRequest({candidates:[{key:'light-sheet',selection}],
+      target:{scope:'default'},pieceIds:['front','back'],cutting:authored.cutting,basis:'nominal',
+      objectives:[{metric:'stock_mass_kg',direction:'minimize'}],
+      design:{pieceIds:['front','back'],axis:'y',atMm:50,multiplier:1,values:[0,5,10,15,20,25,30,35,40],maxDesigns:1,fitSpec:fit}});
+    assert.ok(request.includes(fit));assert.ok(request.includes(selection));
+    // Bash's pipe-backed input path avoids a temporary source file; all paths are positional arguments.
+    const native=JSON.parse(require('node:child_process').execFileSync('/bin/bash',[
+      '-c','exec "$1" study-on-body "$2" <(cat) "$3" "$4"','ftx-guided-design-check',
+      path.resolve(process.env.FTX_GUIDED_DESIGN_NATIVE),path.join(dir,'pattern.json'),path.join(dir,'body-input.json'),path.join(dir,'model.ftxbody')],
+      {input:request,encoding:'utf8',maxBuffer:64*1024*1024,timeout:20000}));
+    const bytes=fs.readFileSync(path.join(dir,'model.ftxbody')),model=new ftx.WebBody(bytes);
+    const previousProgress=globalThis.ftxProgress;globalThis.ftxProgress=()=>{};
+    try {
+      const direct=JSON.parse(ftx.material_study_on_body(model,pattern,request,body));assert.deepEqual(direct,native);
+      const w=await workerModule({bindings:ftx}),result=await w.send({type:'study',request:230,onBody:true,
+        pattern,studyRequest:request,measurements:body,bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+      assert.equal(result.type,'result',result.message);assert.deepEqual(result.result,native);
+      assert.equal(native.alternatives.length,4);assert.equal(native.design_search.complete_grid_enumeration,true);
+      const screening=native.design_search.fit_screening;assert.equal(screening.screened_designs,9);
+      assert.equal(screening.rejected_designs,8);assert.equal(screening.selected_designs,1);
+      const selected=screening.rows.find(row=>row.selected);assert.equal(selected.design.key,'grid:0006');
+      assert.equal(selected.design.variables_mm.linked_adjustment,30);
+      assert.deepEqual(native.comparison.frontier,['["grid:0006","light-sheet"]']);
+      const winner=native.alternatives.find(row=>native.comparison.frontier.includes(row.key));
+      assert.equal(winner.design.fit.result.passed,true);assert.equal(winner.design.fit.result.validation.points[0].residual_mm,0);
+      assert.equal(winner.metrics.stock_mass_kg,0.042);
+      const retained=winner.binding.result.pattern_json,altered=JSON.parse(retained);
+      assert.deepEqual(altered.pieces.map(piece=>[piece.id,piece.vertices.d[1]]),[['front',130],['back',130]]);
+      assert.deepEqual(JSON.parse(ftx.cut_plan(retained,JSON.stringify(authored.cutting))),winner.cutting.result);
+      for(const [name,raw] of [['study-request.json',request],['original-pattern.json',pattern],['body-input.json',body]])
+        assert.equal(result.files.find(file=>file.name===name).text,raw);
+    } finally {model.free();globalThis.ftxProgress=previousProgress;}
   });
 
 test('joint strip histories retain the declared network and separate loss ledgers until source changes', async () => {

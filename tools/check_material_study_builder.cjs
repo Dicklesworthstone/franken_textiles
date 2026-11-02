@@ -518,3 +518,103 @@ test('finite and mixed objectives compose with separately requested scenario con
     assert.throws(()=>build(input,{drape:true,surface:false}),/requested surface/);
   }
 });
+
+const linkedFitSource = () => ' {\r\n"schema":"fabric-fit/1","points":[{"id":"length","kind":"vertical","instance":"front","from":"a","to":"d","body":"stature","body_scale":0.1,"target_mm":[-0.1,0.0,0.1]}],"source":{"seed":18446744073709551615,"x":-0.0,"value":1.0,"label":"é 🧵"}}\r\n';
+const linkedDesignInput = (changes = {}) => ({pieceIds:['front','lining'],axis:'y',atMm:50,multiplier:1,
+  values:[0,5,10,15,20,25,30,35,40],maxDesigns:1,fitSpec:linkedFitSource(),...changes});
+
+test('linked design authoring retains exact fit and material sources with independent alteration targets', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),target:{scope:'pieces',ids:['lining']},
+    cutting:' {"copies":1,"gap_mm":2.0,"edge_margin_mm":-0.0,"end_margin_mm":0.0}\r\n',
+    design:linkedDesignInput({pieceIds:['lining','front'],values:[-4,0,7.5],atMm:-10,multiplier:0.5,maxDesigns:2})};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.equal(result.schema,'ftx-design-study/1');
+  for(const source of [input.design.fitSpec,input.cutting,input.candidates[0].selection])assert.ok(raw.includes(source));
+  assert.match(raw,/18446744073709551615/);assert.match(raw,/"x":-0\.0/);assert.match(raw,/"value":1\.0/);
+  assert.deepEqual(result.design_grid,{variables:[{key:'linked_adjustment',values_mm:[-4,0,7.5],sites:[
+    {piece:'lining',axis:'y',at_mm:-10,multiplier:0.5},{piece:'front',axis:'y',at_mm:-10,multiplier:0.5}]}],
+    max_designs:2,fit_screening:{max_candidates:3}});
+  assert.deepEqual(result.design_fit,{fit_spec:JSON.parse(input.design.fitSpec)});
+  assert.deepEqual(result.variants[0],{key:'baseline',changes:{schema:'ftx-material-bindings/1'}});
+  assert.deepEqual(Object.keys(result.variants[1].changes.pieces),['lining']);
+  for(const key of ['design','designs','design_adaptive','scenario'])assert.equal(Object.hasOwn(result,key),false);
+});
+
+test('linked design rejects invalid or nonfinite sites and domains without sorting or dropping values', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const check=design=>build({...state(),design});
+  for(const design of [null,[],{}, {...linkedDesignInput(),unknown:true}])assert.throws(()=>check(design));
+  for(const key of Object.keys(linkedDesignInput())) {
+    const missing=linkedDesignInput();delete missing[key];assert.throws(()=>check(missing),/missing/);
+  }
+  for(const pieceIds of [[],['front','front'],['missing'],[''],[null],Array.from({length:17},(_,i)=>`p${i}`)]) {
+    assert.throws(()=>check(linkedDesignInput({pieceIds})));
+  }
+  for(const axis of ['z','X',null,1])assert.throws(()=>check(linkedDesignInput({axis})),/axis/);
+  for(const atMm of [NaN,Infinity,-Infinity,'50',null])assert.throws(()=>check(linkedDesignInput({atMm})),/finite/);
+  for(const multiplier of [0,-0,NaN,Infinity,-Infinity,'1',null])assert.throws(()=>check(linkedDesignInput({multiplier})),/nonzero/);
+  for(const values of [[],[0,0],[1,0],['1'],[NaN],[Infinity],[0,,1],Array.from({length:65},(_,i)=>i)]) {
+    assert.throws(()=>check(linkedDesignInput({values})),/strictly increasing/);
+  }
+  for(const maxDesigns of [0,32,1.5,NaN,Infinity,'1',null])assert.throws(()=>check(linkedDesignInput({maxDesigns})),/integer/);
+  assert.throws(()=>check(linkedDesignInput({values:[Number.MAX_VALUE],multiplier:2})),/overflows/);
+  assert.throws(()=>check(linkedDesignInput({values:[Number.MIN_VALUE],multiplier:0.5})),/underflows/);
+  const pieceIds=['front',...Array.from({length:15},(_,i)=>`piece-${i}`)];
+  const result=JSON.parse(build({...state(),pieceIds,design:linkedDesignInput({pieceIds,
+    values:Array.from({length:64},(_,i)=>i-32),multiplier:-0.5})}));
+  assert.equal(result.design_grid.variables[0].sites.length,16);assert.equal(result.design_grid.fit_screening.max_candidates,64);
+  assert.equal(result.design_grid.variables[0].sites[0].multiplier,-0.5);
+  const long='p'.repeat(256*1024);
+  assert.throws(()=>build({...state(),pieceIds:[long],design:linkedDesignInput({pieceIds:[long]})}),/grid exceeds 256 KiB/);
+});
+
+test('linked expansion counts both baselines and refuses excess work before reading frozen materials', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const candidates=Array.from({length:7},(_,i)=>({key:`choice-${i}`,selection:selection(`cloth-${i}`,'abcdef0'[i])}));
+  const input={...state(),candidates,design:linkedDesignInput({values:[0,1,2,3],maxDesigns:3})};
+  const result=JSON.parse(build(input));assert.equal(result.variants.length,8);assert.equal(result.design_grid.max_designs,3);
+  assert.equal(result.design_grid.fit_screening.max_candidates,4,'All declared values are screened even when fewer passing designs reach consumers');
+  let snapshotsRead=0;
+  const unread=candidates.map(candidate=>({key:candidate.key,get selection(){snapshotsRead++;throw Error('Source must remain unread');}}));
+  assert.throws(()=>build({...input,candidates:unread,design:{...input.design,maxDesigns:4}}),/32 expanded/);
+  assert.equal(snapshotsRead,0);
+  const bounded=JSON.parse(build({...input,design:linkedDesignInput({values:[0],maxDesigns:31})}));
+  assert.equal(bounded.design_grid.max_designs,31,'Reserve the smaller domain without silently rewriting the declared allowance');
+  const exact=JSON.parse(build({...state(),design:linkedDesignInput({values:Array.from({length:15},(_,i)=>i),maxDesigns:15})}));
+  assert.equal(exact.design_grid.max_designs,15);
+  assert.throws(()=>build({...state(),design:linkedDesignInput({values:Array.from({length:16},(_,i)=>i),maxDesigns:16})}),/32 expanded/);
+});
+
+test('linked fit contracts retain original JSON and enforce explicit point and UTF-8 source bounds', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const check=fitSpec=>build({...state(),design:linkedDesignInput({fitSpec})});
+  for(const fitSpec of [{},null,'null','[]','{bad','{}','\ufeff'+linkedFitSource(),
+    '{"schema":"other","points":[{}]}','{"schema":null,"points":[{}]}','{"points":[]}'])assert.throws(()=>check(fitSpec));
+  const point=JSON.parse(linkedFitSource()).points[0];
+  const points=Array.from({length:32},(_,i)=>({...point,id:`point-${i}`}));
+  assert.equal(JSON.parse(check(JSON.stringify({points}))).design_fit.fit_spec.points.length,32);
+  assert.throws(()=>check(JSON.stringify({points:[...points,{...point,id:'last'}]})),/1–32/);
+  const prefix='{"schema":"fabric-fit/1","points":'+JSON.stringify([point])+',"source":"',suffix='"}';
+  const room=256*1024-Buffer.byteLength(prefix+suffix),fit=prefix+'é'.repeat(Math.floor(room/2))+'x'.repeat(room%2)+suffix;
+  assert.equal(Buffer.byteLength(fit),256*1024);assert.ok(check(fit).includes(fit));
+  assert.throws(()=>check(' '+fit),/256 KiB.*UTF-8/);
+});
+
+test('linked grids compose with stock and scenario consumers while fixed-study requests remain unchanged', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const mode of ['cutting','finiteStock','cuttingJob']) {
+    const input=mode==='cutting'?state():stockState(mode),context={drape:true,surface:true};
+    input.objectives.push({metric:'independent_surface_power_w',direction:'maximize'});
+    input.constraints=[{metric:'max_absolute_edge_strain_pct',maximum:8,basis:'nominal'}];
+    input.requiredConsumers=['drape','surface'];const fixed=build(input,context),before=JSON.stringify(input);
+    const design=linkedDesignInput(),raw=build({...input,design},context),result=JSON.parse(raw);
+    assert.equal(JSON.stringify(input),before);assert.equal(result.schema,'ftx-design-study/1');
+    assert.deepEqual(result.comparison,JSON.parse(fixed).comparison);
+    if(typeof input[mode]==='string')assert.ok(raw.includes(input[mode]));
+    delete result.design_grid;delete result.design_fit;result.schema='ftx-material-study/1';
+    assert.deepEqual(result,JSON.parse(fixed));assert.equal(build(input,context),fixed);
+    assert.throws(()=>build({...input,design}),/requested surface/);
+    for(const key of ['design_grid','design_fit'])assert.equal(Object.hasOwn(JSON.parse(fixed),key),false);
+  }
+});
