@@ -150,8 +150,13 @@ candidate, so review the study request before running it again. A selected patte
 measurement-readiness, scenario-admission or physical-fit verdict.
 
 Joint outfits retain their original source request, composition correspondence and required
-self-contact. Cleared, replaced or invalidated study results cannot later replace the current
-pattern through a stale action. Adoption is unavailable while a worker operation is pending.
+self-contact. **Use derived pattern** after a dimensional treatment uses this same source-adoption
+path: garment assignment groups and original outfit correspondence remain available for the next
+binding and drape. The original file chooser is cleared so that selecting that file again can
+explicitly restore it. Current measurements, fit specification and model remain selected, while
+accepted-body association requires fresh confirmation. No prior drape or fit verdict follows the
+treated pattern. Cleared, replaced or invalidated study/treatment results cannot later replace the
+current pattern through a stale action. Adoption is unavailable while a worker operation is pending.
 
 ### Combine reported-range objectives with nominal constraints
 

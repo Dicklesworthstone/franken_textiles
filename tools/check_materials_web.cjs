@@ -686,8 +686,40 @@ const server = http.createServer((req, res) => {
       fs.writeFileSync(path.join(work,'outfit-pattern.json'),raw,{flag:'wx'});
       fs.writeFileSync(path.join(work,'outfit-request.json'),original,{flag:'wx'});
       await page.screenshot({path:path.join(work,'drafted-outfit-import.png'),fullPage:true});
+
+      const simple=load('synthetic-joint-outfit.json'),transition=load('kanat-ozdil-2026-denim-1-treatment.json');
+      await input('patternFile',simple);
+      await page.waitForFunction(()=>document.getElementById('status').textContent.startsWith('outfit complete'));
+      const composition=await download('outfit-composition.json');
+      await page.fill('#selection',JSON.stringify(transition.before));assert.equal(await run('inspect'),'');
+      await page.selectOption('#target','@outfit');await page.click('#assign');assert.equal(await run('bind'),'');
+      const before=await download('pattern.json'),ids=JSON.parse(before).pieces.map(piece=>piece.id);
+      const treatment={schema:'ftx-pattern-treatment/1',mode:'treat',transitions:{launder:transition},
+        pieces:Object.fromEntries(ids.map(id=>[id,'launder']))};
+      await input('treatmentRequest',treatment);assert.equal(await run('treatment'),'');
+      const derived=await download('treat-pattern.json');
+      await page.click('#useTreatment');
+      assert.match(await page.textContent('#patternName'),/Derived treatment pattern/);
+      assert.equal(await page.isChecked('#selfContact'),true);assert.equal(await page.isDisabled('#selfContact'),true);
+      assert.equal(await page.locator('#patternFile').evaluate(e=>e.files.length),0);
+      assert.deepEqual(await page.locator('#target option').evaluateAll(options=>options.slice(1).map(o=>o.value)),
+        ['@outfit','@garment:0','@garment:1',...ids]);
+      assert.equal(await page.locator('a[download="treat-pattern.json"]').count(),0);
+      assert.equal(await run('bind'),'');
+      const rebound=await download('pattern.json'),bindings=JSON.parse(await download('material-bindings.json'));
+      assert.ok(bindings.pieces.every(piece=>piece.material_id===transition.after.id));
+      assert.equal(bindings.drape_materials_with_self_contact.ready,false);
+      assert.equal(await download('outfit-request.json'),JSON.stringify(simple));
+      assert.equal(await download('outfit-composition.json'),composition);
+      for(const [name,raw] of [['treatment-source-pattern.json',before],['treatment-request.json',JSON.stringify(treatment)],
+        ['treated-outfit-pattern.json',derived],['rebound-treated-outfit.json',rebound]])
+        fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});
+      await page.screenshot({path:path.join(work,'treated-outfit-adopted.png'),fullPage:true});
+      await input('patternFile',simple);
+      await page.waitForFunction(()=>document.getElementById('status').textContent.startsWith('outfit complete'));
+      assert.match(await page.textContent('#patternName'),/2 garments in one composed outfit/);
       assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m => m==='GET'));
-      console.log('PASS: real Chromium imports drafted bolero/trousers, retains exact original request and independent casing rest/load scope, and locks required self-contact; no errors or uploads. Composition only, synthetic material; no drape or fit claim. Artifacts:',work);
+      console.log('PASS: real Chromium imports drafted bolero/trousers and adopts/rebinds a treated synthetic outfit with original correspondence, required self-contact and a reset file chooser; no errors or uploads. Measured dimensional transition on synthetic flat geometry only; no drape, sewn-treatment or fit claim. Artifacts:',work);
       return;
     }
     if (stripProof) {

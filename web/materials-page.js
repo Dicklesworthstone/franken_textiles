@@ -1508,21 +1508,24 @@ function designComparison(op, parent, study, casePolicies = {}) {
       refusal: row.binding?.refusal });
   }
 }
+function installDerivedPattern(raw, label) {
+  const data = parsePattern(raw), retainedOutfit = outfit;
+  const garments = retainedOutfit ? JSON.parse(retainedOutfit.composition_json).garments : [];
+  resetPatternInput();
+  ++roundRead; roundToken = null; window.opener = null;
+  roundFiles.delete("patternFile"); $("patternFile").value = "";
+  installPattern(raw, label, garments, data);
+  outfit = retainedOutfit;
+  if (outfit) $("selfContact").checked = true;
+  if (roundFiles.size) $("roundImportText").textContent =
+    "A derived pattern is now the current pattern. Received measurement, fit and body snapshots remain selected. Review them before recomputing this pattern.";
+}
 function useStudyPattern(op, study, row) {
   if (!ready || pending || sections.get(op).study !== study) return;
   const raw = available(row.binding)?.pattern_json;
   if (typeof raw !== "string") return;
   try {
-    const data = parsePattern(raw), retainedOutfit = outfit;
-    const garments = retainedOutfit ? JSON.parse(retainedOutfit.composition_json).garments : [];
-    resetPatternInput();
-    ++roundRead; roundToken = null; window.opener = null;
-    roundFiles.delete("patternFile"); $("patternFile").value = "";
-    installPattern(raw, `Study candidate ${row.key}`, garments, data);
-    outfit = retainedOutfit;
-    if (outfit) $("selfContact").checked = true;
-    if (roundFiles.size) $("roundImportText").textContent =
-      "A study candidate is now the current pattern. Received measurement, fit and body snapshots remain selected. Review them before recomputing this candidate.";
+    installDerivedPattern(raw, `Study candidate ${row.key}`);
     $("status").textContent = "Candidate pattern loaded with its exact material selections. Review the current body, fit and process inputs, then Freeze selections and bind to recompute consumers. Study alterations now start from this candidate.";
     controls();
   } catch (e) { error(String(e.message || e)); controls(); }
@@ -3832,11 +3835,11 @@ $("assign").onclick = () => {
 $("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits(); invalidate(["bind", ...boundOperations]); };
 $("useTreatment").onclick = () => {
   if (!preparedTreatment || pending) return;
-  const raw = preparedTreatment;
-  resetPatternInput();
-  installPattern(raw, "Derived treatment pattern");
-  $("status").textContent = "Derived pattern loaded. Freeze selections and bind to recompute its consumers.";
-  controls();
+  try {
+    installDerivedPattern(preparedTreatment, "Derived treatment pattern");
+    $("status").textContent = "Derived pattern loaded. Freeze selections and bind to recompute its consumers.";
+    controls();
+  } catch (e) { error(String(e.message || e)); controls(); }
 };
 $("useGarmentcode").onclick = () => {
   if (!preparedImport || pending) return;

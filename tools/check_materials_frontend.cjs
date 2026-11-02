@@ -2116,6 +2116,9 @@ test('treated outfit adoption retains correspondence, self-contact and current w
   report.pattern_json=' '+imported.pattern_json.replace('1.0','2.0')+'\r\n';
   p.select('treatmentRequest','{"schema":"ftx-pattern-treatment/1"}');
   await p.e.treatment.onclick();p.emit(report);
+  await p.e.inspect.onclick();const name=p.e.patternName.textContent;
+  assert.equal(p.e.useTreatment.disabled,true);p.e.useTreatment.onclick();assert.equal(p.e.patternName.textContent,name);
+  p.emit({selection:{id:'other'},capabilities:{},snapshot:{id:'other'}});
   const messages=p.current().messages.length;p.e.useTreatment.onclick();
   assert.equal(p.current().messages.length,messages,'Adoption does not run a consumer');
   assert.equal(p.e.selfContact.checked,true);assert.equal(p.e.selfContact.disabled,true);
@@ -8938,6 +8941,46 @@ test('compiled WASM outfit import reaches exact material binding and complete as
     assert.equal(study.files.find(f=>f.name==='outfit-composition.json').text,outfit.composition_json);
     const refused = await w.send({type:'scenario',request:4,pattern,outfit,scenarioRequest:'{"options":{}}'});
     assert.equal(refused.type,'error');assert.match(refused.message,/options.self_contact/);
+  });
+
+test('compiled WASM treated outfit adoption rebinds exact derived geometry with original correspondence',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const fixture=name=>fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials',name),'utf8');
+    const p=await pageModule(),w=await workerModule({bindings:ftx});
+    const source=fixture('synthetic-joint-outfit.json'),transition=JSON.parse(fixture('kanat-ozdil-2026-denim-1-treatment.json'));
+    p.select('patternFile',source);await p.e.patternFile.onchange();
+    const imported=await w.send(p.current().messages.at(-1));assert.equal(imported.type,'result',imported.message);p.current().emit(imported);
+    const pieces=JSON.parse(imported.result.pattern_json).pieces.map(piece=>piece.id);
+    p.e.selection.value=JSON.stringify(transition.before);p.e.selection.handlers.input();await p.e.inspect.onclick();
+    const inspected=await w.send(p.current().messages.at(-1));assert.equal(inspected.type,'result',inspected.message);p.current().emit(inspected);
+    p.e.target.value='@outfit';p.e.assign.onclick();await p.e.bind.onclick();
+    const before=await w.send(p.current().messages.at(-1));assert.equal(before.type,'result',before.message);p.current().emit(before);
+    assert.ok(before.result.pieces.every(piece=>piece.material_id===transition.before.id));
+    assert.equal(before.result.drape_materials_with_self_contact.ready,false,'Missing measured mechanics are retained');
+    const request=JSON.stringify({schema:'ftx-pattern-treatment/1',mode:'treat',transitions:{launder:transition},
+      pieces:Object.fromEntries(pieces.map(id=>[id,'launder']))});
+    p.select('treatmentRequest',request);await p.e.treatment.onclick();
+    const treated=await w.send(p.current().messages.at(-1));assert.equal(treated.type,'result',treated.message);
+    assert.equal(treated.result.source_pattern_json,before.result.pattern_json);
+    assert.equal(ftx.material_treatment_pattern(before.result.pattern_json,request),
+      treated.files.find(file=>file.name==='treatment-report.json').text);
+    p.current().emit(treated);p.e.useTreatment.onclick();
+    assert.equal(p.e.selfContact.checked,true);assert.equal(p.e.selfContact.disabled,true);
+    assert.deepEqual(p.e.target.children.slice(1).map(option=>option.value),
+      ['@outfit','@garment:0','@garment:1',...pieces]);
+    await p.e.bind.onclick();const message=p.current().messages.at(-1);
+    assert.equal(message.pattern,treated.result.pattern_json);
+    assert.deepEqual(plain(message.outfit),{request_json:source,composition_json:imported.result.composition_json});
+    const rebound=await w.send(message);assert.equal(rebound.type,'result',rebound.message);
+    assert.equal(rebound.result.pattern_json,JSON.parse(ftx.material_bind(message.pattern,message.changes)).pattern_json);
+    assert.ok(rebound.result.pieces.every(piece=>piece.material_id===transition.after.id));
+    assert.equal(rebound.result.geometry_changed,false);
+    assert.equal(rebound.result.drape_materials_with_self_contact.ready,false);
+    assert.equal(rebound.files.find(file=>file.name==='outfit-request.json').text,source);
+    assert.equal(rebound.files.find(file=>file.name==='outfit-composition.json').text,imported.result.composition_json);
   });
 
 test('compiled WASM qualified knife paths and changed-material process refusals replay native cut and study captures',
