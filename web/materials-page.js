@@ -1921,6 +1921,7 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
   }
   const profile = program.motion_profile;
   const exactStop = profile?.model === "trapezoidal_exact_stop/1";
+  const drilling = program.drilling;
   if (profile) {
     const timing = table(parent, `${label}: retained knife timing model`,
       ["Timing model", "Cutting acceleration (mm/s²)", "Raised-travel acceleration (mm/s²)"]);
@@ -1928,7 +1929,7 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
   }
   const t = table(parent, `${label}: material-qualified knife paths`,
     ["Marker", "Process observation", "Cut paths", "Cut length (mm)", "Raised travel (mm)",
-      "Cutting (s)", "Travel (s)", "Lift / lower (s)", "Modeled path time (s)", "Travel ordering"]);
+      "Cutting (s)", "Travel (s)", "Lift / lower (s)", drilling ? "Modeled process time (s)" : "Modeled path time (s)", "Travel ordering"]);
   for (const marker of program.markers || []) {
     const route = marker.selected;
     cells(t, [String(marker.marker + 1), marker.qualification, metric(route?.runs?.length),
@@ -1937,12 +1938,32 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
       marker.improved ? (exactStop ? "Faster complete traversal" : "Shorter complete traversal") :
         program.travel_routing ? "Complete authored cut order" : "Complete authored traversal"]);
   }
+  if (drilling) {
+    const tool = table(parent, `${label}: retained drill configuration`,
+      ["Drill model", "Tool", "Diameter (mm)", "Maximum sheet thickness (mm)", "Select drill (s)", "Select knife (s)"]);
+    cells(tool, [drilling.model, drilling.tool, metric(drilling.diameter_mm), metric(drilling.maximum_thickness_mm),
+      metric(drilling.select_drill_seconds), metric(drilling.select_knife_seconds)]);
+    const phases = table(parent, `${label}: qualified drilling and tool selection`,
+      ["Marker", "Drill observation", "Holes", "Drill cycles (s)", "Tool selection (s)"]);
+    for (const marker of program.markers || []) {
+      const route = marker.selected, count = route?.drills?.length || 0;
+      cells(phases, [String(marker.marker + 1), count ? marker.drill_qualification : "Not used", metric(count),
+        metric(route?.drilling_seconds ?? 0), metric(route?.tool_change_seconds ?? 0)]);
+    }
+    const drillingNote = document.createElement("p");
+    drillingNote.textContent = "All admitted holes are drilled before knife cutting. Each hole retains its exact source center and diameter, " +
+      "physical piece and copy, with a separate drill observation for the material and complete machine configuration. " +
+      "Drill cycles include the qualified plunge, dwell and retract phases; selecting the drill and returning to the knife are counted separately. " +
+      "Complete modeled process time includes these phases and raised travel between drills and knife paths. The cut-path count and cut length cover knife paths only. " +
+      "The SVG distinguishes qualified drilled holes from the original drawing marks. Hole quality and machine execution require separate physical qualification.";
+    parent.append(drillingNote);
+  }
   if (program.travel_routing) {
     const routes = table(parent, `${label}: raised-tool fixture routing`,
-      ["Marker", "Waypoint offset (mm)", "Detoured moves before cuts", "Intermediate travel points", "Return points"]);
+      ["Marker", "Waypoint offset (mm)", drilling ? "Detoured moves before drills / cuts" : "Detoured moves before cuts", "Intermediate travel points", "Return points"]);
     for (const marker of program.markers || []) {
       const route = marker.selected;
-      const waypoints = (route?.runs || []).map(run => run.travel_waypoints_mm?.length || 0);
+      const waypoints = [...(route?.drills || []), ...(route?.runs || [])].map(run => run.travel_waypoints_mm?.length || 0);
       cells(routes, [String(marker.marker + 1), metric(program.travel_routing.waypoint_offset_mm),
         metric(waypoints.filter(count => count > 0).length), metric(waypoints.reduce((sum, count) => sum + count, 0)),
         metric(route?.return_waypoints_mm?.length || 0)]);

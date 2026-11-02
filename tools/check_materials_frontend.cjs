@@ -6149,6 +6149,81 @@ test('exact-stop knife timing displays retained accelerations and producer total
   }
 });
 
+test('qualified drill review separates holes, knife paths and source phase totals across complete manufacturing routes', async () => {
+  for (const [op,routed,finite] of [['cut',false,false],['stock',false,true],['study',false,false],
+    ['scenario',false,true],['study',true,false],['scenario',true,true]]) {
+    const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);
+    p.select('cutOptions');p.select('stockRequest');
+    // Producer-result doubles exercise display and invalidation only. Native and compiled-WASM
+    // integration establish drill geometry, process qualification and complete modeled timing.
+    const selected={drills:[{placement:0,drill:0,piece:'<front>',instance:'<front>',copy:0,
+      center_mm:[10,20],diameter_mm:3,travel_waypoints_mm:[[5,10]]},
+      {placement:0,drill:1,piece:'<front>',instance:'<front>',copy:0,center_mm:[30,40],diameter_mm:3}],
+      runs:[{path:{placement:0,internal_cut:0},travel_waypoints_mm:[[35,45]]},{path:{placement:0}}],
+      cut_length_mm:480,travel_length_mm:180,cutting_seconds:4.8,travel_seconds:0.9,
+      lift_lower_seconds:0.4,drilling_seconds:1.2,tool_change_seconds:0.7,modeled_path_seconds:8};
+    const drilling={model:'coaxial_cold_through_drill/1',tool:'<qualified drill>',diameter_mm:3,
+      maximum_thickness_mm:2,select_drill_seconds:0.3,select_knife_seconds:0.4};
+    const program={schema:finite?'ftx-knife-cut-program/2':'ftx-knife-cut-program/1',drilling,
+      machine_sha256:'<machine including drill>',travel_routing:{waypoint_offset_mm:0.25},
+      markers:[{marker:0,qualification:'<knife observation>',drill_qualification:'<independent drill observation>',
+        selected,baseline:selected}],physical_cutting_validated:false,hardware_execution_authorized:false};
+    const plan=finite?{schema:'ftx-finite-stock-plan/1',used_stock_count:1,markers:[{placements:[{}]}],program}:
+      {schema:'ftx-roll-cut-plan/1',rolls:[{}],program};
+    const row=studyRow('drilled');
+    if(routed) {
+      row.cutting=omitted();row.cutting_job=outcome({complete_inventory:true,
+        inventory:[{piece:'front',stock:finite?'finite_stock':'roll'}],[finite?'finite_stock':'roll']:plan});
+    } else if(finite) {row.cutting=omitted();row.finite_stock=outcome(plan);}
+    else row.cutting=outcome(plan);
+    const study=studyReport([row]),standalone=op==='cut'||op==='stock';
+    const report=standalone?plan:op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const label=op==='cut'?'Cutting plan':op==='stock'?'Finite-stock plan':
+      routed?`drilled: ${finite?'finite-stock':'roll'} route`:finite?'drilled: finite stock':'drilled';
+    await p.e[op].onclick();
+    const raw=` ${JSON.stringify(report).replace('"diameter_mm":3','"diameter_mm":3.0')}\n`;
+    p.emit(report,[{name:'drilled-program.json',text:raw,mime:'application/json'}],raw);
+    const s=section(p,standalone?op:op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+    assert.deepEqual(plain(table(`${label}: material-qualified knife paths`).children[2].children.map(n=>n.textContent)),
+      ['1','<knife observation>','2','480','180','4.8','0.9','0.4','8','Complete authored cut order']);
+    assert.match(visibleText(table(`${label}: material-qualified knife paths`)),/Modeled process time/);
+    assert.deepEqual(plain(table(`${label}: retained drill configuration`).children[2].children.map(n=>n.textContent)),
+      ['coaxial_cold_through_drill/1','<qualified drill>','3','2','0.3','0.4']);
+    assert.deepEqual(plain(table(`${label}: qualified drilling and tool selection`).children[2].children.map(n=>n.textContent)),
+      ['1','<independent drill observation>','2','1.2','0.7']);
+    assert.deepEqual(plain(table(`${label}: raised-tool fixture routing`).children[2].children.map(n=>n.textContent)),
+      ['1','0.25','2','2','0']);
+    assert.match(visibleText(s),/All admitted holes are drilled before knife cutting/);
+    assert.match(visibleText(s),/cut-path count and cut length cover knife paths only/);
+    assert.match(visibleText(s),/Hole quality and machine execution require separate physical qualification/);
+    const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===`${label}: exact knife paths, material locks and process limits (display only)`);
+    source.open=true;source.handlers.toggle();
+    assert.match(visibleText(source),/<machine including drill>/);
+    assert.match(visibleText(source),/"center_mm"/);
+    const download=descendants(s).find(n=>n.download==='drilled-program.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+
+    delete selected.drills;delete selected.drilling_seconds;delete selected.tool_change_seconds;
+    delete program.markers[0].drill_qualification;
+    await p.e[op].onclick();p.emit(report);
+    assert.deepEqual(plain(table(`${label}: qualified drilling and tool selection`).children[2].children.map(n=>n.textContent)),
+      ['1','Not used','0','0','0']);
+    delete program.drilling;
+    await p.e[op].onclick();p.emit(report);
+    assert.equal(table(`${label}: retained drill configuration`),undefined);
+    assert.equal(table(`${label}: qualified drilling and tool selection`),undefined);
+    assert.doesNotMatch(visibleText(s),/coaxial_cold_through_drill|All admitted holes/);
+    assert.equal(p.live.has(download.href),false);
+    delete plan.program;plan.program_refusal={message:'Drill observation does not match the changed tool'};
+    await p.e[op].onclick();p.emit(report);
+    assert.equal(table(`${label}: material-qualified knife paths`),undefined);
+    assert.match(visibleText(s),/Drill observation does not match the changed tool/);
+    assert.match(visibleText(s),/Valid marker geometry and independent purchasing remain available/);
+  }
+});
+
 test('fixture detours retain actual travel totals, intermediate points and source downloads until inputs or admission change', async () => {
   for (const op of ['cut','stock','study']) {
     const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);
@@ -9730,6 +9805,83 @@ test('compiled WASM qualified knife paths and changed-material process refusals 
             assert.equal(changed.metrics.stock_area_m2,qualified.metrics.stock_area_m2);
           });
       }
+    }
+    for(const [index,prefix] of ['drill','drill-loading'].entries()) {
+      const captured=name=>fs.existsSync(path.join(process.env.FTX_KNIFE_PROGRAM_REPLAY,`${prefix}-${name}`));
+      await t.test(`${prefix}: complete native drill report, geometry and SVG`,
+        {skip:!captured('options.json')&&`${prefix} native captures not supplied`},async()=>{
+          const pattern=input('drill-pattern.json'),options=input(`${prefix}-options.json`),request=JSON.parse(options);
+          const replay=await w.send({type:'cut',request:280+index*4,pattern,options,rollIndex:1});
+          assert.equal(replay.type,'result',replay.message);
+          assert.deepEqual(replay.result,JSON.parse(input(`${prefix}-report.json`)));
+          assert.equal(replay.picture,input(`${prefix}-preview.svg`));
+          assert.equal(replay.files.find(file=>file.name==='roll-1.svg').text,replay.picture);
+          assert.equal(replay.files.find(file=>file.name==='cut-plan.json').text,ftx.cut_plan(pattern,options));
+          const program=replay.result.program;
+          assert.deepEqual(program.drilling,request.program.machine.drilling);
+          assert.equal(program.drilling.model,'coaxial_cold_through_drill/1');
+          assert.equal(program.physical_cutting_validated,false);
+          assert.equal(program.hardware_execution_authorized,false);
+          const shell=program.markers.find(marker=>replay.result.rolls[marker.marker].material.authored.id==='shell');
+          const cuff=program.markers.find(marker=>replay.result.rolls[marker.marker].material.authored.id==='knit');
+          assert.ok(shell);assert.ok(cuff);assert.equal(program.markers.length,2);
+          assert.equal(shell.selected.drills.length,2);assert.equal(shell.selected.runs.length,2);
+          assert.equal(shell.selected.drilling_seconds,2);assert.equal(shell.selected.tool_change_seconds,1);
+          assert.equal(shell.selected.lift_lower_seconds,0.5);
+          assert.deepEqual(shell.selected.drills.map(drill=>drill.center_mm),
+            prefix==='drill'?[[15,20],[40,55]]:[[215,120],[240,155]]);
+          assert.deepEqual(shell.selected.drills.map(drill=>drill.diameter_mm),[2,2]);
+          assert.equal(cuff.selected.drills,undefined);assert.equal(cuff.selected.drilling_seconds,undefined);
+          assert.equal(cuff.selected.tool_change_seconds,undefined);assert.equal(cuff.drill_qualification,undefined);
+          if(prefix==='drill') {
+            const travel=(25+Math.sqrt(1850)+2*Math.sqrt(1025)+Math.sqrt(3125))/200;
+            assert.ok(Math.abs(shell.selected.travel_seconds-travel)<1e-12);
+            assert.equal(shell.selected.cutting_seconds,15.5);
+          } else {
+            assert.deepEqual(program.motion_profile,request.program.machine.motion_profile);
+            assert.equal(program.motion_profile.model,'trapezoidal_exact_stop/1');
+            assert.equal(shell.selected.cutting_seconds,18);assert.equal(cuff.selected.cutting_seconds,12);
+          }
+          const q=request.program.qualifications.find(row=>row.id===shell.qualification);
+          assert.equal(q.machine_sha256,program.machine_sha256);
+          assert.equal(q.drilling.id,shell.drill_qualification);
+          let position=request.program.machine.start_mm;
+          for(const drill of shell.selected.drills) {
+            assert.deepEqual(drill.travel_mm[0],position);
+            assert.deepEqual(drill.travel_mm[1],drill.center_mm);position=drill.center_mm;
+          }
+          for(const run of shell.selected.runs) {
+            assert.deepEqual(run.travel_mm[0],position);position=run.cut_endpoints_mm[1];
+          }
+          assert.deepEqual(shell.selected.return_mm,[position,request.program.machine.start_mm]);
+          const route=shell.selected;
+          assert.ok(Math.abs(route.modeled_path_seconds-route.cutting_seconds-route.travel_seconds-
+            route.lift_lower_seconds-route.drilling_seconds-route.tool_change_seconds)<1e-12);
+          assert.match(replay.picture,/id="qualified-drills"/);
+          assert.equal((replay.picture.match(/class="qualified-drill"/g)||[]).length,2);
+          assert.equal((replay.picture.match(/class="drill"/g)||[]).length,2);
+          assert.equal((replay.picture.match(/data-phase="drill-raised-travel"/g)||[]).length,2);
+          const edited=JSON.parse(options);edited.program.machine.drilling.select_drill_seconds+=0.25;
+          const refused=await w.send({type:'cut',request:281+index*4,pattern,options:JSON.stringify(edited)});
+          assert.equal(refused.type,'result',refused.message);assert.equal(refused.result.program,undefined);
+          assert.match(refused.result.program_refusal.message,/qualification/);
+          assert.deepEqual(refused.result.rolls,replay.result.rolls);
+        });
+      await t.test(`${prefix}: complete native drill material-study replay`,
+        {skip:!captured('study.json')&&`${prefix} native study captures not supplied`},async()=>{
+          const pattern=input('drill-pattern.json'),studyRequest=input(`${prefix}-study.json`);
+          const replay=await w.send({type:'study',request:282+index*4,pattern,studyRequest});
+          assert.equal(replay.type,'result',replay.message);
+          assert.deepEqual(replay.result,JSON.parse(input(`${prefix}-study-report.json`)));
+          assert.equal(replay.files.find(file=>file.name==='material-study.json').text,ftx.material_study(pattern,studyRequest));
+          assert.equal(replay.files.find(file=>file.name==='study-request.json').text,studyRequest);
+          const qualified=replay.result.alternatives.find(row=>row.key==='qualified');
+          const changed=replay.result.alternatives.find(row=>row.key==='changed-finish');
+          assert.deepEqual(qualified.cutting.result.program,JSON.parse(input(`${prefix}-report.json`)).program);
+          assert.equal(changed.cutting.result.program,undefined);
+          assert.match(changed.cutting.result.program_refusal.message,/qualification/);
+          assert.equal(changed.metrics.stock_area_m2,qualified.metrics.stock_area_m2);
+        });
     }
   });
 

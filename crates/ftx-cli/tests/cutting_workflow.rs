@@ -457,6 +457,233 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
             }
         }
     }
+    let mut drilled = p.clone();
+    drilled["pieces"][0]["drills"] = json!([{"p":[10.,10.],"d":2.},{"p":[35.,45.],"d":2.}]);
+    let mut geometry_options = study["cutting"].clone();
+    geometry_options.as_object_mut().unwrap().remove("program");
+    let drill_baseline: Value = serde_json::from_str(
+        &ftx_wasm::manufacturing::cut_plan(&drilled.to_string(), &geometry_options.to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    for loaded in [false, true] {
+        let mut options = study["cutting"].clone();
+        options["program"]["machine"]["drilling"] = json!({
+            "model":"coaxial_cold_through_drill/1","tool":"synthetic-2mm-bit",
+            "diameter_mm":2.,"maximum_thickness_mm":2.,
+            "select_drill_seconds":0.6,"select_knife_seconds":0.4
+        });
+        if loaded {
+            options["program"]["stock_loading"] = json!([
+                {"marker":0,"lower_left_mm":[200.,100.]},
+                {"marker":1,"lower_left_mm":[200.,100.]}
+            ]);
+            options["program"]["machine"]["motion_profile"] = json!({
+                "model":"trapezoidal_exact_stop/1","cutting_acceleration_mm_s2":40.,
+                "travel_acceleration_mm_s2":25.
+            });
+        }
+        let machine: Machine =
+            serde_json::from_value(options["program"]["machine"].clone()).unwrap();
+        let lock = machine_sha256(&machine).unwrap();
+        for (i, q) in options["program"]["qualifications"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            q["machine_sha256"] = json!(lock);
+            q["drilling"] = json!({"id":format!("synthetic-drill-{i}"),
+                "thickness_mm":[0.2,0.8],"plunge_seconds":0.3,"dwell_seconds":0.2,"retract_seconds":0.5,
+                "source":{"reference":"test:drill-workflow","accessed_on":"2026-11-01",
+                    "note":"Synthetic fixed-bit one-second hole cycle for consumer replay only"},
+                "method":"Declared plunge, dwell and retract with independent estimate admission",
+                "conditions":{"specimen":"synthetic-single-ply"},"evidence":"estimate","allow_estimates":true});
+        }
+        w.write("pattern.json", &drilled);
+        w.write("options.json", &options);
+        let portable: Value = serde_json::from_str(
+            &ftx_wasm::manufacturing::cut_plan(&drilled.to_string(), &options.to_string()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(portable["rolls"], drill_baseline["rolls"]);
+        assert!(portable.get("program_refusal").is_none(), "{portable}");
+        assert_eq!(w.ok(PLAN), portable);
+        let primary = Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&w.0)
+            .arg("materials")
+            .args(PLAN)
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert!(
+            primary.status.success(),
+            "{}",
+            String::from_utf8_lossy(&primary.stderr)
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&primary.stdout).unwrap()["result"],
+            portable
+        );
+        let program = &portable["program"];
+        assert_eq!(
+            program["drilling"],
+            options["program"]["machine"]["drilling"]
+        );
+        assert_eq!(program["hardware_execution_authorized"], false);
+        let shell_index = portable["rolls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|roll| roll["material"]["authored"]["id"] == "shell")
+            .unwrap();
+        let shell = program["markers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|marker| marker["marker"] == shell_index)
+            .unwrap();
+        let route = &shell["selected"];
+        assert_eq!(route["drills"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            route["drills"][0]["center_mm"],
+            if loaded {
+                json!([215., 120.])
+            } else {
+                json!([15., 20.])
+            }
+        );
+        assert_eq!(
+            route["drills"][1]["center_mm"],
+            if loaded {
+                json!([240., 155.])
+            } else {
+                json!([40., 55.])
+            }
+        );
+        assert_eq!(route["drilling_seconds"], 2.);
+        assert_eq!(route["tool_change_seconds"], 1.);
+        assert_eq!(route["lift_lower_seconds"], 0.5);
+        let cutting = if loaded { 18. } else { 15.5 };
+        assert!((route["cutting_seconds"].as_f64().unwrap() - cutting).abs() < 1e-10);
+        let lengths = [
+            if loaded { 60625.0_f64.sqrt() } else { 25. },
+            1850.0_f64.sqrt(),
+            1025.0_f64.sqrt(),
+            1025.0_f64.sqrt(),
+            if loaded {
+                77125.0_f64.sqrt()
+            } else {
+                3125.0_f64.sqrt()
+            },
+        ];
+        let travel = if loaded {
+            lengths
+                .into_iter()
+                .map(|length| 2. * (length / 25.).sqrt())
+                .sum::<f64>()
+        } else {
+            lengths.into_iter().sum::<f64>() / 200.
+        };
+        assert!((route["travel_seconds"].as_f64().unwrap() - travel).abs() < 1e-10);
+        assert!(
+            (route["modeled_path_seconds"].as_f64().unwrap() - cutting - 3.5 - travel).abs()
+                < 1e-10
+        );
+        for marker in program["markers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["marker"] != shell_index)
+        {
+            for key in ["drills", "drilling_seconds", "tool_change_seconds"] {
+                assert!(
+                    marker["selected"].get(key).is_none(),
+                    "unused tool phase {key}"
+                );
+            }
+            let expected = if loaded { 12. } else { 10. };
+            assert!(
+                (marker["selected"]["cutting_seconds"].as_f64().unwrap() - expected).abs() < 1e-10
+            );
+        }
+        let mut drill_study = study.clone();
+        drill_study["cutting"] = options.clone();
+        let study_report: Value = serde_json::from_str(
+            &ftx_wasm::materials::study(&drilled.to_string(), &drill_study.to_string()).unwrap(),
+        )
+        .unwrap();
+        let qualified = study_report["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["key"] == "qualified")
+            .unwrap();
+        assert_eq!(qualified["cutting"]["result"]["program"], *program);
+        let total = program["markers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["selected"]["modeled_path_seconds"].as_f64().unwrap())
+            .sum::<f64>();
+        assert!(
+            (qualified["metrics"]["cutting_modeled_path_seconds"]
+                .as_f64()
+                .unwrap()
+                - total)
+                .abs()
+                < 1e-10
+        );
+        let changed = study_report["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["key"] == "changed-finish")
+            .unwrap();
+        assert!(changed["cutting"]["result"].get("program").is_none());
+        assert!(
+            changed["metrics"]
+                .get("cutting_modeled_path_seconds")
+                .is_none()
+        );
+        let job: Value = serde_json::from_str(
+            &ftx_wasm::manufacturing::roll_job(
+                &drilled.to_string(),
+                &options.to_string(),
+                shell_index,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(job["plan_json"].as_str().unwrap()).unwrap(),
+            portable
+        );
+        let svg = job["preview_svg"].as_str().unwrap();
+        assert!(svg.contains("qualified-drills") && svg.contains("drill-raised-travel"));
+        if let Some(capture) = std::env::var_os("FTX_KNIFE_PROGRAM_REPLAY") {
+            let capture = PathBuf::from(capture);
+            let prefix = if loaded { "drill-loading" } else { "drill" };
+            fs::write(
+                capture.join("drill-pattern.json"),
+                serde_json::to_vec(&drilled).unwrap(),
+            )
+            .unwrap();
+            for (suffix, value) in [
+                ("options.json", &options),
+                ("report.json", &portable),
+                ("study.json", &drill_study),
+                ("study-report.json", &study_report),
+            ] {
+                fs::write(
+                    capture.join(format!("{prefix}-{suffix}")),
+                    serde_json::to_vec(value).unwrap(),
+                )
+                .unwrap();
+            }
+            fs::write(capture.join(format!("{prefix}-preview.svg")), svg).unwrap();
+        }
+    }
 }
 
 #[test]
