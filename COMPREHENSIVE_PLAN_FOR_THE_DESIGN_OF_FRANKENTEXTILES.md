@@ -4906,6 +4906,44 @@ front/back case reaches its late passing value and reproduces complete native/WA
 and the selected cutting geometry. Independent measured garment validation and continuous/global
 optimality remain separate; this slice does not add guided adaptive or multi-variable authoring.
 
+### 25.151 Couple multiple guided alterations and source-vertex shaping
+
+The guided design workflow now authors one to three ordered variables with independently declared
+slash-and-spread or source-vertex movement sites. Exact source identities, per-variable values and
+movement multipliers reach the existing canonical alteration and selected-body fit engines. Editing,
+reordering and removing variables preserves the remaining drafts; adopting another pattern clears
+the complete alteration set before reuse.
+
+The browser serializes the bounded domain without expanding its Cartesian product. An explicit
+screening allowance can inspect a deterministic prefix of a larger domain while retaining unvisited
+coordinates as unknown. Every declared displacement is validated before dispatch, and both geometry
+and material baselines remain in the existing consumer reservation. Vertex choices are lazy and
+bounded independently so unrelated material workflows do not pay for a large geometry picker.
+
+This advances `ftx-ds2` using the existing shared search and cached fit results. Source-preserving
+request and browser lifecycle regressions establish authoring behavior; no additional numerical
+solver, inferred ease, empirical garment fit or global optimality claim is introduced.
+
+### 25.152 Guided adaptive discovery follows explicit fit and production objectives
+
+The same linked-variable editor now declares bounded adaptive domains, initial coordinates, polling
+steps and a unique-trial allowance. Fit-band discovery, one-goal consumer improvement and Pareto
+tradeoff discovery reach the existing selected-body search and comparison authorities. Grid lists
+and adaptive domains remain independently retained; no bounds, initial values or source data are
+inferred by switching methods.
+
+Consumer guidance names one exact frozen material or the original baseline. Removed or replaced
+sources require explicit reselection even when a name is reused. Canonical geometry and fit gates,
+ordinary comparison constraints, required consumers and source protocols retain their authority.
+The existing bounded coordinate and production caches supply retained results to final material
+comparisons without a browser optimizer or repeated retained consumer evaluation.
+
+Full retained design/material capacity is reserved independently of discovery trial count. Guided
+consumer discovery covers manufacturing and single scenarios; existing advanced requests retain
+named-case policies and restart controls. Source edits cancel obsolete work, exact inputs remain
+replayable, and reports distinguish valid incumbents from unexplored coordinates. This advances
+`ftx-ds2`; finite software search does not establish physical garment fit or a global optimum.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

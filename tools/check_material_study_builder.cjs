@@ -618,3 +618,234 @@ test('linked grids compose with stock and scenario consumers while fixed-study r
     for(const key of ['design_grid','design_fit'])assert.equal(Object.hasOwn(JSON.parse(fixed),key),false);
   }
 });
+
+const multiDesignInput = (changes = {}) => ({variables:[
+  {key:'ease',values:[-4,0,6],sites:[{piece:'front',axis:'x',at_mm:50,multiplier:0.5},
+    {piece:'lining',axis:'x',at_mm:50,multiplier:-0.5}]},
+  {key:'length',values:[-5,5],sites:[{piece:'front',axis:'y',at_mm:30,multiplier:1}]},
+  {key:'local shape',values:[0,2],sites:[{op:'move',piece:'front',vertex:'d',dx_multiplier:0,dy_multiplier:1},
+    {op:'move',piece:'lining',vertex:'d',dx_multiplier:1,dy_multiplier:-0.5}]}],
+  maxDesigns:3,fitSpec:linkedFitSource(),...changes});
+
+test('multiple linked variables preserve authored order, mixed site semantics and exact independent sources', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),target:{scope:'pieces',ids:['lining']},design:multiDesignInput()};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.equal(result.schema,'ftx-design-study/1');
+  assert.deepEqual(result.design_grid,{variables:input.design.variables.map(v=>({key:v.key,values_mm:v.values,sites:v.sites})),
+    max_designs:3,fit_screening:{max_candidates:12}});
+  for(const source of [input.design.fitSpec,input.candidates[0].selection])assert.ok(raw.includes(source));
+  assert.deepEqual(Object.keys(result.variants[1].changes.pieces),['lining']);
+  assert.equal(Object.hasOwn(result,'design_adaptive'),false);
+  const prefix=JSON.parse(build({...input,design:{...input.design,maxCandidates:4}}));
+  assert.equal(prefix.design_grid.fit_screening.max_candidates,4);
+  assert.deepEqual(prefix.design_grid.variables,result.design_grid.variables);
+});
+
+test('multi-variable screening uses the whole Cartesian domain or an explicitly retained bounded prefix', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const variable=(key,count)=>({key,values:Array.from({length:count},(_,i)=>i),
+    sites:[{piece:'front',axis:'x',at_mm:50,multiplier:1}]});
+  const design=multiDesignInput({variables:[variable('width',16),variable('length',16)]});
+  assert.equal(JSON.parse(build({...state(),design})).design_grid.fit_screening.max_candidates,256);
+  const large={...design,variables:[variable('width',64),variable('length',64),variable('shape',64)]};
+  assert.throws(()=>build({...state(),design:large}),/declare maxCandidates/);
+  for(const maxCandidates of [1,64,256]) {
+    const result=JSON.parse(build({...state(),design:{...large,maxCandidates}}));
+    assert.equal(result.design_grid.fit_screening.max_candidates,maxCandidates);
+    assert.equal(result.design_grid.variables.length,3);assert.equal(result.design_grid.variables[2].values_mm.length,64);
+  }
+  for(const maxCandidates of [0,-1,257,1.5,NaN,Infinity,'2',null,undefined]) {
+    assert.throws(()=>build({...state(),design:{...design,maxCandidates}}),/integer from 1 to 256/);
+  }
+  const small={...design,variables:[variable('width',1)],maxCandidates:256,maxDesigns:31};
+  const result=JSON.parse(build({...state(),design:small}));
+  assert.equal(result.design_grid.fit_screening.max_candidates,256,'An explicit allowance is not silently reduced to domain size');
+  assert.equal(result.design_grid.max_designs,31);
+});
+
+test('multi-variable admission refuses ambiguous shapes, duplicate keys and invalid source sites', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const good=multiDesignInput(),variable=good.variables[0],check=design=>build({...state(),design});
+  for(const variables of [[],null,[null],[,variable],Array(4).fill(variable),[variable,{...variable}]]) {
+    assert.throws(()=>check({...good,variables}));
+  }
+  for(const key of ['',null,1])assert.throws(()=>check({...good,variables:[{...variable,key}]}),/nonempty/);
+  for(const key of ['key','values','sites']) {
+    const v={...variable};delete v[key];assert.throws(()=>check({...good,variables:[v]}),/missing/);
+  }
+  for(const values of [[],[0,0],[1,0],[0,,2],['1'],[NaN],[Infinity],Array.from({length:65},(_,i)=>i)]) {
+    assert.throws(()=>check({...good,variables:[{...variable,values}]}),/strictly increasing/);
+  }
+  assert.throws(()=>check({...good,pieceIds:['front']}),/unsupported/);
+  const move=good.variables[2].sites[0];
+  for(const sites of [[],null,[null],[,move],[{...move,piece:'missing'}],[{...move,vertex:''}],
+    [{...move,op:'slash_spread'}],[{...move,dx_multiplier:0,dy_multiplier:-0}],
+    [{...move,dx_multiplier:NaN}],[{...move,dy_multiplier:'1'}],
+    [{...move,multiplier:1}],[{...variable.sites[0],vertex:'d'}]]) {
+    assert.throws(()=>check({...good,variables:[{...variable,sites}]}));
+  }
+  const sixteen=Array.from({length:16},(_,i)=>({...move,vertex:'v'+i}));
+  assert.equal(JSON.parse(check({...good,variables:[{...variable,sites:sixteen}]})).design_grid.variables[0].sites.length,16);
+  assert.throws(()=>check({...good,variables:[{...variable,sites:sixteen},good.variables[1]]}),/16 ordered/);
+});
+
+test('all linked site displacements are admitted even outside the chosen screening prefix', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const check=(values,site)=>build({...state(),design:multiDesignInput({variables:[{key:'shape',values,sites:[site]}],
+    maxCandidates:1,maxDesigns:1})});
+  const slash={piece:'front',axis:'x',at_mm:50,multiplier:2};
+  const move={op:'move',piece:'front',vertex:'d',dx_multiplier:0,dy_multiplier:2};
+  for(const site of [slash,move])assert.throws(()=>check([0,Number.MAX_VALUE],site),/overflows/);
+  assert.throws(()=>check([0,Number.MIN_VALUE],{...move,dy_multiplier:0.5}),/underflows/);
+  const result=JSON.parse(check([0,Number.MIN_VALUE],{...move,dy_multiplier:1}));
+  assert.equal(result.design_grid.variables[0].sites[0].dx_multiplier,0,'An explicitly zero vector component remains valid');
+  assert.equal(result.design_grid.variables[0].values_mm[1],Number.MIN_VALUE);
+});
+
+test('multi-variable row reservations include both baselines before material snapshots are inspected', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  let reads=0;
+  const candidates=Array.from({length:7},(_,i)=>({key:'choice-'+i,get selection(){reads++;throw Error('Unread snapshot');}}));
+  const design=multiDesignInput({maxDesigns:4,maxCandidates:1});
+  assert.throws(()=>build({...state(),candidates,design}),/32 expanded/);assert.equal(reads,0);
+  const real=candidates.map((c,i)=>({key:c.key,selection:selection('cloth-'+i,'abcdef0'[i])}));
+  const raw=build({...state(),candidates:real,design:{...design,maxDesigns:3}});
+  assert.equal(JSON.parse(raw).variants.length,8);
+  const long='v'.repeat(256*1024),oversize=multiDesignInput({variables:[
+    {key:'shape',values:[0],sites:[{op:'move',piece:'front',vertex:long,dx_multiplier:1,dy_multiplier:0}]}]});
+  assert.throws(()=>build({...state(),design:oversize}),/grid exceeds 256 KiB/);
+});
+
+const adaptiveDesignInput = (changes = {}) => ({mode:'adaptive',objective:'fit_band_violation_mm',
+  variables:multiDesignInput().variables.map((v,i)=>({key:v.key,boundsMm:[-10,40],initialMm:i,
+    initialStepMm:10,minimumStepMm:0.001,sites:v.sites})),maxEvaluations:96,maxDesigns:2,
+  fitSpec:linkedFitSource(),...changes});
+
+test('adaptive authoring preserves ordered mixed sites, original fit bytes and native discovery controls', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),target:{scope:'pieces',ids:['lining']},
+    cutting:' {"copies":1,"gap_mm":2.0,"edge_margin_mm":-0.0,"end_margin_mm":0.0}\r\n',design:adaptiveDesignInput()};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.equal(result.schema,'ftx-design-study/1');
+  assert.deepEqual(result.design_adaptive,{objective:'fit_band_violation_mm',
+    variables:input.design.variables.map(v=>({key:v.key,bounds_mm:v.boundsMm,initial_mm:v.initialMm,
+      initial_step_mm:v.initialStepMm,minimum_step_mm:v.minimumStepMm,sites:v.sites})),max_evaluations:96,max_designs:2});
+  for(const source of [input.design.fitSpec,input.cutting,input.candidates[0].selection])assert.ok(raw.includes(source));
+  assert.deepEqual(result.design_fit,{fit_spec:JSON.parse(input.design.fitSpec)});
+  assert.deepEqual(Object.keys(result.variants[1].changes.pieces),['lining']);
+  for(const key of ['design_grid','mode','material_key','case_key','restart_points_mm'])assert.equal(Object.hasOwn(result.design_adaptive,key),false);
+  assert.equal(Object.hasOwn(result,'design_grid'),false);
+});
+
+test('adaptive domains reject nonfinite spans, out-of-domain starts, invalid steps and lossy displacements', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const design=adaptiveDesignInput(),first=design.variables[0];
+  const check=changes=>build({...state(),design:{...design,variables:[{...first,...changes}]}});
+  for(const boundsMm of [[],[0],[0,1,2],[0,0],[2,1],[0,,1],[,1],[NaN,1],['0',1],[-Number.MAX_VALUE,Number.MAX_VALUE]]) {
+    assert.throws(()=>check({boundsMm}));
+  }
+  for(const initialMm of [-11,41,NaN,Infinity,'0',null])assert.throws(()=>check({initialMm}),/in-domain/);
+  for(const initialStepMm of [0,-1,51,NaN,Infinity,'10',null])assert.throws(()=>check({initialStepMm}),/step/);
+  for(const minimumStepMm of [0,-1,11,NaN,Infinity,'1',null])assert.throws(()=>check({minimumStepMm}),/step/);
+  assert.equal(JSON.parse(check({initialMm:-10,initialStepMm:50,minimumStepMm:50})).design_adaptive.variables[0].initial_mm,-10);
+  assert.equal(JSON.parse(check({initialMm:40})).design_adaptive.variables[0].initial_mm,40);
+  const move={op:'move',piece:'front',vertex:'d',dx_multiplier:0,dy_multiplier:2};
+  assert.throws(()=>check({boundsMm:[0,Number.MAX_VALUE],initialMm:0,sites:[move]}),/overflows/);
+  assert.throws(()=>check({boundsMm:[0,Number.MIN_VALUE*2],initialMm:Number.MIN_VALUE,
+    initialStepMm:Number.MIN_VALUE,minimumStepMm:Number.MIN_VALUE,sites:[{...move,dy_multiplier:0.5}]}),/underflows/);
+  for(const maxEvaluations of [0,257,1.5,NaN,Infinity,'1',null]) {
+    assert.throws(()=>build({...state(),design:{...design,maxEvaluations}}),/evaluation allowance.*integer/);
+  }
+  for(const maxEvaluations of [1,256])assert.equal(JSON.parse(build({...state(),design:{...design,maxEvaluations}})).design_adaptive.max_evaluations,maxEvaluations);
+});
+
+test('grid and adaptive inputs never mix policies and explicit grid mode preserves existing requests', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const grid=multiDesignInput(),adaptive=adaptiveDesignInput(),check=design=>build({...state(),design});
+  assert.equal(check({...grid,mode:'grid'}),check(grid));
+  for(const mode of ['',null,undefined,'adaptive_grid'])assert.throws(()=>check({...grid,mode}),/grid or adaptive/);
+  for(const extra of [{maxCandidates:2},{values:[0,1]},{caseKey:'winter'},{restartPointsMm:[]},
+    {after:[]},{maxEvaluations:undefined}])assert.throws(()=>check({...adaptive,...extra}));
+  for(const extra of [{objective:'fit_band_violation_mm'},{materialKey:'baseline'},{maxEvaluations:8}]) {
+    assert.throws(()=>check({...grid,...extra}),/unsupported/);
+  }
+  assert.throws(()=>check({...adaptive,variables:[{...adaptive.variables[0],values:[0,1]}]}),/unsupported/);
+  assert.throws(()=>check({...grid,variables:[{...grid.variables[0],boundsMm:[0,1]}]}),/unsupported/);
+  for(const key of ['objective','maxEvaluations','fitSpec','maxDesigns']) {
+    const missing={...adaptive};delete missing[key];assert.throws(()=>check(missing),/missing/);
+  }
+  for(const key of ['boundsMm','initialMm','initialStepMm','minimumStepMm']) {
+    const variable={...adaptive.variables[0]};delete variable[key];assert.throws(()=>check({...adaptive,variables:[variable]}),/missing/);
+  }
+  assert.throws(()=>check({...linkedDesignInput(),mode:'adaptive'}),/unsupported/);
+});
+
+test('adaptive consumer guidance nominates an exact material and retains ordinary scalar or Pareto comparisons', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const design=adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative'}),input={...state(),design};
+  for(const materialKey of ['baseline','alternative']) {
+    const result=JSON.parse(build({...input,design:{...design,materialKey}}));
+    assert.equal(result.design_adaptive.material_key,materialKey);
+    assert.deepEqual(result.comparison.objectives,input.objectives);
+  }
+  for(const materialKey of ['removed choice','',null,undefined,1])assert.throws(()=>build({...input,design:{...design,materialKey}}),/materialKey/);
+  const fitOnly=adaptiveDesignInput();
+  for(const materialKey of ['baseline',null,undefined])assert.throws(()=>build({...state(),design:{...fitOnly,materialKey}}),/does not accept/);
+  for(const objective of ['unknown','consumer_worst_case','consumer_matrix_pareto',null]) {
+    assert.throws(()=>build({...input,design:{...design,objective}}),/guidance/);
+  }
+  const objectives=[...input.objectives,{metric:'stock_mass_kg',direction:'minimize'}];
+  assert.throws(()=>build({...input,objectives}),/exactly one/);
+  assert.throws(()=>build({...input,objectives:[]}),/exactly one/);
+  assert.throws(()=>build({...input,design:{...design,objective:'consumer_pareto'}}),/2–16/);
+  assert.throws(()=>build({...input,objectives:Array(17).fill(input.objectives[0]),design:{...design,objective:'consumer_pareto'}}),/2–16/);
+  const pareto={...input,objectives,requiredConsumers:['cutting'],constraints:[{metric:'stock_mass_kg',maximum:0.1}],
+    design:{...design,objective:'consumer_pareto'}};
+  const result=JSON.parse(build(pareto));assert.equal(result.design_adaptive.objective,'consumer_pareto');
+  assert.deepEqual(result.comparison,{basis:'nominal',objectives,constraints:pareto.constraints,
+    required_consumers:['cutting'],allow_mixed_protocols:false});
+  assert.throws(()=>build({...pareto,objectives:[...objectives,{metric:'assembly_mass_kg',direction:'minimize'}]}),/assembly_mass/);
+  assert.equal(JSON.parse(build({...pareto,design:fitOnly})).comparison.objectives.length,2,'Fit discovery keeps independent downstream objectives');
+});
+
+test('adaptive retention reserves all declared output slots before snapshots and preserves independent probe allowance', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  let reads=0;
+  const candidates=Array.from({length:7},(_,i)=>({key:'choice-'+i,get selection(){reads++;throw Error('Unread snapshot');}}));
+  const design=adaptiveDesignInput({maxDesigns:4,maxEvaluations:1});
+  assert.throws(()=>build({...state(),candidates,design}),/32 expanded/);assert.equal(reads,0);
+  assert.throws(()=>build({...state(),design:{...design,maxDesigns:16}}),/32 expanded/);
+  const real=candidates.map((c,i)=>({key:c.key,selection:selection('cloth-'+i,'abcdef0'[i])}));
+  const result=JSON.parse(build({...state(),candidates:real,design:{...design,maxDesigns:3,maxEvaluations:256,
+    objective:'consumer_comparison',materialKey:'choice-6'}}));
+  assert.equal(result.design_adaptive.max_designs,3);assert.equal(result.design_adaptive.max_evaluations,256);
+  assert.equal(result.variants.length,8,'Probe allowance does not consume the32 retained design/material rows');
+  const long='v'.repeat(256*1024),variable={...design.variables[0],sites:[
+    {op:'move',piece:'front',vertex:long,dx_multiplier:1,dy_multiplier:0}]};
+  assert.throws(()=>build({...state(),design:{...design,variables:[variable]}}),/adaptive exceeds 256 KiB/);
+  for(const fitSpec of ['\ufeff'+linkedFitSource(),{},'{}',' '.repeat(256*1024)+linkedFitSource()]) {
+    assert.throws(()=>build({...state(),design:{...design,fitSpec}}));
+  }
+});
+
+test('adaptive guidance composes with finite jobs, source-reported mass and separately declared scenarios', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const mode of ['cutting','finiteStock','cuttingJob']) {
+    const input=mode==='cutting'?state():stockState(mode),context={drape:true,surface:true};
+    input.objectives.push({metric:'independent_surface_power_w',direction:'maximize'});
+    input.constraints=[{metric:'max_absolute_edge_strain_pct',maximum:8,basis:'nominal'}];input.requiredConsumers=['drape','surface'];
+    const fixed=build(input,context),design=adaptiveDesignInput({objective:'consumer_pareto',materialKey:'baseline'});
+    const raw=build({...input,design},context),result=JSON.parse(raw);
+    assert.equal(result.design_adaptive.material_key,'baseline');
+    if(typeof input[mode]==='string')assert.ok(raw.includes(input[mode]));
+    delete result.design_adaptive;delete result.design_fit;result.schema='ftx-material-study/1';
+    assert.deepEqual(result,JSON.parse(fixed));assert.throws(()=>build({...input,design}),/requested surface/);
+  }
+  const input={...state(),assemblyMass:mass(),basis:'reported_bounds',objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
+    constraints:[{metric:'stock_area_m2',maximum:0.25,basis:'nominal'}],requiredConsumers:['assembly_mass','cutting'],
+    design:adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative'})};
+  assert.equal(JSON.parse(build(input)).comparison.basis,'reported_bounds');
+  assert.throws(()=>build({...input,assemblyMass:mass(false)}),/complete inventory/);
+  assert.throws(()=>build({...input,constraints:[{metric:'stock_area_m2',maximum:0.25}]}),/assembly mass only/);
+});
