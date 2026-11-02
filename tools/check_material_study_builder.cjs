@@ -241,3 +241,109 @@ test('the combined manufacturing sources share the existing UTF-8 request budget
   const raw=JSON.stringify({metadata:'é'.repeat(3*1024*1024)});
   assert.throws(()=>build({...state(),sewing:raw,purchasing:{quotes:raw,market:raw}}),/16 MiB/);
 });
+
+const scenarioState = () => ({allowNoFit:true,
+  options:{spacing:12,sew_steps:12,drape_steps:36,step:1/24,max_settle_steps:0},
+  maxMeshPoints:32768,maxVertexFrames:64000000});
+const heatSource = () => ' {\r\n"schema":"ftx-steady-surface-conditions/1","boundaries":[{"inside_c":20.0,"outside_c":30.0,"inside_resistance_m2_k_w":-0.0,"outside_resistance_m2_k_w":1.0}]}\r\n';
+const selfContact = () => ({dhat:0.001,thickness:0.002,kappa:100,mu:0.4,eps_v:0.001});
+
+test('guided scenarios preserve exact fit and heat sources and only author declared numerical controls', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  const fit=' {\r\n"schema":"fabric-fit/1","points":[],"source":{"seed":18446744073709551615,"x":-0.0,"value":1.0,"label":"é 🧵"}}\r\n';
+  const input={...scenarioState(),allowNoFit:false,fitSpec:fit,surface:heatSource()};
+  input.options.self_contact=selfContact();const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.ok(raw.includes(fit));assert.ok(raw.includes(input.surface));
+  assert.equal(result.schema,'ftx-drape-scenario/1');assert.deepEqual(result.options,input.options);
+  assert.deepEqual(result.fit_spec,JSON.parse(fit));assert.deepEqual(result.surface,JSON.parse(input.surface));
+  assert.equal(result.max_mesh_points,32768);assert.equal(result.max_vertex_frames,64000000);
+  for(const key of ['motion','coverage','vapor_surface','allowNoFit','fitSpec'])assert.equal(Object.hasOwn(result,key),false);
+  const ordinary=JSON.parse(build(scenarioState()));assert.deepEqual(ordinary.fit_spec,{});
+  assert.equal(Object.hasOwn(ordinary,'surface'),false);assert.equal(Object.hasOwn(ordinary.options,'self_contact'),false);
+  const off={...scenarioState(),options:{...scenarioState().options,self_contact:null}};
+  assert.equal(JSON.parse(build(off)).options.self_contact,null);
+});
+
+test('guided scenarios require explicit no-fit consent and refuse wrong or malformed original sources', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  for(const allowNoFit of [false,undefined,null,'true',1])assert.throws(()=>build({...scenarioState(),allowNoFit}),/fit contract/);
+  const absent=scenarioState();delete absent.allowNoFit;assert.throws(()=>build(absent),/missing/);
+  for(const fitSpec of [{},'null','[]','{bad','\ufeff{}'])assert.throws(()=>build({...scenarioState(),fitSpec}));
+  for(const surface of [{},'null','[]','{bad','{}','{"schema":"wrong","boundaries":[{}]}',
+    '{"schema":"ftx-steady-surface-conditions/1","boundaries":[]}',
+    '{"schema":"ftx-steady-surface-conditions/1","boundaries":{}}','\ufeff'+heatSource()]) {
+    assert.throws(()=>build({...scenarioState(),surface}));
+  }
+  assert.throws(()=>build({...scenarioState(),unknown:true}),/unsupported/);
+  assert.throws(()=>build({...scenarioState(),options:{...scenarioState().options,guess:true}}),/unsupported/);
+});
+
+test('guided numerical and self-contact policies stay within the native scenario allocation limits', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  for(const key of ['spacing','step'])for(const value of [0,-1,NaN,Infinity,'1']) {
+    assert.throws(()=>build({...scenarioState(),options:{...scenarioState().options,[key]:value}}),/finite and positive/);
+  }
+  for(const key of ['sew_steps','drape_steps','max_settle_steps'])for(const value of [-1,257,1.5,NaN,Infinity,'1']) {
+    assert.throws(()=>build({...scenarioState(),options:{...scenarioState().options,[key]:value}}),/integer/);
+  }
+  assert.throws(()=>build({...scenarioState(),options:{spacing:10,sew_steps:5,drape_steps:0,step:0.001,max_settle_steps:200}}),/at least six/);
+  assert.throws(()=>build({...scenarioState(),options:{spacing:10,sew_steps:120,drape_steps:100,step:0.001,max_settle_steps:37}}),/exceed 256/);
+  assert.equal(JSON.parse(build({...scenarioState(),options:{spacing:10,sew_steps:120,drape_steps:100,step:0.001,max_settle_steps:36}})).options.max_settle_steps,36);
+  assert.throws(()=>build({...scenarioState(),options:{...scenarioState().options,step:Number.MAX_VALUE,max_settle_steps:1}}),/duration.*finite/);
+  for(const [key,values] of [['maxMeshPoints',[2,32769,3.5,'3',NaN]],['maxVertexFrames',[0,64000001,1.5,'1',Infinity]]]) {
+    for(const value of values)assert.throws(()=>build({...scenarioState(),[key]:value}),/budget.*integer/);
+  }
+  assert.equal(JSON.parse(build({...scenarioState(),maxMeshPoints:3,maxVertexFrames:1})).max_mesh_points,3);
+  for(const key of ['dhat','thickness','kappa','mu','eps_v'])for(const value of [-1,NaN,Infinity,'1']) {
+    assert.throws(()=>build({...scenarioState(),options:{...scenarioState().options,self_contact:{...selfContact(),[key]:value}}}),/finite/);
+  }
+  for(const key of ['dhat','kappa','eps_v'])assert.throws(()=>build({...scenarioState(),options:{...scenarioState().options,self_contact:{...selfContact(),[key]:0}}}),/positive/);
+  for(const self_contact of [{},false,undefined,{...selfContact(),unknown:1}]) {
+    assert.throws(()=>build({...scenarioState(),options:{...scenarioState().options,self_contact}}));
+  }
+  const noFriction={...scenarioState(),options:{...scenarioState().options,self_contact:{...selfContact(),thickness:0,mu:0}}};
+  assert.equal(JSON.parse(build(noFriction)).options.self_contact.mu,0);
+});
+
+test('original scenario sources share a UTF-8 request budget before combined serialization', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  const fitSpec=JSON.stringify({schema:'fabric-fit/1',source:'é'.repeat(4*1024*1024)});
+  const surface=heatSource().replace('"boundaries":[','"boundaries":['+' '.repeat(9*1024*1024));
+  assert.throws(()=>build({...scenarioState(),fitSpec,surface}),/16 MiB/);
+});
+
+test('scenario-only comparisons retain signed heat direction and cannot leak into manufacturing mode', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input=state();delete input.cutting;
+  input.objectives=[{metric:'independent_surface_power_w',direction:'maximize'},
+    {metric:'simulated_cloth_mass_kg',direction:'minimize'},{metric:'max_absolute_edge_strain_pct',direction:'minimize'}];
+  input.constraints=[{metric:'independent_surface_power_w',minimum:-50,maximum:-1},
+    {metric:'max_absolute_edge_strain_pct',maximum:8}];input.requiredConsumers=['drape','surface'];
+  const before=JSON.stringify(input),raw=build(input,{drape:true,surface:true}),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(result.comparison.objectives,input.objectives);
+  assert.deepEqual(result.comparison.constraints,input.constraints);assert.deepEqual(result.comparison.required_consumers,input.requiredConsumers);
+  for(const key of ['cutting','assembly_mass','sewing','scenario','surface','drape'])assert.equal(Object.hasOwn(result,key),false);
+  assert.throws(()=>build(input),/Choose cutting/);
+  assert.throws(()=>build({...input,cutting:cutting()}),/requested surface/);
+  assert.throws(()=>build(input,{drape:true,surface:false}),/requested surface/);
+  for(const context of [null,{},true,{drape:true},{drape:false,surface:false},{drape:false,surface:true},
+    {drape:'true',surface:false},{drape:true,surface:'false'},{drape:true,surface:false,unknown:true}]) {
+    assert.throws(()=>build(state(),context));
+  }
+  const drapeOnly={...input,objectives:[{metric:'max_absolute_edge_strain_pct',direction:'minimize'}],constraints:[],requiredConsumers:['drape']};
+  assert.deepEqual(JSON.parse(build(drapeOnly,{drape:true,surface:false})).comparison.required_consumers,['drape']);
+});
+
+test('bounded complete mass can use explicit nominal scenario guards without inventing scenario ranges', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),assemblyMass:mass(),basis:'reported_bounds',
+    objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
+    constraints:[{metric:'independent_surface_power_w',minimum:-10,maximum:10,basis:'nominal'},
+      {metric:'max_absolute_edge_strain_pct',maximum:8,basis:'nominal'}],requiredConsumers:['drape','surface']};
+  const context={drape:true,surface:true},result=JSON.parse(build(input,context));
+  assert.deepEqual(result.comparison.constraints,input.constraints);
+  assert.throws(()=>build({...input,constraints:[{metric:'independent_surface_power_w',maximum:10}]},context),/assembly mass only/);
+  for(const metric of ['simulated_cloth_mass_kg','max_absolute_edge_strain_pct','independent_surface_power_w']) {
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/assembly mass only/);
+  }
+});

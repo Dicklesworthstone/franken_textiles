@@ -8,6 +8,8 @@ const METRIC_CONSUMERS = {
   sewing_modeled_production_seconds: "sewing", sewing_parallel_makespan_seconds: "sewing",
   selected_observed_order_cost: "purchasing", thread_observed_order_cost: "sewing_purchasing",
   cut_and_sew_selected_order_cost: "cut_and_sew_purchasing", thread_required_length_m: "sewing_consumables",
+  simulated_cloth_mass_kg: "drape", max_absolute_edge_strain_pct: "drape",
+  independent_surface_power_w: "surface",
 };
 
 function object(value, allowed, required, label) {
@@ -64,6 +66,66 @@ function sourceObject(raw, label) {
   return value;
 }
 
+/** Author one fresh static drape; source files remain verbatim and Rust owns numerical admission. */
+export function buildMaterialScenarioRequest(state) {
+  object(state, ["fitSpec", "allowNoFit", "options", "maxMeshPoints", "maxVertexFrames", "surface"],
+    ["allowNoFit", "options", "maxMeshPoints", "maxVertexFrames"], "Guided scenario");
+  if (typeof state.allowNoFit !== "boolean") throw Error("Declare the numerical-only study without a fit contract explicitly.");
+  let fitSpec = "{}";
+  if (own(state, "fitSpec")) {
+    sourceObject(state.fitSpec, "Fit contract"); fitSpec = state.fitSpec;
+  } else if (!state.allowNoFit) throw Error("Choose a fit contract or explicitly allow a numerical-only study without one.");
+  const fields = ["spacing", "sew_steps", "drape_steps", "step", "max_settle_steps"];
+  const options = object(state.options, [...fields, "self_contact"], fields, "Drape options");
+  for (const key of ["spacing", "step"]) {
+    if (typeof options[key] !== "number" || !Number.isFinite(options[key]) || options[key] <= 0) {
+      throw Error("Drape " + key + " must be finite and positive.");
+    }
+  }
+  for (const key of ["sew_steps", "drape_steps", "max_settle_steps"]) {
+    if (!Number.isSafeInteger(options[key]) || options[key] < 0 || options[key] > 256) {
+      throw Error("Drape " + key + " must be an integer from 0 to 256.");
+    }
+  }
+  if (options.sew_steps + options.drape_steps < 6) throw Error("Request at least six sewing and gravity steps; the settling tail does not supply the initial metrics window.");
+  if (options.sew_steps + options.drape_steps + options.max_settle_steps > 256) {
+    throw Error("Combined sewing, gravity and settling steps must not exceed 256.");
+  }
+  if (options.max_settle_steps > 0 && !Number.isFinite((options.drape_steps + options.max_settle_steps) * options.step)) {
+    throw Error("The declared gravity and settling duration must be finite.");
+  }
+  if (own(options, "self_contact") && options.self_contact !== null) {
+    const keys = ["dhat", "thickness", "kappa", "mu", "eps_v"];
+    const contact = object(options.self_contact, keys, keys, "Self-contact policy");
+    for (const key of keys) {
+      nonnegative(contact[key], "Self-contact " + key);
+      if (!["thickness", "mu"].includes(key) && contact[key] === 0) throw Error("Self-contact " + key + " must be positive.");
+    }
+  }
+  if (!Number.isSafeInteger(state.maxMeshPoints) || state.maxMeshPoints < 3 || state.maxMeshPoints > 32768) {
+    throw Error("Scenario mesh budget must be an integer from 3 to 32768.");
+  }
+  if (!Number.isSafeInteger(state.maxVertexFrames) || state.maxVertexFrames < 1 || state.maxVertexFrames > 64000000) {
+    throw Error("Scenario vertex-frame budget must be an integer from 1 to 64000000.");
+  }
+  if (own(state, "surface")) {
+    const surface = sourceObject(state.surface, "Independent-sheet heat conditions");
+    if (surface.schema !== "ftx-steady-surface-conditions/1" || !Array.isArray(surface.boundaries) ||
+      !surface.boundaries.length || surface.boundaries.length > 65536) {
+      throw Error("Supply original ftx-steady-surface-conditions/1 heat conditions with 1–65536 boundaries.");
+    }
+  }
+  const parts = ['{"schema":"ftx-drape-scenario/1","options":', JSON.stringify(options), ',"fit_spec":', fitSpec,
+    ',"max_mesh_points":', String(state.maxMeshPoints), ',"max_vertex_frames":', String(state.maxVertexFrames),
+    ...(own(state, "surface") ? [',"surface":', state.surface] : []), '}'];
+  let size = 0;
+  for (const part of parts) {
+    size += bytes(part);
+    if (size > MAX_REQUEST_BYTES) throw Error("Guided scenario request exceeds 16 MiB.");
+  }
+  return parts.join("");
+}
+
 /**
  * Author one fixed-pattern request with an unchanged baseline and 1–7 frozen choices.
  * `pieceIds` are the current pattern's source IDs. `target` is default or named pieces.
@@ -73,8 +135,16 @@ function sourceObject(raw, label) {
  * request (original JSON text for sourced extras, or an authored object with no extras).
  * Objectives, inclusive constraints and required consumers are explicit; no completeness or
  * protocol consent is inferred. Original source text is embedded verbatim, including locked numbers.
+ * Optional scenario context describes the separately dispatched drape/heat request, is never
+ * serialized into the study, and does not enable scenario consumers in manufacturing-only calls.
  */
-export function buildMaterialStudyRequest(state) {
+export function buildMaterialStudyRequest(state, scenario) {
+  if (scenario !== undefined) {
+    object(scenario, ["drape", "surface"], ["drape", "surface"], "Scenario comparison context");
+    if (scenario.drape !== true || typeof scenario.surface !== "boolean") {
+      throw Error("Scenario comparison needs explicit drape: true and a boolean surface request.");
+    }
+  }
   object(state, ["candidates", "target", "pieceIds", "cutting", "assemblyMass", "objectives", "basis",
     "sewing", "sewingSelection", "purchasing", "cutAndSewPurchasing", "constraints", "requiredConsumers"],
     ["candidates", "target", "pieceIds", "objectives", "basis"], "Guided study");
@@ -142,13 +212,14 @@ export function buildMaterialStudyRequest(state) {
     }
     massJson = raw ? state.assemblyMass : JSON.stringify(mass);
   }
-  if (!cutting && !mass && !sewingOptions) throw Error("Choose cutting, sewing or assembly mass to evaluate.");
+  if (!cutting && !mass && !sewingOptions && !scenario) throw Error("Choose cutting, sewing or assembly mass to evaluate.");
   const consumers = {
     cutting: !!cutting, cutting_program: !!cutting?.program,
     sewing: !!sewingOptions, purchasing: !!purchasing,
     sewing_consumables: !!sewingOptions?.consumables,
     sewing_purchasing: !!sewingOptions?.consumables?.purchasing,
     cut_and_sew_purchasing: combinedPurchasing, assembly_mass: !!mass,
+    drape: !!scenario, surface: scenario?.surface === true,
   };
   const requireConsumer = consumer => {
     if (typeof consumer !== "string" || !own(consumers, consumer)) throw Error(`Unsupported guided consumer: ${consumer}.`);
@@ -161,7 +232,7 @@ export function buildMaterialStudyRequest(state) {
       throw Error("Assembly-mass comparison requires an explicit complete inventory declaration.");
     }
     if (basis === "reported_bounds" && key !== "assembly_mass_kg") {
-      throw Error("Guided reported-bound comparison supports assembly mass only; manufacturing time, stock and cost have no propagated source range. Use an explicit nominal basis for those guards.");
+      throw Error("Guided reported-bound comparison supports assembly mass only; use an explicit nominal basis for other guided metrics and guards.");
     }
   };
   if (!Array.isArray(state.objectives) || !state.objectives.length || state.objectives.length > 16) throw Error("Choose 1–16 comparison objectives.");
