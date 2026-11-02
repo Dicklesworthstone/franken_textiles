@@ -417,6 +417,24 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
                         qualified["cutting"]["result"]["program"],
                         portable["program"]
                     );
+                    if let Some(capture) = std::env::var_os("FTX_KNIFE_PROGRAM_REPLAY") {
+                        let capture = PathBuf::from(capture);
+                        let prefix = if accelerated {
+                            "motion-loading"
+                        } else {
+                            "loading"
+                        };
+                        for (suffix, value) in [
+                            ("study.json", &loaded_study),
+                            ("study-report.json", &study_result),
+                        ] {
+                            fs::write(
+                                capture.join(format!("{prefix}-{suffix}")),
+                                serde_json::to_vec(value).unwrap(),
+                            )
+                            .unwrap();
+                        }
+                    }
                 }
                 if let Some(capture) = std::env::var_os("FTX_KNIFE_PROGRAM_REPLAY") {
                     let capture = PathBuf::from(capture);

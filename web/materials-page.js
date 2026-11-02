@@ -529,7 +529,8 @@ function objectiveComparison(parent, r) {
     const cutting = document.createElement("p");
     cutting.textContent = "Cutting objectives use complete selected knife traversals qualified for the exact textile and machine. " +
       "Roll and finite-stock objectives retain their separate physical scope; only a complete cutting job combines its disjoint routes. " +
-      "Modeled time covers declared constant-rate cutting, raised travel and lift/lower phases. It excludes loading, acceleration and inspection. " +
+      "Modeled time uses each program's retained constant-speed or exact-stop acceleration model, together with lift/lower phases. " +
+      "Exact-stop timing includes acceleration and deceleration at every retained vertex, including detours and requested returns. Loading, blade turning and inspection remain outside these models. " +
       "An incomplete or refused process leaves these nominal metrics unknown while independent geometry and purchasing remain available. " +
       "A complete selected traversal need not be shortest; these objectives do not establish production cycle time, physical cut quality or machine authorization.";
     parent.append(cutting);
@@ -1893,6 +1894,13 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
     }
     return;
   }
+  const profile = program.motion_profile;
+  const exactStop = profile?.model === "trapezoidal_exact_stop/1";
+  if (profile) {
+    const timing = table(parent, `${label}: retained knife timing model`,
+      ["Timing model", "Cutting acceleration (mm/s²)", "Raised-travel acceleration (mm/s²)"]);
+    cells(timing, [profile.model, metric(profile.cutting_acceleration_mm_s2), metric(profile.travel_acceleration_mm_s2)]);
+  }
   const t = table(parent, `${label}: material-qualified knife paths`,
     ["Marker", "Process observation", "Cut paths", "Cut length (mm)", "Raised travel (mm)",
       "Cutting (s)", "Travel (s)", "Lift / lower (s)", "Modeled path time (s)", "Travel ordering"]);
@@ -1901,7 +1909,7 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
     cells(t, [String(marker.marker + 1), marker.qualification, metric(route?.runs?.length),
       metric(route?.cut_length_mm), metric(route?.travel_length_mm), metric(route?.cutting_seconds),
       metric(route?.travel_seconds), metric(route?.lift_lower_seconds), metric(route?.modeled_path_seconds),
-      marker.improved ? "Shorter complete traversal" :
+      marker.improved ? (exactStop ? "Faster complete traversal" : "Shorter complete traversal") :
         program.travel_routing ? "Complete authored cut order" : "Complete authored traversal"]);
   }
   if (program.travel_routing) {
@@ -1950,7 +1958,12 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
   const note = document.createElement("p");
   note.textContent = "Internal cuts finish before exterior pieces are released. Every path retains its authored geometry and direction; " +
     "the process observation is locked to the exact textile and full machine configuration. " +
-    "Times cover declared constant-rate cutting, raised travel and lift/lower phases. Loading, acceleration, blade turning and inspection are outside this model. " +
+    (exactStop ?
+      "Times use the retained acceleration limits with a complete stop at every cutting and raised-travel vertex, including collinear vertices, detours and requested returns. " +
+      "Each segment has a triangular or trapezoidal speed profile; the qualified feed and travel rates are speed limits. No vertices are merged and no corner blending is inferred. " +
+      "Lift/lower phases remain separate. Loading, blade turning and inspection are outside this model. " :
+      profile ? "Timing assumptions are retained in the exact source report below. " :
+      "Times cover declared constant-rate cutting, raised travel and lift/lower phases. Loading, acceleration, blade turning and inspection are outside this model. ") +
     (program.budget_exhausted ? "The ordering budget ended; complete authored traversals remain available. " : "") +
     "This reviewable plan does not establish physical cut quality, an optimal route or permission to run a machine.";
   parent.append(note);

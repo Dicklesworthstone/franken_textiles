@@ -5832,6 +5832,65 @@ test('qualified knife programs retain exact process scope and independent refusa
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
+test('exact-stop knife timing displays retained accelerations and producer totals without changing replay bytes', async () => {
+  for (const op of ['cut','stock','study','scenario']) {
+    const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);
+    const profile={model:'trapezoidal_exact_stop/1',cutting_acceleration_mm_s2:2500,travel_acceleration_mm_s2:1250};
+    const options=` {"program":{"machine":{"motion_profile":${JSON.stringify(profile)}}}}\n`;
+    p.select('cutOptions',options);p.select('stockRequest',options);
+    // Display/transport double: the Rust integration tests establish these timing laws. The page
+    // must show the retained totals and profile, never recompute time from length and speed.
+    const selected={runs:[{path:{placement:0,internal_cut:0}},{path:{placement:0}}],
+      cut_length_mm:480,travel_length_mm:120,cutting_seconds:6.25,travel_seconds:1.75,
+      lift_lower_seconds:0.4,modeled_path_seconds:8.4};
+    const program={schema:op==='stock'?'ftx-knife-cut-program/2':'ftx-knife-cut-program/1',
+      machine_sha256:'<machine and acceleration source lock>',motion_profile:profile,
+      markers:[{marker:0,qualification:'<acceleration-qualified process>',selected,baseline:selected,improved:true}],
+      physical_cutting_validated:false,hardware_execution_authorized:false};
+    const plan=op==='stock'?{schema:'ftx-finite-stock-plan/1',used_stock_count:1,markers:[{placements:[{}]}],program}:
+      {schema:'ftx-roll-cut-plan/1',rolls:[{}],program};
+    const row=studyRow('accelerated');row.cutting=outcome(plan);
+    const study=studyReport([row]);
+    const standalone=op==='cut'||op==='stock';
+    const report=standalone?plan:op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const label=op==='cut'?'Cutting plan':op==='stock'?'Finite-stock plan':'accelerated';
+    await p.e[op].onclick();
+    if(op==='cut')assert.equal(p.current().messages.at(-1).options,options);
+    const raw=` ${JSON.stringify(report).replace('"cutting_acceleration_mm_s2":2500','"cutting_acceleration_mm_s2":2500.0')}\n`;
+    p.emit(report,[{name:'accelerated-knife.json',text:raw,mime:'application/json'}],raw);
+    const s=section(p,standalone?op:op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+    assert.deepEqual(plain(table(`${label}: retained knife timing model`).children[2].children.map(n=>n.textContent)),
+      ['trapezoidal_exact_stop/1','2500','1250']);
+    assert.deepEqual(plain(table(`${label}: material-qualified knife paths`).children[2].children.slice(5).map(n=>n.textContent)),
+      ['6.25','1.75','0.4','8.4','Faster complete traversal']);
+    assert.match(visibleText(s),/complete stop at every cutting and raised-travel vertex, including collinear vertices, detours and requested returns/);
+    assert.match(visibleText(s),/No vertices are merged and no corner blending is inferred/);
+    assert.doesNotMatch(visibleText(s),/Loading, acceleration, blade turning and inspection are outside/);
+    assert.match(visibleText(s),/does not establish physical cut quality, an optimal route or permission to run a machine/);
+    const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===`${label}: exact knife paths, material locks and process limits (display only)`);
+    source.open=true;source.handlers.toggle();
+    assert.match(visibleText(source),/<machine and acceleration source lock>/);
+    assert.match(visibleText(source),/"motion_profile"/);
+    const download=descendants(s).find(n=>n.download==='accelerated-knife.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+
+    delete program.motion_profile;
+    await p.e[op].onclick();p.emit(report);
+    assert.equal(table(`${label}: retained knife timing model`),undefined);
+    assert.match(visibleText(s),/Shorter complete traversal/);
+    assert.match(visibleText(s),/Loading, acceleration, blade turning and inspection are outside this model/);
+    assert.doesNotMatch(visibleText(s),/trapezoidal_exact_stop|complete stop at every/);
+    assert.equal(p.live.has(download.href),false);
+    delete plan.program;plan.program_refusal={message:'Acceleration qualification does not match the changed machine'};
+    await p.e[op].onclick();p.emit(report);
+    assert.equal(table(`${label}: material-qualified knife paths`),undefined);
+    assert.equal(table(`${label}: retained knife timing model`),undefined);
+    assert.match(visibleText(s),/Acceleration qualification does not match the changed machine/);
+  }
+});
+
 test('fixture detours retain actual travel totals, intermediate points and source downloads until inputs or admission change', async () => {
   for (const op of ['cut','stock','study']) {
     const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);
@@ -9263,7 +9322,7 @@ test('compiled WASM outfit import reaches exact material binding and complete as
   });
 
 test('compiled WASM qualified knife paths and changed-material process refusals replay native cut and study captures',
-  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_KNIFE_PROGRAM_REPLAY},async()=>{
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_KNIFE_PROGRAM_REPLAY},async t=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
@@ -9320,6 +9379,60 @@ test('compiled WASM qualified knife paths and changed-material process refusals 
     assert.ok(qualified.metrics.stock_area_m2>0);
     assert.equal(changed.metrics.stock_area_m2,qualified.metrics.stock_area_m2);
     assert.equal(changed.cutting.result.rolls.length,qualified.cutting.result.rolls.length);
+    for (const [index,prefix] of ['detour','loading','motion-detour','motion-loading'].entries()) {
+      const captured=name=>fs.existsSync(path.join(process.env.FTX_KNIFE_PROGRAM_REPLAY,`${prefix}-${name}`));
+      await t.test(`${prefix}: complete native knife report and SVG`,
+        {skip:!captured('options.json')&&`${prefix} native captures not supplied`},async()=>{
+          const options=input(`${prefix}-options.json`),request=JSON.parse(options);
+          const replay=await w.send({type:'cut',request:260+index*4,pattern,options});
+          assert.equal(replay.type,'result',replay.message);
+          assert.deepEqual(replay.result,JSON.parse(input(`${prefix}-report.json`)));
+          assert.equal(replay.picture,input(`${prefix}-preview.svg`));
+          assert.equal(replay.files.find(file=>file.name==='roll-0.svg').text,replay.picture);
+          assert.equal(replay.files.find(file=>file.name==='cut-plan.json').text,ftx.cut_plan(pattern,options));
+          assert.deepEqual(replay.result.rolls,cut.result.rolls);
+          const program=replay.result.program;
+          assert.equal(program.hardware_execution_authorized,false);
+          assert.equal(program.physical_cutting_validated,false);
+          if(prefix.startsWith('motion-')) {
+            assert.deepEqual(program.motion_profile,request.program.machine.motion_profile);
+            assert.equal(program.motion_profile.model,'trapezoidal_exact_stop/1');
+            for(const marker of program.markers) {
+              const id=replay.result.rolls[marker.marker].material.authored.id;
+              const expected={shell:18,knit:12}[id];
+              assert.notEqual(expected,undefined,`Unknown independent cutting-time fixture ${id}`);
+              assert.ok(Math.abs(marker.selected.cutting_seconds-expected)<1e-10);
+              assert.ok(marker.selected.modeled_path_seconds<=marker.baseline.modeled_path_seconds);
+              const q=request.program.qualifications.find(row=>row.id===marker.qualification);
+              assert.equal(q.machine_sha256,program.machine_sha256);
+            }
+            const edited=JSON.parse(options);
+            edited.program.machine.motion_profile.travel_acceleration_mm_s2*=2;
+            const refused=await w.send({type:'cut',request:261+index*4,pattern,options:JSON.stringify(edited)});
+            assert.equal(refused.type,'result',refused.message);
+            assert.equal(refused.result.program,undefined);
+            assert.match(refused.result.program_refusal.message,/qualification/);
+            assert.deepEqual(refused.result.rolls,replay.result.rolls);
+          } else assert.equal(program.motion_profile,undefined);
+        });
+      if(prefix.endsWith('loading')) {
+        await t.test(`${prefix}: complete native material-study replay`,
+          {skip:!captured('study.json')&&`${prefix} native study captures not supplied`},async()=>{
+            const studyRequest=input(`${prefix}-study.json`);
+            const replay=await w.send({type:'study',request:262+index*4,pattern,studyRequest});
+            assert.equal(replay.type,'result',replay.message);
+            assert.deepEqual(replay.result,JSON.parse(input(`${prefix}-study-report.json`)));
+            assert.equal(replay.files.find(file=>file.name==='material-study.json').text,ftx.material_study(pattern,studyRequest));
+            assert.equal(replay.files.find(file=>file.name==='study-request.json').text,studyRequest);
+            const qualified=replay.result.alternatives.find(row=>row.key==='qualified');
+            const changed=replay.result.alternatives.find(row=>row.key==='changed-finish');
+            assert.deepEqual(qualified.cutting.result.program,JSON.parse(input(`${prefix}-report.json`)).program);
+            assert.equal(changed.cutting.result.program,undefined);
+            assert.match(changed.cutting.result.program_refusal.message,/qualification/);
+            assert.equal(changed.metrics.stock_area_m2,qualified.metrics.stock_area_m2);
+          });
+      }
+    }
   });
 
 test('compiled WASM finite and mixed knife programs replay exact native stock inventory and process refusals',
