@@ -402,6 +402,8 @@ to replace those assignments. Current section-2 preview edits are not part of th
 <fieldset><legend>Fit-driven linked alterations</legend>
 <label><input id="guidedDesign" type="checkbox"> Search linked alterations against the selected body</label>
 <div id="guidedDesignControls" hidden>
+<label>Search method <select id="guidedDesignMode"><option value="grid">Screen listed combinations</option>
+<option value="adaptive">Discover values within declared bounds</option></select></label>
 <div id="guidedDesignVariables" aria-label="Ordered alteration variables"></div>
 <button id="guidedDesignAdd" type="button" disabled>Add another variable</button>
 <p class="note">Use up to three variables for coupled changes such as width, length and local shaping. Select a variable to edit it;
@@ -432,22 +434,55 @@ aria-label="Source vertices for linked movement"></select></label>
 <p class="note">Choose exact piece / vertex pairs. At least one movement component must be nonzero. Relative curves follow their
 endpoints; independent marks stay fixed. Canonical outline, seam and fit checks still decide whether a design is usable.</p>
 </div>
+<div id="guidedDesignGridDomain">
 <label>Listed variable values, mm before the site multipliers
 <input id="guidedDesignValues" type="text" maxlength="4096" placeholder="Enter comma-separated values in increasing order"></label>
 <p class="note">Declare 1–64 finite, strictly increasing values per variable. Each site receives its own movement from that value;
 this is not a total garment circumference adjustment. Up to 16 sites are allowed across all variables.</p>
+</div>
+<div id="guidedDesignAdaptiveDomain" hidden>
 <div class="study-fields">
-<label>Maximum first passing altered designs <input id="guidedDesignMax" type="number" min="1" max="31" step="1" value="1"></label>
-<label>Maximum grid points to screen <input id="guidedDesignGridBudget" type="number" min="1" max="256" step="1"
+<label>Lower bound (mm) <input id="guidedDesignLower" type="number" step="any"></label>
+<label>Upper bound (mm) <input id="guidedDesignUpper" type="number" step="any"></label>
+<label>Initial value (mm) <input id="guidedDesignInitial" type="number" step="any"></label>
+<label>Initial polling step (mm) <input id="guidedDesignInitialStep" type="number" step="any"></label>
+<label>Minimum polling step (mm) <input id="guidedDesignMinimumStep" type="number" step="any"></label>
+</div>
+<p class="note">Declare a finite domain and an initial value inside it. Both steps must be positive, with the minimum no larger
+than the initial step and the initial step no larger than the domain span. Values are millimetres before each site's multipliers.
+Grid lists and adaptive domains remain separate when switching methods.</p>
+</div>
+<div class="study-fields">
+<label>Maximum retained altered designs <input id="guidedDesignMax" type="number" min="1" max="31" step="1" value="1"></label>
+<label id="guidedDesignGridBudgetField">Maximum grid points to screen <input id="guidedDesignGridBudget" type="number" min="1" max="256" step="1"
 placeholder="All combinations, up to 256"></label>
 </div>
-<p class="note">Blank screening allowance requests every listed combination and refuses a domain above 256 points. An explicit allowance
-screens a deterministic prefix without dropping the rest of the declared domain; unvisited combinations remain unknown.</p>
+<p id="guidedDesignGridNote" class="note">Blank screening allowance requests every listed combination and refuses a domain above 256 points.
+An explicit allowance screens a deterministic prefix; unvisited combinations remain unknown. The retained-design cap takes the first
+qualified combinations in grid order before downstream comparison.</p>
+<div id="guidedDesignAdaptivePolicy" hidden>
+<label>Guide discovery by <select id="guidedDesignObjective">
+<option value="fit_band_violation_mm">Satisfying the declared fit bands</option>
+<option value="consumer_comparison">Improving one comparison goal</option>
+<option value="consumer_pareto">Exploring tradeoffs across comparison goals</option>
+</select></label>
+<label id="guidedDesignMaterialField">Material whose outcomes guide discovery <select id="guidedDesignMaterial">
+<option value="">Choose an explicit material</option></select></label>
+<p id="guidedDesignMaterialStatus" class="note" role="status" hidden></p>
+<label>Maximum unique discovery trials <input id="guidedDesignEvaluations" type="number" min="1" max="256" step="1"></label>
+<p class="note">Fit discovery uses the declared body-fit bands and stops when enough qualifying designs are retained.
+Single-goal guidance requires exactly one comparison goal below; tradeoff guidance requires at least two. Both require an explicit
+material choice and retain ordinary limits, required results and source qualifications. Selected geometries are subsequently
+compared with every shortlisted material, but those other materials do not guide discovery.</p>
+<p class="note">Adaptive search polls bounded coordinates using the existing engine and reuses retained evaluated results.
+The trial allowance and smallest steps limit discovery; successful results remain conditional on explored coordinates.
+Manufacturing and a single scenario are supported here. Use a complete study request for guidance across named scenarios.</p>
+</div>
 <p>Load the original garment fit contract in <a href="#materialConsumers">section 3</a>, with 1–32 explicit points of measure
 and a maximum file size of 256 KiB. Select the local body model and a body source below. Both comparison actions use those
 targets to screen geometry and fit before evaluating each retained design with every material choice.</p>
-<p class="note">The passing-design cap retains the first qualified combinations in grid order. It does not establish a cost minimum or global optimum.
-The unchanged geometry is additional to the cap; the complete geometry × material comparison is limited to 32 rows.
+<p class="note">The unchanged geometry is additional to the retained-design cap; the complete geometry × material comparison is limited to 32 rows.
+Adaptive discovery reserves that complete retained capacity even when the trial allowance is smaller. No mode establishes a global optimum.
 Rejected, passing-but-unselected and unvisited candidates stay visible in the report. Computed model compliance does not establish
 fit on a real wearer. Loading or adopting another pattern clears these alteration settings so spreads are not applied again.</p>
 </div>

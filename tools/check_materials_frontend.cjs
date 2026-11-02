@@ -6599,6 +6599,183 @@ test('guided coupled drafts remain separate from exact advanced study files',asy
   assert.equal(sent.studyRequest.includes(advanced),false);
 });
 
+function guidedAdaptiveDomain(p,[lower,upper,initial,initialStep,minimumStep]) {
+  for(const [id,value] of [['guidedDesignLower',lower],['guidedDesignUpper',upper],['guidedDesignInitial',initial],
+    ['guidedDesignInitialStep',initialStep],['guidedDesignMinimumStep',minimumStep]])guidedDesignField(p,id,String(value));
+}
+async function adaptiveDesignSetup(coupled=true) {
+  const setup=coupled?await coupledDesignSetup():await guidedDesignSetup(coupledDesignPattern),p=setup.p;
+  guidedDesignField(p,'guidedDesignMode','adaptive','change');
+  if(coupled) {
+    guidedAdaptiveDomain(p,[-2,2,0,1,0.125]);guidedDesignAction(p,'Edit length');
+    guidedAdaptiveDomain(p,[0,40,10,10,0.5]);guidedDesignAction(p,'Edit taper');
+  } else guidedAdaptiveDomain(p,[0,40,10,10,0.5]);
+  guidedDesignField(p,'guidedDesignEvaluations','24');return setup;
+}
+
+test('guided adaptive discovery preserves coupled domains, source identity and complete retention reservations',async()=>{
+  const {p,fit,body}=await adaptiveDesignSetup();guidedDesignField(p,'guidedDesignMax','2');
+  guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');
+  guidedDesignField(p,'guidedDesignMaterial','material-1','change');
+  guidedDesignField(p,'guidedDesignObjective','fit_band_violation_mm','change');
+  p.e.guidedStockMassGoal.checked=true;p.e.guidedStockMassGoal.handlers.change();
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);assert.equal(sent.onBody,true);
+  assert.equal(sent.pattern,coupledDesignPattern);assert.equal(sent.measurements,body);assert.ok(sent.studyRequest.includes(fit));
+  const request=JSON.parse(sent.studyRequest),adaptive=request.design_adaptive;
+  assert.equal(Object.hasOwn(request,'design_grid'),false);assert.equal(adaptive.objective,'fit_band_violation_mm');
+  assert.equal(adaptive.max_evaluations,24);assert.equal(adaptive.max_designs,2);
+  assert.equal(Object.hasOwn(adaptive,'material_key'),false,'Fit discovery ignores a retained consumer nomination');
+  assert.deepEqual(adaptive.variables,[
+    {key:'length',bounds_mm:[0,40],initial_mm:10,initial_step_mm:10,minimum_step_mm:0.5,
+      sites:['front','lining'].map(piece=>({piece,axis:'y',at_mm:50,multiplier:1}))},
+    {key:'taper',bounds_mm:[-2,2],initial_mm:0,initial_step_mm:1,minimum_step_mm:0.125,
+      sites:[{op:'move',piece:'front',vertex:'hem:outer',dx_multiplier:-0.5,dy_multiplier:0},
+        {op:'move',piece:'lining',vertex:'a<β>',dx_multiplier:-0.5,dy_multiplier:0}]}]);
+  assert.deepEqual(request.comparison.objectives.map(x=>x.metric),['stock_area_m2','stock_mass_kg']);
+  const report={...studyReport(),schema:'ftx-design-study-report/1'};
+  const w=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){}},material_study_on_body:(_model,...args)=>{
+    assert.deepEqual(args,[coupledDesignPattern,sent.studyRequest,body]);return JSON.stringify(report);
+  }}});
+  const result=await w.send(sent);assert.equal(result.type,'result',result.message);p.current().emit(result);
+  const link=descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(n=>n.download==='study-request.json');
+  assert.equal(await p.blobs.get(link.href).text(),sent.studyRequest);
+  guidedDesignField(p,'guidedDesignEvaluations','1');guidedDesignField(p,'guidedDesignMax','16');
+  const before=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/32.*alternatives/);
+  guidedDesignField(p,'guidedDesignMax','15');await p.e.study.onclick();
+  const bounded=JSON.parse(p.current().messages.at(-1).studyRequest).design_adaptive;
+  assert.equal(bounded.max_evaluations,1);assert.equal(bounded.max_designs,15,'Requested retention is not clamped to visited trials');
+});
+
+test('guided grid and adaptive modes retain independent domains and budgets without converting hidden inputs',async()=>{
+  const {p}=await adaptiveDesignSetup();guidedDesignField(p,'guidedDesignLower','');
+  guidedDesignField(p,'guidedDesignMode','grid','change');guidedDesignField(p,'guidedDesignGridBudget','4');
+  await p.e.study.onclick();let sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+  let request=JSON.parse(sent.studyRequest);assert.equal(Object.hasOwn(request,'design_adaptive'),false);
+  assert.deepEqual(request.design_grid.variables.map(v=>v.values_mm),[[0,10],[-2,0,2]]);
+  assert.equal(request.design_grid.fit_screening.max_candidates,4);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignMode','adaptive','change');let before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/finite|lower/i);
+  guidedDesignField(p,'guidedDesignLower','-2');guidedDesignField(p,'guidedDesignMode','grid','change');
+  guidedDesignField(p,'guidedDesignValues','3,2,1');guidedDesignField(p,'guidedDesignGridBudget','unfinished');
+  guidedDesignField(p,'guidedDesignMode','adaptive','change');await p.e.study.onclick();sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);request=JSON.parse(sent.studyRequest);
+  assert.deepEqual(request.design_adaptive.variables.map(v=>v.bounds_mm),[[0,40],[-2,2]]);
+  assert.equal(request.design_adaptive.max_evaluations,24);assert.equal(Object.hasOwn(request,'design_grid'),false);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignMode','grid','change');assert.equal(p.e.guidedDesignValues.value,'3,2,1');
+  assert.equal(p.e.guidedDesignGridBudget.value,'unfinished');before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.ok(p.e.error.textContent);
+});
+
+test('guided adaptive consumer guidance keeps an explicit material and refuses stale nominations without fallback',async()=>{
+  const {p}=await adaptiveDesignSetup(false);await addGuidedSelection(p,guidedSelection('b'),'alternate');
+  guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');
+  assert.equal(p.e.guidedDesignMaterial.value,'');let before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/material|nomina/i);
+  guidedDesignField(p,'guidedDesignMaterial','alternate','change');await p.e.study.onclick();
+  let sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);let request=JSON.parse(sent.studyRequest);
+  assert.equal(request.design_adaptive.objective,'consumer_comparison');assert.equal(request.design_adaptive.material_key,'alternate');
+  assert.deepEqual(request.variants.map(v=>v.key),['baseline','material-1','alternate']);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignObjective','consumer_pareto','change');before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/2|two|objective/i);
+  p.e.guidedStockMassGoal.checked=true;p.e.guidedStockMassGoal.handlers.change();await p.e.study.onclick();
+  sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);request=JSON.parse(sent.studyRequest);
+  assert.equal(request.design_adaptive.objective,'consumer_pareto');assert.equal(request.design_adaptive.material_key,'alternate');
+  assert.deepEqual(request.comparison.objectives.map(x=>x.metric),['stock_area_m2','stock_mass_kg']);
+  p.emit(studyReport(),[{name:'study-request.json',text:sent.studyRequest}]);assert.ok(p.live.size>0);
+  descendants(p.e.studyCandidates).find(n=>n.tag==='button'&&n.textContent==='Remove alternate').onclick();
+  assert.equal(p.e.guidedDesignMaterial.value,'');assert.equal(p.live.size,0);
+  assert.match(p.e.guidedDesignMaterialStatus.textContent,/alternate/);before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/material|nomina|choice/i);
+  const replacement=guidedSelection('c');await addGuidedSelection(p,replacement,'alternate');
+  assert.equal(p.e.guidedDesignMaterial.value,'','A different frozen revision cannot inherit the removed choice nomination');
+  assert.match(p.e.guidedDesignMaterialStatus.textContent,/alternate/);before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/material|nomina|choice/i);
+  guidedDesignField(p,'guidedDesignMaterial','alternate','change');await p.e.study.onclick();sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);request=JSON.parse(sent.studyRequest);
+  assert.equal(request.design_adaptive.material_key,'alternate');assert.ok(sent.studyRequest.includes(replacement));
+  assert.equal(request.variants.find(v=>v.key==='alternate').changes.default.expected_sha256,'c'.repeat(64));p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignMaterial','baseline','change');await p.e.study.onclick();sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);request=JSON.parse(sent.studyRequest);
+  assert.equal(request.design_adaptive.material_key,'baseline');assert.deepEqual(request.variants.map(v=>v.key),['baseline','material-1','alternate']);
+});
+
+test('guided adaptive policy edits cancel pending work while submitted domains and nominees stay immutable',async()=>{
+  for(const change of ['bounds','step','evaluations','mode','objective','nominee','other-variable']) {
+    const {p,fit}=await adaptiveDesignSetup(),delay=deferred();let reading=false;
+    if(change==='nominee') {
+      guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');guidedDesignField(p,'guidedDesignMaterial','material-1','change');
+    }
+    p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return new TextEncoder().encode(await delay.promise).buffer;};
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();assert.equal(reading,true,change);
+    if(change==='bounds')guidedDesignField(p,'guidedDesignLower','-3');
+    else if(change==='step')guidedDesignField(p,'guidedDesignMinimumStep','0.25');
+    else if(change==='evaluations')guidedDesignField(p,'guidedDesignEvaluations','8');
+    else if(change==='mode')guidedDesignField(p,'guidedDesignMode','grid','change');
+    else if(change==='objective')guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');
+    else if(change==='nominee')guidedDesignField(p,'guidedDesignMaterial','baseline','change');
+    else {guidedDesignAction(p,'Edit length');assert.equal(old.dead,false);guidedDesignField(p,'guidedDesignUpper','45');}
+    assert.equal(old.dead,true,change);p.ready();delay.resolve(fit);await running;
+    assert.equal(old.messages.length,before,change);assert.equal(p.current().messages.length,0,change);
+    old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});
+    assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true,change);assert.equal(p.live.size,0,change);
+  }
+  const {p,fit}=await adaptiveDesignSetup(false),delay=deferred();
+  guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');guidedDesignField(p,'guidedDesignMaterial','baseline','change');
+  p.e.fit.files[0].arrayBuffer=async()=>new TextEncoder().encode(await delay.promise).buffer;
+  const running=p.e.study.onclick();p.e.guidedDesignMode.value='grid';p.e.guidedDesignObjective.value='consumer_pareto';
+  p.e.guidedDesignMaterial.value='unrelated';p.e.guidedDesignEvaluations.value='1';p.e.guidedDesignLower.value='-100';
+  delay.resolve(fit);await running;const sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+  const adaptive=JSON.parse(sent.studyRequest).design_adaptive;assert.equal(adaptive.objective,'consumer_comparison');
+  assert.equal(adaptive.material_key,'baseline');assert.equal(adaptive.max_evaluations,24);assert.deepEqual(adaptive.variables[0].bounds_mm,[0,40]);
+});
+
+test('guided adaptive consumer discovery refuses unnamed matrix guidance while fit-only and advanced replay stay available',async()=>{
+  const {p,body}=await adaptiveDesignSetup(false);
+  guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');guidedDesignField(p,'guidedDesignMaterial','baseline','change');
+  await p.e.study.onclick();const consumer=p.current().messages.at(-1);assert.equal(consumer.type,'study',p.e.error.textContent);p.emit(studyReport());
+  const single=' {"schema":"ftx-drape-scenario/1","options":{"spacing":20.0,"sew_steps":12,"drape_steps":0,"step":0.001},"fit_spec":{"points":[]}}\r\n';
+  const matrix=' {"schema":"ftx-drape-scenario-matrix/1","max_evaluations":64,"cases":[{"key":"steady","scenario":'+single+'}]}\r\n';
+  p.select('scenarioRequest',matrix);p.e.scenarioRequest.handlers.change();
+  for(const objective of ['consumer_comparison','consumer_pareto']) {
+    guidedDesignField(p,'guidedDesignObjective',objective,'change');
+    p.e.guidedStockMassGoal.checked=objective==='consumer_pareto';p.e.guidedStockMassGoal.handlers.change();
+    const before=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+    assert.match(p.e.error.textContent,/single scenario.*named scenarios/i);
+  }
+  guidedDesignField(p,'guidedDesignObjective','fit_band_violation_mm','change');await p.e.scenario.onclick();
+  let sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.equal(sent.scenarioRequest,matrix);assert.equal(sent.measurements,body);
+  assert.equal(JSON.parse(sent.studyRequest).design_adaptive.objective,'fit_band_violation_mm');p.emit(scenarioReport());
+  const advanced=' \r\n'+consumer.studyRequest.replace('"objective":"consumer_comparison"','"objective":"consumer_comparison","case_key":"steady"')+'\r\n';
+  assert.match(advanced,/"case_key":"steady"/);p.select('studyRequest',advanced);p.e.studyRequest.handlers.change();
+  await p.e.scenario.onclick();sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.equal(sent.studyRequest,advanced);assert.equal(sent.scenarioRequest,matrix);assert.equal(sent.measurements,body);
+});
+
+test('guided adaptive domains and material nominations reset on pattern replacement and exact candidate adoption',async()=>{
+  for(const change of ['source','adoption']) {
+    const {p}=await adaptiveDesignSetup();guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');
+    guidedDesignField(p,'guidedDesignMaterial','material-1','change');
+    const replacement=' {"pieces":[{"id":"new","vertices":{"fresh":[1.0,-0.0]}}],"source":18446744073709551615}\r\n';
+    if(change==='source'){p.select('patternFile',replacement);await p.e.patternFile.onchange();}
+    else {
+      await p.e.study.onclick();assert.equal(p.current().messages.at(-1).type,'study',p.e.error.textContent);
+      p.emit({...studyReport([studyRow('chosen',replacement)]),schema:'ftx-design-study-report/1'},[{name:'old.json',text:'{}'}]);
+      descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(n=>n.tag==='button'&&n.textContent==='Use chosen pattern').onclick();
+    }
+    assert.equal(p.e.guidedDesign.checked,false);assert.equal(p.e.guidedDesignMode.value,'grid');
+    assert.equal(p.e.guidedDesignObjective.value,'fit_band_violation_mm');assert.equal(p.e.guidedDesignMaterial.value,'');
+    assert.equal(p.e.guidedDesignEvaluations.value,'');assert.equal(p.e.guidedDesignKey.value,'linked_adjustment');
+    for(const id of ['guidedDesignLower','guidedDesignUpper','guidedDesignInitial','guidedDesignInitialStep','guidedDesignMinimumStep']) {
+      assert.equal(p.e[id].value,'',id);
+    }
+    assert.equal(p.e.guidedDesignVariables.children.length,1);assert.equal(p.e.guidedDesignVertices.children.length,0);
+    assert.equal(p.e.guidedDesignMaterial.children.some(n=>n.value==='material-1'),false);assert.equal(p.live.size,0);
+  }
+});
+
 test('combination controls retain frozen selections and exact policy/pair numbers for native study evaluation', async () => {
   for (const schema of ['ftx-material-study/1','ftx-design-study/1']) {
   const p = await pageModule(); await p.load();
