@@ -209,8 +209,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
           the draft and measurement-readiness verdict remain separate. The model file must match.</p>
         <p><label>Accepted fit <input type="file" id="bodyFitFile" accept=".json,application/json"></label></p>
         <p><label><input type="checkbox" id="bodyFitConsent"> I associate this fit with the current wearer</label></p>
-        <p><label>Drape arm angle (degrees) <input type="number" id="bodyArmDeg" value="35" min="0" max="180" step="1"></label></p>
-        <p class="mut">The angle applies to the imported body only; image poses are not reused.
+        <p class="mut">Image poses are not reused for garment drapes.
           A refused start needs review. Neither an accepted shape nor a settled drape establishes physical fit.
           Clear the fit file to return to tape fitting.</p>
       </details>
@@ -224,10 +223,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       <p class="row"><label><input type="checkbox" id="selfContact" checked> cloth self-contact</label>
         <label><input type="checkbox" id="twoStart"> compare a second sewing path</label>
         <button id="foldGo" disabled>Fold it up</button></p>
-      <p class="row"><label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
+      <p class="row"><label>Drape arm angle (degrees) <input type="number" id="bodyArmDeg" value="35" min="0" max="180" step="any"></label>
+        <label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
         <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
         <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label></p>
-      <p class="mut">Leg fraction moves from standing (0) to the full selected posture (1), keeping the fitted shape and arm angle.
+      <p class="mut">Arm angle applies to tape-fitted or accepted shapes; the default is 35°.
+        Leg fraction moves from standing (0) to the full selected posture (1), keeping the fitted shape and arm angle.
         Extra settling continues the sewn garment until its quiet window or the step limit; 0 keeps the fixed schedule.
         History-dependent materials require a fixed-duration run and refuse automatic settling.</p>
       <p class="mut">The optional comparison runs a second full solve at 18 sewing steps versus the
@@ -537,7 +538,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       status("Associate the accepted fit with this wearer before handing it to materials."); return;
     }
     const angle = $("bodyArmDeg").value.trim();
-    if (imported && (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180)) {
+    if (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180) {
       status("Supply a finite drape arm angle from 0 to 180 degrees before opening materials."); return;
     }
     if (model && model.size > 256 * 1024 * 1024) {
@@ -545,7 +546,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     }
     const fraction = $("drapeLegFraction").value.trim(), settling = $("maxSettleSteps").value.trim();
     const drapeSettings = { self_contact_mm: $("selfContact").checked ? 2 : 0, two_start: $("twoStart").checked,
-      legs: $("drapeLegs").value, leg_fraction: Number(fraction), max_settle_steps: Number(settling) };
+      arm_abduction_deg: Number(angle), legs: $("drapeLegs").value, leg_fraction: Number(fraction), max_settle_steps: Number(settling) };
     if (!fraction || !["standing", "seated", "squat"].includes(drapeSettings.legs) ||
         !Number.isFinite(drapeSettings.leg_fraction) || drapeSettings.leg_fraction < 0 || drapeSettings.leg_fraction > 1 ||
         !settling || !Number.isSafeInteger(drapeSettings.max_settle_steps) || drapeSettings.max_settle_steps < 0 || drapeSettings.max_settle_steps > 256) {
@@ -974,8 +975,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   });
   $("foldGo").addEventListener("click", () => {
     if ($("foldGo").disabled) return;
-    if (bodyFitText !== null && $("bodyArmDeg").value.trim() === "") {
-      showError("Supply the drape arm angle for the imported body."); return;
+    const angle = $("bodyArmDeg").value.trim();
+    if (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180) {
+      showError("Supply a finite drape arm angle from 0 to 180 degrees."); return;
     }
     if ($("drapeLegFraction").value.trim() === "" || $("maxSettleSteps").value.trim() === "") {
       showError("Supply a leg fraction and maximum extra settling steps."); return;
@@ -987,7 +989,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     worker.postMessage({ type: "fold", request: foldRequest, round: roundRequest, body: bodyRequest,
       selfContactMm: $("selfContact").checked ? 2 : 0, twoStart: $("twoStart").checked,
       bodyFit: bodyFitText, bodyFitConsent: $("bodyFitConsent").checked,
-      armDeg: Number($("bodyArmDeg").value), legs: $("drapeLegs").value,
+      armDeg: Number(angle), legs: $("drapeLegs").value,
       legFraction: Number($("drapeLegFraction").value), maxSettleSteps: Number($("maxSettleSteps").value) });
   });
   const traceOrigin=new URL(location.href).origin;

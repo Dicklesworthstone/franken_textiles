@@ -16,6 +16,8 @@ image-fit report and ordinary drape arm angle accompany those files. The receivi
 a fresh wearer association before using an accepted shape; arrival never runs a consumer.
 Measurement readiness is recomputed by the ordinary export consumer and does not become approval
 to cut. A round without body sources still uses the original three-file route.
+The handoff also preserves the ordinary arm angle without an accepted report. Old packets without
+an explicit drape angle retain 35°, or their accepted-source angle when present. Conflicting angles refuse.
 
 The tabs exchange immutable local files through the same origin, window and a one-use token;
 no files enter browser storage or a server. Editing the source round, selected model, accepted
@@ -95,7 +97,7 @@ The garment operations consume this same bound pattern:
 | Operation | Additional local inputs | Existing authority and output |
 |---|---|---|
 | Validate/export | Measurements and fit-specification JSON | `ftx_wasm::page::run`; current verdict basis, measurement readiness and checked export ZIP. No implicit drape/fit claim. |
-| Mechanical drape | Measurements, fit specification, converted `.ftxbody` model, optional accepted image-fit report | Existing `fold_up` fits the supplied model, or `fold_up_with_body_fit` reuses the exact accepted shape at the declared arm angle. Current report and fold-up viewer, or an explicit refusal. |
+| Mechanical drape | Measurements, fit specification, converted `.ftxbody` model, optional accepted image-fit report | Existing fold engines fit the supplied model or reuse the exact accepted shape at the declared arm angle. Nondefault tape-fitted angles use `fold_up_configured`. Current report and fold-up viewer, or an explicit refusal. |
 | Cutting | `CutOptions` JSON | `ftx_export::cutting::CutPlan`; all material-specific roll requirements and a bounded first-roll SVG preview. Not a machine-coordinate program or proof of optimal nesting. |
 | Complete mixed cutting | `ftx-cutting-job/1` or `/2` request | Existing `material_cut_job`; complete roll/finite-stock inventory, route-specific knife programs or independent refusals, purchasing outcomes and exact frozen replay inputs. |
 | Purchasing | Cut options, dated `QuoteBook`, comparable `Market` scope | Existing marker procurement evaluates gross stock including layout waste and order terms. Missing offers remain unknown, not zero-cost purchases. No checkout or live refresh runs in the page. |
@@ -121,6 +123,11 @@ Download `cut-job-pattern.json` and `cut-job-request.json` to replay the frozen 
 `cut-job`; the original bound pattern, original request and complete report remain separate
 downloads. Request or source edits, cancellation and refused replacements withdraw stale outputs.
 These review results do not reserve stock, place orders or authorize a machine.
+
+Drape arm angle applies to both tape-fitted and accepted shapes, from 0–180° with a 35° default.
+Blank or invalid angles refuse. Nondefault ordinary angles download `fold-settings.json` for
+native replay. Tape fitting and body checks retain their measurement pose. Body-dependent studies
+keep their explicit source policy below; selecting a preview angle does not change measurement-source studies.
 
 To keep a previously accepted image-fitted shape, open **Reuse an accepted image-fit shape for
 this drape**, choose its original report, explicitly associate it with the current wearer and

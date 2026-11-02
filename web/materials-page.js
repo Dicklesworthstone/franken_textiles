@@ -99,7 +99,6 @@ function controls() {
   $("fold").disabled ||= !has("measurements") || !has("fit") || !has("body");
   $("fold").disabled ||= has("bodyFitFile") && !$("bodyFitConsent").checked;
   $("clearBodyFit").disabled = !has("bodyFitFile");
-  $("bodyArmDeg").disabled = !has("bodyFitFile");
   $("selfContact").disabled = !!outfit;
   $("cut").disabled ||= !has("cutOptions");
   $("stock").disabled ||= !has("stockRequest");
@@ -3501,7 +3500,7 @@ async function read(id, binary = false) {
   if (!binary) JSON.parse(data);
   return data;
 }
-function acceptedBodyAngle() {
+function drapeArmAngle() {
   const angle = $("bodyArmDeg").value.trim();
   if (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180) {
     throw Error("Supply a finite drape arm angle from 0 to 180 degrees.");
@@ -3537,7 +3536,7 @@ async function studyBodyInput(msg) {
   if (mode !== "accepted") throw Error("Choose a supported study body source.");
   if (!has("bodyFitFile")) throw Error("Choose an accepted body-fit report for the selected study body source.");
   if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before running body-dependent studies.");
-  const angle = acceptedBodyAngle(), fit = await read("bodyFitFile");
+  const angle = drapeArmAngle(), fit = await read("bodyFitFile");
   const measurements = has("measurements") ? await measurementInput(msg) : "{}";
   if (!has("measurements") && (photoEvidence || photoTransfer || photoProblem || $("supplementalFiles").files.length)) throw Error("Choose primary measurements before adding evidence.");
   if (msg.measurementSources !== undefined) {
@@ -3711,10 +3710,10 @@ async function execute(op) {
         msg.legFraction = Number($("drapeLegFraction").value);
         msg.maxSettleSteps = Number($("maxSettleSteps").value);
         msg.twoStart = $("twoStart").checked;
+        msg.armDeg = drapeArmAngle();
         if (has("bodyFitFile")) {
           if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before draping.");
-          const angle = acceptedBodyAngle();
-          msg.bodyFit = await read("bodyFitFile"); msg.bodyFitConsent = true; msg.armDeg = angle;
+          msg.bodyFit = await read("bodyFitFile"); msg.bodyFitConsent = true;
         }
         msg.bytes = await read("body", true); msg.selfContactMm = $("selfContact").checked ? 2 : 0;
       }
@@ -4071,6 +4070,10 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
           !["standing", "seated", "squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
           settings.leg_fraction < 0 || settings.leg_fraction > 1 || !Number.isSafeInteger(settings.max_settle_steps) ||
           settings.max_settle_steps < 0 || settings.max_settle_steps > 256)) throw Error("Received drape settings are incomplete or outside the supported controls.");
+      const hasArm = settings !== undefined && Object.hasOwn(settings, "arm_abduction_deg");
+      if (hasArm && (!Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg < 0 || settings.arm_abduction_deg > 180)) {
+        throw Error("Received drape arm angle must be from 0 to 180 degrees.");
+      }
       const files = new Map();
       for (const [key, id] of [["pattern", "patternFile"], ["measurements", "measurements"], ["fit", "fit"]]) {
         const blob = m.files?.[key];
@@ -4091,6 +4094,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
         if (context.fit != null) {
           if (!(context.fit instanceof Blob) || context.fit.size > 16 * 1024 * 1024) throw Error("Received accepted fit exceeds its 16 MiB input budget.");
           if (!Number.isFinite(context.armDeg) || context.armDeg < 0 || context.armDeg > 180) throw Error("Received drape arm angle must be from 0 to 180 degrees.");
+          if (hasArm && settings.arm_abduction_deg !== context.armDeg) throw Error("Received drape arm angles disagree.");
           const bytes = await context.fit.arrayBuffer();
           if (rev !== roundRead) return;
           if (bytes.byteLength > 16 * 1024 * 1024) throw Error("Received accepted fit exceeds its 16 MiB input budget.");
@@ -4102,7 +4106,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       }
       installPattern(files.get("patternFile"), "Received round pattern.json");
       for (const [id, raw] of files) roundFiles.set(id, raw);
-      if (context?.fit) $("bodyArmDeg").value = String(context.armDeg);
+      $("bodyArmDeg").value = String(hasArm ? settings.arm_abduction_deg : context?.fit ? context.armDeg : 35);
       if (settings !== undefined) {
         $("selfContact").checked = settings.self_contact_mm === 2; $("twoStart").checked = settings.two_start;
         $("drapeLegs").value = settings.legs; $("drapeLegFraction").value = String(settings.leg_fraction);

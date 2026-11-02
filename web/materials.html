@@ -256,7 +256,6 @@ use their own evidence. Added records do not establish readiness or physical fit
 <label>Accepted fit JSON <input id="bodyFitFile" type="file" accept=".json,application/json"></label>
 <button id="clearBodyFit" type="button" disabled>Clear accepted fit and use tape fitting</button>
 <label><input id="bodyFitConsent" type="checkbox"> I associate this accepted fit with the current wearer</label>
-<label>Ordinary drape arm angle (degrees) <input id="bodyArmDeg" type="number" min="0" max="180" step="any" value="35" disabled></label>
 <p class="note">The original accepted shape must match the selected model. It is reused without tape refitting;
 image-frame poses are not garment poses. A refused report or start never falls back to tape fitting.
 Current measurements remain the independent export and readiness evidence. Model predictions and a successful
@@ -267,6 +266,9 @@ drape do not establish physical fit. Body-dependent studies below have an explic
 material binding is needed. Comparisons use the model's measurement pose; drape angle and contact remain separate.
 Predictions remain MODEL_FIT. Differences, missing sections and a successful check do not establish readiness or physical fit.</p>
 <label><input id="selfContact" type="checkbox" checked> Enable cloth self-contact (requires unlike-material pair evidence)</label>
+<label>Drape arm angle (degrees) <input id="bodyArmDeg" type="number" min="0" max="180" step="any" value="35"></label>
+<p class="note">Applies to tape-fitted or accepted shapes. The default is 35°. Body checks and tape fitting retain their measurement pose;
+studies below use their separately selected body source.</p>
 <label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
 <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
 <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label>

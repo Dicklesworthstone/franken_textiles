@@ -445,11 +445,13 @@ self.onmessage = async ({ data: msg }) => {
             throw Error("Accepted body-fit report must be JSON text of at most 16 MiB.");
           }
           if (msg.bodyFitConsent !== true) throw Error("Associate the accepted fit with this wearer before draping.");
-          if (!Number.isFinite(msg.armDeg) || msg.armDeg < 0 || msg.armDeg > 180) throw Error("Supply a finite drape arm angle from 0 to 180 degrees.");
         }
         const settings = { self_contact_mm: msg.selfContactMm ?? 0, two_start: msg.twoStart ?? false,
-          arm_abduction_deg: imported ? msg.armDeg : 35, legs: msg.legs ?? "standing",
+          arm_abduction_deg: !imported && msg.armDeg === undefined ? 35 : msg.armDeg, legs: msg.legs ?? "standing",
           leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0 };
+        if (!Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg < 0 || settings.arm_abduction_deg > 180) {
+          throw Error("Supply a finite drape arm angle from 0 to 180 degrees.");
+        }
         if (typeof settings.two_start !== "boolean") throw Error("Second sewing-path comparison must be a boolean.");
         if (!["standing", "seated", "squat"].includes(settings.legs) ||
             !Number.isFinite(settings.leg_fraction) || settings.leg_fraction < 0 || settings.leg_fraction > 1) {
@@ -458,7 +460,8 @@ self.onmessage = async ({ data: msg }) => {
         if (!Number.isSafeInteger(settings.max_settle_steps) || settings.max_settle_steps < 0 || settings.max_settle_steps > 256) {
           throw Error("Maximum extra settling steps must be a whole number from 0 to 256.");
         }
-        const configured = settings.legs !== "standing" || settings.leg_fraction !== 1 || settings.max_settle_steps !== 0;
+        const configured = (!imported && settings.arm_abduction_deg !== 35) ||
+          settings.legs !== "standing" || settings.leg_fraction !== 1 || settings.max_settle_steps !== 0;
         if (configured && typeof ftx.fold_up_configured !== "function") {
           throw Error("Rebuild web/pkg: missing configured pose and settling drape engine.");
         }
