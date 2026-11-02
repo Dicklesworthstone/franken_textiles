@@ -36,6 +36,7 @@ pub(super) const BOOLEAN_OPTIONS: &[&str] = &[
     "no-nappies",
     "elastic-waist",
     "cuff-opening",
+    "same-wearer",
 ];
 
 fn option<'a>(args: &'a Args, key: &str) -> Option<&'a str> {

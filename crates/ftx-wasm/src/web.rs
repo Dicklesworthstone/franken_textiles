@@ -68,6 +68,21 @@ pub fn camera_calibration(input: &str, corner_noise: &str) -> Result<String, JsE
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Derive PHOTO_ESTIMATED girths or calibrate a section coefficient from original local evidence.
+///
+/// # Errors
+/// The shared source, wearer, provenance, option and numerical-domain refusals.
+#[wasm_bindgen]
+pub fn photo_section(
+    width_source: &str,
+    depth_source: &str,
+    options: &str,
+) -> Result<String, JsError> {
+    crate::photo::photo_section(width_source, depth_source, options)
+        .map(|value| value.to_string())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Incremental local camera acquisition. This handle retains no decoded image pixels.
 #[wasm_bindgen]
 pub struct WebCameraCalibration {

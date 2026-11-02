@@ -1,41 +1,12 @@
 //! Section-derived girths connect calibrated photo widths/depths to measurement fusion.
 
 use ftx_core::Refusal;
-use ftx_measure::{
-    SectionOptions, calibrate_k, canonical_name, definition, fuse, girth_from_section, make_record,
-};
+use ftx_measure::{SectionOptions, calibrate_k, photo_section, section_measurement};
 use serde_json::{Value, json};
+use std::path::Path;
 
-use super::{no_files, numeric, option};
-use crate::{Args, bad_input, known_options, read_json, required};
-
-fn photo_value(data: &Value, name: &str) -> Result<(f64, f64), Refusal> {
-    let entry = &data["fused"][name];
-    let v = entry["value_mm"]
-        .as_f64()
-        .ok_or_else(|| bad_input(format!("no {name} record")))?;
-    let sigma = entry["sigma_mm"]
-        .as_f64()
-        .ok_or_else(|| bad_input(format!("{name} lacks uncertainty")))?;
-    let sources = entry["sources"]
-        .as_array()
-        .ok_or_else(|| bad_input(format!("{name} lacks provenance")))?;
-    if entry["flags"]
-        .as_array()
-        .is_some_and(|flags| flags.iter().any(|f| f == "REMEASURE"))
-    {
-        return Err(bad_input(format!(
-            "{name}: conflicting evidence must be remeasured before deriving a girth"
-        )));
-    }
-    let used: Vec<_> = sources.iter().filter(|s| s["used"] == true).collect();
-    if used.is_empty() || used.iter().any(|s| s["provenance"] != "PHOTO_ESTIMATED") {
-        return Err(bad_input(format!(
-            "{name}: --from requires photo evidence, not chart/model values or a mixed-provenance estimate"
-        )));
-    }
-    Ok((v, sigma))
-}
+use super::{flag, no_files, numeric, option};
+use crate::{Args, bad_input, known_options, required};
 
 pub(super) fn run(args: &Args) -> Result<Value, Refusal> {
     known_options(
@@ -48,6 +19,8 @@ pub(super) fn run(args: &Args) -> Result<Value, Refusal> {
             "sigma-width-mm",
             "sigma-depth-mm",
             "from",
+            "depth-from",
+            "same-wearer",
             "k",
             "k-sigma",
             "k-ratio",
@@ -61,8 +34,7 @@ pub(super) fn run(args: &Args) -> Result<Value, Refusal> {
     )?;
     no_files(args, "girth-from-section")?;
     let level = option(args, "level").unwrap_or("waist");
-    let source = option(args, "from");
-    let evidence = if let Some(path) = source {
+    if let Some(path) = option(args, "from") {
         for key in ["width-mm", "depth-mm", "sigma-width-mm", "sigma-depth-mm"] {
             if option(args, key).is_some() {
                 return Err(bad_input(format!(
@@ -70,28 +42,50 @@ pub(super) fn run(args: &Args) -> Result<Value, Refusal> {
                 )));
             }
         }
-        Some(fuse(&read_json(path)?.0, false)?)
-    } else {
-        None
-    };
-    let (width, sw, depth, sd) = if let Some(data) = &evidence {
-        let (w, sw) = photo_value(data, &format!("{level}_width"))?;
-        let (d, sd) = photo_value(data, &format!("{level}_depth"))?;
-        (w, sw, d, sd)
-    } else {
-        required(args, "width-mm")?;
-        required(args, "depth-mm")?;
-        (
-            numeric(args, "width-mm")?.unwrap(),
-            numeric(args, "sigma-width-mm")?.unwrap_or(0.0),
-            numeric(args, "depth-mm")?.unwrap(),
-            numeric(args, "sigma-depth-mm")?.unwrap_or(0.0),
-        )
-    };
+        let read = |path: &str| {
+            let bytes = super::video::read_limited(Path::new(path), 16 * 1024 * 1024)?;
+            String::from_utf8(bytes).map_err(|e| bad_input(format!("{path}: {e}")))
+        };
+        let width = read(path)?;
+        let depth = option(args, "depth-from")
+            .map(read)
+            .transpose()?
+            .unwrap_or_default();
+        let mut options = json!({"level":level,"same_wearer":flag(args,"same-wearer")});
+        for (flag, key) in [
+            ("k", "k"),
+            ("k-sigma", "k_sigma"),
+            ("k-ratio", "k_ratio"),
+            ("k-ratio-sigma", "k_ratio_sigma"),
+            ("clothing-mm", "clothing_mm"),
+            ("tape-girth-mm", "tape_girth_mm"),
+            ("sigma-tape-mm", "sigma_tape_mm"),
+        ] {
+            if let Some(value) = numeric(args, flag)? {
+                options[key] = json!(value);
+            }
+        }
+        if let Some(name) = option(args, "name") {
+            options["name"] = json!(name);
+        }
+        let mut result = photo_section(&width, &depth, &options.to_string())?;
+        result["section_inputs"]["source"] = json!(path);
+        if let Some(path) = option(args, "depth-from") {
+            result["section_inputs"]["depth_source"] = json!(path);
+        }
+        return Ok(result);
+    }
+    if option(args, "depth-from").is_some() || flag(args, "same-wearer") {
+        return Err(bad_input("--depth-from and --same-wearer require --from"));
+    }
+    required(args, "width-mm")?;
+    required(args, "depth-mm")?;
+    let width = numeric(args, "width-mm")?.unwrap();
+    let depth = numeric(args, "depth-mm")?.unwrap();
     let options = SectionOptions {
         level,
-        sigma_width_mm: sw,
-        sigma_depth_mm: sd,
+        sigma_width_mm: numeric(args, "sigma-width-mm")?.unwrap_or(0.0),
+        sigma_depth_mm: numeric(args, "sigma-depth-mm")?.unwrap_or(0.0),
         k: numeric(args, "k")?,
         k_sigma: numeric(args, "k-sigma")?,
         k_ratio: numeric(args, "k-ratio")?.unwrap_or(1.0),
@@ -117,42 +111,5 @@ pub(super) fn run(args: &Args) -> Result<Value, Refusal> {
     if option(args, "sigma-tape-mm").is_some() {
         return Err(bad_input("--sigma-tape-mm requires --tape-girth-mm"));
     }
-    let mut out = girth_from_section(width, depth, &options)?;
-    let name = option(args, "name")
-        .or_else(|| ["chest", "waist", "hip"].contains(&level).then_some(level));
-    if let Some(name) = name {
-        let name = canonical_name(name);
-        if definition(&name).is_some_and(|d| d["kind"] != "girth") || name.ends_with("_deg") {
-            return Err(bad_input(
-                "the derived record name must identify a girth, not a width, length or angle",
-            ));
-        }
-        let method = format!(
-            "girth-from-section k·Ramanujan(width {width}, depth {depth}), k={}",
-            out["k"]
-        );
-        let record = make_record(
-            &name,
-            out["girth_mm"].as_f64().unwrap(),
-            out["sigma_mm"].as_f64().unwrap(),
-            "PHOTO_ESTIMATED",
-            &method,
-            None,
-            out["notes"].as_str().unwrap(),
-        )?;
-        // Keep the reference's `record` field, plus a schema-valid document for direct fusion.
-        out["record"] = record.clone();
-        out["schema"] = json!("fabric-measurements/1");
-        out["wearer"] = evidence.as_ref().map_or(json!({}), |d| d["wearer"].clone());
-        out["taken_on"] = evidence
-            .as_ref()
-            .map_or(Value::Null, |d| d["taken_on"].clone());
-        out["records"] = json!([record]);
-        out["fused"] = json!({});
-        if let Some(data) = evidence {
-            out["section_inputs"] = json!({"source":source,
-                "width":data["fused"][format!("{level}_width")], "depth":data["fused"][format!("{level}_depth")]});
-        }
-    }
-    Ok(out)
+    section_measurement(width, depth, &options, option(args, "name"))
 }

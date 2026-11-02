@@ -28,7 +28,9 @@ pub use priors::{age_from_stature, cdc_stature, priors_for};
 pub use readiness::{ReadinessOptions, garment_catalogue, garment_kind, readiness};
 pub use records::{date_day, make_record, parse_value, validate};
 pub use round::{format_round_readiness, garment_checks, round_readiness};
-pub use section::{SectionOptions, calibrate_k, girth_from_section};
+pub use section::{
+    SectionOptions, calibrate_k, girth_from_section, photo_section, section_measurement,
+};
 
 use ftx_core::{Refusal, RefusalCode};
 

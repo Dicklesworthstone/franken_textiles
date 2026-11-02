@@ -447,6 +447,67 @@ fn calibrated_photo_sections_feed_girth_fusion_without_stale_cache() {
 }
 
 #[test]
+fn separate_photo_section_files_match_the_portable_authority() {
+    let dir = setup();
+    let source = |name, value, sigma| {
+        json!({"schema":"fabric-measurements/1","wearer":{"label":"synthetic paired views"},
+            "taken_on":null,"records":[ftx_measure::make_record(name,value,sigma,
+                "PHOTO_ESTIMATED","synthetic camera",None,"").unwrap()],"capture_sequence":u64::MAX})
+    };
+    let width = format!(" \r\n{}\r\n", source("waist_width", 160.0, 4.0));
+    let depth = format!(" {}\n", source("waist_depth", 130.0, 5.0));
+    std::fs::write(dir.join("front.json"), &width).unwrap();
+    std::fs::write(dir.join("side.json"), &depth).unwrap();
+    let args = [
+        "measure",
+        "girth-from-section",
+        "--from",
+        "front.json",
+        "--depth-from",
+        "side.json",
+    ];
+    let refused = run(&dir, &args, 3);
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("same_wearer")
+    );
+    let mut confirmed = args.to_vec();
+    confirmed.push("--same-wearer");
+    for calibration in [false, true] {
+        let mut current = confirmed.clone();
+        let mut options = json!({"level":"waist","same_wearer":true});
+        if calibration {
+            current.extend(["--tape-girth-mm", "500", "--sigma-tape-mm", "10"]);
+            options["tape_girth_mm"] = json!(500.0);
+            options["sigma_tape_mm"] = json!(10.0);
+        }
+        let mut actual = run(&dir, &current, 0)["result"].clone();
+        assert_eq!(actual["section_inputs"]["source"], "front.json");
+        assert_eq!(actual["section_inputs"]["depth_source"], "side.json");
+        let inputs = actual["section_inputs"].as_object_mut().unwrap();
+        inputs.remove("source");
+        inputs.remove("depth_source");
+        assert_eq!(
+            actual,
+            ftx_wasm::photo::photo_section(&width, &depth, &options.to_string()).unwrap()
+        );
+        assert_eq!(actual.get("records").is_none(), calibration);
+    }
+    let mut different = source("waist_depth", 130.0, 5.0);
+    different["wearer"]["label"] = json!("other synthetic wearer");
+    save(&dir.join("side.json"), &different);
+    let refused = run(&dir, &confirmed, 3);
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("contradictory wearer")
+    );
+}
+
+#[test]
 fn section_girth_refuses_nonphoto_or_conflicting_inputs_and_invalid_controls() {
     let dir = setup();
     let record = |name, v, provenance, method| {

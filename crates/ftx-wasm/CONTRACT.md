@@ -1,5 +1,13 @@
 # ftx-wasm
 
+**Photo section estimates.** `photo::photo_section` and the wasm32 `photo_section(width_source,
+depth_source, options)` export delegate to the shared `ftx-measure` source-qualified section
+engine. Exact original measurement and option texts survive in `section_sources`; native fusion,
+same-wearer/provenance/conflict guards and input limits apply before estimation. An empty depth
+text reuses one combined document. The result is an ordinary PHOTO_ESTIMATED girth document, or
+a coefficient-only tape calibration without usable measurement records. No browser numerical
+model, inferred landmarks, readiness or real-person fit claim is added.
+
 **Configured garment drapes.** `fold::fold_up_configured` and the browser export
 `fold_up_configured(body, pattern, measurements, fit_spec, settings_json, body_fit?)`
 accept explicit `self_contact_mm`, `two_start`, `arm_abduction_deg`, `legs`

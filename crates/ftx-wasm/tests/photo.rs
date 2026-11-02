@@ -11,11 +11,43 @@ use ftx_trace::raster::{
     Gray,
     image::{encode_png_gray, load_photo_with_limit, load_png},
 };
-use ftx_wasm::photo::{CameraCalibration, Photo, camera_calibration};
+use ftx_wasm::photo::{CameraCalibration, Photo, camera_calibration, photo_section};
 use serde_json::{Value, json};
 
 const SHEET: &str = include_str!("../../../web/calibration/calib-sheet-letter.json");
 const SHEET_PNG: &[u8] = include_bytes!("../../../web/calibration/calib-sheet-letter.png");
+
+#[test]
+fn portable_photo_sections_preserve_shared_results_sources_and_refusals() {
+    let source = |name, value, sigma| {
+        json!({
+        "schema":"fabric-measurements/1","wearer":{},"taken_on":null,
+        "records":[ftx_measure::make_record(name,value,sigma,"PHOTO_ESTIMATED","synthetic view",None,"").unwrap()],
+        "capture_sequence":u64::MAX
+    }).to_string()
+    };
+    let width = format!(" \r\n{}\r\n", source("waist_width", 160.0, 4.0));
+    let depth = source("waist_depth", 130.0, 5.0);
+    let options = r#"{"same_wearer":true,"level":"waist"}"#;
+    let actual = photo_section(&width, &depth, options).unwrap();
+    assert_eq!(
+        actual,
+        ftx_measure::photo_section(&width, &depth, options).unwrap()
+    );
+    assert_eq!(actual["girth_mm"], 484.2);
+    assert_eq!(actual["sigma_mm"], 14.6);
+    assert_eq!(actual["section_sources"]["width"]["text"], width);
+    assert!(photo_section(&width, &depth, "{}").is_err());
+    assert!(photo_section(&width, &depth, r#"{"same_wearer":true,"width_mm":42}"#).is_err());
+    let calibration = photo_section(
+        &width,
+        &depth,
+        r#"{"same_wearer":true,"tape_girth_mm":500}"#,
+    )
+    .unwrap();
+    assert!(calibration.get("records").is_none());
+    assert_eq!(calibration["section_sources"]["depth"]["text"], depth);
+}
 
 fn fixture() -> Vec<u8> {
     let mut image = Gray::filled(720, 960, 90);
