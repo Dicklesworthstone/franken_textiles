@@ -393,6 +393,75 @@ fn translated_hide_detours_and_return_are_visible_beyond_the_stock_in_the_full_b
     assert!(svg.contains("L111.2 146.2 L98.8 146.2"));
     assert!(svg.contains("data-phase=\"raised-return\""));
     assert_eq!(value(&plan), value(&plan.request().build(&p).unwrap()));
+
+    // Add exact-stop dynamics and a further authored loading translation. The physical-stock
+    // identity and nesting stay fixed while every raised detour chord gets its own acceleration.
+    let profile = json!({"model":"trapezoidal_exact_stop/1",
+        "cutting_acceleration_mm_s2":40.,"travel_acceleration_mm_s2":25.});
+    let policy = r.options.program.as_mut().unwrap();
+    let mut machine = value(&policy.machine);
+    machine["motion_profile"] = profile.clone();
+    policy.machine = serde_json::from_value(machine).unwrap();
+    relock(policy);
+    policy.stock_loading = vec![program::StockLoading {
+        marker: 0,
+        lower_left_mm: Vec2::new(0., 10.),
+    }];
+    let accelerated = r.build(&p).unwrap();
+    assert_eq!(value(accelerated.markers()), value(plan.markers()));
+    assert_eq!(
+        value(&accelerated),
+        value(&accelerated.request().build(&p).unwrap())
+    );
+    let report = accelerated.program().unwrap();
+    assert_eq!(value(report)["motion_profile"], profile);
+    let moved = &report.markers[0];
+    assert_eq!(
+        moved.finite_stock.as_ref().unwrap().stock_sha256,
+        marker.finite_stock.as_ref().unwrap().stock_sha256
+    );
+    assert_eq!(
+        moved
+            .finite_stock
+            .as_ref()
+            .unwrap()
+            .marker_to_machine_offset_mm,
+        Vec2::new(150., -70.)
+    );
+    let route = &moved.selected;
+    let run = &route.runs[0];
+    near(run.cut_endpoints_mm[0].dist(Vec2::new(42., 12.)), 0.);
+    assert_eq!(run.cut_endpoints_mm[0], run.cut_endpoints_mm[1]);
+    let corners = [Vec2::new(111.2, 146.2), Vec2::new(98.8, 146.2)];
+    assert_eq!(run.travel_waypoints_mm.len(), 2);
+    assert_eq!(route.return_waypoints_mm.len(), 2);
+    for (actual, expected) in run.travel_waypoints_mm.iter().zip(corners) {
+        near(actual.dist(expected), 0.);
+    }
+    for (actual, expected) in route
+        .return_waypoints_mm
+        .iter()
+        .zip(corners.into_iter().rev())
+    {
+        near(actual.dist(expected), 0.);
+    }
+    // Each of these three known chords is below v²/a = 400 mm. Returning repeats
+    // all three rest-to-rest moves, rather than accelerating just once over their sum.
+    let one_way = [
+        Vec2::new(150., 30.).dist(corners[0]),
+        12.4,
+        corners[1].dist(Vec2::new(42., 12.)),
+    ];
+    let travel = 4.
+        * one_way
+            .into_iter()
+            .map(|length| (length / 25.).sqrt())
+            .sum::<f64>();
+    near(route.cut_length_mm, 200.);
+    near(route.cutting_seconds, 12.);
+    near(route.travel_seconds, travel);
+    near(route.modeled_path_seconds, 12.25 + travel);
+    assert!(!report.physical_cutting_validated && !report.hardware_execution_authorized);
 }
 
 #[test]

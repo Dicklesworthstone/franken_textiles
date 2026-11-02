@@ -4764,6 +4764,28 @@ decisions, parallel makespan, acceleration/loading/inspection time and empirical
 are outside this model. Users can combine these explicit cutting objectives with the already
 qualified material, mass, sewing, purchasing and thermal objectives without changing simulation code.
 
+### 25.144 Acceleration-qualified cutting effort through ordinary manufacturing decisions
+
+The existing knife program now accepts an explicit source-qualified exact-stop acceleration
+profile within the complete machine configuration. Every retained cutting and raised-travel chord
+starts and ends at rest, including collinear vertices, checked fixture detours and the final return.
+Short segments use triangular velocity profiles; longer segments reach the independently qualified
+cutting or travel speed. Geometry, stock ownership, closed-edge accounting and lift/lower phases
+retain their existing authority. Omission preserves the original constant-rate program.
+
+Checked detour routing uses modeled time within its bounded graph, and an ordering candidate must
+improve complete modeled time before replacing the authored baseline. Roll markers, finite hides
+and remnants, complete mixed jobs and material/design comparisons share the same timing law and
+exact profile/source locks. The browser distinguishes the retained profile and its phase totals;
+unchanged source requests replay through native and portable consumers. A higher maximum feed no
+longer implies an advantage when the actual short cuts cannot reach either material's feed limit.
+
+This increment advances `ftx-tm7`; see [cutting-plans.md](docs/cutting-plans.md). Synthetic known
+answers, source-refusal checks and consumer replay establish software behavior. Controller blending,
+jerk limits, blade rotation, kerf, loading/inspection time, independently measured process timing
+and physical cut quality remain separate capabilities or qualification gates. The explicit stop
+model is not a general controller prediction, empirical cycle-time bound or hardware authorization.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -134,11 +134,68 @@ independently of this traversal.
 
 For each traversal, `cutting_seconds` is complete path length divided by the qualified feed rate;
 `travel_seconds` uses raised-tool distance and the locked travel rate; `lift_lower_seconds` counts
-one complete declared cycle per cut. `modeled_path_seconds` is their sum. It excludes acceleration,
+one complete declared cycle per cut. `modeled_path_seconds` is their sum. This default excludes acceleration,
 corner slowing, blade turning, loading, inspection and workholding changes, so it is **not a measured
 production cycle time**. The output always reports false physical-cutting validation and hardware
 authorization. It contains no G-code, laser/hot-wire processing, kerf compensation, three-dimensional
 collision or interlock approval. Numerical source admission and synthetic tests do not establish real cut quality.
+
+### Acceleration-limited exact-stop timing
+
+When the independently qualified process stops at every retained path vertex, add an explicit
+`motion_profile` to `program.machine`. These numbers are **synthetic examples**, not machine settings:
+
+```json
+"motion_profile": {
+  "model": "trapezoidal_exact_stop/1",
+  "cutting_acceleration_mm_s2": 40,
+  "travel_acceleration_mm_s2": 100
+}
+```
+
+The complete machine hash includes this profile. Every consumed qualification must lock the new
+configuration, and its source/method must cover the declared acceleration, equal-magnitude
+deceleration and exact-stop process. An old constant-rate qualification does not automatically
+qualify accelerated motion. Unsupported model names, nonpositive or nonfinite accelerations,
+unrepresentable timing and mismatched locks refuse the program while retaining valid nesting and
+independent purchasing. Omitting the profile preserves the original machine hash and constant-rate
+program output.
+
+Each nonzero straight segment starts and ends at rest. For segment length `L`, its qualified speed
+limit `v`, and declared acceleration magnitude `a`, the model uses a triangular velocity profile
+when the segment is too short to reach `v`, otherwise an acceleration/cruise/deceleration trapezoid:
+
+```text
+L <= v²/a:  seconds = 2 sqrt(L/a)
+L >  v²/a:  seconds = L/v + v/a
+```
+
+Cutting uses the material qualification's `feed_mm_s`; raised motion uses `machine.travel_mm_s`.
+Every original open-cut segment and closed outline edge contributes once, including the closing
+edge. A repeated closing point does not add a second closing cut. Every raised detour chord and
+requested final return also contributes. A zero-distance raised move takes zero time. Cuts retain
+their exact points, source frame, direction and physical-copy identity; stock loading changes only
+the translated travel, not the cut lengths or cutting times.
+
+**Every retained vertex is an exact stop, including collinear vertices.** No simplification,
+corner blending, tangential knife rotation or continuous-curve motion is inferred. A more densely
+sampled curve can therefore take longer under this declared process even when its total length
+is nearly unchanged. This is an explicit process model, not a general controller prediction or an
+upper bound on all real cutting-cycle times. Lift/lower duration remains separately counted;
+loading, inspection, workholding changes, jerk limits and blade dynamics remain outside the model.
+
+The report retains `program.motion_profile` and separate cutting, raised-travel and lift/lower
+totals for both baseline and selected traversals. With this option, checked fixture detours minimize
+modeled raised-travel time within their finite graph. A complete ordering candidate replaces the
+baseline only when it improves modeled time; a shorter but slower candidate is not an improvement.
+Existing shared work limits, complete fallback behavior and no-global-optimum scope remain in force.
+
+Roll markers, finite hides/remnants, mixed cutting jobs and material/design objectives all use this
+same timing authority. Comparison admission checks the exact retained profile and every timing
+phase. Profiles enter the existing comparison protocol, so different acceleration assumptions do
+not silently become comparable measurements. On short cuts where neither material's maximum feed
+is reached, a larger qualified feed alone gives no time advantage. Native/portable replay and
+synthetic known answers verify the computation; physical coupon/timing qualification remains open.
 
 ### Declared fixtures and complete tool sweeps
 

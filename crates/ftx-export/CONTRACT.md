@@ -1,5 +1,21 @@
 # ftx-export
 
+**Acceleration-limited knife timing** (`cutting::program`, `ftx-tm7`). Optional
+`machine.motion_profile` selects the source-locked `trapezoidal_exact_stop/1` process with positive
+cutting and raised-travel acceleration magnitudes. Every retained straight chord starts and ends
+at rest, including collinear cut vertices, fixture detours and the final return. Short segments
+use triangular velocity profiles; longer segments reach their independently qualified speed limit.
+Cut geometry, source-frame lengths, closed-edge ownership and separate lift/lower time remain
+unchanged. Default constant-rate machine hashes and program output are preserved. The exact profile
+is retained in the report; changing it requires a new applicable full-machine qualification.
+Checked detour search and candidate acceptance use modeled time when selected, retaining bounded
+work and a complete baseline. Roll, finite-stock and mixed-job comparison admission reuses the
+same timing law and locks the full profile and timing phases without rerunning nesting. Numerical
+overflow or unsupported inputs refuse the process independently of geometric stock planning.
+Known-answer, source/refusal, complete-job ranking and native/portable regressions are software
+evidence, not measured cycle times, corner blending, blade dynamics or hardware authorization.
+See `docs/cutting-plans.md`.
+
 **Treatment-aware design evaluation** (`material_study::design::treatment`, `ftx-care1.3`).
 The canonical `treatment` operation accepts an ordinary pattern-treatment request in authored
 designs and grid/adaptive `after` operations. Final geometry, seam, outline and selected-body fit

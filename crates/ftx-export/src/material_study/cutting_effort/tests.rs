@@ -100,6 +100,124 @@ fn rerank(request: &Request, rows: &[Alternative]) -> super::super::comparison::
 }
 
 #[test]
+fn exact_stop_timing_reaches_roll_finite_and_complete_job_comparisons() {
+    for (route, consumer) in [
+        ("cutting", Consumer::CuttingProgram),
+        ("finite_stock", Consumer::FiniteStockProgram),
+        ("cutting_job", Consumer::CuttingJobProgram),
+    ] {
+        let (pattern, mut request) = fixture(route);
+        let constant = request.evaluate(&pattern).unwrap();
+        assert_eq!(constant.comparison.as_ref().unwrap().frontier, ["fast"]);
+        let qualify = |policy: &mut program::Policy| {
+            policy.machine.motion_profile = Some(
+                serde_json::from_value(json!({
+                    "model":"trapezoidal_exact_stop/1",
+                    "cutting_acceleration_mm_s2":4.,
+                    "travel_acceleration_mm_s2":6.
+                }))
+                .unwrap(),
+            );
+            let lock = program::machine_sha256(&policy.machine).unwrap();
+            for qualification in &mut policy.qualifications {
+                qualification.machine_sha256.clone_from(&lock);
+                qualification.method =
+                    "Synthetic exact-stop cutting and raised-travel acquisition".into();
+            }
+        };
+        if let Some(options) = &mut request.cutting {
+            qualify(options.program.as_mut().unwrap());
+        }
+        if let Some(finite) = &mut request.finite_stock {
+            qualify(finite.options.program.as_mut().unwrap());
+        }
+        if let Some(job) = &mut request.cutting_job {
+            qualify(job.roll.as_mut().unwrap().program.as_mut().unwrap());
+            qualify(
+                job.finite_stock
+                    .as_mut()
+                    .unwrap()
+                    .options
+                    .program
+                    .as_mut()
+                    .unwrap(),
+            );
+        }
+        let accelerated = request.evaluate(&pattern).unwrap();
+        // No cut chord reaches even the lower 20 mm/s limit. Increasing the qualified
+        // feed to 40 mm/s therefore provides no cutting-time advantage for these parts.
+        assert_eq!(
+            accelerated.comparison.as_ref().unwrap().frontier,
+            ["fast", "slow"]
+        );
+        for key in ["slow", "fast"] {
+            let before = admit(row(&constant, key), consumer).unwrap();
+            let after = admit(row(&accelerated, key), consumer).unwrap();
+            assert_eq!(before.totals.cut_m, after.totals.cut_m);
+            assert!(after.totals.seconds > before.totals.seconds);
+            assert_ne!(before.protocol, after.protocol);
+        }
+        assert_eq!(
+            admit(row(&accelerated, "slow"), consumer)
+                .unwrap()
+                .totals
+                .seconds,
+            admit(row(&accelerated, "fast"), consumer)
+                .unwrap()
+                .totals
+                .seconds
+        );
+        assert!(admit(row(&accelerated, "missing"), consumer).is_err());
+
+        if route != "cutting" {
+            continue;
+        }
+        for defect in 0..4 {
+            let mut changed = row(&accelerated, "fast").clone();
+            let Outcome::Available { result: plan } = &mut changed.cutting else {
+                unreachable!()
+            };
+            let policy = plan.options.program.as_mut().unwrap();
+            let output = plan.program.as_mut().unwrap();
+            match defect {
+                0 => output.motion_profile = None,
+                1 => {
+                    output
+                        .motion_profile
+                        .as_mut()
+                        .unwrap()
+                        .cutting_acceleration_mm_s2 *= 2.
+                }
+                2 => {
+                    let route = &mut output.markers[0].selected;
+                    route.cutting_seconds = route.cut_length_mm / 40.;
+                    route.modeled_path_seconds =
+                        route.cutting_seconds + route.travel_seconds + route.lift_lower_seconds;
+                }
+                _ => {
+                    policy
+                        .machine
+                        .motion_profile
+                        .as_mut()
+                        .unwrap()
+                        .travel_acceleration_mm_s2 *= 2.
+                }
+            }
+            assert!(
+                roll(plan, &plan.pattern_sha256).is_err(),
+                "producer admission {defect}"
+            );
+            let decision = rerank(&request, &[changed]);
+            assert!(
+                !decision.alternatives[0].eligible,
+                "cached admission {defect}"
+            );
+            assert!(decision.alternatives[0].readings.is_empty());
+        }
+    }
+}
+
+#[test]
 fn qualified_rates_change_roll_and_finite_objectives_while_missing_evidence_stays_unknown() {
     for (route, consumer, metric) in [
         (

@@ -350,6 +350,7 @@ fn summarize<'a>(
         || report.physical_cutting_validated
         || report.optimality_proven
         || report.machine_sha256 != program::machine_sha256(&policy.machine)?
+        || report.motion_profile != policy.machine.motion_profile
         || hash(&report.fixture_clearance)? != hash(&policy.machine.fixture_clearance)?
         || hash(&report.travel_routing)? != hash(&policy.travel_routing)?
         || report.stock_loading != policy.stock_loading
@@ -465,6 +466,7 @@ fn summarize<'a>(
         let route = &marker.selected;
         let mut paths = BTreeSet::new();
         let mut exterior_started = false;
+        let mut accelerated_cutting_seconds = 0.;
         for run in &route.runs {
             let placement = placements
                 .get(run.path.placement)
@@ -501,9 +503,31 @@ fn summarize<'a>(
                 ));
             }
             exterior_started |= run.path.internal_cut.is_none();
+            if policy.machine.motion_profile.is_some() {
+                accelerated_cutting_seconds = finite_sum(
+                    [
+                        accelerated_cutting_seconds,
+                        policy
+                            .machine
+                            .cutting_seconds(points, closed, qualification.feed_mm_s)?,
+                    ]
+                    .into_iter(),
+                )?;
+            }
         }
         let cut = finite_sum(route.runs.iter().map(|run| run.cut_length_mm))?;
         let travel = route.checked_travel_length()?;
+        let (cutting_seconds, travel_seconds) = if policy.machine.motion_profile.is_some() {
+            (
+                accelerated_cutting_seconds,
+                policy.machine.travel_seconds(route)?,
+            )
+        } else {
+            (
+                cut / qualification.feed_mm_s,
+                travel / policy.machine.travel_mm_s,
+            )
+        };
         if paths != expected
             || paths.is_empty()
             || route.runs.first().map(|run| run.travel_mm[0]) != Some(policy.machine.start_mm)
@@ -516,8 +540,8 @@ fn summarize<'a>(
                         .any(|run| !run.travel_waypoints_mm.is_empty())))
             || !near(cut, route.cut_length_mm)
             || !near(travel, route.travel_length_mm)
-            || !near(cut / qualification.feed_mm_s, route.cutting_seconds)
-            || !near(travel / policy.machine.travel_mm_s, route.travel_seconds)
+            || !near(cutting_seconds, route.cutting_seconds)
+            || !near(travel_seconds, route.travel_seconds)
             || !near(
                 route.runs.len() as f64 * policy.machine.lift_lower_seconds,
                 route.lift_lower_seconds,
