@@ -1303,6 +1303,348 @@ fn schedule_incoming_velocity(d: &mut Value, m: &mut Value) {
     d["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
 }
 
+fn replace_mechanical_qualification(d: &mut Value, m: &mut Value, qualification: Value) {
+    for path in [
+        "/initial_sample/liquid_mechanics",
+        "/liquid_mechanics",
+        "/transient_surface/result/mechanical_coupling",
+    ] {
+        m.pointer_mut(path).unwrap()["qualification"] = qualification.clone();
+    }
+    let heat = &mut m["transient_surface"]["result"];
+    heat["request"]["mechanical_coupling"] = qualification;
+    d["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+}
+
+fn schedule_phase_velocities(d: &mut Value, m: &mut Value, recoil: bool) {
+    qualify_incoming_velocities(d, m, true);
+    let mut qualification = m["liquid_mechanics"]["qualification"].clone();
+    qualification["schema"] = json!(if recoil {
+        "ftx-coupled-liquid-mechanics/6"
+    } else {
+        "ftx-coupled-liquid-mechanics/5"
+    });
+    qualification["model"] = json!(if recoil {
+        "scheduled_phase_specific_incoming_and_outgoing_velocity_mass_exchange_frozen_mechanics/1"
+    } else {
+        "scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1"
+    });
+    for binding in qualification["bindings"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        let velocities = binding
+            .as_object_mut()
+            .unwrap()
+            .remove("incoming_stream_velocities_world_m_s")
+            .unwrap();
+        binding["incoming_stream_velocities_world_m_s_by_interval"] = json!([velocities]);
+        if recoil {
+            // Zero relative outflow retains the independent accounting fixture's unit-x velocity.
+            binding["outgoing_stream_velocities_relative_to_cloth_m_s_by_interval"] =
+                json!([{"evaporation":[0.,0.,0.],"drainage":[0.,0.,0.]}]);
+        }
+    }
+    for path in [
+        "/initial_sample/liquid_mechanics",
+        "/liquid_mechanics",
+        "/transient_surface/result/mechanical_coupling",
+    ] {
+        let report = m.pointer_mut(path).unwrap();
+        report["schema"] = json!(if recoil {
+            "ftx-coupled-liquid-mechanics-result/6"
+        } else {
+            "ftx-coupled-liquid-mechanics-result/5"
+        });
+        if recoil {
+            report["exchange"]["outgoing_separation_work_j"] = json!(0.);
+        }
+    }
+    if recoil {
+        m["transient_surface"]["result"]["trace"][0]["mechanical_coupling"]["exchange"]["outgoing_separation_work_j"] =
+            json!(0.);
+    }
+    replace_mechanical_qualification(d, m, qualification);
+}
+
+#[test]
+fn scheduled_phases_and_recoil_admit_the_same_independent_thermal_objectives() {
+    for condensation in [false, true] {
+        for draining in [false, true] {
+            for recoil in [false, true] {
+                let (a, mut d, s, mut m) = if draining {
+                    draining_case(condensation)
+                } else {
+                    exchanging_case(condensation)
+                };
+                let h = &m["transient_surface"]["result"];
+                let expected = admit(&a, &s, &m, h, &h["request"], false, &[3., 3.]).unwrap();
+                schedule_phase_velocities(&mut d, &mut m, recoil);
+                assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+                let h = &m["transient_surface"]["result"];
+                assert_eq!(
+                    admit(&a, &s, &m, h, &h["request"], false, &[3., 3.]).unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn scheduled_phase_mechanics_need_exact_intervals_phases_sources_and_exclusive_fields() {
+    let field = "incoming_stream_velocities_world_m_s_by_interval";
+    for recoil in [false, true] {
+        let (a, mut d, s, mut m) = draining_case(true);
+        schedule_phase_velocities(&mut d, &mut m, recoil);
+        assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+        for fault in 0..18 {
+            let (mut changed, mut descriptor) = (m.clone(), d.clone());
+            let mut q = changed["liquid_mechanics"]["qualification"].clone();
+            let binding = &mut q["bindings"]["front"];
+            match fault {
+                0 => {
+                    binding.as_object_mut().unwrap().remove(field);
+                }
+                1 => binding[field] = Value::Null,
+                2 => binding[field] = json!([]),
+                3 => binding[field]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"supply":[1.,0.,0.],"condensation":[1.,0.,0.]})),
+                4 => binding[field][0]["supply"] = json!([1., 0.]),
+                5 => binding[field][0]["condensation"] = json!([1., null, 0.]),
+                6 => {
+                    binding[field][0].as_object_mut().unwrap().remove("supply");
+                }
+                7 => binding[field][0]["extra"] = json!([0., 0., 0.]),
+                8 => {
+                    binding[field][0]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("condensation");
+                    binding[field][0]["drainage"] = json!([0., 0., 0.]);
+                }
+                9 => binding["incoming_velocity_world_m_s"] = Value::Null,
+                10 => {
+                    binding["incoming_stream_velocities_world_m_s"] =
+                        json!({"supply":[1.,0.,0.],"condensation":[1.,0.,0.]})
+                }
+                11 => binding["incoming_velocity_world_m_s_by_interval"] = json!([[1., 0., 0.]]),
+                12 => {
+                    q["schema"] = json!(if recoil {
+                        "ftx-coupled-liquid-mechanics/5"
+                    } else {
+                        "ftx-coupled-liquid-mechanics/6"
+                    })
+                }
+                13 => {
+                    q["model"] =
+                        json!("phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1")
+                }
+                14 => binding["material_sha256"] = json!("f".repeat(64)),
+                15 => q["material_report_sha256"] = json!("f".repeat(64)),
+                16 => q["allow_estimates"] = json!(false),
+                _ => q["qualification"] = json!(""),
+            }
+            replace_mechanical_qualification(&mut descriptor, &mut changed, q);
+            assert!(
+                admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err(),
+                "recoil {recoil}, fault {fault}"
+            );
+        }
+        let mut stale = m.clone();
+        stale["initial_sample"]["liquid_mechanics"]["schema"] =
+            json!("ftx-coupled-liquid-mechanics-result/4");
+        assert!(admit_heat(&a, &d, &s, &stale, Consumer::TransientSurface).is_err());
+        let mut wrong_intervals = m.clone();
+        wrong_intervals["keyframes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"time_s":2.}));
+        let h = &wrong_intervals["transient_surface"]["result"];
+        assert!(admit_mechanics(&s, &wrong_intervals, h, &h["request"], false).is_err());
+    }
+}
+
+#[test]
+fn outgoing_recoil_requires_both_qualified_phases_on_every_interval() {
+    let field = "outgoing_stream_velocities_relative_to_cloth_m_s_by_interval";
+    let (a, mut d, s, mut m) = draining_case(true);
+    schedule_phase_velocities(&mut d, &mut m, true);
+    for fault in 0..9 {
+        let (mut changed, mut descriptor) = (m.clone(), d.clone());
+        let mut q = changed["liquid_mechanics"]["qualification"].clone();
+        let binding = &mut q["bindings"]["back"];
+        match fault {
+            0 => {
+                binding.as_object_mut().unwrap().remove(field);
+            }
+            1 => binding[field] = Value::Null,
+            2 => binding[field] = json!([]),
+            3 => binding[field]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"evaporation":[0.,0.,0.],"drainage":[0.,0.,0.]})),
+            4 => binding[field][0]["evaporation"] = json!([0., 0.]),
+            5 => binding[field][0]["drainage"] = json!([0., null, 0.]),
+            6 => {
+                binding[field][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("drainage");
+            }
+            7 => binding[field][0]["extra"] = json!([0., 0., 0.]),
+            _ => {
+                binding[field][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("evaporation");
+                binding[field][0]["supply"] = json!([0., 0., 0.]);
+            }
+        }
+        replace_mechanical_qualification(&mut descriptor, &mut changed, q);
+        assert!(
+            admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
+#[test]
+fn recoil_work_requires_complete_monotone_accounting_and_actual_outgoing_mass() {
+    let (a, mut d, s, mut m) = draining_case(true);
+    schedule_phase_velocities(&mut d, &mut m, true);
+    // A nonzero qualification keeps these receipt checks independent of the zero-recoil control.
+    let mut q = m["liquid_mechanics"]["qualification"].clone();
+    q["bindings"]["front"]["outgoing_stream_velocities_relative_to_cloth_m_s_by_interval"][0]["drainage"] =
+        json!([0., 0., 1.]);
+    replace_mechanical_qualification(&mut d, &mut m, q);
+    for fault in 0..5 {
+        let mut changed = m.clone();
+        if fault == 0 {
+            changed["initial_sample"]["liquid_mechanics"]["exchange"]["outgoing_separation_work_j"] =
+                json!(1.);
+        } else {
+            for path in [
+                "/liquid_mechanics/exchange",
+                "/transient_surface/result/mechanical_coupling/exchange",
+                "/transient_surface/result/trace/0/mechanical_coupling/exchange",
+            ] {
+                let flow = changed.pointer_mut(path).unwrap();
+                match fault {
+                    1 => {
+                        flow.as_object_mut()
+                            .unwrap()
+                            .remove("outgoing_separation_work_j");
+                    }
+                    2 => flow["outgoing_separation_work_j"] = Value::Null,
+                    3 => flow["outgoing_separation_work_j"] = json!(-1.),
+                    _ => flow["mixing_dissipation_j"] = Value::Null,
+                }
+            }
+        }
+        assert!(
+            admit_heat(&a, &d, &s, &changed, Consumer::TransientSurface).is_err(),
+            "fault {fault}"
+        );
+    }
+    // Isolate cumulative receipt admission: a second retained sample with unchanged outgoing
+    // mass cannot manufacture work, and a later sample cannot erase already supplied work.
+    for (first, last) in [(0., 1.), (1., 0.)] {
+        let mut changed = m.clone();
+        for path in [
+            "/liquid_mechanics/exchange",
+            "/transient_surface/result/mechanical_coupling/exchange",
+            "/transient_surface/result/trace/0/mechanical_coupling/exchange",
+        ] {
+            changed.pointer_mut(path).unwrap()["outgoing_separation_work_j"] = json!(last);
+        }
+        let h = &mut changed["transient_surface"]["result"];
+        let mut earlier = h["trace"][0].clone();
+        earlier["mechanical_coupling"]["exchange"]["outgoing_separation_work_j"] = json!(first);
+        h["trace"].as_array_mut().unwrap().insert(0, earlier);
+        let h = &changed["transient_surface"]["result"];
+        assert!(
+            admit_mechanics(&s, &changed, h, &h["request"], false).is_err(),
+            "{first} -> {last}"
+        );
+    }
+}
+
+#[test]
+fn zero_relative_outflow_forbids_work_without_inventing_flow_from_an_inactive_phase() {
+    let (a, mut d, s, mut m) = exchanging_case(false);
+    schedule_phase_velocities(&mut d, &mut m, true);
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+    let mut changed = m.clone();
+    for path in [
+        "/liquid_mechanics/exchange",
+        "/transient_surface/result/mechanical_coupling/exchange",
+        "/transient_surface/result/trace/0/mechanical_coupling/exchange",
+    ] {
+        changed.pointer_mut(path).unwrap()["outgoing_separation_work_j"] = json!(1e-12);
+    }
+    // Actual evaporation is positive, so an outgoing-mass check alone cannot reject invented work.
+    assert!(
+        m["liquid_mechanics"]["exchange"]["outgoing_mass_kg"]
+            .as_f64()
+            .unwrap()
+            > 0.
+    );
+    assert!(admit_heat(&a, &d, &s, &changed, Consumer::TransientSurface).is_err());
+    let mut q = m["liquid_mechanics"]["qualification"].clone();
+    q["bindings"]["front"]["outgoing_stream_velocities_relative_to_cloth_m_s_by_interval"][0]["drainage"] =
+        json!([0., 0., 1.]);
+    replace_mechanical_qualification(&mut d, &mut m, q);
+    // This water policy has no drainage; a qualified nonzero velocity does not create its mass/work.
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+}
+
+#[test]
+fn older_mechanical_models_cannot_acquire_new_velocity_fields_or_recoil_work() {
+    for model in 1..=5 {
+        let (a, mut d, s, mut m) = exchanging_case(false);
+        match model {
+            2 => prescribe_incoming_velocity(&mut d, &mut m),
+            3 => schedule_incoming_velocity(&mut d, &mut m),
+            4 => qualify_incoming_velocities(&mut d, &mut m, true),
+            5 => schedule_phase_velocities(&mut d, &mut m, false),
+            _ => {}
+        }
+        assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+        let mut changed = m.clone();
+        for path in [
+            "/liquid_mechanics/exchange",
+            "/transient_surface/result/mechanical_coupling/exchange",
+            "/transient_surface/result/trace/0/mechanical_coupling/exchange",
+        ] {
+            changed.pointer_mut(path).unwrap()["outgoing_separation_work_j"] = json!(0.);
+        }
+        assert!(
+            admit_heat(&a, &d, &s, &changed, Consumer::TransientSurface).is_err(),
+            "work on /{model}"
+        );
+        for field in [
+            "incoming_stream_velocities_world_m_s_by_interval",
+            "outgoing_stream_velocities_relative_to_cloth_m_s_by_interval",
+        ] {
+            if model == 5 && field == "incoming_stream_velocities_world_m_s_by_interval" {
+                continue;
+            }
+            let (mut changed, mut descriptor) = (m.clone(), d.clone());
+            let mut q = changed["liquid_mechanics"]["qualification"].clone();
+            q["bindings"]["front"][field] = Value::Null;
+            replace_mechanical_qualification(&mut descriptor, &mut changed, q);
+            assert!(
+                admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err(),
+                "{field} on /{model}"
+            );
+        }
+    }
+}
+
 #[test]
 fn scheduled_incoming_velocity_admission_requires_exact_complete_source_intervals() {
     for condensation in [false, true] {

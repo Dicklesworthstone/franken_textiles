@@ -4,10 +4,13 @@ let sourceUrls = [], resultUrls = [], draftUrls = [];
 let pointSource = null;
 let importedOptions = null;
 let photoRecords = null, workbenchTransfer = null;
+let sectionWorker = null, sectionTicket = 0, sectionBusy = false, sectionRecords = null;
+const sectionSources = {width:null,depth:null}, sectionUrls = [];
 const materialsOrigin = new URL(import.meta.url).origin;
 let materialsToken = new URL(window.location.href).searchParams.get("materialsReturn");
 let materialsTarget = materialsToken && /^[0-9a-f]{32}$/.test(materialsToken) && materialsOrigin !== "null" ? window.opener : null;
 $("returnMaterials").hidden = !materialsTarget;
+$("sectionMaterials").hidden = !materialsTarget;
 let cameraWorker = null, cameraTicket = 0, cameraBusy = false, cameraResult = null, generatedCalibration = null;
 const cameraUrls = [];
 const status = text => {$("status").textContent=text;};
@@ -43,10 +46,10 @@ function controls() {
   $("plainControls").hidden=charuco; $("charucoControls").hidden=!charuco; $("lensControls").hidden=!calibrated;
   $("paper").disabled=charuco; $("sheet").disabled=!charuco; $("calibration").disabled=!charuco;
   $("clearCalibration").disabled=!calibrated;
-  $("analyze").disabled=busy || cameraBusy || !$("photo").files.length || (charuco && !$("sheet").files.length);
-  $("measure").disabled=busy || cameraBusy || scale?.ok !== true || pending.length>0;
-  $("openWorkbench").disabled=busy || cameraBusy || photoRecords===null;
-  $("returnMaterials").disabled=busy || cameraBusy || photoRecords===null || !materialsTarget;
+  $("analyze").disabled=busy || cameraBusy || sectionBusy || !$("photo").files.length || (charuco && !$("sheet").files.length);
+  $("measure").disabled=busy || cameraBusy || sectionBusy || scale?.ok !== true || pending.length>0;
+  $("openWorkbench").disabled=busy || cameraBusy || sectionBusy || photoRecords===null;
+  $("returnMaterials").disabled=busy || cameraBusy || sectionBusy || photoRecords===null || !materialsTarget;
   $("pointFile").disabled=!bitmap || scale?.ok!==true;
   $("draftFile").disabled=cameraBusy || !bitmap || scale?.ok!==true;
   $("saveDraft").disabled=busy || cameraBusy || !bitmap || scale?.ok!==true || pending.length>0;
@@ -64,18 +67,32 @@ function controls() {
   const images=$("cameraMode").value==="images";
   $("cameraImageControls").hidden=!images;
   $("cameraInputLabel").textContent=images?"Image manifest":"Reference-coordinate input";
-  $("cameraRun").disabled=busy || cameraBusy || !$("cameraInput").files.length ||
+  $("cameraRun").disabled=busy || cameraBusy || sectionBusy || !$("cameraInput").files.length ||
     (images && (!$("cameraSheet").files.length || (!$("cameraImages").files.length && !$("cameraDirectory").files.length)));
   $("cameraCancel").disabled=!cameraBusy;
   $("cameraClearNoise").disabled=!$("cameraNoise").files.length;
   $("cameraUse").disabled=busy || cameraBusy || cameraResult?.accepted!==true;
   $("cameraActive").textContent=generatedCalibration?`Using the locally generated calibration for ${generatedCalibration.lensId}.`:"";
+  const combined=$("sectionCombined").checked, calibrating=$("sectionMode").value==="calibrate";
+  $("sectionDepthControls").hidden=combined;
+  $("sectionGirthControls").hidden=calibrating; $("sectionTapeControls").hidden=!calibrating;
+  $("sectionRun").textContent=calibrating?"Calibrate section shape factor":"Estimate girth";
+  $("sectionRun").disabled=busy || cameraBusy || sectionBusy || !sectionSources.width ||
+    (!combined && !sectionSources.depth) || !$("sectionConsent").checked;
+  $("sectionCancel").disabled=!sectionBusy;
+  $("sectionKeepWidth").disabled=busy || cameraBusy || sectionBusy || !photoRecords;
+  $("sectionKeepDepth").disabled=busy || cameraBusy || sectionBusy || !photoRecords;
+  $("sectionClear").disabled=!sectionSources.width && !sectionSources.depth;
+  $("sectionWorkbench").disabled=busy || cameraBusy || sectionBusy || !sectionRecords;
+  $("sectionMaterials").disabled=busy || cameraBusy || sectionBusy || !sectionRecords || !materialsTarget;
+  $("sectionWidthSource").textContent=sectionSources.width?`Retained front/combined source: ${sectionSources.width.label}`:"No front-width records selected.";
+  $("sectionDepthSource").textContent=sectionSources.depth?`Retained side source: ${sectionSources.depth.label}`:"No side-depth records selected.";
 }
 function kill() { worker?.terminate(); worker=null; busy=false; controls(); }
 function revoke(urls) { urls.forEach(u=>URL.revokeObjectURL(u)); urls.length=0; }
 function withdraw(source=false) {
   photoRecords=null;
-  if(workbenchTransfer) workbenchTransfer.records=null;
+  if(workbenchTransfer && workbenchTransfer.kind!=="section") workbenchTransfer.records=null;
   ++ticket; kill(); $("pointFile").value=""; $("optionsFile").value=""; revoke(resultUrls); $("downloads").replaceChildren();
   $("draftFile").value=""; revoke(draftUrls); $("draftDownloads").replaceChildren();
   $("result").hidden=true; $("report").textContent=""; $("values").replaceChildren(); $("error").textContent="";
@@ -120,6 +137,95 @@ async function readJsonFile(file) {
   // Preserve the exact UTF-8 source, including a BOM (which the Rust JSON parser will reject).
   // Replacing invalid bytes or stripping a BOM would change the source identity before hashing.
   return new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(await file.arrayBuffer());
+}
+function stopSection() {sectionWorker?.terminate(); sectionWorker=null; sectionBusy=false; controls();}
+function withdrawSection(source=false) {
+  ++sectionTicket; sectionRecords=null;
+  if(workbenchTransfer?.kind==="section") workbenchTransfer.records=null;
+  if(source) $("sectionConsent").checked=false;
+  stopSection(); revoke(sectionUrls); $("sectionDownloads").replaceChildren();
+  $("sectionResult").hidden=true; $("sectionReport").textContent=""; $("sectionError").textContent="";
+  $("sectionSummary").textContent=""; $("sectionUncertainty").textContent=""; $("sectionNotes").textContent="";
+}
+function keepSectionSource(side) {
+  if(busy || cameraBusy || sectionBusy || !photoRecords) return;
+  sectionSources[side]={file:photoRecords,label:`Measured snapshot of ${$("photo").files[0]?.name || "the current photo"}`};
+  $(side==="width"?"sectionWidthFile":"sectionDepthFile").value="";
+  withdrawSection(true);
+  $("sectionStatus").textContent="Photo result retained. You may choose the next photo; review both sources before calculating.";
+}
+function sectionOptions() {
+  const number=(id,optional=false)=>{
+    const raw=$(id).value.trim();
+    if(!raw && optional) return undefined;
+    if(!raw || !Number.isFinite(Number(raw))) throw Error("Complete the active section settings with finite numbers.");
+    return Number(raw);
+  };
+  const value={level:$("sectionLevel").value,same_wearer:$("sectionConsent").checked,clothing_mm:number("sectionClothing")};
+  if($("sectionMode").value==="calibrate") {
+    value.tape_girth_mm=number("sectionTape"); value.sigma_tape_mm=number("sectionTapeSigma");
+  } else {
+    value.k=number("sectionK",true); value.k_sigma=number("sectionKSigma",true);
+    value.k_ratio=number("sectionRatio"); value.k_ratio_sigma=number("sectionRatioSigma");
+  }
+  return JSON.stringify(value);
+}
+async function runSection() {
+  if(busy || cameraBusy || sectionBusy) return;
+  withdrawSection(); const id=sectionTicket;
+  const width=sectionSources.width?.file, depth=$("sectionCombined").checked?null:sectionSources.depth?.file;
+  const calibrating=$("sectionMode").value==="calibrate";
+  try {
+    if(!width || (!$("sectionCombined").checked && !depth)) throw Error("Choose front-width and side-depth evidence first.");
+    if(!$("sectionConsent").checked) throw Error("Review the sources and confirm the same wearer and matching anatomical levels.");
+    if(width.size+(depth?.size || 0)>16*1024*1024) throw Error("Section source documents must total at most 16 MiB; no source was read.");
+    const opts=sectionOptions();
+    sectionBusy=true; controls(); $("sectionStatus").textContent="Reading the retained local photo evidence…";
+    const [widthText,depthText]=await Promise.all([readJsonFile(width),readJsonFile(depth)]);
+    if(id!==sectionTicket) return;
+    const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); sectionWorker=current;
+    current.onmessage=({data:m})=>{
+      if(current!==sectionWorker || m.request!==sectionTicket) return;
+      if(m.type==="progress") {$("sectionStatus").textContent=m.text; return;}
+      stopSection();
+      if(m.type==="error") {$("sectionError").textContent=m.message; $("sectionStatus").textContent="Section calculation refused; no result published."; return;}
+      try {
+        const result=JSON.parse(m.report);
+        if(calibrating) {
+          $("sectionSummary").textContent=`${result.level} calibration: k = ${result.k_child} ± ${result.k_child_sigma} (1σ).`;
+          $("sectionUncertainty").textContent=`For this wearer's other levels: k ratio ${result.k_ratio}, ratio σ ${result.k_ratio_sigma}. Enter both under Shape-factor assumptions. Transferring this calibration between levels remains uncertain.`;
+          $("sectionNotes").textContent="This coefficient report is not another independent tape or photo measurement. It cannot be sent as girth evidence.";
+        } else {
+          if(result.schema!=="fabric-measurements/1" || !Array.isArray(result.records) || result.records.length!==1) throw Error("The section engine returned no ordinary girth record.");
+          $("sectionSummary").textContent=`${result.level}: ${result.girth_mm} mm ± ${result.sigma_mm} mm (1σ), PHOTO_ESTIMATED.`;
+          const terms=result.sigma_terms_mm;
+          $("sectionUncertainty").textContent=`Uncertainty contributions (mm): front width ${terms.width}, side depth ${terms.depth}, section shape ${terms.k}. Clothing offset: ${result.clothing_mm_per_side} mm per side.`;
+          $("sectionNotes").textContent=result.notes;
+          sectionRecords=new Blob([m.report],{type:"application/json"});
+        }
+        $("sectionReport").textContent=m.report; $("sectionResult").hidden=false;
+        link($("sectionDownloads"),m.report,calibrating?"section-calibration.json":"section-measurements.json","application/json",sectionUrls);
+        link($("sectionDownloads"),widthText,"section-front-measurements.json","application/json",sectionUrls);
+        if(depth) link($("sectionDownloads"),depthText,"section-side-measurements.json","application/json",sectionUrls);
+        link($("sectionDownloads"),opts,"section-options.json","application/json",sectionUrls);
+        $("sectionStatus").textContent=calibrating?"Section calibration available; retain the coefficients and their uncertainty.":"Photo-estimated girth available; review its uncertainty and original evidence before use.";
+      } catch(error) {
+        withdrawSection(); $("sectionError").textContent=String(error.message || error);
+        $("sectionStatus").textContent="No section result published.";
+      }
+      controls();
+    };
+    current.onerror=error=>{
+      if(current!==sectionWorker) return;
+      withdrawSection(); $("sectionError").textContent=error.message;
+      $("sectionStatus").textContent="Section worker stopped; calculate again from the retained sources.";
+    };
+    current.postMessage({request:id,op:"section",width:widthText,depth:depthText,options:opts});
+  } catch(error) {
+    if(id!==sectionTicket) return;
+    stopSection(); $("sectionError").textContent=String(error.message || error);
+    $("sectionStatus").textContent="No section result published.";
+  }
 }
 async function loadOptions() {
   const file=$("optionsFile").files[0];
@@ -383,6 +489,30 @@ $("cameraUse").onclick=()=>{
   generatedCalibration=cameraResult; $("calibration").value=""; $("referenceMode").value="charuco";
   withdraw(true); status("Generated calibration selected. Assert this photo's capture settings and analyze it.");
 };
+$("sectionRun").onclick=runSection;
+$("sectionCancel").onclick=()=>{withdrawSection(); $("sectionStatus").textContent="Section calculation cancelled; retained sources remain available.";};
+$("sectionKeepWidth").onclick=()=>keepSectionSource("width");
+$("sectionKeepDepth").onclick=()=>keepSectionSource("depth");
+$("sectionClear").onclick=()=>{
+  sectionSources.width=null; sectionSources.depth=null;
+  $("sectionWidthFile").value=""; $("sectionDepthFile").value="";
+  withdrawSection(true); $("sectionStatus").textContent="Retained section sources cleared.";
+};
+for(const [id,side] of [["sectionWidthFile","width"],["sectionDepthFile","depth"]]) {
+  $(id).addEventListener("change",()=>{
+    const file=$(id).files[0]; sectionSources[side]=file?{file,label:file.name}:null;
+    withdrawSection(true); $("sectionStatus").textContent="Section source changed. Review both views and confirm the wearer again.";
+  });
+}
+for(const id of ["sectionCombined","sectionLevel","sectionMode","sectionConsent"]) {
+  $(id).addEventListener("change",()=>{
+    withdrawSection(id==="sectionCombined");
+    $("sectionStatus").textContent="Section settings changed; review the sources and calculate again.";
+  });
+}
+for(const id of ["sectionClothing","sectionK","sectionKSigma","sectionRatio","sectionRatioSigma","sectionTape","sectionTapeSigma"]) {
+  $(id).addEventListener("input",()=>{withdrawSection(); $("sectionStatus").textContent="Section assumptions changed; calculate again.";});
+}
 for(const id of ["cameraMode","cameraInput","cameraSheet","cameraImages","cameraDirectory","cameraNoise"]) {
   $(id).addEventListener("change",()=>{
     if(id==="cameraImages" && $(id).files.length) $("cameraDirectory").value="";
@@ -429,26 +559,31 @@ $("image").onclick=e=>{
   $("clickStatus").textContent=pending.length?"First point selected; click the second.":"Pair added. Review its name and coordinates.";
   status(pending.length?"First point selected; click the second.":"Point pairs changed; measure again."); draw(); controls();
 };
-$("openWorkbench").onclick=()=>{
-  if(busy || cameraBusy || !photoRecords) return;
+function openWorkbench(records,kind,notify,filename) {
+  if(busy || cameraBusy || sectionBusy || !records) return;
   if(workbenchTransfer && !workbenchTransfer.target.closed) {
-    status("A Workbench handoff is still opening. Finish or close that tab before opening another.");return;
+    notify("A Workbench handoff is still opening. Finish or close that tab before opening another.");return;
   }
   const token=Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,"0")).join("");
   const url=new URL("index.html",import.meta.url);url.searchParams.set("photoImport",token);
   const target=window.open(url.href,"_blank");
-  if(!target) {status("Workbench popup blocked. Download photo-measurements.json and add it there instead.");return;}
-  workbenchTransfer={target,token,records:photoRecords};
-  status("Workbench opened. Choose primary measurements and confirm the same wearer before checking.");
-};
-$("returnMaterials").onclick=()=>{
-  if(busy || cameraBusy || !photoRecords || !materialsTarget) return;
-  if(materialsTarget.closed) {status("Material Workbench closed. Download the photo records instead.");return;}
-  if(workbenchTransfer && !workbenchTransfer.target.closed) {status("Finish the pending Workbench handoff first.");return;}
-  workbenchTransfer={target:materialsTarget,token:materialsToken,records:photoRecords};
+  if(!target) {notify(`Workbench popup blocked. Download ${filename} and add it there instead.`);return;}
+  workbenchTransfer={target,token,records,kind};
+  notify("Workbench opened. Choose primary measurements and confirm the same wearer before checking.");
+}
+function returnMaterials(records,kind,notify) {
+  if(busy || cameraBusy || sectionBusy || !records || !materialsTarget) return;
+  if(materialsTarget.closed) {notify("Material Workbench closed. Download the records instead.");return;}
+  if(workbenchTransfer && !workbenchTransfer.target.closed) {notify("Finish the pending Workbench handoff first.");return;}
+  workbenchTransfer={target:materialsTarget,token:materialsToken,records,kind};
   materialsTarget.postMessage({type:"ftx-photo-records-offer",token:materialsToken},materialsOrigin);
-  status("Returning current photo records to Material Workbench…");
-};
+  notify("Returning current photo records to Material Workbench…");
+}
+const sectionStatus=text=>{$("sectionStatus").textContent=text;};
+$("openWorkbench").onclick=()=>openWorkbench(photoRecords,"photo",status,"photo-measurements.json");
+$("sectionWorkbench").onclick=()=>openWorkbench(sectionRecords,"section",sectionStatus,"section-measurements.json");
+$("returnMaterials").onclick=()=>returnMaterials(photoRecords,"photo",status);
+$("sectionMaterials").onclick=()=>returnMaterials(sectionRecords,"section",sectionStatus);
 window.addEventListener("message",event=>{
   const m=event.data;
   if(materialsTarget && event.origin===materialsOrigin && event.source===materialsTarget && m?.token===materialsToken &&
@@ -470,6 +605,6 @@ window.addEventListener("pagehide",()=>{
     materialsTarget.postMessage({type:"ftx-photo-records-cancelled",token:materialsToken},materialsOrigin);
     materialsTarget=null;materialsToken=null;window.opener=null;
   }
-  withdrawCamera(); withdraw(true);
+  withdrawSection(true); withdrawCamera(); withdraw(true);
 });
 controls();

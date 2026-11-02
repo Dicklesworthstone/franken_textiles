@@ -272,29 +272,39 @@ fn evaporating_mechanical_water_replays_in_native_portable_and_named_case_decisi
 
 #[test]
 fn incoming_mechanical_water_replays_actual_native_portable_and_named_case_decisions() {
-    replay_incoming_mechanical_water(false, false, false);
+    replay_incoming_mechanical_water(1);
 }
 
 #[test]
 fn incoming_water_impulse_replays_actual_native_portable_and_named_case_decisions() {
-    replay_incoming_mechanical_water(true, false, false);
+    replay_incoming_mechanical_water(2);
 }
 
 #[test]
 fn separate_water_phase_impulses_replay_native_portable_and_named_case_decisions() {
-    replay_incoming_mechanical_water(true, true, false);
+    replay_incoming_mechanical_water(4);
 }
 
 #[test]
 fn scheduled_incoming_water_replays_native_portable_and_named_case_decisions() {
-    replay_incoming_mechanical_water(true, false, true);
+    replay_incoming_mechanical_water(3);
 }
 
-fn replay_incoming_mechanical_water(
-    prescribed_velocity: bool,
-    phase_specific: bool,
-    scheduled: bool,
-) {
+#[test]
+fn scheduled_phase_water_impulses_replay_native_portable_and_named_case_decisions() {
+    replay_incoming_mechanical_water(5);
+}
+
+#[test]
+fn outgoing_water_recoil_replays_native_portable_and_named_case_decisions() {
+    replay_incoming_mechanical_water(6);
+}
+
+fn replay_incoming_mechanical_water(version: u8) {
+    let prescribed_velocity = version >= 2;
+    let phase_specific = version >= 4;
+    let scheduled = matches!(version, 3 | 5 | 6);
+    let recoil = version == 6;
     for condensation in [false, true] {
         let (pattern, mut study, mut single) = inputs();
         single["motion"]["keyframes"] = json!([
@@ -316,11 +326,14 @@ fn replay_incoming_mechanical_water(
         water["maximum_liquid_loading_kg_m2"] = json!(0.2);
         water["qualification"] =
             json!("Synthetic invariant thermal/vapor laws over [-20,80] C and [0,0.2] kg/m2");
-        water["outside_vapor_pressure_pa"] = json!(if condensation {
-            [6000., 1000.]
-        } else {
-            [1000., 1000.]
-        });
+        water["outside_vapor_pressure_pa"] =
+            json!(if condensation && phase_specific && scheduled {
+                [6000., 6500.]
+            } else if condensation {
+                [6000., 1000.]
+            } else {
+                [1000., 1000.]
+            });
         water["supply"] = json!({"schema":"ftx-textile-liquid-supply/1",
             "bindings":{"band":{"rate_kg_m2_s":if phase_specific && condensation { [0.1,0.1] } else if condensation { [0.,0.] } else { [100.,100.] },
                 "temperature_c":[20.,20.]}},
@@ -334,6 +347,15 @@ fn replay_incoming_mechanical_water(
                     "note":"Artificial reverse Ret and low latent heat; no empirical textile claim"},
                 "evidence":"estimate","allow_estimates":true,"method":"Two-interval phase transfer",
                 "qualification":"Synthetic reverse Ret and wet/dry phase closure with constant latent plus cp_liquid effective sensible enthalpy over the full declared domain"});
+        }
+        if recoil {
+            water["schema"] = json!("ftx-textile-surface-water/4");
+            water["drainage"] = json!({"schema":"ftx-textile-liquid-drainage/1",
+                "bindings":{"band":{"rate_kg_m2_s":[1.,2.]}},
+                "source":{"reference":"test:scheduled-recoil-drainage","accessed_on":"2026-11-01",
+                    "note":"Artificial nonzero outflow for conservation; no measured runoff claim"},
+                "evidence":"estimate","allow_estimates":true,"method":"Prescribed reference-area drainage",
+                "qualification":"Stock-limited removal with sensible enthalpy at the retained liquid temperature; velocities independently qualified by the mechanical request"});
         }
         let mass_metric = if condensation {
             "textile_water_condensed_mass_kg"
@@ -349,6 +371,11 @@ fn replay_incoming_mechanical_water(
         let velocity = [0.2, 0.1, -0.5];
         let vapor_velocity = [-0.1, 0.3, 0.4];
         let next_velocity = [-0.3, 0.4, 0.2];
+        let next_vapor_velocity = [0.5, -0.2, 0.1];
+        let evaporation_velocity = [0., 0., 0.4];
+        let next_evaporation_velocity = [0., 0., 0.2];
+        let drainage_velocity = [0.2, 0., -0.1];
+        let next_drainage_velocity = [-0.1, 0.1, -0.2];
         if prescribed_velocity {
             let qualification = &mut single["motion"]["transient_surface"]["mechanical_coupling"];
             qualification["schema"] = json!("ftx-coupled-liquid-mechanics/2");
@@ -372,7 +399,34 @@ fn replay_incoming_mechanical_water(
             qualification["qualification"] = json!(
                 "Exact artificial wet mechanical laws and prescribed incoming momentum over the complete declared thermal domain; numerical test, not measured rain or condensation"
             );
-            if scheduled {
+            if scheduled && phase_specific {
+                qualification["schema"] = json!(if recoil {
+                    "ftx-coupled-liquid-mechanics/6"
+                } else {
+                    "ftx-coupled-liquid-mechanics/5"
+                });
+                qualification["model"] = json!(if recoil {
+                    "scheduled_phase_specific_incoming_and_outgoing_velocity_mass_exchange_frozen_mechanics/1"
+                } else {
+                    "scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1"
+                });
+                let binding = &mut qualification["bindings"]["band"];
+                binding
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("incoming_stream_velocities_world_m_s");
+                binding["incoming_stream_velocities_world_m_s_by_interval"] = json!([
+                    {"supply":velocity,"condensation":vapor_velocity},
+                    {"supply":next_velocity,"condensation":next_vapor_velocity}]);
+                if recoil {
+                    binding["outgoing_stream_velocities_relative_to_cloth_m_s_by_interval"] = json!([
+                        {"evaporation":evaporation_velocity,"drainage":drainage_velocity},
+                        {"evaporation":next_evaporation_velocity,"drainage":next_drainage_velocity}]);
+                }
+                qualification["qualification"] = json!(
+                    "Exact artificial wet mechanical laws with independently prescribed phase velocities in both intervals; outgoing relative velocities, when declared, are separately qualified synthetic boundary work, not inferred runoff"
+                );
+            } else if scheduled {
                 qualification["schema"] = json!("ftx-coupled-liquid-mechanics/3");
                 qualification["model"] =
                     json!("scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1");
@@ -384,11 +438,21 @@ fn replay_incoming_mechanical_water(
                     json!([velocity, next_velocity]);
             }
         }
+        let expected_qualification =
+            single["motion"]["transient_surface"]["mechanical_coupling"].clone();
         replay(
             &pattern,
             &study,
             single,
-            if phase_specific && condensation {
+            if recoil && condensation {
+                "FTX_CONDENSING_OUTGOING_RECOIL_REPLAY"
+            } else if recoil {
+                "FTX_OUTGOING_RECOIL_REPLAY"
+            } else if phase_specific && scheduled && condensation {
+                "FTX_SCHEDULED_PHASE_CONDENSING_REPLAY"
+            } else if phase_specific && scheduled {
+                "FTX_SCHEDULED_PHASE_SUPPLY_REPLAY"
+            } else if phase_specific && condensation {
                 "FTX_PHASE_SPECIFIC_CONDENSING_REPLAY"
             } else if phase_specific {
                 "FTX_PHASE_SPECIFIC_SUPPLY_REPLAY"
@@ -413,7 +477,11 @@ fn replay_incoming_mechanical_water(
                 let mechanics = &motion["liquid_mechanics"];
                 assert_eq!(
                     mechanics["schema"],
-                    if phase_specific && !scheduled {
+                    if recoil {
+                        "ftx-coupled-liquid-mechanics-result/6"
+                    } else if phase_specific && scheduled {
+                        "ftx-coupled-liquid-mechanics-result/5"
+                    } else if phase_specific {
                         "ftx-coupled-liquid-mechanics-result/4"
                     } else if scheduled {
                         "ftx-coupled-liquid-mechanics-result/3"
@@ -424,6 +492,11 @@ fn replay_incoming_mechanical_water(
                     }
                 );
                 assert_eq!(mechanics, &heat["mechanical_coupling"]);
+                assert_eq!(mechanics["qualification"], expected_qualification);
+                assert_eq!(
+                    heat["request"]["mechanical_coupling"],
+                    expected_qualification
+                );
                 let water = &heat["surface_water"];
                 let supplied = water["supplied_liquid_kg"].as_f64().unwrap();
                 let condensed = if condensation {
@@ -452,26 +525,48 @@ fn replay_incoming_mechanical_water(
                 if prescribed_velocity {
                     let flow = &mechanics["exchange"];
                     assert!(flow["mixing_dissipation_j"].as_f64().unwrap() > 0.);
-                    let first_incoming = if scheduled {
-                        let first = heat["trace"]
+                    let first = if scheduled {
+                        heat["trace"]
                             .as_array()
                             .unwrap()
                             .iter()
                             .rev()
                             .find(|row| row["interval_index"] == 0)
-                            .unwrap();
+                            .unwrap()
+                    } else {
+                        heat
+                    };
+                    let first_incoming =
                         first["mechanical_coupling"]["exchange"]["incoming_mass_kg"]
+                            .as_f64()
+                            .unwrap();
+                    let later_incoming = incoming - first_incoming;
+                    let first_supplied = first["surface_water"]["supplied_liquid_kg"]
+                        .as_f64()
+                        .unwrap();
+                    let first_condensed = if condensation {
+                        first["surface_water"]["condensed_liquid_kg"]
                             .as_f64()
                             .unwrap()
                     } else {
-                        incoming
+                        0.
                     };
-                    let later_incoming = incoming - first_incoming;
+                    if scheduled && phase_specific {
+                        assert!(first_supplied > 0. && supplied > first_supplied);
+                        if condensation {
+                            assert!(first_condensed > 0. && condensed > first_condensed);
+                        }
+                    }
                     if scheduled && !condensation {
                         assert!(first_incoming > 0. && later_incoming > 0.);
                     }
                     for (axis, speed) in velocity.iter().enumerate() {
-                        let momentum = if phase_specific {
+                        let momentum = if phase_specific && scheduled {
+                            first_supplied * speed
+                                + (supplied - first_supplied) * next_velocity[axis]
+                                + first_condensed * vapor_velocity[axis]
+                                + (condensed - first_condensed) * next_vapor_velocity[axis]
+                        } else if phase_specific {
                             supplied * speed + condensed * vapor_velocity[axis]
                         } else {
                             first_incoming * speed + later_incoming * next_velocity[axis]
@@ -482,7 +577,18 @@ fn replay_incoming_mechanical_water(
                                 < 1e-12
                         );
                     }
-                    let kinetic = if phase_specific {
+                    let kinetic = if phase_specific && scheduled {
+                        0.5 * first_supplied * velocity.iter().map(|v| v * v).sum::<f64>()
+                            + 0.5
+                                * (supplied - first_supplied)
+                                * next_velocity.iter().map(|v| v * v).sum::<f64>()
+                            + 0.5
+                                * first_condensed
+                                * vapor_velocity.iter().map(|v| v * v).sum::<f64>()
+                            + 0.5
+                                * (condensed - first_condensed)
+                                * next_vapor_velocity.iter().map(|v| v * v).sum::<f64>()
+                    } else if phase_specific {
                         0.5 * supplied * velocity.iter().map(|v| v * v).sum::<f64>()
                             + 0.5 * condensed * vapor_velocity.iter().map(|v| v * v).sum::<f64>()
                     } else {
@@ -506,11 +612,70 @@ fn replay_incoming_mechanical_water(
                         motion["initial_sample"]["liquid_mechanics"]["exchange"]["mixing_dissipation_j"],
                         0.
                     );
+                    if recoil {
+                        assert!(
+                            mechanics["scope"]
+                                .as_str()
+                                .unwrap()
+                                .contains("separation work")
+                        );
+                        assert!(
+                            motion["thermal_basis"]
+                                .as_str()
+                                .unwrap()
+                                .contains("separation work")
+                        );
+                        let evaporated = water["evaporated_liquid_kg"].as_f64().unwrap();
+                        let drained = water["drained_liquid_kg"].as_f64().unwrap();
+                        let first_evaporated = first["surface_water"]["evaporated_liquid_kg"]
+                            .as_f64()
+                            .unwrap();
+                        let first_drained = first["surface_water"]["drained_liquid_kg"]
+                            .as_f64()
+                            .unwrap();
+                        assert!(first_drained > 0. && drained > first_drained);
+                        if !condensation {
+                            assert!(first_evaporated > 0. && evaporated > first_evaporated);
+                        }
+                        assert!(
+                            (flow["outgoing_mass_kg"].as_f64().unwrap() - evaporated - drained)
+                                .abs()
+                                < 1e-14
+                        );
+                        // Independent lower bound: separating the two outgoing phases carries
+                        // this relative kinetic energy, in addition to retained-mass recoil.
+                        let separation_minimum = 0.5
+                            * (first_evaporated
+                                * evaporation_velocity.iter().map(|v| v * v).sum::<f64>()
+                                + (evaporated - first_evaporated)
+                                    * next_evaporation_velocity.iter().map(|v| v * v).sum::<f64>()
+                                + first_drained
+                                    * drainage_velocity.iter().map(|v| v * v).sum::<f64>()
+                                + (drained - first_drained)
+                                    * next_drainage_velocity.iter().map(|v| v * v).sum::<f64>());
+                        let separation = flow["outgoing_separation_work_j"].as_f64().unwrap();
+                        assert!(separation_minimum > 0.);
+                        assert!(separation >= separation_minimum * (1. - 1e-12));
+                        assert_eq!(
+                            motion["initial_sample"]["liquid_mechanics"]["exchange"]["outgoing_separation_work_j"],
+                            0.
+                        );
+                        for residual in mechanics["transfer_momentum_residual_kg_m_s"]
+                            .as_array()
+                            .unwrap()
+                        {
+                            assert!(residual.as_f64().unwrap().abs() < 1e-12);
+                        }
+                        assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+                    } else {
+                        assert!(flow.get("outgoing_separation_work_j").is_none());
+                    }
                 } else {
                     assert!(mechanics["exchange"].get("mixing_dissipation_j").is_none());
                 }
-                let readings =
-                    &keyed(&report["comparison"]["alternatives"], "qualified")["readings"];
+                let alternative = keyed(&report["comparison"]["alternatives"], "qualified");
+                assert_eq!(alternative["eligible"], true, "{alternative}");
+                let readings = &alternative["readings"];
                 assert!(readings[mass_metric]["value"].as_f64().unwrap() > 0.);
                 assert_eq!(
                     keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"]

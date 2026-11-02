@@ -165,6 +165,11 @@ accepted-body association requires fresh confirmation. No prior drape or fit ver
 treated pattern. Cleared, replaced or invalidated study/treatment results cannot later replace the
 current pattern through a stale action. Adoption is unavailable while a worker operation is pending.
 
+The treatment result's **Use derived pattern** action follows the same adoption rules. It keeps
+the joint outfit's garment assignment groups and exact treated pattern, retains the selected
+measurement, fit and body inputs, and clears the accepted-body association for fresh confirmation
+before recomputation.
+
 ### Combine reported-range objectives with nominal constraints
 
 The comparison policy's `basis` governs its objectives. Each constraint can explicitly declare

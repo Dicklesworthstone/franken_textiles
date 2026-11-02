@@ -163,6 +163,7 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
     assert_eq!(portable["rolls"], baseline["rolls"]);
     let program = &portable["program"];
     assert_eq!(program["schema"], "ftx-knife-cut-program/1");
+    assert!(program.get("motion_profile").is_none());
     assert_eq!(program["markers"].as_array().unwrap().len(), 2);
     assert_eq!(program["hardware_execution_authorized"], false);
     for marker in program["markers"].as_array().unwrap() {
@@ -238,11 +239,14 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
     }
     // The same optional source-qualified fixture policy crosses both real binaries and the
     // portable boundary; obstruction withdraws only the process, never the ordinary markers.
-    for (blocked, routed, loaded) in [
-        (false, false, false),
-        (true, false, false),
-        (true, true, false),
-        (true, false, true),
+    for (blocked, routed, loaded, accelerated) in [
+        (false, false, false, false),
+        (true, false, false, false),
+        (true, true, false, false),
+        (true, false, true, false),
+        (false, false, false, true),
+        (true, true, false, true),
+        (true, false, true, true),
     ] {
         options["program"]
             .as_object_mut()
@@ -252,6 +256,16 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
             .as_object_mut()
             .unwrap()
             .remove("stock_loading");
+        options["program"]["machine"]
+            .as_object_mut()
+            .unwrap()
+            .remove("motion_profile");
+        if accelerated {
+            options["program"]["machine"]["motion_profile"] = json!({
+                "model":"trapezoidal_exact_stop/1","cutting_acceleration_mm_s2":40.,
+                "travel_acceleration_mm_s2":25.
+            });
+        }
         let fixture = if blocked {
             json!([[7.9, 11.9], [8.1, 11.9], [8.1, 12.1], [7.9, 12.1]])
         } else {
@@ -270,6 +284,11 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
         let lock = machine_sha256(&machine).unwrap();
         for q in options["program"]["qualifications"].as_array_mut().unwrap() {
             q["machine_sha256"] = json!(lock);
+            q["method"] = json!(if accelerated {
+                "Synthetic exact-stop acceleration for every retained cutting and raised chord"
+            } else {
+                "Synthetic constant-rate cut, raised travel and lift/lower phases"
+            });
         }
         if routed {
             options["program"]["travel_routing"] = json!({
@@ -316,6 +335,29 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
                 portable["program"]["fixture_clearance"],
                 options["program"]["machine"]["fixture_clearance"]
             );
+            if accelerated {
+                assert_eq!(
+                    portable["program"]["motion_profile"],
+                    options["program"]["machine"]["motion_profile"]
+                );
+                for marker in portable["program"]["markers"].as_array().unwrap() {
+                    let index = marker["marker"].as_u64().unwrap() as usize;
+                    let expected = match portable["rolls"][index]["material"]["authored"]["id"]
+                        .as_str()
+                        .unwrap()
+                    {
+                        "shell" => 18., // 50/100 mm exterior sides and the 10 mm open slit.
+                        "knit" => 12.,  // 40/60 mm exterior sides, including the closing side.
+                        id => panic!("unexpected synthetic material: {id}"),
+                    };
+                    assert!(
+                        (marker["selected"]["cutting_seconds"].as_f64().unwrap() - expected).abs()
+                            < 1e-10
+                    );
+                }
+            } else {
+                assert!(portable["program"].get("motion_profile").is_none());
+            }
             if routed {
                 assert!(
                     portable["program"]["markers"]
@@ -375,10 +417,33 @@ fn qualified_knife_paths_replay_through_both_commands_portable_api_and_material_
                         qualified["cutting"]["result"]["program"],
                         portable["program"]
                     );
+                    if let Some(capture) = std::env::var_os("FTX_KNIFE_PROGRAM_REPLAY") {
+                        let capture = PathBuf::from(capture);
+                        let prefix = if accelerated {
+                            "motion-loading"
+                        } else {
+                            "loading"
+                        };
+                        for (suffix, value) in [
+                            ("study.json", &loaded_study),
+                            ("study-report.json", &study_result),
+                        ] {
+                            fs::write(
+                                capture.join(format!("{prefix}-{suffix}")),
+                                serde_json::to_vec(value).unwrap(),
+                            )
+                            .unwrap();
+                        }
+                    }
                 }
                 if let Some(capture) = std::env::var_os("FTX_KNIFE_PROGRAM_REPLAY") {
                     let capture = PathBuf::from(capture);
-                    let prefix = if loaded { "loading" } else { "detour" };
+                    let prefix = match (accelerated, loaded) {
+                        (true, true) => "motion-loading",
+                        (true, false) => "motion-detour",
+                        (false, true) => "loading",
+                        (false, false) => "detour",
+                    };
                     for (suffix, value) in [("options.json", &options), ("report.json", &portable)]
                     {
                         fs::write(

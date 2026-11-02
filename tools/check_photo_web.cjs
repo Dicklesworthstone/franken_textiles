@@ -1,11 +1,12 @@
 // Actual local photo controls through compiled WASM. Native captures are made by ftx measure.
 // FTX_PLAYWRIGHT_MODULE=playwright-core NODE_PATH=... node tools/check_photo_web.cjs NATIVE_DIR
+// Use --section for the standalone synthetic front/side section and Workbench handoff workflow.
 const {chromium}=require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
 const assert=require("node:assert/strict"), fs=require("node:fs"), path=require("node:path"), http=require("node:http"), os=require("node:os");
 const sha256=bytes=>require("node:crypto").createHash("sha256").update(bytes).digest("hex");
-const root=path.resolve(__dirname,".."), web=path.join(root,"web"), native=process.argv[2];
+const root=path.resolve(__dirname,".."), web=path.join(root,"web"), sectionOnly=process.argv[2]==="--section", native=sectionOnly?null:process.argv[2];
 const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(web,"pkg");
-if(!native) throw Error("Supply the directory containing native photo scale and measurement captures");
+if(!native && !sectionOnly) throw Error("Supply the directory containing native photo scale and measurement captures, or --section");
 const work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-photo-browser-"));
 async function photoHandoff(browser,origin) {
   const context=await browser.newContext({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"}),errors=[],requests=[];
@@ -72,6 +73,121 @@ async function photoHandoff(browser,origin) {
     console.log("PASS photo-to-Workbench: real local popup, exact original PHOTO_ESTIMATED records, explicit primary evidence/consent, unchanged NOT_READY, complete manual-upload ZIP equality, clear/stale cancellation and opener cleanup; no uploads or stored photo records.");
   } finally {await context.close();}
 }
+async function sectionWorkflow(browser,origin) {
+  const context=await browser.newContext({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"}),errors=[],requests=[];
+  context.on("page",p=>p.on("pageerror",e=>errors.push(String(e))));
+  context.on("request",r=>requests.push({url:r.url(),method:r.method()}));
+  const page=await context.newPage();page.setDefaultTimeout(30000);
+  const front=' {\r\n"schema":"fabric-measurements/1","wearer":{"label":"synthetic section workflow"},"taken_on":"2026-10-01",'+
+    '"records":[{"name":"waist_width","value_mm":160,"sigma_mm":4,"provenance":"PHOTO_ESTIMATED","method":"synthetic front view"}],'+
+    '"fused":{"waist_width":{"value_mm":9999}},"source_integer":18446744073709551615,"source_float":1.0,"source_zero":-0.0\r\n}\r\n';
+  const side=' '+JSON.stringify({schema:"fabric-measurements/1",wearer:{label:"synthetic section workflow"},taken_on:null,
+    records:[{name:"waist_depth",value_mm:130,sigma_mm:5,provenance:"PHOTO_ESTIMATED",method:"synthetic side view"}],fused:{}})+'\n';
+  const source=async(id,text)=>page.setInputFiles(id,{name:id.includes("Width")?"front.json":"side.json",mimeType:"application/json",buffer:Buffer.from(text)});
+  const download=async name=>{
+    const event=page.waitForEvent("download");await page.click(`a[download="${name}"]`);const d=await event;
+    assert.equal(d.suggestedFilename(),name);assert.equal(await d.failure(),null);return fs.readFileSync(await d.path());
+  };
+  const calculate=async()=>{
+    await page.click("#sectionRun");
+    await page.waitForFunction(()=>/available|refused|No section result/.test(document.getElementById("sectionStatus").textContent));
+  };
+  const absent=async()=>{
+    assert.equal(await page.locator("#sectionResult").isVisible(),false);
+    assert.equal(await page.locator('a[download="section-measurements.json"]').count(),0);
+    assert.equal(await page.isDisabled("#sectionWorkbench"),true);
+  };
+  try {
+    await page.goto(origin+"/photo.html");
+    await source("#sectionWidthFile",front);await source("#sectionDepthFile",side);
+    assert.equal(await page.isDisabled("#sectionRun"),true,"Explicit wearer and anatomical-level review is required");
+    await page.check("#sectionConsent");await calculate();assert.equal(await page.textContent("#sectionError"),"");
+    const original=(await download("section-measurements.json")).toString(),result=JSON.parse(original);
+    assert.equal(result.girth_mm,484.2);assert.equal(result.sigma_mm,14.6);
+    assert.deepEqual(result.sigma_terms_mm,{width:6.99,depth:7.87,k:10.05});
+    assert.equal(result.record.provenance,"PHOTO_ESTIMATED");assert.equal(result.taken_on,null);
+    assert.equal(result.section_sources.width.text,front);assert.equal(result.section_sources.width.sha256,sha256(front));
+    assert.equal(result.section_sources.depth.text,side);assert.equal(result.section_sources.depth.sha256,sha256(side));
+    assert.equal((await download("section-front-measurements.json")).toString(),front);
+    assert.equal((await download("section-side-measurements.json")).toString(),side);
+    assert.equal((await download("section-options.json")).toString(),result.section_sources.options.text);
+    assert.match(await page.textContent("#sectionSummary"),/484\.2.*14\.6.*PHOTO_ESTIMATED/);
+    assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0,"The photo tool stores no evidence or preferences");
+    fs.writeFileSync(path.join(work,"section-measurements.json"),original,{flag:"wx"});
+
+    const [receiver]=await Promise.all([page.waitForEvent("popup"),page.click("#sectionWorkbench")]);
+    await receiver.waitForFunction(()=>/^Ready/.test(document.getElementById("status").textContent));
+    await receiver.waitForFunction(()=>document.getElementById("photoImportText").textContent.startsWith("Photo-record file received"));
+    assert.equal(await receiver.evaluate(()=>window.opener),null);assert.equal(await receiver.locator("#results").isVisible(),false);
+    await receiver.click("#go");await receiver.waitForFunction(()=>document.getElementById("errorText").textContent.includes("tape measurements"));
+    await receiver.check('input[name="program"][value="zouave_bolero"]');await receiver.check('input[name="bodyMode"][value="tape"]');
+    await receiver.click("#go");await receiver.waitForFunction(()=>document.getElementById("errorText").textContent.includes("same wearer"));
+    await receiver.check("#supplementalConsent");await receiver.click("#go");
+    await receiver.waitForFunction(()=>!document.getElementById("results").classList.contains("hidden") || !document.getElementById("errorBox").classList.contains("hidden"),null,{timeout:60000});
+    assert.equal(await receiver.locator("#errorBox").isVisible(),false,await receiver.textContent("#errorText"));
+    const event=receiver.waitForEvent("download");await receiver.click("#resFiles a[download$='.zip']");const zip=await event;
+    assert.equal(await zip.failure(),null);
+    const zipPath=path.join(work,"section-handoff.zip");fs.writeFileSync(zipPath,fs.readFileSync(await zip.path()),{flag:"wx"});
+    const extract=name=>JSON.parse(require("node:child_process").execFileSync("unzip",["-p",zipPath,name]));
+    const measurements=extract("measurements.json");assert.equal(measurements.measurement_imports[0],original);
+    assert.equal(measurements.fused.waist.primary_provenance,"PHOTO_ESTIMATED");assert.equal(measurements.taken_on,null);
+    assert.equal(extract("readiness.json").status,"NOT_READY");
+    const expectedPreferences=await receiver.evaluate(()=>({
+      "fab-wb-bodyMode":JSON.stringify("tape"),"fab-wb-program":JSON.stringify("zouave_bolero"),
+      "fab-wb-style-zouave_bolero":JSON.stringify(document.getElementById("style").value),
+    }));
+    await receiver.screenshot({path:path.join(work,"section-handoff-workbench.png"),fullPage:true});await receiver.close();
+    console.log("PASS section handoff: actual local popup, explicit primary evidence and wearer consent, exact original report, PHOTO_ESTIMATED fusion, unknown date and NOT_READY preserved.");
+
+    await page.selectOption("#sectionMode","calibrate");await absent();await page.fill("#sectionTape","500");await calculate();
+    const calibrated=JSON.parse(await download("section-calibration.json"));assert.ok(calibrated.k_child>1);assert.ok(calibrated.k_child_sigma>0);
+    for(const field of ["schema","records","record","readiness"])assert.equal(calibrated[field],undefined,field);
+    assert.equal(await page.isDisabled("#sectionWorkbench"),true);assert.equal(await page.isDisabled("#sectionMaterials"),true);
+    assert.match(await page.textContent("#sectionNotes"),/not another independent/);
+    await page.selectOption("#sectionMode","girth");
+    await source("#sectionWidthFile",front.replace('"PHOTO_ESTIMATED"','"MODEL_FIT"'));
+    assert.equal(await page.isChecked("#sectionConsent"),false);await absent();await page.check("#sectionConsent");await calculate();
+    assert.match(await page.textContent("#sectionError"),/photo evidence|PHOTO_ESTIMATED|provenance/i);await absent();
+    await source("#sectionWidthFile",front);await page.check("#sectionConsent");
+
+    // Hold the real WASM module to exercise edits and cancellation before a worker can publish.
+    for(const change of ["assumptions","cancel"]) {
+      let release,arrived;const parked=new Promise(resolve=>{arrived=resolve;});
+      const hold=route=>{release=route;arrived();};await context.route("**/ftx_wasm_bg.wasm",hold);
+      await page.click("#sectionRun");let timeout;
+      try {await Promise.race([parked,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error("Section module request was not intercepted")),30000);})]);}
+      finally {clearTimeout(timeout);}
+      if(change==="assumptions")await page.fill("#sectionClothing","1");else await page.click("#sectionCancel");
+      await absent();assert.equal(await page.isDisabled("#sectionCancel"),true);
+      await release.continue().catch(()=>{});await context.unroute("**/ftx_wasm_bg.wasm",hold);
+      await page.fill("#sectionClothing","0");await calculate();assert.equal(await page.textContent("#sectionError"),"");
+      assert.deepEqual(JSON.parse(await download("section-measurements.json")),result,"New work wins after an interrupted section worker");
+    }
+    const section=page.locator("section").filter({has:page.locator("#sectionRun")});
+    for(const [label,width,height] of [["desktop",1280,900],["mobile",390,844]]) {
+      await page.setViewportSize({width,height});await section.scrollIntoViewIfNeeded();
+      const overflow=await section.evaluate(element=>[...element.querySelectorAll("input,select,button,p,pre")]
+        .filter(e=>e.getClientRects().length).map(e=>({id:e.id,left:e.getBoundingClientRect().left,right:e.getBoundingClientRect().right}))
+        .filter(e=>e.left<0 || e.right>innerWidth+1));
+      assert.deepEqual(overflow,[],`${label} section controls fit the viewport`);
+      await section.screenshot({path:path.join(work,`section-${label}.png`)});
+    }
+    assert.deepEqual(errors,[]);
+    assert.deepEqual(requests.filter(r=>{
+      const url=new URL(r.url);
+      return !["http:","blob:"].includes(url.protocol) || url.origin!==origin || r.method!=="GET";
+    }),[],"Section requests and Blob downloads stay on the exact local origin and are read-only");
+    for(const p of context.pages()) {
+      assert.deepEqual(await p.evaluate(()=>Object.fromEntries(Object.entries(localStorage))),expectedPreferences,"Only the ordinary Workbench's explicit UI preferences are retained");
+      assert.equal(await p.evaluate(()=>sessionStorage.length),0);
+    }
+    console.log("PASS section workflow: compiled Rust worker/spec girth and uncertainty, exact source/options downloads, calibration-only coefficients, provenance refusal, stale-worker cancellation, desktop/mobile controls, no uploads or stored measurement/source data, no page errors. Artifacts:",work);
+  } catch(error) {
+    for(const p of context.pages())console.error("Section failure state",p.url(),await p.evaluate(()=>Object.fromEntries(
+      ["status","photoImportText","errorText","sectionStatus","sectionError"].map(id=>[id,document.getElementById(id)?.textContent]))).catch(()=>"page unavailable"));
+    console.error("Section page errors",errors);throw error;
+  } finally {await context.close();}
+}
 const server=http.createServer((req,res)=>{
   let file,base=web;
   try {
@@ -89,7 +205,7 @@ const server=http.createServer((req,res)=>{
 (async()=>{
   await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
   const origin=`http://127.0.0.1:${server.address().port}`;
-  const browser=await chromium.launch(), page=await browser.newPage({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"});
+  const browser=await chromium.launch(process.env.FTX_CHROMIUM_EXECUTABLE?{executablePath:process.env.FTX_CHROMIUM_EXECUTABLE}:{}), page=await browser.newPage({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"});
   const errors=[],requests=[];
   page.on("pageerror",e=>errors.push(String(e)));
   page.context().on("request",r=>requests.push({url:r.url(),method:r.method()}));
@@ -110,6 +226,7 @@ const server=http.createServer((req,res)=>{
     return value;
   };
   try {
+    if(sectionOnly) {await sectionWorkflow(browser,origin);return;}
     await page.goto(origin+"/photo.html");
     let annotationDraft;
     for(const [file,tag,width,height,end,knownLength] of [["photo.png","png",720,960,630,400],["photo.jpg","jpeg",600,800,530,250]]) {

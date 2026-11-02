@@ -556,6 +556,15 @@ the page with a step/progress interface and positions handed to a Three.js view 
 converted body-model data is fetched once from the user's own installation or a CC0-clean hosted copy, never
 bundled with a person's data. Gate G4.
 
+The local photo page also joins retained front-view widths and side-view depths through the
+same `ftx-measure` section model used by native `girth-from-section`. Chest/waist/hip estimates
+retain PHOTO_ESTIMATED provenance, decomposed uncertainty, exact source documents and conservative
+dates before entering ordinary workbench fusion/readiness. The shared source checks refuse
+chart/model dimensions, conflicting evidence and contradictory wearer metadata. Tape calibration
+produces coefficients, not an additional independent measurement. This browser capability does not
+establish physical capture accuracy, anatomical validity, full multi-frame body fitting or garment fit;
+see `docs/section-girth.md` and `docs/photo-measurement.md`.
+
 ---
 
 ## 16. Workspace crates, budgets, dependency direction and dependency policy
@@ -4670,11 +4679,15 @@ sensible/latent heat. Existing co-moving requests retain their original semantic
 is tracked by `ftx-vc2.3.2`; see [textile-surface-water.md](docs/textile-surface-water.md).
 The bounded extensions retain that law: schema `/3` prescribes one common incoming velocity per
 mechanical keyframe interval, while schema `/4` prescribes separate constant supplied-liquid and
-condensed-vapor velocities. Their fields and model tags are exclusive; phase-specific schedules
-remain unsupported. The phase-specific work is tracked by `ftx-vc2.3.3` and the broader work by
-`ftx-vc2.3`. Independent conservation and step-refinement checks establish numerical closure;
-measured wet response, rain interception, relative outgoing velocity, changing wet constitutive laws, mixing-heat
-partition and empirical garment agreement remain separate work.
+condensed-vapor velocities. Schema `/5` independently schedules both incoming phases; `/6` also
+qualifies each outgoing phase's velocity relative to the post-mixing cloth and conserves momentum
+through retained-cloth recoil. Ordinary material and design comparisons admit these complete
+source-bound histories with exact interval schedules and independent phase/transfer checks.
+Outgoing separation work remains an explicit mechanical boundary term, separate from thermal heat.
+Their fields and model tags are exclusive. The phase-specific work is tracked by `ftx-vc2.3.3` and
+the broader work by `ftx-vc2.3`. Independent conservation and step-refinement checks establish
+numerical closure; measured wet response, rain interception, inferred runoff, changing wet
+constitutive laws, mixing-heat partition and empirical garment agreement remain separate work.
 
 ### 25.140 Turn material-aware markers into qualified cold-knife path plans
 
@@ -4759,6 +4772,28 @@ complete selected traversal without a shortest-path proof. Source uncertainty, r
 decisions, parallel makespan, acceleration/loading/inspection time and empirical production quality
 are outside this model. Users can combine these explicit cutting objectives with the already
 qualified material, mass, sewing, purchasing and thermal objectives without changing simulation code.
+
+### 25.144 Acceleration-qualified cutting effort through ordinary manufacturing decisions
+
+The existing knife program now accepts an explicit source-qualified exact-stop acceleration
+profile within the complete machine configuration. Every retained cutting and raised-travel chord
+starts and ends at rest, including collinear vertices, checked fixture detours and the final return.
+Short segments use triangular velocity profiles; longer segments reach the independently qualified
+cutting or travel speed. Geometry, stock ownership, closed-edge accounting and lift/lower phases
+retain their existing authority. Omission preserves the original constant-rate program.
+
+Checked detour routing uses modeled time within its bounded graph, and an ordering candidate must
+improve complete modeled time before replacing the authored baseline. Roll markers, finite hides
+and remnants, complete mixed jobs and material/design comparisons share the same timing law and
+exact profile/source locks. The browser distinguishes the retained profile and its phase totals;
+unchanged source requests replay through native and portable consumers. A higher maximum feed no
+longer implies an advantage when the actual short cuts cannot reach either material's feed limit.
+
+This increment advances `ftx-tm7`; see [cutting-plans.md](docs/cutting-plans.md). Synthetic known
+answers, source-refusal checks and consumer replay establish software behavior. Controller blending,
+jerk limits, blade rotation, kerf, loading/inspection time, independently measured process timing
+and physical cut quality remain separate capabilities or qualification gates. The explicit stop
+model is not a general controller prediction, empirical cycle-time bound or hardware authorization.
 
 ## Appendix A. Sources
 

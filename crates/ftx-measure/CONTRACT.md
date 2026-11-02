@@ -115,9 +115,19 @@ chest/waist/hip shape factors to the Ramanujan ellipse perimeter, propagating wi
 and shape-factor uncertainty separately. Clothing offsets and calibrated k ratios are
 explicit. `calibrate_k` estimates a coefficient from a tape girth; it is not another girth
 observation. Published D.5 values and prior-section round trips are covered by direct tests.
-The CLI emits PHOTO_ESTIMATED records and accepts `--from` only for consistent photo-derived
-width/depth evidence, recomputed from source records. It does not relabel charts or model
-predictions as photo evidence. See `docs/section-girth.md` for commands and independence limits.
+`section_measurement` constructs the ordinary PHOTO_ESTIMATED document for numeric and photo
+callers. `photo_section` accepts exact width/depth measurement texts and strict options, recomputes
+fusion from original records, and requires every used dimension source to be PHOTO_ESTIMATED with
+no REMEASURE conflict. It does not relabel charts or model predictions as photo evidence. An empty
+depth text reuses a combined document; separate files require explicit same-wearer confirmation,
+and contradictory non-null wearer metadata or reference-wearer evidence still refuses. Source
+documents total at most 16 MiB / 4096 records; options at most 256 KiB. Results retain exact source
+and option texts with hashes, the selected fused dimensions, and the oldest known source date
+(unknown if either is unknown). Calibration returns coefficients and retained evidence, never
+another measurement record. The CLI's `--from`, optional `--depth-from` and `--same-wearer` route
+uses this same authority. Shared files or model calibration do not establish independent evidence,
+camera accuracy, anatomy, measurement readiness or garment fit. See `docs/section-girth.md` for
+commands and independence limits.
 
 **Calibrated sheet poses (FTX-20).** The shared `camera::Camera` (also exported as
 `photo::Camera`) supports `from_sheet` and `project_with_jacobian`. Sheet pose recovery uses

@@ -17,6 +17,7 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 .links a{display:inline-block;margin:8px 16px 8px 0}iframe{width:100%;height:520px;border:1px solid var(--line)}img{max-width:100%;max-height:440px}
 .comparison{overflow-x:auto}.comparison table{margin:16px 0}.comparison caption{text-align:left;font-weight:600;margin:8px 0}.comparison td{vertical-align:top;min-width:110px;overflow-wrap:anywhere}.comparison details{margin:8px 0}
 .motion-views{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-width:860px}.motion-views figure{margin:0}.motion-views canvas{display:block;width:100%;height:auto;background:var(--paper);border:1px solid var(--line)}.comparison input[type=range]{display:block;width:100%;max-width:840px}
+.study-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px}.study-fields input[type=number]{width:100%}.study-choice{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}.study-choice span{overflow-wrap:anywhere}.study-choice button{flex-shrink:0}fieldset{border:1px solid var(--line);border-radius:6px;margin:14px 0;padding:12px}legend{font-weight:600}
 @media(max-width:760px){.grid{grid-template-columns:1fr}main{padding:14px}}
 </style>
 </head>
@@ -28,7 +29,7 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <p id="status" role="status">Loading local engine…</p><p id="error" role="alert" hidden></p>
 <button id="cancel" disabled>Cancel current operation</button></header>
 <div class="grid">
-<section><h2>1. Inspect materials</h2>
+<section id="materialCatalog"><h2>1. Inspect materials</h2>
 <label>Search the built-in catalog <input id="query" type="search" placeholder="linen, wool, leather, knit…"></label>
 <button id="search" data-command="catalog">Search</button>
 <label>Catalog record <select id="catalog" size="7" aria-label="Catalog records"></select></label>
@@ -36,6 +37,10 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <label>Selection to inspect <textarea id="selection" rows="5" spellcheck="false">{"id":"fs/il019-dusty-lotus-softened","allow_estimates":false}</textarea></label>
 <p class="note">Estimates stay disabled unless this selection explicitly sets <code>allow_estimates</code> to <code>true</code>. A digest-locked selection cannot be edited in place; author a new selection deliberately.</p>
 <button id="inspect" data-command="inspect">Inspect sources &amp; capabilities</button>
+<label>Optional comparison name <input id="studyCandidateName" type="text" maxlength="80" placeholder="e.g. lightweight shell"></label>
+<button id="addStudyCandidate" disabled>Add inspected material to comparison</button>
+<small><a href="#materialPattern">Load a pattern in section 2</a> to enable the shortlist. Keep up to seven exact inspected selections, then
+<a href="#materialComparison">compare them on your pattern</a>.</small>
 <div id="capabilities"></div><details><summary>Original observations, normalized units and sources</summary><pre id="detail"></pre></details>
 <h3>Material temperature and dry heating / cooling</h3>
 <label>Material temperature (°C) <input id="thermalPointTemperature" type="number" step="any" placeholder="50"></label>
@@ -175,7 +180,7 @@ Only an accepted result publishes a frozen selection for section 2. These planar
 wrinkling, grip slip, bending, rate dependence or hysteresis.</p>
 </details>
 </section>
-<section><h2>2. Bind the same pattern</h2>
+<section id="materialPattern"><h2>2. Bind the same pattern</h2>
 <p id="roundImportNote" hidden><span id="roundImportText"></span>
 <button id="clearRoundImport" type="button">Clear received round</button></p>
 <label>Original pattern or joint outfit JSON <input id="patternFile" type="file" accept=".json,application/json"></label>
@@ -355,7 +360,7 @@ availability, layered body evaporation or cooling feedback into the dry-heat sim
 Coverage reports keep the unbridged baseline, seam/closure excess and combined power separately. An incompatible material, geometry or qualification refuses this heat result; no seam benefit is inferred from a name.</p>
 <button id="coverage" data-command="coverage" disabled>Recompute layered body coverage</button></div></div>
 </section>
-<section><h2>4. Compare material alternatives on the original pattern</h2>
+<section id="materialComparison"><h2>4. Compare material alternatives on the original pattern</h2>
 <p>Run a source-qualified shortlist, then compare real manufacturing and simulation outcomes side by side.
 Every alternative starts from the <strong>original pattern loaded in section 2</strong>, not its current bound preview.
 No binding step is required. Refused consumers remain visible; missing prices, mass or heat never become zero.</p>
@@ -365,6 +370,61 @@ No binding step is required. Refused consumers remain visible; missing prices, m
 <button id="screen" data-command="screen" disabled>Screen source-qualified materials</button>
 <p class="note">The request declares units, constraints, objectives, nominal or reported-bound comparison and estimate consent.
 Its scalar frontier is not a garment ranking. Original observations and protocols remain inspectable for excluded candidates too.</p>
+<label>Build this comparison <select id="studyMode">
+<option value="guided">Choose materials and goals here</option>
+<option value="file">Load a complete study request (advanced)</option>
+</select></label>
+<div id="guidedStudy">
+<p><a href="#materialCatalog">Inspect each material in section 1</a> and add it to the shortlist. The original pattern is always included as
+<strong>baseline</strong>. Each alternative changes only the assignment you choose below.</p>
+<p id="studyCandidateCount" role="status">No comparison materials added.</p>
+<div id="studyCandidates"></div>
+<button id="clearStudyCandidates" disabled>Clear shortlist</button>
+<label>Replace <select id="studyTarget">
+<option value="default">Pattern default; keep explicit piece assignments</option>
+<option value="all">Material on every source piece</option>
+<option value="pieces">Material on selected source pieces</option>
+</select></label>
+<label>Source pieces <select id="studyPieces" multiple size="4" disabled aria-label="Source pieces for material comparison"></select></label>
+<p class="note">Changing the default does not replace an explicit lining or cuff material. Choose every piece or exact pieces
+to replace those assignments. Current section-2 preview edits are not part of the original baseline.</p>
+<fieldset><legend>Roll cutting</legend>
+<label><input id="guidedCutting" type="checkbox" checked> Calculate actual roll requirements</label>
+<div class="study-fields">
+<label>Garment copies <input id="guidedCopies" type="number" min="1" max="4096" step="1" value="1"></label>
+<label>Gap between pieces (mm) <input id="guidedGap" type="number" min="0" step="any" value="2"></label>
+<label>Side margin (mm) <input id="guidedEdge" type="number" min="0" step="any" value="5"></label>
+<label>End margin (mm) <input id="guidedEnd" type="number" min="0" step="any" value="10"></label>
+</div>
+<p class="note">Each material must supply its qualified roll width. Missing width or unsupported stock keeps the cutting
+refusal visible. Finite hides, remnants, machine programs and purchasing use a complete request in advanced mode.</p>
+</fieldset>
+<fieldset><legend>Garment mass</legend>
+<label><input id="guidedMass" type="checkbox"> Calculate retained sheet and complete assembly mass per garment</label>
+<label><input id="guidedInventoryComplete" type="checkbox"> The pattern includes every part and attachment; there are no other extras</label>
+<label>Or supply an explicit sourced assembly inventory <input id="guidedInventory" type="file" accept=".json,application/json"></label>
+<button id="clearGuidedInventory" type="button" disabled>Clear inventory file</button>
+<p class="note">Without a complete inventory, sheet subtotals remain useful and whole-garment mass stays unknown.
+An inventory file supplies its own completeness declaration and sourced extras. Pattern-owned attachments are counted by the engine.
+Mass does not infer thread, buttons, zippers or other unrepresented parts.</p>
+</fieldset>
+<label>Optional seam allowance override (mm) <input id="guidedAllowance" type="number" min="0" step="any" placeholder="Keep the pattern's allowances"></label>
+<small>The same allowance applies to cutting and mass. Leave blank to retain authored piece allowances.
+For mass alone, an uploaded inventory retains its own allowance; when cutting also runs, the policies must agree.</small>
+<fieldset><legend>Comparison goals</legend>
+<label><input id="guidedAreaGoal" type="checkbox" checked> Minimize roll stock area for the batch</label>
+<label><input id="guidedStockMassGoal" type="checkbox"> Minimize roll stock mass for the batch</label>
+<label><input id="guidedMassGoal" type="checkbox"> Minimize complete garment mass</label>
+<label>Compare using <select id="guidedBasis"><option value="nominal">Reported central values</option>
+<option value="reported_bounds">Complete reported ranges (garment mass only)</option></select></label>
+<p class="note">Multiple goals retain tradeoffs without a hidden combined score. Complete reported ranges need bounds for every
+mass contribution; overlapping ranges remain unresolved. Different measurement protocols may remain incomparable.
+Missing observations are never treated as zero.</p>
+</fieldset>
+<p class="note">The generated request, original pattern, exact material selections and full results are available for download
+after comparison. No body model is needed for these manufacturing calculations.</p>
+</div>
+<div id="studyFileControls" hidden>
 <label>Study request JSON (<code>ftx-material-study/1</code> or <code>ftx-design-study/1</code>) <input id="studyRequest" type="file" accept=".json,application/json"></label>
 <p class="note">Use <code>ftx-design-study/1</code> to compare pattern alterations alongside material choices.
 Each named entry in <code>designs</code> contains explicit <code>operations</code>: <code>slash_spread</code>,
@@ -434,6 +494,7 @@ It must omit <code>variants</code>, <code>screened</code> and <code>combinations
 missing friction evidence stays missing. Omitting the pool preserves the original pattern's interfaces. An empty list clears them.
 Up to eight groups may target disjoint source pieces, with at most one default group. Up to 32 complete combinations are evaluated.</p>
 </details>
+</div>
 <label>Body source for body-dependent studies <select id="studyBodySource">
 <option value="measurements">Fit section-3 measurements at 35°</option>
 <option value="accepted">Reuse the accepted shape and pose selected above</option>
@@ -655,9 +716,19 @@ or <code>ftx-coupled-liquid-mechanics/3</code> with
 For separately qualified constant supply and condensation velocities, use <code>ftx-coupled-liquid-mechanics/4</code>,
 <code>phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1</code> and
 <code>incoming_stream_velocities_world_m_s</code> with <code>supply</code> and <code>condensation</code> vectors.
-The constant, scheduled and phase-specific fields cannot be combined. Incoming water mixes with the actual cloth and accessory inertia;
-outgoing vapor leaves at the mixed velocity. Mixing loss is reported separately and is not deposited as thermal heat.
-Drainage, phase-specific schedules, pinned cloth coordinates and inferred wet constitutive changes remain unsupported.</p>
+For independently scheduled supply and condensation, use <code>ftx-coupled-liquid-mechanics/5</code>,
+<code>scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1</code> and
+<code>incoming_stream_velocities_world_m_s_by_interval</code>: one explicit pair per keyframe interval.
+The constant, aggregate scheduled and phase-specific fields cannot be combined. Incoming water mixes with the actual cloth
+and accessory inertia; outgoing water leaves at the mixed velocity in versions 1–5.
+For qualified outgoing recoil, use <code>ftx-coupled-liquid-mechanics/6</code> with
+<code>scheduled_phase_specific_incoming_and_outgoing_velocity_mass_exchange_frozen_mechanics/1</code> and both
+the phase-specific incoming schedule and <code>outgoing_stream_velocities_relative_to_cloth_m_s_by_interval</code>.
+Each outgoing entry has explicit <code>evaporation</code> and <code>drainage</code> vectors relative to the post-mixing cloth;
+the retained cloth recoils to conserve momentum. Drainage additionally needs its independent water-process qualification.
+Mixing loss and outgoing separation work stay separate from thermal sensible and latent heat. Material and design comparisons
+require complete schedules and consistent source, phase and transfer ledgers. Pinned cloth coordinates, inferred runoff and
+wet constitutive changes remain unsupported.</p>
 <p class="note">For serial production handling, provide <code>production.handling</code> with exact machine and
 process qualification locks, independent timing evidence, initial loading, final unloading and every directed
 operation transition for the same garment or a different garment. Select ordering objective

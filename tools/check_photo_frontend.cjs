@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,calibrationReport=cameraReport()}={}) {
   const sent=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -32,10 +32,12 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
     free(){assert.equal(this.freed,undefined);this.freed=true;}
   }
   function camera_calibration(input,noise){calls.push({kind:'coordinates',input,noise});return JSON.stringify(calibrationReport);}
+  function photo_section(width,depth,options){calls.push({kind:'section',width,depth,options});if(failSection)throw Error('section evidence refused');return JSON.stringify(sectionReport());}
   const context=vm.createContext({Uint8Array,JSON,Error,URL,self:{postMessage:m=>sent.push(m)}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','camera_calibration'],function(){
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','camera_calibration','photo_section'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
+    this.setExport('photo_section',photo_section);
   },{context});
   await imports.link(()=>{}); await imports.evaluate();
   const module=new vm.SourceTextModule(read('photo-worker.js'),{
@@ -80,8 +82,9 @@ const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text
 async function photoPage({decode,materialsToken=null}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
-  for(const id of ['pointFile','optionsFile','draftFile'])if(e[id])e[id].type='file';e.points.type='textarea';
+  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile'])if(e[id])e[id].type='file';e.points.type='textarea';
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images'}))e[id].value=value;
+  for(const [id,value] of Object.entries({sectionLevel:'waist',sectionMode:'girth',sectionClothing:'0',sectionRatio:'1',sectionRatioSigma:'0',sectionTapeSigma:'10'}))e[id].value=value;
   const workers=[],urls=new Map(),closed=[],windowEvents={},popups=[]; let serial=0;
   class Worker {
     constructor(){this.messages=[];workers.push(this);}
@@ -602,6 +605,129 @@ test('calibration source read races, exact directory identities and input budget
   await invalid.e.cameraRun.onclick();assert.equal(invalid.workers.length,0);assert.notEqual(invalid.e.cameraError.textContent,'');
 });
 
+function sectionReport() {
+  return {schema:'fabric-measurements/1',level:'waist',girth_mm:484.2,sigma_mm:14.6,
+    sigma_terms_mm:{width:6.99,depth:7.87,k:10.05},clothing_mm_per_side:0,notes:'UNCERTAIN section-shape assumption',
+    records:[{name:'waist',value_mm:484.2,sigma_mm:14.6,provenance:'PHOTO_ESTIMATED'}]};
+}
+function selectSection(p) {
+  p.e.sectionWidthFile.files=[file(' {"front":"original λ","seed":18446744073709551615}\r\n','front.json')];
+  p.e.sectionDepthFile.files=[file(' {"side":"original","value":-0.0}\r\n','side.json')];
+  p.e.sectionWidthFile.handlers.change();p.e.sectionDepthFile.handlers.change();
+  p.e.sectionConsent.checked=true;p.e.sectionConsent.handlers.change();
+}
+async function sectionResult(p,report=sectionReport()) {
+  await p.e.sectionRun.onclick();const w=p.current();
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(report)});return w;
+}
+
+test('section worker passes exact photo sources to the shared authority without constructing a photo',async()=>{
+  const source={request:11,op:'section',width:' {"front":18446744073709551615}\r\n',depth:' {"side":-0.0}\n',options:' {"level":"waist"}\n'};
+  const w=await photoWorker(),result=await w.send(source);
+  assert.deepEqual(w.calls,[{kind:'section',width:source.width,depth:source.depth,options:source.options}]);
+  assert.equal(w.instances.length,0);assert.equal(result.request,11);assert.deepEqual(JSON.parse(result.report),sectionReport());
+  const refused=await photoWorker({failSection:true});assert.equal((await refused.send(source)).type,'error');
+  assert.equal(refused.instances.length,0);assert.deepEqual(refused.calls.map(c=>c.kind),['section']);
+});
+
+test('retained front and side photo snapshots survive later photo edits and require fresh source consent',async()=>{
+  const p=await photoPage();p.select(false);await p.analyze();await p.measure();
+  const exact=p.e.report.textContent;p.e.sectionKeepWidth.onclick();
+  assert.match(p.e.sectionWidthSource.textContent,/Measured snapshot/);assert.equal(p.e.sectionRun.disabled,true);
+  p.e.photo.handlers.change();assert.match(p.e.sectionWidthSource.textContent,/Measured snapshot/);
+  p.e.sectionDepthFile.files=[file(' {"side":"saved"}\r\n','side.json')];p.e.sectionDepthFile.handlers.change();
+  assert.equal(p.e.sectionRun.disabled,true);p.e.sectionConsent.checked=true;p.e.sectionConsent.handlers.change();
+  assert.equal(p.e.sectionRun.disabled,false);const w=await sectionResult(p);
+  assert.equal(w.messages[0].width,exact);assert.equal(w.messages[0].depth,' {"side":"saved"}\r\n');
+  assert.equal(p.e.sectionResult.hidden,false);assert.match(p.e.sectionSummary.textContent,/484\.2.*14\.6.*PHOTO_ESTIMATED/);
+  assert.match(p.e.sectionUncertainty.textContent,/6\.99.*7\.87.*10\.05/);
+  p.e.sectionWidthFile.files=[file('replacement','front.json')];p.e.sectionWidthFile.handlers.change();
+  assert.equal(p.e.sectionConsent.checked,false);assert.equal(p.e.sectionRun.disabled,true);
+  assert.equal(p.e.sectionResult.hidden,true);assert.equal(p.e.sectionDownloads.children.length,0);
+  p.e.sectionClear.onclick();assert.equal(p.e.sectionClear.disabled,true);assert.equal(p.e.sectionWidthFile.files.length,0);
+});
+
+test('section download and one-use handoff retain exact source bytes and invalidate only the edited evidence',async()=>{
+  const p=await photoPage();selectSection(p);const w=await sectionResult(p),m=w.messages[0];
+  for(const [name,expected] of [['section-front-measurements.json',m.width],['section-side-measurements.json',m.depth],['section-options.json',m.options]]) {
+    const a=p.e.sectionDownloads.children.find(a=>a.download===name);assert.ok(a);assert.equal(await p.urls.get(a.href).text(),expected);
+  }
+  const exact=p.e.sectionReport.textContent;p.e.sectionWorkbench.onclick();const popup=p.popups[0];
+  p.e.points.handlers.input();assert.equal(p.e.sectionWorkbench.disabled,false,'retained section snapshots are independent of photo edits');
+  const ready=target=>p.windowEvents.message({origin:'https://unit.invalid',source:target.target,data:{type:'ftx-photo-records-ready',token:new URL(target.url).searchParams.get('photoImport')}});
+  ready(popup);assert.equal(await popup.messages[0].data.records.text(),exact);assert.equal(popup.messages[0].data.type,'ftx-photo-records');
+  p.e.sectionWorkbench.onclick();const stale=p.popups[1];p.e.sectionLevel.value='hip';p.e.sectionLevel.handlers.change();ready(stale);
+  assert.equal(stale.messages[0].data.type,'ftx-photo-records-cancelled');assert.equal(p.e.sectionWorkbench.disabled,true);
+  p.select(false);await p.analyze();await p.measure();const photo=p.e.report.textContent;p.e.openWorkbench.onclick();
+  p.e.sectionClothing.handlers.input();ready(p.popups[2]);assert.equal(await p.popups[2].messages[0].data.records.text(),photo);
+});
+
+test('section calibration keeps coefficients separate from measurement handoff and sends only active settings',async()=>{
+  const p=await photoPage();selectSection(p);await sectionResult(p);
+  p.e.sectionMode.value='calibrate';p.e.sectionMode.handlers.change();p.e.sectionTape.value='505';
+  p.e.sectionK.value='9';p.e.sectionKSigma.value='9';p.e.sectionRatio.value='9';p.e.sectionRatioSigma.value='9';
+  const report={level:'waist',k_child:1.1058,k_child_sigma:0.0197,k_ratio:1.0432,k_ratio_sigma:0.0186};
+  const w=await sectionResult(p,report);
+  assert.deepEqual(JSON.parse(w.messages[0].options),{level:'waist',same_wearer:true,clothing_mm:0,tape_girth_mm:505,sigma_tape_mm:10});
+  assert.equal(p.e.sectionGirthControls.hidden,true);assert.equal(p.e.sectionTapeControls.hidden,false);
+  assert.equal(p.e.sectionWorkbench.disabled,true);assert.equal(p.e.sectionMaterials.disabled,true);
+  p.e.sectionWorkbench.onclick();assert.equal(p.popups.length,0);
+  assert.ok(p.e.sectionDownloads.children.some(a=>a.download==='section-calibration.json'));
+  assert.ok(!p.e.sectionDownloads.children.some(a=>a.download==='section-measurements.json'));
+  assert.match(p.e.sectionNotes.textContent,/not another independent/);
+  p.e.sectionTape.value='';p.e.sectionTape.handlers.input();const count=p.workers.length;await p.e.sectionRun.onclick();
+  assert.equal(p.workers.length,count);assert.match(p.e.sectionError.textContent,/finite numbers/);
+});
+
+test('section source bounds, invalid UTF-8, combined documents and native refusals remain explicit',async()=>{
+  const p=await photoPage();selectSection(p);let reads=0;
+  p.e.sectionWidthFile.files=[{name:'large.json',size:16*1024*1024,arrayBuffer:async()=>{reads++;}}];p.e.sectionWidthFile.handlers.change();
+  p.e.sectionConsent.checked=true;await p.e.sectionRun.onclick();assert.equal(reads,0);assert.equal(p.workers.length,0);
+  assert.match(p.e.sectionError.textContent,/16 MiB/);
+  selectSection(p);p.e.sectionWidthFile.files=[{name:'bad.json',size:2,arrayBuffer:async()=>new Uint8Array([0xc3,0x28]).buffer}];
+  p.e.sectionWidthFile.handlers.change();p.e.sectionConsent.checked=true;await p.e.sectionRun.onclick();assert.equal(p.workers.length,0);
+  assert.notEqual(p.e.sectionError.textContent,'');
+  selectSection(p);p.e.sectionCombined.checked=true;p.e.sectionCombined.handlers.change();assert.equal(p.e.sectionConsent.checked,false);
+  p.e.sectionConsent.checked=true;p.e.sectionConsent.handlers.change();await p.e.sectionRun.onclick();
+  const w=p.current();assert.equal(w.messages[0].depth,'');assert.equal(p.e.sectionDepthControls.hidden,true);
+  await w.emit({type:'error',request:w.messages[0].request,message:'conflicting photo dimensions require REMEASURE'});
+  assert.equal(p.e.sectionResult.hidden,true);assert.equal(p.e.sectionDownloads.children.length,0);
+  assert.match(p.e.sectionError.textContent,/REMEASURE/);assert.equal(p.e.sectionRun.disabled,false);
+});
+
+test('section cancellation and edits discard late reads or worker replies without stopping newer work',async()=>{
+  for(const reject of [false,true])for(const action of ['cancel','source','level','consent','clear']) {
+    const p=await photoPage();selectSection(p);let resolve,rejectRead;
+    p.e.sectionWidthFile.files=[{name:'held.json',size:10,arrayBuffer:()=>new Promise((yes,no)=>{resolve=yes;rejectRead=no;})}];
+    p.e.sectionWidthFile.handlers.change();p.e.sectionConsent.checked=true;
+    const reading=p.e.sectionRun.onclick();assert.equal(p.e.sectionCancel.disabled,false);
+    if(action==='cancel')p.e.sectionCancel.onclick();
+    else if(action==='source')p.e.sectionDepthFile.handlers.change();
+    else if(action==='level')p.e.sectionLevel.handlers.change();
+    else if(action==='consent'){p.e.sectionConsent.checked=false;p.e.sectionConsent.handlers.change();}
+    else p.e.sectionClear.onclick();
+    selectSection(p);await p.e.sectionRun.onclick();const current=p.current();
+    if(reject)rejectRead(Error('late read failed'));else resolve(new TextEncoder().encode('stale').buffer);
+    await reading;assert.equal(current.dead,undefined);assert.equal(p.workers.length,1);assert.equal(p.e.sectionResult.hidden,true);
+    p.e.sectionCancel.onclick();assert.equal(current.dead,true);
+    await current.emit({type:'result',request:current.messages[0].request,report:JSON.stringify(sectionReport())});
+    assert.equal(p.e.sectionResult.hidden,true);assert.equal(p.e.sectionDownloads.children.length,0);
+  }
+});
+
+test('section evidence can return to its material session and page exit withdraws pending transfers',async()=>{
+  const token='ab'.repeat(16),p=await photoPage({materialsToken:token});selectSection(p);await sectionResult(p);
+  assert.equal(p.e.sectionMaterials.hidden,false);assert.equal(p.e.sectionMaterials.disabled,false);
+  const exact=p.e.sectionReport.textContent;p.e.sectionMaterials.onclick();assert.equal(p.openerMessages[0].data.type,'ftx-photo-records-offer');
+  p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-photo-records-ready',token}});
+  assert.equal(await p.openerMessages[1].data.records.text(),exact);
+  p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-materials-photo-received',token}});
+  assert.equal(p.e.sectionMaterials.disabled,true);
+  p.e.sectionWorkbench.onclick();const popup=p.popups[0];p.windowEvents.pagehide();
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{type:'ftx-photo-records-ready',token:new URL(popup.url).searchParams.get('photoImport')}});
+  assert.equal(popup.messages[0].data.type,'ftx-photo-records-cancelled');assert.equal(p.e.sectionResult.hidden,true);
+});
+
 async function compiledPhotoBindings(){
   const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(root,'web/pkg');
   const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
@@ -729,4 +855,88 @@ test('compiled WASM retains native Brown calibration covariance and complete pho
     assert.throws(()=>ftx.WebPhoto.from_reference(bytes,sheet,lens,JSON.stringify(missing)),/independent-calibration-evidence/);
     const reused=JSON.parse(lens);reused.image_acquisition={views:[{sha256:require('node:crypto').createHash('sha256').update(bytes).digest('hex')}]};
     assert.throws(()=>ftx.WebPhoto.from_reference(bytes,sheet,JSON.stringify(reused),capture),/reuses a calibration image/);
+  });
+
+// These values come from spec 02 A.5/D.5, not a report generated by this implementation.
+function syntheticSectionSource(name,value,sigma,extra={}) {
+  return {schema:'fabric-measurements/1',wearer:{label:'synthetic section test'},taken_on:null,
+    records:[{name,value_mm:value,sigma_mm:sigma,provenance:'PHOTO_ESTIMATED',method:`synthetic ${name} view`}],
+    fused:{},...extra};
+}
+
+test('compiled WASM photo sections reproduce the published girth and retain exact two-view sources through ordinary fusion',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const ftx=await compiledPhotoBindings(),hash=text=>require('node:crypto').createHash('sha256').update(text).digest('hex');
+    const front=' {\r\n"schema":"fabric-measurements/1","wearer":{"label":"synthetic section test"},"taken_on":"2026-10-01",'+
+      '"records":[{"name":"waist_width","value_mm":160,"sigma_mm":4,"provenance":"PHOTO_ESTIMATED","method":"synthetic front view"}],'+
+      '"fused":{"waist_width":{"value_mm":9999,"sigma_mm":0.001}},"source_integer":18446744073709551615,"source_float":1.0,"source_zero":-0.0\r\n}\r\n';
+    const side=' '+JSON.stringify(syntheticSectionSource('waist_depth',130,5))+'\n';
+    const options=' { "level":"waist", "same_wearer":true, "clothing_mm":-0.0 }\n';
+    const raw=ftx.photo_section(front,side,options),result=JSON.parse(raw);
+    assert.equal(result.girth_mm,484.2);assert.equal(result.sigma_mm,14.6);
+    assert.deepEqual(result.sigma_terms_mm,{width:6.99,depth:7.87,k:10.05});
+    assert.equal(result.schema,'fabric-measurements/1');assert.equal(result.records.length,1);
+    assert.deepEqual(result.record,result.records[0]);assert.equal(result.record.provenance,'PHOTO_ESTIMATED');
+    assert.equal(result.section_inputs.width.value_mm,160,'Original records override forged cached fusion');
+    assert.equal(result.section_inputs.depth.value_mm,130);assert.equal(result.taken_on,null);
+    assert.deepEqual(result.section_sources,{width:{text:front,sha256:hash(front)},depth:{text:side,sha256:hash(side)},
+      depth_uses_width_source:false,options:{text:options,sha256:hash(options)}});
+    assert.equal(ftx.photo_section(front,side,options),raw,'Identical sources and assumptions replay exactly');
+    const body={mode:'tape',stature_cm:92,supplemental_same_wearer:true,supplemental_measurements:[raw]};
+    const fused=JSON.parse(ftx.measurement_file(JSON.stringify(body),'2026-11-01'));
+    assert.equal(fused.measurement_imports[0],raw);assert.equal(fused.taken_on,null);
+    assert.equal(fused.fused.waist.primary_provenance,'PHOTO_ESTIMATED');
+    assert.equal(fused.fused.waist.sources.find(s=>s.provenance==='PHOTO_ESTIMATED' && s.used).sigma_mm,14.6);
+    // A derived girth supplies one estimate, not the other body evidence needed to draft a garment.
+    assert.throws(()=>ftx.run(JSON.stringify({program:'zouave_trousers',body:{mode:'file',measurements:result}}),
+      '2026-11-01','2026-11-01T12:00'),/missing measurement|stature/i);
+
+    const combined=syntheticSectionSource('waist_width',166,4,{taken_on:'2026-10-02'});
+    combined.records.push({...syntheticSectionSource('waist_depth',136,5).records[0]});
+    const combinedText=JSON.stringify(combined),corrected=JSON.parse(ftx.photo_section(combinedText,'','{"clothing_mm":3}'));
+    assert.equal(corrected.girth_mm,484.2);assert.equal(corrected.sigma_mm,14.6);assert.equal(corrected.taken_on,'2026-10-02');
+    assert.equal(corrected.section_sources.depth,null);assert.equal(corrected.section_sources.depth_uses_width_source,true);
+    assert.match(corrected.notes,/clothing offset/);
+  });
+
+test('compiled WASM photo section calibration remains a coefficient report with explicit uncertainty',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const ftx=await compiledPhotoBindings();
+    const source=syntheticSectionSource('chest_width',172,0.001);
+    source.records.push(syntheticSectionSource('chest_depth',150,0.001).records[0]);
+    const text=JSON.stringify(source),options='{"level":"chest","tape_girth_mm":560,"sigma_tape_mm":10}';
+    const calibrated=JSON.parse(ftx.photo_section(text,'',options));
+    assert.equal(calibrated.k_child,1.1058);assert.equal(calibrated.k_child_sigma,0.0197);
+    assert.equal(calibrated.k_ratio,1.0335);assert.equal(calibrated.k_ratio_sigma,0.0185);
+    for(const field of ['schema','record','records','readiness'])assert.equal(calibrated[field],undefined,field);
+    assert.equal(calibrated.section_sources.options.text,options);
+    assert.throws(()=>ftx.measurement_file(JSON.stringify({mode:'file',measurements:calibrated}),'2026-11-01'),/schema|records/);
+    const estimated=JSON.parse(ftx.photo_section(text,'',JSON.stringify({level:'chest',
+      k_ratio:calibrated.k_ratio,k_ratio_sigma:calibrated.k_ratio_sigma})));
+    assert.ok(Math.abs(estimated.girth_mm-560)<0.2);assert.ok(estimated.sigma_mm>10);
+    assert.equal(estimated.record.provenance,'PHOTO_ESTIMATED');assert.match(estimated.notes,/UNCERTAIN/);
+  });
+
+test('compiled WASM photo sections refuse missing consent, fabricated provenance, conflicting evidence and unsupported settings',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const ftx=await compiledPhotoBindings(),front=syntheticSectionSource('waist_width',160,4),side=syntheticSectionSource('waist_depth',130,5);
+    const run=(a=front,b=side,options={same_wearer:true})=>ftx.photo_section(JSON.stringify(a),JSON.stringify(b),JSON.stringify(options));
+    for(const same_wearer of [undefined,false])assert.throws(()=>run(front,side,{same_wearer}),/same.wearer/i);
+    assert.throws(()=>run(front,{...side,wearer:{label:'different synthetic wearer'}}),/wearer/i);
+    for(const reference of [true,'demo',1])assert.throws(()=>run({...front,wearer:{...front.wearer,reference}}),/reference/i);
+    for(const provenance of ['MODEL_FIT','CHART_PRIOR','MEASURED_TAPE']) {
+      const changed=structuredClone(front);changed.records[0].provenance=provenance;
+      assert.throws(()=>run(changed),/photo evidence|PHOTO_ESTIMATED|provenance/i);
+    }
+    const mixed=structuredClone(front);mixed.records.push({...mixed.records[0],provenance:'MODEL_FIT',method:'synthetic model'});
+    assert.throws(()=>run(mixed),/photo evidence|PHOTO_ESTIMATED|provenance/i);
+    const conflict=structuredClone(front);conflict.records.push({...conflict.records[0],value_mm:260,method:'second synthetic view'});
+    assert.throws(()=>run(conflict),/remeasure|conflicting/i);
+    assert.throws(()=>run({...front,records:[]}),/waist_width|no .*record/i);
+    for(const changed of [{unexpected:true},{level:null},{clothing_mm:null},{k_ratio:0},{sigma_tape_mm:10},
+      {tape_girth_mm:500,k:1},{tape_girth_mm:500,k_ratio:1},{tape_girth_mm:500,name:'waist'}]) {
+      assert.throws(()=>run(front,side,{same_wearer:true,...changed}));
+    }
+    assert.throws(()=>ftx.photo_section('\ufeff'+JSON.stringify(front),JSON.stringify(side),'{"same_wearer":true}'));
+    assert.throws(()=>ftx.photo_section(JSON.stringify(front),JSON.stringify(side),' '.repeat(256*1024+1)),/budget|256 KiB|exceeds/i);
   });

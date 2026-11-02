@@ -1,4 +1,6 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
+import { buildMaterialStudyRequest } from "./materials-study-builder.js";
+
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "stockIdentities", "stockPrice", "cutJob", "price", "sew"];
@@ -20,6 +22,8 @@ let interfaceChange = null, interfaceRead = 0, interfaceReady = true;
 let calibratedPair = null;
 const pieceChanges = new Map(), urls = new Map();
 const combinationGroups = new Map();
+const studyCandidates = [];
+let studyCandidateSequence = 0;
 const outfitTargets = new Map();
 const sections = new Map();
 for (const op of operations) {
@@ -40,6 +44,7 @@ for (const op of operations) {
 }
 const text = value => JSON.stringify(value, null, 2);
 const has = id => roundFiles.has(id) || !!$(id).files.length;
+const guidedStudyMode = () => $("studyMode").value === "guided";
 const studyBodyMode = () => $("studyBodySource").value || "measurements";
 function studyBodyReady() {
   const mode = studyBodyMode();
@@ -55,6 +60,7 @@ function bodyDependentStudies(id) {
   return used ? ["scenario", ...($("studyOnBody").checked ? ["study"] : [])] : [];
 }
 function controls() {
+  const guided = guidedStudyMode();
   for (const el of commands) el.disabled = !ready || !!pending;
   for (const section of sections.values()) {
     for (const button of section.adoptions) button.disabled = !ready || !!pending;
@@ -65,12 +71,25 @@ function controls() {
   $("reset").disabled = !!pending || !source;
   $("addCombination").disabled = !!pending || !source || !inspected;
   $("clearCombinations").disabled = !!pending || !combinationGroups.size;
+  $("addStudyCandidate").disabled = !ready || !!pending || !source || !inspected || studyCandidates.length >= 7;
+  $("clearStudyCandidates").disabled = !studyCandidates.length;
+  $("guidedStudy").hidden = !guided;
+  $("studyFileControls").hidden = guided;
+  $("studyPieces").disabled = !source || $("studyTarget").value !== "pieces";
+  for (const id of ["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAreaGoal", "guidedStockMassGoal"]) {
+    $(id).disabled = !$("guidedCutting").checked;
+  }
+  $("guidedInventory").disabled = !$("guidedMass").checked;
+  $("clearGuidedInventory").disabled = !has("guidedInventory");
+  $("guidedInventoryComplete").disabled = !$("guidedMass").checked || has("guidedInventory");
+  $("guidedMassGoal").disabled = !$("guidedMass").checked;
+  $("studyOnBody").disabled = guided;
   $("clearInterfaces").disabled = interfaceChange === null && interfaceReady;
   for (const op of boundOperations) $(op).disabled ||= !bound;
   $("screen").disabled ||= !has("screenRequest");
   $("pressure").disabled ||= !has("compressionRequest");
   $("treatment").disabled ||= !has("treatmentRequest");
-  $("useTreatment").disabled = !!pending || !preparedTreatment;
+  $("useTreatment").disabled = !ready || !!pending || !preparedTreatment;
   $("garmentcode").disabled ||= !has("garmentcodeSource");
   $("useGarmentcode").disabled = !!pending || !preparedImport;
   $("useGarmentcodeFit").disabled = !!pending || typeof preparedImport?.fit_spec_json !== "string";
@@ -87,10 +106,11 @@ function controls() {
   $("stageInterface").disabled ||= !source || !interfaceReady || !calibratedPair;
   $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
   for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
-  $("study").disabled ||= !source || !has("studyRequest");
-  if ($("studyOnBody").checked) $("study").disabled ||= !has("body") || !studyBodyReady();
-  $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || !studyBodyReady();
-  if ($("combinationMode").checked && !combinationGroups.size) {
+  const studyReady = guided ? studyCandidates.length > 0 : has("studyRequest");
+  $("study").disabled ||= !source || !studyReady;
+  if (!guided && $("studyOnBody").checked) $("study").disabled ||= !has("body") || !studyBodyReady();
+  $("scenario").disabled ||= !source || !studyReady || !has("scenarioRequest") || !has("body") || !studyBodyReady();
+  if (!guided && $("combinationMode").checked && !combinationGroups.size) {
     $("study").disabled = true; $("scenario").disabled = true;
   }
   $("exports").disabled ||= !has("measurements") || !has("fit");
@@ -508,7 +528,8 @@ function objectiveComparison(parent, r) {
     const cutting = document.createElement("p");
     cutting.textContent = "Cutting objectives use complete selected knife traversals qualified for the exact textile and machine. " +
       "Roll and finite-stock objectives retain their separate physical scope; only a complete cutting job combines its disjoint routes. " +
-      "Modeled time covers declared constant-rate cutting, raised travel and lift/lower phases. It excludes loading, acceleration and inspection. " +
+      "Modeled time uses each program's retained constant-speed or exact-stop acceleration model, together with lift/lower phases. " +
+      "Exact-stop timing includes acceleration and deceleration at every retained vertex, including detours and requested returns. Loading, blade turning and inspection remain outside these models. " +
       "An incomplete or refused process leaves these nominal metrics unknown while independent geometry and purchasing remain available. " +
       "A complete selected traversal need not be shortest; these objectives do not establish production cycle time, physical cut quality or machine authorization.";
     parent.append(cutting);
@@ -742,6 +763,8 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       if (h.mechanical_coupling) {
         const m = h.mechanical_coupling, exchange = m.exchange;
         const prescribed = ["ftx-coupled-liquid-mechanics-result/2", "ftx-coupled-liquid-mechanics-result/3", "ftx-coupled-liquid-mechanics-result/4", "ftx-coupled-liquid-mechanics-result/5", "ftx-coupled-liquid-mechanics-result/6"].includes(m.schema);
+        const recoil = m.schema === "ftx-coupled-liquid-mechanics-result/6";
+        const phaseScheduled = recoil || m.schema === "ftx-coupled-liquid-mechanics-result/5";
         const inertia = table(parent, `${key}: ${exchange ? "liquid exchange" : "evaporation"} changes moving cloth mass`,
           ["Dry cloth + accessories (kg)", "Initial water (kg)", "Remaining water (kg)", "Current inertial mass (kg)", "Mass residual (kg)"]);
         cells(inertia, [metric(m.substrate_and_attached_mass_kg), metric(m.initial_liquid_mass_kg),
@@ -758,9 +781,11 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
             metric(m.exported_kinetic_energy_j), metric(m.exported_gravitational_energy_j)]);
           const residual = table(parent, `${key}: liquid exchange momentum and energy residuals`,
             ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)",
-              ...(prescribed ? ["Inelastic mixing loss (J)"] : [])]);
+              ...(prescribed ? ["Inelastic mixing loss (J)"] : []),
+              ...(recoil ? ["Outgoing separation work (J)"] : [])]);
           cells(residual, [vector(m.transfer_momentum_residual_kg_m_s), metric(m.transfer_kinetic_residual_j),
-            metric(m.transfer_gravitational_residual_j), ...(prescribed ? [metric(exchange.mixing_dissipation_j)] : [])]);
+            metric(m.transfer_gravitational_residual_j), ...(prescribed ? [metric(exchange.mixing_dissipation_j)] : []),
+            ...(recoil ? [metric(exchange.outgoing_separation_work_j)] : [])]);
         } else {
           const transfer = table(parent, `${key}: mechanical energy carried away by vapor`,
             ["Momentum x, y, z (kg m/s)", "Kinetic energy (J)", "Gravitational energy (J)", "Kinetic transfer residual (J)"]);
@@ -771,7 +796,9 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         couplingScope.textContent = "Initial liquid is added co-moving after the dry drape; it is not a wet equilibrium. Each mechanical step uses its starting water mass, then accepted heat and liquid exchange update the next step. " +
           "Refine the mechanical time step to assess this first-order coupling. The thermal latent/sensible ledger remains separate from transferred bulk mechanical energy. " +
           (exchange ? (prescribed ?
-            `Incoming liquid and condensed vapor use the prescribed world-frame velocities; outgoing vapor${draining ? " and drained liquid leave" : " leaves"} at the mixed cloth velocity. Inelastic mixing loss is separate from thermal heat. ` :
+            `Incoming liquid and condensed vapor use ${phaseScheduled ? "their independently scheduled" : "the prescribed"} world-frame velocities. ` +
+            (recoil ? `Outgoing vapor${draining ? " and drained liquid use" : " uses"} scheduled velocities relative to the post-mixing cloth; the retained cloth recoils to conserve momentum. Inelastic mixing loss and outgoing separation work are mechanical boundary terms, separate from thermal heat. ` :
+              `The outgoing vapor${draining ? " and drained liquid leave" : " leaves"} at the mixed cloth velocity. Inelastic mixing loss is separate from thermal heat. `) :
             `Incoming liquid, condensed vapor and outgoing vapor${draining ? " and drained liquid" : ""} share the local endpoint cloth velocity under the independent source qualification. `) +
             "Equal incoming and outgoing mass retain both transfer ledgers. Signed gravitational energies keep the declared world frame. These residuals check mass transfer, not the complete motion energy balance. " :
             "Supply and condensation are unsupported in this evaporation-only mode. ") +
@@ -1507,18 +1534,6 @@ function designComparison(op, parent, study, casePolicies = {}) {
       refusal: row.binding?.refusal });
   }
 }
-function installDerivedPattern(raw, label) {
-  const data = parsePattern(raw), retainedOutfit = outfit;
-  const garments = retainedOutfit ? JSON.parse(retainedOutfit.composition_json).garments : [];
-  resetPatternInput();
-  ++roundRead; roundToken = null; window.opener = null;
-  roundFiles.delete("patternFile"); $("patternFile").value = "";
-  installPattern(raw, label, garments, data);
-  outfit = retainedOutfit;
-  if (outfit) $("selfContact").checked = true;
-  if (roundFiles.size) $("roundImportText").textContent =
-    "A derived pattern is now the current pattern. Received measurement, fit and body snapshots remain selected. Review them before recomputing this pattern.";
-}
 function useStudyPattern(op, study, row) {
   if (!ready || pending || sections.get(op).study !== study) return;
   const raw = available(row.binding)?.pattern_json;
@@ -1878,6 +1893,13 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
     }
     return;
   }
+  const profile = program.motion_profile;
+  const exactStop = profile?.model === "trapezoidal_exact_stop/1";
+  if (profile) {
+    const timing = table(parent, `${label}: retained knife timing model`,
+      ["Timing model", "Cutting acceleration (mm/s²)", "Raised-travel acceleration (mm/s²)"]);
+    cells(timing, [profile.model, metric(profile.cutting_acceleration_mm_s2), metric(profile.travel_acceleration_mm_s2)]);
+  }
   const t = table(parent, `${label}: material-qualified knife paths`,
     ["Marker", "Process observation", "Cut paths", "Cut length (mm)", "Raised travel (mm)",
       "Cutting (s)", "Travel (s)", "Lift / lower (s)", "Modeled path time (s)", "Travel ordering"]);
@@ -1886,7 +1908,7 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
     cells(t, [String(marker.marker + 1), marker.qualification, metric(route?.runs?.length),
       metric(route?.cut_length_mm), metric(route?.travel_length_mm), metric(route?.cutting_seconds),
       metric(route?.travel_seconds), metric(route?.lift_lower_seconds), metric(route?.modeled_path_seconds),
-      marker.improved ? "Shorter complete traversal" :
+      marker.improved ? (exactStop ? "Faster complete traversal" : "Shorter complete traversal") :
         program.travel_routing ? "Complete authored cut order" : "Complete authored traversal"]);
   }
   if (program.travel_routing) {
@@ -1935,7 +1957,12 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
   const note = document.createElement("p");
   note.textContent = "Internal cuts finish before exterior pieces are released. Every path retains its authored geometry and direction; " +
     "the process observation is locked to the exact textile and full machine configuration. " +
-    "Times cover declared constant-rate cutting, raised travel and lift/lower phases. Loading, acceleration, blade turning and inspection are outside this model. " +
+    (exactStop ?
+      "Times use the retained acceleration limits with a complete stop at every cutting and raised-travel vertex, including collinear vertices, detours and requested returns. " +
+      "Each segment has a triangular or trapezoidal speed profile; the qualified feed and travel rates are speed limits. No vertices are merged and no corner blending is inferred. " +
+      "Lift/lower phases remain separate. Loading, blade turning and inspection are outside this model. " :
+      profile ? "Timing assumptions are retained in the exact source report below. " :
+      "Times cover declared constant-rate cutting, raised travel and lift/lower phases. Loading, acceleration, blade turning and inspection are outside this model. ") +
     (program.budget_exhausted ? "The ordering budget ended; complete authored traversals remain available. " : "") +
     "This reviewable plan does not establish physical cut quality, an optimal route or permission to run a machine.";
   parent.append(note);
@@ -3577,6 +3604,62 @@ function changes() {
   return `{"schema":"ftx-material-bindings/1","default":${defaultChange || "null"},"pieces":{${pieces}}${interfaces}}`;
 }
 function edits() { $("edits").textContent = text(JSON.parse(changes())); }
+function showStudyCandidates() {
+  const parent = $("studyCandidates"); parent.replaceChildren();
+  for (const candidate of studyCandidates) {
+    const row = document.createElement("div"), label = document.createElement("span"), remove = document.createElement("button");
+    row.className = "study-choice";
+    const selection = JSON.parse(candidate.selection); // Display only; the retained string is the input authority.
+    label.textContent = `${candidate.key}: ${selection.id} (${selection.allow_estimates ? "estimates explicitly admitted" : "estimates disabled"})`;
+    remove.type = "button"; remove.textContent = `Remove ${candidate.key}`;
+    remove.onclick = () => {
+      const index = studyCandidates.indexOf(candidate);
+      if (index < 0) return;
+      studyCandidates.splice(index, 1); showStudyCandidates();
+      if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
+    };
+    row.append(label, remove); parent.append(row);
+  }
+  $("studyCandidateCount").textContent = studyCandidates.length ?
+    `${studyCandidates.length} frozen material choice${studyCandidates.length === 1 ? "" : "s"} plus the original baseline; limit seven choices.` :
+    "No comparison materials added. Load a pattern, then inspect and add materials in section 1.";
+}
+async function guidedStudyInput() {
+  if (!source) throw Error("Load the original pattern first.");
+  const number = (id, label) => {
+    const raw = $(id).value.trim();
+    if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
+    return Number(raw);
+  };
+  const scope = $("studyTarget").value;
+  const target = scope === "default" ? { scope: "default" } : scope === "all" ?
+    { scope: "pieces", ids: source.pieces.map(p => p.id) } : scope === "pieces" ?
+      { scope: "pieces", ids: Array.from($("studyPieces").selectedOptions, option => option.value) } : null;
+  if (!target) throw Error("Choose the pattern assignment to compare.");
+  const allowance = $("guidedAllowance").value.trim() ?
+    { seam_allowance_mm: number("guidedAllowance", "seam allowance in millimetres") } : {};
+  const cutting = $("guidedCutting").checked ? {
+    copies: number("guidedCopies", "whole garment copy count"), gap_mm: number("guidedGap", "piece gap in millimetres"),
+    edge_margin_mm: number("guidedEdge", "side margin in millimetres"), end_margin_mm: number("guidedEnd", "end margin in millimetres"),
+    ...allowance,
+  } : undefined;
+  const objectives = [["guidedAreaGoal", "stock_area_m2"], ["guidedStockMassGoal", "stock_mass_kg"],
+    ["guidedMassGoal", "assembly_mass_kg"]].filter(([id]) => $(id).checked).map(([, metric]) => ({ metric, direction: "minimize" }));
+  // Snapshot every control before the optional asynchronous inventory read. execute() admits the
+  // result only while its request ID remains current; no download or visible state is made here.
+  const input = { candidates: studyCandidates.map(candidate => ({ ...candidate })), target,
+    pieceIds: source.pieces.map(p => p.id), ...(cutting ? { cutting } : {}), objectives, basis: $("guidedBasis").value };
+  if ($("guidedMass").checked) {
+    if (has("guidedInventory")) {
+      const raw = await read("guidedInventory");
+      if (Object.hasOwn(allowance, "seam_allowance_mm") && JSON.parse(raw)?.seam_allowance_mm !== allowance.seam_allowance_mm) {
+        throw Error("The inventory file must use the same explicit seam allowance override.");
+      }
+      input.assemblyMass = raw;
+    } else input.assemblyMass = { schema: "ftx-assembly-mass/1", inventory_complete: $("guidedInventoryComplete").checked, extras: [], ...allowance };
+  }
+  return buildMaterialStudyRequest(input);
+}
 function showCombinations() {
   const parent = $("combinationGroups"); parent.replaceChildren();
   let count = combinationGroups.size ? 1 : 0;
@@ -3599,6 +3682,7 @@ function showCombinations() {
   $("combinationCount").textContent = count ? `${count} complete material combination${count === 1 ? "" : "s"}; limit 32.` : "No material choices added.";
 }
 async function studyInput() {
+  if (guidedStudyMode()) return guidedStudyInput();
   const raw = await read("studyRequest");
   if (!$("combinationMode").checked) return raw;
   const policy = JSON.parse(raw);
@@ -3691,7 +3775,7 @@ async function execute(op) {
       if (!sourceText) throw Error("Load the original pattern first.");
       // Alternatives always start at the original, never the currently bound single-material preview.
       msg.pattern = sourceText; msg.studyRequest = await studyInput();
-      if (op === "study") msg.onBody = $("studyOnBody").checked;
+      if (op === "study") msg.onBody = !guidedStudyMode() && $("studyOnBody").checked;
       if (op === "scenario" || msg.onBody) {
         if (op === "scenario") msg.scenarioRequest = await read("scenarioRequest");
         msg.measurements = await studyBodyInput(msg);
@@ -3749,6 +3833,46 @@ async function execute(op) {
   }
 }
 for (const el of commands) el.onclick = () => execute(el.dataset.command);
+$("addStudyCandidate").onclick = () => {
+  if (!source || !inspected || pending) return;
+  try {
+    if (studyCandidates.length >= 7) throw Error("Keep at most seven material choices plus the original baseline.");
+    let key = $("studyCandidateName").value.trim();
+    if (!key) {
+      do { key = `material-${++studyCandidateSequence}`; } while (studyCandidates.some(candidate => candidate.key === key));
+    }
+    if (key === "baseline" || studyCandidates.some(candidate => candidate.key === key)) {
+      throw Error("Choose a unique comparison name other than baseline.");
+    }
+    if (studyCandidates.some(candidate => candidate.selection === inspected)) {
+      throw Error("This exact inspected selection is already in the shortlist.");
+    }
+    studyCandidates.push({ key, selection: inspected });
+    $("studyCandidateName").value = ""; $("studyMode").value = "guided";
+    showStudyCandidates(); invalidate(["study", "scenario"], true);
+  } catch (e) { error(String(e.message || e)); }
+};
+$("clearStudyCandidates").onclick = () => {
+  studyCandidates.length = 0; showStudyCandidates();
+  if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
+};
+$("studyMode").addEventListener("change", () => invalidate(["study", "scenario"], true));
+$("clearGuidedInventory").onclick = () => {
+  $("guidedInventory").value = ""; roundFiles.delete("guidedInventory");
+  if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
+};
+for (const id of ["studyTarget", "studyPieces", "guidedCutting", "guidedMass", "guidedInventoryComplete", "guidedInventory",
+  "guidedAreaGoal", "guidedStockMassGoal", "guidedMassGoal", "guidedBasis", "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance"]) {
+  const changed = () => {
+    if (id === "guidedCutting" && !$(id).checked) {
+      $("guidedAreaGoal").checked = false; $("guidedStockMassGoal").checked = false;
+    }
+    if (id === "guidedMass" && !$(id).checked) $("guidedMassGoal").checked = false;
+    if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
+  };
+  $(id).addEventListener("change", changed);
+  if (["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance"].includes(id)) $(id).addEventListener("input", changed);
+}
 $("rollPreview").addEventListener("change", () => invalidate(["cut"]));
 $("cancel").onclick = () => { cancelPhotoReturn(); start(); $("status").textContent = "Cancelled; reloading local engine."; };
 $("catalog").onchange = () => {
@@ -3791,10 +3915,22 @@ function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
     garments.forEach((garment, i) => group(`@garment:${i}`, `${garment.id} — every source piece`, Object.values(garment.pieces)));
   }
   for (const p of data.pieces) {
-    for (const target of ["target", "combinationPieces"]) {
+    for (const target of ["target", "combinationPieces", "studyPieces"]) {
       const o = document.createElement("option"); o.value = p.id; o.textContent = p.id; $(target).append(o);
     }
   }
+}
+function installDerivedPattern(raw, label) {
+  const data = parsePattern(raw), retainedOutfit = outfit;
+  const garments = retainedOutfit ? JSON.parse(retainedOutfit.composition_json).garments : [];
+  resetPatternInput();
+  ++roundRead; roundToken = null; window.opener = null;
+  roundFiles.delete("patternFile"); $("patternFile").value = "";
+  installPattern(raw, label, garments, data);
+  outfit = retainedOutfit;
+  if (outfit) $("selfContact").checked = true;
+  if (roundFiles.size) $("roundImportText").textContent =
+    "A derived pattern is now the current pattern. Received measurement, fit and body snapshots remain selected. Review them before recomputing this pattern.";
 }
 function resetPatternInput(keepImport = false) {
   cancelPhotoReturn();
@@ -3803,6 +3939,7 @@ function resetPatternInput(keepImport = false) {
   defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
   outfitTargets.clear();
   combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
+  studyCandidates.length = 0; studyCandidateSequence = 0; showStudyCandidates(); $("studyPieces").replaceChildren();
   invalidate(["bodyCheck", "bind", ...boundOperations, "study", "scenario", "outfit", ...(keepImport ? [] : ["garmentcode"])]);
   $("patternName").textContent = "No pattern loaded.";
   $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
@@ -3833,10 +3970,10 @@ $("assign").onclick = () => {
 };
 $("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits(); invalidate(["bind", ...boundOperations]); };
 $("useTreatment").onclick = () => {
-  if (!preparedTreatment || pending) return;
+  if (!ready || !preparedTreatment || pending) return;
   try {
     installDerivedPattern(preparedTreatment, "Derived treatment pattern");
-    $("status").textContent = "Derived pattern loaded. Freeze selections and bind to recompute its consumers.";
+    $("status").textContent = "Derived pattern loaded. Review the current body, fit and process inputs, then Freeze selections and bind to recompute its consumers.";
     controls();
   } catch (e) { error(String(e.message || e)); controls(); }
 };
@@ -3984,6 +4121,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
+    if (id === "studyRequest") $("studyMode").value = "file";
     if (id === "measurements" || id === "body") cancelPhotoReturn();
     if (id === "fit") clearImportFit();
     if (id === "measurements") $("supplementalConsent").checked = false;

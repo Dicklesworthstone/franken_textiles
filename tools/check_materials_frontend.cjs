@@ -1296,6 +1296,7 @@ class Element {
 async function pageModule({roundToken=null}={}) {
   const html = read('materials.html');
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
+  Object.defineProperty(e.studyPieces,'selectedOptions',{get:()=>e.studyPieces.children.filter(option=>option.selected)});
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
@@ -1315,12 +1316,15 @@ async function pageModule({roundToken=null}={}) {
   const window={opener,location:{href:'https://unit.invalid/materials.html'+(roundToken?'?roundImport='+roundToken:'')},
     open:url=>{const messages=[],target={closed:false,postMessage:(data,origin)=>messages.push({data,origin})};popups.push({url,target,messages});return target;},
     addEventListener:(name,fn)=>{const old=windowEvents[name];windowEvents[name]=old?(...args)=>Promise.all([old(...args),fn(...args)]):fn;}};
-  const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder,crypto:require('node:crypto').webcrypto, document: {
+  const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder, TextEncoder,crypto:require('node:crypto').webcrypto, document: {
     getElementById: id => { assert.ok(e[id], `HTML missing ${id}`); return e[id]; },
     querySelectorAll: () => commands, createElement: tag => Object.assign(new Element(), { tag }),
   }, window });
   const module = new vm.SourceTextModule(read('materials-page.js'), { context, initializeImportMeta: m => { m.url = 'https://unit.invalid/materials-page.js'; } });
-  await module.link(() => { throw Error('unexpected import'); }); await module.evaluate();
+  await module.link(specifier => {
+    assert.equal(specifier, './materials-study-builder.js', 'unexpected material page import');
+    return new vm.SourceTextModule(read('materials-study-builder.js'), { context });
+  }); await module.evaluate();
   const current = () => workers.at(-1), ready = () => current().emit({ type: 'ready' }); ready();
   const select = (id, text = '{}') => { e[id].files = [{ name: `${id}.json`, size: text.length, text: async () => text }]; };
   const emit = (result, files = [], reportText = JSON.stringify(result)) => current().emit({ type: 'result', request: current().messages.at(-1).request, result, files, reportText });
@@ -5392,6 +5396,292 @@ function addChoice(p, group, choice, pieces = ['front']) {
   p.e.addCombination.onclick();
 }
 
+// Exact source transport doubles; canonical material qualification is tested by the Rust/WASM lanes.
+const guidedSelection = (lock = 'a', id = '<reviewed cloth>') =>
+  ` {"id":${JSON.stringify(id)},"expected_sha256":"${lock.repeat(64)}","allow_estimates":false,"record":{"id":${JSON.stringify(id)},"fixture":{"coefficient":1.0,"signed":-0.0,"sample":18446744073709551615}}}\r\n`;
+function guidedControls(p) {
+  Object.assign(p.e.studyMode, {value:'guided'});
+  p.e.studyTarget.value='default';p.e.guidedBasis.value='nominal';
+  p.e.guidedCutting.checked=true;p.e.guidedAreaGoal.checked=true;
+  p.e.guidedCopies.value='1';p.e.guidedGap.value='2';p.e.guidedEdge.value='5';p.e.guidedEnd.value='10';
+  p.e.studyMode.handlers.change();
+}
+async function addGuidedSelection(p, raw = guidedSelection(), key = '') {
+  p.e.selection.value=raw;p.e.selection.handlers.input();await p.e.inspect.onclick();
+  const selection=JSON.parse(raw);
+  p.emit({selection,selection_json:raw,snapshot:selection.record,capabilities:{}});
+  p.e.studyCandidateName.value=key;p.e.addStudyCandidate.onclick();
+}
+
+test('guided studies retain immutable inspected sources, an explicit baseline and exact downloadable requests', async () => {
+  const p=await pageModule(),original=' {"pieces":[{"id":"front"},{"id":"lining"}],"coefficient":1.0,"signed":-0.0,"sample":18446744073709551615}\r\n';
+  p.select('patternFile',original);await p.e.patternFile.onchange();guidedControls(p);
+  assert.equal(p.e.study.disabled,true);
+  const raw=guidedSelection();await addGuidedSelection(p,raw,'<source & evidence>');
+  assert.equal(p.e.study.disabled,false,p.e.error.textContent);
+  assert.equal(p.e.addStudyCandidate.disabled,false);
+  p.e.selection.value='{"id":"uninspected replacement"}';p.e.selection.handlers.input();
+  assert.equal(p.e.addStudyCandidate.disabled,true);
+  p.e.addStudyCandidate.onclick();
+  assert.match(visibleText(p.e.studyCandidates),/<source & evidence>/);
+  assert.doesNotMatch(visibleText(p.e.studyCandidates),/uninspected replacement/);
+  p.e.studyOnBody.checked=true;
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);assert.equal(sent.pattern,original);
+  assert.equal(sent.onBody,false,'Guided manufacturing must not silently require a body source');
+  assert.ok(sent.studyRequest.includes(raw));
+  const request=JSON.parse(sent.studyRequest);
+  assert.equal(request.schema,'ftx-material-study/1');assert.equal(request.variants.length,2);
+  assert.deepEqual(plain(request.variants[0]),{key:'baseline',changes:{schema:'ftx-material-bindings/1'}});
+  assert.equal(request.variants[1].key,'<source & evidence>');
+  assert.deepEqual(request.variants[1].changes.default,JSON.parse(raw));
+  assert.deepEqual(plain(request.cutting),{copies:1,gap_mm:2,edge_margin_mm:5,end_margin_mm:10});
+  assert.equal(Object.hasOwn(request,'assembly_mass'),false);
+  assert.equal(Object.hasOwn(request,'design_fit'),false);
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_study:(pattern,input)=>{
+    assert.equal(pattern,original);assert.equal(input,sent.studyRequest);
+    return JSON.stringify(studyReport([studyRow('baseline'),studyRow('<source & evidence>')]));
+  }}});
+  const result=await w.send(sent);assert.equal(result.type,'result',result.message);p.current().emit(result);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  for(const [name,value] of [['study-request.json',sent.studyRequest],['original-pattern.json',original]]) {
+    const download=descendants(s).find(n=>n.download===name);
+    assert.ok(download,name);assert.equal(await p.blobs.get(download.href).text(),value);
+  }
+  assert.equal(descendants(p.e.studyCandidates).some(n=>'innerHTML' in n),false);
+  p.windowEvents.pagehide();assert.equal(p.live.size,0);
+});
+
+test('guided comparison targets preserve the distinction between defaults, all pieces and selected pieces', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);const raw=guidedSelection();
+  await addGuidedSelection(p,raw,'reviewed');
+  for(const [mode,ids] of [['default',null],['all',['front','lining']],['pieces',['lining']]]) {
+    p.e.studyTarget.value=mode;p.e.studyTarget.handlers.change();
+    for(const option of p.e.studyPieces.children)option.selected=ids?.includes(option.value)??false;
+    p.e.studyPieces.handlers.change();
+    await p.e.study.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'study',p.e.error.textContent);
+    const variant=JSON.parse(sent.studyRequest).variants[1];
+    if(ids===null) {
+      assert.deepEqual(variant.changes.default,JSON.parse(raw));
+      assert.equal(Object.hasOwn(variant.changes,'pieces'),false);
+    } else {
+      assert.equal(Object.hasOwn(variant.changes,'default'),false);
+      assert.deepEqual(Object.keys(variant.changes.pieces),ids);
+      for(const id of ids)assert.deepEqual(variant.changes.pieces[id],JSON.parse(raw));
+    }
+    assert.equal(sent.pattern,JSON.stringify({pieces:[{id:'front'},{id:'lining'}]}));
+    p.emit(studyReport());
+  }
+  for(const option of p.e.studyPieces.children)option.selected=false;
+  p.e.studyPieces.handlers.change();const before=p.current().messages.length;
+  await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/piece/i);
+});
+
+test('guided shortlists reject duplicate names and snapshots while retaining distinct revisions of one material', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);
+  await addGuidedSelection(p,guidedSelection('a'),'first');
+  await addGuidedSelection(p,guidedSelection('a'),'duplicate');
+  assert.match(p.e.error.textContent,/already|duplicate/i);
+  await addGuidedSelection(p,guidedSelection('b'),'first');
+  assert.match(p.e.error.textContent,/name|unique|already/i);
+  await addGuidedSelection(p,guidedSelection('b'),'baseline');
+  assert.match(p.e.error.textContent,/baseline|reserved/i);
+  await addGuidedSelection(p,guidedSelection('b'),'second revision');
+  await p.e.study.onclick();const request=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.deepEqual(request.variants.map(v=>v.key),['baseline','first','second revision']);
+  assert.equal(request.variants[1].changes.default.id,request.variants[2].changes.default.id);
+  assert.notEqual(request.variants[1].changes.default.expected_sha256,request.variants[2].changes.default.expected_sha256);
+});
+
+test('guided garment-mass-only comparison uses explicit complete inventory without roll-cutting inputs', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+  p.e.guidedCutting.checked=false;p.e.guidedCutting.handlers.change();
+  p.e.guidedMass.checked=true;p.e.guidedMass.handlers.change();
+  p.e.guidedInventoryComplete.checked=true;p.e.guidedInventoryComplete.handlers.change();
+  p.e.guidedMassGoal.checked=true;p.e.guidedMassGoal.handlers.change();
+  p.e.guidedBasis.value='reported_bounds';p.e.guidedBasis.handlers.change();
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);
+  const request=JSON.parse(sent.studyRequest);
+  assert.equal(Object.hasOwn(request,'cutting'),false);
+  assert.deepEqual(request.assembly_mass,{schema:'ftx-assembly-mass/1',inventory_complete:true,extras:[]});
+  assert.equal(request.comparison.basis,'reported_bounds');
+  assert.deepEqual(request.comparison.objectives,[{metric:'assembly_mass_kg',direction:'minimize'}]);
+  p.emit(studyReport());
+  p.e.guidedInventoryComplete.checked=false;p.e.guidedInventoryComplete.handlers.change();
+  const before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/complete inventory/i);
+});
+
+test('clearing a guided inventory recovers from malformed files and cancels pending reads without losing the shortlist', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);const raw=guidedSelection();
+  await addGuidedSelection(p,raw,'retained choice');
+  const input=p.e.guidedInventory;
+  // Only this file control needs the browser's value="" -> empty FileList behavior.
+  Object.defineProperty(input,'value',{get:()=>input.files[0]?.name||'',set:value=>{
+    assert.equal(value,'');input.files=[];
+  }});
+  p.e.guidedCutting.checked=false;p.e.guidedCutting.handlers.change();
+  p.e.guidedMass.checked=true;p.e.guidedMass.handlers.change();
+  p.e.guidedMassGoal.checked=true;p.e.guidedMassGoal.handlers.change();
+  const shortlist=visibleText(p.e.studyCandidates);
+  p.select('guidedInventory','{ malformed inventory');input.handlers.change();
+  assert.equal(p.e.guidedInventoryComplete.disabled,true);
+  assert.equal(p.e.clearGuidedInventory.disabled,false);
+  const before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/JSON/i);
+  p.e.clearGuidedInventory.onclick();
+  assert.equal(input.files.length,0);assert.equal(input.value,'');
+  assert.equal(p.e.clearGuidedInventory.disabled,true);
+  assert.equal(p.e.guidedInventoryComplete.disabled,false);
+  assert.equal(p.e.guidedInventoryComplete.checked,false,'Clearing a file must not infer complete inventory');
+  assert.equal(visibleText(p.e.studyCandidates),shortlist);
+  await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/complete inventory/i);
+  p.e.guidedInventoryComplete.checked=true;p.e.guidedInventoryComplete.handlers.change();
+  await p.e.study.onclick();const sent=p.current().messages.at(-1),request=JSON.parse(sent.studyRequest);
+  assert.equal(sent.type,'study',p.e.error.textContent);assert.ok(sent.studyRequest.includes(raw));
+  assert.equal(Object.hasOwn(request,'cutting'),false);
+  assert.deepEqual(request.assembly_mass,{schema:'ftx-assembly-mass/1',inventory_complete:true,extras:[]});
+  assert.deepEqual(request.variants.map(v=>v.key),['baseline','retained choice']);
+  p.emit(studyReport(),[{name:'study-request.json',text:sent.studyRequest}]);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');assert.equal(s.hidden,false);
+  const inventory=' {"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[]}\r\n';
+  p.select('guidedInventory',inventory);input.handlers.change();
+  assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  assert.equal(p.e.guidedInventoryComplete.disabled,true);
+  const delay=deferred();let reading=false;
+  input.files[0].text=()=>{reading=true;return delay.promise;};
+  const old=p.current(),messages=old.messages.length,running=p.e.study.onclick();
+  assert.equal(reading,true);p.e.clearGuidedInventory.onclick();
+  assert.equal(old.dead,true);assert.equal(input.files.length,0);
+  assert.equal(p.e.guidedInventoryComplete.disabled,false);
+  assert.equal(visibleText(p.e.studyCandidates),shortlist);
+  p.ready();delay.resolve(inventory);await running;
+  assert.equal(old.messages.length,messages);assert.equal(p.current().messages.length,0);
+  old.emit({type:'result',request:sent.request,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});
+  assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  await p.e.study.onclick();const retry=p.current().messages.at(-1);
+  assert.equal(retry.type,'study',p.e.error.textContent);assert.ok(retry.studyRequest.includes(raw));
+  assert.deepEqual(JSON.parse(retry.studyRequest).assembly_mass,request.assembly_mass);
+});
+
+test('guided choices reach body scenarios without a study file and preserve the separate body request', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);const raw=guidedSelection();await addGuidedSelection(p,raw);
+  const scenario=' {"options":{"self_contact":null},"source":-0.0}\r\n';
+  const body=' {"schema":"ftx-scenario-body/1","source":{"value":1.0,"sample":18446744073709551615}}\r\n';
+  p.select('scenarioRequest',scenario);p.e.scenarioRequest.handlers.change();
+  p.select('scenarioBody',body);p.e.scenarioBody.handlers.change();
+  p.e.studyBodySource.value='request';p.e.studyBodySource.handlers.change();
+  p.e.body.files=[new Blob([new Uint8Array([2,4,6])])];p.e.body.handlers.change();
+  assert.equal(p.e.studyRequest.files.length,0);assert.equal(p.e.scenario.disabled,false);
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.studyRequest.includes(raw));
+  assert.equal(JSON.parse(sent.studyRequest).variants[0].key,'baseline');
+  assert.equal(sent.scenarioRequest,scenario);assert.equal(sent.measurements,body);
+  assert.deepEqual([...new Uint8Array(sent.bytes)],[2,4,6]);
+  p.emit(scenarioReport(),[{name:'study-request.json',text:sent.studyRequest},{name:'body-input.json',text:body}]);
+  const s=section(p,'Fresh drape and heat alternatives');assert.equal(s.hidden,false);
+  const link=descendants(s).find(n=>n.download==='body-input.json');
+  assert.equal(await p.blobs.get(link.href).text(),body);
+  p.e.guidedGap.value='3';p.e.guidedGap.handlers.input();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+});
+
+test('switching guided and complete-file study modes preserves each source without mixing policies', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);const raw=guidedSelection();
+  await addGuidedSelection(p,raw,'shortlisted');
+  const uploaded=' \r\n{"schema":"ftx-material-study/1","variants":[],"source":{"value":1.0,"signed":-0.0,"integer":18446744073709551615}}\r\n';
+  p.select('studyRequest',uploaded);p.e.studyRequest.handlers.change();
+  for(const mode of ['file','guided','file']) {
+    p.e.studyMode.value=mode;p.e.studyMode.handlers.change();
+    assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+    assert.equal(p.live.size,0);
+    await p.e.study.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'study',p.e.error.textContent);
+    if(mode==='file')assert.equal(sent.studyRequest,uploaded);
+    else {assert.ok(sent.studyRequest.includes(raw));assert.equal(Object.hasOwn(JSON.parse(sent.studyRequest),'source'),false);}
+    p.emit(studyReport(),[{name:'study-request.json',text:sent.studyRequest,mime:'application/json'}]);
+    assert.ok(p.live.size>0);
+  }
+});
+
+test('guided inventory reads cannot publish after edits, cancellation or source replacement', async () => {
+  const inventory=' {"schema":"ftx-assembly-mass/1","inventory_complete":false,"extras":[{"id":"source-bound extra","count":1.0,"source":{"signed":-0.0,"sample":18446744073709551615}}]}\r\n';
+  for(const change of ['quantity','target','inventory','remove','mode','pattern','cancel']) {
+    const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+    p.e.guidedMass.checked=true;p.e.guidedMass.handlers.change();p.select('guidedInventory',inventory);
+    p.e.guidedInventory.handlers.change();
+    const delay=deferred();let reading=false;
+    p.e.guidedInventory.files[0].text=()=>{reading=true;return delay.promise;};
+    const old=p.current(),running=p.e.study.onclick();assert.equal(reading,true,change);
+    if(change==='quantity'){p.e.guidedCopies.value='2';p.e.guidedCopies.handlers.input();}
+    else if(change==='target'){p.e.studyTarget.value='all';p.e.studyTarget.handlers.change();}
+    else if(change==='inventory')p.e.guidedInventory.handlers.change();
+    else if(change==='remove')descendants(p.e.studyCandidates).find(n=>n.tag==='button').onclick();
+    else if(change==='mode'){p.e.studyMode.value='file';p.e.studyMode.handlers.change();}
+    else if(change==='pattern')await p.load();
+    else p.e.cancel.onclick();
+    assert.equal(old.dead,true,change);p.ready();delay.resolve(inventory);await running;
+    assert.equal(old.messages.filter(m=>m.type==='study').length,0,change);
+    old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});
+    assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true,change);
+    assert.equal(p.live.size,0,change);
+  }
+  const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+  p.e.guidedMass.checked=true;p.select('guidedInventory',inventory);p.e.guidedInventory.handlers.change();
+  await p.e.study.onclick();assert.ok(p.current().messages.at(-1).studyRequest.includes(inventory));
+});
+
+test('guided edits withdraw current comparisons and reject late worker results and stale adoption actions', async () => {
+  for(const change of ['goal','copies','clear','remove','cancel']) {
+    const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+    await p.e.study.onclick();p.emit(studyReport(),[{name:'study-request.json',text:'{}'}]);
+    const s=section(p,'Fixed-pattern manufacturing alternatives');
+    const adoption=descendants(s).find(n=>n.tag==='button'&&n.textContent==='Use A pattern');
+    await p.e.study.onclick();const old=p.current(),request=old.messages.at(-1).request;
+    if(change==='goal'){p.e.guidedStockMassGoal.checked=true;p.e.guidedStockMassGoal.handlers.change();}
+    else if(change==='copies'){p.e.guidedCopies.value='3';p.e.guidedCopies.handlers.input();}
+    else if(change==='clear')p.e.clearStudyCandidates.onclick();
+    else if(change==='remove')descendants(p.e.studyCandidates).find(n=>n.tag==='button').onclick();
+    else p.e.cancel.onclick();
+    assert.equal(old.dead,true,change);p.ready();
+    old.emit({type:'result',request,result:studyReport(),files:[{name:'late.json',text:'{}'}]});
+    assert.equal(s.hidden,true,change);assert.equal(p.live.size,0,change);
+    const patternName=p.e.patternName.textContent;adoption.onclick();assert.equal(p.e.patternName.textContent,patternName,change);
+  }
+});
+
+test('guided pattern replacement and candidate adoption clear the shortlist while retaining exact received body sources', async () => {
+  const token='6'.repeat(32),p=await pageModule({roundToken:token});
+  const original=' {"pieces":[{"id":"front"},{"id":"lining"}],"integer":18446744073709551615}\r\n';
+  const measurements=' {"length":1.0}\r\n',fit=' {"points":[],"signed":-0.0}\r\n',bodyFit=' {"schema":"ftx-body-fit/1","value":1.0}\r\n';
+  const model=new Blob([new Uint8Array([3,5,7])]);
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{type:'ftx-round-sources',token,
+    files:{pattern:new Blob([original]),measurements:new Blob([measurements]),fit:new Blob([fit])},
+    bodySource:{model,fit:new Blob([bodyFit]),armDeg:48}}});
+  guidedControls(p);await addGuidedSelection(p);p.e.bodyFitConsent.checked=true;
+  await p.e.study.onclick();assert.equal(p.current().messages.at(-1).pattern,original);
+  const raw=' {"pieces":[{"id":"adopted"}],"value":1.0,"signed":-0.0}\r\n';
+  p.emit(studyReport([studyRow('chosen',raw)]));
+  descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(n=>n.tag==='button'&&n.textContent==='Use chosen pattern').onclick();
+  assert.equal(p.e.studyCandidates.children.length,0);assert.equal(p.e.study.disabled,true);
+  assert.deepEqual(p.e.studyPieces.children.map(o=>o.value),['adopted']);
+  assert.equal(p.e.bodyFitConsent.checked,false);
+  await p.e.bind.onclick();assert.equal(p.current().messages.at(-1).pattern,raw);
+  p.emit({pattern_json:raw,pieces:[],pattern_sha256:'adopted-lock'});
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();await p.e.fold.onclick();
+  const folded=p.current().messages.at(-1);
+  assert.equal(folded.pattern,raw);assert.equal(folded.bodyFit,bodyFit);
+  assert.equal(folded.measurements,measurements);assert.equal(folded.fit,fit);assert.equal(folded.armDeg,48);
+  assert.deepEqual([...new Uint8Array(folded.bytes)],[3,5,7]);
+  p.e.cancel.onclick();p.ready();await addGuidedSelection(p,guidedSelection('b'));
+  await p.load();
+  assert.equal(p.e.studyCandidates.children.length,0);assert.equal(p.e.study.disabled,true);
+  assert.deepEqual(p.e.studyPieces.children.map(o=>o.value),['front','lining']);
+});
+
 test('combination controls retain frozen selections and exact policy/pair numbers for native study evaluation', async () => {
   for (const schema of ['ftx-material-study/1','ftx-design-study/1']) {
   const p = await pageModule(); await p.load();
@@ -5691,6 +5981,65 @@ test('qualified knife programs retain exact process scope and independent refusa
   assert.equal(section(p,'stock').hidden,true);
   assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
+test('exact-stop knife timing displays retained accelerations and producer totals without changing replay bytes', async () => {
+  for (const op of ['cut','stock','study','scenario']) {
+    const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);
+    const profile={model:'trapezoidal_exact_stop/1',cutting_acceleration_mm_s2:2500,travel_acceleration_mm_s2:1250};
+    const options=` {"program":{"machine":{"motion_profile":${JSON.stringify(profile)}}}}\n`;
+    p.select('cutOptions',options);p.select('stockRequest',options);
+    // Display/transport double: the Rust integration tests establish these timing laws. The page
+    // must show the retained totals and profile, never recompute time from length and speed.
+    const selected={runs:[{path:{placement:0,internal_cut:0}},{path:{placement:0}}],
+      cut_length_mm:480,travel_length_mm:120,cutting_seconds:6.25,travel_seconds:1.75,
+      lift_lower_seconds:0.4,modeled_path_seconds:8.4};
+    const program={schema:op==='stock'?'ftx-knife-cut-program/2':'ftx-knife-cut-program/1',
+      machine_sha256:'<machine and acceleration source lock>',motion_profile:profile,
+      markers:[{marker:0,qualification:'<acceleration-qualified process>',selected,baseline:selected,improved:true}],
+      physical_cutting_validated:false,hardware_execution_authorized:false};
+    const plan=op==='stock'?{schema:'ftx-finite-stock-plan/1',used_stock_count:1,markers:[{placements:[{}]}],program}:
+      {schema:'ftx-roll-cut-plan/1',rolls:[{}],program};
+    const row=studyRow('accelerated');row.cutting=outcome(plan);
+    const study=studyReport([row]);
+    const standalone=op==='cut'||op==='stock';
+    const report=standalone?plan:op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const label=op==='cut'?'Cutting plan':op==='stock'?'Finite-stock plan':'accelerated';
+    await p.e[op].onclick();
+    if(op==='cut')assert.equal(p.current().messages.at(-1).options,options);
+    const raw=` ${JSON.stringify(report).replace('"cutting_acceleration_mm_s2":2500','"cutting_acceleration_mm_s2":2500.0')}\n`;
+    p.emit(report,[{name:'accelerated-knife.json',text:raw,mime:'application/json'}],raw);
+    const s=section(p,standalone?op:op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+    assert.deepEqual(plain(table(`${label}: retained knife timing model`).children[2].children.map(n=>n.textContent)),
+      ['trapezoidal_exact_stop/1','2500','1250']);
+    assert.deepEqual(plain(table(`${label}: material-qualified knife paths`).children[2].children.slice(5).map(n=>n.textContent)),
+      ['6.25','1.75','0.4','8.4','Faster complete traversal']);
+    assert.match(visibleText(s),/complete stop at every cutting and raised-travel vertex, including collinear vertices, detours and requested returns/);
+    assert.match(visibleText(s),/No vertices are merged and no corner blending is inferred/);
+    assert.doesNotMatch(visibleText(s),/Loading, acceleration, blade turning and inspection are outside/);
+    assert.match(visibleText(s),/does not establish physical cut quality, an optimal route or permission to run a machine/);
+    const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===`${label}: exact knife paths, material locks and process limits (display only)`);
+    source.open=true;source.handlers.toggle();
+    assert.match(visibleText(source),/<machine and acceleration source lock>/);
+    assert.match(visibleText(source),/"motion_profile"/);
+    const download=descendants(s).find(n=>n.download==='accelerated-knife.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+
+    delete program.motion_profile;
+    await p.e[op].onclick();p.emit(report);
+    assert.equal(table(`${label}: retained knife timing model`),undefined);
+    assert.match(visibleText(s),/Shorter complete traversal/);
+    assert.match(visibleText(s),/Loading, acceleration, blade turning and inspection are outside this model/);
+    assert.doesNotMatch(visibleText(s),/trapezoidal_exact_stop|complete stop at every/);
+    assert.equal(p.live.has(download.href),false);
+    delete plan.program;plan.program_refusal={message:'Acceleration qualification does not match the changed machine'};
+    await p.e[op].onclick();p.emit(report);
+    assert.equal(table(`${label}: material-qualified knife paths`),undefined);
+    assert.equal(table(`${label}: retained knife timing model`),undefined);
+    assert.match(visibleText(s),/Acceleration qualification does not match the changed machine/);
+  }
 });
 
 test('fixture detours retain actual travel totals, intermediate points and source downloads until inputs or admission change', async () => {
@@ -8752,6 +9101,38 @@ test('evaporation and incoming liquid mechanics expose separate mass and bulk tr
   const scheduledSource=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='A: liquid exchange mechanics qualification and complete transfer ledger (display only)');
   scheduledSource.open=true;scheduledSource.handlers.toggle();
   assert.match(visibleText(scheduledSource),/incoming_velocity_world_m_s_by_interval/);
+  const phaseSchedule=[{supply:[1,0,0],condensation:[0,1,0]},
+    {supply:[0,0,1],condensation:[-1,0,0]}];
+  mechanics.schema='ftx-coupled-liquid-mechanics-result/5';
+  mechanics.qualification.model='scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1';
+  mechanics.qualification.bindings={front:{incoming_stream_velocities_world_m_s_by_interval:phaseSchedule}};
+  await p.e.scenario.onclick();p.emit(report);
+  assert.equal(table('A: liquid exchange momentum and energy residuals').children[1].children.length,4);
+  assert.match(visibleText(s),/independently scheduled world-frame velocities/);
+  assert.doesNotMatch(visibleText(s),/Outgoing separation work/);
+  assert.equal(visibleText(table('A: textile evaporation and sensible energy')),thermalBefore);
+  mechanics.schema='ftx-coupled-liquid-mechanics-result/6';
+  mechanics.qualification.model='scheduled_phase_specific_incoming_and_outgoing_velocity_mass_exchange_frozen_mechanics/1';
+  mechanics.qualification.bindings.front.outgoing_stream_velocities_relative_to_cloth_m_s_by_interval=
+    [{evaporation:[0,0,0.4],drainage:[0.2,0,-0.1]},
+      {evaporation:[0,0,0.2],drainage:[-0.1,0.1,-0.2]}];
+  mechanics.exchange.outgoing_separation_work_j=0.002;
+  const recoilRaw=JSON.stringify(report);
+  await p.e.scenario.onclick();p.emit(report,[{name:'recoil.json',text:recoilRaw,mime:'application/json'}],recoilRaw);
+  const recoilResidual=table('A: liquid exchange momentum and energy residuals');
+  assert.equal(recoilResidual.children[1].children[4].textContent,'Outgoing separation work (J)');
+  assert.deepEqual(plain(recoilResidual.children[2].children.map(n=>n.textContent)),
+    ['0, 0, 0','0','0','0.001','0.002']);
+  assert.match(visibleText(s),/retained cloth recoils to conserve momentum/);
+  assert.match(visibleText(s),/relative to the post-mixing cloth/);
+  assert.doesNotMatch(visibleText(s),/outgoing vapor leaves at the mixed cloth velocity/);
+  assert.equal(visibleText(table('A: textile evaporation and sensible energy')),thermalBefore,
+    'Outgoing separation work must remain separate from thermal sensible and latent energy');
+  const recoilSource=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='A: liquid exchange mechanics qualification and complete transfer ledger (display only)');
+  recoilSource.open=true;recoilSource.handlers.toggle();
+  assert.match(visibleText(recoilSource),/outgoing_stream_velocities_relative_to_cloth_m_s_by_interval/);
+  const recoilDownload=descendants(s).find(n=>n.download==='recoil.json');
+  assert.equal(await p.blobs.get(recoilDownload.href).text(),recoilRaw);
   evaluation.motion=refused('coupled liquid mechanics left its source domain');
   await p.e.scenario.onclick(); p.emit(report);
   assert.equal(table('A: evaporation changes moving cloth mass'),undefined);
@@ -9132,7 +9513,7 @@ test('compiled WASM treated outfit adoption rebinds exact derived geometry with 
   });
 
 test('compiled WASM qualified knife paths and changed-material process refusals replay native cut and study captures',
-  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_KNIFE_PROGRAM_REPLAY},async()=>{
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_KNIFE_PROGRAM_REPLAY},async t=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
@@ -9189,6 +9570,60 @@ test('compiled WASM qualified knife paths and changed-material process refusals 
     assert.ok(qualified.metrics.stock_area_m2>0);
     assert.equal(changed.metrics.stock_area_m2,qualified.metrics.stock_area_m2);
     assert.equal(changed.cutting.result.rolls.length,qualified.cutting.result.rolls.length);
+    for (const [index,prefix] of ['detour','loading','motion-detour','motion-loading'].entries()) {
+      const captured=name=>fs.existsSync(path.join(process.env.FTX_KNIFE_PROGRAM_REPLAY,`${prefix}-${name}`));
+      await t.test(`${prefix}: complete native knife report and SVG`,
+        {skip:!captured('options.json')&&`${prefix} native captures not supplied`},async()=>{
+          const options=input(`${prefix}-options.json`),request=JSON.parse(options);
+          const replay=await w.send({type:'cut',request:260+index*4,pattern,options});
+          assert.equal(replay.type,'result',replay.message);
+          assert.deepEqual(replay.result,JSON.parse(input(`${prefix}-report.json`)));
+          assert.equal(replay.picture,input(`${prefix}-preview.svg`));
+          assert.equal(replay.files.find(file=>file.name==='roll-0.svg').text,replay.picture);
+          assert.equal(replay.files.find(file=>file.name==='cut-plan.json').text,ftx.cut_plan(pattern,options));
+          assert.deepEqual(replay.result.rolls,cut.result.rolls);
+          const program=replay.result.program;
+          assert.equal(program.hardware_execution_authorized,false);
+          assert.equal(program.physical_cutting_validated,false);
+          if(prefix.startsWith('motion-')) {
+            assert.deepEqual(program.motion_profile,request.program.machine.motion_profile);
+            assert.equal(program.motion_profile.model,'trapezoidal_exact_stop/1');
+            for(const marker of program.markers) {
+              const id=replay.result.rolls[marker.marker].material.authored.id;
+              const expected={shell:18,knit:12}[id];
+              assert.notEqual(expected,undefined,`Unknown independent cutting-time fixture ${id}`);
+              assert.ok(Math.abs(marker.selected.cutting_seconds-expected)<1e-10);
+              assert.ok(marker.selected.modeled_path_seconds<=marker.baseline.modeled_path_seconds);
+              const q=request.program.qualifications.find(row=>row.id===marker.qualification);
+              assert.equal(q.machine_sha256,program.machine_sha256);
+            }
+            const edited=JSON.parse(options);
+            edited.program.machine.motion_profile.travel_acceleration_mm_s2*=2;
+            const refused=await w.send({type:'cut',request:261+index*4,pattern,options:JSON.stringify(edited)});
+            assert.equal(refused.type,'result',refused.message);
+            assert.equal(refused.result.program,undefined);
+            assert.match(refused.result.program_refusal.message,/qualification/);
+            assert.deepEqual(refused.result.rolls,replay.result.rolls);
+          } else assert.equal(program.motion_profile,undefined);
+        });
+      if(prefix.endsWith('loading')) {
+        await t.test(`${prefix}: complete native material-study replay`,
+          {skip:!captured('study.json')&&`${prefix} native study captures not supplied`},async()=>{
+            const studyRequest=input(`${prefix}-study.json`);
+            const replay=await w.send({type:'study',request:262+index*4,pattern,studyRequest});
+            assert.equal(replay.type,'result',replay.message);
+            assert.deepEqual(replay.result,JSON.parse(input(`${prefix}-study-report.json`)));
+            assert.equal(replay.files.find(file=>file.name==='material-study.json').text,ftx.material_study(pattern,studyRequest));
+            assert.equal(replay.files.find(file=>file.name==='study-request.json').text,studyRequest);
+            const qualified=replay.result.alternatives.find(row=>row.key==='qualified');
+            const changed=replay.result.alternatives.find(row=>row.key==='changed-finish');
+            assert.deepEqual(qualified.cutting.result.program,JSON.parse(input(`${prefix}-report.json`)).program);
+            assert.equal(changed.cutting.result.program,undefined);
+            assert.match(changed.cutting.result.program_refusal.message,/qualification/);
+            assert.equal(changed.metrics.stock_area_m2,qualified.metrics.stock_area_m2);
+          });
+      }
+    }
   });
 
 test('compiled WASM finite and mixed knife programs replay exact native stock inventory and process refusals',
@@ -10790,8 +11225,8 @@ test('compiled WASM routed shared fixtures and attending workers replay exact na
     }
   });
 
-test('compiled WASM evaporating, supplied and condensing textile-water objectives, moving mass and incoming momentum replay native commands and named scenarios',
-  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY || process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY || process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY || process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY || process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY || process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY)}, async()=>{
+test('compiled WASM textile-water objectives, moving mass, scheduled phase momentum and outgoing recoil replay native commands and named scenarios',
+  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY || process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY || process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY || process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY || process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY || process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY || process.env.FTX_SCHEDULED_PHASE_SUPPLY_REPLAY || process.env.FTX_SCHEDULED_PHASE_CONDENSING_REPLAY || process.env.FTX_OUTGOING_RECOIL_REPLAY || process.env.FTX_CONDENSING_OUTGOING_RECOIL_REPLAY)}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
@@ -10806,25 +11241,33 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
         [process.env.FTX_CONDENSING_IMPULSE_REPLAY,'condensing-impulse-mechanics'],
         [process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY,'supplied-phase-impulse-mechanics'],
         [process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY,'condensing-phase-impulse-mechanics'],
+        [process.env.FTX_SCHEDULED_PHASE_SUPPLY_REPLAY,'supplied-scheduled-phase-impulse-mechanics'],
+        [process.env.FTX_SCHEDULED_PHASE_CONDENSING_REPLAY,'condensing-scheduled-phase-impulse-mechanics'],
+        [process.env.FTX_OUTGOING_RECOIL_REPLAY,'supplied-scheduled-phase-impulse-recoil-mechanics'],
+        [process.env.FTX_CONDENSING_OUTGOING_RECOIL_REPLAY,'condensing-scheduled-phase-impulse-recoil-mechanics'],
         [process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY,'supplied-scheduled-impulse-mechanics'],
         [process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY,'condensing-finite-mechanics'],
         [process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY,'condensing-scheduled-impulse-mechanics']].filter(([dir])=>dir)) {
         const prescribed=kind.includes('impulse');
         const finite=kind.includes('finite');
-        const phases=kind.includes('phase'),scheduled=kind.includes('scheduled');
+        const phases=kind.includes('phase'),scheduled=kind.includes('scheduled'),recoil=kind.includes('recoil');
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8');
         const bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
         for(const name of ['single','matrix']) {
         const studyRequest=input('study.json'), scenarioRequest=input(`${name}-scenario.json`);
+        const sourceScenario=JSON.parse(scenarioRequest);
+        const sourceCases=name==='single'?[sourceScenario]:sourceScenario.cases.map(entry=>entry.scenario);
         const result=await w.send({type:'scenario',request:181,pattern:input('pattern.json'),studyRequest,scenarioRequest,
           measurements:input('body-input.json'),bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
         assert.equal(result.type,'result',result.message);
         assert.deepEqual(result.result,JSON.parse(input(`${name}-report.json`)));
         assert.deepEqual(result.result.comparison.frontier,['qualified']);
         if(name==='matrix') assert.deepEqual(result.result.comparison.case_order,['equal-reservoirs','warm-outside']);
-        for(const report of name==='single'?[result.result]:result.result.cases) {
+        for(const [caseIndex,report] of (name==='single'?[result.result]:result.result.cases).entries()) {
           assert.deepEqual(report.comparison.frontier,['qualified']);
-          const readings=report.comparison.alternatives.find(row=>row.key==='qualified').readings;
+          const alternative=report.comparison.alternatives.find(row=>row.key==='qualified');
+          assert.equal(alternative.eligible,true);
+          const readings=alternative.readings;
           if(kind.startsWith('supplied')) assert.ok(readings.textile_water_supplied_mass_kg.value>0);
           else if(kind==='condensed'||kind.startsWith('condensing')) {
             assert.ok(readings.textile_water_condensed_mass_kg.value>0);
@@ -10835,6 +11278,7 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
             assert.equal(readings.textile_water_remaining_mass_kg.value,0);
           }
           if(finite) assert.equal(readings.textile_water_evaporated_mass_kg.value,0);
+          else if(phases&&scheduled&&kind.startsWith('condensing')) assert.ok(readings.textile_water_evaporated_mass_kg.value>=0);
           else assert.ok(readings.textile_water_evaporated_mass_kg.value>0);
           const motion=report.simulations.find(row=>row.key==='qualified').evaluation.result.motion.result;
           const heat=motion.transient_surface.result;
@@ -10873,22 +11317,48 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
             const mechanics=motion.liquid_mechanics;
             assert.deepEqual(mechanics,heat.mechanical_coupling);
             assert.deepEqual(mechanics.qualification,heat.request.mechanical_coupling);
+            assert.deepEqual(mechanics.qualification,sourceCases[caseIndex].motion.transient_surface.mechanical_coupling);
             if(kind==='mechanics') {
               assert.equal(mechanics.remaining_liquid_mass_kg,0);
               assert.ok(mechanics.initial_liquid_mass_kg>0);
             } else {
-              assert.equal(mechanics.schema,phases?'ftx-coupled-liquid-mechanics-result/4':
+              assert.equal(mechanics.schema,recoil?'ftx-coupled-liquid-mechanics-result/6':
+                phases&&scheduled?'ftx-coupled-liquid-mechanics-result/5':phases?'ftx-coupled-liquid-mechanics-result/4':
                 scheduled?'ftx-coupled-liquid-mechanics-result/3':prescribed?
                   'ftx-coupled-liquid-mechanics-result/2':'ftx-coupled-liquid-mechanics-result/1');
               assert.ok(mechanics.exchange.incoming_mass_kg>0);
-              assert.equal(mechanics.exchange.outgoing_mass_kg,mechanics.evaporated_liquid_mass_kg);
+              if(recoil) {
+                assert.equal(heat.surface_water.schema,'ftx-textile-surface-water-result/4');
+                assert.ok(mechanics.drained_liquid_mass_kg>0);
+                assert.ok(Math.abs(mechanics.drained_liquid_mass_kg-heat.surface_water.drained_liquid_kg)<1e-14);
+                assert.ok(Math.abs(mechanics.exchange.outgoing_mass_kg-mechanics.evaporated_liquid_mass_kg-
+                  mechanics.drained_liquid_mass_kg)<1e-14);
+                assert.ok(mechanics.exchange.outgoing_separation_work_j>0);
+                assert.equal(motion.initial_sample.liquid_mechanics.exchange.outgoing_separation_work_j,0);
+                assert.match(mechanics.scope,/recoil/);
+                assert.match(mechanics.scope,/separation work/);
+              } else {
+                assert.equal(mechanics.exchange.outgoing_mass_kg,mechanics.evaporated_liquid_mass_kg);
+                assert.equal(mechanics.exchange.outgoing_separation_work_j,undefined);
+              }
               assert.ok(Math.abs(mechanics.remaining_liquid_mass_kg-heat.surface_water.remaining_liquid_kg)<1e-14);
               assert.ok(mechanics.exchange.incoming_kinetic_energy_j>=0);
               if(prescribed) {
                 const exchange=mechanics.exchange,velocity=[0.2,0.1,-0.5];
                 const vaporVelocity=[-0.1,0.3,0.4],nextVelocity=[-0.3,0.4,0.2];
                 const binding=mechanics.qualification.bindings.band;
-                if(phases) {
+                if(phases&&scheduled) {
+                  assert.deepEqual(binding.incoming_stream_velocities_world_m_s_by_interval,[
+                    {supply:velocity,condensation:vaporVelocity},
+                    {supply:nextVelocity,condensation:[0.5,-0.2,0.1]}]);
+                  assert.equal(binding.incoming_velocity_world_m_s,undefined);
+                  assert.equal(binding.incoming_velocity_world_m_s_by_interval,undefined);
+                  assert.equal(binding.incoming_stream_velocities_world_m_s,undefined);
+                  if(recoil) assert.deepEqual(binding.outgoing_stream_velocities_relative_to_cloth_m_s_by_interval,[
+                    {evaporation:[0,0,0.4],drainage:[0.2,0,-0.1]},
+                    {evaporation:[0,0,0.2],drainage:[-0.1,0.1,-0.2]}]);
+                  else assert.equal(binding.outgoing_stream_velocities_relative_to_cloth_m_s_by_interval,undefined);
+                } else if(phases) {
                   assert.deepEqual(binding.incoming_stream_velocities_world_m_s,{supply:velocity,condensation:vaporVelocity});
                   assert.equal(binding.incoming_velocity_world_m_s,undefined);
                   assert.equal(binding.incoming_velocity_world_m_s_by_interval,undefined);
@@ -10901,25 +11371,35 @@ test('compiled WASM evaporating, supplied and condensing textile-water objective
                 assert.equal(motion.initial_sample.liquid_mechanics.exchange.mixing_dissipation_j,0);
                 assert.ok(Math.abs(exchange.incoming_mass_kg-heat.surface_water.supplied_liquid_kg-
                   (heat.surface_water.condensed_liquid_kg||0))<1e-14);
-                const firstIncoming=scheduled?heat.trace.filter(row=>row.interval_index===0).at(-1)
-                  .mechanical_coupling.exchange.incoming_mass_kg:exchange.incoming_mass_kg;
-                const firstMass=phases?heat.surface_water.supplied_liquid_kg:firstIncoming;
-                const otherMass=phases?(heat.surface_water.condensed_liquid_kg||0):exchange.incoming_mass_kg-firstIncoming;
-                const otherVelocity=phases?vaporVelocity:nextVelocity;
-                if(scheduled&&kind.startsWith('supplied')) assert.ok(firstMass>0&&otherMass>0);
-                if(phases&&kind.startsWith('condensing')) assert.ok(firstMass>0&&otherMass>0);
-                for(const [axis,speed] of velocity.entries()) {
-                  assert.ok(Math.abs(exchange.incoming_momentum_kg_m_s[axis]-
-                    firstMass*speed-otherMass*otherVelocity[axis])<1e-12);
-                  assert.ok(Math.abs(mechanics.transfer_momentum_residual_kg_m_s[axis])<1e-12);
+                if(phases&&scheduled) {
+                  // The native capture independently checks every phase/interval momentum and
+                  // kinetic term. Complete report equality above checks this actual WASM replay.
+                  const first=heat.trace.filter(row=>row.interval_index===0).at(-1).surface_water;
+                  assert.ok(first.supplied_liquid_kg>0&&heat.surface_water.supplied_liquid_kg>first.supplied_liquid_kg);
+                  if(kind.startsWith('condensing')) assert.ok(first.condensed_liquid_kg>0&&
+                    heat.surface_water.condensed_liquid_kg>first.condensed_liquid_kg);
+                  if(recoil) assert.ok(first.drained_liquid_kg>0&&heat.surface_water.drained_liquid_kg>first.drained_liquid_kg);
+                } else {
+                  const firstIncoming=scheduled?heat.trace.filter(row=>row.interval_index===0).at(-1)
+                    .mechanical_coupling.exchange.incoming_mass_kg:exchange.incoming_mass_kg;
+                  const firstMass=phases?heat.surface_water.supplied_liquid_kg:firstIncoming;
+                  const otherMass=phases?(heat.surface_water.condensed_liquid_kg||0):exchange.incoming_mass_kg-firstIncoming;
+                  const otherVelocity=phases?vaporVelocity:nextVelocity;
+                  if(scheduled&&kind.startsWith('supplied')) assert.ok(firstMass>0&&otherMass>0);
+                  if(phases&&kind.startsWith('condensing')) assert.ok(firstMass>0&&otherMass>0);
+                  for(const [axis,speed] of velocity.entries()) {
+                    assert.ok(Math.abs(exchange.incoming_momentum_kg_m_s[axis]-
+                      firstMass*speed-otherMass*otherVelocity[axis])<1e-12);
+                  }
+                  assert.ok(Math.abs(exchange.incoming_kinetic_energy_j-
+                    0.5*firstMass*velocity.reduce((sum,speed)=>sum+speed*speed,0)-
+                    0.5*otherMass*otherVelocity.reduce((sum,speed)=>sum+speed*speed,0))<1e-12);
                 }
-                assert.ok(Math.abs(exchange.incoming_kinetic_energy_j-
-                  0.5*firstMass*velocity.reduce((sum,speed)=>sum+speed*speed,0)-
-                  0.5*otherMass*otherVelocity.reduce((sum,speed)=>sum+speed*speed,0))<1e-12);
+                assert.ok(mechanics.transfer_momentum_residual_kg_m_s.every(value=>Math.abs(value)<1e-12));
                 assert.ok(Math.abs(mechanics.transfer_kinetic_residual_j)<1e-12);
               } else assert.equal(mechanics.exchange.mixing_dissipation_j,undefined);
             }
-            if(finite) assert.equal(mechanics.exported_kinetic_energy_j,0);
+            if(finite||mechanics.exchange?.outgoing_mass_kg===0) assert.equal(mechanics.exported_kinetic_energy_j,0);
             else assert.ok(mechanics.exported_kinetic_energy_j>0);
             assert.ok(Math.abs(mechanics.mass_balance_residual_kg)<1e-14);
             assert.equal(motion.initial_sample.liquid_mechanics.remaining_liquid_mass_kg,mechanics.initial_liquid_mass_kg);

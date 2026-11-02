@@ -108,6 +108,18 @@ fn relock(opts: &mut CutOptions) {
     }
 }
 
+fn motion_profile() -> Value {
+    json!({"model":"trapezoidal_exact_stop/1", "cutting_acceleration_mm_s2":40.,
+        "travel_acceleration_mm_s2":25.})
+}
+
+fn set_motion_profile(opts: &mut CutOptions, profile: Value) {
+    let machine = &mut opts.program.as_mut().unwrap().machine;
+    let mut raw = value(machine);
+    raw["motion_profile"] = profile;
+    *machine = serde_json::from_value(raw).unwrap();
+}
+
 fn routed_fixture() -> (Pattern, CutOptions) {
     let p = pattern(vec![piece("front", 40., 60.)]);
     let mut opts = qualified_options(&p);
@@ -674,6 +686,125 @@ fn complete_authored_paths_have_known_length_and_time_and_release_exteriors_last
     assert_eq!(report.search_work, 0);
     assert_eq!(p.raw(), &raw);
     assert_eq!(value(&cut), value(&CutPlan::build(&p, &options).unwrap()));
+}
+
+#[test]
+fn exact_stop_timing_counts_each_cut_chord_closure_and_final_raised_return() {
+    let mut sheet = piece("front", 40., 60.);
+    sheet["internal"] = json!([
+        {"kind":"cut","closed":true,"pts":[[5,5],[15,5],[15,15],[5,15]]},
+        {"kind":"cut","closed":false,"pts":[[25,30],[30,30]]}
+    ]);
+    let p = pattern(vec![sheet]);
+    let mut opts = qualified_options(&p);
+    let legacy = CutPlan::build(&p, &opts).unwrap();
+    assert!(
+        value(legacy.program.as_ref().unwrap())
+            .get("motion_profile")
+            .is_none()
+    );
+    set_motion_profile(&mut opts, motion_profile());
+    relock(&mut opts);
+    let plan = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(value(&plan.rolls), value(&legacy.rolls));
+    assert_eq!(value(&plan), value(&CutPlan::build(&p, &opts).unwrap()));
+    let report = plan.program.as_ref().unwrap();
+    assert_eq!(value(report)["motion_profile"], motion_profile());
+    let traversal = &report.markers[0].selected;
+    let before = &legacy.program.as_ref().unwrap().markers[0].selected;
+    assert_eq!(value(&traversal.runs), value(&before.runs));
+    assert_eq!(traversal.return_mm, before.return_mm);
+    assert_eq!(traversal.runs.len(), 3);
+    near(traversal.cut_length_mm, 245.);
+    // At 20 mm/s and 40 mm/s², a 10 mm chord reaches the speed limit exactly.
+    // Four 10 mm sides take 4 s; the 40/60 mm exterior takes 12 s, including closure;
+    // the open 5 mm slit takes 2 sqrt(5/40) s and never reaches its feed limit.
+    let cutting = 16. + 2. * (5.0_f64 / 40.).sqrt();
+    // The unchanged four raised legs have squared lengths 200, 1025, 1000, 2050 mm².
+    // Each is triangular at 100 mm/s and 25 mm/s²; the fourth is the final return.
+    let travel = [200.0_f64, 1025., 1000., 2050.]
+        .into_iter()
+        .map(|squared_length| 2. * (squared_length.sqrt() / 25.).sqrt())
+        .sum::<f64>();
+    near(traversal.cutting_seconds, cutting);
+    near(traversal.travel_seconds, travel);
+    near(traversal.lift_lower_seconds, 0.75);
+    near(traversal.modeled_path_seconds, cutting + travel + 0.75);
+    assert!(!report.physical_cutting_validated && !report.hardware_execution_authorized);
+}
+
+#[test]
+fn exact_stop_retains_collinear_cut_vertices_instead_of_timing_only_total_length() {
+    let mut sheet = piece("front", 40., 60.);
+    sheet["internal"] = json!([{"kind":"cut","closed":false,"pts":[[10,20],[30,20]]}]);
+    let p = pattern(vec![sheet]);
+    let mut opts = qualified_options(&p);
+    set_motion_profile(&mut opts, motion_profile());
+    relock(&mut opts);
+    let coarse = CutPlan::build(&p, &opts).unwrap();
+    let mut raw = p.raw().clone();
+    raw["pieces"][0]["internal"][0]["pts"] = json!([[10, 20], [20, 20], [30, 20]]);
+    let refined = CutPlan::build(&Pattern::new(raw), &opts).unwrap();
+    assert_eq!(coarse.rolls[0].placements[0].internal_cut_mm[0].0.len(), 2);
+    assert_eq!(refined.rolls[0].placements[0].internal_cut_mm[0].0.len(), 3);
+    let coarse = &coarse.program.as_ref().unwrap().markers[0].selected;
+    let refined = &refined.program.as_ref().unwrap().markers[0].selected;
+    near(coarse.cut_length_mm, 220.);
+    near(refined.cut_length_mm, coarse.cut_length_mm);
+    near(coarse.cutting_seconds, 13.5);
+    near(refined.cutting_seconds, 14.);
+    near(refined.travel_seconds, coarse.travel_seconds);
+    near(
+        refined.modeled_path_seconds - coarse.modeled_path_seconds,
+        0.5,
+    );
+}
+
+#[test]
+fn motion_changes_require_new_machine_qualification_and_invalid_profiles_preserve_nesting() {
+    let p = pattern(vec![piece("front", 40., 60.)]);
+    let mut opts = qualified_options(&p);
+    let legacy_lock = program::machine_sha256(&opts.program.as_ref().unwrap().machine).unwrap();
+    set_motion_profile(&mut opts, motion_profile());
+    let motion_lock = program::machine_sha256(&opts.program.as_ref().unwrap().machine).unwrap();
+    assert_ne!(motion_lock, legacy_lock);
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("exact machine/material locks")
+    );
+    relock(&mut opts);
+    let admitted = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(
+        admitted.program.as_ref().unwrap().machine_sha256,
+        motion_lock
+    );
+    for field in ["cutting_acceleration_mm_s2", "travel_acceleration_mm_s2"] {
+        let mut changed = opts.clone();
+        let mut profile = motion_profile();
+        profile[field] = json!(30.);
+        set_motion_profile(&mut changed, profile);
+        assert!(
+            process_refusal(&p, &changed)
+                .message
+                .contains("exact machine/material locks")
+        );
+    }
+    for (field, invalid) in [
+        ("model", json!("unqualified_blending/1")),
+        ("cutting_acceleration_mm_s2", json!(0.)),
+        ("travel_acceleration_mm_s2", json!(-1.)),
+    ] {
+        let mut changed = opts.clone();
+        let mut profile = motion_profile();
+        profile[field] = invalid;
+        set_motion_profile(&mut changed, profile);
+        relock(&mut changed);
+        assert_eq!(
+            process_refusal(&p, &changed).code,
+            ftx_core::RefusalCode::InvalidDocument
+        );
+    }
 }
 
 #[test]

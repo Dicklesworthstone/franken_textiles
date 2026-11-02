@@ -7,11 +7,12 @@
 <style>
 body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:24px auto;padding:0 18px;color:#17252d;background:#fafbfc}
 section{background:white;border:1px solid #ccd5db;border-radius:8px;padding:16px;margin:18px 0}
-h1,h2{line-height:1.2}label{display:inline-block;margin:6px 14px 6px 0}input,select,button,textarea{font:inherit;padding:6px}
+h1,h2{line-height:1.2}label{display:inline-block;max-width:100%;margin:6px 14px 6px 0}input,select,button,textarea{font:inherit;padding:6px}
+input[type=file]{max-width:100%;box-sizing:border-box}
 button{cursor:pointer}button:disabled{cursor:default;opacity:.5}textarea{width:100%;box-sizing:border-box;font:14px monospace}
 canvas{display:block;width:100%;height:auto;cursor:crosshair}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
 table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px;border-bottom:1px solid #ddd}
-a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#cameraError{color:#a02020}small{color:#42515a}
+a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#cameraError,#sectionError{color:#a02020}small{color:#42515a}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -103,7 +104,8 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
   <p>Cyan marks show the detected paper outline or accepted ChArUco corners; amber marks show rejected corners.
     Click two landmarks to add a pair under the name below.
     Coordinates refer to the full-resolution oriented pixels, regardless of display size.</p>
-  <label>Measurement name <input id="name" value="across_back" maxlength="128"></label>
+  <label>Measurement name <input id="name" value="across_back" maxlength="128" list="photoNames"></label>
+  <datalist id="photoNames"><option value="across_back"><option value="chest_width"><option value="waist_width"><option value="hip_width"><option value="chest_depth"><option value="waist_depth"><option value="hip_depth"></datalist>
   <button id="cancelPoint" disabled>Cancel first click</button>
   <button id="removePair" disabled>Remove named pair</button>
   <button id="clearPoints">Clear all points</button>
@@ -156,6 +158,59 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
   <p><button id="openWorkbench" disabled>Add records in Pattern Workbench</button></p>
   <p><button id="returnMaterials" disabled hidden>Return records to Material Workbench</button></p>
   <details><summary>Complete native measurement report</summary><pre id="report"></pre></details>
+</section>
+<section>
+  <h2>4. Estimate a girth from front and side views</h2>
+  <p>Measure <code>chest_width</code>, <code>waist_width</code> or <code>hip_width</code> in a front photo,
+    and the matching <code>_depth</code> in a side photo at the same anatomical level.
+    Keep a measured result below before choosing the next photo, or load earlier measurement downloads.
+    The section model combines those dimensions and their uncertainty; two clicks alone do not measure a circumference.</p>
+  <label>Front widths or combined records <input id="sectionWidthFile" type="file" accept=".json,application/json"></label>
+  <button id="sectionKeepWidth" disabled>Keep current photo result as front widths</button>
+  <p id="sectionWidthSource">No front-width records selected.</p>
+  <label><input id="sectionCombined" type="checkbox">This file already contains both widths and depths</label>
+  <div id="sectionDepthControls">
+    <label>Side depths <input id="sectionDepthFile" type="file" accept=".json,application/json"></label>
+    <button id="sectionKeepDepth" disabled>Keep current photo result as side depths</button>
+    <p id="sectionDepthSource">No side-depth records selected.</p>
+  </div>
+  <button id="sectionClear" disabled>Clear retained section sources</button>
+  <p><small>Retained snapshots stay available when you change photos. Replacing a source removes the previous section result.
+    Only photo-estimated dimensions are accepted. Chart priors, model-derived dimensions and conflicting observations refuse.
+    Source documents are limited to 16 MiB combined and 4,096 records; nothing is uploaded or stored in the browser.</small></p>
+  <label><input id="sectionConsent" type="checkbox">I reviewed both views: the same wearer, comparable capture conditions and matching anatomical levels.</label>
+  <p><label>Section <select id="sectionLevel"><option value="waist">Waist</option><option value="chest">Chest</option><option value="hip">Hip</option></select></label>
+    <label>Action <select id="sectionMode"><option value="girth">Estimate a girth</option><option value="calibrate">Calibrate the shape factor with tape</option></select></label>
+    <label>Clothing thickness per side (mm) <input id="sectionClothing" type="number" min="0" step="0.1" value="0"></label></p>
+  <div id="sectionGirthControls">
+    <details><summary>Shape-factor assumptions</summary>
+      <p>Defaults include uncertain section-shape factors. Adult data and assumed child chest factors do not establish
+        accuracy for this wearer. A tape calibration supplies ratios for this wearer's other levels; transfer remains an assumption.</p>
+      <label>Override k (optional) <input id="sectionK" type="number" min="0" step="0.0001"></label>
+      <label>Override k σ (optional) <input id="sectionKSigma" type="number" min="0" step="0.0001"></label>
+      <label>Per-wearer k ratio <input id="sectionRatio" type="number" min="0" step="0.0001" value="1"></label>
+      <label>Ratio σ <input id="sectionRatioSigma" type="number" min="0" step="0.0001" value="0"></label>
+    </details>
+  </div>
+  <div id="sectionTapeControls" hidden>
+    <label>Tape girth at this level (mm) <input id="sectionTape" type="number" min="0" step="0.1"></label>
+    <label>Tape σ (mm) <input id="sectionTapeSigma" type="number" min="0" step="0.1" value="10"></label>
+    <p><small>Calibration produces coefficients, not another independent measurement of the taped level.
+      Shape-factor overrides are inactive while calibrating. Keep the original tape measurement separately.</small></p>
+  </div>
+  <p><button id="sectionRun" disabled>Estimate girth</button> <button id="sectionCancel" disabled>Cancel section calculation</button></p>
+  <p id="sectionStatus" role="status" aria-live="polite">Choose front-width and side-depth evidence.</p>
+  <pre id="sectionError" role="alert"></pre>
+  <div id="sectionResult" hidden>
+    <h3>Section result</h3>
+    <p id="sectionSummary"></p><p id="sectionUncertainty"></p><p id="sectionNotes"></p>
+    <p>Girth estimates remain PHOTO_ESTIMATED. They do not establish measurement readiness, anatomical accuracy or garment fit.
+      Review the original source dates and assumptions. Unknown dates remain unknown.</p>
+    <div id="sectionDownloads" class="files"></div>
+    <p><button id="sectionWorkbench" disabled>Add this girth in Pattern Workbench</button>
+      <button id="sectionMaterials" disabled hidden>Return this girth to Material Workbench</button></p>
+    <details><summary>Complete section report and original source evidence</summary><pre id="sectionReport"></pre></details>
+  </div>
 </section>
 <script type="module" src="photo-page.js"></script>
 </body></html>

@@ -23,6 +23,37 @@ The browser bindings are `material_screen(request_json)` and
 `ftx_export::material_study::Request::evaluate`, and `ftx_wasm::materials::{screen,study}`.
 Section 4 of `materials.html` runs these same requests and displays source-qualified results.
 
+### Build a comparison in the browser
+
+Load the original pattern in section 2 of the material workbench. Inspect a catalog or custom
+material in section 1, then choose **Add inspected material to comparison**. Repeat for up to seven
+choices. Section 4's guided mode retains those exact frozen selections and includes the unchanged
+original pattern as `baseline`; staged assignments and the bound single-preview pattern do not
+silently replace it. Choose the pattern default, every source piece, or selected source pieces.
+Default substitution preserves explicit lining, cuff and other piece assignments.
+
+Declare the roll-cutting copies, gaps and margins and/or request assembly mass. Select one or more
+goals: roll stock area, roll stock mass or complete garment mass. The stock goals describe the
+declared batch; assembly mass describes one complete pattern expansion. Multiple goals use the
+existing Pareto comparison. Reported-range comparison supports assembly mass and requires complete
+source bounds; missing ranges and overlapping intervals are not replaced with guessed uncertainty.
+
+Complete garment mass needs an explicit declaration that the pattern includes every part and
+attachment, or an original `ftx-assembly-mass/1` inventory file with its own declaration and sourced
+extras. Without completeness, sheet subtotals remain available but cannot rank as whole-garment
+mass. A source without roll width may refuse cutting while retaining valid independent mass.
+The optional seam-allowance override must agree across cutting and mass. For mass alone, an
+uploaded inventory keeps its own allowance when no override is entered. **Clear inventory file**
+returns to the explicit no-extras declaration without discarding the shortlist; it also cancels
+an unfinished study that was reading the removed file.
+
+**Compare manufacturing alternatives** runs the same Rust study API as an authored file. Results
+retain each refusal and include the original pattern, exact generated request, full report and
+source-locked alternatives for replay. Changing a relevant input withdraws stale results and cancels
+affected work. **Load a complete study request (advanced)** preserves the existing design, finite
+stock, sewing, purchasing, scenario and grouped-combination paths. Guided choices do not infer a
+body, missing physical properties, prices or process qualification.
+
 The examples use the existing source-bearing 3M insulation records and a clearly synthetic pattern.
 They compare reported mass/thickness/resistance, not whole-jacket warmth. Some candidate records
 have no stock width: the study retains their cutting refusal instead of inventing a roll width.
@@ -1580,6 +1611,15 @@ Comparison reconstructs the supplied totals and requires the complete source, ge
 energy accounting. A missing source, unsupported loading or partial history excludes that consumer
 without erasing independent manufacturing results. These decisions remain nominal, without
 propagated wet-material uncertainty or empirical wearer validation.
+
+The same comparison path admits separately scheduled supply/condensation velocities from liquid
+mechanics `/5` and qualified outgoing recoil from `/6`. Every retained instance needs one complete
+phase-velocity pair per mechanical keyframe interval; `/6` also needs the complete evaporation/drainage
+relative-velocity schedule. Different policies remain distinct comparison protocols. Mixed fields,
+changed source identities, incomplete schedules or inconsistent phase/transfer ledgers exclude the
+affected consumer. The `/6` outgoing separation work must start at zero and remain nonnegative and
+cumulative; it is mechanical boundary work, never a thermal heat input or an inferred runoff law.
+The workbench displays it separately from incoming mixing loss and retains the exact source request.
 
 ## Budgets, tests and remaining gates
 

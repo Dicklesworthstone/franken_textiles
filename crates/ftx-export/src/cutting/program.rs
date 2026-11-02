@@ -1,7 +1,8 @@
 //! Source-qualified cold-knife path planning on the existing final roll/finite-stock geometry.
 //! Every internal cut precedes every exterior release. Paths retain their authored start and
 //! direction; raised-tool travel may be reordered or explicitly routed around qualified planar
-//! fixtures. Kerf, acceleration and three-dimensional machine trajectories are not inferred.
+//! fixtures. Acceleration requires an explicit exact-stop profile; kerf and three-dimensional
+//! machine trajectories are not inferred.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,7 +36,8 @@ pub enum Ordering {
     /// Retain original placement/feature order within each phase.
     #[default]
     Authored,
-    /// Bounded nearest authored start; retain the complete baseline if the candidate travels farther.
+    /// Bounded nearest authored start; retain the complete baseline unless the candidate improves
+    /// declared motion-profile time, or travel distance when the profile is omitted.
     NearestPath,
 }
 
@@ -59,6 +61,20 @@ pub struct StockLoading {
     /// Machine-frame location of the whole stock bounding-box lower-left corner, in mm.
     /// This is a modeled translation, not measured registration or a workholding qualification.
     pub lower_left_mm: Vec2,
+}
+
+/// Optional rest-to-rest timing for every retained straight cut or raised-travel segment.
+/// The complete process qualification must cover these accelerations and exact-stop behavior.
+/// Collinear authored vertices remain stops; no controller blending or blade rotation is inferred.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MotionProfile {
+    /// `trapezoidal_exact_stop/1`: symmetric acceleration/braking, with a triangular short move.
+    pub model: String,
+    /// Positive tangential acceleration and braking magnitude during cutting, in mm/s².
+    pub cutting_acceleration_mm_s2: f64,
+    /// Positive tangential acceleration and braking magnitude during raised travel, in mm/s².
+    pub travel_acceleration_mm_s2: f64,
 }
 
 /// Explicit cold-knife configuration. A qualification locks every field, not just its display ID.
@@ -88,6 +104,10 @@ pub struct Machine {
     /// Absence makes no tool/fixture clearance claim and preserves the original machine digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixture_clearance: Option<FixtureClearance>,
+    /// Independently qualified exact-stop acceleration model. Omission preserves constant-rate
+    /// timing and the original machine digest; adding or changing it requires a new qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion_profile: Option<MotionProfile>,
 }
 
 /// Filled, stationary exclusion polygon at both declared tool elevations.
@@ -235,13 +255,13 @@ pub struct Traversal {
     pub cut_length_mm: f64,
     /// Total raised-tool travel including requested return, in mm.
     pub travel_length_mm: f64,
-    /// Cut length / independently qualified feed rate, in seconds.
+    /// Constant-rate or explicitly qualified exact-stop cutting time, in seconds.
     pub cutting_seconds: f64,
-    /// Raised-tool travel length / the locked travel speed, in seconds.
+    /// Constant-rate or explicitly qualified exact-stop raised-travel time, in seconds.
     pub travel_seconds: f64,
     /// One declared lift/lower cycle per path, in seconds.
     pub lift_lower_seconds: f64,
-    /// Sum of declared constant-speed cut, travel and lift/lower phases only.
+    /// Sum of the declared cut, travel and lift/lower phases only.
     pub modeled_path_seconds: f64,
 }
 
@@ -369,9 +389,11 @@ pub struct Marker {
     pub thickness_mm: [f64; 2],
     /// Complete authored two-phase traversal.
     pub baseline: Traversal,
-    /// Complete selected traversal; never more raised-tool distance than the baseline.
+    /// Complete selected traversal; never slower than baseline under an explicit motion profile,
+    /// or never more raised-tool distance under the original constant-rate model.
     pub selected: Traversal,
-    /// Whether a complete nearest-path candidate strictly improved on the baseline.
+    /// Whether a complete nearest-path candidate improved modeled time (explicit motion profile)
+    /// or raised distance (original constant-rate model) on the baseline.
     pub improved: bool,
     /// A candidate could not complete its checked raised route, so the checked baseline was kept.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -388,6 +410,9 @@ pub struct Report {
     /// Exact optional source geometry checked against both baseline and selected traversals.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fixture_clearance: Option<FixtureClearance>,
+    /// Exact optional motion profile admitted by every complete machine/process qualification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub motion_profile: Option<MotionProfile>,
     /// Exact optional raised-move routing policy, independent of physical source qualification.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub travel_routing: Option<TravelRouting>,
@@ -445,6 +470,133 @@ pub fn machine_sha256(machine: &Machine) -> Result<String, Refusal> {
     Ok(sha256_hex(
         &serde_json::to_vec(&value).map_err(|e| bad(e.to_string()))?,
     ))
+}
+
+impl MotionProfile {
+    fn validate(&self) -> Result<(), Refusal> {
+        if self.model != "trapezoidal_exact_stop/1"
+            || !positive(self.cutting_acceleration_mm_s2)
+            || !positive(self.travel_acceleration_mm_s2)
+        {
+            return Err(bad(
+                "knife motion profile needs trapezoidal_exact_stop/1 and finite positive cutting/travel acceleration",
+            ));
+        }
+        Ok(())
+    }
+}
+
+// Each retained segment starts and ends at zero speed. Compare the triangular half-time with
+// the time needed to reach the speed cap; this avoids squaring large speed/acceleration inputs.
+fn exact_stop_seconds(length: f64, speed: f64, acceleration: f64) -> Result<f64, Refusal> {
+    if !length.is_finite() || length < 0.0 || !positive(speed) || !positive(acceleration) {
+        return Err(bad(
+            "knife motion needs finite nonnegative length and positive speed/acceleration",
+        ));
+    }
+    if length == 0.0 {
+        return Ok(0.0);
+    }
+    let half_triangle = length.sqrt() / acceleration.sqrt();
+    let acceleration_time = speed / acceleration;
+    let seconds = if half_triangle <= acceleration_time {
+        2.0 * half_triangle
+    } else {
+        let constant_rate_time = length / speed;
+        if !positive(acceleration_time) || !positive(constant_rate_time) {
+            return Err(bad(
+                "positive knife motion phase cannot be represented as a finite time",
+            ));
+        }
+        constant_rate_time + acceleration_time
+    };
+    if !positive(seconds) {
+        return Err(bad(
+            "positive knife motion cannot be represented as a finite time",
+        ));
+    }
+    Ok(seconds)
+}
+
+impl Machine {
+    /// Time of one complete retained cut; a repeated explicit closing endpoint is counted once.
+    /// Source-marker coordinates preserve the producer's rigid-translation-independent arithmetic.
+    pub(crate) fn cutting_seconds(
+        &self,
+        points: &[Vec2],
+        closed: bool,
+        feed: f64,
+    ) -> Result<f64, Refusal> {
+        let points = if closed && points.len() > 1 && points.first() == points.last() {
+            &points[..points.len() - 1]
+        } else {
+            points
+        };
+        if !positive(feed)
+            || points.len() < if closed { 3 } else { 2 }
+            || points.iter().any(|p| !p.is_finite())
+        {
+            return Err(bad(
+                "knife cut timing needs a complete finite path and positive feed",
+            ));
+        }
+        if let Some(profile) = &self.motion_profile {
+            profile.validate()?;
+        }
+        let mut sum = 0.0;
+        for (a, b) in edges(points, closed) {
+            let length = a.dist(b);
+            if !positive(length) {
+                return Err(bad("positive knife cut length cannot be represented"));
+            }
+            sum += if let Some(profile) = &self.motion_profile {
+                exact_stop_seconds(length, feed, profile.cutting_acceleration_mm_s2)?
+            } else {
+                length
+            };
+        }
+        if self.motion_profile.is_none() {
+            sum /= feed;
+        }
+        if !positive(sum) {
+            return Err(bad("positive knife cut timing overflows or underflows"));
+        }
+        Ok(sum)
+    }
+
+    /// Time of every retained raised chord, including detours and the requested final return.
+    pub(crate) fn travel_seconds(&self, traversal: &Traversal) -> Result<f64, Refusal> {
+        let length = traversal.checked_travel_length()?;
+        if !positive(self.travel_mm_s) {
+            return Err(bad("knife raised timing needs positive travel speed"));
+        }
+        let Some(profile) = &self.motion_profile else {
+            let seconds = length / self.travel_mm_s;
+            if !seconds.is_finite() || (length > 0.0 && seconds <= 0.0) {
+                return Err(bad("knife raised timing overflows or underflows"));
+            }
+            return Ok(seconds);
+        };
+        profile.validate()?;
+        let mut seconds = 0.0;
+        for [a, b] in traversal
+            .runs
+            .iter()
+            .flat_map(|run| raised_segments(run.travel_points()))
+            .chain(raised_segments(traversal.return_points()))
+        {
+            let length = a.dist(b);
+            if a != b && !positive(length) {
+                return Err(bad("positive knife raised length cannot be represented"));
+            }
+            seconds +=
+                exact_stop_seconds(length, self.travel_mm_s, profile.travel_acceleration_mm_s2)?;
+        }
+        if !seconds.is_finite() || (length > 0.0 && seconds <= 0.0) {
+            return Err(bad("knife raised timing overflows or underflows"));
+        }
+        Ok(seconds)
+    }
 }
 
 impl FixtureClearance {
@@ -599,6 +751,7 @@ impl TravelRouting {
 fn detour(
     endpoints: [Vec2; 2],
     corners: &[Vec2],
+    machine: &Machine,
     clearance: &FixtureClearance,
     search: &mut geometry::Work,
     geometry: &mut geometry::Work,
@@ -647,7 +800,20 @@ fn detour(
             if settled[j] || i == j {
                 continue;
             }
-            let candidate = distance[i] + nodes[i].dist(nodes[j]);
+            let length = nodes[i].dist(nodes[j]);
+            let weight = if let Some(profile) = &machine.motion_profile {
+                exact_stop_seconds(
+                    length,
+                    machine.travel_mm_s,
+                    profile.travel_acceleration_mm_s2,
+                )?
+            } else {
+                length
+            };
+            let candidate = distance[i] + weight;
+            if !candidate.is_finite() {
+                return Err(bad("knife raised-route cost overflows"));
+            }
             if candidate < distance[j]
                 && clearance
                     .blocking_fixture([nodes[i], nodes[j]], false, geometry)?
@@ -681,10 +847,12 @@ fn admit_travel(
     };
     if let Some(corners) = corners {
         for run in &mut route.runs {
-            run.travel_waypoints_mm = detour(run.travel_mm, corners, clearance, search, geometry)?;
+            run.travel_waypoints_mm =
+                detour(run.travel_mm, corners, machine, clearance, search, geometry)?;
         }
         if let Some(endpoints) = route.return_mm {
-            route.return_waypoints_mm = detour(endpoints, corners, clearance, search, geometry)?;
+            route.return_waypoints_mm =
+                detour(endpoints, corners, machine, clearance, search, geometry)?;
         }
         let points = route
             .runs
@@ -696,7 +864,11 @@ fn admit_travel(
             .spend(points.saturating_add(2))
             .ok_or_else(budget)?;
         route.travel_length_mm = route.checked_travel_length()?;
-        route.travel_seconds = route.travel_length_mm / machine.travel_mm_s;
+        route.travel_seconds = if machine.motion_profile.is_some() {
+            machine.travel_seconds(route)?
+        } else {
+            route.travel_length_mm / machine.travel_mm_s
+        };
         route.modeled_path_seconds =
             route.cutting_seconds + route.travel_seconds + route.lift_lower_seconds;
         if !route.modeled_path_seconds.is_finite() {
@@ -724,6 +896,9 @@ impl Policy {
             return Err(bad(
                 "invalid cold-knife machine, model or timing configuration",
             ));
+        }
+        if let Some(profile) = &m.motion_profile {
+            profile.validate()?;
         }
         if let Some(routing) = &self.travel_routing
             && (routing.model != "fixture_box_visibility/1"
@@ -1179,12 +1354,16 @@ fn traversal(
     let mut position = machine.start_mm;
     let mut travel_length_mm = 0.0;
     let mut cut_length_mm = 0.0;
+    let mut cutting_seconds = 0.0;
     let mut runs = Vec::with_capacity(order.len());
     for &i in order {
         let path = &paths[i];
         let piece = &placements[path.reference.placement];
         travel_length_mm += position.dist(path.start());
         cut_length_mm += path.length;
+        if machine.motion_profile.is_some() {
+            cutting_seconds += machine.cutting_seconds(path.points, path.closed, feed)?;
+        }
         runs.push(Run {
             path: path.reference.clone(),
             piece: piece.piece.clone(),
@@ -1204,7 +1383,9 @@ fn traversal(
     if let Some([a, b]) = return_mm {
         travel_length_mm += a.dist(b);
     }
-    let cutting_seconds = cut_length_mm / feed;
+    if machine.motion_profile.is_none() {
+        cutting_seconds = cut_length_mm / feed;
+    }
     let travel_seconds = travel_length_mm / machine.travel_mm_s;
     let lift_lower_seconds = order.len() as f64 * machine.lift_lower_seconds;
     let modeled_path_seconds = cutting_seconds + travel_seconds + lift_lower_seconds;
@@ -1214,7 +1395,7 @@ fn traversal(
     {
         return Err(bad("knife timing/length arithmetic overflows"));
     }
-    Ok(Traversal {
+    let mut traversal = Traversal {
         runs,
         return_mm,
         return_waypoints_mm: Vec::new(),
@@ -1224,7 +1405,16 @@ fn traversal(
         travel_seconds,
         lift_lower_seconds,
         modeled_path_seconds,
-    })
+    };
+    if machine.motion_profile.is_some() {
+        traversal.travel_seconds = machine.travel_seconds(&traversal)?;
+        traversal.modeled_path_seconds =
+            cutting_seconds + traversal.travel_seconds + lift_lower_seconds;
+        if !traversal.modeled_path_seconds.is_finite() {
+            return Err(bad("knife exact-stop timing arithmetic overflows"));
+        }
+    }
+    Ok(traversal)
 }
 
 fn nearest(paths: &[Path<'_>], machine: &Machine, work: &mut geometry::Work) -> Option<Vec<usize>> {
@@ -1414,9 +1604,13 @@ fn build_markers(
             candidate_clearance_refusal = Some(refusal);
             candidate = None;
         }
-        let improved = candidate
-            .as_ref()
-            .is_some_and(|c| c.travel_length_mm < baseline.travel_length_mm);
+        let improved = candidate.as_ref().is_some_and(|c| {
+            if policy.machine.motion_profile.is_some() {
+                c.modeled_path_seconds < baseline.modeled_path_seconds
+            } else {
+                c.travel_length_mm < baseline.travel_length_mm
+            }
+        });
         let selected = if improved {
             candidate.expect("checked candidate")
         } else {
@@ -1444,6 +1638,7 @@ fn build_markers(
         },
         machine_sha256,
         fixture_clearance: policy.machine.fixture_clearance.clone(),
+        motion_profile: policy.machine.motion_profile.clone(),
         travel_routing: policy.travel_routing.clone(),
         stock_loading: policy.stock_loading.clone(),
         markers,
@@ -1457,13 +1652,19 @@ fn build_markers(
             let mut limits = vec![
                 "Single-ply cold-knife planning uses exact final marker paths. All internal paths finish before exterior releases; paths retain their authored start, direction and closing edge.",
                 "Source qualifications are exact material and full machine locks. A changed textile, finish, thickness, blade, bed or timing configuration requires new applicable process evidence.",
-                if policy.travel_routing.is_some() {
+                if policy.machine.motion_profile.is_some() {
+                    "Modeled time uses the source-qualified symmetric acceleration/braking profile and speed caps, with zero speed at every retained cut/travel vertex, including collinear authored vertices, detours and the final return. Triangular short moves never attain their speed cap. Lift/lower cycles are separate. No controller blending, jerk bound, blade turning, loading, workholding change or inspection time is inferred."
+                } else if policy.travel_routing.is_some() {
                     "Modeled time includes only constant-rate cutting, every retained raised-travel chord and explicit lift/lower cycles. Acceleration, corner slowing, blade turning, loading, workholding changes and inspection are not inferred."
                 } else {
                     "Modeled time includes only constant-rate cutting, raised-tool straight travel and explicit lift/lower cycles. Acceleration, corner slowing, blade turning, loading, workholding changes and inspection are not inferred."
                 },
                 "No kerf compensation, common-line cutting, drill operation, thermal processing, three-dimensional tool/body collision check, measured cut quality, physical cycle-time claim or hardware execution authorization.",
-                "Nearest-path ordering is a bounded heuristic; an unfinished or longer candidate retains the complete authored baseline, without a shortest-path proof.",
+                if policy.machine.motion_profile.is_some() {
+                    "Nearest-path ordering is a bounded heuristic; an unfinished candidate or one without strictly lower modeled time retains the complete authored baseline. Raised detours minimize exact-stop time within their finite checked graph, without a general fastest-path proof."
+                } else {
+                    "Nearest-path ordering is a bounded heuristic; an unfinished or longer candidate retains the complete authored baseline, without a shortest-path proof."
+                },
             ];
             if policy.machine.fixture_clearance.is_some() {
                 if policy.travel_routing.is_some() {
@@ -1485,4 +1686,270 @@ fn build_markers(
             limits
         },
     })
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn machine() -> Machine {
+        Machine {
+            id: "synthetic-motion".into(),
+            blade: "synthetic-knife".into(),
+            bed_mm: [100.0, 100.0],
+            maximum_thickness_mm: 1.0,
+            maximum_feed_mm_s: 10.0,
+            travel_mm_s: 10.0,
+            lift_lower_seconds: 0.0,
+            start_mm: Vec2::new(0.0, 0.0),
+            return_to_start: true,
+            fixture_clearance: None,
+            motion_profile: Some(MotionProfile {
+                model: "trapezoidal_exact_stop/1".into(),
+                cutting_acceleration_mm_s2: 4.0,
+                travel_acceleration_mm_s2: 4.0,
+            }),
+        }
+    }
+
+    fn near(actual: f64, expected: f64) {
+        assert!((actual - expected).abs() <= 1e-12, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn triangular_threshold_and_trapezoidal_moves_have_known_times() {
+        // At a=4, a 9 mm move reaches 6 mm/s in 1.5 s and brakes for another 1.5 s.
+        near(exact_stop_seconds(9.0, 10.0, 4.0).unwrap(), 3.0);
+        // Reaching 10 mm/s consumes 12.5 mm at each end. The threshold has no cruise.
+        near(exact_stop_seconds(25.0, 10.0, 4.0).unwrap(), 5.0);
+        // Another 20 mm at 10 mm/s adds two seconds to the five-second ramp/brake pair.
+        near(exact_stop_seconds(45.0, 10.0, 4.0).unwrap(), 7.0);
+        near(exact_stop_seconds(0.0, 10.0, 4.0).unwrap(), 0.0);
+        assert!(exact_stop_seconds(25.0_f64.next_down(), 10.0, 4.0).unwrap() <= 5.0);
+        assert!(exact_stop_seconds(25.0_f64.next_up(), 10.0, 4.0).unwrap() >= 5.0);
+    }
+
+    #[test]
+    fn finite_positive_moves_do_not_disappear_through_intermediate_arithmetic() {
+        let very_short = exact_stop_seconds(f64::from_bits(1), 1.0, 1e308).unwrap();
+        assert!(very_short.is_finite() && very_short > 0.0);
+        let high_cap = exact_stop_seconds(1.0, 1e308, 1e308).unwrap();
+        assert!((high_cap / 2e-154 - 1.0).abs() < 1e-14);
+        for (length, speed, acceleration) in [
+            (f64::MAX, 1e-308, 1.0),
+            (f64::MAX, f64::MAX, f64::from_bits(1)),
+            (1.0, 1e-300, 1e308), // positive ramp time underflows
+            (f64::INFINITY, 1.0, 1.0),
+            (1.0, f64::NAN, 1.0),
+            (1.0, 1.0, 0.0),
+            (-1.0, 1.0, 1.0),
+        ] {
+            assert!(exact_stop_seconds(length, speed, acceleration).is_err());
+        }
+    }
+
+    #[test]
+    fn closing_edge_is_counted_once_and_authored_collinear_vertices_remain_stops() {
+        let machine = machine();
+        let square = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(9.0, 0.0),
+            Vec2::new(9.0, 9.0),
+            Vec2::new(0.0, 9.0),
+        ];
+        near(machine.cutting_seconds(&square, true, 10.0).unwrap(), 12.0);
+        let mut repeated = square.to_vec();
+        repeated.push(square[0]);
+        assert_eq!(
+            machine.cutting_seconds(&square, true, 10.0).unwrap(),
+            machine.cutting_seconds(&repeated, true, 10.0).unwrap()
+        );
+        let mut subdivided = square.to_vec();
+        subdivided.insert(1, Vec2::new(4.5, 0.0));
+        near(
+            machine.cutting_seconds(&subdivided, true, 10.0).unwrap(),
+            9.0 + 3.0 * 2.0_f64.sqrt(),
+        );
+        let translated: Vec<_> = square.iter().map(|p| *p + Vec2::new(20.0, 30.0)).collect();
+        near(
+            machine.cutting_seconds(&translated, true, 10.0).unwrap(),
+            12.0,
+        );
+    }
+
+    #[test]
+    fn raised_timing_includes_every_detour_chord_and_the_complete_return() {
+        let start = Vec2::new(0.0, 0.0);
+        let end = Vec2::new(9.0, 0.0);
+        let mut route = Traversal {
+            runs: vec![Run {
+                path: PathRef {
+                    placement: 0,
+                    internal_cut: None,
+                },
+                piece: "synthetic".into(),
+                instance: "synthetic".into(),
+                copy: 0,
+                closed: true,
+                travel_mm: [start, end],
+                travel_waypoints_mm: vec![Vec2::new(3.0, 0.0), Vec2::new(6.0, 0.0)],
+                cut_endpoints_mm: [end, end],
+                cut_length_mm: 1.0,
+            }],
+            return_mm: Some([end, start]),
+            return_waypoints_mm: vec![Vec2::new(6.0, 0.0), Vec2::new(3.0, 0.0)],
+            cut_length_mm: 1.0,
+            travel_length_mm: 18.0,
+            cutting_seconds: 0.0,
+            travel_seconds: 0.0,
+            lift_lower_seconds: 0.0,
+            modeled_path_seconds: 0.0,
+        };
+        near(
+            machine().travel_seconds(&route).unwrap(),
+            6.0 * 3.0_f64.sqrt(),
+        );
+        route.runs[0].travel_waypoints_mm.clear();
+        route.return_waypoints_mm.clear();
+        near(machine().travel_seconds(&route).unwrap(), 6.0);
+        route.runs[0].travel_mm = [start, start];
+        route.runs[0].cut_endpoints_mm = [start, start];
+        route.return_mm = Some([start, start]);
+        near(machine().travel_seconds(&route).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn complete_nearest_path_candidate_is_rejected_when_shorter_but_slower() {
+        let internal: Vec<_> = [(78.0, 88.0), (14.0, 31.0), (90.0, 3.0)]
+            .into_iter()
+            .map(|(x, y)| {
+                json!({"kind":"cut","closed":true,
+                    "pts":[[x,y],[x+1.0,y],[x+1.0,y+1.0],[x,y+1.0]]})
+            })
+            .collect();
+        let pattern = Pattern::new(json!({
+            "schema":"fabric-pattern/1","units":"mm","meta":{"sa_mm":0},
+            "fabric":{"material":{"id":"synthetic-sheet","allow_estimates":true,"record":{
+                "id":"synthetic-sheet","name":"Synthetic timing control","form":"woven",
+                "properties":{
+                    "width":{"value":0.12,"unit":"m","source":"control","evidence":"estimate","method":"Synthetic test"},
+                    "thickness":{"value":1.0,"unit":"mm","source":"control","evidence":"estimate","method":"Synthetic test"}
+                },
+                "sources":{"control":{"reference":"test:motion","accessed_on":"2026-11-01","note":"Synthetic software control; no measured machine or textile"}}
+            }}},
+            "pieces":[{"id":"sheet","cut":{"qty":1},"grain":[[0,0],[0,10]],
+                "vertices":{"a":[0,0],"b":[100,0],"c":[100,100],"d":[0,100]},
+                "edges":[{"id":"bottom","from":"a","to":"b"},{"id":"right","from":"b","to":"c"},
+                    {"id":"top","from":"c","to":"d"},{"id":"left","from":"d","to":"a"}],
+                "internal":internal}],
+            "seams":[]
+        }));
+        let options = serde_json::from_value(json!({
+            "copies":1,"gap_mm":0,"edge_margin_mm":0,"end_margin_mm":0
+        }))
+        .unwrap();
+        let plan = CutPlan::build(&pattern, &options).unwrap();
+        let mut machine = machine();
+        machine.bed_mm = [120.0, 120.0];
+        machine.maximum_feed_mm_s = 1000.0;
+        machine.travel_mm_s = 1000.0;
+        let mut policy: Policy = serde_json::from_value(json!({
+            "model":"qualified_cold_knife_paths/1","machine":machine,
+            "qualifications":[{"id":"synthetic-motion","material_sha256":plan.rolls[0].material.sha256(),
+                "machine_sha256":machine_sha256(&machine).unwrap(),"thickness_mm":[0.5,1.5],
+                "feed_mm_s":1000.0,"directions":"all_in_plane","evidence":"estimate","allow_estimates":true,
+                "source":{"reference":"test:motion","accessed_on":"2026-11-01","note":"Synthetic exact-stop timing"},
+                "method":"Independently authored synthetic motion control"}],
+            "ordering":"nearest_path","work_limit":10000
+        })).unwrap();
+        let accelerated = build(&plan, &policy).unwrap();
+        let marker = &accelerated.markers[0];
+        assert!(!marker.improved);
+        assert_eq!(
+            serde_json::to_value(&marker.selected).unwrap(),
+            serde_json::to_value(&marker.baseline).unwrap()
+        );
+        policy.machine.motion_profile = None;
+        policy.qualifications[0].machine_sha256 = machine_sha256(&policy.machine).unwrap();
+        let constant = build(&plan, &policy).unwrap();
+        let constant_marker = &constant.markers[0];
+        assert!(constant_marker.improved);
+        assert!(constant_marker.selected.travel_length_mm < marker.baseline.travel_length_mm);
+        // The old selection really is faster under the old model but slower when every segment
+        // accelerates. The same actual cut paths and complete producer selection are exercised.
+        assert!(
+            machine.travel_seconds(&constant_marker.selected).unwrap()
+                > marker.baseline.travel_seconds + 1.0
+        );
+        assert_eq!(constant_marker.selected.runs[0].path.internal_cut, Some(1));
+        assert_eq!(constant_marker.selected.runs[1].path.internal_cut, Some(2));
+        assert_eq!(constant_marker.selected.runs[2].path.internal_cut, Some(0));
+    }
+
+    #[test]
+    fn checked_fixture_graph_chooses_longer_two_leg_route_when_its_motion_is_faster() {
+        let clearance: FixtureClearance = serde_json::from_value(json!({
+            "model":"planar_disk_sweep/1","cutting_radius_mm":0.5,"raised_radius_mm":0.5,
+            "fixtures":[{"id":"synthetic-clamp","outline_mm":[[40,30],[60,30],[60,70],[40,70]]}],
+            "source":{"reference":"test:motion-clamp","accessed_on":"2026-11-01","note":"Synthetic planar geometry"},
+            "method":"Declared disk and stationary polygon control","evidence":"estimate","allow_estimates":true
+        })).unwrap();
+        let mut accelerated = machine();
+        accelerated.travel_mm_s = 1000.0;
+        let mut constant = accelerated.clone();
+        constant.motion_profile = None;
+        let routing = TravelRouting {
+            model: "fixture_box_visibility/1".into(),
+            waypoint_offset_mm: 1.5,
+        };
+        let mut search = geometry::Work::new(10000);
+        let mut geometry = geometry::Work::new(100000);
+        clearance.validate(&mut geometry).unwrap();
+        let nodes = routing
+            .nodes(&accelerated, &clearance, &mut search, &mut geometry)
+            .unwrap();
+        let endpoints = [Vec2::new(88.0, 79.0), Vec2::new(36.0, 30.0)];
+        let shortest = detour(
+            endpoints,
+            &nodes,
+            &constant,
+            &clearance,
+            &mut search,
+            &mut geometry,
+        )
+        .unwrap();
+        let fastest = detour(
+            endpoints,
+            &nodes,
+            &accelerated,
+            &clearance,
+            &mut search,
+            &mut geometry,
+        )
+        .unwrap();
+        assert_eq!(shortest.len(), 2);
+        assert_eq!(fastest.len(), 1);
+        let metrics = |waypoints: &[Vec2]| {
+            let lengths: Vec<_> = raised_segments(
+                std::iter::once(endpoints[0])
+                    .chain(waypoints.iter().copied())
+                    .chain(std::iter::once(endpoints[1])),
+            )
+            .map(|[a, b]| a.dist(b))
+            .collect();
+            (
+                lengths.iter().sum::<f64>(),
+                lengths.iter().map(|length| length.sqrt()).sum::<f64>(),
+            )
+        };
+        let (short_length, short_time) = metrics(&shortest);
+        let (fast_length, fast_time) = metrics(&fastest);
+        near(short_length, 84.07351425019303);
+        near(fast_length, 92.53521432871463);
+        // a=4 and the high speed cap make each rest-to-rest leg take sqrt(length) seconds.
+        near(short_time, 14.14682063243067);
+        near(fast_time, 13.589875720396915);
+        assert!(fast_length > short_length && fast_time < short_time);
+    }
 }

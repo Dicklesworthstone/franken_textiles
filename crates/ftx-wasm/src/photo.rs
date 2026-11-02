@@ -16,6 +16,19 @@ use serde_json::{Value, json};
 
 const MAX_JSON: usize = 256 * 1024;
 
+/// Source-qualified section girth or tape-based coefficient calibration using the shared native
+/// measurement engine. An empty depth source reuses a combined width/depth document.
+///
+/// # Errors
+/// The shared source, wearer, provenance, option and numerical-domain refusals.
+pub fn photo_section(
+    width_source: &str,
+    depth_source: &str,
+    options: &str,
+) -> Result<Value, Refusal> {
+    ftx_measure::photo_section(width_source, depth_source, options)
+}
+
 /// Fit original coordinate observations through the shared camera engine. Empty noise means no
 /// separate noise document; explicit requests retain source bytes and never imply zero covariance.
 ///

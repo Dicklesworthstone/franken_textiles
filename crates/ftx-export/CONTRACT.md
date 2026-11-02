@@ -1,5 +1,21 @@
 # ftx-export
 
+**Acceleration-limited knife timing** (`cutting::program`, `ftx-tm7`). Optional
+`machine.motion_profile` selects the source-locked `trapezoidal_exact_stop/1` process with positive
+cutting and raised-travel acceleration magnitudes. Every retained straight chord starts and ends
+at rest, including collinear cut vertices, fixture detours and the final return. Short segments
+use triangular velocity profiles; longer segments reach their independently qualified speed limit.
+Cut geometry, source-frame lengths, closed-edge ownership and separate lift/lower time remain
+unchanged. Default constant-rate machine hashes and program output are preserved. The exact profile
+is retained in the report; changing it requires a new applicable full-machine qualification.
+Checked detour search and candidate acceptance use modeled time when selected, retaining bounded
+work and a complete baseline. Roll, finite-stock and mixed-job comparison admission reuses the
+same timing law and locks the full profile and timing phases without rerunning nesting. Numerical
+overflow or unsupported inputs refuse the process independently of geometric stock planning.
+Known-answer, source/refusal, complete-job ranking and native/portable regressions are software
+evidence, not measured cycle times, corner blending, blade dynamics or hardware authorization.
+See `docs/cutting-plans.md`.
+
 **Treatment-aware design evaluation** (`material_study::design::treatment`, `ftx-care1.3`).
 The canonical `treatment` operation accepts an ordinary pattern-treatment request in authored
 designs and grid/adaptive `after` operations. Final geometry, seam, outline and selected-body fit
@@ -662,6 +678,14 @@ initial admission. Evaporation retains its own counter; aggregate outgoing mass 
 plus drainage, with co-moving bulk export after incoming mixing. Missing phase fields, invented
 enthalpy, demand excess or stale source policy refuse the dependent comparison. The complete
 water request already binds the drainage source and schedule in protocol comparability.
+
+Mechanical versions `/5` and `/6` admit exact per-interval supply/condensation velocity pairs;
+`/6` also requires evaporation/drainage relative-velocity pairs for every retained instance.
+Schema/model/result identities are exclusive, as are old and new velocity fields, including
+explicit nulls. Recoil's `outgoing_separation_work_j` must be finite, nonnegative, initially zero
+and cumulative, with no increase without outgoing mass. Older versions reject that field.
+The exact policy remains part of motion-dependent comparison protocols; mechanical boundary
+work stays separate from the conservative sensible/latent thermal ledger and its objectives.
 
 **Scoped material-direction requirements.** `material_strain` and `motion_material_strain` admit raw
 dimensionless `[E11, E22, 2E12]` from the production membrane frame. Six static signed min/max metrics
