@@ -242,6 +242,157 @@ test('the combined manufacturing sources share the existing UTF-8 request budget
   assert.throws(()=>build({...state(),sewing:raw,purchasing:{quotes:raw,market:raw}}),/16 MiB/);
 });
 
+const finiteSource = () => ` {\r\n"schema":"ftx-finite-stock-request/1","stocks":[{"id":"hide-1","material":${selection()},
+  "outline_mm":[[-0.0,0.0],[100.0,0.0],[100.0,100.0],[0.0,100.0]],"grain_mm":[[0.0,0.0],[0.0,1.0]],
+  "geometry_source":{"reference":"test:stock","accessed_on":"2026-11-02","note":"Synthetic inventory"}}],
+  "options":{"copies":2,"gap_mm":1.0,"boundary_margin_mm":1.0,"step_mm":1.0,"work_limit":10000,"program":{}}}\r\n`;
+const jobSource = () => ` {\r\n"schema":"ftx-cutting-job/2","routes":[{"piece":"lining","stock":"roll"}],
+  "material_routes":[{"piece":"front","choices":[{"material_sha256":"${'a'.repeat(64)}","stock":"finite_stock"}]}],
+  "roll":${processSources().cutting},"finite_stock":${finiteSource()},
+  "purchasing":{"quotes":${processSources().purchasing.quotes},"market":${processSources().purchasing.market},"finite_bindings":[]}}\r\n`;
+function stockState(mode = 'finiteStock') {
+  const input=state();delete input.cutting;
+  input[mode]=mode==='finiteStock'?finiteSource():jobSource();
+  input.objectives=[{metric:mode==='finiteStock'?'used_stock_count':'cutting_job_stock_area_m2',direction:'minimize'}];
+  return input;
+}
+
+test('guided finite inventory keeps physical stock source bytes and admits its own objectives', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input=stockState();
+  input.objectives=['used_stock_count','used_stock_gross_area_m2','used_stock_mass_kg','finite_stock_modeled_path_seconds']
+    .map(metric=>({metric,direction:'minimize'}));
+  input.constraints=[{metric:'used_stock_count',maximum:2}];
+  input.requiredConsumers=['finite_stock','finite_stock_program'];
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);
+  assert.ok(raw.includes(input.finiteStock));
+  assert.equal(raw.split(input.finiteStock).length-1,1,'The shared inventory is supplied once, not consumed across alternatives');
+  assert.match(raw,/18446744073709551615/);assert.match(raw,/\[-0\.0,0\.0\]/);assert.match(raw,/"gap_mm":1\.0/);
+  assert.deepEqual(result.finite_stock,JSON.parse(input.finiteStock));
+  for(const key of ['cutting','cutting_job','purchasing'])assert.equal(Object.hasOwn(result,key),false);
+  assert.deepEqual(result.comparison.objectives,input.objectives);
+  assert.deepEqual(result.comparison.constraints,input.constraints);
+  assert.deepEqual(result.comparison.required_consumers,input.requiredConsumers);
+  assert.deepEqual(result.variants[0],{key:'baseline',changes:{schema:'ftx-material-bindings/1'}});
+});
+
+test('guided complete jobs retain routes and embedded market for combined fabric and thread orders', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...stockState('cuttingJob'),sewing:processSources().sewing,cutAndSewPurchasing:true,
+    objectives:['cutting_job_stock_area_m2','cutting_job_stock_mass_kg','cutting_job_modeled_path_seconds',
+      'cutting_job_selected_order_cost','cut_and_sew_selected_order_cost'].map(metric=>({metric,direction:'minimize'})),
+    requiredConsumers:['cutting_job','cutting_job_program','cutting_job_purchasing','cut_and_sew_purchasing']};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);
+  assert.ok(raw.includes(input.cuttingJob));assert.ok(raw.includes(input.sewing));
+  assert.equal(raw.split(input.cuttingJob).length-1,1);
+  assert.deepEqual(result.cutting_job,JSON.parse(input.cuttingJob));
+  assert.deepEqual(result.comparison.objectives,input.objectives);
+  assert.deepEqual(result.comparison.required_consumers,input.requiredConsumers);
+  assert.equal(result.cut_and_sew_purchasing,true);
+  for(const key of ['cutting','finite_stock','purchasing'])assert.equal(Object.hasOwn(result,key),false);
+  const finiteOnly=JSON.parse(input.cuttingJob);
+  finiteOnly.schema='ftx-cutting-job/1';delete finiteOnly.roll;delete finiteOnly.material_routes;
+  finiteOnly.routes=input.pieceIds.map(piece=>({piece,stock:'finite_stock'}));
+  const allFinite=JSON.stringify(finiteOnly);
+  const changed=JSON.parse(build({...input,cuttingJob:allFinite}));
+  assert.deepEqual(changed.cutting_job.routes,finiteOnly.routes);
+  assert.equal(Object.hasOwn(changed.cutting_job,'roll'),false);
+  assert.equal(changed.cut_and_sew_purchasing,true,'Whole finite-item pricing uses the ordinary complete job');
+});
+
+test('guided stock modes reject duplicate allocation and require the actual requested consumers', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const input of [{...state(),finiteStock:finiteSource()},{...state(),cuttingJob:jobSource()},
+    {...stockState(),cuttingJob:jobSource()}])assert.throws(()=>build(input),/Choose one stock plan/);
+  assert.throws(()=>build({...stockState('cuttingJob'),purchasing:processSources().purchasing}),/own purchasing/);
+  assert.throws(()=>build({...stockState(),purchasing:processSources().purchasing}),/purchasing requires roll cutting/);
+  assert.throws(()=>build({...stockState(),sewing:processSources().sewing,cutAndSewPurchasing:true}),/complete job/);
+  for(const [mode,metric,consumer] of [
+    ['finiteStock','finite_stock_modeled_path_seconds','finite_stock_program'],
+    ['cuttingJob','cutting_job_modeled_path_seconds','cutting_job_program'],
+    ['cuttingJob','cutting_job_selected_order_cost','cutting_job_purchasing'],
+  ]) {
+    const input=stockState(mode),source=JSON.parse(input[mode]);
+    if(mode==='finiteStock')delete source.options.program;
+    else {delete source.roll.program;delete source.finite_stock.options.program;delete source.purchasing;}
+    input[mode]=JSON.stringify(source);
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]}),/requires requested/);
+    assert.throws(()=>build({...input,requiredConsumers:[consumer]}),/requires requested/);
+  }
+  for(const [mode,metric,consumer] of [
+    ['finiteStock','stock_area_m2','cutting'],['finiteStock','cutting_job_stock_area_m2','cutting_job'],
+    ['cuttingJob','used_stock_mass_kg','finite_stock'],['cuttingJob','selected_observed_order_cost','purchasing'],
+  ]) {
+    assert.throws(()=>build({...stockState(mode),objectives:[{metric,direction:'minimize'}]}),/requires requested/);
+    assert.throws(()=>build({...stockState(mode),requiredConsumers:[consumer]}),/requires requested/);
+  }
+  const withoutJobPrices=JSON.parse(jobSource());delete withoutJobPrices.purchasing;
+  assert.throws(()=>build({...stockState('cuttingJob'),cuttingJob:JSON.stringify(withoutJobPrices),
+    sewing:processSources().sewing,cutAndSewPurchasing:true}),/complete job/);
+});
+
+test('retained stock and job files need their exact schema and outer input shapes', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const mode of ['finiteStock','cuttingJob'])for(const raw of [null,{},'null','[]','{bad','{}']) {
+    assert.throws(()=>build({...stockState(mode),[mode]:raw}));
+  }
+  const finite=JSON.parse(finiteSource());
+  for(const change of [{schema:'ftx-finite-stock-request/2'},{stocks:{}},{options:null},{options:[]},{extra:true}]) {
+    assert.throws(()=>build({...stockState(),finiteStock:JSON.stringify({...finite,...change})}));
+  }
+  const job=JSON.parse(jobSource());
+  for(const change of [{schema:'ftx-cutting-job/3'},{roll:null,finite_stock:null},{roll:[]},
+    {finite_stock:{...finite,options:null}},{purchasing:{}},{purchasing:{quotes:{},market:[]}},
+    {purchasing:{quotes:{},market:{},unknown:true}},{unknown:true}]) {
+    assert.throws(()=>build({...stockState('cuttingJob'),cuttingJob:JSON.stringify({...job,...change})}));
+  }
+  const nested={...job,roll:null,purchasing:null};
+  const result=JSON.parse(build({...stockState('cuttingJob'),cuttingJob:JSON.stringify(nested)}));
+  assert.equal(result.cutting_job.roll,null);assert.equal(result.cutting_job.purchasing,null);
+});
+
+test('complete assembly mass agrees with every selected finite and mixed-job allowance', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const finite=JSON.parse(finiteSource());finite.options.seam_allowance_mm=4;
+  const input={...stockState(),finiteStock:JSON.stringify(finite),assemblyMass:{...mass(),seam_allowance_mm:4}};
+  assert.equal(JSON.parse(build(input)).assembly_mass.seam_allowance_mm,4);
+  assert.throws(()=>build({...input,assemblyMass:mass()}),/same seam allowance/);
+  const job=JSON.parse(jobSource());job.finite_stock.options.seam_allowance_mm=4;
+  const mixed={...stockState('cuttingJob'),cuttingJob:JSON.stringify(job),assemblyMass:input.assemblyMass};
+  assert.throws(()=>build(mixed),/same seam allowance/,'The roll route cannot be ignored when finite stock agrees');
+  job.roll.seam_allowance_mm=4;
+  assert.equal(JSON.parse(build({...mixed,cuttingJob:JSON.stringify(job)})).assembly_mass.seam_allowance_mm,4);
+  job.finite_stock.options.seam_allowance_mm=5;
+  assert.throws(()=>build({...mixed,cuttingJob:JSON.stringify(job)}),/same seam allowance/,'The finite route cannot be ignored when roll stock agrees');
+  for(const mode of ['finiteStock','cuttingJob'])for(const value of [-1,'4']) {
+    const source=JSON.parse(stockState(mode)[mode]);
+    if(mode==='finiteStock')source.options.seam_allowance_mm=value;else source.roll.seam_allowance_mm=value;
+    assert.throws(()=>build({...stockState(mode),[mode]:JSON.stringify(source)}),/finite and nonnegative/);
+  }
+});
+
+test('reported mass ranges compose with explicit nominal finite-stock and job limits only', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const [mode,metric] of [['finiteStock','used_stock_count'],['cuttingJob','cutting_job_selected_order_cost']]) {
+    const input={...stockState(mode),assemblyMass:mass(),basis:'reported_bounds',
+      objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],constraints:[{metric,maximum:20,basis:'nominal'}]};
+    assert.deepEqual(JSON.parse(build(input)).comparison.constraints,input.constraints);
+    assert.throws(()=>build({...input,constraints:[{metric,maximum:20}]}),/assembly mass only/);
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]}),/assembly mass only/);
+  }
+});
+
+test('finite and mixed original sources share the same bounded UTF-8 output budget', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const text='é'.repeat(4*1024*1024),sewing=JSON.stringify({metadata:text});
+  for(const mode of ['finiteStock','cuttingJob']) {
+    const input=stockState(mode);input[mode]=input[mode].replace('é 🧵',text);
+    assert.throws(()=>build({...input,sewing}),/16 MiB/);
+  }
+});
+
 const scenarioState = () => ({allowNoFit:true,
   options:{spacing:12,sew_steps:12,drape_steps:36,step:1/24,max_settle_steps:0},
   maxMeshPoints:32768,maxVertexFrames:64000000});
@@ -345,5 +496,25 @@ test('bounded complete mass can use explicit nominal scenario guards without inv
   assert.throws(()=>build({...input,constraints:[{metric:'independent_surface_power_w',maximum:10}]},context),/assembly mass only/);
   for(const metric of ['simulated_cloth_mass_kg','max_absolute_edge_strain_pct','independent_surface_power_w']) {
     assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/assembly mass only/);
+  }
+});
+
+test('finite and mixed objectives compose with separately requested scenario consumers', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const [mode,metric,consumer] of [['finiteStock','used_stock_count','finite_stock'],
+    ['cuttingJob','cutting_job_stock_area_m2','cutting_job']]) {
+    const input=stockState(mode);
+    input.objectives=[{metric,direction:'minimize'},
+      {metric:'simulated_cloth_mass_kg',direction:'minimize'},{metric:'independent_surface_power_w',direction:'maximize'}];
+    input.constraints=[{metric:'max_absolute_edge_strain_pct',maximum:8,basis:'nominal'}];
+    input.requiredConsumers=[consumer,'drape','surface'];
+    const before=JSON.stringify(input),raw=build(input,{drape:true,surface:true}),result=JSON.parse(raw);
+    assert.equal(JSON.stringify(input),before);assert.ok(raw.includes(input[mode]));
+    assert.deepEqual(result.comparison.objectives,input.objectives);
+    assert.deepEqual(result.comparison.constraints,input.constraints);
+    assert.deepEqual(result.comparison.required_consumers,input.requiredConsumers);
+    for(const key of ['drape','surface','scenario'])assert.equal(Object.hasOwn(result,key),false);
+    assert.throws(()=>build(input),/requested drape/);
+    assert.throws(()=>build(input,{drape:true,surface:false}),/requested surface/);
   }
 });

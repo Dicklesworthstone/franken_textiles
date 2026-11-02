@@ -5,6 +5,10 @@ const own = (value, key) => Object.hasOwn(value, key);
 const METRIC_CONSUMERS = {
   stock_area_m2: "cutting", stock_mass_kg: "cutting", assembly_mass_kg: "assembly_mass",
   cutting_modeled_path_seconds: "cutting_program",
+  used_stock_count: "finite_stock", used_stock_gross_area_m2: "finite_stock", used_stock_mass_kg: "finite_stock",
+  finite_stock_modeled_path_seconds: "finite_stock_program",
+  cutting_job_stock_area_m2: "cutting_job", cutting_job_stock_mass_kg: "cutting_job",
+  cutting_job_modeled_path_seconds: "cutting_job_program", cutting_job_selected_order_cost: "cutting_job_purchasing",
   sewing_modeled_production_seconds: "sewing", sewing_parallel_makespan_seconds: "sewing",
   selected_observed_order_cost: "purchasing", thread_observed_order_cost: "sewing_purchasing",
   cut_and_sew_selected_order_cost: "cut_and_sew_purchasing", thread_required_length_m: "sewing_consumables",
@@ -126,10 +130,44 @@ export function buildMaterialScenarioRequest(state) {
   return parts.join("");
 }
 
+function stockOptions(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw Error(`${label} must be an options object.`);
+  allowance(value, `${label} seam allowance`);
+  return value;
+}
+function finiteInventory(value) {
+  const request = object(value, ["schema", "stocks", "options", "pricing"], ["schema", "stocks", "options"], "Finite stock");
+  if (request.schema !== "ftx-finite-stock-request/1" || !Array.isArray(request.stocks)) {
+    throw Error("Finite stock requires an ftx-finite-stock-request/1 inventory.");
+  }
+  stockOptions(request.options, "Finite-stock options");
+  return request;
+}
+function completeCuttingJob(value) {
+  const request = object(value, ["schema", "routes", "material_routes", "roll", "finite_stock", "purchasing"],
+    ["schema"], "Complete cutting job");
+  if (!["ftx-cutting-job/1", "ftx-cutting-job/2"].includes(request.schema)) {
+    throw Error("Use an ftx-cutting-job/1 or /2 complete cutting request.");
+  }
+  if (!request.roll && !request.finite_stock) throw Error("A complete cutting job needs its original stock planning inputs.");
+  if (request.roll !== undefined && request.roll !== null) stockOptions(request.roll, "Job roll options");
+  if (request.finite_stock !== undefined && request.finite_stock !== null) finiteInventory(request.finite_stock);
+  if (request.purchasing !== undefined && request.purchasing !== null) {
+    const purchasing = object(request.purchasing, ["quotes", "market", "finite_bindings"], ["quotes", "market"], "Job purchasing");
+    for (const key of ["quotes", "market"]) {
+      if (!purchasing[key] || typeof purchasing[key] !== "object" || Array.isArray(purchasing[key])) {
+        throw Error("Job purchasing needs its original quote book and market objects.");
+      }
+    }
+  }
+  return request;
+}
+
 /**
  * Author one fixed-pattern request with an unchanged baseline and 1–7 frozen choices.
  * `pieceIds` are the current pattern's source IDs. `target` is default or named pieces.
  * `cutting` uses authored numeric roll options or an exact original policy file. Optional
+ * `finiteStock` and `cuttingJob` retain original inventory/job JSON instead of roll cutting.
  * sewing/selection and purchasing inputs always retain their original JSON texts.
  * `assemblyMass` is a canonical inventory
  * request (original JSON text for sourced extras, or an authored object with no extras).
@@ -145,7 +183,7 @@ export function buildMaterialStudyRequest(state, scenario) {
       throw Error("Scenario comparison needs explicit drape: true and a boolean surface request.");
     }
   }
-  object(state, ["candidates", "target", "pieceIds", "cutting", "assemblyMass", "objectives", "basis",
+  object(state, ["candidates", "target", "pieceIds", "cutting", "finiteStock", "cuttingJob", "assemblyMass", "objectives", "basis",
     "sewing", "sewingSelection", "purchasing", "cutAndSewPurchasing", "constraints", "requiredConsumers"],
     ["candidates", "target", "pieceIds", "objectives", "basis"], "Guided study");
   const pieces = uniqueNames(state.pieceIds, "Pattern source pieces", 4096);
@@ -159,6 +197,15 @@ export function buildMaterialStudyRequest(state, scenario) {
     throw Error("Add 1–7 material choices; the unchanged baseline is included separately.");
   }
   if (!["nominal", "reported_bounds"].includes(state.basis)) throw Error("Choose nominal or reported-bound comparison.");
+
+  if (["cutting", "finiteStock", "cuttingJob"].filter(key => own(state, key)).length > 1) {
+    throw Error("Choose one stock plan: roll cutting, finite inventory or a complete cutting job.");
+  }
+  if (own(state, "cuttingJob") && own(state, "purchasing")) {
+    throw Error("A complete cutting job retains its own purchasing; omit separate fabric purchasing.");
+  }
+  const finiteStock = own(state, "finiteStock") ? finiteInventory(sourceObject(state.finiteStock, "Finite-stock inventory")) : null;
+  const cuttingJob = own(state, "cuttingJob") ? completeCuttingJob(sourceObject(state.cuttingJob, "Complete cutting job")) : null;
 
   const rawCutting = typeof state.cutting === "string";
   const cutting = own(state, "cutting") ? object(rawCutting ? sourceObject(state.cutting, "Cutting options") : state.cutting,
@@ -187,8 +234,8 @@ export function buildMaterialStudyRequest(state, scenario) {
     throw Error("Combined fabric and thread purchasing must be an explicit boolean.");
   }
   const combinedPurchasing = state.cutAndSewPurchasing === true;
-  if (combinedPurchasing && (!purchasing || !sewingOptions?.consumables?.purchasing)) {
-    throw Error("Combined fabric and thread purchasing requires roll purchasing and sewing thread purchasing.");
+  if (combinedPurchasing && ((!purchasing && !cuttingJob?.purchasing) || !sewingOptions?.consumables?.purchasing)) {
+    throw Error("Combined fabric and thread purchasing requires roll purchasing and sewing thread purchasing, or a complete job with its own purchasing and sewing thread purchasing.");
   }
   let mass = null, massJson = null;
   if (own(state, "assemblyMass")) {
@@ -207,14 +254,19 @@ export function buildMaterialStudyRequest(state, scenario) {
       ids.add(extra.id);
     }
     const massAllowance = allowance(mass, "Assembly seam allowance");
-    if (cutting && massAllowance !== allowance(cutting, "Cutting seam allowance")) {
+    const cuttingPolicies = [cutting, finiteStock?.options, cuttingJob?.roll, cuttingJob?.finite_stock?.options].filter(Boolean);
+    if (cuttingPolicies.some(policy => massAllowance !== allowance(policy, "Cutting seam allowance"))) {
       throw Error("Use the same seam allowance override for cutting and assembly mass.");
     }
     massJson = raw ? state.assemblyMass : JSON.stringify(mass);
   }
-  if (!cutting && !mass && !sewingOptions && !scenario) throw Error("Choose cutting, sewing or assembly mass to evaluate.");
+  if (!cutting && !finiteStock && !cuttingJob && !mass && !sewingOptions && !scenario) throw Error("Choose cutting, sewing or assembly mass to evaluate.");
   const consumers = {
     cutting: !!cutting, cutting_program: !!cutting?.program,
+    finite_stock: !!finiteStock, finite_stock_program: !!finiteStock?.options.program,
+    cutting_job: !!cuttingJob,
+    cutting_job_program: !!(cuttingJob?.roll?.program || cuttingJob?.finite_stock?.options.program),
+    cutting_job_purchasing: !!cuttingJob?.purchasing,
     sewing: !!sewingOptions, purchasing: !!purchasing,
     sewing_consumables: !!sewingOptions?.consumables,
     sewing_purchasing: !!sewingOptions?.consumables?.purchasing,
@@ -305,6 +357,8 @@ export function buildMaterialStudyRequest(state, scenario) {
   }
   append("]");
   if (cutting) { append(',"cutting":'); append(rawCutting ? state.cutting : JSON.stringify(cutting)); }
+  if (finiteStock) { append(',"finite_stock":'); append(state.finiteStock); }
+  if (cuttingJob) { append(',"cutting_job":'); append(state.cuttingJob); }
   if (sewing) { append(',"sewing":'); append(state.sewing); }
   if (selection) { append(',"sewing_selection":'); append(state.sewingSelection); }
   if (purchasing) {

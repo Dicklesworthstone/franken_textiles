@@ -32,23 +32,50 @@ original pattern as `baseline`; staged assignments and the bound single-preview 
 silently replace it. Choose the pattern default, every source piece, or selected source pieces.
 Default substitution preserves explicit lining, cuff and other piece assignments.
 
-Declare roll-cutting copies, gaps and margins, or choose **Use the original roll-planning options
-selected in section 3**. That original file supplies its own copies, allowances, nesting and optional
-qualified knife program; inactive form entries are not merged into it. A modeled knife-time goal
-requires that program and its applicable machine/material qualifications. Assembly mass remains
-independently selectable, including when another manufacturing consumer refuses.
+Under **Stock planning mode**, choose one source for the guided comparison:
 
-Under **Sewing and purchasing**, reuse the original section-3 sewing request, dated quote book and
-market. The section-3 recipe-choice setting selects either one declared recipe or the existing
-bounded recipe/route search. Every material alternative reruns those consumers; an earlier preview
+- **Roll fabric** uses the declared copies, gaps and margins, or **Use the original roll-planning
+  options selected in section 3**. The original file supplies its own copies, allowances, nesting
+  and optional qualified cutting program; inactive form entries are not merged into it.
+- **Finite hides and remnants** uses section 3's original **Finite hides / remnants with defect
+  maps JSON**, an `ftx-finite-stock-request/1` file. Its physical stock identities, exact material
+  selections, boundaries, defects, occupied regions, copy count, allowances and optional program
+  reach the existing finite-stock planner unchanged.
+- **Complete roll / finite-stock job** uses section 3's original **Complete roll / finite-stock
+  job JSON**, an `ftx-cutting-job/1` or `/2` file. The job owns its fixed routes or declared route
+  alternatives, supplied roll/finite inventory, quantities, allowances, programs and purchasing.
+  The roll form and separate quote-book/market inputs are inactive in this mode.
+
+Each alternative evaluates the same original inventory independently; one row does not consume
+stock for the next. A different material name or shortlist choice cannot rebind an item's frozen
+material identity. Each mode retains separate goals, maximums and required stock results, and only
+the current mode's declarations are submitted. Sewing and assembly-mass choices remain shared.
+
+Finite-stock goals count whole physical items used, their full polygon area including defects and
+prior occupied regions, or their complete source-qualified stock mass. These are engaged-inventory
+metrics, not newly cut area or retained garment mass. Complete-job stock goals combine allocated
+roll stock with whole engaged finite items. To compare complete hide/remnant order costs, choose
+a complete job with embedded purchasing, including for a job using only finite stock. Standalone
+finite-stock comparison has no whole-item order-cost objective.
+
+A modeled cutting-time goal requires the source request's qualified program and its applicable
+machine/material evidence. Complete jobs require qualification on every engaged route. A refused
+program withholds its time metric while independent stock allocation, mass, sewing and purchasing
+results remain inspectable. Assembly mass is also independently selectable without stock planning.
+
+Under **Sewing and purchasing**, reuse the original section-3 sewing request. Roll purchasing uses
+section 3's dated quote book and market; complete jobs retain their own embedded purchasing sources,
+including finite-item offer bindings. The section-3 recipe-choice setting selects one declared recipe
+or the existing bounded recipe/route search. Every material alternative reruns those consumers; an earlier preview
 is not reused as a substitute result. Sewing-only studies do not need a cutting request.
-**Combine complete fabric and selected sewing-thread orders** additionally requires fabric
-purchasing and a sewing request with thread purchasing. Their exact quote history, market and
-production count must agree, and shared-stock conflicts refuse the combined total.
+**Combine complete fabric and selected sewing-thread orders** requires roll purchasing or complete
+job purchasing, plus a sewing request with thread purchasing. The job contribution must cover every
+used roll and finite item. Exact quote history, market and production count must agree across fabric
+and thread, and shared-stock conflicts refuse the combined total while preserving independent results.
 
-Choose goals for roll area/mass, complete garment mass, modeled knife time, serial sewing production
-time, multi-cell makespan, thread length, selected fabric cost, thread cost or their complete combined
-cost. Stock and cutting goals describe the declared batch; assembly mass describes one complete
+Choose the active mode's stock and cutting goals alongside complete garment mass, serial sewing
+production time, multi-cell makespan, thread length, thread cost or complete fabric-plus-thread cost.
+Stock and cutting goals describe the declared batch; assembly mass describes one complete
 pattern expansion. Sewing quantities retain their source request's scope. Selected feasible order
 cost does not imply a proved minimum, and no price includes undeclared labor, trims or charges.
 Multiple goals retain the existing Pareto tradeoffs without a hidden combined score.
@@ -59,18 +86,24 @@ qualified program, sewing plan, complete purchasing, thread quantities or assemb
 making it an objective. A refused or missing required value excludes that alternative while its
 independent results remain inspectable. Disabling a consumer does not silently erase its guards.
 
-**Compare using** selects the objectives' basis. Reported ranges require complete assembly-mass
-bounds; missing ranges and overlapping intervals do not become guessed uncertainty. To impose time
-or price limits while minimizing bounded garment mass, choose **Nominal computed values** under
-**Apply maximums using**. Each generated constraint then explicitly records that nominal basis.
-Manufacturing time and cost do not acquire reported ranges from a bounded mass objective.
+**Compare using** selects the objectives' basis. Guided reported-range objectives cover complete
+assembly mass only, so clear the stock mode's goals when choosing that basis. Every mass contribution
+needs reported bounds; missing ranges and overlapping intervals do not become guessed uncertainty.
+To impose stock, cutting-time or price limits while minimizing bounded garment mass, choose
+**Nominal computed values** under **Apply maximums using**. Each generated constraint explicitly
+records that nominal basis. Required stock, program and purchasing results still apply independently.
+Stock, manufacturing-time and cost decisions do not acquire reported ranges from a bounded mass
+objective. Unsupported range comparisons refuse instead of silently changing basis.
 
 Complete garment mass needs an explicit declaration that the pattern includes every part and
 attachment, or an original `ftx-assembly-mass/1` inventory file with its own declaration and sourced
 extras. Without completeness, sheet subtotals remain available but cannot rank as whole-garment
 mass. A source without roll width may refuse cutting while retaining valid independent mass.
-The optional seam-allowance override must agree across cutting and mass. For mass alone, an
-uploaded inventory keeps its own allowance when no override is entered. **Clear inventory file**
+The optional seam-allowance override must agree across cutting and mass, including finite-stock
+options and every supplied roll/finite route in a complete job. Original files are never rewritten
+to force agreement. When mass is requested, its allowance must agree with every supplied cutting
+policy even when the override is blank. For mass alone, an uploaded inventory keeps its own allowance
+when no override is entered. **Clear inventory file**
 returns to the explicit no-extras declaration without discarding the shortlist; it also cancels
 an unfinished study that was reading the removed file.
 
@@ -81,9 +114,11 @@ affected work. Original source JSON is retained without rewriting its numeric to
 oversized inputs and missing requested files refuse. The source files together and the complete
 generated request each have a 16 MiB limit. Download the request for exact native/portable replay or
 load it in advanced mode.
-**Load a complete study request (advanced)** also retains design, finite/mixed-stock, scenario and
-grouped-combination workflows. Guided choices infer no body, missing properties, prices or process
-qualification. Modeled times are not measured factory throughput or authorization to run machinery.
+**Load a complete study request (advanced)** retains authored design, scenario and grouped-combination
+workflows, as well as studies requesting separate roll and finite-stock consumers. Guided choices
+reuse the existing native and WASM planners and infer no body, missing properties, prices or process
+qualification. Empirical textile and machine validation remains an independent requirement. Modeled
+times are not measured factory throughput or authorization to run machinery.
 
 The examples use the existing source-bearing 3M insulation records and a clearly synthetic pattern.
 They compare reported mass/thickness/resistance, not whole-jacket warmth. Some candidate records
@@ -583,8 +618,9 @@ including frozen inventory, complete geometry and replay identities. Its summary
 Used-item area and mass describe inventory engaged by a plan, not the newly consumed area, recovered
 offcuts or a purchasing requirement. Unused inventory cannot inflate these metrics or erase known
 used-stock mass. Roll metrics retain their original meanings and are reported separately when both
-consumers are requested. Purchasing still requires the roll `cutting` consumer: no price per hide,
-offcut valuation or area-to-hide conversion is inferred.
+consumers are requested. The separate study `purchasing` consumer still requires roll `cutting`.
+Complete finite-item orders use `cutting_job` with embedded purchasing, including all-finite jobs;
+no price per hide, offcut valuation or area-to-hide conversion is inferred.
 
 For example, with `finite_stock` supplied in the study request, this comparison minimizes the number
 of hides/remnants needed, retaining inventory area as a separate objective:

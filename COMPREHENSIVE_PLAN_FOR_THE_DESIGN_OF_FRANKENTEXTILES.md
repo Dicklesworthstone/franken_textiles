@@ -4846,6 +4846,29 @@ The two independent flat source frames do not establish machine registration, em
 quality or hardware authorization. This advances the usable manufacturing path in `ftx-tm7`
 and `ftx-sp2` through existing engines; physical process qualification remains open.
 
+### 25.148 Guided finite-stock and complete mixed-job material decisions
+
+The guided material workbench now compares roll cutting, original finite-hide/remnant inventories,
+or complete cutting jobs with fixed and material-specific routes. Original inventory and job JSON
+remain verbatim: source locks, physical stock identities, quantities, programs and embedded pricing
+retain their authority. Each stock mode keeps its own objectives, maximums and required outcomes;
+switching modes does not reinterpret whole-item counts as area or carry inactive roll purchasing
+into a complete job. Shared sewing and assembly-mass choices remain available.
+
+Finite objectives describe complete engaged stock items and their gross area/mass, separately from
+the allocated part area and one-garment assembly mass. Complete jobs can compare whole-item and roll
+orders, qualified cutting time and combined fabric/thread purchasing through the existing Rust
+consumers. Missing material revisions, process qualifications and prices remain independent refusals;
+valid placements, complete physical-part inventory and garment mass stay visible. Explicit nominal
+stock, time and cost guards can accompany bounded assembly-mass comparisons without invented ranges.
+
+Original requests and selected sources remain replayable. Relevant source changes and mode changes
+cancel obsolete comparisons and withdraw their downloads; inactive process files leave independent
+work running. Browser lifecycle regressions and complete compiled-WASM report comparisons cover
+finite allocations, whole-item prices, refused qualifications and both mixed-job routing schemas.
+This advances `ftx-ms2` through existing engines; empirical nesting quality, process timing, physical
+garment fit and hardware qualification remain open.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

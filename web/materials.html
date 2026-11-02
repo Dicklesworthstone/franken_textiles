@@ -399,8 +399,16 @@ Its scalar frontier is not a garment ranking. Original observations and protocol
 <label>Source pieces <select id="studyPieces" multiple size="4" disabled aria-label="Source pieces for material comparison"></select></label>
 <p class="note">Changing the default does not replace an explicit lining or cuff material. Choose every piece or exact pieces
 to replace those assignments. Current section-2 preview edits are not part of the original baseline.</p>
-<fieldset><legend>Roll cutting</legend>
-<label><input id="guidedCutting" type="checkbox" checked> Calculate actual roll requirements</label>
+<fieldset><legend>Stock and cutting</legend>
+<label>Stock planning mode <select id="guidedStockMode">
+<option value="roll">Roll fabric</option>
+<option value="finite">Finite hides and remnants</option>
+<option value="job">Complete roll / finite-stock job</option>
+</select></label>
+<label><input id="guidedCutting" type="checkbox" checked> Calculate stock and cutting requirements</label>
+<p class="note">Each mode keeps its own goals, maximums and required stock results. Only the current mode's declarations
+are submitted; switching back restores its previous settings. Sewing and garment-mass choices remain shared.</p>
+<div id="guidedRollSources">
 <label>Roll policy <select id="guidedCuttingSource"><option value="form">Use the roll settings below</option>
 <option value="file">Use the original roll-planning options selected in section 3</option></select></label>
 <div id="guidedRollForm" class="study-fields">
@@ -412,19 +420,39 @@ to replace those assignments. Current section-2 preview edits are not part of th
 <p class="note">Each material must supply its qualified roll width. Missing width or unsupported stock keeps the cutting
 refusal visible. To compare qualified knife-path time, select the original roll-planning options from
 <a href="#materialConsumers">section 3</a>, including their machine and material process qualifications.
-That file owns its copy count, allowances and program; the inactive form is not merged into it.
-Finite hides and mixed-stock jobs still use advanced mode.</p>
+That file owns its copy count, allowances and program; the inactive form is not merged into it.</p>
+</div>
+<div id="guidedFiniteSources" hidden>
+<p>Use the original finite-stock inventory selected in <a href="#materialConsumers">section 3</a>.
+It owns the physical hides or remnants, defects, material identities, copy count, allowance and any qualified cutting program.
+Each alternative evaluates that same retained inventory independently.</p>
+<p class="note">Compare the number of used items, their gross area or stock mass, and qualified modeled cutting time.
+Standalone finite-stock comparisons have no whole-item cost objective. Choose a complete job with embedded purchasing to
+compare complete hide or remnant orders, including jobs that use only finite stock.</p>
+</div>
+<div id="guidedJobSources" hidden>
+<p>Use the original complete roll / finite-stock job selected in <a href="#materialConsumers">section 3</a>.
+It owns every supplied route, physical inventory, copy count, allowance, cutting program and purchasing policy.</p>
+<p class="note">Compare complete job stock area, stock mass, qualified modeled cutting time or the selected complete order cost.
+The roll form and separate quote-book and market inputs are inactive; the job's embedded sources reach the shared planner unchanged.
+Missing route qualification or incomplete purchasing stays visible for each alternative.</p>
+</div>
 </fieldset>
 <fieldset><legend>Sewing and purchasing</legend>
 <label><input id="guidedSewing" type="checkbox"> Evaluate the original sewing request selected in section 3</label>
 <p class="note">The section-3 recipe-choice setting determines whether this is one declared recipe or a bounded recipe/route search.
 Each material must qualify independently. Serial modeled production time includes only declared feed, setup and handling;
 parallel makespan needs an explicit multi-cell production plan. Neither is measured factory throughput.</p>
+<div id="guidedRollPurchasing">
 <label><input id="guidedPurchasing" type="checkbox"> Price the roll requirements using section 3's dated quote book and market</label>
+</div>
+<div id="guidedCombinedPurchasing">
 <label><input id="guidedCombinedCost" type="checkbox"> Combine complete fabric and selected sewing-thread orders</label>
-<p class="note">Combined purchasing requires roll cutting, fabric purchasing and a sewing request with thread purchasing.
+<p class="note">Combined purchasing requires roll purchasing or embedded complete-job purchasing, and a sewing request with thread purchasing.
 Both must retain the same quote history, market and production count; shared-stock conflicts refuse the combined total.
-Thread purchasing otherwise keeps its own declared market. Prices exclude undeclared labor, trims and charges.
+Complete jobs can include finite-stock orders without a roll route.</p>
+</div>
+<p class="note">Thread purchasing otherwise keeps its own declared market. Prices exclude undeclared labor, trims and charges.
 The original files reach the shared planners unchanged. Missing or refused outputs remain visible.</p>
 </fieldset>
 <fieldset><legend>Garment mass</legend>
@@ -437,27 +465,46 @@ An inventory file supplies its own completeness declaration and sourced extras. 
 Mass does not infer thread, buttons, zippers or other unrepresented parts.</p>
 </fieldset>
 <label>Optional seam allowance override (mm) <input id="guidedAllowance" type="number" min="0" step="any" placeholder="Keep the pattern's allowances"></label>
-<small>The same allowance applies to the roll form and mass. A retained roll file keeps its own policy; clear this override or make it agree.
+<small>The same allowance applies to the roll form and mass. Retained stock and job files keep their own policies; clear this override or make every supplied route agree.
 Leave blank to retain authored piece allowances.
-For mass alone, an uploaded inventory retains its own allowance; when cutting also runs, the policies must agree.</small>
+For mass alone, an uploaded inventory retains its own allowance; when cutting also runs, mass and every supplied roll or finite-stock route must agree.</small>
 <fieldset><legend>Comparison goals</legend>
 <p>Choose what to minimize. Optional maximums are inclusive limits, even when that row is not an objective.
 A missing required value excludes an alternative; it is never treated as zero.</p>
-<div class="study-goals">
+<div id="guidedRollGoals"><div class="study-goals">
 <strong>Minimize</strong><strong>Maximum allowed</strong>
 <label><input id="guidedAreaGoal" type="checkbox" checked> Roll stock area (m² / batch)</label><input id="guidedAreaLimit" type="number" min="0" step="any" aria-label="Maximum roll stock area in square metres" placeholder="No limit">
 <label><input id="guidedStockMassGoal" type="checkbox"> Roll stock mass (kg / batch)</label><input id="guidedStockMassLimit" type="number" min="0" step="any" aria-label="Maximum roll stock mass in kilograms" placeholder="No limit">
-<label><input id="guidedMassGoal" type="checkbox"> Complete garment mass (kg / garment)</label><input id="guidedMassLimit" type="number" min="0" step="any" aria-label="Maximum complete garment mass in kilograms" placeholder="No limit">
 <label><input id="guidedCutTimeGoal" type="checkbox"> Modeled knife-path time (s / batch)</label><input id="guidedCutTimeLimit" type="number" min="0" step="any" aria-label="Maximum modeled knife-path time in seconds" placeholder="No limit">
+<label><input id="guidedOrderCostGoal" type="checkbox"> Selected complete roll-fabric order cost</label><input id="guidedOrderCostLimit" type="number" min="0" step="any" aria-label="Maximum selected roll-fabric order cost in its declared currency" placeholder="No limit">
+</div></div>
+<div id="guidedFiniteGoals" hidden><div class="study-goals">
+<strong>Minimize</strong><strong>Maximum allowed</strong>
+<label><input id="guidedFiniteCountGoal" type="checkbox" checked> Used hides or remnants (whole items / batch)</label><input id="guidedFiniteCountLimit" type="number" min="0" step="1" aria-label="Maximum number of used finite-stock items" placeholder="No limit">
+<label><input id="guidedFiniteAreaGoal" type="checkbox"> Used finite-stock gross area (m² / batch)</label><input id="guidedFiniteAreaLimit" type="number" min="0" step="any" aria-label="Maximum used finite-stock gross area in square metres" placeholder="No limit">
+<label><input id="guidedFiniteMassGoal" type="checkbox"> Used finite-stock mass (kg / batch)</label><input id="guidedFiniteMassLimit" type="number" min="0" step="any" aria-label="Maximum used finite-stock mass in kilograms" placeholder="No limit">
+<label><input id="guidedFiniteTimeGoal" type="checkbox"> Modeled finite-stock cutting time (s / batch)</label><input id="guidedFiniteTimeLimit" type="number" min="0" step="any" aria-label="Maximum modeled finite-stock cutting time in seconds" placeholder="No limit">
+</div></div>
+<div id="guidedJobGoals" hidden><div class="study-goals">
+<strong>Minimize</strong><strong>Maximum allowed</strong>
+<label><input id="guidedJobAreaGoal" type="checkbox" checked> Complete job stock area (m² / batch)</label><input id="guidedJobAreaLimit" type="number" min="0" step="any" aria-label="Maximum complete-job stock area in square metres" placeholder="No limit">
+<label><input id="guidedJobMassGoal" type="checkbox"> Complete job stock mass (kg / batch)</label><input id="guidedJobMassLimit" type="number" min="0" step="any" aria-label="Maximum complete-job stock mass in kilograms" placeholder="No limit">
+<label><input id="guidedJobTimeGoal" type="checkbox"> Modeled complete job cutting time (s / batch)</label><input id="guidedJobTimeLimit" type="number" min="0" step="any" aria-label="Maximum modeled complete-job cutting time in seconds" placeholder="No limit">
+<label><input id="guidedJobCostGoal" type="checkbox"> Selected complete job order cost</label><input id="guidedJobCostLimit" type="number" min="0" step="any" aria-label="Maximum selected complete-job order cost in its declared currency" placeholder="No limit">
+</div></div>
+<div class="study-goals">
+<strong>Shared sewing and mass goals</strong><strong>Maximum allowed</strong>
+<label><input id="guidedMassGoal" type="checkbox"> Complete garment mass (kg / garment)</label><input id="guidedMassLimit" type="number" min="0" step="any" aria-label="Maximum complete garment mass in kilograms" placeholder="No limit">
 <label><input id="guidedSewTimeGoal" type="checkbox"> Modeled serial sewing production (s)</label><input id="guidedSewTimeLimit" type="number" min="0" step="any" aria-label="Maximum modeled serial sewing production seconds" placeholder="No limit">
 <label><input id="guidedMakespanGoal" type="checkbox"> Modeled multi-cell sewing makespan (s)</label><input id="guidedMakespanLimit" type="number" min="0" step="any" aria-label="Maximum modeled sewing makespan in seconds" placeholder="No limit">
-<label><input id="guidedOrderCostGoal" type="checkbox"> Selected complete fabric order cost</label><input id="guidedOrderCostLimit" type="number" min="0" step="any" aria-label="Maximum selected fabric order cost in its declared currency" placeholder="No limit">
 <label><input id="guidedThreadLengthGoal" type="checkbox"> Required sewing thread (m / batch)</label><input id="guidedThreadLengthLimit" type="number" min="0" step="any" aria-label="Maximum required sewing thread in metres" placeholder="No limit">
 <label><input id="guidedThreadCostGoal" type="checkbox"> Complete thread order cost</label><input id="guidedThreadCostLimit" type="number" min="0" step="any" aria-label="Maximum thread order cost in its declared currency" placeholder="No limit">
-<label><input id="guidedCombinedCostGoal" type="checkbox"> Selected complete fabric + thread cost</label><input id="guidedCombinedCostLimit" type="number" min="0" step="any" aria-label="Maximum selected fabric and thread order cost in its declared currency" placeholder="No limit">
-<small>Costs use each declared market's currency. A complete selected order can be feasible without being proved least-cost.
-Knife-path time excludes loading and inspection; sewing totals retain the scope and quantity declared by their source request.</small>
 </div>
+<div id="guidedCombinedGoals"><div class="study-goals">
+<label><input id="guidedCombinedCostGoal" type="checkbox"> Selected complete fabric + thread cost</label><input id="guidedCombinedCostLimit" type="number" min="0" step="any" aria-label="Maximum selected fabric and thread order cost in its declared currency" placeholder="No limit">
+</div></div>
+<p class="note">Costs use each declared market's currency. A complete selected order can be feasible without being proved least-cost.
+Cutting-path time excludes loading and inspection; sewing totals retain the scope and quantity declared by their source request.</p>
 <label>Compare using <select id="guidedBasis"><option value="nominal">Reported central values</option>
 <option value="reported_bounds">Complete reported ranges (garment mass only)</option></select></label>
 <label>Apply maximums using <select id="guidedLimitBasis"><option value="inherit">The same basis as the objectives</option>
@@ -465,20 +512,32 @@ Knife-path time excludes loading and inspection; sewing totals retain the scope 
 <p class="note">Multiple goals retain tradeoffs without a hidden combined score. Complete reported ranges need bounds for every
 mass contribution; overlapping ranges remain unresolved. Different measurement protocols may remain incomparable.
 Use explicitly nominal time or price limits alongside a reported-range mass objective. Unsupported range decisions refuse.
-Changing a consumer does not discard a maximum or required-result declaration; clear or satisfy those declarations explicitly.</p>
+Changing a consumer does not discard a maximum or required-result declaration in the current mode; clear or satisfy those declarations explicitly.
+Inactive stock modes keep their own declarations without applying them to another mode.</p>
 </fieldset>
 <fieldset><legend>Other results every eligible alternative must provide</legend>
 <p>Require a result even when it is not an objective or limit. Independent results remain inspectable when another consumer refuses.</p>
-<div class="study-fields">
+<div id="guidedRollRequired"><div class="study-fields">
 <label><input id="guidedRequireCutting" type="checkbox"> Complete roll plan</label>
-<label><input id="guidedRequireCutProgram" type="checkbox"> Qualified knife program</label>
+<label><input id="guidedRequireCutProgram" type="checkbox"> Qualified roll-cutting program</label>
+<label><input id="guidedRequirePurchasing" type="checkbox"> Complete roll-fabric purchasing</label>
+</div></div>
+<div id="guidedFiniteRequired" hidden><div class="study-fields">
+<label><input id="guidedRequireFinite" type="checkbox"> Complete finite-stock allocation</label>
+<label><input id="guidedRequireFiniteProgram" type="checkbox"> Qualified finite-stock cutting program</label>
+</div></div>
+<div id="guidedJobRequired" hidden><div class="study-fields">
+<label><input id="guidedRequireJob" type="checkbox"> Complete cutting job</label>
+<label><input id="guidedRequireJobProgram" type="checkbox"> Qualified complete-job cutting programs</label>
+<label><input id="guidedRequireJobPurchasing" type="checkbox"> Complete cutting-job purchasing</label>
+</div></div>
+<div class="study-fields">
 <label><input id="guidedRequireSewing" type="checkbox"> Qualified sewing plan</label>
-<label><input id="guidedRequirePurchasing" type="checkbox"> Complete fabric purchasing</label>
 <label><input id="guidedRequireThread" type="checkbox"> Complete thread quantities</label>
 <label><input id="guidedRequireThreadPurchasing" type="checkbox"> Complete thread purchasing</label>
-<label><input id="guidedRequireCombined" type="checkbox"> Complete fabric + thread purchasing</label>
 <label><input id="guidedRequireMass" type="checkbox"> Complete garment mass</label>
 </div>
+<div id="guidedCombinedRequired"><label><input id="guidedRequireCombined" type="checkbox"> Complete fabric + thread purchasing</label></div>
 </fieldset>
 <p class="note">The generated request, original pattern, exact material selections and full results are available for download
 after comparison. No body model is needed for these manufacturing calculations.</p>

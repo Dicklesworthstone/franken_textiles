@@ -5746,6 +5746,129 @@ test('guided manufacturing freezes source inputs and cancels delayed reads after
   }
 });
 
+function guidedStockSources(p) {
+  const stock=' {"schema":"ftx-finite-stock-request/1","stocks":[],"options":{"copies":2,"gap_mm":1.0,"edge_margin_mm":0,"seam_allowance_mm":3,"program":{"source":{"signed":-0.0,"sample":18446744073709551615}}}}\r\n';
+  const job=' {"schema":"ftx-cutting-job/2","material_routes":[],"finite_stock":'+stock+',"roll":{"copies":2,"gap_mm":1.0,"edge_margin_mm":0,"end_margin_mm":0,"seam_allowance_mm":3},"purchasing":{"quotes":{"schema":"ftx-fabric-quotes/1","offers":[]},"market":{"currency":"EUR"},"finite_bindings":[]}}\r\n';
+  p.select('stockRequest',stock);p.select('cutJobRequest',job);
+  return {finite:{id:'stockRequest',raw:stock,field:'finite_stock',goal:'guidedFiniteCountGoal',metric:'used_stock_count'},
+    job:{id:'cutJobRequest',raw:job,field:'cutting_job',goal:'guidedJobAreaGoal',metric:'cutting_job_stock_area_m2'}};
+}
+
+test('guided finite and complete-job comparisons retain their original sources and active consumer ownership', async () => {
+  for(const mode of ['finite','job']) {
+    const p=await pageModule();await p.load();guidedControls(p);const candidate=guidedSelection();await addGuidedSelection(p,candidate);
+    const manufacturing=guidedManufacturingSources(p),sources=guidedStockSources(p),active=sources[mode];
+    p.e.guidedStockMode.value=mode;p.e.guidedStockMode.handlers.change();
+    p.e.guidedFiniteCountGoal.checked=true;p.e.guidedJobAreaGoal.checked=true;
+    p.e.guidedFiniteCountLimit.value=mode==='finite'?'2':'inactive limit';
+    p.e.guidedJobAreaLimit.value=mode==='job'?'0.25':'inactive limit';
+    p.e.guidedAreaLimit.value='inactive roll limit';p.e.guidedCopies.value='inactive quantity';
+    p.e.guidedRequireFinite.checked=true;p.e.guidedRequireJob.checked=true;
+    p.e.guidedRequireFiniteProgram.checked=true;p.e.guidedRequireJobProgram.checked=true;
+    p.e.guidedRequireJobPurchasing.checked=true;p.e.guidedRequirePurchasing.checked=true;
+    p.e.guidedSewTimeGoal.checked=true;p.e.guidedRequireSewing.checked=true;
+    p.e.guidedCombinedCost.checked=true;p.e.guidedCombinedCostGoal.checked=true;p.e.guidedRequireCombined.checked=true;
+    await p.e.study.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'study',p.e.error.textContent);
+    assert.ok(sent.studyRequest.includes(active.raw));assert.ok(sent.studyRequest.includes(candidate));
+    assert.ok(sent.studyRequest.includes(manufacturing.sewOptions));
+    for(const id of ['cutOptions','quotes','market'])assert.equal(sent.studyRequest.includes(manufacturing[id]),false,id);
+    const request=JSON.parse(sent.studyRequest),comparison=request.comparison;
+    for(const field of ['cutting','finite_stock','cutting_job'])assert.equal(Object.hasOwn(request,field),field===active.field,field);
+    assert.deepEqual(request[active.field],JSON.parse(active.raw));assert.equal(Object.hasOwn(request,'purchasing'),false);
+    assert.equal(Object.hasOwn(request,'cut_and_sew_purchasing'),mode==='job');
+    assert.deepEqual(comparison.objectives.map(x=>x.metric).sort(),
+      [active.metric,'sewing_modeled_production_seconds',...(mode==='job'?['cut_and_sew_selected_order_cost']:[])].sort());
+    assert.deepEqual(comparison.constraints,[{metric:active.metric,maximum:mode==='finite'?2:0.25}]);
+    assert.deepEqual(comparison.required_consumers.sort(),
+      (mode==='finite'?['finite_stock','finite_stock_program','sewing']:
+        ['cutting_job','cutting_job_program','cutting_job_purchasing','cut_and_sew_purchasing','sewing']).sort());
+    p.emit(studyReport(),[{name:'study-request.json',text:sent.studyRequest}]);
+    const link=descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(n=>n.download==='study-request.json');
+    assert.equal(await p.blobs.get(link.href).text(),sent.studyRequest);
+  }
+});
+
+test('guided stock modes retain separate goals and limits without reinterpreting units or discarding requirements', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);guidedStockSources(p);
+  p.e.guidedFiniteCountGoal.checked=true;p.e.guidedJobAreaGoal.checked=true;
+  p.e.guidedAreaLimit.value='10';p.e.guidedFiniteCountLimit.value='2';p.e.guidedJobAreaLimit.value='3';
+  p.e.guidedRequireCutting.checked=true;p.e.guidedRequireFinite.checked=true;p.e.guidedRequireJob.checked=true;
+  p.e.guidedMass.checked=true;p.e.guidedMassGoal.checked=true;p.e.guidedInventoryComplete.checked=true;p.e.guidedAllowance.value='3';
+  const output=section(p,'Fixed-pattern manufacturing alternatives');
+  for(const [mode,metric,maximum,consumer] of [['finite','used_stock_count',2,'finite_stock'],
+    ['job','cutting_job_stock_area_m2',3,'cutting_job'],['roll','stock_area_m2',10,'cutting']]) {
+    p.e.guidedStockMode.value=mode;p.e.guidedStockMode.handlers.change();
+    assert.equal(output.hidden,true);assert.equal(p.live.size,0);
+    await p.e.study.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'study',p.e.error.textContent);const request=JSON.parse(sent.studyRequest);
+    assert.deepEqual(request.comparison.constraints,[{metric,maximum}]);
+    assert.deepEqual(request.comparison.required_consumers,[consumer]);
+    assert.deepEqual(request.comparison.objectives.map(x=>x.metric).sort(),[metric,'assembly_mass_kg'].sort());
+    assert.equal(request.assembly_mass.seam_allowance_mm,3);
+    p.emit(studyReport(),[{name:'study-request.json',text:sent.studyRequest}]);
+  }
+  p.e.guidedStockMode.value='finite';p.e.guidedStockMode.handlers.change();
+  p.e.guidedCutting.checked=false;p.e.guidedCutting.handlers.change();
+  assert.equal(p.e.guidedFiniteCountGoal.checked,false);assert.equal(p.e.guidedAreaGoal.checked,true);
+  assert.equal(p.e.guidedJobAreaGoal.checked,true);assert.equal(p.e.guidedMassGoal.checked,true);
+  assert.equal(p.e.guidedFiniteCountLimit.value,'2');assert.equal(p.e.guidedRequireFinite.checked,true);
+  const before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/finite_stock/);
+});
+
+test('guided stock reads ignore inactive process sources but cancel when their retained source changes', async () => {
+  for(const mode of ['finite','job']) {
+    const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+    const sources=guidedStockSources(p),active=sources[mode],delay=deferred();let reading=false;
+    p.e.guidedStockMode.value=mode;p.e.guidedStockMode.handlers.change();p.e[active.goal].checked=true;
+    p.e[active.id].files[0].arrayBuffer=async()=>{reading=true;return new TextEncoder().encode(await delay.promise).buffer;};
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();assert.equal(reading,true);
+    for(const id of ['cutOptions','quotes','market','stockPricing','sewOptions','sewOptimize',mode==='finite'?'cutJobRequest':'stockRequest']) {
+      p.e[id].handlers.change();assert.equal(old.dead,false,id);
+    }
+    // The actual file object was captured before asynchronous reads began.
+    p.select(active.id,'{"replacement":true}');delay.resolve(active.raw);await running;
+    assert.equal(old.messages.length,before+1);const sent=old.messages.at(-1);
+    assert.equal(sent.type,'study',p.e.error.textContent);assert.ok(sent.studyRequest.includes(active.raw));
+    assert.equal(sent.studyRequest.includes('"replacement"'),false);
+    p.e[active.id].handlers.change();assert.equal(old.dead,true);p.ready();
+    old.emit({type:'result',request:sent.request,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});
+    assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);assert.equal(p.live.size,0);
+  }
+});
+
+test('guided stock mode changes and cancellation withdraw delayed reads and completed downloads', async () => {
+  for(const change of ['mode','cancel']) {
+    const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+    const active=guidedStockSources(p).finite;p.e.guidedStockMode.value='finite';p.e.guidedStockMode.handlers.change();
+    p.e[active.goal].checked=true;await p.e.study.onclick();
+    p.emit(studyReport(),[{name:'study-request.json',text:p.current().messages.at(-1).studyRequest}]);
+    const output=section(p,'Fixed-pattern manufacturing alternatives');assert.equal(output.hidden,false);
+    const delay=deferred();let reading=false;
+    p.e[active.id].files[0].arrayBuffer=async()=>{reading=true;return new TextEncoder().encode(await delay.promise).buffer;};
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();assert.equal(reading,true);
+    if(change==='mode'){p.e.guidedStockMode.value='job';p.e.guidedStockMode.handlers.change();}else p.e.cancel.onclick();
+    assert.equal(old.dead,true);p.ready();delay.resolve(active.raw);await running;
+    assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+    assert.equal(output.hidden,true);assert.equal(p.live.size,0);
+  }
+});
+
+test('guided finite and job inputs require their own original file and matching explicit route allowances', async () => {
+  for(const mode of ['finite','job']) {
+    const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+    p.e.guidedStockMode.value=mode;p.e.guidedStockMode.handlers.change();
+    const goal=mode==='finite'?'guidedFiniteCountGoal':'guidedJobAreaGoal';p.e[goal].checked=true;
+    const before=p.current().messages.length;await p.e.study.onclick();
+    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/original.*section 3/);
+    guidedStockSources(p);p.e.guidedAllowance.value='4';await p.e.study.onclick();
+    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/same explicit seam allowance/);
+    p.e.guidedAllowance.value='3';await p.e.study.onclick();
+    assert.equal(p.current().messages.at(-1).type,'study',p.e.error.textContent);
+  }
+});
+
 test('guided garment-mass-only comparison uses explicit complete inventory without roll-cutting inputs', async () => {
   const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
   p.e.guidedCutting.checked=false;p.e.guidedCutting.handlers.change();
@@ -12009,4 +12132,148 @@ test('compiled WASM guided production deadlines use qualified serial and paralle
       const missed=JSON.parse(ftx.material_study(pattern,build({...state,constraints:[{metric,maximum:known-0.1,basis:'nominal'}]})));
       assert.deepEqual(missed.comparison.frontier,[]);assert.equal(missed.alternatives[0].sewing.status,'available','An unmet comparison limit does not discard an independently computed schedule');
     }
+  });
+
+test('compiled WASM guided finite and mixed stock studies preserve shared inventory and independent refusals',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async t=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const module=new vm.SourceTextModule(read('materials-study-builder.js'));
+    await module.link(()=>{throw Error('Unexpected guided-builder import');});await module.evaluate();
+    const build=module.namespace.buildMaterialStudyRequest,w=await workerModule({bindings:ftx});let request=790;
+    const fixture=name=>fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials',name),'utf8');
+    const pattern=fixture('synthetic-stock-pattern.json'),inventory=' \n'+fixture('synthetic-stock-request.json')+'\r\n';
+    const pricing=JSON.parse(fixture('synthetic-stock-pricing.json'));
+    const mass={schema:'ftx-assembly-mass/1',inventory_complete:true,extras:[]};
+    const close=(actual,expected)=>assert.ok(Math.abs(actual-expected)<1e-12,actual+' != '+expected);
+    function choices(source) {
+      const material=JSON.parse(source).fabric.material,changed=structuredClone(material);
+      changed.record.properties.areal_density.value=0.75;
+      return [['same-stock',material],['unavailable-revision',changed]].map(([key,value])=>({
+        key,selection:' \n'+JSON.parse(ftx.material_inspect(JSON.stringify(value))).selection_json+'\r\n'}));
+    }
+    const candidates=choices(pattern);
+    async function evaluate(source,candidates,mode,raw,metrics,required) {
+      const objectives=metrics.map(metric=>({metric,direction:'minimize'}));
+      const state={candidates,target:{scope:'default'},pieceIds:JSON.parse(source).pieces.map(piece=>piece.id),
+        [mode]:raw,assemblyMass:mass,objectives,requiredConsumers:required,basis:'nominal'};
+      const studyRequest=build(state);
+      for(const original of [raw,...candidates.map(candidate=>candidate.selection)])assert.ok(studyRequest.includes(original));
+      // Authored independently of the builder result, using the native request field names.
+      const canonical={schema:'ftx-material-study/1',variants:[
+        {key:'baseline',changes:{schema:'ftx-material-bindings/1'}},
+        ...candidates.map(candidate=>({key:candidate.key,changes:{schema:'ftx-material-bindings/1',default:JSON.parse(candidate.selection)}}))],
+        [mode==='finiteStock'?'finite_stock':'cutting_job']:JSON.parse(raw),assembly_mass:mass,
+        comparison:{basis:'nominal',objectives,constraints:[],required_consumers:required,allow_mixed_protocols:false}};
+      assert.deepEqual(JSON.parse(studyRequest),canonical);
+      const result=await w.send({type:'study',request:++request,pattern:source,studyRequest});
+      assert.equal(result.type,'result',result.message);
+      assert.deepEqual(result.result,JSON.parse(ftx.material_study(source,JSON.stringify(canonical))));
+      assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
+      return result.result;
+    }
+    await t.test('each finite alternative gets the original item and missing process evidence preserves nesting',async()=>{
+      const report=await evaluate(pattern,candidates,'finiteStock',inventory,
+        ['used_stock_count','used_stock_mass_kg','assembly_mass_kg'],['finite_stock']);
+      assert.deepEqual(report.comparison.frontier,['baseline','same-stock']);
+      const [baseline,same,missing]=report.alternatives;
+      assert.deepEqual(same.finite_stock.result.markers,baseline.finite_stock.result.markers,
+        'Evaluating the baseline does not consume the inventory supplied to another alternative');
+      for(const row of [baseline,same]) {
+        assert.equal(row.finite_stock.status,'available');assert.equal(row.metrics.used_stock_count,1);
+        close(row.metrics.used_stock_gross_area_m2,6975/1e6);
+        close(row.metrics.used_stock_mass_kg,6975/1e6*0.5);
+        close(row.metrics.finite_stock_external_cut_area_m2,700/1e6);
+        close(row.metrics.assembly_mass_kg,700/1e6*0.5);
+      }
+      assert.equal(missing.finite_stock.status,'refused');assert.match(missing.finite_stock.refusal.message,/no stock matches/);
+      assert.equal(missing.assembly_mass.status,'available');close(missing.metrics.assembly_mass_kg,700/1e6*0.75);
+      assert.equal(Object.hasOwn(missing.metrics,'used_stock_count'),false);
+      const refused=JSON.parse(inventory);
+      refused.options.program={model:'qualified_cold_knife_paths/1',work_limit:1000,
+        machine:{id:'synthetic-unqualified-knife',blade:'synthetic-blade',bed_mm:[200,200],maximum_thickness_mm:2,
+          maximum_feed_mm_s:100,travel_mm_s:100,lift_lower_seconds:0.1,start_mm:[0,0],return_to_start:true},
+        qualifications:[{id:'stale-source',material_sha256:JSON.parse(candidates[0].selection).expected_sha256,
+          machine_sha256:'00'.repeat(32),thickness_mm:[0.1,1],feed_mm_s:20,directions:'all_in_plane',
+          evidence:'estimate',allow_estimates:true,
+          source:{reference:'test:guided-stale-process',accessed_on:'2026-10-20',note:'Invented process with an intentionally stale machine lock'},
+          method:'Synthetic source-lock refusal; no measured process claim'}]};
+      const denied=await evaluate(pattern,candidates,'finiteStock',' \n'+JSON.stringify(refused)+'\r\n',
+        ['finite_stock_modeled_path_seconds','assembly_mass_kg'],['finite_stock','finite_stock_program']);
+      assert.deepEqual(denied.comparison.frontier,[]);
+      for(const row of denied.alternatives.slice(0,2)) {
+        assert.equal(row.finite_stock.status,'available');
+        assert.deepEqual(row.finite_stock.result.markers,baseline.finite_stock.result.markers);
+        assert.match(row.finite_stock.result.program_refusal.message,/exact machine\/material locks/);
+        assert.equal(Object.hasOwn(row.metrics,'finite_stock_modeled_path_seconds'),false);
+        assert.equal(row.assembly_mass.status,'available');close(row.metrics.assembly_mass_kg,700/1e6*0.5);
+      }
+    });
+    await t.test('all-finite complete jobs price whole items and retain allocation under a pricing refusal',async()=>{
+      const job={schema:'ftx-cutting-job/1',routes:[{piece:'front',stock:'finite_stock'},{piece:'pocket',stock:'finite_stock'}],
+        finite_stock:JSON.parse(inventory),purchasing:{quotes:pricing.quotes,market:pricing.market,finite_bindings:pricing.bindings}};
+      const report=await evaluate(pattern,candidates,'cuttingJob',' \n'+JSON.stringify(job,null,2)+'\r\n',
+        ['cutting_job_selected_order_cost','assembly_mass_kg'],['cutting_job','cutting_job_purchasing']);
+      assert.deepEqual(report.comparison.frontier,['baseline','same-stock']);
+      const baseline=report.alternatives[0].cutting_job.result;
+      for(const row of report.alternatives.slice(0,2)) {
+        const plan=row.cutting_job.result;
+        assert.equal(row.cutting_job.status,'available');assert.equal(plan.complete_inventory,true);
+        assert.equal(plan.inventory.length,2);assert.equal(plan.roll,null);
+        assert.ok(plan.inventory.every(part=>part.stock==='finite_stock'));
+        assert.equal(plan.hardware_execution_authorized,false);
+        assert.equal(plan.purchasing.complete_offer_coverage,true);
+        assert.equal(row.metrics.cutting_job_selected_order_cost,17,'The dated offer prices one complete physical hide');
+        close(row.metrics.cutting_job_stock_area_m2,6975/1e6);
+        close(row.metrics.assembly_mass_kg,700/1e6*0.5);
+      }
+      assert.equal(report.alternatives[2].cutting_job.status,'refused');
+      assert.equal(report.alternatives[2].assembly_mass.status,'available');
+      const invalidPrice=structuredClone(job);invalidPrice.purchasing.market.currency='';
+      const denied=await evaluate(pattern,candidates,'cuttingJob',JSON.stringify(invalidPrice),
+        ['cutting_job_selected_order_cost','assembly_mass_kg'],['cutting_job','cutting_job_purchasing']);
+      assert.deepEqual(denied.comparison.frontier,[]);
+      for(const row of denied.alternatives.slice(0,2)) {
+        const plan=row.cutting_job.result;
+        assert.equal(row.cutting_job.status,'available');assert.equal(plan.complete_inventory,true);
+        assert.deepEqual(plan.inventory,baseline.inventory);assert.deepEqual(plan.finite_stock.markers,baseline.finite_stock.markers);
+        assert.equal(plan.purchasing.finite_stock.status,'refused');assert.equal(plan.purchasing.complete_offer_coverage,false);
+        assert.equal(Object.hasOwn(row.metrics,'cutting_job_selected_order_cost'),false);
+        assert.equal(row.assembly_mass.status,'available');close(row.metrics.assembly_mass_kg,700/1e6*0.5);
+      }
+    });
+    await t.test('fixed and material-specific mixed routes keep complete copy inventory and one-assembly mass',async()=>{
+      const source=fs.readFileSync(path.join(__dirname,'../examples/mixed-cutting/pattern.json'),'utf8');
+      const original=JSON.parse(fs.readFileSync(path.join(__dirname,'../examples/mixed-cutting/study.json'),'utf8')).cutting_job;
+      const selections=choices(source),routed=structuredClone(original);
+      routed.schema='ftx-cutting-job/2';routed.routes=routed.routes.filter(route=>route.piece==='lining');
+      routed.material_routes=[{piece:'shell',choices:selections.map(candidate=>({
+        material_sha256:JSON.parse(candidate.selection).expected_sha256,stock:'finite_stock'}))}];
+      for(const job of [original,routed]) {
+        const report=await evaluate(source,selections,'cuttingJob',' \n'+JSON.stringify(job,null,2)+'\r\n',
+          ['cutting_job_stock_area_m2','assembly_mass_kg'],['cutting_job']);
+        assert.deepEqual(report.comparison.frontier,['baseline','same-stock']);
+        for(const row of report.alternatives.slice(0,2)) {
+          const plan=row.cutting_job.result;
+          assert.equal(plan.complete_inventory,true);assert.equal(plan.inventory.length,6);
+          assert.equal(new Set(plan.inventory.map(part=>[part.piece,part.instance,part.copy].join('/'))).size,6);
+          assert.equal(plan.inventory.filter(part=>part.piece==='shell'&&part.stock==='finite_stock').length,4);
+          assert.equal(plan.inventory.filter(part=>part.piece==='lining'&&part.stock==='roll').length,2);
+          assert.deepEqual([...new Set(plan.inventory.map(part=>part.copy))].sort(),[0,1]);
+          close(row.metrics.cutting_job_external_cut_area_m2,0.003);
+          close(row.metrics.cutting_job_stock_area_m2,0.01+0.1*0.029);
+          close(row.metrics.cutting_job_stock_mass_kg,0.01*0.5+0.1*0.029*0.2);
+          close(row.metrics.assembly_mass_kg,2*0.0005*0.5+0.0005*0.2);
+          if(job.schema==='ftx-cutting-job/2') {
+            assert.equal(plan.schema,'ftx-cutting-job-plan/2');
+            assert.equal(plan.resolved_routes.find(route=>route.piece==='shell').stock,'finite_stock');
+          }
+        }
+        const missing=report.alternatives[2];
+        assert.equal(missing.cutting_job.status,'refused');assert.equal(missing.cutting_job.result,undefined);
+        assert.equal(missing.assembly_mass.status,'available');close(missing.metrics.assembly_mass_kg,0.00085);
+        assert.equal(Object.hasOwn(missing.metrics,'cutting_job_stock_area_m2'),false);
+      }
+    });
   });
