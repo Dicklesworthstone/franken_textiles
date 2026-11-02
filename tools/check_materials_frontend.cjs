@@ -2371,6 +2371,99 @@ test('selected-body manufacturing is opt-in and invalidates only current body-de
   p.e.bodyFitFile.handlers.change();p.e.body.handlers.change();assert.equal(p.live.size,1);
 });
 
+test('preview-pose tape studies retain exact measurements and explicit arm and leg controls', async () => {
+  const raw=' {"wearer":{"stature_mm":920.0},"probe":-0.0,"seed":18446744073709551615}\n';
+  for(const op of ['study','scenario']) for(const angle of ['50','0']) {
+    const p=await pageModule();await p.load();scenarioInputs(p);p.select('measurements',raw);
+    p.e.studyBodySource.value='preview';p.e.studyBodySource.handlers.change();
+    p.e.studyOnBody.checked=true;p.e.studyOnBody.handlers.change();
+    p.e.bodyArmDeg.value=angle;p.e.drapeLegs.value='seated';p.e.drapeLegFraction.value='0.25';
+    assert.equal(p.e[op].disabled,false,'The explicit preview-pose source needs no hand-authored body request');
+    await p.e[op].onclick();const msg=p.current().messages.at(-1);
+    assert.equal(msg.measurements,'{"schema":"ftx-scenario-body/1","measurements":'+raw+
+      ',"arm_abduction_deg":'+angle+',"legs":"seated","leg_fraction":0.25}');
+    assert.equal(msg.measurementAcceptedFit,undefined);
+  }
+});
+test('preview-pose studies refuse invalid controls and withdraw only consumed source edits', async () => {
+  for(const op of ['study','scenario']) {
+    const p=await pageModule();await p.load();scenarioInputs(p);p.e.studyOnBody.checked=true;
+    p.e.studyBodySource.value='preview';p.e.studyBodySource.handlers.change();
+    for(const [id,value] of [['bodyArmDeg',''],['bodyArmDeg','NaN'],['bodyArmDeg','181'],
+      ['drapeLegs','unknown'],['drapeLegFraction',''],['drapeLegFraction','NaN'],['drapeLegFraction','1.01']]) {
+      p.e.bodyArmDeg.value='50';p.e.drapeLegs.value='seated';p.e.drapeLegFraction.value='0.25';
+      p.e[id].value=value;const count=p.current().messages.length;await p.e[op].onclick();
+      assert.equal(p.current().messages.length,count);assert.equal(p.e.error.hidden,false);
+    }
+    for(const [id,event] of [['bodyArmDeg','input'],['drapeLegs','change'],['drapeLegFraction','input'],['measurements','change']]) {
+      p.e.bodyArmDeg.value='50';p.e.drapeLegs.value='seated';p.e.drapeLegFraction.value='0.25';
+      await p.e[op].onclick();p.emit(op==='study'?{alternatives:[]}:scenarioReport(),[{name:'body-input.json',text:'{}'}]);
+      const urls=[...p.live];p.e[id].handlers[event]();assert.ok(urls.every(url=>!p.live.has(url)));
+      const delay=deferred(),reading=deferred();p.e.measurements.files=[{size:2,text:()=>{reading.resolve();return delay.promise;}}];
+      const old=p.current(),running=p.e[op].onclick();await reading.promise;p.e[id].handlers[event]();
+      assert.equal(old.dead,true,`${op}: ${id} cancels an unfinished evidence read`);p.ready();delay.resolve('{}');await running;
+      assert.equal(p.current().messages.length,0);p.select('measurements');
+    }
+    await p.e[op].onclick();const old=p.current();
+    p.e.bodyFitFile.handlers.change();p.e.bodyFitConsent.handlers.change();p.e.scenarioBody.handlers.change();
+    assert.equal(old.dead,false,'The explicitly selected tape-fit source does not consume accepted/separate reports');
+  }
+});
+test('supplemental fusion retains a preview tape pose and refuses malformed pose transport before body loading', async () => {
+  const pose={arm_abduction_deg:0,legs:'seated',leg_fraction:0.25},primary=' {"probe":18446744073709551615}',
+    merged=' {"fused":-0.0,"seed":18446744073709551615}',calls=[];
+  const w=await workerModule({bindings:{default:async()=>{},measurement_file:raw=>{calls.push(['fuse',raw]);return merged;},
+    WebBody:class{constructor(){calls.push(['body']);}free(){}},
+    material_scenario_study:(_m,_p,_s,_r,body)=>{calls.push(['scenario',body]);return '{"simulations":[]}';}}});
+  const input={type:'scenario',pattern:'{}',studyRequest:'{}',scenarioRequest:'{}',bytes:new ArrayBuffer(1),
+    measurements:'{}',measurementPrimary:primary,measurementSources:'[{}]',measurementConsent:true,measurementPose:pose};
+  const result=await w.send(input);assert.equal(result.type,'result',result.message);
+  const expected='{"schema":"ftx-scenario-body/1","measurements":'+merged+',"arm_abduction_deg":0,"legs":"seated","leg_fraction":0.25}';
+  assert.equal(calls.at(-1)[1],expected);assert.equal(result.files.find(f=>f.name==='body-input.json').text,expected);
+  const before=calls.length;
+  for(const bad of [null,{},[],{...pose,unknown:1},{...pose,arm_abduction_deg:NaN},{...pose,legs:'unknown'},{...pose,leg_fraction:1.1}]) {
+    assert.equal((await w.send({...input,measurementPose:bad})).type,'error');assert.equal(calls.length,before);
+  }
+  assert.equal((await w.send({...input,measurementAcceptedFit:'{}'})).type,'error');assert.equal(calls.length,before);
+  const p=await pageModule();await p.load();scenarioInputs(p);p.e.studyBodySource.value='preview';p.e.studyBodySource.handlers.change();
+  p.e.supplementalFiles.files=[new Blob(['{"records":[]}'])];p.e.supplementalConsent.checked=true;
+  p.e.bodyArmDeg.value='0';p.e.drapeLegs.value='seated';p.e.drapeLegFraction.value='0.25';await p.e.scenario.onclick();
+  const msg=p.current().messages.at(-1);assert.deepEqual(plain(msg.measurementPose),pose);assert.equal(msg.measurementPrimary,'{"length":10.0}');
+});
+test('compiled WASM preview-pose studies fuse real evidence and reproduce native manufacturing and scenario reports',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_PREVIEW_STUDY_DIR||!process.env.FTX_ANNY_MODEL},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const dir=process.env.FTX_PREVIEW_STUDY_DIR,load=n=>fs.readFileSync(path.join(dir,n),'utf8'),bytes=fs.readFileSync(process.env.FTX_ANNY_MODEL);
+    const p=await pageModule(),w=await workerModule({bindings:ftx});p.select('patternFile',load('pattern.json'));await p.e.patternFile.onchange();
+    p.select('studyRequest',load('study.json'));p.select('measurements',load('primary.json'));
+    p.e.body.files=[new Blob([bytes])];p.e.body.handlers.change();
+    p.e.studyBodySource.value='preview';p.e.studyBodySource.handlers.change();p.e.studyOnBody.checked=true;p.e.studyOnBody.handlers.change();
+    p.e.bodyArmDeg.value='50';p.e.drapeLegs.value='seated';p.e.drapeLegFraction.value='0.001';
+    p.e.supplementalFiles.files=[new Blob([load('supplemental.json')])];p.e.supplementalConsent.checked=true;
+    for(const kind of ['manufacturing','single','matrix']) {
+      const op=kind==='manufacturing'?'study':'scenario';if(op==='scenario')p.select('scenarioRequest',load(kind+'.json'));
+      await p.e[op].onclick();const msg=p.current().messages.at(-1);
+      assert.equal(msg.measurementPrimary,load('primary.json'));assert.deepEqual(plain(msg.measurementPose),JSON.parse(load('pose.json')));
+      const result=await w.send(msg);assert.equal(result.type,'result',result.message);
+      assert.deepEqual(result.result,JSON.parse(load(kind+'-native.json')));
+      assert.equal(result.files.find(f=>f.name==='body-input.json').text,load('body-input.json'));
+      const body=JSON.parse(result.files.find(f=>f.name==='body-input.json').text);
+      assert.equal(body.arm_abduction_deg,50);assert.equal(body.legs,'seated');assert.equal(body.leg_fraction,0.001);
+      assert.equal(body.accepted_body_fit,undefined);assert.equal(body.measurements.measurement_imports[0],load('supplemental.json'));
+      if(kind==='single') {
+        const source=load('body-input.json'),at=source.lastIndexOf(',"arm_abduction_deg":');assert.ok(at>0);
+        const standing=await w.send({type:'scenario',pattern:msg.pattern,studyRequest:msg.studyRequest,scenarioRequest:msg.scenarioRequest,bytes:msg.bytes,
+          measurements:source.slice(0,at)+',"arm_abduction_deg":35,"legs":"standing","leg_fraction":1}'});
+        assert.equal(standing.type,'result',standing.message);
+        assert.notEqual(result.result.scenario.body_geometry_sha256,standing.result.scenario.body_geometry_sha256);
+        assert.deepEqual(result.result.scenario.body_fit.readings_mm,standing.result.scenario.body_fit.readings_mm,'Tape fitting retains its measurement pose');
+        assert.equal(result.result.scenario.body_fit.physical_validation_claim,false);
+      }
+      p.current().emit(result);
+    }
+  });
 test('selected accepted body supplies the same exact source to manufacturing, single and named scenario studies', async () => {
   const p=await pageModule();await p.load();scenarioInputs(p);
   const fit=' \r\n{"schema":"ftx-body-fit/1","probe":-0.0,"seed":18446744073709551615}\r\n',

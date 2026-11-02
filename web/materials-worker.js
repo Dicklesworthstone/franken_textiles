@@ -129,11 +129,20 @@ self.onmessage = async ({ data: msg }) => {
       }
       if (typeof msg.measurementSources !== "string") throw Error("Additional measurements must be original JSON text strings.");
       if (typeof ftx.measurement_file !== "function") throw Error("Rebuild web/pkg: missing shared measurement fusion.");
+      const pose = msg.measurementPose;
+      if (pose !== undefined && (!pose || typeof pose !== "object" || Array.isArray(pose) ||
+          Object.keys(pose).length !== 3 || Object.keys(pose).some(key => !["arm_abduction_deg", "legs", "leg_fraction"].includes(key)) ||
+          !Number.isFinite(pose.arm_abduction_deg) || pose.arm_abduction_deg < 0 || pose.arm_abduction_deg > 180 ||
+          !["standing", "seated", "squat"].includes(pose.legs) || !Number.isFinite(pose.leg_fraction) ||
+          pose.leg_fraction < 0 || pose.leg_fraction > 1 || msg.measurementAcceptedFit !== undefined)) {
+        throw Error("Supplemental tape-fit preview pose must contain valid arm and leg settings without an accepted-fit source.");
+      }
       const primary = msg.measurementPrimary ?? msg.measurements;
       json(primary); // Validate without reserializing full-width input numbers.
       const merged = ftx.measurement_file(`{"mode":"file","measurements":${primary},"supplemental_measurements":${msg.measurementSources},"supplemental_same_wearer":true}`, msg.today || "1970-01-01");
-      // A separate body request never enters this path. Retain the exact accepted report text.
-      msg.measurements = msg.measurementAcceptedFit === undefined ? merged :
+      // Separate body requests never enter fusion. Keep pose outside the merged evidence document.
+      msg.measurements = pose !== undefined ? `{"schema":"ftx-scenario-body/1","measurements":${merged},${JSON.stringify(pose).slice(1)}` :
+        msg.measurementAcceptedFit === undefined ? merged :
         `{"schema":"ftx-scenario-body/1","measurements":${merged},"accepted_body_fit":${msg.measurementAcceptedFit},"arm_abduction_deg":${msg.measurementArmDeg}}`;
     }
     if (msg.outfit) {

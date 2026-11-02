@@ -304,6 +304,10 @@ advanced manufacturing study to the selected body** is checked. Every mode uses 
 Fixed-pattern manufacturing without that constraint needs no body input.
 
 - **Fit section-3 measurements at 35°** uses the current measurements through the existing tape-fit authority.
+- **Fit section-3 measurements at preview pose** uses those measurements with the preview's arm angle,
+  leg posture and fraction, preserving them after supplemental measurement fusion. It performs ordinary
+  tape fitting and does not consume a selected accepted-fit report or its consent. Study solver settings
+  and authored motion remain explicit in the study request. Pose edits withdraw dependent results and pending work.
 - **Reuse the accepted shape and pose selected above** uses the original accepted report, current ordinary
   arm angle and explicit wearer association already selected for the preview. Pattern-to-material handoffs
   support this choice directly. Optional current measurements are compared with the accepted shape without

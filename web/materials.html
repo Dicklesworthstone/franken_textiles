@@ -641,9 +641,12 @@ Up to eight groups may target disjoint source pieces, with at most one default g
 </div>
 <label>Body source for body-dependent studies <select id="studyBodySource">
 <option value="measurements">Fit section-3 measurements at 35°</option>
+<option value="preview">Fit section-3 measurements at preview pose</option>
 <option value="accepted">Reuse the accepted shape and pose selected above</option>
 <option value="request">Use the separate body-source request below</option>
 </select></label>
+<p class="note">Preview-pose tape fitting uses the arm angle, leg posture and fraction in section 3, including after additional measurement fusion.
+It fits the current measurements and does not use a selected accepted-fit report. Study solver settings and authored motion remain in the study request.</p>
 <label><input id="studyOnBody" type="checkbox"> Constrain an advanced manufacturing study to the selected body</label>
 <p class="note">Guided linked alterations use this body source automatically. An advanced study requires <code>design_fit</code>
   in its request, the section-3 local model and the selected body source.

@@ -78,12 +78,13 @@ function studyBodyReady() {
   const mode = studyBodyMode();
   if (mode === "accepted") return has("bodyFitFile") && $("bodyFitConsent").checked;
   if (mode === "request") return has("scenarioBody");
-  return mode === "measurements" && has("measurements");
+  return ["measurements", "preview"].includes(mode) && has("measurements");
 }
 function bodyDependentStudies(id) {
   const mode = studyBodyMode();
   const used = id === "body" || (id === "scenarioBody" && mode === "request") ||
-    (id === "measurements" && (mode === "measurements" || mode === "accepted")) ||
+    (id === "measurements" && ["measurements", "accepted", "preview"].includes(mode)) ||
+    (["bodyArmDeg", "drapeLegs", "drapeLegFraction"].includes(id) && mode === "preview") ||
     (["bodyFitFile", "bodyFitConsent", "bodyArmDeg"].includes(id) && mode === "accepted");
   return used ? ["scenario", ...(studyUsesBody() ? ["study"] : [])] : [];
 }
@@ -3735,6 +3736,17 @@ async function measurementInput(msg) {
 async function studyBodyInput(msg) {
   const mode = studyBodyMode();
   if (mode === "measurements") return measurementInput(msg);
+  if (mode === "preview") {
+    const fraction = $("drapeLegFraction").value.trim();
+    const pose = { arm_abduction_deg: drapeArmAngle(), legs: $("drapeLegs").value, leg_fraction: Number(fraction) };
+    if (!fraction || !["standing", "seated", "squat"].includes(pose.legs) ||
+        !Number.isFinite(pose.leg_fraction) || pose.leg_fraction < 0 || pose.leg_fraction > 1) {
+      throw Error("Choose standing, seated or squat legs and a finite leg fraction from 0 to 1.");
+    }
+    const measurements = await measurementInput(msg);
+    if (msg.measurementSources !== undefined) { msg.measurementPrimary = measurements; msg.measurementPose = pose; }
+    return '{"schema":"ftx-scenario-body/1","measurements":' + measurements + ',' + JSON.stringify(pose).slice(1);
+  }
   if (mode === "request") return read("scenarioBody");
   if (mode !== "accepted") throw Error("Choose a supported study body source.");
   if (!has("bodyFitFile")) throw Error("Choose an accepted body-fit report for the selected study body source.");
@@ -4467,13 +4479,15 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     const guidedKeys = guidedSourceStudies(id);
     const guidedProcessSource = guidedStudyMode() && ["cutOptions", "stockRequest", "stockPricing", "cutJobRequest",
       "sewOptions", "sewOptimize", "quotes", "market"].includes(id);
-    invalidate([...keys, ...bodyDependentStudies(id), ...guidedKeys], guidedProcessSource || guidedKeys.length > 0 || ["measurements", "fit", "body", "selfContact", "scenarioBody", "heatConditions"].includes(id));
+    invalidate([...keys, ...bodyDependentStudies(id), ...guidedKeys], guidedProcessSource || guidedKeys.length > 0 ||
+      (studyBodyMode() === "preview" && ["drapeLegs", "drapeLegFraction"].includes(id)) ||
+      ["measurements", "fit", "body", "selfContact", "scenarioBody", "heatConditions"].includes(id));
   });
 }
 for (const id of ["drapeLegFraction", "maxSettleSteps"]) {
   $(id).addEventListener("input", () => {
     ++roundRead; roundToken = null; window.opener = null;
-    invalidate(["fold", "heat", "vaporSurface", "coverage"], true);
+    invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
   });
 }
 $("bodyFitFile").addEventListener("change", () => {
