@@ -400,26 +400,53 @@ Its scalar frontier is not a garment ranking. Original observations and protocol
 <p class="note">Changing the default does not replace an explicit lining or cuff material. Choose every piece or exact pieces
 to replace those assignments. Current section-2 preview edits are not part of the original baseline.</p>
 <fieldset><legend>Fit-driven linked alterations</legend>
-<label><input id="guidedDesign" type="checkbox"> Search explicitly listed slash-and-spread alterations against the selected body</label>
+<label><input id="guidedDesign" type="checkbox"> Search linked alterations against the selected body</label>
 <div id="guidedDesignControls" hidden>
+<div id="guidedDesignVariables" aria-label="Ordered alteration variables"></div>
+<button id="guidedDesignAdd" type="button" disabled>Add another variable</button>
+<p class="note">Use up to three variables for coupled changes such as width, length and local shaping. Select a variable to edit it;
+all variables are applied in their displayed order to each fresh copy of the original pattern.</p>
+<div class="study-fields">
+<label>Variable name <input id="guidedDesignKey" type="text" maxlength="128" value="linked_adjustment"></label>
+<label>Linked alteration <select id="guidedDesignKind"><option value="slash">Slash and spread selected pieces</option>
+<option value="move">Move selected source vertices</option></select></label>
+</div>
+<div id="guidedDesignSlash">
 <label>Source pieces to alter together <select id="guidedDesignPieces" multiple size="4" disabled
 aria-label="Source pieces for linked alterations"></select></label>
-<p class="note">Choose 1–16 original source pieces independently of the material assignment above. Each uses the same cut coordinate
-on its own outline. Every design starts from the original pattern; it does not accumulate earlier alterations.</p>
+<p class="note">Each selected piece uses the same cut coordinate on its own outline, independently of the material assignment above.</p>
 <div class="study-fields">
 <label>Source coordinate axis <select id="guidedDesignAxis"><option value="x">x</option><option value="y">y</option></select></label>
 <label>Cut coordinate on each selected piece (mm) <input id="guidedDesignAt" type="number" step="any"></label>
 <label>Value multiplier for each selected piece <input id="guidedDesignMultiplier" type="number" step="any" value="1"></label>
-<label>Maximum first passing altered designs <input id="guidedDesignMax" type="number" min="1" max="31" step="1" value="1"></label>
 </div>
-<label>Listed values, mm per selected source piece before the multiplier
+</div>
+<div id="guidedDesignMove" hidden>
+<label>Original source vertices <select id="guidedDesignVertices" multiple size="6" disabled
+aria-label="Source vertices for linked movement"></select></label>
+<p id="guidedDesignVertexStatus" class="note" role="status" hidden></p>
+<div class="study-fields">
+<label>Horizontal movement per listed millimetre <input id="guidedDesignDx" type="number" step="any"></label>
+<label>Vertical movement per listed millimetre <input id="guidedDesignDy" type="number" step="any"></label>
+</div>
+<p class="note">Choose exact piece / vertex pairs. At least one movement component must be nonzero. Relative curves follow their
+endpoints; independent marks stay fixed. Canonical outline, seam and fit checks still decide whether a design is usable.</p>
+</div>
+<label>Listed variable values, mm before the site multipliers
 <input id="guidedDesignValues" type="text" maxlength="4096" placeholder="Enter comma-separated values in increasing order"></label>
-<p class="note">Declare 1–64 finite, strictly increasing values and a nonzero multiplier. Each piece receives its own addition of
-the listed value times that multiplier; this is not a total garment circumference adjustment. No range or alteration amount is inferred.</p>
+<p class="note">Declare 1–64 finite, strictly increasing values per variable. Each site receives its own movement from that value;
+this is not a total garment circumference adjustment. Up to 16 sites are allowed across all variables.</p>
+<div class="study-fields">
+<label>Maximum first passing altered designs <input id="guidedDesignMax" type="number" min="1" max="31" step="1" value="1"></label>
+<label>Maximum grid points to screen <input id="guidedDesignGridBudget" type="number" min="1" max="256" step="1"
+placeholder="All combinations, up to 256"></label>
+</div>
+<p class="note">Blank screening allowance requests every listed combination and refuses a domain above 256 points. An explicit allowance
+screens a deterministic prefix without dropping the rest of the declared domain; unvisited combinations remain unknown.</p>
 <p>Load the original garment fit contract in <a href="#materialConsumers">section 3</a>, with 1–32 explicit points of measure
 and a maximum file size of 256 KiB. Select the local body model and a body source below. Both comparison actions use those
 targets to screen geometry and fit before evaluating each retained design with every material choice.</p>
-<p class="note">The cap retains the first passing alterations in the listed order, not the cheapest alterations or a global optimum.
+<p class="note">The passing-design cap retains the first qualified combinations in grid order. It does not establish a cost minimum or global optimum.
 The unchanged geometry is additional to the cap; the complete geometry × material comparison is limited to 32 rows.
 Rejected, passing-but-unselected and unvisited candidates stay visible in the report. Computed model compliance does not establish
 fit on a real wearer. Loading or adopting another pattern clears these alteration settings so spreads are not applied again.</p>

@@ -163,30 +163,86 @@ function completeCuttingJob(value) {
   return request;
 }
 
-function linkedDesign(value, pieces, materialCount) {
-  const fields = ["pieceIds", "axis", "atMm", "multiplier", "values", "maxDesigns", "fitSpec"];
-  const design = object(value, fields, fields, "Linked design");
-  const selected = uniqueNames(design.pieceIds, "Altered source pieces", 16);
-  if ([...selected].some(id => !pieces.has(id))) throw Error("Alteration names a missing source piece.");
-  if (!["x", "y"].includes(design.axis) || typeof design.atMm !== "number" || !Number.isFinite(design.atMm) ||
-    typeof design.multiplier !== "number" || !Number.isFinite(design.multiplier) || design.multiplier === 0) {
-    throw Error("Linked alterations need an x/y axis, finite cut coordinate and finite nonzero multiplier.");
-  }
-  if (!Array.isArray(design.values) || !design.values.length || design.values.length > 64 ||
-    Array.from(design.values).some((value, index) => typeof value !== "number" || !Number.isFinite(value) ||
-      (index > 0 && design.values[index - 1] >= value))) {
+function linkedValues(values) {
+  if (!Array.isArray(values) || !values.length || values.length > 64 ||
+    Array.from(values).some((value, index) => typeof value !== "number" || !Number.isFinite(value) ||
+      (index > 0 && values[index - 1] >= value))) {
     throw Error("Linked design needs 1–64 finite strictly increasing millimetre values.");
   }
-  for (const value of design.values) {
-    const displacement = value * design.multiplier;
-    if (!Number.isFinite(displacement) || (value !== 0 && displacement === 0)) {
+  return values;
+}
+
+function linkedSite(value, pieces, values) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("Linked alteration site must be an object.");
+  const move = own(value, "op");
+  const fields = move ? ["op", "piece", "vertex", "dx_multiplier", "dy_multiplier"] : ["piece", "axis", "at_mm", "multiplier"];
+  const site = object(value, fields, fields, "Linked alteration site");
+  name(site.piece, "Altered source piece");
+  if (!pieces.has(site.piece)) throw Error("Alteration names a missing source piece.");
+  let multipliers;
+  if (move) {
+    if (site.op !== "move") throw Error("A vertex site requires the explicit move operation.");
+    name(site.vertex, "Altered source vertex");
+    multipliers = [site.dx_multiplier, site.dy_multiplier];
+    if (multipliers.some(n => typeof n !== "number" || !Number.isFinite(n)) || multipliers.every(n => n === 0)) {
+      throw Error("Linked vertex moves need finite x/y multipliers, at least one nonzero.");
+    }
+  } else {
+    if (!["x", "y"].includes(site.axis) || typeof site.at_mm !== "number" || !Number.isFinite(site.at_mm) ||
+      typeof site.multiplier !== "number" || !Number.isFinite(site.multiplier) || site.multiplier === 0) {
+      throw Error("Linked alterations need an x/y axis, finite cut coordinate and finite nonzero multiplier.");
+    }
+    multipliers = [site.multiplier];
+  }
+  for (const value of values) for (const multiplier of multipliers) {
+    const displacement = value * multiplier;
+    if (!Number.isFinite(displacement) || (value !== 0 && multiplier !== 0 && displacement === 0)) {
       throw Error("Linked design displacement overflows or underflows; no alteration is silently dropped.");
     }
+  }
+  return move ? { op: "move", piece: site.piece, vertex: site.vertex,
+    dx_multiplier: site.dx_multiplier, dy_multiplier: site.dy_multiplier } :
+    { piece: site.piece, axis: site.axis, at_mm: site.at_mm, multiplier: site.multiplier };
+}
+
+function linkedDesign(value, pieces, materialCount) {
+  const multiple = !!value && typeof value === "object" && own(value, "variables");
+  const fields = multiple ? ["variables", "maxDesigns", "fitSpec"] :
+    ["pieceIds", "axis", "atMm", "multiplier", "values", "maxDesigns", "fitSpec"];
+  const design = object(value, multiple ? [...fields, "maxCandidates"] : fields, fields, "Linked design");
+  let authored = design.variables;
+  if (!multiple) {
+    const selected = uniqueNames(design.pieceIds, "Altered source pieces", 16);
+    if ([...selected].some(id => !pieces.has(id))) throw Error("Alteration names a missing source piece.");
+    authored = [{ key: "linked_adjustment", values: design.values,
+      sites: design.pieceIds.map(piece => ({ piece, axis: design.axis, at_mm: design.atMm, multiplier: design.multiplier })) }];
+  }
+  if (!Array.isArray(authored) || !authored.length || authored.length > 3) throw Error("Linked design needs 1–3 variables.");
+  const keys = new Set();
+  let totalPoints = 1, totalSites = 0;
+  const variables = Array.from(authored, value => {
+    const variable = object(value, ["key", "values", "sites"], ["key", "values", "sites"], "Linked variable");
+    name(variable.key, "Linked variable key");
+    if (keys.has(variable.key)) throw Error("Linked variable keys must be unique.");
+    keys.add(variable.key);
+    const values = linkedValues(variable.values);
+    if (!Array.isArray(variable.sites) || !variable.sites.length) throw Error("Each linked variable needs alteration sites.");
+    totalSites += variable.sites.length;
+    if (totalSites > 16) throw Error("Linked design exceeds 16 ordered alteration sites per generated design.");
+    totalPoints *= values.length;
+    return { key: variable.key, values_mm: values, sites: Array.from(variable.sites, site => linkedSite(site, pieces, values)) };
+  });
+  if (!own(design, "maxCandidates") && totalPoints > 256) {
+    throw Error("Linked grid exceeds 256 points; declare maxCandidates from 1 to 256 for explicit prefix screening.");
+  }
+  const maxCandidates = own(design, "maxCandidates") ? design.maxCandidates : totalPoints;
+  if (!Number.isSafeInteger(maxCandidates) || maxCandidates < 1 || maxCandidates > 256) {
+    throw Error("The linked fit-screening allowance must be an integer from 1 to 256.");
   }
   if (!Number.isSafeInteger(design.maxDesigns) || design.maxDesigns < 1 || design.maxDesigns > 31) {
     throw Error("The passing-design allowance must be an integer from 1 to 31.");
   }
-  if ((Math.min(design.values.length, design.maxDesigns) + 1) * materialCount > 32) {
+  if ((Math.min(totalPoints, design.maxDesigns) + 1) * materialCount > 32) {
     throw Error("Linked design exceeds 32 expanded design/material alternatives including both baselines; reduce its passing-design allowance or material shortlist.");
   }
   if (typeof design.fitSpec !== "string") throw Error("Design fit contract must retain its original JSON text.");
@@ -195,9 +251,7 @@ function linkedDesign(value, pieces, materialCount) {
   if ((own(fit, "schema") && fit.schema !== "fabric-fit/1") || !Array.isArray(fit.points) || !fit.points.length || fit.points.length > 32) {
     throw Error("Design fit needs 1–32 explicit points and fabric-fit/1 when a schema is supplied.");
   }
-  const grid = JSON.stringify({ variables: [{ key: "linked_adjustment", values_mm: design.values,
-    sites: design.pieceIds.map(piece => ({ piece, axis: design.axis, at_mm: design.atMm, multiplier: design.multiplier })) }],
-    max_designs: design.maxDesigns, fit_screening: { max_candidates: design.values.length } });
+  const grid = JSON.stringify({ variables, max_designs: design.maxDesigns, fit_screening: { max_candidates: maxCandidates } });
   bytes(grid, 256 * 1024, "Linked design grid exceeds 256 KiB of authored domain data.");
   return { grid, fitSpec: design.fitSpec };
 }
@@ -214,7 +268,8 @@ function linkedDesign(value, pieces, materialCount) {
  * protocol consent is inferred. Original source text is embedded verbatim, including locked numbers.
  * Optional scenario context describes the separately dispatched drape/heat request, is never
  * serialized into the study, and does not enable scenario consumers in manufacturing-only calls.
- * Optional `design` authors one shared slash-spread variable and retains the original fit contract;
+ * Optional `design` authors ordered linked grid variables and retains the original fit contract;
+ * the original single-slash-variable shape remains supported without changing its serialized request.
  * its selected-body dispatch and canonical geometry/fit admission remain with the caller and Rust.
  */
 export function buildMaterialStudyRequest(state, scenario) {

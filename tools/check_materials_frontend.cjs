@@ -1335,7 +1335,7 @@ class Element {
 async function pageModule({roundToken=null}={}) {
   const html = read('materials.html');
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
-  for(const id of ['studyPieces','guidedDesignPieces'])
+  for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices'])
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
@@ -6337,8 +6337,10 @@ function configureGuidedDesign(p) {
   const fit=' {"schema":"fabric-fit/1","points":[{"id":"length","kind":"vertical","instance":"front","from":"a","to":"d","body":"stature","body_scale":0.1,"target_mm":[-0.1,0.0,0.1]}],"source":{"sample":18446744073709551615,"signed":-0.0,"value":1.0}}\r\n';
   p.select('fit',fit);p.e.fit.handlers.change();p.e.guidedDesign.handlers.change();return fit;
 }
-async function guidedDesignSetup() {
-  const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+async function guidedDesignSetup(pattern) {
+  const p=await pageModule();
+  if(pattern){p.select('patternFile',pattern);await p.e.patternFile.onchange();}else await p.load();
+  guidedControls(p);await addGuidedSelection(p);
   const fit=configureGuidedDesign(p),body=' {"schema":"ftx-scenario-body/1","measurements":{},"arm_abduction_deg":35.0}\r\n';
   p.select('scenarioBody',body);p.e.scenarioBody.handlers.change();
   p.e.studyBodySource.value='request';p.e.studyBodySource.handlers.change();
@@ -6418,6 +6420,183 @@ test('guided linked design snapshots, fit-source budgets and body edits prevent 
     const before=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,before,invalid);
     assert.ok(p.e.error.textContent,invalid);if(invalid==='oversize')assert.equal(reads,0);
   }
+});
+
+const coupledDesignPattern=' {"pieces":[{"id":"front","vertices":{"hem:outer":[0.0,100.0],"top":[-0.0,0.0]}},{"id":"lining","vertices":{"a<β>":[0.0,100.0],"top":[10.0,0.0]}}],"source":{"sample":18446744073709551615,"value":1.0,"signed":-0.0}}\r\n';
+function guidedDesignField(p,id,value,event='input') {
+  p.e[id].value=value;p.e[id].handlers[event]();
+}
+function guidedDesignAction(p,label) {
+  const button=descendants(p.e.guidedDesignVariables).find(n=>n.tag==='button'&&n.textContent===label);
+  assert.ok(button,label);assert.equal(button.disabled,false,label);button.onclick();
+}
+function guidedMoveVariable(p,key='taper') {
+  guidedDesignField(p,'guidedDesignKey',key);
+  guidedDesignField(p,'guidedDesignKind','move','change');
+  guidedDesignField(p,'guidedDesignValues','-2,0,2');
+  guidedDesignField(p,'guidedDesignDx','-0.5');guidedDesignField(p,'guidedDesignDy','0');
+  const chosen=[JSON.stringify(['front','hem:outer']),JSON.stringify(['lining','a<β>'])];
+  for(const option of p.e.guidedDesignVertices.children)option.selected=chosen.includes(option.value);
+  p.e.guidedDesignVertices.handlers.change();
+}
+async function coupledDesignSetup() {
+  const setup=await guidedDesignSetup(coupledDesignPattern),p=setup.p;
+  guidedDesignField(p,'guidedDesignKey','length');guidedDesignField(p,'guidedDesignValues','0,10');
+  p.e.guidedDesignAdd.onclick();guidedMoveVariable(p);return setup;
+}
+
+test('guided coupled designs dispatch ordered slash and exact source-vertex sites with bounded grid screening',async()=>{
+  const {p,fit,body}=await coupledDesignSetup();
+  p.e.studyTarget.value='pieces';p.e.studyTarget.handlers.change();
+  for(const option of p.e.studyPieces.children)option.selected=option.value==='lining';
+  p.e.studyPieces.handlers.change();guidedDesignField(p,'guidedDesignGridBudget','4');
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);assert.equal(sent.onBody,true);
+  assert.equal(sent.pattern,coupledDesignPattern);assert.equal(sent.measurements,body);assert.ok(sent.studyRequest.includes(fit));
+  const request=JSON.parse(sent.studyRequest);
+  assert.deepEqual(request.design_grid,{variables:[
+    {key:'length',values_mm:[0,10],sites:['front','lining'].map(piece=>({piece,axis:'y',at_mm:50,multiplier:1}))},
+    {key:'taper',values_mm:[-2,0,2],sites:[{op:'move',piece:'front',vertex:'hem:outer',dx_multiplier:-0.5,dy_multiplier:0},
+      {op:'move',piece:'lining',vertex:'a<β>',dx_multiplier:-0.5,dy_multiplier:0}]}],
+    max_designs:1,fit_screening:{max_candidates:4}});
+  assert.deepEqual(Object.keys(request.variants[1].changes.pieces),['lining']);
+  assert.equal(Object.hasOwn(request,'design_adaptive'),false);
+  const report={...studyReport(),schema:'ftx-design-study-report/1'};
+  const w=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){}},material_study_on_body:(_model,...args)=>{
+    assert.deepEqual(args,[coupledDesignPattern,sent.studyRequest,body]);return JSON.stringify(report);
+  }}});
+  const result=await w.send(sent);assert.equal(result.type,'result',result.message);p.current().emit(result);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  for(const [name,raw] of [['study-request.json',sent.studyRequest],['body-input.json',body],['original-pattern.json',coupledDesignPattern]]) {
+    const link=descendants(s).find(n=>n.download===name);assert.ok(link,name);assert.equal(await p.blobs.get(link.href).text(),raw);
+  }
+});
+
+test('guided coupled variable edits preserve draft controls and authored order across navigation and removal',async()=>{
+  const {p}=await coupledDesignSetup();p.e.guidedDesignAdd.onclick();
+  guidedDesignField(p,'guidedDesignKey','width');guidedDesignField(p,'guidedDesignValues','0,5');
+  guidedDesignField(p,'guidedDesignAt','20');guidedDesignField(p,'guidedDesignMultiplier','-1');
+  for(const option of p.e.guidedDesignPieces.children)option.selected=option.value==='front';
+  p.e.guidedDesignPieces.handlers.change();assert.equal(p.e.guidedDesignAdd.disabled,true);
+  guidedDesignAction(p,'Edit length');assert.equal(p.e.guidedDesignValues.value,'0,10');
+  assert.equal(p.e.guidedDesignAxis.value,'y');assert.equal(p.e.guidedDesignPieces.selectedOptions.length,2);
+  guidedDesignField(p,'guidedDesignValues','0,3');guidedDesignAction(p,'Edit taper');
+  assert.equal(p.e.guidedDesignKind.value,'move');assert.equal(p.e.guidedDesignDx.value,'-0.5');
+  assert.equal(p.e.guidedDesignVertices.selectedOptions.length,2);guidedDesignAction(p,'Move width earlier');
+  await p.e.study.onclick();let sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+  let variables=JSON.parse(sent.studyRequest).design_grid.variables;
+  assert.deepEqual(variables.map(v=>v.key),['length','width','taper']);assert.deepEqual(variables[0].values_mm,[0,3]);
+  assert.deepEqual(variables[1].sites,[{piece:'front',axis:'x',at_mm:20,multiplier:-1}]);
+  assert.equal(variables[2].sites[1].vertex,'a<β>');p.emit(studyReport());
+  guidedDesignAction(p,'Remove width');assert.equal(p.e.guidedDesignAdd.disabled,false);
+  assert.equal(p.e.guidedDesignKey.value,'taper');await p.e.study.onclick();sent=p.current().messages.at(-1);
+  variables=JSON.parse(sent.studyRequest).design_grid.variables;assert.deepEqual(variables.map(v=>v.key),['length','taper']);
+  assert.deepEqual(variables[0].values_mm,[0,3]);assert.equal(variables[1].sites.length,2);
+});
+
+test('guided coupled designs clear every variable and vertex on source replacement or candidate adoption',async()=>{
+  for(const change of ['source','adoption']) {
+    const {p}=await coupledDesignSetup();guidedDesignField(p,'guidedDesignGridBudget','2');
+    const replacement=' {"pieces":[{"id":"new","vertices":{"fresh":[1.0,-0.0]}}],"source":18446744073709551615}\r\n';
+    if(change==='source'){p.select('patternFile',replacement);await p.e.patternFile.onchange();}
+    else {
+      await p.e.study.onclick();assert.equal(p.current().messages.at(-1).type,'study',p.e.error.textContent);
+      p.emit({...studyReport([studyRow('chosen',replacement)]),schema:'ftx-design-study-report/1'},[{name:'old.json',text:'{}'}]);
+      descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(n=>n.tag==='button'&&n.textContent==='Use chosen pattern').onclick();
+    }
+    assert.equal(p.e.guidedDesign.checked,false);assert.equal(p.e.guidedDesignKey.value,'linked_adjustment');
+    assert.equal(p.e.guidedDesignKind.value,'slash');assert.equal(p.e.guidedDesignValues.value,'');
+    assert.equal(p.e.guidedDesignAt.value,'');assert.equal(p.e.guidedDesignGridBudget.value,'');
+    assert.equal(p.e.guidedDesignVariables.children.length,1);assert.equal(p.e.guidedDesignPieces.selectedOptions.length,0);
+    assert.equal(p.e.guidedDesignVertices.children.length,0,'Source loading does not build an unused vertex picker');
+    p.e.guidedDesign.checked=true;p.e.guidedDesign.handlers.change();
+    guidedDesignField(p,'guidedDesignKind','move','change');
+    assert.deepEqual(p.e.guidedDesignVertices.children.map(n=>n.value),[JSON.stringify(['new','fresh'])]);
+    assert.equal(p.e.guidedDesignVertices.selectedOptions.length,0);assert.equal(p.e.studyCandidates.children.length,0);
+    assert.equal(p.live.size,0);assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  }
+});
+
+test('guided coupled edits cancel pending fit reads and cannot publish stale studies or source downloads',async()=>{
+  for(const change of ['key','vertices','movement','budget','other-variable','remove','reorder','add']) {
+    const {p,fit}=await coupledDesignSetup(),delay=deferred();let reading=false;
+    p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return new TextEncoder().encode(await delay.promise).buffer;};
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();assert.equal(reading,true,change);
+    if(change==='key')guidedDesignField(p,'guidedDesignKey','renamed');
+    else if(change==='vertices'){p.e.guidedDesignVertices.children[0].selected=false;p.e.guidedDesignVertices.handlers.change();}
+    else if(change==='movement')guidedDesignField(p,'guidedDesignDx','0.25');
+    else if(change==='budget')guidedDesignField(p,'guidedDesignGridBudget','2');
+    else if(change==='other-variable'){
+      guidedDesignAction(p,'Edit length');assert.equal(old.dead,false,'Editor navigation leaves the immutable request running');
+      guidedDesignField(p,'guidedDesignValues','0,20');
+    }
+    else if(change==='remove')guidedDesignAction(p,'Remove length');
+    else if(change==='reorder')guidedDesignAction(p,'Move taper earlier');else p.e.guidedDesignAdd.onclick();
+    assert.equal(old.dead,true,change);p.ready();delay.resolve(fit);await running;
+    assert.equal(old.messages.length,before,change);assert.equal(p.current().messages.length,0,change);
+    old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});
+    assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true,change);assert.equal(p.live.size,0,change);
+  }
+});
+
+test('guided coupled domains refuse duplicate keys, unbounded grids and incomplete variables without silently dropping them',async()=>{
+  const {p}=await coupledDesignSetup();const before=p.current().messages.length;
+  guidedDesignField(p,'guidedDesignKey','length');await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/unique|duplicate/i);
+  guidedDesignField(p,'guidedDesignKey','taper');guidedDesignField(p,'guidedDesignValues',Array.from({length:17},(_,i)=>i).join(','));
+  guidedDesignAction(p,'Edit length');guidedDesignField(p,'guidedDesignValues',Array.from({length:17},(_,i)=>i).join(','));
+  await p.e.study.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/256|screen/i);
+  guidedDesignField(p,'guidedDesignGridBudget','5');await p.e.study.onclick();let sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);assert.equal(JSON.parse(sent.studyRequest).design_grid.fit_screening.max_candidates,5);
+  assert.deepEqual(JSON.parse(sent.studyRequest).design_grid.variables.map(v=>v.values_mm.length),[17,17]);p.emit(studyReport());
+  p.e.guidedDesignAdd.onclick();const incomplete=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,incomplete);assert.ok(p.e.error.textContent);
+  assert.equal(p.e.guidedDesignVariables.children.length,3);assert.equal(p.e.guidedDesignAdd.disabled,true);
+  p.e.guidedDesignAdd.onclick();assert.equal(p.e.guidedDesignVariables.children.length,3);assert.match(p.e.error.textContent,/three/);
+});
+
+test('guided source-vertex choices are lazy, cached and bounded without blocking other study modes',async()=>{
+  const {p}=await guidedDesignSetup(coupledDesignPattern);
+  assert.equal(p.e.guidedDesignVertices.children.length,0,'Slash studies do not populate unused source vertices');
+  guidedDesignField(p,'guidedDesignKind','move','change');assert.equal(p.e.guidedDesignVertices.children.length,4);
+  const option=p.e.guidedDesignVertices.children[0];option.selected=true;p.e.guidedDesignVertices.handlers.change();
+  guidedDesignField(p,'guidedDesignKind','slash','change');guidedDesignField(p,'guidedDesignKind','move','change');
+  assert.equal(p.e.guidedDesignVertices.children[0],option,'Unchanged source choices are reused');assert.equal(option.selected,true);
+  for(const count of [2048,2049]) {
+    const pattern=JSON.stringify({pieces:[{id:'front',vertices:Object.fromEntries(Array.from({length:count},(_,i)=>['v'+i,[i,0]]))}]});
+    const {p}=await guidedDesignSetup(pattern);assert.equal(p.e.guidedDesignVertices.children.length,0);
+    guidedDesignField(p,'guidedDesignKind','move','change');guidedDesignField(p,'guidedDesignDx','1');
+    guidedDesignField(p,'guidedDesignDy','0');guidedDesignField(p,'guidedDesignValues','0,1');
+    if(count===2048) {
+      assert.equal(p.e.guidedDesignVertices.children.length,count);assert.equal(p.e.guidedDesignVertices.disabled,false);
+      p.e.guidedDesignVertices.children[0].selected=true;p.e.guidedDesignVertices.handlers.change();
+      await p.e.study.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+      assert.deepEqual(JSON.parse(sent.studyRequest).design_grid.variables[0].sites,
+        [{op:'move',piece:'front',vertex:'v0',dx_multiplier:1,dy_multiplier:0}]);
+      continue;
+    }
+    assert.equal(p.e.guidedDesignVertices.children.length,0);assert.equal(p.e.guidedDesignVertices.disabled,true);
+    assert.match(p.e.guidedDesignVertexStatus.textContent,/2,?048/);
+    const before=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+    assert.match(p.e.error.textContent,/2,?048/);
+    const advanced=' {"schema":"ftx-material-study/1","variants":[],"source":-0.0}\r\n';
+    p.select('studyRequest',advanced);p.e.studyRequest.handlers.change();await p.e.study.onclick();
+    assert.equal(p.current().messages.at(-1).studyRequest,advanced);p.emit(studyReport());
+    p.e.studyMode.value='guided';p.e.studyMode.handlers.change();guidedDesignField(p,'guidedDesignKind','slash','change');
+    await p.e.study.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+    assert.deepEqual(JSON.parse(sent.studyRequest).design_grid.variables[0].sites,[{piece:'front',axis:'y',at_mm:50,multiplier:1}]);
+  }
+});
+
+test('guided coupled drafts remain separate from exact advanced study files',async()=>{
+  const {p}=await coupledDesignSetup(),advanced=' {"schema":"ftx-design-study/1","designs":[],"variants":[],"source":{"value":1.0,"signed":-0.0,"sample":18446744073709551615}}\r\n';
+  p.select('studyRequest',advanced);p.e.studyRequest.handlers.change();assert.equal(p.e.studyMode.value,'file');
+  await p.e.study.onclick();let sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+  assert.equal(sent.studyRequest,advanced);assert.equal(sent.onBody,false);p.emit(studyReport());
+  p.e.studyMode.value='guided';p.e.studyMode.handlers.change();await p.e.study.onclick();sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);assert.equal(sent.onBody,true);
+  assert.deepEqual(JSON.parse(sent.studyRequest).design_grid.variables.map(v=>v.key),['length','taper']);
+  assert.equal(sent.studyRequest.includes(advanced),false);
 });
 
 test('combination controls retain frozen selections and exact policy/pair numbers for native study evaluation', async () => {

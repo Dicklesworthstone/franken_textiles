@@ -172,22 +172,37 @@ before recomputation.
 
 ### Search linked alterations against the selected body
 
-The guided study's **Fit-driven linked alterations** option searches explicit slash-and-spread values
+The guided study's **Fit-driven linked alterations** option searches up to three ordered variables
 through the existing design engine. Load the original garment fit contract in section 3, select the
-local model and the desired study body source, then choose the source pieces to alter. Alteration
-pieces are independent of the material-assignment target. An accepted shape still requires the
-existing wearer association; a refused or missing source never falls back to another body.
+local model and the desired study body source, then choose the source pieces or vertices to alter.
+Alteration targets are independent of the material-assignment target. An accepted shape still requires
+the existing wearer association; a refused or missing source never falls back to another body.
 
 Choose one source-coordinate axis, a cut coordinate shared across the selected pieces, a nonzero
 multiplier, and a comma-separated list of strictly increasing values. Every selected piece receives
 the listed millimetre value times the multiplier. This is not automatically a total circumference
-adjustment. Every trial starts from the original pattern and uses canonical alteration, seam,
-outline, cut/grain and flat-fit checks; the browser does not transform geometry or repair seams.
+adjustment. For local shaping, select **Move selected source vertices**, choose exact piece/vertex
+pairs, and specify horizontal and vertical movement per listed millimetre. At least one component
+must be nonzero. Relative curves follow their endpoints while independent marks stay fixed.
+Every trial starts from the original pattern and uses canonical alteration, seam, outline, cut/grain
+and flat-fit checks; the browser does not transform geometry or repair seams.
 
-The form permits 1–16 source pieces and 1–64 values. The original fit contract must contain 1–32
-explicit points and fit within 256 KiB of UTF-8 source. All listed values are screened before
-manufacturing or simulation; **Maximum first passing altered designs** retains the first qualifying
-designs in list order. It does not choose the cheapest designs before evaluating their consumers.
+Use **Add another variable** for a coupled adjustment. Each variable has its own name, sites and
+1–64 strictly increasing values. **Edit**, **Move … earlier** and **Remove** preserve the other
+drafts; order matters because linked operations are applied sequentially. Merely viewing another
+variable leaves an active study running. Changing its values, sites or order cancels affected work.
+There may be at most 16 alteration sites across all variables. The vertex picker is populated only
+when needed and supports up to 2048 original vertices; larger sources can still use complete design
+requests, slash-and-spread and independent material workflows.
+
+The original fit contract must contain 1–32 explicit points and fit within 256 KiB of UTF-8 source.
+With a blank **Maximum grid points to screen**, every listed combination is requested, through a
+maximum of 256. Supply an explicit allowance from 1 to 256 to inspect a bounded prefix of a larger
+domain. The complete declared domain remains in the request, including unvisited coordinates;
+invalid displacements cannot hide beyond that prefix. The browser does not expand the Cartesian
+product. Rust generates, validates and caches each screened geometry once for the downstream materials.
+**Maximum first passing altered designs** retains the first qualifying designs in grid order.
+It does not choose the cheapest designs before evaluating their consumers.
 The original geometry and unchanged material each add a baseline, and the complete reserved
 geometry/material cross-product must fit within 32 alternatives. Oversized requests refuse rather
 than silently trimming the value list or material shortlist.
@@ -197,7 +212,7 @@ Fresh scenarios retain the same mandatory flat-fit screening even if their separ
 reporting is explicitly set to no contract. Existing result tables show screened refusals,
 passing-but-unselected designs, actual manufacturing/scenario outcomes and the computed frontier.
 Use a candidate's **Use … pattern** action to retain its exact evaluated geometry and material
-assignments. Loading or adopting another pattern clears the alteration controls, preventing an
+assignments. Loading or adopting another pattern clears every variable and source-site selection, preventing an
 accidental second application. An advanced request retains its own authored alterations.
 
 The focused synthetic numerical test screens nine values and retains the +30 mm linked front/back

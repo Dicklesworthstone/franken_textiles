@@ -618,3 +618,101 @@ test('linked grids compose with stock and scenario consumers while fixed-study r
     for(const key of ['design_grid','design_fit'])assert.equal(Object.hasOwn(JSON.parse(fixed),key),false);
   }
 });
+
+const multiDesignInput = (changes = {}) => ({variables:[
+  {key:'ease',values:[-4,0,6],sites:[{piece:'front',axis:'x',at_mm:50,multiplier:0.5},
+    {piece:'lining',axis:'x',at_mm:50,multiplier:-0.5}]},
+  {key:'length',values:[-5,5],sites:[{piece:'front',axis:'y',at_mm:30,multiplier:1}]},
+  {key:'local shape',values:[0,2],sites:[{op:'move',piece:'front',vertex:'d',dx_multiplier:0,dy_multiplier:1},
+    {op:'move',piece:'lining',vertex:'d',dx_multiplier:1,dy_multiplier:-0.5}]}],
+  maxDesigns:3,fitSpec:linkedFitSource(),...changes});
+
+test('multiple linked variables preserve authored order, mixed site semantics and exact independent sources', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),target:{scope:'pieces',ids:['lining']},design:multiDesignInput()};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.equal(result.schema,'ftx-design-study/1');
+  assert.deepEqual(result.design_grid,{variables:input.design.variables.map(v=>({key:v.key,values_mm:v.values,sites:v.sites})),
+    max_designs:3,fit_screening:{max_candidates:12}});
+  for(const source of [input.design.fitSpec,input.candidates[0].selection])assert.ok(raw.includes(source));
+  assert.deepEqual(Object.keys(result.variants[1].changes.pieces),['lining']);
+  assert.equal(Object.hasOwn(result,'design_adaptive'),false);
+  const prefix=JSON.parse(build({...input,design:{...input.design,maxCandidates:4}}));
+  assert.equal(prefix.design_grid.fit_screening.max_candidates,4);
+  assert.deepEqual(prefix.design_grid.variables,result.design_grid.variables);
+});
+
+test('multi-variable screening uses the whole Cartesian domain or an explicitly retained bounded prefix', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const variable=(key,count)=>({key,values:Array.from({length:count},(_,i)=>i),
+    sites:[{piece:'front',axis:'x',at_mm:50,multiplier:1}]});
+  const design=multiDesignInput({variables:[variable('width',16),variable('length',16)]});
+  assert.equal(JSON.parse(build({...state(),design})).design_grid.fit_screening.max_candidates,256);
+  const large={...design,variables:[variable('width',64),variable('length',64),variable('shape',64)]};
+  assert.throws(()=>build({...state(),design:large}),/declare maxCandidates/);
+  for(const maxCandidates of [1,64,256]) {
+    const result=JSON.parse(build({...state(),design:{...large,maxCandidates}}));
+    assert.equal(result.design_grid.fit_screening.max_candidates,maxCandidates);
+    assert.equal(result.design_grid.variables.length,3);assert.equal(result.design_grid.variables[2].values_mm.length,64);
+  }
+  for(const maxCandidates of [0,-1,257,1.5,NaN,Infinity,'2',null,undefined]) {
+    assert.throws(()=>build({...state(),design:{...design,maxCandidates}}),/integer from 1 to 256/);
+  }
+  const small={...design,variables:[variable('width',1)],maxCandidates:256,maxDesigns:31};
+  const result=JSON.parse(build({...state(),design:small}));
+  assert.equal(result.design_grid.fit_screening.max_candidates,256,'An explicit allowance is not silently reduced to domain size');
+  assert.equal(result.design_grid.max_designs,31);
+});
+
+test('multi-variable admission refuses ambiguous shapes, duplicate keys and invalid source sites', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const good=multiDesignInput(),variable=good.variables[0],check=design=>build({...state(),design});
+  for(const variables of [[],null,[null],[,variable],Array(4).fill(variable),[variable,{...variable}]]) {
+    assert.throws(()=>check({...good,variables}));
+  }
+  for(const key of ['',null,1])assert.throws(()=>check({...good,variables:[{...variable,key}]}),/nonempty/);
+  for(const key of ['key','values','sites']) {
+    const v={...variable};delete v[key];assert.throws(()=>check({...good,variables:[v]}),/missing/);
+  }
+  for(const values of [[],[0,0],[1,0],[0,,2],['1'],[NaN],[Infinity],Array.from({length:65},(_,i)=>i)]) {
+    assert.throws(()=>check({...good,variables:[{...variable,values}]}),/strictly increasing/);
+  }
+  assert.throws(()=>check({...good,pieceIds:['front']}),/unsupported/);
+  const move=good.variables[2].sites[0];
+  for(const sites of [[],null,[null],[,move],[{...move,piece:'missing'}],[{...move,vertex:''}],
+    [{...move,op:'slash_spread'}],[{...move,dx_multiplier:0,dy_multiplier:-0}],
+    [{...move,dx_multiplier:NaN}],[{...move,dy_multiplier:'1'}],
+    [{...move,multiplier:1}],[{...variable.sites[0],vertex:'d'}]]) {
+    assert.throws(()=>check({...good,variables:[{...variable,sites}]}));
+  }
+  const sixteen=Array.from({length:16},(_,i)=>({...move,vertex:'v'+i}));
+  assert.equal(JSON.parse(check({...good,variables:[{...variable,sites:sixteen}]})).design_grid.variables[0].sites.length,16);
+  assert.throws(()=>check({...good,variables:[{...variable,sites:sixteen},good.variables[1]]}),/16 ordered/);
+});
+
+test('all linked site displacements are admitted even outside the chosen screening prefix', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const check=(values,site)=>build({...state(),design:multiDesignInput({variables:[{key:'shape',values,sites:[site]}],
+    maxCandidates:1,maxDesigns:1})});
+  const slash={piece:'front',axis:'x',at_mm:50,multiplier:2};
+  const move={op:'move',piece:'front',vertex:'d',dx_multiplier:0,dy_multiplier:2};
+  for(const site of [slash,move])assert.throws(()=>check([0,Number.MAX_VALUE],site),/overflows/);
+  assert.throws(()=>check([0,Number.MIN_VALUE],{...move,dy_multiplier:0.5}),/underflows/);
+  const result=JSON.parse(check([0,Number.MIN_VALUE],{...move,dy_multiplier:1}));
+  assert.equal(result.design_grid.variables[0].sites[0].dx_multiplier,0,'An explicitly zero vector component remains valid');
+  assert.equal(result.design_grid.variables[0].values_mm[1],Number.MIN_VALUE);
+});
+
+test('multi-variable row reservations include both baselines before material snapshots are inspected', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  let reads=0;
+  const candidates=Array.from({length:7},(_,i)=>({key:'choice-'+i,get selection(){reads++;throw Error('Unread snapshot');}}));
+  const design=multiDesignInput({maxDesigns:4,maxCandidates:1});
+  assert.throws(()=>build({...state(),candidates,design}),/32 expanded/);assert.equal(reads,0);
+  const real=candidates.map((c,i)=>({key:c.key,selection:selection('cloth-'+i,'abcdef0'[i])}));
+  const raw=build({...state(),candidates:real,design:{...design,maxDesigns:3}});
+  assert.equal(JSON.parse(raw).variants.length,8);
+  const long='v'.repeat(256*1024),oversize=multiDesignInput({variables:[
+    {key:'shape',values:[0],sites:[{op:'move',piece:'front',vertex:long,dx_multiplier:1,dy_multiplier:0}]}]});
+  assert.throws(()=>build({...state(),design:oversize}),/grid exceeds 256 KiB/);
+});
