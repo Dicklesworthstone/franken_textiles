@@ -766,6 +766,168 @@ fn requested_nappy_occupancy_refuses_missing_invalid_and_unreachable_targets() {
 }
 
 #[test]
+fn multi_frame_fit_keeps_requested_tape_targets_when_other_sections_are_unavailable() {
+    use ftx_body::{
+        BodyFrames, Phenotype, Pose, partial_tape_readings, pose_deltas, tape_readings,
+    };
+
+    let bytes = model_bytes_with_locals(true, &ftx_body::FREE[ftx_body::N_PHENOTYPE..]);
+    let hash = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let rest = model
+        .rest(&model.params(Phenotype {
+            height: 0.6,
+            ..Phenotype::default()
+        }))
+        .unwrap();
+    let posed = model
+        .pose(
+            &rest,
+            &pose_deltas(&model, &rest, &Pose::a_pose(35.0), 1.0).unwrap(),
+        )
+        .unwrap();
+    let frames = BodyFrames::new(&model, &posed).unwrap();
+    let faces: Vec<_> = model
+        .data()
+        .faces
+        .iter()
+        .map(|f| f.map(|i| i as usize))
+        .collect();
+    let waist_m = 3.2 * ftx_core::det::sin_cos(std::f64::consts::PI / 16.0).0;
+    let readings = partial_tape_readings(&faces, 1.3, &posed, &frames);
+    assert!((readings[2].unwrap() / 1000.0 - waist_m).abs() < 1e-12);
+    assert!(
+        readings[16].is_none(),
+        "the synthetic prism has no head surface"
+    );
+    assert!(
+        tape_readings(&faces, 1.3, &posed, &frames).is_none(),
+        "the former all-or-nothing adapter path rejects this otherwise usable evidence"
+    );
+
+    // Independently projected vertices on the two root-weighted rings. Fitted output supplies
+    // neither these pixels nor the regular-polygon tape circumference above.
+    let frame = |i: usize| json!({"stream":"synthetic-partial-tape","timestamp_us":9_007_199_254_740_995_u64+i as u64*100_000});
+    let mut observed_frames = Vec::new();
+    let mut targets = BTreeMap::new();
+    for (f, offset) in [0.04, 0.11].into_iter().enumerate() {
+        let mut points = Vec::new();
+        for (ring, z) in [(1, 0.52), (2, 1.04)] {
+            for i in [0_u32, 4, 8, 12] {
+                let (s, c) = ftx_core::det::sin_cos(f64::from(i) * std::f64::consts::TAU / 16.0);
+                let (x, y) = (0.1 * c, 0.1 * s);
+                let name = format!("p{}", ring * 16 + i);
+                targets.insert(name.clone(), json!({"kind":"vertex","index":ring*16+i}));
+                points.push(json!({"name":name,
+                    "pixel_px":[640.0+1000.0*x/(y+4.0),480.0-1000.0*(z+offset-0.7)/(y+4.0)],
+                    "sigma_px":0.5,"partition":if ring==2 && i==12 {"held_out"}else{"fit"}}));
+            }
+        }
+        observed_frames.push(json!({"frame":frame(f),"image_size_px":[1280,960],"rotation_cw_deg":0,
+            "camera":{"intrinsics":{"focal_px":[1000,1000],"principal_px":[640,480]},
+            "world_to_camera":{"rows":[[1,0,0],[0,0,-1],[0,1,0]]},"center_m":[0,-4,0.7]},"keypoints":points}));
+    }
+    let starts: Vec<_> = [0.4, 0.8]
+        .into_iter()
+        .map(|height| {
+            json!({"shape":[height],
+        "poses":[{"frame":frame(0),"values":[0.0]},{"frame":frame(1),"values":[0.2]}]})
+        })
+        .collect();
+    let mut request = json!({"schema":"ftx-anny-body-fit-input/1",
+        "model":{"model_sha256":hash,"age_years":2.5,"gender":1.0,
+            "shape_parameters":[{"name":"height","lower":0.0,"upper":1.0}],
+            "pose_parameters":[{"name":"root_z_m","lower":-1.0,"upper":1.0}],
+            "keypoints":targets,"measurements":["waist","stature"]},
+        "fit":{"schema":"ftx-body-fit-input/1","metric_scale_source":"analytic metre camera",
+            "observation_evidence":"synthetic regular-prism ring vertices","frames":observed_frames,"starts":starts,
+            "measurements":[{"name":"waist","value_m":waist_m,"sigma_m":0.003,"evidence":"analytic 16-gon perimeter","partition":"fit"},
+                {"name":"stature","value_m":1.3,"sigma_m":0.002,"evidence":"analytic prism height","partition":"held_out"}]}});
+    let dir = setup();
+    std::fs::write(dir.join("partial.ftxbody"), &bytes).unwrap();
+    save(&dir.join("partial-input.json"), &request);
+    let output = invoke(
+        &dir,
+        &[
+            "measure",
+            "fit-body",
+            "partial-input.json",
+            "--model",
+            "partial.ftxbody",
+            "--mesh-out",
+            "partial-photo-review",
+        ],
+        0,
+    );
+    let output: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let result = &output["result"];
+    assert_eq!(result["status"], "ACCEPTED", "{result}");
+    assert_eq!(
+        result["input_sha256"],
+        sha256_hex(&std::fs::read(dir.join("partial-input.json")).unwrap())
+    );
+    assert_eq!(result["anny_configuration"], request["model"]);
+    assert_eq!(result["model"]["measurements"], json!(["waist", "stature"]));
+    assert!((result["solution"]["shape"][0].as_f64().unwrap() - 0.6).abs() < 1e-7);
+    let predicted = result["solution"]["predicted_measurements_m"]
+        .as_array()
+        .unwrap();
+    assert_eq!(predicted.len(), 2);
+    assert!((predicted[0].as_f64().unwrap() - waist_m).abs() < 1e-12);
+    assert!((predicted[1].as_f64().unwrap() - 1.3).abs() < 1e-7);
+    assert_eq!(
+        result["solution"]["anny_parameters"]["provenance"],
+        "MODEL_FIT"
+    );
+    for attempt in result["attempts"].as_array().unwrap() {
+        assert_eq!(attempt["status"], "CONVERGED");
+        assert_eq!(attempt["checks"].as_array().unwrap().len(), 18);
+        assert!(
+            attempt["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|c| c["passed"] == true)
+        );
+    }
+    assert!(dir.join("partial-photo-review/fit.json").is_file());
+
+    // Explicitly requesting the absent field must still reject every start and publish no mesh.
+    request["model"]["measurements"] = json!(["waist", "stature", "head"]);
+    request["fit"]["measurements"].as_array_mut().unwrap().push(json!({
+        "name":"head","value_m":0.5,"sigma_m":0.005,"evidence":"deliberate unavailable target","partition":"fit"}));
+    save(&dir.join("missing-input.json"), &request);
+    let output = invoke(
+        &dir,
+        &[
+            "measure",
+            "fit-body",
+            "missing-input.json",
+            "--model",
+            "partial.ftxbody",
+            "--mesh-out",
+            "missing-photo-review",
+        ],
+        2,
+    );
+    let output: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let refused = &output["result"];
+    assert_eq!(refused["status"], "REJECTED");
+    assert!(refused["solution"].is_null());
+    for attempt in refused["attempts"].as_array().unwrap() {
+        assert_eq!(attempt["status"], "REJECTED");
+        assert!(
+            attempt["flags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|flag| flag.as_str().unwrap().contains("'head' is unavailable"))
+        );
+    }
+    assert!(!dir.join("missing-photo-review").exists());
+}
+
+#[test]
 fn partial_tape_targets_reach_native_portable_and_study_workflows() {
     use ftx_body::{Pose, Wearer, fit_tape, tape_targets};
     use ftx_drape::study::fitted::{BodyRequest, FittedBody};

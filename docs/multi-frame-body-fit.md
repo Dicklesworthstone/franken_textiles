@@ -511,6 +511,11 @@ functionals are the 21 `ftx-body::TAPE_FIELDS` names, including `stature`, `ches
 and `arm_length`. Stature is the rest mesh's z extent; other functionals reuse the existing
 body tape implementation at its standard 35-degree A-pose. They do not change as image poses
 move. Give actual independent tape evidence, not a size-chart guess masquerading as tape.
+Only the functionals explicitly requested in the model configuration must be available.
+For example, a missing head section does not invalidate independently available waist or
+stature targets. A requested unavailable functional rejects the fit with its name in the
+attempt diagnostics; it is never omitted, set to zero or replaced by a prior. Accepted
+output still contains exactly the requested predictions in their declared order.
 
 ## Author sampled silhouettes in capture review
 

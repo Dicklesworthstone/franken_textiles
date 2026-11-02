@@ -8,7 +8,7 @@ use std::{
 
 use ftx_body::{
     Affine, AnnyData, AnnyModel, BodyFrames, BodyParams, Phenotype, Pose, RestBody, TAPE_FIELDS,
-    age_parameter_for_years, pose_deltas, tape_readings,
+    age_parameter_for_years, partial_tape_readings, pose_deltas,
 };
 use ftx_core::{Mat3, Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::body_fit::{
@@ -553,10 +553,18 @@ impl Adapter {
                 .iter()
                 .map(|f| f.map(|v| v as usize))
                 .collect();
-            let tape = tape_readings(&faces, height, &posed, &frames)
-                .ok_or_else(|| bad_input("Anny rest-body tape functional is unavailable"))?;
+            // Missing unrequested anatomy must not discard independent usable tape targets.
+            let tape = partial_tape_readings(&faces, height, &posed, &frames);
             for (name, value) in self.layout.measurements.iter().zip(&mut metrics) {
-                *value = tape[TAPE_FIELDS.iter().position(|n| *n == name).unwrap()] / 1000.0;
+                *value =
+                    tape[TAPE_FIELDS.iter().position(|n| *n == name).unwrap()].ok_or_else(|| {
+                        Refusal::new(
+                            RefusalCode::DegenerateGeometry,
+                            format!(
+                                "requested Anny rest-body tape functional '{name}' is unavailable"
+                            ),
+                        )
+                    })? / 1000.0;
             }
         }
         self.cache.replace(Some(Cache {
