@@ -682,6 +682,45 @@ test('direct sewing selection retains exact requests and selected options and ne
   }
 });
 
+test('sewing preview worker preserves exact source bytes and dispatches the explicitly chosen operation and cell', async () => {
+  const pattern=' {"source":-0.0,"seed":18446744073709551615}\n', options=' {"qualified":1.0,"label":"évidence"}\n';
+  for(const cell of [undefined,'<specialist cell>']) {
+    const operation='<reverse "topstitch">', svg='<svg xmlns="http://www.w3.org/2000/svg"><title>exact source frames</title></svg>', calls=[];
+    const w=await workerModule({bindings:{default:async()=>{},
+      sew_svg:(...args)=>{calls.push(['plain',...args]);return svg;},
+      sew_cell_svg:(...args)=>{calls.push(['cell',...args]);return svg;},
+      sew_select:()=>assert.fail('Preview must retain the already selected options'),
+      sew_stitches:()=>assert.fail('Preview must not regenerate a second stitch download')}});
+    const response=await w.send({type:'sewPreview',request:83,pattern,options,operation,...(cell===undefined?{}:{cell})});
+    assert.equal(response.type,'result',response.message);assert.equal(response.op,'sewPreview');assert.equal(response.picture,svg);
+    assert.deepEqual(calls,[cell===undefined?['plain',pattern,options,operation]:['cell',pattern,options,cell,operation]]);
+    assert.deepEqual(plain(response.result),{operation,cell:cell??null,hardware_execution_authorized:false});
+    const files=Object.fromEntries(response.files.map(f=>[f.name,f.text]));
+    assert.equal(files['sewing-preview.svg'],svg);assert.equal(files['sewing-options.json'],options);assert.equal(files['original-pattern.json'],pattern);
+    assert.deepEqual(JSON.parse(files['sewing-preview-selection.json']),{operation,cell:cell??null});
+    assert.equal(response.files.find(f=>f.name==='sewing-preview.svg').mime,'image/svg+xml');
+  }
+});
+
+test('sewing preview worker refuses incomplete identities, unavailable bindings and failed geometry without publishing partial files', async () => {
+  const request={type:'sewPreview',request:84,pattern:'{}',options:'{}',operation:'join'};
+  for(const change of [{pattern:{}},{options:null},{operation:''},{operation:' '},{operation:1},{operation:'x'.repeat(513)},
+    {cell:null},{cell:''},{cell:1},{cell:'x'.repeat(513)}]) {
+    const w=await workerModule({bindings:{default:async()=>{},sew_svg:()=>assert.fail('Invalid identity reached native engine'),
+      sew_cell_svg:()=>assert.fail('Invalid identity reached native engine')}});
+    const response=await w.send({...request,...change});assert.equal(response.type,'error');assert.equal(response.op,'sewPreview');
+    assert.equal(response.files,undefined);assert.equal(response.picture,undefined);
+  }
+  for(const cell of [undefined,'actual-cell']) for(const engine of [undefined,()=>'',()=>{throw Error('source tool sweep refused');}]) {
+    const key=cell===undefined?'sew_svg':'sew_cell_svg';
+    const w=await workerModule({bindings:{default:async()=>{},...(engine?{[key]:engine}:{})}});
+    const response=await w.send({...request,...(cell===undefined?{}:{cell})});
+    assert.equal(response.type,'error');assert.equal(response.files,undefined);assert.equal(response.picture,undefined);
+    assert.match(response.message,/missing canonical sewing|no preview SVG|source tool sweep refused/);
+    assert.equal(w.sent.some(m=>m.type==='result'),false);
+  }
+});
+
 test('compiled WASM direct fixed-route sewing keeps complete orders separate from deadline admission',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_ROUTED_FIXTURE_REPLAY},async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
@@ -2647,6 +2686,111 @@ test('direct recipe selection exposes complete orders and withdraws dependent op
   assert.match(visibleText(s),/No complete sewing candidate was selected/);
   assert.equal(JSON.parse(s.children[1].textContent).selected,false);
   p.e.sewOptions.handlers.change();assert.equal(s.hidden,true);
+});
+
+// Producer-result doubles below exercise source retention and UI lifetime, not stitch geometry.
+const sewingPreviewProgram = () => ({schema:'ftx-sewing-program/2',stitches:[],plan:{
+  options:{},feed_seconds:13,hardware_execution_authorized:false,
+  seams:['join <literal>','reverse "topstitch"'].map(id=>({pass:{id,seam:'side',needle:'N',thread:'Y',after:[]}}))}});
+
+test('sewing preview page retains exact evaluated sources and keeps its independent refusal separate from the sewing result', async () => {
+  const p=await pageModule();await p.load();
+  const pattern=' {"pieces":[{"id":"front"}],"x":-0.0,"seed":18446744073709551615}\n',options=' {"pitch":1.0,"x":-0.0}\n';
+  await p.e.bind.onclick();p.emit({pattern_json:pattern,pieces:[]});
+  p.select('sewOptions',options);p.e.sewOptions.handlers.change();await p.e.sew.onclick();
+  const program=sewingPreviewProgram(),raw=JSON.stringify(program);
+  p.emit(program,[{name:'sewing-program.json',text:raw,mime:'application/json'}]);
+  const sewing=section(p,'sew'),kept=descendants(sewing).find(n=>n.download==='sewing-program.json').href;
+  assert.equal(p.e.sewPreviewControls.hidden,false);assert.equal(p.e.sewPreviewCellLabel.hidden,true);
+  assert.equal(p.e.sewPreview.disabled,true);
+  assert.deepEqual(p.e.sewPreviewOperation.children.slice(1).map(o=>o.value),['join <literal>','reverse "topstitch"']);
+  p.e.sewPreviewOperation.value='reverse "topstitch"';p.e.sewPreviewOperation.handlers.change();
+  assert.equal(p.e.sewPreview.disabled,false);assert.match(p.e.sewPreviewSummary.textContent,/source seam side/);
+  p.select('sewOptions','{"different":true}'); // No change event: retained File contents are not reread by preview.
+  await p.e.sewPreview.onclick();const request=p.current().messages.at(-1);
+  assert.equal(request.type,'sewPreview');assert.equal(request.pattern,pattern);assert.equal(request.options,options);
+  assert.equal(request.operation,'reverse "topstitch"');assert.equal(Object.hasOwn(request,'cell'),false);
+  const svg='<svg xmlns="http://www.w3.org/2000/svg"><title>canonical</title></svg>';
+  p.emit({operation:request.operation,cell:null,hardware_execution_authorized:false},
+    [{name:'sewing-preview.svg',text:svg,mime:'image/svg+xml'}]);
+  assert.equal(p.e.sewingPreview.hidden,false);
+  const url=p.e.sewingPreview.src;assert.equal(await p.blobs.get(url).text(),svg);assert.equal(p.live.has(kept),true);
+  assert.equal(descendants(sewing).some(n=>'innerHTML' in n),false);
+  await p.e.sewPreview.onclick();assert.equal(p.live.has(url),false);assert.equal(p.e.sewingPreview.hidden,true);
+  p.current().emit({type:'error',request:p.current().messages.at(-1).request,op:'sewPreview',message:'qualified tool envelope refused'});
+  assert.match(p.e.error.textContent,/tool envelope refused/);assert.equal(p.live.has(kept),true);
+  assert.equal(sewing.hidden,false);assert.equal(p.e.sewPreview.disabled,false);
+  p.e.sewOptions.handlers.change();assert.equal(p.e.sewPreviewControls.hidden,true);
+  assert.equal(p.e.sewPreview.disabled,true);assert.equal(p.live.has(kept),false);
+});
+
+test('sewing preview page uses exact selected options and actual configured or routed source membership', async () => {
+  for(const mode of ['shared','configured','routed']) {
+    const p=await pageModule();await p.load();await p.bind();
+    const template=' {"template":1.0}\n',chosen=' {"chosen":-0.0,"seed":18446744073709551615}\n';
+    p.select('sewOptions',template);p.e.sewOptimize.checked=true;p.e.sewOptimize.handlers.change();
+    await p.e.sew.onclick();
+    const program=sewingPreviewProgram(),plan=program.plan;
+    const source=(cell,ids)=>({cell,plan:{options:{machine:{id:cell}},seams:ids.map(id=>({pass:{id,seam:'side',after:[]}}))}});
+    const a=source('cell-a',['actual-a','unused-a']),b=source('cell-b',['actual-b']);
+    if(mode==='routed') plan.production={routing:{route:[],cell_plans:[a,b],
+      selected:{operations:[{cell:'cell-a',operation_id:'actual-a',copy:2,seam_index:0}],transfers:[]}}};
+    else plan.production={parallel:{selected:{cells:[{cell:'cell-a',copies:[2]},{cell:'cell-b',copies:[]},
+      ...(mode==='configured'?[{cell:'missing-source',copies:[]}]:[])]},...(mode==='configured'?{cell_plans:[a,b]}:{})}};
+    const report={request:{objective:'minimize_thread_observed_order_cost'},selected_thread_order_cost:14,
+      objective_currency:'USD',selected_choices:{join:'chosen'},trials:[],optimality_proven:false,budget_exhausted:true};
+    p.emit({selection:{report,selected_options_json:chosen},program});
+    assert.equal(p.e.sewPreviewCellLabel.hidden,false);assert.equal(p.e.sewPreview.disabled,true);
+    p.e.sewPreviewCell.value='cell-a';p.e.sewPreviewCell.handlers.change();
+    const expected=mode==='shared'?['join <literal>','reverse "topstitch"']:['actual-a','unused-a'];
+    assert.deepEqual(p.e.sewPreviewOperation.children.slice(1).map(o=>o.value),expected);
+    p.e.sewPreviewOperation.value=expected[0];p.e.sewPreviewOperation.handlers.change();
+    assert.match(p.e.sewPreviewSummary.textContent,/copy IDs: \[2\]/);
+    await p.e.sewPreview.onclick();const request=p.current().messages.at(-1);
+    assert.equal(request.options,chosen);assert.notEqual(request.options,template);
+    assert.equal(request.cell,'cell-a');assert.equal(request.operation,expected[0]);
+    p.current().emit({type:'error',op:'sewPreview',request:request.request,message:'preview-only refusal'});
+    if(mode==='routed') {
+      p.e.sewPreviewOperation.value='unused-a';p.e.sewPreviewOperation.handlers.change();
+      assert.match(p.e.sewPreviewSummary.textContent,/No selected garment copies/);assert.equal(p.e.sewPreview.disabled,false);
+    }
+    p.e.sewPreviewCell.value='cell-b';p.e.sewPreviewCell.handlers.change();
+    assert.equal(p.e.sewPreviewOperation.value,'');assert.equal(p.e.sewPreview.disabled,true);
+    const next=mode==='shared'?expected[0]:'actual-b';
+    p.e.sewPreviewOperation.value=next;p.e.sewPreviewOperation.handlers.change();
+    assert.match(p.e.sewPreviewSummary.textContent,/No selected garment copies/);
+    if(mode==='configured') {
+      p.e.sewPreviewCell.value='missing-source';p.e.sewPreviewCell.handlers.change();
+      assert.equal(p.e.sewPreviewOperation.children.length,1);assert.equal(p.e.sewPreview.disabled,true);
+    }
+    await p.e.sew.onclick();
+    p.emit({selection:{report:{...report,selected_choices:null},selected_options_json:null},program:null});
+    assert.equal(p.e.sewPreviewControls.hidden,true);assert.equal(p.e.sewPreview.disabled,true);
+  }
+});
+
+test('sewing preview selectors, source edits and cancellation withdraw late images without discarding a valid completed plan', async () => {
+  for(const change of ['operation','recipe','cancel','binding']) {
+    const p=await pageModule();await p.load();await p.bind();p.select('sewOptions');
+    await p.e.sew.onclick();const program=sewingPreviewProgram();
+    p.emit(program,[{name:'sewing-program.json',text:JSON.stringify(program),mime:'application/json'}]);
+    const kept=descendants(section(p,'sew')).find(n=>n.download==='sewing-program.json').href;
+    p.e.sewPreviewOperation.value='join <literal>';p.e.sewPreviewOperation.handlers.change();
+    await p.e.sewPreview.onclick();const old=p.current(),request=old.messages.at(-1).request;
+    if(change==='operation') {p.e.sewPreviewOperation.value='reverse "topstitch"';p.e.sewPreviewOperation.handlers.change();}
+    else if(change==='recipe') {p.e.studyMode.value='guided';p.e.guidedSewing.checked=true;p.e.sewOptions.handlers.change();}
+    else if(change==='cancel') p.e.cancel.onclick();
+    else await p.e.bind.onclick(); // Pending work cannot start another command; explicit source edits still invalidate it.
+    if(change==='binding') p.e.reset.onclick();
+    assert.equal(old.dead,true,change);p.ready();
+    old.emit({type:'result',request,op:'sewPreview',result:{operation:'stale'},
+      files:[{name:'sewing-preview.svg',text:'<svg/>',mime:'image/svg+xml'}]});
+    assert.equal(p.e.sewingPreview.hidden,true,change);
+    assert.equal(p.live.has(kept),change==='operation'||change==='cancel',change);
+    if(change==='operation'||change==='cancel') {
+      assert.equal(section(p,'sew').hidden,false);assert.equal(p.e.sewPreview.disabled,false);
+    } else assert.equal(p.e.sewPreviewControls.hidden,true);
+  }
 });
 
 test('batch sewing displays production ordering, scoped copy dependencies and actual batch feed with objective-specific proof', async () => {
@@ -7939,6 +8083,110 @@ test('compiled WASM heterogeneous cells replay native geometry, thread orders an
     const refused=await w.send({type:'sew',request:223,pattern,options:JSON.stringify(changed)});
     assert.equal(refused.type,'error');
     assert.equal(w.sent.some(message=>message.type==='result'&&message.request===223),false);
+  });
+
+test('compiled WASM sewing previews preserve canonical operation and selected-cell sources through the worker',
+  {skip:process.env.FTX_REAL_WASM!=='1'}, async t=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const fixture=name=>fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials',name),'utf8');
+    const pattern=' \n'+fixture('synthetic-sewing-pattern.json')+'\r\n';
+    const w=await workerModule({bindings:ftx});let request=2250;
+    async function inspect(source,options,operation,cell) {
+      const expected=cell===undefined?ftx.sew_svg(source,options,operation):ftx.sew_cell_svg(source,options,cell,operation);
+      const result=await w.send({type:'sewPreview',request:++request,pattern:source,options,operation,
+        ...(cell===undefined?{}:{cell})});
+      assert.equal(result.type,'result',result.message);assert.equal(result.op,'sewPreview');
+      assert.equal(result.picture,expected);
+      assert.deepEqual(plain(result.result),{operation,cell:cell??null,hardware_execution_authorized:false});
+      const files=new Map(result.files.map(file=>[file.name,file.text]));
+      assert.deepEqual([...files.keys()].sort(),[
+        'original-pattern.json','sewing-options.json','sewing-preview-selection.json','sewing-preview.svg']);
+      assert.equal(files.get('sewing-preview.svg'),expected);
+      assert.equal(files.get('original-pattern.json'),source);
+      assert.equal(files.get('sewing-options.json'),options);
+      const selection=JSON.parse(files.get('sewing-preview-selection.json'));
+      assert.equal(selection.operation,operation);assert.equal(selection.cell,cell??null);
+      const metadata=JSON.parse(expected.match(/<metadata>(.*?)<\/metadata>/s)[1]
+        .replaceAll('&quot;','"').replaceAll('&apos;',"'").replaceAll('&lt;','<')
+        .replaceAll('&gt;','>').replaceAll('&amp;','&'));
+      assert.equal(metadata.operation.id??metadata.operation.seam,operation);
+      assert.equal(metadata.hardware_execution_authorized,false);
+      assert.equal(metadata.physical_seam_quality_validated,false);
+      assert.equal(metadata.material_sha256.length,2);
+      assert.match(expected,/class="needle"/);assert.match(expected,/class="stitch-path"/);
+      return metadata;
+    }
+    async function refuse(source,options,operation,cell) {
+      assert.throws(()=>cell===undefined?ftx.sew_svg(source,options,operation):ftx.sew_cell_svg(source,options,cell,operation));
+      const id=++request,result=await w.send({type:'sewPreview',request:id,pattern:source,options,operation,
+        ...(cell===undefined?{}:{cell})});
+      assert.equal(result.type,'error');assert.equal(result.op,'sewPreview');
+      assert.equal(result.picture,undefined);assert.equal(result.files,undefined);
+      assert.equal(w.sent.some(message=>message.type==='result'&&message.request===id),false);
+    }
+    await t.test('direct multipass previews retain exact sources and reverse-pass identity',async()=>{
+      const options=' \n'+fixture('synthetic-sewing-topstitch-options.json')+'\r\n';
+      const plan=JSON.parse(ftx.sew_plan(pattern,options));
+      assert.equal(plan.stitch_intervals,90);assert.equal(plan.feed_seconds,13);
+      for(const operation of ['join','topstitch']) {
+        const metadata=await inspect(pattern,options,operation);
+        assert.equal(metadata.schema,'ftx-sewing-preview/1');
+        assert.equal(metadata.pattern_sha256,plan.pattern_sha256);
+        assert.deepEqual(metadata.operation,plan.seams.find(seam=>seam.pass.id===operation).pass);
+        assert.equal(Object.hasOwn(metadata,'cell'),false);
+      }
+      await refuse(pattern,options,'unknown-operation');
+    });
+    await t.test('configured cells retain their actual geometry, locks and assigned copies',async()=>{
+      const options=fs.readFileSync(path.join(__dirname,'../examples/sewing-heterogeneous-options.json'),'utf8');
+      const plan=JSON.parse(ftx.sew_plan(pattern,options)),parallel=plan.production.parallel;
+      for(const [cell,copies,intervals,seconds] of [['cell-a',[0],40,4],['cell-b',[1,2],20,4/3]]) {
+        const metadata=await inspect(pattern,options,'join',cell);
+        const source=parallel.cell_plans.find(source=>source.cell===cell);
+        assert.equal(metadata.schema,'ftx-sewing-preview/2');assert.equal(metadata.cell,cell);
+        assert.deepEqual(metadata.production_copy_ids,copies);
+        assert.equal(metadata.stitch_intervals,intervals);assert.equal(metadata.feed_seconds,seconds);
+        assert.deepEqual(metadata.machine,source.plan.options.machine);
+        assert.equal(metadata.machine_sha256,source.machine_sha256);
+        assert.deepEqual(metadata.qualifications,source.qualifications);
+      }
+      await refuse(pattern,options,'join');
+      await refuse(pattern,options,'join','unknown-cell');
+      await refuse(pattern,options,'unknown-operation','cell-a');
+      const stale=JSON.parse(options);
+      stale.production.parallel.cells[0].configuration.machine.max_stitches_per_minute=1;
+      await refuse(pattern,JSON.stringify(stale),'join','cell-b');
+    });
+    await t.test('selected routed options preview the winning specialists and preserve native replay bytes',
+      {skip:!process.env.FTX_ROUTED_FIXTURE_REPLAY},async()=>{
+        const input=name=>fs.readFileSync(path.join(process.env.FTX_ROUTED_FIXTURE_REPLAY,'route-time',name),'utf8');
+        const source=input('pattern.json'),selectionRequest=input('request.json'),expected=JSON.parse(input('selection.json'));
+        const selected=await w.send({type:'sew',request:++request,pattern:source,options:selectionRequest,selectRecipes:true});
+        assert.equal(selected.type,'result',selected.message);
+        assert.deepEqual(plain(selected.result.selection),expected);
+        assert.equal(expected.report.selected_route,'available-specialists');
+        const options=selected.files.find(file=>file.name==='selected-sewing-options.json').text;
+        assert.equal(options,expected.selected_options_json);assert.equal(options,input('selected-options.json'));
+        const plan=selected.result.program.plan,routing=plan.production.routing;
+        assert.deepEqual(plain(plan),expected.report.selected_plan);
+        assert.equal(selected.result.program.stitches.length,130);
+        for(const [cell,operation,intervals] of [['cell-a','join',40],['cell-c','reinforce',25]]) {
+          const metadata=await inspect(source,options,operation,cell);
+          const sourcePlan=routing.cell_plans.find(source=>source.cell===cell);
+          const seam=sourcePlan.plan.seams.find(seam=>seam.pass.id===operation);
+          assert.equal(metadata.schema,'ftx-sewing-preview/2');assert.equal(metadata.cell,cell);
+          assert.deepEqual(metadata.production_copy_ids,[0,1]);assert.equal(metadata.stitch_intervals,intervals);
+          assert.equal(metadata.feed_seconds,seam.feed_seconds);
+          assert.deepEqual(metadata.machine,plain(sourcePlan.plan.options.machine));
+          assert.equal(metadata.machine_sha256,sourcePlan.machine_sha256);
+          assert.deepEqual(metadata.qualifications,plain(sourcePlan.qualifications));
+        }
+        await refuse(source,options,'join');
+        await refuse(source,options,'reinforce','cell-b');
+        await refuse(source,options,'reinforce','cell-a');
+      });
   });
 
 test('compiled WASM eligible routes replay exact native assignments, selected recipes and yarn through workers',

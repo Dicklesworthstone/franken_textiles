@@ -4832,6 +4832,20 @@ reports remain replayable, and relevant edits cancel obsolete work. This advance
 usable controls without another planner or comparison engine. Modeled schedules, dated observations
 and numerical replay do not establish empirical factory timing, garment fit or hardware authorization.
 
+### 25.147 Inspect qualified sewing geometry in its actual production cell
+
+The material workbench now exposes canonical per-operation SVG inspection after a complete
+sewing or recipe-selection result. Ordinary passes retain their distinct operation IDs;
+configured and routed cells use their own qualified source plans and selected garment-copy
+scopes. Exact selected recipe options remain the source for previews and replay downloads.
+Admitted idle geometry stays distinguishable from selected production.
+
+The renderer validates the complete retained job. Preview refusals preserve the independent
+sewing result, while source edits, selection changes and cancellation withdraw stale images.
+The two independent flat source frames do not establish machine registration, empirical seam
+quality or hardware authorization. This advances the usable manufacturing path in `ftx-tm7`
+and `ftx-sp2` through existing engines; physical process qualification remains open.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

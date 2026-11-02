@@ -234,6 +234,32 @@ order does not require proof of the shortest makespan. The separate deadline tab
 completion time, lower bound and timing proof, and downloaded reports preserve the exact inputs
 and source evidence.
 
+### Inspect the actual sewing operation and production cell
+
+After a successful **Evaluate sewing & stitch paths** or recipe-selection result, choose
+a **Sewing operation** and, for parallel or routed production, an explicit **Production cell**.
+**Preview selected sewing operation** calls the canonical native SVG renderer with the exact
+retained pattern and evaluated options. A selected recipe uses its `selected_options_json`,
+including the selected route's machines and qualifications; the search template is not replayed.
+
+Separate passes over one seam keep their own operation IDs. Configured cells offer only their
+own source operations, and routed cells use their retained specialist plans. The summary shows
+the selected garment copy IDs for that operation. An admitted idle cell or unused eligible
+operation may be inspected, with its empty copy list stated explicitly.
+
+The SVG distinguishes exterior cuts, original seam lines, offset stitch paths, needle stations,
+and the source-qualified geometry supported by that operation. Its two flat source frames are
+laid out independently; their display translations do not establish machine registration.
+The exact SVG, original pattern, evaluated options and chosen operation/cell are downloadable.
+No geometry is recreated in JavaScript.
+
+A preview-only refusal preserves the completed sewing result and its downloads. Changing a
+selector cancels a pending preview and withdraws its image; changing recipes, selection mode,
+material bindings or source pattern also withdraws the retained preview inputs. Cancellation
+and late worker responses cannot restore obsolete images. A search without an admitted
+incumbent provides no preview. Inspection does not certify physical seam quality or authorize
+hardware execution.
+
 ### Reuse the selected body in manufacturing and scenario studies
 
 Section 4 has an explicit **Body source for body-dependent studies** choice. It applies to fresh

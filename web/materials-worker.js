@@ -629,6 +629,31 @@ self.onmessage = async ({ data: msg }) => {
         }
         break;
       }
+      case "sewPreview": {
+        if (typeof msg.pattern !== "string" || typeof msg.options !== "string") {
+          throw Error("Sewing preview requires the exact retained pattern and options JSON text.");
+        }
+        const identity = value => typeof value === "string" && value.trim().length > 0 && value.length <= 512;
+        if (!identity(msg.operation) || (msg.cell !== undefined && !identity(msg.cell))) {
+          throw Error("Choose a retained sewing operation and, when required, an explicit machine cell.");
+        }
+        // The native renderer rebuilds the complete qualified job and chooses the actual cell's
+        // source geometry. A preview refusal does not replace the separately retained stitch plan.
+        if (msg.cell === undefined) {
+          if (typeof ftx.sew_svg !== "function") throw Error("Rebuild web/pkg: missing canonical sewing previews.");
+          picture = ftx.sew_svg(msg.pattern, msg.options, msg.operation);
+        } else {
+          if (typeof ftx.sew_cell_svg !== "function") throw Error("Rebuild web/pkg: missing canonical sewing cell previews.");
+          picture = ftx.sew_cell_svg(msg.pattern, msg.options, msg.cell, msg.operation);
+        }
+        if (typeof picture !== "string" || !picture.trim()) throw Error("The sewing engine returned no preview SVG.");
+        const selected = { operation: msg.operation, cell: msg.cell ?? null };
+        result = { ...selected, hardware_execution_authorized: false };
+        files = [file("sewing-preview.svg", picture, "image/svg+xml"),
+          file("sewing-options.json", msg.options), file("original-pattern.json", msg.pattern),
+          file("sewing-preview-selection.json", selected)];
+        break;
+      }
       case "exports": {
         for (const fragment of [msg.pattern, msg.fit, msg.measurements]) json(fragment);
         const round = ftx.run(`{"pattern":${msg.pattern},"fit_spec":${msg.fit},"body":{"mode":"file","measurements":${msg.measurements}}}`, msg.today, msg.created);

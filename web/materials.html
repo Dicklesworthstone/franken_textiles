@@ -327,6 +327,16 @@ a work-limited feasible result does not prove an optimum. These are dated observ
 <label>Sewing recipe and machine limits JSON <input id="sewOptions" type="file" accept=".json,application/json"></label>
 <label><input id="sewOptimize" type="checkbox"> Choose from listed sewing recipes and routes</label>
 <button id="sew" data-command="sew" disabled>Evaluate sewing &amp; stitch paths</button>
+<div id="sewPreviewControls" hidden>
+<label id="sewPreviewCellLabel" hidden>Production cell <select id="sewPreviewCell" disabled></select></label>
+<label>Sewing operation <select id="sewPreviewOperation" disabled></select></label>
+<p id="sewPreviewSummary" class="note" aria-live="polite"></p>
+<button id="sewPreview" data-command="sewPreview" disabled>Preview selected sewing operation</button>
+<p class="note">Inspect and download the canonical stitch geometry in two independent flat source frames.
+Each configured or routed cell uses its own retained machine, qualifications and operation geometry.
+These source frames do not establish machine registration, physical seam quality or authorization to execute hardware.
+A preview refusal preserves the complete sewing result and its downloads.</p>
+</div>
 <p class="note">To compare recipes or routes directly, enable the choice above and load an
 <code>ftx-sewing-selection</code> request in the same file input. Declare the objective, candidate recipes
 or fixed routes, work limits, qualifications and any deadline. Review every trial, the selected complete
@@ -860,5 +870,6 @@ including synchronous simulation. Raw reports and exact input JSON are downloada
 <section><h2>Current results</h2><pre id="progress" aria-live="polite"></pre>
 <div id="outputs"></div><iframe id="viewer" title="Current material drape" sandbox="allow-scripts" hidden></iframe>
 <img id="marker" alt="First material roll preview" hidden>
-<img id="stockMarker" alt="First allocated finite-stock item with defect exclusions" hidden></section>
+<img id="stockMarker" alt="First allocated finite-stock item with defect exclusions" hidden>
+<img id="sewingPreview" alt="Independent flat source frames for the selected sewing operation" hidden></section>
 </main><script type="module" src="materials-page.js"></script></body></html>

@@ -3,7 +3,7 @@ import { buildMaterialStudyRequest } from "./materials-study-builder.js";
 
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
-const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "stockIdentities", "stockPrice", "cutJob", "price", "sew"];
+const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "stockIdentities", "stockPrice", "cutJob", "price", "sew", "sewPreview"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "treatment", "vapor", "calibrate",
   "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode", "bodyCheck"];
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
@@ -20,6 +20,7 @@ const roundFiles = new Map();
 let photoEvidence = null, photoTransfer = null, photoProblem = null;
 let interfaceChange = null, interfaceRead = 0, interfaceReady = true;
 let calibratedPair = null;
+let sewingPreviewSource = null;
 const pieceChanges = new Map(), urls = new Map();
 const combinationGroups = new Map();
 const studyCandidates = [];
@@ -48,7 +49,7 @@ for (const op of operations) {
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
     stripHistory: "Strip loading and recovery", vaporSurface: "Vapor transfer on this drape",
     stripFit: "Clamped-strip identification", outfit: "Imported joint outfit", cutJob: "Complete mixed cutting job",
-    stockIdentities: "Exact physical-stock identities", stockPrice: "Whole-item finite-stock prices",
+    stockIdentities: "Exact physical-stock identities", stockPrice: "Whole-item finite-stock prices", sewPreview: "Sewing operation preview",
     garmentcode: "Imported GarmentCode pattern — review required", bodyCheck: "Body target comparison" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
@@ -153,6 +154,10 @@ function controls() {
   $("cutJob").disabled ||= !has("cutJobRequest");
   $("price").disabled ||= !has("cutOptions") || !has("quotes") || !has("market");
   $("sew").disabled ||= !has("sewOptions");
+  $("sewPreview").disabled ||= !currentSewingPreviewOperation();
+  const previewBlocked = !!pending && pending.op !== "sewPreview";
+  $("sewPreviewCell").disabled = !sewingPreviewSource?.requiresCell || previewBlocked;
+  $("sewPreviewOperation").disabled = !currentSewingPreviewCell() || previewBlocked;
   $("heat").disabled ||= !drape || !has("heatConditions");
   $("vaporSurface").disabled ||= !drape || !has("vaporSurfaceConditions");
   $("coverage").disabled ||= !drape || !has("map") || !has("coverageConditions");
@@ -161,6 +166,7 @@ function controls() {
 }
 function clear(keys) {
   if (keys.includes("bind") && !keys.includes("treatment")) keys = [...keys, "treatment"];
+  if (keys.includes("sew") && !keys.includes("sewPreview")) keys = [...keys, "sewPreview"];
   for (const key of keys) {
     for (const url of urls.get(key) || []) URL.revokeObjectURL(url);
     urls.delete(key);
@@ -171,6 +177,12 @@ function clear(keys) {
     if (key === "fold") { drape = null; $("viewer").hidden = true; $("viewer").removeAttribute("src"); }
     if (key === "cut") { $("marker").hidden = true; $("marker").removeAttribute("src"); }
     if (key === "stock") { $("stockMarker").hidden = true; $("stockMarker").removeAttribute("src"); }
+    if (key === "sewPreview") { $("sewingPreview").hidden = true; $("sewingPreview").removeAttribute("src"); }
+    if (key === "sew") {
+      sewingPreviewSource = null; $("sewPreviewControls").hidden = true;
+      $("sewPreviewCell").replaceChildren(); $("sewPreviewOperation").replaceChildren();
+      $("sewPreviewSummary").textContent = "";
+    }
     if (key === "bind") { bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren(); }
     if (key === "treatment") preparedTreatment = null;
     if (key === "garmentcode") { preparedImport = null; $("useGarmentcodeFit").checked = false; }
@@ -199,12 +211,12 @@ function start() {
     if (msg.type === "loadError") { ready = false; error(`Cannot load web/pkg: ${msg.message}. Build the browser bundle first.`); controls(); return; }
     if (msg.request !== pending?.id) return;
     if (msg.type === "progress") { $("progress").textContent = msg.text; return; }
-    const op = pending.op; pending = null;
+    const request = pending, op = request.op; pending = null;
     if (msg.type === "error") {
       error(msg.message); $("status").textContent = `${op} refused; no current result published.`;
       if (msg.fatal) { ready = false; error(`${msg.message}. Reload this page to restart the engine.`); }
     } else if (msg.type === "result") {
-      show(op, msg); $("status").textContent = `${op} complete. Results describe only the retained inputs.`;
+      show(op, msg, request); $("status").textContent = `${op} complete. Results describe only the retained inputs.`;
     }
     $("progress").textContent = ""; controls();
   };
@@ -215,6 +227,7 @@ function start() {
   };
 }
 function invalidate(keys, dependentOnly = false) {
+  if (keys.includes("sew") && !keys.includes("sewPreview")) keys = [...keys, "sewPreview"];
   if (pending && (!dependentOnly || keys.includes(pending.op))) start(); // terminate affected Rust work; never wait for its stale success
   clear(keys); $("error").hidden = true; $("progress").textContent = ""; controls();
 }
@@ -2749,6 +2762,75 @@ function sewingAccess(parent, plan, label = "Selected sewing plan") {
     "Operations without a retained result remain unchecked.";
   parent.append(note);
 }
+// Choices reference retained producer plans; preview geometry is always rendered by Rust.
+function sewingPreviewCells(plan) {
+  const routing = plan.production?.routing, parallel = plan.production?.parallel;
+  if (routing) return (routing.cell_plans || []).map(source => ({ cell: source.cell, plan: source.plan,
+    copies: [...new Set((routing.selected?.operations || []).filter(row => row.cell === source.cell).map(row => row.copy))],
+    routedOperations: (routing.selected?.operations || []).filter(row => row.cell === source.cell) }));
+  if (parallel) {
+    const configured = !!parallel.cell_plans?.length;
+    return (parallel.selected?.cells || []).map(cell => ({ cell: cell.cell, copies: cell.copies,
+      plan: configured ? parallel.cell_plans.find(source => source.cell === cell.cell)?.plan : plan }));
+  }
+  return [{ cell: null, plan }];
+}
+function currentSewingPreviewCell() {
+  if (!sewingPreviewSource) return null;
+  return sewingPreviewSource.cells.find(cell => cell.cell ===
+    (sewingPreviewSource.requiresCell ? $("sewPreviewCell").value : null)) || null;
+}
+function currentSewingPreviewOperation() {
+  return currentSewingPreviewCell()?.plan?.seams?.find(row =>
+    (row.pass.id ?? row.pass.seam) === $("sewPreviewOperation").value) || null;
+}
+function describeSewingPreviewSelection() {
+  const cell = currentSewingPreviewCell(), operation = currentSewingPreviewOperation();
+  if (!cell) {
+    $("sewPreviewSummary").textContent = "Choose an explicit production cell to inspect its own retained source operations.";
+    return;
+  }
+  if (!operation) {
+    $("sewPreviewSummary").textContent = "Choose a retained operation. Separate passes over the same seam keep their own operation identities.";
+    return;
+  }
+  const id = operation.pass.id ?? operation.pass.seam;
+  const copies = cell.routedOperations ? [...new Set(cell.routedOperations.filter(row => row.operation_id === id).map(row => row.copy))] : cell.copies;
+  $("sewPreviewSummary").textContent = `${id} on source seam ${operation.pass.seam}. ` +
+    (copies ? (copies.length ? `Selected garment copy IDs: [${copies.join(", ")}]. ` : "No selected garment copies use this cell and operation; its retained source geometry is available for inspection. ") : "Reference geometry for this operation. ") +
+    (sewingPreviewSource.selected ? "The preview uses the exact selected recipe options." : "The preview uses the exact evaluated sewing options.");
+}
+function refreshSewingPreviewOperations() {
+  const select = $("sewPreviewOperation"); select.replaceChildren();
+  const placeholder = document.createElement("option"); placeholder.value = "";
+  placeholder.textContent = "Choose a sewing operation"; select.append(placeholder);
+  for (const row of currentSewingPreviewCell()?.plan?.seams || []) {
+    const option = document.createElement("option"), id = row.pass.id ?? row.pass.seam;
+    option.value = id; option.textContent = `${id} — source seam ${row.pass.seam}`; select.append(option);
+  }
+  select.value = ""; describeSewingPreviewSelection();
+}
+function retainSewingPreview(result, request) {
+  const inputs = request?.sewingInputs, selected = !!result.selection;
+  const program = selected ? result.program : result;
+  const options = selected ? result.selection.selected_options_json : inputs?.options;
+  if (!inputs || typeof inputs.pattern !== "string" || typeof options !== "string" || !program?.plan) return;
+  const plan = program.plan;
+  sewingPreviewSource = { pattern: inputs.pattern, options, selected,
+    requiresCell: !!(plan.production?.routing || plan.production?.parallel), cells: sewingPreviewCells(plan) };
+  $("sewPreviewControls").hidden = false;
+  $("sewPreviewCellLabel").hidden = !sewingPreviewSource.requiresCell;
+  const select = $("sewPreviewCell"); select.replaceChildren();
+  const placeholder = document.createElement("option"); placeholder.value = "";
+  placeholder.textContent = "Choose a production cell"; select.append(placeholder);
+  for (const cell of sewingPreviewSource.cells) {
+    if (cell.cell === null) continue;
+    const option = document.createElement("option"); option.value = cell.cell;
+    option.textContent = `${cell.cell} — ${cell.copies?.length ? `garment copy IDs [${cell.copies.join(", ")}]` : "no selected garment copies"}`;
+    select.append(option);
+  }
+  select.value = ""; refreshSewingPreviewOperations();
+}
 function sewingResult(parent, r) {
   if (r.selection) {
     sewingSelection(parent, [{ key: "Current bound pattern", sewing_selection: { status: "available", result: r.selection.report } }]);
@@ -3400,7 +3482,7 @@ function stripResult(parent, op, r) {
   }
   return stripCalibrationResult(parent, r);
 }
-function show(op, msg) {
+function show(op, msg, request) {
   const r = msg.result;
   if (op === "catalog") {
     $("catalog").replaceChildren();
@@ -3548,12 +3630,17 @@ function show(op, msg) {
       if (op === "fold" && f.mime === "text/html") { $("viewer").src = url; $("viewer").hidden = false; }
       if (op === "cut" && f.mime === "image/svg+xml") { $("marker").src = url; $("marker").hidden = false; }
       if (op === "stock" && f.mime === "image/svg+xml") { $("stockMarker").src = url; $("stockMarker").hidden = false; }
+      if (op === "sewPreview" && f.name === "sewing-preview.svg" && f.mime === "image/svg+xml") {
+        $("sewingPreview").src = url; $("sewingPreview").hidden = false;
+        $("sewingPreview").alt = `Independent flat source frames for sewing operation ${r.operation}${r.cell ? ` on cell ${r.cell}` : ""}`;
+      }
       if (["screen", "study", "scenario"].includes(op) && ["screen-request.json", "study-request.json"].includes(f.name)) {
         detail(s.comparison, `${f.name}: declared objectives, evidence and process policy (display only)`, JSON.parse(f.text));
       }
     }
     // The parsed result is for display only: JSON.stringify changes 1.0/-0.0 and breaks locks.
     if (op === "fold") drape = msg.reportText;
+    if (op === "sew") retainSewingPreview(r, request);
   }
 }
 async function read(id, binary = false) {
@@ -3905,9 +3992,17 @@ async function execute(op) {
       if (op === "cutJob") msg.cutJobRequest = await read("cutJobRequest");
       if (op === "price") { msg.quotes = await read("quotes"); msg.market = await read("market"); }
       if (op === "sew") { msg.options = await read("sewOptions"); msg.selectRecipes = $("sewOptimize").checked; }
+      if (op === "sewPreview") {
+        const cell = currentSewingPreviewCell(), operation = currentSewingPreviewOperation();
+        if (!sewingPreviewSource || !cell || !operation) throw Error("Evaluate sewing, then choose a retained cell and operation before previewing.");
+        msg.pattern = sewingPreviewSource.pattern; msg.options = sewingPreviewSource.options;
+        msg.operation = operation.pass.id ?? operation.pass.seam;
+        if (cell.cell !== null) msg.cell = cell.cell;
+      }
     }
     if (outfit && (op === "bind" || boundOperations.includes(op) || op === "study" || op === "scenario")) msg.outfit = outfit;
     if (pending?.id !== id) return;
+    if (op === "sew") pending.sewingInputs = { pattern: msg.pattern, options: msg.options };
     worker.postMessage(msg, msg.bytes ? [msg.bytes] : []);
   } catch (e) {
     if (pending?.id !== id) return;
@@ -3964,7 +4059,13 @@ for (const id of ["studyTarget", "studyPieces", "guidedCutting", "guidedCuttingS
   if (id.endsWith("Limit") || ["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance"].includes(id)) $(id).addEventListener("input", changed);
 }
 $("rollPreview").addEventListener("change", () => invalidate(["cut"]));
-$("cancel").onclick = () => { cancelPhotoReturn(); start(); $("status").textContent = "Cancelled; reloading local engine."; };
+$("sewPreviewCell").addEventListener("change", () => {
+  invalidate(["sewPreview"], true); refreshSewingPreviewOperations(); controls();
+});
+$("sewPreviewOperation").addEventListener("change", () => {
+  invalidate(["sewPreview"], true); describeSewingPreviewSelection(); controls();
+});
+$("cancel").onclick = () => { cancelPhotoReturn(); clear(["sewPreview"]); start(); $("status").textContent = "Cancelled; reloading local engine."; };
 $("catalog").onchange = () => {
   if (!$("catalog").value) return;
   invalidateThermalPoint();
