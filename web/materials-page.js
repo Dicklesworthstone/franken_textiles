@@ -23,6 +23,19 @@ let calibratedPair = null;
 const pieceChanges = new Map(), urls = new Map();
 const combinationGroups = new Map();
 const studyCandidates = [];
+const guidedMetrics = [
+  ["guidedArea", "stock_area_m2"], ["guidedStockMass", "stock_mass_kg"], ["guidedMass", "assembly_mass_kg"],
+  ["guidedCutTime", "cutting_modeled_path_seconds"], ["guidedSewTime", "sewing_modeled_production_seconds"],
+  ["guidedMakespan", "sewing_parallel_makespan_seconds"], ["guidedOrderCost", "selected_observed_order_cost"],
+  ["guidedThreadLength", "thread_required_length_m"], ["guidedThreadCost", "thread_observed_order_cost"],
+  ["guidedCombinedCost", "cut_and_sew_selected_order_cost"],
+];
+const guidedRequired = [
+  ["guidedRequireCutting", "cutting"], ["guidedRequireCutProgram", "cutting_program"],
+  ["guidedRequireSewing", "sewing"], ["guidedRequirePurchasing", "purchasing"],
+  ["guidedRequireThread", "sewing_consumables"], ["guidedRequireThreadPurchasing", "sewing_purchasing"],
+  ["guidedRequireCombined", "cut_and_sew_purchasing"], ["guidedRequireMass", "assembly_mass"],
+];
 let studyCandidateSequence = 0;
 const outfitTargets = new Map();
 const sections = new Map();
@@ -59,6 +72,13 @@ function bodyDependentStudies(id) {
     (["bodyFitFile", "bodyFitConsent", "bodyArmDeg"].includes(id) && mode === "accepted");
   return used ? ["scenario", ...($("studyOnBody").checked ? ["study"] : [])] : [];
 }
+function guidedSourceStudies(id) {
+  if (!guidedStudyMode()) return [];
+  const used = (id === "cutOptions" && $("guidedCutting").checked && $("guidedCuttingSource").value === "file") ||
+    (["sewOptions", "sewOptimize"].includes(id) && $("guidedSewing").checked) ||
+    (["quotes", "market"].includes(id) && $("guidedPurchasing").checked);
+  return used ? ["study", "scenario"] : [];
+}
 function controls() {
   const guided = guidedStudyMode();
   for (const el of commands) el.disabled = !ready || !!pending;
@@ -76,9 +96,15 @@ function controls() {
   $("guidedStudy").hidden = !guided;
   $("studyFileControls").hidden = guided;
   $("studyPieces").disabled = !source || $("studyTarget").value !== "pieces";
-  for (const id of ["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAreaGoal", "guidedStockMassGoal"]) {
-    $(id).disabled = !$("guidedCutting").checked;
-  }
+  const rollFile = $("guidedCuttingSource").value === "file";
+  $("guidedCuttingSource").disabled = !$("guidedCutting").checked;
+  $("guidedRollForm").hidden = rollFile;
+  for (const id of ["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd"]) $(id).disabled = !$("guidedCutting").checked || rollFile;
+  for (const id of ["guidedAreaGoal", "guidedStockMassGoal"]) $(id).disabled = !$("guidedCutting").checked;
+  $("guidedCutTimeGoal").disabled = !$("guidedCutting").checked || !rollFile;
+  for (const id of ["guidedSewTimeGoal", "guidedMakespanGoal", "guidedThreadLengthGoal", "guidedThreadCostGoal"]) $(id).disabled = !$("guidedSewing").checked;
+  $("guidedOrderCostGoal").disabled = !$("guidedPurchasing").checked;
+  $("guidedCombinedCostGoal").disabled = !$("guidedCombinedCost").checked;
   $("guidedInventory").disabled = !$("guidedMass").checked;
   $("clearGuidedInventory").disabled = !has("guidedInventory");
   $("guidedInventoryComplete").disabled = !$("guidedMass").checked || has("guidedInventory");
@@ -3638,25 +3664,60 @@ async function guidedStudyInput() {
   if (!target) throw Error("Choose the pattern assignment to compare.");
   const allowance = $("guidedAllowance").value.trim() ?
     { seam_allowance_mm: number("guidedAllowance", "seam allowance in millimetres") } : {};
-  const cutting = $("guidedCutting").checked ? {
+  const rollSource = $("guidedCuttingSource").value || "form";
+  if (!["form", "file"].includes(rollSource)) throw Error("Choose the roll form or original roll-planning file.");
+  const cutting = $("guidedCutting").checked && rollSource === "form" ? {
     copies: number("guidedCopies", "whole garment copy count"), gap_mm: number("guidedGap", "piece gap in millimetres"),
     edge_margin_mm: number("guidedEdge", "side margin in millimetres"), end_margin_mm: number("guidedEnd", "end margin in millimetres"),
     ...allowance,
   } : undefined;
-  const objectives = [["guidedAreaGoal", "stock_area_m2"], ["guidedStockMassGoal", "stock_mass_kg"],
-    ["guidedMassGoal", "assembly_mass_kg"]].filter(([id]) => $(id).checked).map(([, metric]) => ({ metric, direction: "minimize" }));
-  // Snapshot every control before the optional asynchronous inventory read. execute() admits the
-  // result only while its request ID remains current; no download or visible state is made here.
+  const objectives = guidedMetrics.filter(([id]) => $(`${id}Goal`).checked).map(([, metric]) => ({ metric, direction: "minimize" }));
+  const limitBasis = $("guidedLimitBasis").value || "inherit";
+  if (!["inherit", "nominal", "reported_bounds"].includes(limitBasis)) throw Error("Choose the basis for comparison limits.");
+  const constraints = guidedMetrics.filter(([id]) => $(`${id}Limit`).value.trim()).map(([id, metric]) => ({
+    metric, maximum: number(`${id}Limit`, `maximum for ${metric}`), ...(limitBasis === "inherit" ? {} : { basis: limitBasis }),
+  }));
+  const requiredConsumers = guidedRequired.filter(([id]) => $(id).checked).map(([, consumer]) => consumer);
+  // Freeze controls AND files before any read. execute() rejects an obsolete request after edits;
+  // original UTF-8 fragments reach Rust without JS number reserialization or BOM replacement.
   const input = { candidates: studyCandidates.map(candidate => ({ ...candidate })), target,
-    pieceIds: source.pieces.map(p => p.id), ...(cutting ? { cutting } : {}), objectives, basis: $("guidedBasis").value };
+    pieceIds: source.pieces.map(p => p.id), ...(cutting ? { cutting } : {}), objectives, constraints,
+    requiredConsumers, basis: $("guidedBasis").value };
+  const retained = [], budget = 16 * 1024 * 1024;
+  let sourceBytes = 0;
+  const retain = (key, id, label) => {
+    const original = roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
+    if (!original) throw Error(`Choose ${label} first.`);
+    sourceBytes += typeof original === "string" ? new Blob([original]).size : original.size;
+    if (sourceBytes > budget) throw Error("Guided study source files exceed 16 MiB combined; no source was read.");
+    retained.push({ key, original });
+  };
+  if ($("guidedCutting").checked && rollSource === "file") retain("cutting", "cutOptions", "the original roll-planning options in section 3");
+  if ($("guidedSewing").checked) retain($("sewOptimize").checked ? "sewingSelection" : "sewing", "sewOptions", "the original sewing request in section 3");
+  if ($("guidedPurchasing").checked) {
+    retain("quotes", "quotes", "the dated quote book in section 3");
+    retain("market", "market", "the comparable market in section 3");
+  }
+  if ($("guidedCombinedCost").checked) input.cutAndSewPurchasing = true;
   if ($("guidedMass").checked) {
-    if (has("guidedInventory")) {
-      const raw = await read("guidedInventory");
-      if (Object.hasOwn(allowance, "seam_allowance_mm") && JSON.parse(raw)?.seam_allowance_mm !== allowance.seam_allowance_mm) {
-        throw Error("The inventory file must use the same explicit seam allowance override.");
-      }
-      input.assemblyMass = raw;
-    } else input.assemblyMass = { schema: "ftx-assembly-mass/1", inventory_complete: $("guidedInventoryComplete").checked, extras: [], ...allowance };
+    if (has("guidedInventory")) retain("assemblyMass", "guidedInventory", "the sourced assembly inventory");
+    else input.assemblyMass = { schema: "ftx-assembly-mass/1", inventory_complete: $("guidedInventoryComplete").checked, extras: [], ...allowance };
+  }
+  const fragments = Object.fromEntries(await Promise.all(retained.map(async ({ key, original }) => {
+    const raw = typeof original === "string" ? original : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await original.arrayBuffer());
+    if (new Blob([raw]).size > budget) throw Error("Guided study source exceeds 16 MiB.");
+    JSON.parse(raw);
+    return [key, raw];
+  })));
+  for (const key of ["cutting", "sewing", "sewingSelection", "assemblyMass"]) {
+    if (Object.hasOwn(fragments, key)) input[key] = fragments[key];
+  }
+  if (Object.hasOwn(fragments, "quotes")) input.purchasing = { quotes: fragments.quotes, market: fragments.market };
+  for (const key of ["cutting", "assemblyMass"]) {
+    if (Object.hasOwn(fragments, key) && Object.hasOwn(allowance, "seam_allowance_mm") &&
+      JSON.parse(fragments[key])?.seam_allowance_mm !== allowance.seam_allowance_mm) {
+      throw Error("Retained cutting and inventory files must use the same explicit seam allowance override; their source policy is not rewritten.");
+    }
   }
   return buildMaterialStudyRequest(input);
 }
@@ -3861,17 +3922,25 @@ $("clearGuidedInventory").onclick = () => {
   $("guidedInventory").value = ""; roundFiles.delete("guidedInventory");
   if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
 };
-for (const id of ["studyTarget", "studyPieces", "guidedCutting", "guidedMass", "guidedInventoryComplete", "guidedInventory",
-  "guidedAreaGoal", "guidedStockMassGoal", "guidedMassGoal", "guidedBasis", "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance"]) {
+for (const id of ["studyTarget", "studyPieces", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
+  "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis",
+  "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
+  ...guidedMetrics.flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]), ...guidedRequired.map(([id]) => id)]) {
   const changed = () => {
     if (id === "guidedCutting" && !$(id).checked) {
-      $("guidedAreaGoal").checked = false; $("guidedStockMassGoal").checked = false;
+      $("guidedAreaGoal").checked = false; $("guidedStockMassGoal").checked = false; $("guidedCutTimeGoal").checked = false;
     }
+    if (id === "guidedCuttingSource" && $(id).value !== "file") $("guidedCutTimeGoal").checked = false;
     if (id === "guidedMass" && !$(id).checked) $("guidedMassGoal").checked = false;
+    if (id === "guidedSewing" && !$(id).checked) {
+      for (const goal of ["guidedSewTimeGoal", "guidedMakespanGoal", "guidedThreadLengthGoal", "guidedThreadCostGoal"]) $(goal).checked = false;
+    }
+    if (id === "guidedPurchasing" && !$(id).checked) $("guidedOrderCostGoal").checked = false;
+    if (id === "guidedCombinedCost" && !$(id).checked) $("guidedCombinedCostGoal").checked = false;
     if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
   };
   $(id).addEventListener("change", changed);
-  if (["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance"].includes(id)) $(id).addEventListener("input", changed);
+  if (id.endsWith("Limit") || ["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance"].includes(id)) $(id).addEventListener("input", changed);
 }
 $("rollPreview").addEventListener("change", () => invalidate(["cut"]));
 $("cancel").onclick = () => { cancelPhotoReturn(); start(); $("status").textContent = "Cancelled; reloading local engine."; };
@@ -4130,7 +4199,8 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
       if (id === "body") showReceivedBody();
     }
-    invalidate([...keys, ...bodyDependentStudies(id)], ["measurements", "fit", "body", "selfContact", "scenarioBody"].includes(id));
+    const guidedKeys = guidedSourceStudies(id);
+    invalidate([...keys, ...bodyDependentStudies(id), ...guidedKeys], guidedKeys.length > 0 || ["measurements", "fit", "body", "selfContact", "scenarioBody"].includes(id));
   });
 }
 for (const id of ["drapeLegFraction", "maxSettleSteps"]) {

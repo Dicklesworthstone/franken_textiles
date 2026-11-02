@@ -4816,6 +4816,22 @@ This advances `ftx-tm7`. The bounded software model does not infer offset heads,
 axial/spindle trajectories, chip handling, workholding adequacy or measured cut/hole quality. Independent
 process coupons and hardware interlocks remain separate qualification and execution requirements.
 
+### 25.146 Guided material choices include qualified manufacturing time and complete orders
+
+The materials workbench now builds manufacturing comparisons from inspected material choices and
+original cutting, sewing/recipe-selection, quote-book and market files. Each alternative reruns the
+existing Rust consumers with its declared material substitutions. Goals include qualified knife time, serial
+sewing production, multi-cell makespan, thread quantities and selected fabric/thread order costs,
+alongside the existing roll and assembly-mass goals. Combined orders require matching source markets
+and production quantities; missing qualifications and incomplete results remain explicit refusals.
+
+Inclusive maximums and independently required consumers exclude unsuitable alternatives without
+hiding their valid results. Explicit nominal guards can accompany a reported-range mass objective;
+no time or cost uncertainty is invented. Original source bytes, generated requests and complete
+reports remain replayable, and relevant edits cancel obsolete work. This advances `ftx-ms2` through
+usable controls without another planner or comparison engine. Modeled schedules, dated observations
+and numerical replay do not establish empirical factory timing, garment fit or hardware authorization.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

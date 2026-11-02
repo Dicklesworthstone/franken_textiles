@@ -1326,7 +1326,10 @@ async function pageModule({roundToken=null}={}) {
     return new vm.SourceTextModule(read('materials-study-builder.js'), { context });
   }); await module.evaluate();
   const current = () => workers.at(-1), ready = () => current().emit({ type: 'ready' }); ready();
-  const select = (id, text = '{}') => { e[id].files = [{ name: `${id}.json`, size: text.length, text: async () => text }]; };
+  const select = (id, text = '{}') => {
+    const bytes=new TextEncoder().encode(text);
+    e[id].files = [{ name: `${id}.json`, size: bytes.length, text: async () => text, arrayBuffer:async()=>bytes.buffer }];
+  };
   const emit = (result, files = [], reportText = JSON.stringify(result)) => current().emit({ type: 'result', request: current().messages.at(-1).request, result, files, reportText });
   const pattern = { pieces: [{ id: 'front' }, { id: 'lining' }] };
   const load = async () => { select('patternFile', JSON.stringify(pattern)); await e.patternFile.onchange(); };
@@ -5402,6 +5405,7 @@ const guidedSelection = (lock = 'a', id = '<reviewed cloth>') =>
 function guidedControls(p) {
   Object.assign(p.e.studyMode, {value:'guided'});
   p.e.studyTarget.value='default';p.e.guidedBasis.value='nominal';
+  p.e.guidedCuttingSource.value='form';p.e.guidedLimitBasis.value='inherit';
   p.e.guidedCutting.checked=true;p.e.guidedAreaGoal.checked=true;
   p.e.guidedCopies.value='1';p.e.guidedGap.value='2';p.e.guidedEdge.value='5';p.e.guidedEnd.value='10';
   p.e.studyMode.handlers.change();
@@ -5495,6 +5499,109 @@ test('guided shortlists reject duplicate names and snapshots while retaining dis
   assert.notEqual(request.variants[1].changes.default.expected_sha256,request.variants[2].changes.default.expected_sha256);
 });
 
+function guidedManufacturingSources(p, optimize = false) {
+  const token='"source":{"value":1.0,"signed":-0.0,"sample":18446744073709551615}';
+  const sources={
+    cutOptions:' {"copies":2,"gap_mm":1.0,"edge_margin_mm":0,"end_margin_mm":0,"program":{'+token+'}}\r\n',
+    sewOptions:optimize?' {"options":{"consumables":{"purchasing":{'+token+'}}},"choices":[]}\r\n':
+      ' {"consumables":{"purchasing":{'+token+'}}}\r\n',
+    quotes:' {"schema":"ftx-fabric-quotes/1",'+token+'}\r\n',
+    market:' {"currency":"USD",'+token+'}\r\n',
+  };
+  p.e.guidedCuttingSource.value='file';p.e.guidedCuttingSource.handlers.change();
+  p.e.guidedSewing.checked=true;p.e.guidedSewing.handlers.change();
+  p.e.sewOptimize.checked=optimize;p.e.sewOptimize.handlers.change();
+  p.e.guidedPurchasing.checked=true;p.e.guidedPurchasing.handlers.change();
+  for(const [id,raw] of Object.entries(sources)){p.select(id,raw);p.e[id].handlers.change();}
+  return sources;
+}
+
+test('guided manufacturing transports original policies with bounded mass, nominal guards and explicit required results', async () => {
+  for(const optimize of [false,true]) {
+    const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+    const sources=guidedManufacturingSources(p,optimize);
+    p.e.guidedCombinedCost.checked=true;p.e.guidedCombinedCost.handlers.change();
+    p.e.guidedMass.checked=true;p.e.guidedMass.handlers.change();p.e.guidedInventoryComplete.checked=true;
+    p.e.guidedAreaGoal.checked=false;p.e.guidedMassGoal.checked=true;
+    p.e.guidedBasis.value='reported_bounds';p.e.guidedLimitBasis.value='nominal';
+    p.e.guidedCutTimeLimit.value='120';p.e.guidedSewTimeLimit.value='60';p.e.guidedCombinedCostLimit.value='0';
+    p.e.guidedRequireCutProgram.checked=true;p.e.guidedRequireCombined.checked=true;
+    // Form values are inactive in original-file mode, even when invalid.
+    p.e.guidedCopies.value='invalid';p.e.guidedGap.value='invalid';
+    await p.e.study.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'study',p.e.error.textContent);
+    for(const raw of Object.values(sources))assert.ok(sent.studyRequest.includes(raw));
+    const request=JSON.parse(sent.studyRequest);
+    assert.equal(request.cutting.copies,2);assert.equal(request.cut_and_sew_purchasing,true);
+    assert.deepEqual(request[optimize?'sewing_selection':'sewing'],JSON.parse(sources.sewOptions));
+    assert.equal(Object.hasOwn(request,optimize?'sewing':'sewing_selection'),false);
+    assert.deepEqual(request.comparison,{basis:'reported_bounds',allow_mixed_protocols:false,
+      objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
+      constraints:[{metric:'cutting_modeled_path_seconds',maximum:120,basis:'nominal'},
+        {metric:'sewing_modeled_production_seconds',maximum:60,basis:'nominal'},
+        {metric:'cut_and_sew_selected_order_cost',maximum:0,basis:'nominal'}],
+      required_consumers:['cutting_program','cut_and_sew_purchasing']});
+    p.emit(studyReport(),[{name:'study-request.json',text:sent.studyRequest}]);
+    const link=descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(n=>n.download==='study-request.json');
+    assert.equal(await p.blobs.get(link.href).text(),sent.studyRequest);
+  }
+});
+
+test('guided manufacturing cannot silently discard limits or required results when a consumer is disabled', async () => {
+  const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+  guidedManufacturingSources(p);p.e.guidedSewTimeGoal.checked=true;
+  p.e.guidedSewTimeLimit.value='60';p.e.guidedRequireSewing.checked=true;
+  p.e.guidedSewing.checked=false;p.e.guidedSewing.handlers.change();
+  assert.equal(p.e.guidedSewTimeGoal.checked,false);
+  assert.equal(p.e.guidedSewTimeLimit.value,'60');assert.equal(p.e.guidedRequireSewing.checked,true);
+  const before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/sewing/);
+  p.e.guidedSewTimeLimit.value='';await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/sewing/);
+  p.e.guidedRequireSewing.checked=false;await p.e.study.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+  assert.equal(Object.hasOwn(JSON.parse(sent.studyRequest),'sewing'),false);
+});
+
+test('guided manufacturing source reads reject invalid UTF-8, a BOM and an oversized combined input before dispatch', async () => {
+  for(const invalid of ['utf8','bom','budget']) {
+    const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+    const sources=guidedManufacturingSources(p);let reads=0;
+    for(const id of Object.keys(sources)) {
+      const file=p.e[id].files[0],read=file.arrayBuffer;
+      file.arrayBuffer=async()=>{reads++;return read();};
+      if(invalid==='budget')file.size=5*1024*1024;
+    }
+    if(invalid!=='budget') {
+      const bytes=invalid==='utf8'?new Uint8Array([0x7b,0x22,0xc3,0x28,0x22,0x3a,0x31,0x7d]):
+        new TextEncoder().encode('\ufeff'+sources.quotes);
+      p.e.quotes.files[0].arrayBuffer=async()=>{reads++;return bytes.buffer;};
+    }
+    const before=p.current().messages.length;await p.e.study.onclick();
+    assert.equal(p.current().messages.length,before,invalid);assert.ok(p.e.error.textContent,invalid);
+    if(invalid==='budget'){assert.equal(reads,0);assert.match(p.e.error.textContent,/16 MiB combined/);}
+    assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  }
+});
+
+test('guided manufacturing freezes source inputs and cancels delayed reads after process, limit or mode changes', async () => {
+  for(const change of ['cutOptions','sewOptions','sewOptimize','quotes','market','limit','required','mode','cancel']) {
+    const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+    const sources=guidedManufacturingSources(p),delay=deferred();let reading=false;
+    p.e.quotes.files[0].arrayBuffer=async()=>{reading=true;return new TextEncoder().encode(await delay.promise).buffer;};
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();assert.equal(reading,true,change);
+    if(change==='limit'){p.e.guidedSewTimeLimit.value='60';p.e.guidedSewTimeLimit.handlers.input();}
+    else if(change==='required'){p.e.guidedRequireSewing.checked=true;p.e.guidedRequireSewing.handlers.change();}
+    else if(change==='mode'){p.e.studyMode.value='file';p.e.studyMode.handlers.change();}
+    else if(change==='cancel')p.e.cancel.onclick();
+    else p.e[change].handlers.change();
+    assert.equal(old.dead,true,change);p.ready();delay.resolve(sources.quotes);await running;
+    assert.equal(old.messages.length,before,change);assert.equal(p.current().messages.length,0,change);
+    old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});
+    assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true,change);assert.equal(p.live.size,0,change);
+  }
+});
+
 test('guided garment-mass-only comparison uses explicit complete inventory without roll-cutting inputs', async () => {
   const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
   p.e.guidedCutting.checked=false;p.e.guidedCutting.handlers.change();
@@ -5553,7 +5660,7 @@ test('clearing a guided inventory recovers from malformed files and cancels pend
   assert.equal(s.hidden,true);assert.equal(p.live.size,0);
   assert.equal(p.e.guidedInventoryComplete.disabled,true);
   const delay=deferred();let reading=false;
-  input.files[0].text=()=>{reading=true;return delay.promise;};
+  input.files[0].arrayBuffer=async()=>{reading=true;return new TextEncoder().encode(await delay.promise).buffer;};
   const old=p.current(),messages=old.messages.length,running=p.e.study.onclick();
   assert.equal(reading,true);p.e.clearGuidedInventory.onclick();
   assert.equal(old.dead,true);assert.equal(input.files.length,0);
@@ -5614,7 +5721,7 @@ test('guided inventory reads cannot publish after edits, cancellation or source 
     p.e.guidedMass.checked=true;p.e.guidedMass.handlers.change();p.select('guidedInventory',inventory);
     p.e.guidedInventory.handlers.change();
     const delay=deferred();let reading=false;
-    p.e.guidedInventory.files[0].text=()=>{reading=true;return delay.promise;};
+    p.e.guidedInventory.files[0].arrayBuffer=async()=>{reading=true;return new TextEncoder().encode(await delay.promise).buffer;};
     const old=p.current(),running=p.e.study.onclick();assert.equal(reading,true,change);
     if(change==='quantity'){p.e.guidedCopies.value='2';p.e.guidedCopies.handlers.input();}
     else if(change==='target'){p.e.studyTarget.value='all';p.e.studyTarget.handlers.change();}
@@ -11411,4 +11518,95 @@ test('compiled WASM textile-water objectives, moving mass, scheduled phase momen
         }
       }
     } finally {globalThis.ftxProgress=previousProgress;}
+  });
+
+test('compiled WASM guided manufacturing compares complete orders and retains independent mass after a sewing refusal',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const module=new vm.SourceTextModule(read('materials-study-builder.js'));
+    await module.link(()=>{throw Error('Unexpected guided-builder import');});await module.evaluate();
+    const build=module.namespace.buildMaterialStudyRequest;
+    const source=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-sewing-pattern.json'),'utf8'));
+    for(const [key,value,unit] of [['width',0.1,'m'],['areal_density',0.2,'kg/m2']]) {
+      source.fabric.material.record.properties[key]={value,unit,evidence:'estimate',source:'test',
+        method:'Invented guided manufacturing software fixture; no measured textile claim'};
+    }
+    const freeze=value=>JSON.parse(ftx.material_inspect(JSON.stringify(value))).selection_json;
+    source.fabric.material=JSON.parse(freeze(source.fabric.material));
+    const changed=structuredClone(source.fabric.material);delete changed.expected_sha256;
+    changed.id=changed.record.id='synthetic-cheaper-unqualified-sheet';changed.record.properties.areal_density.value=0.1;
+    const selectionText=' \r\n'+freeze(changed)+'\r\n',selection=JSON.parse(selectionText);
+    const recipe=JSON.parse(fs.readFileSync(path.join(__dirname,'../examples/sewing-thread-cost-selection.json'),'utf8'));
+    for(const qualification of recipe.options.qualifications)qualification.materials=[source.fabric.material.expected_sha256,source.fabric.material.expected_sha256];
+    const procurement=recipe.options.consumables.purchasing,thread=procurement.quote_book.quotes[0];thread.available_quantity=16;
+    for(const [material,price] of [[source.fabric.material,3],[selection,1]]) {
+      procurement.quote_book.quotes.push({...thread,offer_id:`cloth-${material.id}`,sku:`cloth-${material.id}`,
+        material_id:material.id,material_sha256:material.expected_sha256,price,quantity:1,minimum_quantity:0.1,
+        order_increment:0.1,price_breaks:[]});
+    }
+    const cutting=' {"copies":2,"gap_mm":2.0,"edge_margin_mm":-0.0,"end_margin_mm":0.0}\r\n';
+    const sewingSelection=' '+JSON.stringify(recipe,null,2)+'\r\n',quotes=' '+JSON.stringify(procurement.quote_book,null,2)+'\n';
+    const market=' '+JSON.stringify(procurement.market,null,2)+'\r\n',pattern=JSON.stringify(source);
+    const state={candidates:[{key:'cheaper-unqualified',selection:selectionText}],target:{scope:'default'},pieceIds:['front','back'],
+      cutting,sewingSelection,purchasing:{quotes,market},cutAndSewPurchasing:true,
+      assemblyMass:{schema:'ftx-assembly-mass/1',inventory_complete:true,extras:[]},basis:'nominal',
+      objectives:[{metric:'cut_and_sew_selected_order_cost',direction:'minimize'}],
+      constraints:[{metric:'assembly_mass_kg',maximum:0.01,basis:'nominal'}],
+      requiredConsumers:['cut_and_sew_purchasing','assembly_mass']};
+    const studyRequest=build(state),w=await workerModule({bindings:ftx});
+    for(const raw of [cutting,sewingSelection,quotes,market,selectionText])assert.ok(studyRequest.includes(raw),'Original consumer/source text is embedded verbatim');
+    const result=await w.send({type:'study',request:771,pattern,studyRequest});assert.equal(result.type,'result',result.message);
+    assert.deepEqual(result.result,JSON.parse(ftx.material_study(pattern,studyRequest)));
+    assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
+    const baseline=result.result.alternatives.find(row=>row.key==='baseline'),changedRow=result.result.alternatives.find(row=>row.key==='cheaper-unqualified');
+    assert.equal(baseline.cut_and_sew_purchasing.status,'available');assert.equal(baseline.metrics.thread_observed_order_cost,14);
+    assert.ok(baseline.metrics.cut_and_sew_selected_order_cost>14);assert.equal(baseline.cut_and_sew_purchasing.result.production_copies,2);
+    assert.equal(baseline.cut_and_sew_purchasing.result.execution_authorized,false);
+    assert.equal(changedRow.purchasing.status,'available');assert.ok(changedRow.metrics.selected_observed_order_total<baseline.metrics.selected_observed_order_total);
+    assert.equal(changedRow.sewing.status,'refused');assert.equal(changedRow.cut_and_sew_purchasing.status,'refused');
+    assert.equal(changedRow.assembly_mass.status,'available');assert.ok(changedRow.metrics.assembly_mass_kg>0);
+    assert.ok(changedRow.metrics.assembly_mass_kg<baseline.metrics.assembly_mass_kg);
+    assert.deepEqual(result.result.comparison.frontier,['baseline']);
+    assert.equal(result.result.comparison.alternatives.find(row=>row.key==='cheaper-unqualified').eligible,false);
+    const costOnly=build({...state,objectives:[{metric:'selected_observed_order_cost',direction:'minimize'}],requiredConsumers:[]});
+    const screened=JSON.parse(ftx.material_study(pattern,costOnly));
+    assert.deepEqual(screened.comparison.frontier,['cheaper-unqualified'],'An explicitly fabric-only comparison may retain the independently priced cheaper stock');
+    assert.equal(screened.alternatives.find(row=>row.key==='cheaper-unqualified').sewing.status,'refused');
+    if(process.env.FTX_GUIDED_MANUFACTURING_REPLAY) {
+      const dir=process.env.FTX_GUIDED_MANUFACTURING_REPLAY;fs.mkdirSync(dir,{recursive:true});
+      for(const [name,raw] of Object.entries({'pattern.json':pattern,'selection.json':selectionText,'cutting.json':cutting,
+        'sewing-selection.json':sewingSelection,'quotes.json':quotes,'market.json':market,'study.json':studyRequest})) {
+        fs.writeFileSync(path.join(dir,name),raw,{flag:'wx'});
+      }
+    }
+  });
+
+test('compiled WASM guided production deadlines use qualified serial and parallel time without suppressing refusals',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const module=new vm.SourceTextModule(read('materials-study-builder.js'));
+    await module.link(()=>{throw Error('Unexpected guided-builder import');});await module.evaluate();
+    const build=module.namespace.buildMaterialStudyRequest;
+    const pattern=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-sewing-pattern.json'),'utf8');
+    const changed=JSON.parse(pattern).fabric.material;changed.id=changed.record.id='synthetic-unqualified-production-sheet';
+    const selection=JSON.parse(ftx.material_inspect(JSON.stringify(changed))).selection_json;
+    const base={candidates:[{key:'unqualified',selection}],target:{scope:'default'},pieceIds:['front','back'],basis:'nominal',requiredConsumers:['sewing']};
+    const w=await workerModule({bindings:ftx});
+    for(const [index,file,metric,known] of [[0,'sewing-handling-options.json','sewing_modeled_production_seconds',41.1],
+      [1,'sewing-heterogeneous-options.json','sewing_parallel_makespan_seconds',9.9]]) {
+      const sewing=fs.readFileSync(path.join(__dirname,'../examples',file),'utf8');
+      const state={...base,sewing,objectives:[{metric,direction:'minimize'}],constraints:[{metric,maximum:known,basis:'nominal'}]};
+      const studyRequest=build(state),result=await w.send({type:'study',request:780+index,pattern,studyRequest});
+      assert.equal(result.type,'result',result.message);assert.deepEqual(result.result,JSON.parse(ftx.material_study(pattern,studyRequest)));
+      assert.ok(studyRequest.includes(sewing));assert.deepEqual(result.result.comparison.frontier,['baseline']);
+      const baseline=result.result.alternatives.find(row=>row.key==='baseline');assert.ok(Math.abs(baseline.metrics[metric]-known)<1e-12);
+      assert.deepEqual(baseline.sewing.result,JSON.parse(ftx.sew_stitches(baseline.binding.result.pattern_json,sewing)).plan);
+      assert.equal(result.result.alternatives.find(row=>row.key==='unqualified').sewing.status,'refused');
+      const missed=JSON.parse(ftx.material_study(pattern,build({...state,constraints:[{metric,maximum:known-0.1,basis:'nominal'}]})));
+      assert.deepEqual(missed.comparison.frontier,[]);assert.equal(missed.alternatives[0].sewing.status,'available','An unmet comparison limit does not discard an independently computed schedule');
+    }
   });

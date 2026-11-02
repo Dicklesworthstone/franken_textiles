@@ -32,11 +32,38 @@ original pattern as `baseline`; staged assignments and the bound single-preview 
 silently replace it. Choose the pattern default, every source piece, or selected source pieces.
 Default substitution preserves explicit lining, cuff and other piece assignments.
 
-Declare the roll-cutting copies, gaps and margins and/or request assembly mass. Select one or more
-goals: roll stock area, roll stock mass or complete garment mass. The stock goals describe the
-declared batch; assembly mass describes one complete pattern expansion. Multiple goals use the
-existing Pareto comparison. Reported-range comparison supports assembly mass and requires complete
-source bounds; missing ranges and overlapping intervals are not replaced with guessed uncertainty.
+Declare roll-cutting copies, gaps and margins, or choose **Use the original roll-planning options
+selected in section 3**. That original file supplies its own copies, allowances, nesting and optional
+qualified knife program; inactive form entries are not merged into it. A modeled knife-time goal
+requires that program and its applicable machine/material qualifications. Assembly mass remains
+independently selectable, including when another manufacturing consumer refuses.
+
+Under **Sewing and purchasing**, reuse the original section-3 sewing request, dated quote book and
+market. The section-3 recipe-choice setting selects either one declared recipe or the existing
+bounded recipe/route search. Every material alternative reruns those consumers; an earlier preview
+is not reused as a substitute result. Sewing-only studies do not need a cutting request.
+**Combine complete fabric and selected sewing-thread orders** additionally requires fabric
+purchasing and a sewing request with thread purchasing. Their exact quote history, market and
+production count must agree, and shared-stock conflicts refuse the combined total.
+
+Choose goals for roll area/mass, complete garment mass, modeled knife time, serial sewing production
+time, multi-cell makespan, thread length, selected fabric cost, thread cost or their complete combined
+cost. Stock and cutting goals describe the declared batch; assembly mass describes one complete
+pattern expansion. Sewing quantities retain their source request's scope. Selected feasible order
+cost does not imply a proved minimum, and no price includes undeclared labor, trims or charges.
+Multiple goals retain the existing Pareto tradeoffs without a hidden combined score.
+
+Each **Maximum allowed** is an inclusive hard constraint, even if its goal checkbox is clear. Blank
+maximums impose no limit. **Other results every eligible alternative must provide** can require a
+qualified program, sewing plan, complete purchasing, thread quantities or assembly mass without
+making it an objective. A refused or missing required value excludes that alternative while its
+independent results remain inspectable. Disabling a consumer does not silently erase its guards.
+
+**Compare using** selects the objectives' basis. Reported ranges require complete assembly-mass
+bounds; missing ranges and overlapping intervals do not become guessed uncertainty. To impose time
+or price limits while minimizing bounded garment mass, choose **Nominal computed values** under
+**Apply maximums using**. Each generated constraint then explicitly records that nominal basis.
+Manufacturing time and cost do not acquire reported ranges from a bounded mass objective.
 
 Complete garment mass needs an explicit declaration that the pattern includes every part and
 attachment, or an original `ftx-assembly-mass/1` inventory file with its own declaration and sourced
@@ -50,9 +77,13 @@ an unfinished study that was reading the removed file.
 **Compare manufacturing alternatives** runs the same Rust study API as an authored file. Results
 retain each refusal and include the original pattern, exact generated request, full report and
 source-locked alternatives for replay. Changing a relevant input withdraws stale results and cancels
-affected work. **Load a complete study request (advanced)** preserves the existing design, finite
-stock, sewing, purchasing, scenario and grouped-combination paths. Guided choices do not infer a
-body, missing physical properties, prices or process qualification.
+affected work. Original source JSON is retained without rewriting its numeric tokens; invalid UTF-8,
+oversized inputs and missing requested files refuse. The source files together and the complete
+generated request each have a 16 MiB limit. Download the request for exact native/portable replay or
+load it in advanced mode.
+**Load a complete study request (advanced)** also retains design, finite/mixed-stock, scenario and
+grouped-combination workflows. Guided choices infer no body, missing properties, prices or process
+qualification. Modeled times are not measured factory throughput or authorization to run machinery.
 
 The examples use the existing source-bearing 3M insulation records and a clearly synthetic pattern.
 They compare reported mass/thickness/resistance, not whole-jacket warmth. Some candidate records

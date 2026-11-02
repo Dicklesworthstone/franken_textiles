@@ -13,6 +13,7 @@
 // --sewing-selection-proof DIR checks native captured fixed-route requests through direct recipe selection.
 // --mixed-cutting-proof DIR checks complete and process-refused native mixed cutting jobs on the real page.
 // --guided-study-proof checks shortlist authoring, actual native/WASM studies and generated-request replay.
+// --guided-manufacturing-proof DIR uses the small synthetic inputs emitted by the focused guided WASM test.
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
@@ -34,6 +35,9 @@ const outfitProof = process.argv.includes('--outfit-proof');
 const compressionProof = process.argv.includes('--compression-proof');
 const purchasingProof = process.argv.includes('--purchasing-proof');
 const guidedStudyProof = process.argv.includes('--guided-study-proof');
+const guidedManufacturingIndex = process.argv.indexOf('--guided-manufacturing-proof');
+if (guidedManufacturingIndex >= 0 && !process.argv[guidedManufacturingIndex + 1]) throw Error('--guided-manufacturing-proof requires the synthetic replay input directory');
+const guidedManufacturingProof = guidedManufacturingIndex < 0 ? null : path.resolve(process.argv[guidedManufacturingIndex + 1]);
 const areaIndex = process.argv.indexOf('--area-proof');
 if (areaIndex >= 0 && !process.argv[areaIndex + 1]) throw Error('--area-proof requires a native capture directory');
 const areaProof = areaIndex < 0 ? null : path.resolve(process.argv[areaIndex + 1]);
@@ -52,7 +56,7 @@ const sewingSelectionProof = sewingSelectionIndex < 0 ? null : path.resolve(proc
 const mixedCuttingIndex = process.argv.indexOf('--mixed-cutting-proof');
 if (mixedCuttingIndex >= 0 && !process.argv[mixedCuttingIndex + 1]) throw Error('--mixed-cutting-proof requires the native finite-knife capture directory');
 const mixedCuttingProof = mixedCuttingIndex < 0 ? null : path.resolve(process.argv[mixedCuttingIndex + 1]);
-assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,guidedStudyProof,areaProof,swatchAreaProof,fitProof,adaptiveProof,sewingSelectionProof,mixedCuttingProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
+assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,guidedStudyProof,guidedManufacturingProof,areaProof,swatchAreaProof,fitProof,adaptiveProof,sewingSelectionProof,mixedCuttingProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -102,6 +106,66 @@ const server = http.createServer((req, res) => {
   try {
     await page.goto(origin); await page.click('a[href="materials.html"]');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (guidedManufacturingProof) {
+      const retained=name=>fs.readFileSync(path.join(guidedManufacturingProof,name),'utf8');
+      const pattern=retained('pattern.json');
+      await page.setInputFiles('#patternFile',path.join(guidedManufacturingProof,'pattern.json'));
+      await page.waitForFunction(()=>!document.getElementById('bind').disabled);
+      await page.fill('#selection',retained('selection.json'));assert.equal(await run('inspect'),'');
+      await page.fill('#studyCandidateName','cheaper-unqualified');await page.click('#addStudyCandidate');
+      for(const [id,file] of [['cutOptions','cutting.json'],['sewOptions','sewing-selection.json'],['quotes','quotes.json'],['market','market.json']]) {
+        await page.setInputFiles('#'+id,path.join(guidedManufacturingProof,file));
+      }
+      await page.check('#sewOptimize');await page.selectOption('#guidedCuttingSource','file');
+      for(const id of ['guidedSewing','guidedPurchasing','guidedCombinedCost','guidedMass','guidedInventoryComplete',
+        'guidedCombinedCostGoal','guidedRequireCombined','guidedRequireMass'])await page.check('#'+id);
+      await page.uncheck('#guidedAreaGoal');await page.fill('#guidedMassLimit','0.01');await page.selectOption('#guidedLimitBasis','nominal');
+      const verify=async label=>{
+        assert.equal(await run('study'),'');
+        const request=await download('study-request.json'),raw=await download('material-study.json');
+        assert.equal(await download('original-pattern.json'),pattern);
+        for(const file of ['cutting.json','sewing-selection.json','quotes.json','market.json'])assert.ok(request.includes(retained(file)),file+' retains its exact original text');
+        const requestFile=path.join(work,`${label}-request.json`);fs.writeFileSync(requestFile,request,{flag:'wx'});
+        const report=JSON.parse(raw);assert.deepEqual(report,JSON.parse(invoke('study',path.join(guidedManufacturingProof,'pattern.json'),requestFile)));
+        return {request,requestFile,report};
+      };
+      const combined=await verify('guided-complete-order');
+      assert.deepEqual(combined.report.comparison.frontier,['baseline']);
+      const baseline=combined.report.alternatives.find(row=>row.key==='baseline'),changed=combined.report.alternatives.find(row=>row.key==='cheaper-unqualified');
+      assert.equal(baseline.metrics.thread_observed_order_cost,14);assert.equal(baseline.cut_and_sew_purchasing.status,'available');
+      assert.equal(changed.cut_and_sew_purchasing.status,'refused');assert.equal(changed.sewing.status,'refused');
+      assert.equal(changed.assembly_mass.status,'available');assert.ok(changed.metrics.assembly_mass_kg>0);
+      assert.ok(changed.metrics.selected_observed_order_total<baseline.metrics.selected_observed_order_total);
+      assert.equal(await page.getByRole('table',{name:'Complete fabric + thread merchandise orders',exact:true}).count(),1);
+      await page.uncheck('#guidedCombinedCostGoal');await page.uncheck('#guidedRequireCombined');await page.check('#guidedOrderCostGoal');
+      assert.equal(await page.locator('a[download="material-study.json"]').count(),0);
+      const fabric=await verify('guided-fabric-order');assert.deepEqual(fabric.report.comparison.frontier,['cheaper-unqualified']);
+      await page.fill('#guidedOrderCostLimit','0');assert.equal(await page.locator('a[download="material-study.json"]').count(),0);
+      assert.deepEqual((await verify('guided-zero-cost-limit')).report.comparison.frontier,[]);
+      await page.fill('#guidedOrderCostLimit','');
+      await page.setInputFiles('#quotes',path.join(guidedManufacturingProof,'quotes.json'));
+      assert.equal(await page.locator('a[download="material-study.json"]').count(),0);
+      assert.deepEqual((await verify('guided-replaced-quotes')).report,fabric.report);
+      await page.setInputFiles('#studyRequest',combined.requestFile);assert.equal(await page.inputValue('#studyMode'),'file');
+      assert.equal(await run('study'),'');assert.equal(await download('study-request.json'),combined.request);
+      assert.deepEqual(JSON.parse(await download('material-study.json')),combined.report);
+      await page.selectOption('#studyMode','guided');
+      await page.evaluate(()=>{document.getElementById('study').click();document.getElementById('cancel').click();});
+      await page.waitForFunction(()=>document.getElementById('status').textContent.startsWith('Ready'),null,{timeout:60000});
+      assert.equal(await page.locator('a[download="material-study.json"]').count(),0);
+      assert.deepEqual((await verify('guided-after-cancel')).report,fabric.report);
+      for(const [label,width,height] of [['desktop',1280,900],['mobile',390,844]]) {
+        await page.setViewportSize({width,height});await page.locator('#guidedStudy').scrollIntoViewIfNeeded();
+        const overflow=await page.locator('#guidedStudy').evaluate(element=>[...element.querySelectorAll('input,select,button')]
+          .filter(e=>e.getClientRects().length).map(e=>({id:e.id,left:e.getBoundingClientRect().left,right:e.getBoundingClientRect().right}))
+          .filter(e=>e.left<0||e.right>innerWidth+1));
+        assert.deepEqual(overflow,[],`${label}: guided manufacturing controls fit the viewport`);
+        await page.locator('#guidedStudy').screenshot({path:path.join(work,`guided-manufacturing-${label}.png`)});
+      }
+      assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(methods.every(method=>method==='GET'));
+      console.log('PASS: actual guided manufacturing matches complete native reports, exact process/quote/market text, combined cloth+thread orders, independent mass and cheaper-stock qualification refusal, inclusive cost guards, advanced replay, source/cancel withdrawal and desktop/mobile controls. Synthetic software evidence only. Artifacts:',work);
+      return;
+    }
     if (guidedStudyProof) {
       const original=fs.readFileSync(fixture('synthetic-sewing-pattern.json'),'utf8'), identities=new Map();
       await page.setInputFiles('#patternFile',fixture('synthetic-sewing-pattern.json'));
