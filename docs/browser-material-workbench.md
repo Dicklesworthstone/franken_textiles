@@ -485,6 +485,21 @@ Unconsumed section-3 files do not replace an advanced scenario's own sources. Se
 complete scenario or named matrix (advanced)** for coverage, transient heat, coupled transport or
 other existing scenario policies; its exact request remains authoritative.
 
+#### Track material-direction strain
+
+Enable **Track warp, weft and shear on the actual cloth triangles** to use all retained physical
+instances or exact instance names from the drape report. The six initial and six complete-motion
+extrema expose signed warp E11, weft E22 and engineering shear 2E12 in dimensionless Green strain.
+They are distinct from the panel-edge percentage metric. Raise selected minima or lower selected
+maxima, and enter independently justified lower or upper limits. These metrics support nominal
+decisions; use explicit nominal guards alongside source-reported heat or mass objectives.
+
+The declared triangle-sample allowance covers the initial state and every accepted motion sample.
+Each alternative reserves its allowance against the shared 64000000-sample budget, including across
+named cases. Missing instance scopes and exhausted budgets refuse the affected consumer while
+independent results remain available. Required initial and complete-motion strain consumers can
+exclude an alternative without adding an objective. No failure or comfort threshold is supplied.
+
 #### Continue the same sewn garment through movement
 
 Enable **Continue the sewn garment through a prescribed body movement**. Declare an endpoint's
@@ -493,9 +508,15 @@ then choose **Add motion keyframe**. Seated and squat endpoints also require an 
 of that model pose. Returning to standing is an explicit endpoint choice; poses are not incremental.
 An unchanged pose at a later time is a hold. No movement is supplied automatically.
 
+Alternatively, choose **Retain an original motion request** and select `ftx-drape-motion/1` JSON.
+The complete original text, including transient thermal/water requests and source numbers, is
+retained for native admission and replay. This mode does not need saved form endpoints. Its case
+motion-attempt allowance remains explicit; the form's inactive trajectory limits do not change it.
+Switching sources retains both drafts and withdraws obsolete work.
+
 The list supports explicit replacement from the endpoint controls and removal. Editing those
 controls prepares another endpoint without changing the saved path. Disabling motion retains the
-draft. Loading another pattern clears it. A single scenario uses the added endpoints; a named case
+draft. Removing, replacing or adopting a pattern clears its saved endpoints, cases and strain scope. A single scenario uses the added endpoints; a named case
 freezes its own path and work limits when saved. Later draft edits do not change that saved case.
 
 The existing engine accepts 1–16 endpoints, increasing by at least 1e-9 seconds and ending within
@@ -523,9 +544,10 @@ sheet heat gives independent steady endpoint snapshots, not transient temperatur
 #### Save several named cases from the ordinary controls
 
 Choose **Save and compare several named cases here** to prepare 1–8 scenarios on the same selected
-body and initial pose. Configure a case using the fit, drape, optional sheet-heat and movement controls,
+body and initial pose. Configure a case using the fit, drape, optional sheet-heat, directional-strain and movement controls,
 give it a unique name, and choose **Save current settings as a named case**. Each saved case freezes
-the exact original fit and heat text, declared numerical options and saved motion endpoints. You can change those
+the exact original fit and heat text, declared strain scope and numerical options, and saved motion endpoints
+or original motion file. You can change those
 source files and settings to prepare the next case without changing any saved case.
 
 For each case, choose one comparison policy:
