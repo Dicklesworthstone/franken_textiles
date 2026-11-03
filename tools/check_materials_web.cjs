@@ -758,9 +758,12 @@ const server = http.createServer((req, res) => {
       await input('market',{...market,as_of:'2026-10-22'});
       assert.equal(await page.locator('a[download="cut-price.json"]').count(),0);
       assert.ok(fs.existsSync(native),'Finite-stock pricing replay needs the native materials executable');
-      await page.setInputFiles('#patternFile',fixture('synthetic-stock-pattern.json'));
+      const sourceText=' \r\n'+fs.readFileSync(fixture('synthetic-stock-pattern.json'),'utf8')
+        .replace('"sa_mm": 0','"sa_mm": -0.0, "source_label":"café 🧵 literal �", "source_number":18446744073709551615')+'\r\n';
+      await page.setInputFiles('#patternFile',{name:'original-pattern.json',mimeType:'application/json',buffer:Buffer.from(sourceText)});
       await page.waitForFunction(()=>!document.getElementById('bind').disabled);
       assert.equal(await run('bind'),'');
+      assert.equal(await download('original-pattern.json'),sourceText,'Valid original Unicode and numeric source bytes stay exact');
       const stockPattern=await download('pattern.json'),stockPatternFile=path.join(work,'finite-price-pattern.json');
       fs.writeFileSync(stockPatternFile,stockPattern,{flag:'wx'});
       const stockRequestFile=fixture('synthetic-stock-request.json'),stockRequest=fs.readFileSync(stockRequestFile,'utf8');
@@ -769,6 +772,20 @@ const server = http.createServer((req, res) => {
       assert.deepEqual(JSON.parse(identities),JSON.parse(invoke('stock-identities',stockPatternFile,stockRequestFile)));
       assert.equal(await download('stock-identities-pattern.json'),stockPattern);
       assert.equal(await download('stock-identities-stock-request.json'),stockRequest);
+      await page.evaluate(()=>{
+        window.materialPosts=[];const original=Worker.prototype.postMessage;
+        Worker.prototype.postMessage=function(message,...rest){window.materialPosts.push(message.type);return original.call(this,message,...rest);};
+      });
+      const badSource=Buffer.concat([Buffer.from('{"source":"'),Buffer.from([0xff]),Buffer.from('"}')]);
+      for(const bytes of [badSource,Buffer.from('\ufeff'+stockRequest)]) {
+        const before=await page.evaluate(()=>window.materialPosts.length);
+        await page.setInputFiles('#stockRequest',{name:'invalid-stock.json',mimeType:'application/json',buffer:bytes});
+        assert.match(await run('stockIdentities'),/encoded data|encoding|UTF-8|JSON|Unexpected|unexpected/i);
+        assert.equal(await page.evaluate(()=>window.materialPosts.length),before,'Malformed source never reaches the worker');
+        assert.equal(await page.locator('a[download="stock-identities.json"]').count(),0);
+      }
+      await page.setInputFiles('#stockRequest',stockRequestFile);assert.equal(await run('stockIdentities'),'');
+      assert.equal(await download('stock-identities.json'),identities);
       const original=load('synthetic-stock-pricing.json'),missing={...original,bindings:[]};
       const latest=structuredClone(original);latest.market.as_of='2026-10-21';latest.market.max_age_days=1;
       latest.quotes.quotes.push({...latest.quotes.quotes[0],observed_on:'2026-10-21',available:false});
@@ -848,7 +865,7 @@ const server = http.createServer((req, res) => {
       await input('patternFile',{schema:'fabric-pattern/1',pieces:[]});
       assert.equal(await page.locator('a[download="stock-identities.json"]').count(),0);
       assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m=>m==='GET'));
-      console.log('PASS: real Chromium renders bounded roll orders and native-equal finite-stock identities/prices; adopts exact residual stock for a disjoint second job, keeps stale prices unknown, and respects manual replacement/clear. Sources, edits/refusal/cancellation and same-origin HTTP/blob GET checks pass. Synthetic observations only; no live purchasing, physical cuts, optimal nesting or machine claim. Artifacts:',work);
+      console.log('PASS: real Chromium preserves exact Unicode/numeric sources and refuses malformed UTF-8/BOM before worker dispatch; renders native-equal orders, identities/prices and a disjoint residual-stock second job. Manual replacement, clear, stale-price/source withdrawal, cancellation and same-origin HTTP/blob GET checks pass. Synthetic software evidence only; no live purchasing, physical cuts, optimal nesting or machine claim. Artifacts:',work);
       return;
     }
     if (compressionProof) {

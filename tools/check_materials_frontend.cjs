@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const read = name => fs.readFileSync(path.join(__dirname, '../web', name), 'utf8');
 const plain = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const utf8Buffer = raw => new TextEncoder().encode(raw).buffer;
 // Transport/display doubles, not a geometric or physical validation of the imported garment.
 const garmentcodeSource = ' {"pattern":{"panels":{},"stitches":[]},"label":"café 🧵","x":-0.0,"n":1.0}\n';
 const garmentcodeAnnotations = ' {"schema":"fabric-garmentcode-annotations/1","note":"évidence <literal>"}\n';
@@ -1380,6 +1381,28 @@ async function pageModule({roundToken=null}={}) {
   return { e, current, workers, ready, select, emit, load, inspect, bind, live, blobs, windowEvents,
     opener,openerMessages,window,popups,hasOpener:()=>!!window.opener };
 }
+test('ordinary JSON files refuse malformed UTF-8 and a leading BOM before worker dispatch',async()=>{
+  const malformed=Buffer.concat([Buffer.from('{"source":"'),Buffer.from([0xff]),Buffer.from('"}')]);
+  for(const bytes of [malformed,Buffer.from('\ufeff{"source":"valid JSON after a BOM"}')]) {
+    const p=await pageModule();await p.load();await p.bind();p.e.cutOptions.files=[new Blob([bytes])];p.e.cutOptions.handlers.change();
+    const before=p.current().messages.length;await p.e.cut.onclick();
+    assert.equal(p.current().messages.length,before,'Invalid original bytes must not be repaired into a submitted source');
+    assert.equal(section(p,'cut').hidden,true);assert.match(p.e.error.textContent,/encoded data|encoding|UTF-8|JSON|Unexpected|unexpected/i);
+  }
+});
+test('ordinary JSON files preserve exact Unicode and numeric source text and check actual byte budgets',async()=>{
+  const raw=' \r\n{"source":"café 🧵 literal � and interior \ufeff","coefficient":1.0,"signed":-0.0,"large":18446744073709551615}\r\n';
+  const p=await pageModule();await p.load();await p.bind();p.e.cutOptions.files=[new Blob([raw])];p.e.cutOptions.handlers.change();
+  await p.e.cut.onclick();assert.equal(p.current().messages.at(-1).options,raw);
+  p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'transport-only input is not a cutting schema'});
+  for(const declared of [true,false]) {
+    let reads=0;
+    p.e.cutOptions.files=[{size:declared?64*1024*1024+1:2,
+      arrayBuffer:async()=>{reads++;return new ArrayBuffer(64*1024*1024+1);},text:async()=>'{}'}];
+    p.e.cutOptions.handlers.change();const before=p.current().messages.length;await p.e.cut.onclick();
+    assert.equal(p.current().messages.length,before);assert.equal(reads,declared?0:1);assert.match(p.e.error.textContent,/input budget/);
+  }
+});
 function offerMaterialPhoto(p,records) {
   const popup=p.popups.at(-1),token=new URL(popup.url).searchParams.get('materialsReturn');
   const send=data=>p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{token,...data}});
@@ -2324,7 +2347,7 @@ test('changed treatment requests, source patterns and material interfaces cancel
   for (const change of ['request','source','interfaces']) {
     const p=await pageModule(), delay=deferred(); await p.load();
     p.select('treatmentRequest','{"schema":"ftx-pattern-treatment/1"}');
-    p.e.treatmentRequest.files[0].text=()=>delay.promise;
+    p.e.treatmentRequest.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
     const old=p.current(), running=p.e.treatment.onclick();
     if(change==='request') p.e.treatmentRequest.handlers.change();
     else if(change==='source') await p.load();
@@ -2401,7 +2424,7 @@ test('preview-pose studies refuse invalid controls and withdraw only consumed so
       p.e.bodyArmDeg.value='50';p.e.drapeLegs.value='seated';p.e.drapeLegFraction.value='0.25';
       await p.e[op].onclick();p.emit(op==='study'?{alternatives:[]}:scenarioReport(),[{name:'body-input.json',text:'{}'}]);
       const urls=[...p.live];p.e[id].handlers[event]();assert.ok(urls.every(url=>!p.live.has(url)));
-      const delay=deferred(),reading=deferred();p.e.measurements.files=[{size:2,text:()=>{reading.resolve();return delay.promise;}}];
+      const delay=deferred(),reading=deferred();p.e.measurements.files=[{size:2,arrayBuffer:async()=>{reading.resolve();return utf8Buffer(await delay.promise);}}];
       const old=p.current(),running=p.e[op].onclick();await reading.promise;p.e[id].handlers[event]();
       assert.equal(old.dead,true,`${op}: ${id} cancels an unfinished evidence read`);p.ready();delay.resolve('{}');await running;
       assert.equal(p.current().messages.length,0);p.select('measurements');
@@ -2479,7 +2502,7 @@ test('selected accepted body supplies the same exact source to manufacturing, si
   p.e.bodyArmDeg.value='50';p.e.bodyArmDeg.handlers.input();
   p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();
   assert.equal(p.e.study.disabled,false);assert.equal(p.e.scenario.disabled,false);
-  p.select('scenarioBody','{}');p.e.scenarioBody.files[0].text=()=>{throw Error('unused request read');};
+  p.select('scenarioBody','{}');p.e.scenarioBody.files[0].arrayBuffer=()=>{throw Error('unused request read');};
   const expected='{"schema":"ftx-scenario-body/1","measurements":'+measurements+
     ',"accepted_body_fit":'+fit+',"arm_abduction_deg":50}',calls=[],freed=[];
   let result;
@@ -2580,16 +2603,16 @@ test('material page freezes named assignments, withdraws dependent outputs and i
 });
 test('material page cancels delayed files before transfer and frees all downloads on page exit', async () => {
   const p = await pageModule(); await p.load(); await p.bind();
-  p.select('cutOptions'); const d = deferred(); p.e.cutOptions.files[0].text = () => d.promise;
+  p.select('cutOptions'); const d = deferred(); p.e.cutOptions.files[0].arrayBuffer = async () => utf8Buffer(await d.promise);
   const old = p.current(), running = p.e.cut.onclick(); p.e.cancel.onclick(); p.ready(); d.resolve('{}'); await running;
   assert.equal(old.messages.filter(m => m.type === 'cut').length, 0);
   assert.equal(p.live.size, 1); p.windowEvents.pagehide(); assert.equal(p.live.size, 0); assert.equal(p.current().dead, true);
 });
 test('material page protects newer pattern and selection edits against delayed reads', async () => {
-  const p = await pageModule(); const d = deferred(); p.select('selectionFile'); p.e.selectionFile.files[0].text = () => d.promise;
+  const p = await pageModule(); const d = deferred(); p.select('selectionFile'); p.e.selectionFile.files[0].arrayBuffer = async () => utf8Buffer(await d.promise);
   const old = p.e.selectionFile.onchange(); p.e.selection.value = '{"id":"new"}'; p.e.selection.handlers.input();
   d.resolve('{"id":"old"}'); await old; assert.equal(p.e.selection.value, '{"id":"new"}');
-  const a = deferred(); p.select('patternFile'); p.e.patternFile.files[0].text = () => a.promise;
+  const a = deferred(); p.select('patternFile'); p.e.patternFile.files[0].arrayBuffer = async () => utf8Buffer(await a.promise);
   const loading = p.e.patternFile.onchange(); await p.load(); a.resolve('{"pieces":[{"id":"stale"}]}'); await loading;
   await p.e.bind.onclick(); assert.equal(JSON.parse(p.current().messages.at(-1).pattern).pieces[0].id, 'front');
 });
@@ -2686,7 +2709,7 @@ test('catalog changes cannot publish another material inspection or silently ena
   p.e.catalog.value = '<new>'; p.e.catalog.onchange(); p.ready();
   old.emit({ type: 'result', request: id, result: { selection: { id: 'old' }, capabilities: {}, snapshot: {} } });
   assert.equal(p.e.assign.disabled, true); assert.equal(JSON.parse(p.e.selection.value).allow_estimates, false);
-  const d = deferred(); p.select('selectionFile'); p.e.selectionFile.files[0].text = () => d.promise;
+  const d = deferred(); p.select('selectionFile'); p.e.selectionFile.files[0].arrayBuffer = async () => utf8Buffer(await d.promise);
   const reading = p.e.selectionFile.onchange(); p.e.catalog.value = 'latest'; p.e.catalog.onchange();
   d.resolve('{"id":"late"}'); await reading; assert.equal(JSON.parse(p.e.selection.value).id, 'latest');
 });
@@ -2715,7 +2738,7 @@ test('invalid and superseded interface reads cannot silently reuse the old table
   const old=p.current().messages.length; await p.e.bind.onclick();
   assert.equal(p.current().messages.length,old);
   p.e.clearInterfaces.onclick(); assert.equal(p.e.bind.disabled,false);
-  const delay=deferred(); p.select('interfacesFile'); p.e.interfacesFile.files[0].text=()=>delay.promise;
+  const delay=deferred(); p.select('interfacesFile'); p.e.interfacesFile.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
   const reading=p.e.interfacesFile.onchange(); assert.equal(p.e.bind.disabled,true);
   await p.load(); delay.resolve('[{"materials":["stale","pair"]}]'); await reading;
   await p.e.bind.onclick(); assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).changes),'interfaces'),false);
@@ -3537,7 +3560,7 @@ test('dry thermal history pages every retained sample and cell with signed energ
 test('thermal history replacement, cancellation and native refusals never restore an obsolete history', async () => {
   const p=await pageModule(),delay=deferred(),r=thermalHistoryReport();
   p.select('thermalRequest',thermalHistoryInput);p.e.thermalRequest.handlers.change();
-  p.e.thermalRequest.files[0].text=()=>delay.promise;
+  p.e.thermalRequest.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
   const old=p.current(),reading=p.e.thermalHistory.onclick();
   p.e.cancel.onclick();assert.equal(old.dead,true);delay.resolve(thermalHistoryInput);await reading;
   assert.equal(old.messages.some(m=>m.type==='thermalHistory'),false);p.ready();
@@ -3660,7 +3683,7 @@ test('replacing a vapor request cancels delayed file reads and stale worker resu
   const p=await pageModule(), delay=deferred(), oldRequest=vaporHistoryReport().replay_request_json,
     newRequest=vaporCoverageReport().replay_request_json;
   p.select('vaporRequest',oldRequest);
-  p.e.vaporRequest.files[0].text=()=>delay.promise;
+  p.e.vaporRequest.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
   const old=p.current(), running=p.e.vapor.onclick();
   p.select('vaporRequest',newRequest); p.e.vaporRequest.handlers.change(); p.ready();
   delay.resolve(oldRequest); await running;
@@ -3696,7 +3719,7 @@ test('pressure-conditioned selections enter ordinary piece bindings without a nu
 
 test('a newer selection cancels a delayed pressure request before it can replace the inspected material', async () => {
   const p = await pageModule(), delay = deferred(); await p.load();
-  p.select('compressionRequest'); p.e.compressionRequest.files[0].text = () => delay.promise;
+  p.select('compressionRequest'); p.e.compressionRequest.files[0].arrayBuffer = async () => utf8Buffer(await delay.promise);
   const old = p.current(), running = p.e.pressure.onclick();
   p.e.catalog.value = 'newer-material'; p.e.catalog.onchange(); p.ready();
   delay.resolve('{"pressure_pa":250.0}'); await running;
@@ -4044,7 +4067,7 @@ test('calibration consent and response changes withdraw only the prepared result
   old.emit({type:'result',request:id,result:calibrationReport('relaxation',true),files:[]});
   assert.equal(old.dead,true); assert.equal(section(p,'Identified material behavior').hidden,true);
   assert.equal(p.e.assign.disabled,true);
-  const delay=deferred(); p.e.calibrationRequest.files[0].text=()=>delay.promise;
+  const delay=deferred(); p.e.calibrationRequest.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
   const before=p.current(), running=p.e.calibrate.onclick();
   p.e.catalog.value='newer'; p.e.catalog.onchange(); p.ready(); delay.resolve('{}'); await running;
   assert.equal(before.messages.length,0); assert.equal(JSON.parse(p.e.selection.value).id,'newer');
@@ -4502,7 +4525,7 @@ test('changed strip inputs and later selections cancel pending work and delayed 
   p.e.stripFitRequest.handlers.change(); p.ready();
   old.emit({type:'result',request:id,result:stripCalibration(),files:[]});
   assert.equal(old.dead,true); assert.equal(p.e.assign.disabled,true); assert.equal(section(p,'Clamped-strip identification').hidden,true);
-  const delay=deferred(); p.e.stripFitRequest.files[0].text=()=>delay.promise;
+  const delay=deferred(); p.e.stripFitRequest.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
   const before=p.current(), reading=p.e.stripFit.onclick();
   p.e.catalog.value='newer-material'; p.e.catalog.onchange(); p.ready(); delay.resolve('{}'); await reading;
   assert.equal(before.messages.length,0); assert.equal(JSON.parse(p.e.selection.value).id,'newer-material');
@@ -5619,7 +5642,7 @@ test('matrix policies remain optional per case and replacement cancels every sta
   assert.match(visibleText(s),/Case <cold> has no effective comparison policy/);
   assert.equal(descendants(s).filter(n=>n.tag==='table'&&n.children[0].textContent.startsWith('Declared computed objectives')).length,1);
   assert.equal(descendants(s).filter(n=>n.tag==='table'&&n.children[0].textContent.startsWith('Initial static-drape results')).length,2);
-  const delay=deferred(); p.e.scenarioRequest.files[0].text=()=>delay.promise;
+  const delay=deferred(); p.e.scenarioRequest.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
   const old=p.current(), messages=old.messages.length, running=p.e.scenario.onclick();
   p.select('scenarioRequest','{"schema":"ftx-drape-scenario-matrix/1","cases":[]}');
   p.e.scenarioRequest.handlers.change(); p.ready(); delay.resolve('{"schema":"ftx-drape-scenario-matrix/1"}'); await running;
@@ -6967,7 +6990,7 @@ test('combination changes and pattern replacement cancel pending reads and canno
   const p = await pageModule(); await p.load(); await p.inspect('source');
   p.e.combinationMode.checked = true; addChoice(p, 'shell', 'one');
   p.select('studyRequest','{"schema":"ftx-material-study/1"}');
-  const delayed = deferred(); p.e.studyRequest.files[0].text = () => delayed.promise;
+  const delayed = deferred(); p.e.studyRequest.files[0].arrayBuffer = async () => utf8Buffer(await delayed.promise);
   const old = p.current(), running = p.e.study.onclick();
   p.e.combinationMode.checked = false; p.e.combinationMode.handlers.change(); p.ready();
   delayed.resolve('{"schema":"ftx-material-study/1"}'); await running;
@@ -8554,7 +8577,7 @@ test('study output invalidation follows the actual request/body dependencies, no
 test('study replacement/cancellation cannot publish late file reads or stale scenario success', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   await p.e.scenario.onclick(); p.emit(scenarioReport()); assert.equal(p.live.size, 2);
-  const d = deferred(); p.e.scenarioRequest.files[0].text = () => d.promise;
+  const d = deferred(); p.e.scenarioRequest.files[0].arrayBuffer = async () => utf8Buffer(await d.promise);
   const old = p.current(), running = p.e.scenario.onclick(); assert.equal(p.live.size, 0);
   p.e.cancel.onclick(); p.ready(); d.resolve('{}'); await running;
   assert.equal(old.messages.filter(m => m.type === 'scenario').length, 1);
@@ -10212,7 +10235,7 @@ test('invalid or superseded body-source files cannot fall back to tapes or publi
   await p.e.scenario.onclick();
   assert.equal(p.current().messages.length, oldCount); assert.equal(p.e.error.hidden, false);
   assert.equal(p.live.size, 0);
-  const d = deferred(); p.select('scenarioBody', '{}'); p.e.scenarioBody.files[0].text = () => d.promise;
+  const d = deferred(); p.select('scenarioBody', '{}'); p.e.scenarioBody.files[0].arrayBuffer = async () => utf8Buffer(await d.promise);
   const old = p.current(), running = p.e.scenario.onclick();
   p.select('scenarioBody', '{"schema":"ftx-scenario-body/1"}'); p.e.scenarioBody.handlers.change();
   p.ready(); d.resolve('{"schema":"ftx-scenario-body/1","arm_abduction_deg":35.0}'); await running;

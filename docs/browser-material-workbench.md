@@ -649,6 +649,10 @@ in this tab: no localStorage, sessionStorage, indexedDB, server upload, device c
 refresh. The existing fold viewer uses a Three.js CDN, explicitly disclosed on the page; its sandbox
 cannot access the parent workbench. Closing the tab drops this unsaved session.
 
+JSON files are decoded as strict UTF-8. Invalid encoding, a leading BOM or malformed JSON refuses
+before dispatch; source text is never repaired or reserialized by the reader. Valid Unicode,
+whitespace, integer spelling and signed zero remain exact. Both declared file size and actual bytes
+are checked against the input limit. Accepted body-fit reports retain their separate 16 MiB limit.
 Combined JSON requests are limited to 64 MiB and each body-model input to 256 MiB, followed by the
 existing native geometry, candidate, solver, stitch and allocation limits. Ordinary incomplete data
 produces the specific native refusal rather than a generic success. A numerical result is not empirical

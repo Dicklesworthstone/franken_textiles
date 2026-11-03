@@ -3743,19 +3743,15 @@ async function read(id, binary = false) {
   if (!binary && roundFiles.has(id)) return roundFiles.get(id);
   const f = binary && roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
   if (!f) throw Error(`Choose ${id} first.`);
-  if (id === "bodyFitFile") {
-    if (f.size > 16 * 1024 * 1024) throw Error("Accepted body-fit report exceeds 16 MiB.");
-    const bytes = await f.arrayBuffer();
-    if (bytes.byteLength > 16 * 1024 * 1024) throw Error("Accepted body-fit report exceeds 16 MiB.");
-    const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-    JSON.parse(raw);
-    return raw;
-  }
-  if (f.size > (binary ? 256 : 64) * 1024 * 1024) throw Error(`${id} exceeds its input budget.`);
-  const data = binary ? await f.arrayBuffer() : await f.text();
-  if (binary && data.byteLength > 256 * 1024 * 1024) throw Error(`${id} exceeds its input budget.`);
-  if (!binary) JSON.parse(data);
-  return data;
+  const limit = (id === "bodyFitFile" ? 16 : binary ? 256 : 64) * 1024 * 1024;
+  const budgetMessage = id === "bodyFitFile" ? "Accepted body-fit report exceeds 16 MiB." : `${id} exceeds its input budget.`;
+  if (f.size > limit) throw Error(budgetMessage);
+  const bytes = await f.arrayBuffer();
+  if (bytes.byteLength > limit) throw Error(budgetMessage);
+  if (binary) return bytes;
+  const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  JSON.parse(raw);
+  return raw;
 }
 function drapeArmAngle() {
   const angle = $("bodyArmDeg").value.trim();
