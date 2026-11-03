@@ -4975,6 +4975,23 @@ This advances `ftx-tma` by fixing inconsistent software admission and discovery.
 the matched-specimen, uncertainty or independent thermal-validation gates. Material substitutions
 must continue to preserve usable independent consumers while refusing only unsupported capabilities.
 
+### 25.155 Add useful source-model observations and make frozen replay self-contained
+
+Ten named Wang2011 study fabrics add 50 published observations: mass per area and four exact
+origin-node membrane coefficients per specimen. Composition, source basis, source checksum and
+unreported conditioning remain attached. These are source-model parameters, not generic fiber
+constants or a complete cloth law. Preserve negative coupling and the one indefinite origin;
+never repair source data to create a usable preset. A subsequent explicitly estimated, bounded
+origin approximation may feed the existing membrane consumer, but must retain missing bending,
+thickness, contact and thermal properties and distinguish numerical behavior from measured agreement.
+
+An embedded material selection now resolves through the unchanged canonical source/unit/evidence/hash
+authority without parsing every unrelated bundled record. Identifier-only selections still load the
+unified catalog. This makes the existing self-contained replay contract independent of future catalog
+growth and removes repeated catalog construction from per-piece substitutions. Exact serialized
+snapshots, refusals and complete binding results remain unchanged. `ftx-wg1` and `ftx-fr1` track these
+deliveries; `ftx-wg2` tracks the bounded approximation and real native/portable consumer checks.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -1,5 +1,16 @@
 # ftx-pattern contract
 
+**Published source-origin observations.** Ten Wang2011 study specimens supply 50 attributed
+mass/origin-matrix quantities with exact tensor-shear basis and missing conditioning retained.
+These do not activate a membrane law; the indefinite Navy origin remains unchanged. Source/freeze
+checks: `wang2011_catalog`; details: `docs/wang2011-materials.md`.
+
+**Self-contained material ingress.** `textile_import::resolve_fabric` resolves an embedded record
+through the existing canonical resolver against an empty catalog, preserving all unit, override,
+source, policy and digest checks. Identifier-only lookup still uses the merged catalog, and callers
+that explicitly provide a catalog still validate it. No global cache or malformed-record fallback
+is introduced. Regression coverage: `textile_import` unit tests.
+
 **Canonical scalar thermal admission.** `Material::thermal_resistance` and `ThermalStack` use
 `ConductionLaw::constant_resistance` after the shared form, source, evidence and declared thermal
 specimen/conditioning checks. Fiber/yarn observations remain inspectable but cannot impersonate a
