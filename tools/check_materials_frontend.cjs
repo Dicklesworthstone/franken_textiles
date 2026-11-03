@@ -5989,6 +5989,13 @@ function guidedStrainControls(p, instances = null) {
   p.e.guidedMaterialStrainBudget.value='100000';
   p.e.guidedMaterialStrain.handlers.change();
 }
+function guidedContactControls(p, instances = null) {
+  p.e.guidedContactLoads.checked=true;
+  p.e.guidedContactLoadsScope.value=instances===null?'all':'instances';
+  p.e.guidedContactLoadsInstances.value=instances===null?'':instances.join('\n');
+  p.e.guidedContactVertexBudget.value='100000';p.e.guidedContactPairBudget.value='1000000';
+  p.e.guidedContactLoads.handlers.change();
+}
 function guidedMotionSourceControls(p, mode = 'form') {
   for(const [id,value] of Object.entries({guidedMotionSource:mode==='none'?'form':mode,guidedScenarioMotionTrials:'96',guidedMotionStep:'0.001',
     guidedMotionTrials:'16',guidedMotionPairs:'100000',guidedMotionVertices:'10000'}))p.e[id].value=value;
@@ -6893,6 +6900,126 @@ test('guided directional strain maps all signed static and motion goals, guards 
   assert.equal(comparison.basis,'nominal');
 });
 
+test('guided contact loads preserve exact instance scopes, force criteria and independent native refusals through replay',async()=>{
+  const {p,sources}=await guidedScenarioSetup(true);guidedContactControls(p,[' front.R ','lining <β>']);
+  guidedMotionSourceControls(p);await addGuidedMotion(p,'0.002','35');
+  p.e.guidedDrapeMassGoal.checked=false;p.e.guidedHeatPowerGoal.checked=false;
+  p.e.guidedRequireContactLoads.checked=true;p.e.guidedRequireMotionContactLoads.checked=true;
+  const metrics=[['ContactResultant','body_contact_resultant_n',5],['ContactVertex','max_body_contact_vertex_force_n',2],
+    ['MotionContactResultant','motion_peak_body_contact_resultant_n',10],['MotionContactVertex','motion_max_body_contact_vertex_force_n',4]];
+  for(const [id,,maximum] of metrics) {p.e['guided'+id+'Goal'].checked=true;p.e['guided'+id+'Limit'].value=String(maximum);}
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const scenario=JSON.parse(sent.scenarioRequest),comparison=JSON.parse(sent.studyRequest).comparison;
+  assert.deepEqual(scenario.contact_loads,{schema:'ftx-contact-loads/1',instances:[' front.R ','lining <β>'],
+    max_vertex_samples:100000,max_pair_evaluations:1000000});
+  const byMetric=(a,b)=>a.metric.localeCompare(b.metric);
+  assert.deepEqual(comparison.objectives.sort(byMetric),metrics.map(([,metric])=>({metric,direction:'minimize'})).sort(byMetric));
+  assert.deepEqual(comparison.constraints.sort(byMetric),metrics.map(([,metric,maximum])=>({metric,maximum})).sort(byMetric));
+  assert.deepEqual(comparison.required_consumers.sort(),['contact_loads','drape','motion_contact_loads','surface']);
+  assert.ok(sent.scenarioRequest.includes(sources.fit));assert.ok(sent.scenarioRequest.includes(sources.heatConditions));
+  assert.equal(sent.measurements,sources.scenarioBody);
+  const report=scenarioReport();report.scenario.scenario=scenario;
+  const initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  initial.contact_loads=refused('Contact scope names an unknown retained instance');
+  initial.motion=outcome({samples:[{}],keyframes:[],contact_loads:refused('Contact pair allowance exhausted')});
+  let calls=0,freed=0;
+  const w=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){freed++;}},
+    material_scenario_study:(_body,...args)=>{calls++;assert.deepEqual(args,[sent.pattern,sent.studyRequest,sent.scenarioRequest,sources.scenarioBody]);return JSON.stringify(report);}}});
+  const result=await w.send(sent);assert.equal(result.type,'result',result.message);assert.equal(calls,1);assert.equal(freed,1);
+  p.current().emit(result);const output=section(p,'Fresh drape and heat alternatives');
+  assert.match(visibleText(output),/Contact scope names an unknown retained instance/);
+  assert.match(visibleText(output),/Contact pair allowance exhausted/);
+  assert.match(visibleText(output),/-4.5/,'An optional contact refusal preserves independent initial sheet heat');
+  for(const [name,raw] of [['scenario-request.json',sent.scenarioRequest],['study-request.json',sent.studyRequest]]) {
+    const link=descendants(output).find(node=>node.download===name);assert.ok(link,name);assert.equal(await p.blobs.get(link.href).text(),raw);
+  }
+});
+
+test('guided contact loads admit explicit nominal force guards beside bounded heat and refuse incomplete or unsupported criteria',async()=>{
+  const {p}=await guidedScenarioSetup(true);guidedContactControls(p);
+  p.e.guidedDrapeMassGoal.checked=false;p.e.guidedBasis.value='reported_bounds';p.e.guidedLimitBasis.value='nominal';
+  p.e.guidedContactVertexLimit.value='0';p.e.guidedRequireContactLoads.checked=true;
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).contact_loads,{schema:'ftx-contact-loads/1',max_vertex_samples:100000,max_pair_evaluations:1000000});
+  const comparison=JSON.parse(sent.studyRequest).comparison;
+  assert.equal(comparison.basis,'reported_bounds');assert.deepEqual(comparison.objectives,[{metric:'independent_surface_power_w',direction:'maximize'}]);
+  assert.deepEqual(comparison.constraints,[{metric:'max_body_contact_vertex_force_n',maximum:0,basis:'nominal'}]);
+  for(const invalid of ['empty-scope','duplicate-scope','blank-scope','missing-contact','missing-motion','motion-without-contact',
+    'reported-goal','reported-guard','negative-limit','fractional-vertices','zero-pairs','oversized-pairs']) {
+    const {p}=await guidedScenarioSetup();guidedContactControls(p);
+    if(invalid.endsWith('scope')) {
+      p.e.guidedContactLoadsScope.value='instances';p.e.guidedContactLoadsInstances.value={
+        'empty-scope':'','duplicate-scope':'front.R\nfront.R','blank-scope':' \n\t'}[invalid];
+    } else if(invalid==='missing-contact') {p.e.guidedContactLoads.checked=false;p.e.guidedRequireContactLoads.checked=true;}
+    else if(invalid==='missing-motion')p.e.guidedMotionContactResultantGoal.checked=true;
+    else if(invalid==='motion-without-contact') {
+      guidedMotionSourceControls(p);await addGuidedMotion(p,'0.002','35');p.e.guidedContactLoads.checked=false;
+      p.e.guidedRequireMotionContactLoads.checked=true;
+    } else if(invalid==='reported-goal') {
+      p.e.guidedDrapeMassGoal.checked=false;p.e.guidedContactResultantGoal.checked=true;p.e.guidedBasis.value='reported_bounds';
+    } else if(invalid==='reported-guard') {p.e.guidedContactResultantLimit.value='1';p.e.guidedLimitBasis.value='reported_bounds';}
+    else if(invalid==='negative-limit')p.e.guidedContactVertexLimit.value='-1';
+    else if(invalid==='fractional-vertices')p.e.guidedContactVertexBudget.value='1.5';
+    else if(invalid==='zero-pairs')p.e.guidedContactPairBudget.value='0';
+    else p.e.guidedContactPairBudget.value='64000001';
+    const before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before,invalid);assert.equal(p.e.error.hidden,false,invalid);
+    assert.ok(p.e.error.textContent,invalid);assert.equal(p.live.size,0,invalid);
+  }
+});
+
+test('guided named cases freeze contact scopes, independent allowances and force limits without reading later drafts',async()=>{
+  const {p}=await guidedScenarioSetup();guidedContactControls(p,['front.R']);
+  p.e.guidedContactResultantGoal.checked=true;p.e.guidedContactResultantLimit.value='5';p.e.guidedRequireContactLoads.checked=true;
+  guidedNamedCases(p);p.e.guidedScenarioPolicySource.value='snapshot';await saveGuidedCase(p,'front contact');
+  guidedContactControls(p);p.e.guidedContactVertexBudget.value='200000';p.e.guidedContactPairBudget.value='3000000';
+  p.e.guidedContactResultantLimit.value='10';guidedMotionSourceControls(p);await addGuidedMotion(p,'0.002','35');
+  p.e.guidedMotionContactVertexGoal.checked=true;p.e.guidedMotionContactVertexLimit.value='4';p.e.guidedRequireMotionContactLoads.checked=true;
+  await saveGuidedCase(p,'moving garment');await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases.map(item=>item.scenario.contact_loads),[
+    {schema:'ftx-contact-loads/1',instances:['front.R'],max_vertex_samples:100000,max_pair_evaluations:1000000},
+    {schema:'ftx-contact-loads/1',max_vertex_samples:200000,max_pair_evaluations:3000000}]);
+  assert.equal(Object.hasOwn(cases[0].scenario,'motion'),false);assert.ok(cases[1].scenario.motion);
+  assert.deepEqual(cases.map(item=>item.comparison.constraints),[
+    [{metric:'body_contact_resultant_n',maximum:5}],
+    [{metric:'body_contact_resultant_n',maximum:10},{metric:'motion_max_body_contact_vertex_force_n',maximum:4}]]);
+  assert.deepEqual(cases.map(item=>item.comparison.required_consumers.sort()),[
+    ['contact_loads','drape'],['contact_loads','drape','motion_contact_loads']]);
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const output=section(p,'Fresh drape and heat alternatives'),live=new Set(p.live);
+  p.e.guidedContactLoads.checked=false;p.e.guidedContactLoads.handlers.change();
+  p.e.guidedContactLoadsInstances.value='another garment';p.e.guidedContactLoadsInstances.handlers.input();
+  p.e.guidedContactVertexBudget.value='invalid';p.e.guidedContactVertexBudget.handlers.input();
+  p.e.guidedContactPairBudget.value='0';p.e.guidedContactPairBudget.handlers.input();
+  assert.equal(output.hidden,false);assert.deepEqual(p.live,live);
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
+test('guided contact source reads capture scopes and cancel obsolete single runs or pending cases after policy edits',async()=>{
+  const {p,sources}=await guidedScenarioSetup();guidedContactControls(p,['front.R']);
+  const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const running=p.e.scenario.onclick();p.e.guidedContactLoadsInstances.value='changed without event';
+  p.e.guidedContactVertexBudget.value='1';p.e.guidedContactPairBudget.value='2';delay.resolve(sources.fit);await running;
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).contact_loads,
+    {schema:'ftx-contact-loads/1',instances:['front.R'],max_vertex_samples:100000,max_pair_evaluations:1000000});
+  for(const mode of ['single','draft'])for(const change of ['enabled','scope','instances','vertices','pairs','goal','guard','required']) {
+    const {p,sources}=await guidedScenarioSetup();guidedContactControls(p,['front.R']);
+    if(mode==='draft'){guidedNamedCases(p);await saveGuidedCase(p,'retained');p.e.guidedScenarioPolicySource.value='snapshot';}
+    const delay=deferred();let reading=false;
+    p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+    const old=p.current(),before=old.messages.length;
+    const running=mode==='draft'?saveGuidedCase(p,'pending'):p.e.scenario.onclick();assert.equal(reading,true,mode+':'+change);
+    const [id,event]={enabled:['guidedContactLoads','change'],scope:['guidedContactLoadsScope','change'],
+      instances:['guidedContactLoadsInstances','input'],vertices:['guidedContactVertexBudget','input'],pairs:['guidedContactPairBudget','input'],
+      goal:['guidedContactResultantGoal','change'],guard:['guidedMotionContactVertexLimit','input'],required:['guidedRequireMotionContactLoads','change']}[change];
+    p.e[id].handlers[event]();assert.equal(old.dead,true,mode+':'+change);p.ready();delay.resolve(sources.fit);await running;
+    assert.equal(old.messages.length,before,mode+':'+change);assert.equal(p.current().messages.length,0,mode+':'+change);
+    assert.equal(p.e.guidedScenarioCases.children.length,mode==='draft'?1:0,mode+':'+change);assert.equal(p.live.size,0,mode+':'+change);
+  }
+});
+
 test('guided motion endpoints start blank, require explicit poses and stay bounded after removal and clearing',async()=>{
   const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);
   assert.equal(p.e.guidedMotionKeyframes.children.length,0);assert.equal(p.e.scenario.disabled,true);
@@ -7032,7 +7159,7 @@ test('guided motion inactive files cannot cancel authored or static scenarios',a
 
 test('guided motion and instance drafts clear when the garment is removed, replaced or adopted',async()=>{
   for(const replacement of ['removed','file','malformed','candidate']) {
-    const {p}=await guidedScenarioSetup();guidedStrainControls(p,['front.R']);guidedMotionSourceControls(p);
+    const {p}=await guidedScenarioSetup();guidedStrainControls(p,['front.R']);guidedContactControls(p,['front.R']);guidedMotionSourceControls(p);
     await addGuidedMotion(p,'0.002','35','seated','0.25');guidedNamedCases(p);await saveGuidedCase(p,'old garment');
     const stale=descendants(p.e.guidedMotionKeyframes).find(node=>node.textContent==='Remove keyframe 1');
     if(replacement==='candidate') {
@@ -7048,6 +7175,8 @@ test('guided motion and instance drafts clear when the garment is removed, repla
     assert.deepEqual(['guidedMotionTime','guidedMotionArm','guidedMotionLegs','guidedMotionLegFraction'].map(id=>p.e[id].value),['','','standing','1'],replacement);
     assert.equal(p.e.guidedMaterialStrain.checked,false,replacement);assert.equal(p.e.guidedMaterialStrainScope.value,'all',replacement);
     assert.equal(p.e.guidedMaterialStrainInstances.value,'',replacement);assert.equal(p.e.guidedScenarioCases.children.length,0,replacement);
+    assert.equal(p.e.guidedContactLoads.checked,false,replacement);assert.equal(p.e.guidedContactLoadsScope.value,'all',replacement);
+    assert.equal(p.e.guidedContactLoadsInstances.value,'',replacement);
     stale.onclick();assert.equal(p.e.guidedMotionKeyframes.children.length,0,replacement);
   }
 });
@@ -14011,7 +14140,7 @@ test('compiled WASM guided single-body comparisons preserve signed heat, budgets
     t.diagnostic(`Synthetic sewing-only proof: outward power ${base.metrics.independent_surface_power_w} W -> ${substitute.metrics.independent_surface_power_w} W; ${native?'five complete native/WASM/worker reports agree':'five complete direct/worker WASM reports agree'}. No physical fit or gravity-settled garment claim.`);
   });
 
-test('compiled WASM guided heat bounds and moving directional strain reproduce native consumers through page controls',
+test('compiled WASM guided heat bounds, moving directional strain and contact loads reproduce native consumers through page controls',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_SCENARIO_BODY},async t=>{
     const source=path.resolve(process.env.FTX_GUIDED_SCENARIO_BODY),load=name=>fs.readFileSync(path.join(source,name),'utf8');
     const fixture=JSON.parse(load('pattern.json')),body=load('body-input.json'),modelBytes=fs.readFileSync(path.join(source,'model.ftxbody'));
@@ -14071,16 +14200,22 @@ test('compiled WASM guided heat bounds and moving directional strain reproduce n
     }
     p.e.guidedBasis.value='nominal';p.e.guidedHeatPowerGoal.checked=false;
     p.e.guidedHeatMinimumLimit.value='';p.e.guidedHeatPowerLimit.value='';
-    guidedStrainControls(p,['band']);guidedMotionSourceControls(p);
+    guidedStrainControls(p,['band']);guidedContactControls(p,['band']);guidedMotionSourceControls(p);
     p.e.guidedMotionStep.value='0.0005';p.e.guidedMotionVertices.value='100000';
     await addGuidedMotion(p,'0.001','35');await addGuidedMotion(p,'0.002','35.1');
     p.e.guidedRequireMaterialStrain.checked=true;p.e.guidedRequireMotion.checked=true;p.e.guidedRequireMotionMaterialStrain.checked=true;
+    p.e.guidedRequireContactLoads.checked=true;p.e.guidedRequireMotionContactLoads.checked=true;
     const metrics=[];
     for(const [prefix,scope] of [['',''],['Motion','motion_']])for(const [name,axis] of [['Warp','warp'],['Weft','weft'],['Shear','engineering_shear']]) {
       for(const [side,extreme] of [['Min','min'],['Max','max']]) {
         p.e['guided'+prefix+name+side+'Goal'].checked=true;metrics.push(scope+extreme+'_'+axis+'_green_strain');
       }
     }
+    const forceMetrics=[['ContactResultant','body_contact_resultant_n','contact_loads','peak_body_resultant_n'],
+      ['ContactVertex','max_body_contact_vertex_force_n','contact_loads','max_body_vertex_force_n'],
+      ['MotionContactResultant','motion_peak_body_contact_resultant_n','motion_contact_loads','peak_body_resultant_n'],
+      ['MotionContactVertex','motion_max_body_contact_vertex_force_n','motion_contact_loads','max_body_vertex_force_n']];
+    for(const [id] of forceMetrics)p.e['guided'+id+'Goal'].checked=true;
     const moving=await evaluate('directional-motion');
     for(const row of moving.comparison.alternatives) {
       assert.equal(row.eligible,true,JSON.stringify(row.exclusions));
@@ -14098,6 +14233,20 @@ test('compiled WASM guided heat bounds and moving directional strain reproduce n
       assert.equal(history.triangle_samples,initial.material_strain.result.triangle_samples*history.frames.length);
       assert.equal(history.strain_convention,'material_green_E11_E22_2E12');assert.equal(history.safe_strain_claim,false);
       assert.equal(history.physical_validation_claim,false);
+      assert.equal(initial.contact_loads.status,'available');assert.equal(motion.result.contact_loads.status,'available');
+      const initialLoads=initial.contact_loads.result,loads=motion.result.contact_loads.result;
+      assert.equal(initialLoads.frames.length,1);assert.equal(loads.frames.length,motion.result.samples.length+1);
+      assert.deepEqual(loads.frames[0],initialLoads.frames[0]);assert.deepEqual(loads.source,initialLoads.source);
+      assert.deepEqual(Object.keys(loads.source.instances),['band']);assert.match(loads.source.instances.band,/^[0-9a-f]{64}$/);
+      assert.equal(new Set(loads.source.selected_vertices).size,loads.source.selected_vertices.length,'Welded vertices are counted once');
+      assert.equal(loads.vertex_samples,(loads.source.vertex_count+loads.source.body_vertex_count)*loads.frames.length);
+      assert.notEqual(loads.frames.at(-1).body_state_sha256,loads.frames[0].body_state_sha256,'Force samples bind the actual moving body');
+      assert.equal(loads.pressure_claim,false);assert.equal(loads.comfort_claim,false);assert.equal(loads.physical_validation_claim,false);
+      for(const [,metric,consumer,field] of forceMetrics) {
+        const reading=row.readings[metric],sample=consumer==='contact_loads'?initialLoads:loads;
+        assert.equal(reading.unit,'N',metric);assert.equal(reading.consumer,consumer,metric);
+        assert.ok(Number.isFinite(reading.value)&&reading.value>=0,metric);assert.equal(reading.value,sample[field],metric);
+      }
     }
     p.e.guidedMaterialStrainInstances.value='missing-retained-instance';p.e.guidedMaterialStrainInstances.handlers.input();
     const missing=await evaluate('missing-instance');assert.deepEqual(missing.comparison.frontier,[]);
@@ -14107,9 +14256,21 @@ test('compiled WASM guided heat bounds and moving directional strain reproduce n
       assert.equal(after.motion.status,'available');assert.equal(after.motion.result.material_strain.status,'refused');
       assert.deepEqual(after.motion.result.samples,before.motion.result.samples,'A source-bound strain refusal must not reset or erase mechanics');
       assert.equal(after.metrics.independent_surface_power_w,before.metrics.independent_surface_power_w);
+      assert.deepEqual(after.contact_loads,before.contact_loads);assert.deepEqual(after.motion.result.contact_loads,before.motion.result.contact_loads);
     }
-    t.diagnostic('Synthetic sewing-only proof: signed source intervals, all twelve material-frame strain values and a genuinely moving model-bound trajectory; missing instance scope refuses only strain. '+
-      (native?'All three complete reports agree with native ftx-materials.':'Actual compiled WASM worker results retained.')+' No physical fit or gravity-settled garment claim.');
+    p.e.guidedMaterialStrainInstances.value='band';p.e.guidedMaterialStrainInstances.handlers.input();
+    p.e.guidedContactLoadsInstances.value='missing-retained-instance';p.e.guidedContactLoadsInstances.handlers.input();
+    const missingContact=await evaluate('missing-contact-instance');assert.deepEqual(missingContact.comparison.frontier,[]);
+    for(const key of ['baseline','insulating']) {
+      const before=simulation(moving,key),after=simulation(missingContact,key);
+      assert.equal(after.contact_loads.status,'refused');assert.match(after.contact_loads.refusal.message,/unknown|omitted|collapsed/);
+      assert.equal(after.motion.status,'available');assert.equal(after.motion.result.contact_loads.status,'refused');
+      assert.deepEqual(after.motion.result.samples,before.motion.result.samples,'A contact-scope refusal preserves the complete prescribed motion');
+      assert.deepEqual(after.material_strain,before.material_strain);assert.deepEqual(after.motion.result.material_strain,before.motion.result.material_strain);
+      assert.equal(after.metrics.independent_surface_power_w,before.metrics.independent_surface_power_w);
+    }
+    t.diagnostic('Synthetic sewing-only proof: signed source intervals, all twelve material-frame strain values, all four force readings and a genuinely moving model-bound trajectory; missing strain/contact scopes refuse independently. '+
+      (native?'All four complete reports agree with native ftx-materials.':'Actual compiled WASM worker results retained.')+' No pressure, comfort, physical fit or gravity-settled garment claim.');
   });
 
 test('compiled WASM guided finite and mixed stock studies preserve shared inventory and independent refusals',

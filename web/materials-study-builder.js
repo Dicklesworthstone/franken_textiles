@@ -21,6 +21,8 @@ const METRIC_CONSUMERS = {
   motion_min_warp_green_strain: "motion_material_strain", motion_max_warp_green_strain: "motion_material_strain",
   motion_min_weft_green_strain: "motion_material_strain", motion_max_weft_green_strain: "motion_material_strain",
   motion_min_engineering_shear_green_strain: "motion_material_strain", motion_max_engineering_shear_green_strain: "motion_material_strain",
+  body_contact_resultant_n: "contact_loads", max_body_contact_vertex_force_n: "contact_loads",
+  motion_peak_body_contact_resultant_n: "motion_contact_loads", motion_max_body_contact_vertex_force_n: "motion_contact_loads",
 };
 
 function object(value, allowed, required, label) {
@@ -172,10 +174,23 @@ function materialStrainPolicy(value) {
   }
 }
 
+function contactLoadsPolicy(value) {
+  const budgets = ["max_vertex_samples", "max_pair_evaluations"];
+  object(value, ["schema", "instances", ...budgets], ["schema", ...budgets], "Body contact loads");
+  if (value.schema !== "ftx-contact-loads/1" || budgets.some(key => !Number.isSafeInteger(value[key]) ||
+    value[key] < 1 || value[key] > 64000000)) {
+    throw Error("Body contact loads need ftx-contact-loads/1 and explicit integer vertex/pair budgets from 1 to 64000000.");
+  }
+  if (value.instances != null) {
+    uniqueNames(value.instances, "Body contact-load instance IDs", 4096);
+    for (const id of value.instances) bytes(id, 4096, "Body contact-load instance IDs must not exceed 4096 UTF-8 bytes.");
+  }
+}
+
 /** Author one fresh drape with authored or original motion; source files remain verbatim and Rust owns numerical admission. */
 export function buildMaterialScenarioRequest(state) {
   object(state, ["fitSpec", "allowNoFit", "options", "maxMeshPoints", "maxVertexFrames", "surface",
-    "motion", "maxMotionTrials", "materialStrain"],
+    "motion", "maxMotionTrials", "materialStrain", "contactLoads"],
     ["allowNoFit", "options", "maxMeshPoints", "maxVertexFrames"], "Guided scenario");
   if (typeof state.allowNoFit !== "boolean") throw Error("Declare the numerical-only study without a fit contract explicitly.");
   let fitSpec = "{}";
@@ -238,11 +253,13 @@ export function buildMaterialScenarioRequest(state) {
     throw Error("A scenario motion-trial budget requires a prescribed motion request; both must be supplied together.");
   }
   if (own(state, "materialStrain")) materialStrainPolicy(sourceObject(state.materialStrain, "Material strain"));
+  if (own(state, "contactLoads")) contactLoadsPolicy(sourceObject(state.contactLoads, "Body contact loads"));
   const parts = ['{"schema":"ftx-drape-scenario/1","options":', JSON.stringify(options), ',"fit_spec":', fitSpec,
     ',"max_mesh_points":', String(state.maxMeshPoints), ',"max_vertex_frames":', String(state.maxVertexFrames),
     ...(own(state, "surface") ? [',"surface":', state.surface] : []),
     ...(motion === undefined ? [] : [',"motion":', motion, ',"max_motion_trials":', String(state.maxMotionTrials)]),
-    ...(own(state, "materialStrain") ? [',"material_strain":', state.materialStrain] : []), '}'];
+    ...(own(state, "materialStrain") ? [',"material_strain":', state.materialStrain] : []),
+    ...(own(state, "contactLoads") ? [',"contact_loads":', state.contactLoads] : []), '}'];
   let size = 0;
   for (const part of parts) {
     size += bytes(part);
@@ -288,7 +305,7 @@ export function buildMaterialScenarioMatrixRequest(state) {
       throw Error("Named scenarios exceed 64000000 aggregate vertex frames or 32768 active motion trials.");
     }
     context.cases.push({ key: item.key, surface: scenario.surface != null,
-      motion: scenario.motion != null, materialStrain: scenario.material_strain != null,
+      motion: scenario.motion != null, materialStrain: scenario.material_strain != null, contactLoads: scenario.contact_loads != null,
       ...(own(item, "comparison") ? { comparison: parse(item.comparison, "Original case comparison") } : {}) });
     append(`${index ? "," : ""}{"key":${JSON.stringify(item.key)},"scenario":`); append(item.scenario);
     if (own(item, "comparison")) { append(',"comparison":'); append(item.comparison); }
@@ -550,7 +567,8 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
 function scenarioConsumers(value) {
   const enabled = key => value != null && own(value, key) && value[key] === true;
   return { surface: enabled("surface"), motion: enabled("motion"), material_strain: enabled("materialStrain"),
-    motion_material_strain: enabled("motion") && enabled("materialStrain") };
+    motion_material_strain: enabled("motion") && enabled("materialStrain"), contact_loads: enabled("contactLoads"),
+    motion_contact_loads: enabled("motion") && enabled("contactLoads") };
 }
 
 function matrixContext(value) {
@@ -561,13 +579,13 @@ function matrixContext(value) {
   }
   const keys = new Set();
   for (const item of matrix.cases) {
-    object(item, ["key", "surface", "motion", "materialStrain", "comparison"], ["key", "surface"], "Named scenario case");
+    object(item, ["key", "surface", "motion", "materialStrain", "contactLoads", "comparison"], ["key", "surface"], "Named scenario case");
     name(item.key, "Scenario case key");
     bytes(item.key, 128, "Scenario case keys must not exceed 128 UTF-8 bytes.");
     if (keys.has(item.key)) throw Error("Scenario case keys must be unique.");
     keys.add(item.key);
     if (typeof item.surface !== "boolean") throw Error("Each named case needs an explicit surface-request boolean.");
-    for (const key of ["motion", "materialStrain"]) {
+    for (const key of ["motion", "materialStrain", "contactLoads"]) {
       if (own(item, key) && typeof item[key] !== "boolean") throw Error(`Named case ${key} availability must be a boolean when supplied.`);
     }
     if (item.comparison != null) {
@@ -597,9 +615,9 @@ function matrixContext(value) {
  * request (original JSON text for sourced extras, or an authored object with no extras).
  * Objectives, inclusive constraints and required consumers are explicit; no completeness or
  * protocol consent is inferred. Original source text is embedded verbatim, including locked numbers.
- * Optional scenario context describes the separately dispatched drape/heat/motion/strain request, is never
+ * Optional scenario context describes the separately dispatched drape/heat/motion/strain/load request, is never
  * serialized into the study, and does not enable scenario consumers in manufacturing-only calls.
- * Motion and materialStrain availability default to false. Its optional matrix retains ordered case
+ * Motion, materialStrain and contactLoads availability default to false. Its optional matrix retains ordered case
  * keys, consumer availability, original parsed comparison
  * policies and the callback allowance. Only guidance selection and capacity are read here; the
  * caller retains the original matrix JSON for native admission and exact replay.
@@ -612,16 +630,16 @@ function matrixContext(value) {
 export function buildMaterialStudyRequest(state, scenario) {
   let matrix;
   if (scenario !== undefined) {
-    object(scenario, ["drape", "surface", "motion", "materialStrain", "matrix"], ["drape", "surface"], "Scenario comparison context");
+    object(scenario, ["drape", "surface", "motion", "materialStrain", "contactLoads", "matrix"], ["drape", "surface"], "Scenario comparison context");
     if (scenario.drape !== true || typeof scenario.surface !== "boolean") {
       throw Error("Scenario comparison needs explicit drape: true and a boolean surface request.");
     }
-    for (const key of ["motion", "materialStrain"]) {
+    for (const key of ["motion", "materialStrain", "contactLoads"]) {
       if (own(scenario, key) && typeof scenario[key] !== "boolean") throw Error(`Scenario ${key} availability must be a boolean when supplied.`);
     }
     if (own(scenario, "matrix")) {
       matrix = matrixContext(scenario.matrix);
-      for (const key of ["surface", "motion", "materialStrain"]) {
+      for (const key of ["surface", "motion", "materialStrain", "contactLoads"]) {
         if ((own(scenario, key) && scenario[key] === true) !== matrix.cases.some(item => own(item, key) && item[key] === true)) {
           throw Error(`Named scenario ${key} availability must describe its actual cases.`);
         }
@@ -726,7 +744,11 @@ export function buildMaterialStudyRequest(state, scenario) {
     cut_and_sew_purchasing: combinedPurchasing, assembly_mass: !!mass,
     drape: !!scenario, ...scenarioConsumers(scenario),
   };
-  if (matrix) consumers.motion_material_strain = matrix.cases.some(item => scenarioConsumers(item).motion_material_strain);
+  if (matrix) {
+    for (const consumer of ["motion_material_strain", "motion_contact_loads"]) {
+      consumers[consumer] = matrix.cases.some(item => scenarioConsumers(item)[consumer]);
+    }
+  }
   const requireConsumer = consumer => {
     if (typeof consumer !== "string" || !own(consumers, consumer)) throw Error(`Unsupported guided consumer: ${consumer}.`);
     if (!consumers[consumer]) throw Error(`Comparison requires requested ${consumer} inputs.`);

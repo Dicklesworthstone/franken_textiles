@@ -919,6 +919,29 @@ Every alternative reserves its full allowance against a shared 64000000 triangle
 Warp E11, weft E22 and engineering shear 2E12 are signed, dimensionless Green strain, not percent elongation or principal strain.
 Enter independently justified limits below; no material failure or comfort threshold is supplied.</p>
 </div></fieldset>
+<fieldset><legend>Body contact loads</legend>
+<label><input id="guidedContactLoads" type="checkbox"> Track normal body forces on retained cloth</label>
+<div id="guidedContactLoadsControls" hidden>
+<label>Cloth region <select id="guidedContactLoadsScope"><option value="all">All retained physical instances</option>
+<option value="instances">Only the exact physical instance names below</option></select></label>
+<label>Physical instance names, one per line <textarea id="guidedContactLoadsInstances" rows="3" disabled
+placeholder="For example: front.R&#10;front.L"></textarea></label>
+<small>Use names from the drape report. Blank lines are ignored; other spaces remain part of each name.
+Selected pieces contribute their union of welded vertices; shared vertices keep their complete body force.</small>
+<div class="study-fields">
+<label>Vertex-sample allowance per alternative <input id="guidedContactVertexBudget" type="number"
+min="1" max="64000000" step="1" value="1000000"></label>
+<label>Candidate-pair evaluation allowance per alternative <input id="guidedContactPairBudget" type="number"
+min="1" max="64000000" step="1" value="1000000"></label>
+</div>
+<p class="note">These allowances cover the initial state and every accepted motion sample. Vertex work includes the complete cloth
+and collision body; candidate work also includes inactive pairs and self-contact. Each case reserves the full allowances across
+its alternatives against separate 64000000 vertex and pair limits. Missing instances or exhausted work refuse this consumer
+while independent drape, heat and motion results remain available.</p>
+<p class="note">Results are normal body barrier forces in newtons. They exclude tangential friction and do not measure contact
+pressure or comfort. Opposing forces can cancel in the resultant; the maximum vertex force depends on the mesh and contact policy.
+Choose numerical force limits explicitly; no safe-fit threshold is supplied.</p>
+</div></fieldset>
 <label><input id="guidedScenarioMotion" type="checkbox"> Continue the sewn garment through a prescribed body movement</label>
 <fieldset id="guidedMotionControls" hidden><legend>Movement after the initial drape</legend>
 <label>Motion source <select id="guidedMotionSource"><option value="form">Author absolute pose endpoints here</option>
@@ -977,7 +1000,7 @@ An original policy file keeps its complete source. Shared comparison settings ap
 <p id="guidedScenarioCaseCount" class="note" role="status">No named cases saved.</p>
 <div id="guidedScenarioCases"></div>
 <button id="clearScenarioCases" type="button" disabled>Clear saved cases</button>
-<p class="note">Save 1–8 unique names. Every case retains its exact fit, heat and motion sources, strain scope and numerical settings.
+<p class="note">Save 1–8 unique names. Every case retains its exact fit, heat and motion sources, strain and contact-load scopes and numerical settings.
 Saved cases share the selected body source and current material/design choices. Their vertex-frame allowances must sum to
 at most 64000000; for example, explicitly allocate 32000000 each for two cases. The single-case default uses the full allowance.
 Active motion trial allowances must sum to at most 32768. No budget is divided automatically.</p>
@@ -999,6 +1022,14 @@ Use the scenario action below; the manufacturing-only action cannot evaluate the
 <input id="guidedStrainLimit" type="number" min="0" step="any" aria-label="Maximum absolute panel-edge strain percentage" placeholder="No limit">
 <label><input id="guidedMotionStrainGoal" type="checkbox"> Minimize peak absolute panel-edge strain through movement (%)</label>
 <input id="guidedMotionStrainLimit" type="number" min="0" step="any" aria-label="Maximum absolute panel-edge strain throughout movement" placeholder="No limit">
+<label><input id="guidedContactResultantGoal" type="checkbox"> Minimize initial body-force resultant magnitude (N)</label>
+<input id="guidedContactResultantLimit" type="number" min="0" step="any" aria-label="Maximum initial body-force resultant in newtons" placeholder="No limit">
+<label><input id="guidedContactVertexGoal" type="checkbox"> Minimize initial maximum vertex body force (N)</label>
+<input id="guidedContactVertexLimit" type="number" min="0" step="any" aria-label="Maximum initial vertex body force in newtons" placeholder="No limit">
+<label><input id="guidedMotionContactResultantGoal" type="checkbox"> Minimize peak body-force resultant through motion (N)</label>
+<input id="guidedMotionContactResultantLimit" type="number" min="0" step="any" aria-label="Maximum body-force resultant through complete motion in newtons" placeholder="No limit">
+<label><input id="guidedMotionContactVertexGoal" type="checkbox"> Minimize maximum vertex body force through motion (N)</label>
+<input id="guidedMotionContactVertexLimit" type="number" min="0" step="any" aria-label="Maximum vertex body force through complete motion in newtons" placeholder="No limit">
 <label><input id="guidedHeatPowerGoal" type="checkbox"> Compare signed independent sheet heat (W)</label>
 <input id="guidedHeatPowerLimit" type="number" step="any" aria-label="Maximum signed independent sheet heat power in watts" placeholder="No limit">
 </div>
@@ -1011,6 +1042,11 @@ aria-label="Minimum signed independent sheet heat power in watts" placeholder="N
 <label><input id="guidedRequireMotion" type="checkbox"> Require a complete numerically admissible movement</label>
 <label><input id="guidedRequireMaterialStrain" type="checkbox"> Require initial material-direction strain</label>
 <label><input id="guidedRequireMotionMaterialStrain" type="checkbox"> Require material-direction strain over the complete motion</label>
+<label><input id="guidedRequireContactLoads" type="checkbox"> Require initial body contact loads</label>
+<label><input id="guidedRequireMotionContactLoads" type="checkbox"> Require body contact loads over the complete motion</label>
+<p class="note">Body-force objectives and limits use nominal values. Motion forces include the initial state and every accepted
+sample and require motion and contact-load tracking in the same case. A required result or force limit remains active without
+its goal checkbox. Use an explicit nominal limit basis alongside source-reported heat or mass objectives.</p>
 <details><summary>Signed material-direction goals and limits</summary>
 <p>Choose which extrema to improve, or enter limits without choosing an objective. Lower bounds apply to the minimum strain;
 upper bounds apply to the maximum. These signed, dimensionless Green-strain metrics support nominal values only.

@@ -402,6 +402,7 @@ const motionPolicy = (changes={}) => ({schema:'ftx-drape-motion/1',keyframes:[
   {time_s:0.1,arm_abduction_deg:50,leg_pose:{posture:'seated',fraction:0.5}},
   {time_s:0.2,arm_abduction_deg:35}],max_step_s:0.01,max_trials:32,max_pairs:1000,...changes});
 const strainPolicy = (changes={}) => ({schema:'ftx-material-strain/1',max_triangle_samples:10000,...changes});
+const contactPolicy = (changes={}) => ({schema:'ftx-contact-loads/1',max_vertex_samples:100000,max_pair_evaluations:1000000,...changes});
 const motionState = () => ({keyframes:[{time_s:0.25,arm_abduction_deg:30}],max_step_s:0.125,
   max_trials:128,max_pairs:100000,max_sample_vertices:500000});
 
@@ -637,6 +638,51 @@ test('guided material strain validates exact distinct instance scope and explici
   }
 });
 
+test('guided contact loads retain original scope and budget text alongside motion, strain and fit sources', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  const contactLoads=' {\r\n"max_pair_evaluations":1000000,"schema":"ftx-contact-loads/1",'+
+    '"instances":["\\u0066ront:right"," lining 🧵 "],"max_vertex_samples":100000}\r\n';
+  const fitSpec=' {"source":{"seed":18446744073709551615,"zero":-0.0}}\r\n';
+  const materialStrain=JSON.stringify(strainPolicy()),motion=' \r\n'+JSON.stringify(motionPolicy())+'\r\n';
+  const input={...scenarioState(),contactLoads,fitSpec,materialStrain,motion,maxMotionTrials:4096},before=JSON.stringify(input);
+  const raw=build(input),result=JSON.parse(raw);
+  for(const original of [contactLoads,fitSpec,materialStrain,motion])assert.ok(raw.includes(original));
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(result.contact_loads,JSON.parse(contactLoads));
+  assert.equal(Object.hasOwn(result,'contactLoads'),false);
+  assert.equal(Object.hasOwn(JSON.parse(build(scenarioState())),'contact_loads'),false);
+  for(const instances of [undefined,null]) {
+    const original=JSON.stringify(contactPolicy(instances===undefined?{}:{instances}));
+    const independent=JSON.parse(build({...scenarioState(),contactLoads:original}));
+    assert.deepEqual(independent.contact_loads,JSON.parse(original));
+    for(const key of ['motion','material_strain','max_motion_trials'])assert.equal(Object.hasOwn(independent,key),false);
+  }
+});
+
+test('guided contact loads validate exact native scopes, bounded allowances and complete original input size', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  const check=policy=>build({...scenarioState(),contactLoads:JSON.stringify(policy)});
+  for(const policy of [null,[],{},contactPolicy({schema:'wrong'}),contactPolicy({unknown:true})])assert.throws(()=>check(policy));
+  for(const key of ['schema','max_vertex_samples','max_pair_evaluations']) {
+    const missing=contactPolicy();delete missing[key];assert.throws(()=>check(missing),/missing/);
+  }
+  for(const key of ['max_vertex_samples','max_pair_evaluations']) {
+    for(const value of [0,-1,64000001,1.5,null,'1',Infinity])assert.throws(()=>check(contactPolicy({[key]:value})),/integer vertex\/pair budgets/);
+    for(const value of [1,64000000])assert.equal(JSON.parse(check(contactPolicy({[key]:value}))).contact_loads[key],value);
+  }
+  for(const instances of [[],[''],[' \t'],['front','front'],[1],{},Array.from({length:4097},(_,i)=>String(i)),['é'.repeat(2049)]]) {
+    assert.throws(()=>check(contactPolicy({instances})));
+  }
+  const names=['é'.repeat(2048),'__proto__','front',' front '];
+  assert.deepEqual(JSON.parse(check(contactPolicy({instances:names}))).contact_loads.instances,names);
+  const limit=Array.from({length:4096},(_,i)=>'part-'+i);
+  assert.equal(JSON.parse(check(contactPolicy({instances:limit}))).contact_loads.instances.length,4096);
+  for(const contactLoads of [contactPolicy(),null,undefined,'null','[]','{bad','\ufeff'+JSON.stringify(contactPolicy())]) {
+    assert.throws(()=>build({...scenarioState(),contactLoads}));
+  }
+  const original=JSON.stringify(contactPolicy()),contactLoads=original+' '.repeat(16*1024*1024-original.length);
+  assert.throws(()=>build({...scenarioState(),contactLoads}),/16 MiB/,'Scenario framing shares the input limit with the exact contact source');
+});
+
 test('scenario-only comparisons retain signed heat direction and cannot leak into manufacturing mode', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input=state();delete input.cutting;
@@ -703,16 +749,56 @@ test('directional strain and motion refuse reported ranges while retaining expli
   }
 });
 
+const initialContactMetrics=['body_contact_resultant_n','max_body_contact_vertex_force_n'];
+const movingContactMetrics=['motion_peak_body_contact_resultant_n','motion_max_body_contact_vertex_force_n'];
+
+test('body contact objectives and guards require their own initial or complete-motion consumer', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={drape:true,surface:false,motion:true,contactLoads:true},input=state();delete input.cutting;
+  input.objectives=[...initialContactMetrics,...movingContactMetrics].map((metric,i)=>({metric,direction:i%2?'minimize':'maximize'}));
+  input.constraints=[{metric:'body_contact_resultant_n',minimum:0.1,maximum:2},{metric:'motion_max_body_contact_vertex_force_n',maximum:3}];
+  input.requiredConsumers=['contact_loads','motion_contact_loads'];
+  const before=JSON.stringify(input),raw=build(input,context),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(result.comparison.objectives,input.objectives);
+  assert.deepEqual(result.comparison.constraints,input.constraints);assert.deepEqual(result.comparison.required_consumers,input.requiredConsumers);
+  for(const key of ['contactLoads','contact_loads','motion','scenario'])assert.equal(Object.hasOwn(result,key),false);
+  for(const [metrics,consumer] of [[initialContactMetrics,'contact_loads'],[movingContactMetrics,'motion_contact_loads']]) {
+    for(const metric of metrics)for(const policy of [{objectives:[{metric,direction:'minimize'}]},
+      {constraints:[{metric,maximum:2}]},{requiredConsumers:[consumer]}]) {
+      const request={...state(),...policy};
+      assert.ok(build(request,context));
+      for(const missing of [undefined,{drape:true,surface:false},{...context,contactLoads:false}]) {
+        assert.throws(()=>build(request,missing),new RegExp(`requested ${consumer}`));
+      }
+      if(consumer==='motion_contact_loads')assert.throws(()=>build(request,{...context,motion:false}),/requested motion_contact_loads/);
+      else assert.ok(build(request,{...context,motion:false}),'Initial loads need no prescribed motion or material-strain request');
+    }
+  }
+});
+
+test('contact-load criteria remain nominal and compose with independently bounded heat objectives', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={drape:true,surface:true,motion:true,contactLoads:true},input={...state(),basis:'reported_bounds',
+    objectives:[{metric:'independent_surface_power_w',direction:'maximize'}],requiredConsumers:['contact_loads','motion_contact_loads']};
+  for(const metric of [...initialContactMetrics,...movingContactMetrics]) {
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/steady sheet heat only/);
+    assert.throws(()=>build({...input,constraints:[{metric,maximum:2}]},context),/steady sheet heat only/);
+    const constraint={metric,basis:'nominal',minimum:0,maximum:2};
+    assert.deepEqual(JSON.parse(build({...input,constraints:[constraint]},context)).comparison.constraints,[constraint]);
+  }
+});
+
 test('optional motion and strain availability preserves old contexts and rejects ambiguous flags', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const old={drape:true,surface:false},raw=build(state(),old);
-  assert.equal(build(state(),{...old,motion:false,materialStrain:false}),raw);
-  for(const key of ['motion','materialStrain'])for(const value of [null,undefined,'true',1,{}]) {
+  assert.equal(build(state(),{...old,motion:false,materialStrain:false,contactLoads:false}),raw);
+  for(const key of ['motion','materialStrain','contactLoads'])for(const value of [null,undefined,'true',1,{}]) {
     assert.throws(()=>build(state(),{...old,[key]:value}),/availability must be a boolean/);
   }
-  const inherited=Object.assign(Object.create({materialStrain:true,motion:true}),old);
+  const inherited=Object.assign(Object.create({materialStrain:true,motion:true,contactLoads:true}),old);
   assert.throws(()=>build({...state(),requiredConsumers:['material_strain']},inherited),/requested material_strain/);
   assert.throws(()=>build({...state(),requiredConsumers:['motion']},inherited),/requested motion/);
+  assert.throws(()=>build({...state(),requiredConsumers:['contact_loads']},inherited),/requested contact_loads/);
 });
 
 test('reported sheet heat retains signed objectives and inclusive guards without inventing source ranges', async () => {
@@ -1232,7 +1318,7 @@ const casePolicy = (metric='stock_area_m2',direction='minimize',changes={}) =>
   ({basis:'nominal',objectives:[{metric,direction}],...changes});
 const namedContext = (cases=[{key:'cold',surface:false},{key:'warm',surface:false}],maxEvaluations=64) =>
   ({drape:true,surface:cases.some(item=>item.surface),motion:cases.some(item=>item.motion===true),
-    materialStrain:cases.some(item=>item.materialStrain===true),matrix:{maxEvaluations,cases}});
+    materialStrain:cases.some(item=>item.materialStrain===true),contactLoads:cases.some(item=>item.contactLoads===true),matrix:{maxEvaluations,cases}});
 const namedDesign = changes => adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative',
   caseKey:'cold',maxEvaluations:2,maxDesigns:1,...changes});
 
@@ -1427,6 +1513,36 @@ test('named motion comparisons admit inherited consumers case by case and retain
   }
 });
 
+test('named contact-load decisions preserve case policies and require motion and loads in the same case', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const complete={key:'cold',surface:false,motion:true,contactLoads:true};
+  for(const [metrics,consumer] of [[initialContactMetrics,'contact_loads'],[movingContactMetrics,'motion_contact_loads']]) {
+    for(const metric of metrics)for(const policy of [{objectives:[{metric,direction:'maximize'}]},
+      {constraints:[{metric,maximum:2}]},{requiredConsumers:[consumer]}]) {
+      const input={...state(),...policy,design:namedDesign()},missing={key:'warm',surface:false,motion:true};
+      assert.throws(()=>build(input,namedContext([complete,missing])),new RegExp(`warm inherits.*${consumer}`));
+      const override=namedContext([complete,{...missing,comparison:casePolicy()}]),before=JSON.stringify(override);
+      const result=JSON.parse(build(input,override));
+      assert.equal(result.design_adaptive.case_key,'cold');assert.equal(JSON.stringify(override),before);
+      if(policy.objectives)assert.deepEqual(result.comparison.objectives,policy.objectives);
+      if(policy.constraints)assert.deepEqual(result.comparison.constraints,policy.constraints);
+      if(policy.requiredConsumers)assert.deepEqual(result.comparison.required_consumers,policy.requiredConsumers);
+    }
+  }
+  const moving={...state(),requiredConsumers:['motion_contact_loads']};
+  const split=namedContext([{key:'cold',surface:false,motion:true},{key:'warm',surface:false,contactLoads:true}]);
+  assert.throws(()=>build(moving,split),/requested motion_contact_loads/);
+  assert.throws(()=>build(moving,namedContext([complete,{key:'warm',surface:false,contactLoads:true}])) ,/warm inherits.*motion_contact_loads/);
+  const both=namedContext([complete,{...complete,key:'warm'}]);assert.ok(build(moving,both));
+  const absent={...both};delete absent.contactLoads;
+  for(const context of [absent,{...both,contactLoads:false}])assert.throws(()=>build(moving,context),/contactLoads availability.*actual cases/);
+  for(const contactLoads of [null,undefined,'true',1])assert.throws(()=>build(state(),namedContext([{...complete,contactLoads}])),/availability must be a boolean/);
+  const advanced=casePolicy('motion_max_body_contact_vertex_force_n','minimize',{
+    required_consumers:['motion_contact_loads'],allow_mixed_protocols:true});
+  const original=namedContext([{key:'cold',surface:false,comparison:advanced}]),before=JSON.stringify(original);
+  assert.ok(build(state(),original));assert.equal(JSON.stringify(original),before,'Native admission retains authority over original case policies');
+});
+
 test('reported sheet heat respects effective named-case policies and adaptive guidance without changing sources', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input={...state(),basis:'reported_bounds',
@@ -1492,6 +1608,21 @@ test('named scenarios retain authored motion and strain budgets without sharing 
   assert.equal(JSON.parse(build({maxEvaluations:4,cases:[{key:'one',scenario:moving},{key:'two',scenario:moving}]})).cases.length,2);
   const excessive=single({...scenarioState(),motion,maxMotionTrials:16385,materialStrain,maxVertexFrames:32000000});
   assert.throws(()=>build({maxEvaluations:4,cases:[{key:'one',scenario:moving},{key:'two',scenario:excessive}]}),/32768 active motion trials/);
+});
+
+test('named scenarios retain each contact scope and original allowance without rewriting independent requests', async () => {
+  const {buildMaterialScenarioMatrixRequest:build,buildMaterialScenarioRequest:single}=await modulePromise;
+  const contacts=' \r\n'+JSON.stringify(contactPolicy({instances:['front:right'],max_vertex_samples:64000000,max_pair_evaluations:64000000}))+'\r\n';
+  const materialStrain=JSON.stringify(strainPolicy()),motion=JSON.stringify(motionPolicy());
+  const moving=single({...scenarioState(),contactLoads:contacts,materialStrain,motion,maxMotionTrials:4096,maxVertexFrames:32000000});
+  const staticOnly=single({...scenarioState(),contactLoads:contacts,maxVertexFrames:32000000});
+  const raw=build({maxEvaluations:4,cases:[{key:'moving',scenario:moving},{key:'initial',scenario:staticOnly}]}),result=JSON.parse(raw);
+  for(const original of [moving,staticOnly,contacts,materialStrain,motion])assert.ok(raw.includes(original));
+  assert.equal(result.cases[1].scenario.contact_loads.max_vertex_samples,64000000);
+  for(const key of ['motion','material_strain','max_motion_trials'])assert.equal(Object.hasOwn(result.cases[1].scenario,key),false);
+  const independent=single({...scenarioState(),maxVertexFrames:32000000});
+  const mixed=JSON.parse(build({maxEvaluations:4,cases:[{key:'loaded',scenario:moving},{key:'independent',scenario:independent}]}));
+  assert.equal(Object.hasOwn(mixed.cases[1].scenario,'contact_loads'),false,'A case never inherits another case’s contact request');
 });
 
 test('matrix snapshot resources use native active-motion defaults and complete aggregate limits', async () => {
