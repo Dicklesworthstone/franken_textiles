@@ -51,6 +51,8 @@ struct Board {
 
 fn board(sheet: &Value) -> Result<Board, Refusal> {
     let b = &sheet["board"];
+    let capacity = b["dictionary"].as_str().and_then(ftx_core::aruco::lookup)
+        .map_or(0, |(_, codes)| codes.len());
     let count = |name| {
         b[name]
             .as_u64()
@@ -60,11 +62,11 @@ fn board(sheet: &Value) -> Result<Board, Refusal> {
     };
     if sheet["schema"] != "fabric-calib-sheet/1"
         || b["type"] != "charuco"
-        || b["dictionary"] != "DICT_4X4_50"
+        || capacity == 0
         || !matches!(sheet["paper"].as_str(), Some("letter" | "a4"))
     {
         return Err(bad_input(
-            "--sheet requires a DICT_4X4_50 fabric-calib-sheet/1 sidecar",
+            "--sheet requires a captured predefined fabric-calib-sheet/1 sidecar",
         ));
     }
     let (sx, sy) = (count("squares_x")?, count("squares_y")?);
@@ -73,7 +75,7 @@ fn board(sheet: &Value) -> Result<Board, Refusal> {
     if !square.is_finite()
         || !marker.is_finite()
         || !(0.0 < marker && marker < square && square <= 1000.0)
-        || sx * sy / 2 > 50
+        || sx * sy / 2 > capacity
         || (sx - 1) * (sy - 1) > 128
     {
         return Err(bad_input(

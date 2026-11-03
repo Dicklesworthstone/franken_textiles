@@ -71,6 +71,15 @@ not zero-sigma/partial results. The unrounded matrix is retained for calculation
 Known-answer tests recover spec D.7 exact-camera residuals/focal search and analytic distances,
 angles and uncertainty terms. No automatic detector, image-oracle or real-wearer fit claim.
 
+**Detected ChArUco dictionaries.** The native detector and camera-image admission use the same
+OpenCV 4.13.0 captured prefixes as the sheet renderer, through `ftx_core::aruco`: all 27 names and
+aliases, with 50 codes for the 4x4 family and 28 for each other family. Unsupported names and
+boards beyond a captured prefix refuse; these are not complete upstream dictionaries. Sampling
+uses the declared 4–7 data bits and one-cell border. At most one border cell and two weak data
+cells are tolerated before the unchanged one-bit/runner-up correction rule. Defaults retain their
+arithmetic/order. Receipts retain the declared dictionary. Existing pixel, corner, source, held-out
+and uncertainty limits remain; synthetic detection is not physical camera or anatomical accuracy.
+
 **Imported ChArUco.** The same input schema accepts `reference: charuco`, board dimensions
 (`squares_x`, `squares_y`, `square_mm`, optional `origin_mm`) and identified image corners
 `corners: [{id, point_px}]`. IDs are row-major internal corners. Fixed-seed RANSAC (512 trials,

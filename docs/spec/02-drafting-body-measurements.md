@@ -663,8 +663,13 @@ Layout (mm, page origin top-left, y down):
   predefined names/aliases and 108 independent board rasters are frozen in
   `tests/fixtures/oracle/measure/calibration_sheets.json`. These supplement the unchanged Python skill
   pin, rather than replacing its fixtures. Fixed 8×6/7 sheets use only IDs 0–23/27; no arbitrary
-  dictionary editor is implied. The built-in image detector still accepts only DICT_4X4_50; other
-  printed dictionaries require matching external detection or reviewed corner-coordinate input.
+  dictionary editor is implied. The native image detector uses these same captured code prefixes
+  for all 27 names/aliases: 50 codes for the 4x4 family and 28 for the other families. Larger boards
+  outside those prefixes refuse, even when the named upstream dictionary contains more codes.
+  Sampling uses the declared data-bit width and a one-cell black border, preserving the default
+  contrast, strong-cell, one-bit correction and runner-up-distance rules. Detection receipts name
+  the declared dictionary. Existing corner/pixel/control budgets and source/uncertainty gates apply;
+  this extension does not establish general OpenCV detection parity or physical camera accuracy.
 - Bars (alternate segments filled, starting filled; thin outline `px(0.25)`; end ticks `px(2.0)` beyond each side):
   `y_100mm` vertical at x = x0 + bw + 4, y = y0 + 4, 100 mm, 10 mm segments, label `100 mm`; `y_4in` at x = that +
   3.5 + 6, 101.6 mm, 12.7 mm segments, label `4 in`; `x_100mm` horizontal at (x0, y0 + bh + 6), label `100 mm  (10 mm

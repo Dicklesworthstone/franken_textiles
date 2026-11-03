@@ -14,6 +14,7 @@
 //! Units: pattern geometry is in millimetres (2D, y up); bodies and drapes are in metres (3D, z up).
 #![forbid(unsafe_code)]
 
+pub mod aruco;
 pub mod curve;
 pub mod det;
 pub mod exact;

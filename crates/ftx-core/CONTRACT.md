@@ -5,6 +5,13 @@ orientation predicate, vectors and 3×3 matrices, minimum-norm least squares, th
 depend on, chord-relative edge curves, polyline and polygon helpers, refusals and run receipts. No domain
 logic (no pieces, seams, bodies or garments).
 
+`aruco` supplies shared, immutable row-major marker bits for printable references and image
+detection. The existing OpenCV 4.13.0 capture (`calibration_sheets.json`) pins all 27 names/aliases,
+bit widths and retained prefixes: 50 codes for the 4x4 family, 28 for each other family. Lookup
+does not provide a complete upstream dictionary. Bits are dimensionless, 1 means white, and
+integer ordering is target-independent. No rendering, detection, I/O or camera-accuracy claim
+belongs to this data module; the existing trace provider tests retain the independent oracle.
+
 **Units and frames.** Pattern geometry: millimetres, 2D, x right, y up, loops counter-clockwise.
 Body and drape geometry: metres, 3D, z up. Nothing here converts between them.
 
