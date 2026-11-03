@@ -30,6 +30,17 @@ use calibration::{read, simulation_readiness};
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if action == "linearize-origin" {
+        known_options(args, "materials", &[])?;
+        let [path] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials linearize-origin REQUEST.json [--json]",
+            ));
+        };
+        let result = calibration::linearize_origin(path)?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if matches!(action, "cut-plan" | "cut-job" | "cut-price" | "cut-svg") {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {

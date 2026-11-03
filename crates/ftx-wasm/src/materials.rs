@@ -107,6 +107,28 @@ pub fn inspect(selection: &str) -> Result<String, Refusal> {
     serde_json::to_string(&detail(&m)?).map_err(invalid)
 }
 
+/// Prepare an explicitly estimated bounded membrane from source-model origin observations.
+/// The request supplies estimate consent, every strain bound and its dated approximation rationale.
+///
+/// # Errors
+/// Oversized/invalid input, incompatible sources, unstable origin or unsupported approximation.
+pub fn linearize_origin(request: &str) -> Result<String, Refusal> {
+    budget(&[request])?;
+    let input: ftx_pattern::material_linearization::Input =
+        serde_json::from_str(request).map_err(invalid)?;
+    serde_json::to_string(&ftx_pattern::material_linearization::linearize(&input)?).map_err(invalid)
+}
+
+/// Browser entry point for the same bounded source-origin approximation as both native commands.
+///
+/// # Errors
+/// Same refusals as [`linearize_origin`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_linearize_origin(request: &str) -> Result<String, wasm_bindgen::JsError> {
+    linearize_origin(request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Prepare the existing frozen material selection at an explicitly characterized normal pressure.
 /// The input owns its specimen, pressure observations, invariance evidence and estimate consent.
 ///

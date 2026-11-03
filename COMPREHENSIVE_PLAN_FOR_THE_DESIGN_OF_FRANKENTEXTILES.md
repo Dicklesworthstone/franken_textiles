@@ -5009,6 +5009,28 @@ evaluation and input-size limits without allocating unstated budgets. Exact matr
 replay through the same native and portable authority. This advances `ftx-ms2`; synthetic software
 and numerical evidence do not close measured material, garment-fit or process-qualification gates.
 
+### 25.157 Use explicit source-origin approximations in ordinary membrane consumers
+
+The native commands and portable/WASM API now prepare an ordinary frozen material from Wang2011
+origin observations through one shared evaluator. Operators explicitly consent to estimates, provide
+a dated approximation rationale and choose a finite physical Green-strain box spanning the origin.
+The source normal block is retained and tensor shear is converted using G12=C33/2. The existing
+tabulated membrane compiler supplies work-conjugate energy, stress, tangent and domain enforcement;
+there is no additional solver or inferred constitutive law. Nine published origins are stable in
+this local approximation; the indefinite Navy origin refuses without modifying the source.
+
+Original quantities, specimen/conditioning identities, source hashes and exact frozen replay survive.
+Existing constitutive laws or history cannot be overwritten. Missing bending, thickness, contact,
+heat and process observations remain missing. The ideal strip consumer can use a bounded membrane
+alone, allowing fixed geometry and loading to demonstrate a real material-only numerical response.
+The native and portable workflow regressions cover those production reactions, solver residuals,
+out-of-domain refusal and source-locked replay alongside independent analytic energy checks.
+
+This delivers `ftx-wg2` as an explicitly estimated local model. It does not reproduce the paper's
+nonlinear angular interpolation, establish a measured validity range, supply a complete drape-ready
+fabric or close the matched-specimen empirical gates in `ftx-tm2`/`ftx-tm8`. Those gates remain the
+highest-value path from useful numerical material swaps to reliable garment and production claims.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

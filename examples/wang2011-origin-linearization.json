@@ -1,0 +1,17 @@
+{
+  "schema": "ftx-wang2011-linearization/1",
+  "material": {
+    "id": "wang/2011/gray-interlock",
+    "allow_estimates": true
+  },
+  "green_strain_domain": [
+    [-0.02, 0.02],
+    [-0.02, 0.02],
+    [-0.02, 0.02]
+  ],
+  "approximation_source": {
+    "reference": "local:examples/wang2011-origin-linearization",
+    "accessed_on": "2026-11-03",
+    "note": "Illustrative operator choice: retain the published origin tangent on a small Green-strain box for a planar elastic strip comparison. These limits are an explicit approximation, not a measured validation interval. No garment, contact, bending or thermal qualification is supplied."
+  }
+}

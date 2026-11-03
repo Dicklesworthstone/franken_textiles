@@ -37,6 +37,12 @@ pub(super) fn simulation_readiness(material: &ResolvedMaterial) -> Result<(), Re
     Ok(())
 }
 
+pub(super) fn linearize_origin(path: &str) -> Result<Value, Refusal> {
+    let input: ftx_pattern::material_linearization::Input = read(path)?;
+    serde_json::to_value(ftx_pattern::material_linearization::linearize(&input)?)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
+}
+
 pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
     let input: Input = read(path)?;
     let report = calibrate(&input)?;

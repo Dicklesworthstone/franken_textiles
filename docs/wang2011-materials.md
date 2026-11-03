@@ -63,3 +63,50 @@ These records use ordinary catalog discovery, source-preserving normalization an
 A consumer that needs only mass can use the reported mass directly. Further constitutive use must
 be explicit about its approximation, domain and estimate policy; a raw record alone is not a
 complete drape-ready material, a fitted garment or independent empirical acceptance.
+
+## Run an explicit local membrane approximation
+
+`ftx materials linearize-origin REQUEST.json`, the companion
+`ftx-materials linearize-origin REQUEST.json`, and portable
+`ftx_wasm::materials::linearize_origin` use one evaluator. The browser binding is
+`material_linearize_origin`. Start with the checked-in example:
+
+```sh
+cargo run -p ftx-cli --bin ftx -- materials linearize-origin examples/wang2011-origin-linearization.json --json
+```
+
+The request selects an exact source, explicitly sets `material.allow_estimates: true`, supplies
+three closed Green-strain intervals and a dated `approximation_source` explaining the choice.
+Every interval must strictly span zero, and the entire box must have a positive-definite surface
+metric. The example's +/-0.02 bounds are an illustrative operator choice, not measured accuracy
+limits. Unknown conditioning remains unknown. Replacing the example's ID with
+`wang/2011/11oz-black-denim` changes the selected source while preserving the approximation choice.
+
+The evaluator takes the source's origin normal block directly: Q11 = C11, Q12 = C12 and Q22 = C22.
+It converts tensor shear to the production engineering shear using G12 = C33 / 2. Thus its energy
+per reference area is
+
+```text
+W = 0.5 * C11 * E11^2 + C12 * E11 * E22 + 0.5 * C22 * E22^2 + 0.5 * G12 * gamma^2
+gamma = 2 * E12
+```
+
+This is an integrable constant-tangent approximation, not the source's strain-dependent stiffness
+interpolation. Existing `TabulatedMembrane` curves carry its exact bounds, work-conjugate stresses,
+energy and tangent; ordinary solver assembly needs no new physical path. The production stability
+gate admits nine origins and refuses Navy Sparkle Sweat. Existing membrane laws/history are not
+replaced. No source coefficient is clamped, projected or relabelled as a direct measurement.
+
+The report contains the original frozen input and digest, source material hash, converted tangent,
+ordinary `selection`, and exact `selection_json`. Use that selection as the material in an existing
+`ftx-strip-experiment/1` request; the planar static strip needs only the membrane response. An
+ordinary full drape still requires separately supplied bending, thickness and interface properties.
+Missing warmth, durability and manufacturing data stay missing. Source scalar observations remain
+unchanged in the derived record; the added curves and coupling are labelled estimates, and removing
+estimate consent refuses their use.
+
+Regressions compare independent quadratic energy/stress answers, numerical energy derivatives,
+shear normalization, provenance and domain refusals. The native workflow test uses the same ideal
+40 x 100 mm strip and imposed extension for Gray Interlock and black denim, checks the actual
+production solver's grip reactions and free-force residuals, and replays each frozen result.
+This verifies model integration; it does not compare the approximation to held-out physical coupons.

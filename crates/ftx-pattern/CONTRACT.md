@@ -1,5 +1,12 @@
 # ftx-pattern contract
 
+**Bounded origin approximation.** `material_linearization::linearize` transfers exact Wang2011
+origin coefficients into the existing `TabulatedMembrane`, with G12=C33/2, explicit estimate consent,
+operator-authored physical Green-strain bounds and dated rationale. Original observations and
+parent hashes survive. Existing laws/history, source/specimen mismatches and unstable tensors refuse;
+no other physical property is filled. Result selections feed the ordinary strip/cloth consumers.
+Checks: `material_linearization`, CLI `material_origin_workflow`; source/usage: `wang2011-materials.md`.
+
 **Published source-origin observations.** Ten Wang2011 study specimens supply 50 attributed
 mass/origin-matrix quantities with exact tensor-shear basis and missing conditioning retained.
 These do not activate a membrane law; the indefinite Navy origin remains unchanged. Source/freeze
