@@ -2653,15 +2653,21 @@ function sewingRoutedWorkholding(parent, routing, label) {
     for (const pool of report.shared_workholding.resources || []) cells(pools, [pool.id, metric(pool.capacity),
       metric(report.baseline?.shared_peak_occupancy?.[pool.id]), metric(report.selected?.shared_peak_occupancy?.[pool.id])]);
   }
+  const retained = (report.selected?.holds || []).some(hold =>
+    typeof hold.release_operation === "string" && hold.release_operation !== hold.operation);
   const holds = table(parent, `${label}: selected routed fixture reservations`,
-    ["Cell", "Garment copy", "Operation", "Hold", "Cell resource", "Shared pool", "Units", "Acquired (s)", "Released after unloading (s)"]);
+    ["Cell", "Garment copy", retained ? "Acquire operation" : "Operation", ...(retained ? ["Release operation"] : []),
+      "Hold", "Cell resource", "Shared pool", "Units", "Acquired (s)", "Released after unloading (s)"]);
   for (const hold of report.selected?.holds || []) cells(holds, [hold.cell, metric(hold.copy), hold.operation,
+    ...(retained ? [hold.release_operation ?? hold.operation] : []),
     hold.hold, hold.resource, hold.pool || "Cell local", metric(hold.units),
     metric(seconds(hold.acquired_at_milliseconds)), metric(seconds(hold.released_at_milliseconds))]);
   const note = document.createElement("p");
   note.textContent = "Routed fixtures are reserved before loading and remain occupied through setup, feed and unloading. " +
     "A release can supply an acquisition at the same instant. Shared pools constrain overlapping operations across specialist cells, including reservations already placed later in time. " +
-    "These holds end at their operation; occupied fixtures are not transferred with garments. Physical fixture access, pool access and machine execution require separate qualification.";
+    (retained ? "Retained fixtures stay reserved at their owning cell until the declared release operation finishes unloading, including intervening waits and unloaded garment handoffs; " :
+      "These holds end at their operation; ") +
+    "occupied fixtures are not transferred with garments. Physical fixture access, pool access and machine execution require separate qualification.";
   parent.append(note);
   detail(parent, `${label}: routed fixture sources, cell locks and complete reservation histories`, report);
 }

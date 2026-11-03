@@ -3355,6 +3355,30 @@ test('routed specialist cells show actual operations, serialized garment transfe
       const summary=JSON.parse(s.children[1].textContent);
       assert.equal(summary.finite_workholding_enforced,true);assert.equal(summary.shared_fixture_pools_enforced,true);
     }
+    // Display the optional declared release verbatim; native times and downloadable evidence
+    // remain authoritative, including same-operation holds mixed with a retained lifecycle.
+    const retainedReport=plain(report);
+    const retainedPlan=op==='sew'?retainedReport.plan:op==='study'?retainedReport.alternatives[0].sewing.result:
+      retainedReport.manufacturing.alternatives[0].sewing.result;
+    retainedPlan.schema='ftx-sewing-plan/25';retainedPlan.production.schema='ftx-sewing-production/13';
+    const retainedRoute=retainedPlan.production.routing;
+    retainedRoute.schema='ftx-sewing-routing/8';retainedRoute.workholding.schema='ftx-sewing-routed-workholding/2';
+    retainedRoute.workholding.release_protocol='available_after_declared_release_unload_at_owning_cell/1';
+    retainedRoute.workholding.selected.holds[0].release_operation='0/<declared finish>';
+    retainedRoute.workholding.selected.holds[0].released_at_milliseconds=18800;
+    const retainedRaw=' '+JSON.stringify(retainedReport)+'\n';
+    await p.e[op].onclick();p.emit(retainedReport,[{name:'retained-routed-report.json',text:retainedRaw,mime:'application/json'}]);
+    assert.deepEqual(plain(table('selected routed fixture reservations').children[1].children.map(n=>n.textContent)),
+      ['Cell','Garment copy','Acquire operation','Release operation','Hold','Cell resource','Shared pool','Units','Acquired (s)','Released after unloading (s)']);
+    assert.deepEqual(plain(table('selected routed fixture reservations').children[2].children.map(n=>n.textContent)),
+      ['straight','0','0/join','0/<declared finish>','0/join-fixture','fixture','<shared jig>','1','0','18.8']);
+    assert.deepEqual(plain(table('selected routed fixture reservations').children[3].children.map(n=>n.textContent)),
+      ['finish','0','0/reinforce','0/reinforce','0/reinforce-fixture','fixture','<shared jig>','1','6','8.8']);
+    assert.match(visibleText(s),/stay reserved at their owning cell until the declared release operation finishes unloading/);
+    assert.doesNotMatch(visibleText(s),/These holds end at their operation/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    const retainedDownload=descendants(s).find(n=>n.download==='retained-routed-report.json');
+    assert.equal(await p.blobs.get(retainedDownload.href).text(),retainedRaw);
     const previous = new Map();
     const laborSteps = selected.operations.map(operation => {
       const departure = previous.get(operation.cell) || 0;

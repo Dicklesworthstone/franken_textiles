@@ -648,6 +648,38 @@ fn refresh_pool_locks(options: &mut Value) {
     route["shared_workholding"]["cells"] = route["cell_locks"].clone();
 }
 
+fn retained_fixtures(local_capacity: u32, shared_capacity: Option<u32>) -> (Pattern, Value) {
+    let (pattern, raw) = reentrant();
+    let mut options = shared_fixtures(raw, shared_capacity.unwrap_or(1));
+    let route = &mut options["production"]["routing"];
+    route["protocol"] = json!("unloaded_operations_with_cell_retained_fixtures/1");
+    route["method"] = json!(
+        "Synthetic fixture remains reserved at its owning cell while the unloaded garment leaves and returns; every operation retains its complete loading and unloading"
+    );
+    let holding = &mut route["cells"][0]["workholding"];
+    holding["resources"][0]["capacity"] = json!(local_capacity);
+    holding["holds"] = json!([{
+        "id":"retained-jig","resource":"jig","units":1,
+        "acquire":"join","release":"finish"
+    }]);
+    holding["method"] = json!(
+        "Synthetic cell-owned jig reservation from join loading through finish unloading; the fixture stays at cell A while the unloaded garment visits B"
+    );
+    if shared_capacity.is_some() {
+        route["shared_workholding"]["release_protocol"] =
+            json!("available_after_declared_release_unload_at_owning_cell/1");
+        route["shared_workholding"]["method"] = json!(
+            "Synthetic shared inventory stays reserved at its owning cell until the declared release operation finishes unloading; access and return remain inside qualified handling"
+        );
+        refresh_pool_locks(&mut options);
+    } else {
+        route.as_object_mut().unwrap().remove("shared_workholding");
+        route["independence"] = json!("independent_attended_cells_and_transfer_resource/1");
+        refresh_locks(&mut options);
+    }
+    (pattern, options)
+}
+
 fn capture_routed_fixture(name: &str, value: &impl serde::Serialize) {
     let Some(directory) = std::env::var_os("FTX_ROUTED_FIXTURE_REPLAY") else {
         return;
@@ -2658,6 +2690,291 @@ fn routed_fixture_protocol_sources_and_retained_lifecycles_are_independently_adm
             .message
             .contains("retained or transported occupied fixtures")
     );
+}
+
+#[test]
+fn retained_routed_local_fixtures_control_reentrant_capacity_and_exact_stitches() {
+    for (capacity, finish) in [(1, 41100), (2, 23200)] {
+        let (pattern, raw) = retained_fixtures(capacity, None);
+        let options: SewOptions = serde_json::from_value(raw).unwrap();
+        let program = SewProgram::build(&pattern, &options).unwrap();
+        let production = program.plan.production.as_ref().unwrap();
+        let route = production.routing.as_ref().unwrap();
+        let holding = route.workholding.as_ref().unwrap();
+        assert_eq!(program.plan.schema, "ftx-sewing-plan/25");
+        assert_eq!(production.schema, "ftx-sewing-production/13");
+        assert_eq!(route.schema, "ftx-sewing-routing/8");
+        assert_eq!(
+            route.search_scope,
+            "coupled_cell_retained_fixture_append_dispatch/1"
+        );
+        assert_eq!(holding.schema, "ftx-sewing-routed-workholding/2");
+        assert_eq!(route.selected.makespan_milliseconds, finish);
+        assert_eq!(
+            holding.selected.local_peak_occupancy["cell-a"]["jig"],
+            capacity
+        );
+        assert_eq!(holding.selected.local_final_occupancy["cell-a"]["jig"], 0);
+        assert_eq!(holding.selected.local_final_occupancy["cell-b"]["jig"], 0);
+        assert!(holding.selected.shared_peak_occupancy.is_empty());
+        assert_eq!(program.stitches.len(), 200);
+        assert_eq!(program.plan.total_stitch_intervals(), 200);
+        assert_eq!(route.selected.transfers.len(), 4);
+        // A has 17.2 seconds of mandatory feed/handling, one 1-second initial setup and
+        // one 5-second setup change. Two jigs recover that independently known 23.2-second
+        // machine-work bound; one jig forces both complete garment routes to run serially.
+        assert_eq!(route.optimality_proven, capacity == 2);
+        for (timeline, operations) in [
+            (&holding.baseline, &route.baseline.operations),
+            (&holding.selected, &route.selected.operations),
+        ] {
+            assert_eq!(timeline.holds.len(), 4);
+            for hold in &timeline.holds {
+                let acquire = operations
+                    .iter()
+                    .find(|op| op.id == hold.operation)
+                    .unwrap();
+                let release_id = hold.release_operation.as_deref().unwrap_or(&hold.operation);
+                let release = operations.iter().find(|op| op.id == release_id).unwrap();
+                assert_eq!(hold.cell, acquire.cell);
+                assert_eq!(hold.cell, release.cell);
+                assert_eq!(hold.copy, acquire.copy);
+                assert_eq!(hold.copy, release.copy);
+                assert_eq!(
+                    hold.acquired_at_milliseconds,
+                    acquire.loading_start_milliseconds
+                );
+                assert_eq!(hold.released_at_milliseconds, release.finish_milliseconds);
+                if hold.cell == "cell-a" {
+                    assert_eq!(acquire.operation_id, "join");
+                    assert_eq!(release.operation_id, "finish");
+                    assert!(hold.release_operation.is_some());
+                    let middle = operations
+                        .iter()
+                        .find(|op| op.copy == hold.copy && op.operation_id == "reinforce")
+                        .unwrap();
+                    assert!(acquire.finish_milliseconds < middle.loading_start_milliseconds);
+                    assert!(middle.finish_milliseconds < release.loading_start_milliseconds);
+                } else {
+                    assert!(hold.release_operation.is_none());
+                }
+            }
+            if capacity == 1 {
+                let mut local: Vec<_> = timeline
+                    .holds
+                    .iter()
+                    .filter(|hold| hold.cell == "cell-a")
+                    .map(|hold| (hold.acquired_at_milliseconds, hold.released_at_milliseconds))
+                    .collect();
+                local.sort_unstable();
+                assert!(local.windows(2).all(|pair| pair[0].1 <= pair[1].0));
+            }
+        }
+        assert_eq!(
+            serde_json::to_value(&program).unwrap(),
+            serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap())
+                .unwrap()
+        );
+        if capacity == 1 {
+            capture_routed_fixture("retained-sewing-pattern.json", pattern.raw());
+            capture_routed_fixture("retained-sewing-options.json", &options);
+            capture_routed_fixture("retained-sewing-program.json", &program);
+        }
+    }
+}
+
+#[test]
+fn retained_routed_shared_fixtures_wait_for_real_releases_and_refuse_self_blocking_routes() {
+    let (pattern, raw) = retained_fixtures(1, Some(1));
+    // B cannot borrow the only pooled jig: A retains it until finish, which follows B.
+    // Waiting without dispatching that release cannot manufacture another inventory unit.
+    let refusal = build(&pattern, raw).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::NotConverged);
+    let (pattern, raw) = retained_fixtures(1, Some(2));
+    let plan = build(&pattern, raw).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let holding = route.workholding.as_ref().unwrap();
+    assert_eq!(route.selected.makespan_milliseconds, 41100);
+    assert_eq!(holding.selected.shared_peak_occupancy["common-jigs"], 2);
+    assert_eq!(holding.selected.shared_final_occupancy["common-jigs"], 0);
+    assert_eq!(
+        holding.release_protocol,
+        "available_after_declared_release_unload_at_owning_cell/1"
+    );
+    for copy in 0..2 {
+        let held = holding
+            .selected
+            .holds
+            .iter()
+            .find(|hold| hold.copy == copy && hold.cell == "cell-a")
+            .unwrap();
+        let borrowed = holding
+            .selected
+            .holds
+            .iter()
+            .find(|hold| hold.copy == copy && hold.cell == "cell-b")
+            .unwrap();
+        assert!(held.acquired_at_milliseconds < borrowed.acquired_at_milliseconds);
+        assert!(borrowed.released_at_milliseconds < held.released_at_milliseconds);
+    }
+}
+
+#[test]
+fn retained_routed_fixtures_span_passive_calendar_gaps_and_release_after_full_unloading() {
+    let (pattern, mut raw) = retained_fixtures(1, None);
+    raw["production"]["routing"]["cells"][0]["handling"]["final_milliseconds"]["finish"] =
+        json!(2200);
+    refresh_locks(&mut raw);
+    let raw = availability_calendars(
+        raw,
+        json!({
+            "cell-a":[{"start_milliseconds":0,"end_milliseconds":5300},
+                      {"start_milliseconds":20000,"end_milliseconds":100000}]
+        }),
+    );
+    let plan = build(&pattern, raw).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let rows: BTreeMap<_, _> = route
+        .selected
+        .operations
+        .iter()
+        .map(|op| (op.id.as_str(), op))
+        .collect();
+    assert_eq!(rows["0/join"].loading_start_milliseconds, 0);
+    assert_eq!(rows["0/join"].finish_milliseconds, 5300);
+    assert_eq!(rows["0/finish"].loading_start_milliseconds, 20000);
+    assert_eq!(rows["0/finish"].feed_finish_milliseconds, 29100);
+    assert_eq!(rows["0/finish"].finish_milliseconds, 31300);
+    assert_eq!(rows["1/join"].loading_start_milliseconds, 31300);
+    let holding = route.workholding.as_ref().unwrap();
+    let held = holding
+        .selected
+        .holds
+        .iter()
+        .find(|hold| hold.copy == 0 && hold.cell == "cell-a")
+        .unwrap();
+    assert_eq!(
+        (held.acquired_at_milliseconds, held.released_at_milliseconds),
+        (0, 31300)
+    );
+    assert_eq!(holding.selected.local_peak_occupancy["cell-a"]["jig"], 1);
+    assert_eq!(holding.selected.local_final_occupancy["cell-a"]["jig"], 0);
+    assert_eq!(route.selected.makespan_milliseconds, 55600);
+}
+
+#[test]
+fn retained_routed_fixture_protocols_and_source_consent_are_independently_admitted() {
+    let (pattern, raw) = retained_fixtures(1, Some(2));
+    let mut cases = Vec::new();
+    let mut old_route = raw.clone();
+    old_route["production"]["routing"]["protocol"] = json!("unloaded_between_operations/1");
+    old_route["production"]["routing"]["shared_workholding"]["release_protocol"] =
+        json!("available_after_unload_with_access_in_cell_handling/1");
+    cases.push(old_route);
+    let mut old_pool = raw.clone();
+    old_pool["production"]["routing"]["shared_workholding"]["release_protocol"] =
+        json!("available_after_unload_with_access_in_cell_handling/1");
+    cases.push(old_pool);
+    let mut unqualified = raw.clone();
+    unqualified["production"]["routing"]["cells"][0]["workholding"]["allow_estimates"] =
+        json!(false);
+    refresh_pool_locks(&mut unqualified);
+    cases.push(unqualified);
+    let mut reversed = raw.clone();
+    reversed["production"]["routing"]["cells"][0]["workholding"]["holds"][0]["acquire"] =
+        json!("finish");
+    reversed["production"]["routing"]["cells"][0]["workholding"]["holds"][0]["release"] =
+        json!("join");
+    refresh_pool_locks(&mut reversed);
+    cases.push(reversed);
+    let mut stale_pool = raw;
+    stale_pool["production"]["routing"]["cells"][0]["handling"]["final_milliseconds"]["finish"] =
+        json!(201);
+    refresh_locks(&mut stale_pool);
+    cases.push(stale_pool);
+    for (index, options) in cases.into_iter().enumerate() {
+        let refusal = build(&pattern, options).unwrap_err();
+        assert_eq!(
+            refusal.code,
+            RefusalCode::InvalidDocument,
+            "retained fixture source case {index}"
+        );
+    }
+}
+
+#[test]
+fn retained_routed_eligible_choices_pair_acquisition_and_release_at_the_actual_cell() {
+    for (blocked, complete) in [("cell-a", "cell-c"), ("cell-c", "cell-a")] {
+        let (pattern, mut raw) = retained_fixtures(1, None);
+        raw["production"]["production_copies"] = json!(1);
+        let route = &mut raw["production"]["routing"];
+        let mut alternate = route["cells"][0].clone();
+        alternate["id"] = json!("cell-c");
+        alternate["configuration"]["machine"]["id"] = json!("synthetic-retained-alternate-c");
+        for qualification in alternate["configuration"]["qualifications"]
+            .as_array_mut()
+            .unwrap()
+        {
+            qualification["machine"] = json!("synthetic-retained-alternate-c");
+        }
+        alternate["ordering"]["setup_times"]["machine"] = json!("synthetic-retained-alternate-c");
+        alternate["workholding"]["method"] = json!(
+            "Synthetic stationary cell C jig reservation across unloaded join and finish operations"
+        );
+        route["cells"].as_array_mut().unwrap().push(alternate);
+        for cell in route["cells"].as_array_mut().unwrap() {
+            if cell["id"] == blocked {
+                cell["available_until_milliseconds"] = json!(5300);
+            }
+        }
+        route["model"] = json!("eligible_operation_route/1");
+        route["route"][0]["cell"] = json!(blocked);
+        route["route"][0]["eligible_cells"] = json!([blocked, complete]);
+        route["route"][1]["eligible_cells"] = json!(["cell-b"]);
+        route["route"][2]["cell"] = json!(complete);
+        route["route"][2]["eligible_cells"] = json!([complete, blocked]);
+        route["transfer"]["transfers"]
+            .as_array_mut()
+            .unwrap()
+            .extend([
+                json!({"from":"cell-c","to":"cell-b","milliseconds":700}),
+                json!({"from":"cell-b","to":"cell-c","milliseconds":700}),
+            ]);
+        refresh_locks(&mut raw);
+        let plan = build(&pattern, raw).unwrap();
+        let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+        assert!(route.baseline_replaced);
+        assert_eq!(route.selected.makespan_milliseconds, 18800);
+        for operation in route
+            .selected
+            .operations
+            .iter()
+            .filter(|op| op.operation_id != "reinforce")
+        {
+            assert_eq!(operation.cell, complete);
+        }
+        let holding = route.workholding.as_ref().unwrap();
+        assert_eq!(holding.cells.len(), 3);
+        assert_eq!(holding.selected.holds.len(), 2);
+        assert!(
+            holding
+                .selected
+                .holds
+                .iter()
+                .all(|hold| hold.cell != blocked)
+        );
+        assert_eq!(holding.selected.local_peak_occupancy[blocked]["jig"], 0);
+        assert_eq!(holding.selected.local_final_occupancy[blocked]["jig"], 0);
+        assert_eq!(holding.selected.local_peak_occupancy[complete]["jig"], 1);
+        let hold = holding
+            .selected
+            .holds
+            .iter()
+            .find(|hold| hold.cell == complete)
+            .unwrap();
+        assert_eq!(hold.operation, "0/join");
+        assert_eq!(hold.release_operation.as_deref(), Some("0/finish"));
+    }
 }
 
 #[test]

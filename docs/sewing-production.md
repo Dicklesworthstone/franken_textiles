@@ -812,11 +812,12 @@ directed edges actually used by the route. Same-cell successors need no handoff.
 availability may have `available_until_milliseconds`; these inclusive limits cover complete
 unloading and complete handoffs. A cell can finish one garment while another waits for the mover.
 
-Optional cell `workholding` policies now admit fixtures confined to one complete operation, with
-separately qualified common pools as described below. Existing per-operation planar access checks
-still apply. Retained fixtures across operations, moving an occupied fixture, autonomous feed and
-insufficient staging require separately qualified extensions. Explicit worker sharing is described
-below. Explicit eligible-machine domains retain the selected cell's fixture obligations.
+Optional cell `workholding` policies admit fixtures confined to one complete operation or, under
+the explicit retained protocol below, reserved at their owning cell across several operations.
+Separately qualified common pools and existing per-operation planar access checks still apply.
+Moving an occupied fixture, autonomous feed and insufficient staging require separately qualified
+extensions. Explicit worker sharing is described below. Eligible-machine domains retain the
+selected cell's fixture obligations.
 
 The bounded search appends a copy's next handoff and cell operation at their earliest admitted
 times. It considers copy dispatch permutations for the fixed route; it does not enumerate arbitrary
@@ -855,8 +856,9 @@ permission is established.
 Each routed cell may supply the existing `workholding` policy with its full machine content lock,
 actual process/material qualification references, finite `resources`, per-copy `holds`, source,
 method, conditions, evidence and separate estimate consent. Qualification coverage names exactly
-that specialist's owned operations. Every hold must have the same `acquire` and `release` operation:
-the unloaded routing protocol does not carry an occupied fixture to another operation or cell.
+that specialist's owned operations. Under `unloaded_between_operations/1`, every hold must have
+the same `acquire` and `release` operation. That protocol cannot retain a cross-operation hold;
+the explicit extension below reserves it at its owning cell without transporting an occupied fixture.
 All holds on one operation accumulate; their combined demand must fit the declared local capacity.
 The cell's exclusive execution then prevents those local reservations from overlapping between copies.
 Matching resource names at different cells remain independent inventories.
@@ -921,6 +923,73 @@ study substitution. Total routed fixture inputs are bounded at 64 source holds, 
 and 256 qualification references; each existing cell policy retains its own resource limits and
 common pools retain the existing 16-pool/128-binding bound. Grip adequacy, physical pool access,
 seam quality and machine execution authorization remain separate requirements.
+
+### Retain a fixture at its cell across several operations
+
+Set `routing.protocol` to `unloaded_operations_with_cell_retained_fixtures/1` to admit an existing
+source-qualified hold whose `acquire` and `release` name different operations at the same cell.
+For example, this fragment belongs inside that cell's existing `workholding.holds`:
+
+```json
+{
+  "id": "return-jig",
+  "resource": "jig",
+  "units": 1,
+  "acquire": "join",
+  "release": "finish"
+}
+```
+
+Both anchors must be eligible at the owning cell and release must follow acquisition in the route.
+The actual physical copy must choose that same cell for both anchors. Selecting a different
+release cell cannot abandon the original hold or borrow an unused alternative's source lifecycle.
+Every cell's full material/process, machine, fixture and handling qualification remains required.
+After changing a lifecycle, update its qualified cell locks; an old shared-pool lock cannot be reused.
+
+The reservation starts at acquisition loading and ends **after the release operation finishes
+unloading**. It remains occupied while that garment is unloaded, transferred to another specialist,
+processed there, and returned, or while its cell is outside an operating window. This is reserved
+inventory at the owning cell, not a claim that the garment stays clamped during transport. Every
+operation still charges its complete supplied loading, setup, feed and unloading durations. Passive
+inventory retention does not occupy an attending worker or bypass an operation's calendar.
+
+If a shared pool is present, it must independently qualify the exact release protocol
+`available_after_declared_release_unload_at_owning_cell/1`. Both the local capacity and bound pool
+capacity remain occupied continuously. A retained jig cannot supply an intermediate operation's
+additional jig demand. Acquisition at the exact completed release time is allowed; acquisition
+inside unloading is not. No access, fixture movement or return duration is inferred.
+
+In the synthetic two-copy A → B → A regression, local capacity one produces **41,100 ms** completion;
+capacity two produces **23,200 ms**, reaching the independent machine-work lower bound. Both emit
+the same 200 stitches. A single shared jig cannot complete the route when B also needs a jig while
+A retains it; two shared units can. These are software known answers with declared synthetic times,
+not measured factory throughput.
+
+The complete one-jig request, including the synthetic qualifications and current content locks,
+is available as an ordinary sewing example. It uses the existing synthetic pattern:
+
+```sh
+cargo run -p ftx-cli --bin ftx-materials -- sew-stitches \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  examples/sewing-routed-retained-options.json
+```
+
+The declared search scope is `coupled_cell_retained_fixture_append_dispatch/1`. An undispatched
+release has no invented time: the search conservatively reserves its open tail and considers
+already-placed future reservations. Dispatching the actual release shortens that interval. This
+construction can miss schedules that require an unconstructed release to admit another choice;
+`search_complete` and thread-order cost proof apply only to this scope. Makespan optimality still
+requires reaching the independent lower bound. No complete incumbent yields `not_converged`,
+without establishing unrestricted infeasibility or an impossible deadline.
+
+Retained requests use plan `/25`, production `/13`, routing `/8` and nested workholding `/2`.
+The stitch format remains `/7`. Each retained report hold keeps `operation` as the exact acquisition
+ID and adds `release_operation` for a distinct release; ordinary single-operation holds omit it.
+Baseline and selected lifecycle reports independently reconstruct both actual anchors and replay
+local/shared capacities, peaks and zero final inventory. The previous protocol, schemas and
+single-operation output remain unchanged. Source and expanded-work limits are the same as above.
+This delivers the retained-inventory slice of `ftx-pb2.2.16`; measured grip, access, seam quality,
+physical timing and hardware authorization remain separate requirements.
 
 ## Choose eligible cells separately for each garment operation
 
@@ -1000,8 +1069,8 @@ zero-use alternatives, alongside the complete selected operation and transfer ti
 Independent synthetic regressions enumerate small assignment/dispatch combinations and check mixed
 window feasibility, actual geometry, yarn demand, complete-incumbent limits, source invalidation and
 protocol identity. They establish this bounded software model, not measured factory throughput,
-physical seam quality, cross-operation retained fixtures or hardware authorization. Optional local
-and shared inventories follow the selected cell for every actual operation as described above.
+physical seam quality or hardware authorization. Optional local and shared inventories follow the
+selected cell for every actual operation; retained lifecycles pair their actual owning anchors.
 
 ## Several specialist cells with fewer attending workers
 
@@ -1112,9 +1181,10 @@ The mover's next visit starts from the actual deposit location, even if it is no
 Worker shifts inclusively contain empty approach, waiting, handoffs and attended machine phases.
 The transfer resource's inclusive window contains pickup through complete deposit; the worker may
 approach before the resource opens and wait at the source. Staging remains fully unloaded and sized
-for the batch. Source fixtures are released through complete unloading; destination fixtures are
-acquired for the later destination operation. No occupied fixture is transported or retained during a
-handoff, and no physical travel speed, return law or cooperative handling is inferred.
+for the batch. Ordinary source holds release after complete unloading; explicitly retained holds
+stay reserved at their owning cell until their declared release finishes unloading. Destination
+fixtures are acquired for the later destination operation. No occupied fixture is transported,
+and no physical travel speed, return law or cooperative handling is inferred.
 
 Fixed routes, eligible assignments and finite fixture pools share this exact state transition.
 A failed copy-major seed may be replaced by a complete feasible searched execution, and a bounded

@@ -37,7 +37,9 @@ pub struct Policy {
     pub thread_order_search: Option<ThreadOrderSearch>,
     /// `ceil_operation_feed_milliseconds/1`; each actual feed is ceiled separately.
     pub time_basis: String,
-    /// `unloaded_between_operations/1`; every operation consumes its own load and unload evidence.
+    /// `unloaded_between_operations/1`, or explicit
+    /// `unloaded_operations_with_cell_retained_fixtures/1` for reservations at their owning cell.
+    /// Every operation still consumes its own load and unload evidence.
     pub protocol: String,
     /// Explicit dedicated-cell or shared-attending-worker independence, qualified with this route.
     pub independence: String,
@@ -107,6 +109,7 @@ pub struct ThreadOrderReport {
     /// Whether assignment pricing stopped at its separate explicit cap.
     pub order_budget_exhausted: bool,
     /// All admitted append-dispatch assignments were examined and every relevant order was proved.
+    /// Scoped to the parent routing `search_scope`, including conservative retained-fixture tails.
     /// This is not a minimum makespan or unrestricted factory scheduling claim.
     pub optimality_proven: bool,
 }
@@ -294,7 +297,9 @@ pub struct Report {
     pub budget_exhausted: bool,
     /// Independent lower bound from mandatory per-cell work, garment path and handoff-resource work.
     pub lower_bound_makespan_milliseconds: u64,
-    /// `coupled_handoff_cell_append_dispatch/1`; does not enumerate arbitrary prestaging/reordering.
+    /// Declared append-dispatch scope; does not enumerate arbitrary prestaging/reordering.
+    /// Retained mode reserves open tails until the actual release is dispatched, so it may exclude
+    /// schedules requiring an unconstructed release to admit an earlier dispatch choice.
     pub search_scope: &'static str,
     /// Deterministic event evaluations reserved for exact baseline/selected reconstruction.
     pub replay_operations: usize,
@@ -331,6 +336,10 @@ fn add(a: u64, b: u64) -> Result<u64, Refusal> {
 }
 
 impl Policy {
+    fn retained_fixtures(&self) -> bool {
+        self.protocol == "unloaded_operations_with_cell_retained_fixtures/1"
+    }
+
     pub(crate) fn eligible(&self) -> bool {
         self.model == "eligible_operation_route/1"
     }
@@ -404,7 +413,7 @@ impl Policy {
         ) || !(self.objective == "minimize_makespan" && self.thread_order_search.is_none()
             || self.cost_directed() && self.eligible() && self.thread_order_search.is_some())
             || self.time_basis != "ceil_operation_feed_milliseconds/1"
-            || self.protocol != "unloaded_between_operations/1"
+            || !(self.protocol == "unloaded_between_operations/1" || self.retained_fixtures())
             || self.independence != independence
             || (owned_transfer && self.attending_labor.is_none())
             || self.staging_capacity < copies
@@ -764,6 +773,11 @@ impl Prepared<'_> {
         if state.next[copy] != task.route {
             return Err(bad("routed dispatch changed its original operation order"));
         }
+        if self.fixtures.as_ref().is_some_and(|fixtures| {
+            !fixtures.can_dispatch(&state.reservations, copy, task.route, task.cell)
+        }) {
+            return Ok(None);
+        }
         let mut next = state.clone();
         let mut ready = state.copy_ready[copy];
         let duration = state.copy_cell[copy].and_then(|from| self.handoffs[from][task.cell]);
@@ -899,11 +913,12 @@ impl Prepared<'_> {
         if let Some(fixtures) = &self.fixtures {
             fixtures.reserve(
                 &mut next.reservations,
+                copy,
                 task.route,
                 task.cell,
                 load_start,
                 finish,
-            );
+            )?;
         }
         Ok(Some((
             next,
@@ -1433,7 +1448,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if policy.cost_directed() {
+        schema: if policy.retained_fixtures() {
+            "ftx-sewing-plan/25"
+        } else if policy.cost_directed() {
             "ftx-sewing-plan/24"
         } else if policy.availability_calendars.is_some() {
             "ftx-sewing-plan/23"
@@ -1773,7 +1790,9 @@ pub(in crate::sewing) fn build(
         .map(|labor| labor.report(&baseline, &selected))
         .transpose()?;
     let report = Report {
-        schema: if policy.cost_directed() {
+        schema: if policy.retained_fixtures() {
+            "ftx-sewing-routing/8"
+        } else if policy.cost_directed() {
             "ftx-sewing-routing/7"
         } else if policy.availability_calendars.is_some() {
             "ftx-sewing-routing/6"
@@ -1803,7 +1822,9 @@ pub(in crate::sewing) fn build(
         optimality_proven: proven,
         budget_exhausted: !search_complete,
         lower_bound_makespan_milliseconds: lower,
-        search_scope: if owned_transfer && policy.eligible() {
+        search_scope: if policy.retained_fixtures() {
+            "coupled_cell_retained_fixture_append_dispatch/1"
+        } else if owned_transfer && policy.eligible() {
             "coupled_eligible_worker_owned_handoff_cell_append_dispatch/1"
         } else if owned_transfer {
             "coupled_worker_owned_handoff_cell_append_dispatch/1"
@@ -1821,7 +1842,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if policy.cost_directed() {
+        schema: if policy.retained_fixtures() {
+            "ftx-sewing-production/13"
+        } else if policy.cost_directed() {
             "ftx-sewing-production/12"
         } else if policy.availability_calendars.is_some() {
             "ftx-sewing-production/11"

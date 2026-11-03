@@ -5066,6 +5066,30 @@ tests cover source inspection, preparation, download/adoption and real piece bin
 domain, evidence, unstable-source and cancellation refusals. This closes the browser delivery
 slice `ftx-wg3`; incomplete mechanics and empirical garment qualification remain explicit.
 
+### 25.160 Retain source-qualified cell inventory across routed production operations
+
+The ordinary specialist-route engine now supports an explicit cell-retained fixture protocol.
+Each physical garment copy acquires its qualified inventory at one operation and retains it until
+the declared release operation finishes unloading at the same actual cell. The garment may leave
+unloaded for another specialist and return; the fixture is reserved at its owning cell. Local and
+shared capacities stay occupied across processing, staging, transfers and closed calendar gaps,
+while every supplied handling and feed duration remains charged.
+
+The same source-qualified lifecycle, machine/material/process locks, eligible-cell authority and
+bounded schedule search apply. Actual acquire/release choices must agree in both directions;
+an unused alternative cannot supply a release. Reservations with an undispatched release retain
+an unknown end and conservatively block conflicting work, including future intervals introduced by
+nonchronological dispatch. Complete baseline and selected reports independently reconstruct both
+anchors and replay local/shared occupancy to zero. The explicit search scope preserves incomplete
+search and cost-proof limits; the independent lower bound remains required for makespan optimality.
+
+This delivers the numerical retained-inventory slice `ftx-pb2.2.16` of the open manufacturing parent.
+The synthetic A → B → A batch changes from 41.1 to 23.2 seconds when its local jig inventory grows
+from one to two, while all 200 stitch identities remain unchanged. This is software evidence for
+resource-constrained scheduling, not measured throughput, occupied-fixture transport, continuous
+clamping, grip adequacy, robot motion or hardware authorization. Those physical qualifications
+remain open under `ftx-pb2.2` and `ftx-sp2`.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
