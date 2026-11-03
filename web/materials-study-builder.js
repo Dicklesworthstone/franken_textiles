@@ -558,8 +558,10 @@ export function buildMaterialStudyRequest(state, scenario) {
     if (key === "assembly_mass_kg" && !mass.inventory_complete) {
       throw Error("Assembly-mass comparison requires an explicit complete inventory declaration.");
     }
-    if (basis === "reported_bounds" && key !== "assembly_mass_kg") {
-      throw Error("Guided reported-bound comparison supports assembly mass only; use an explicit nominal basis for other guided metrics and guards.");
+    // Rust admits the actual source endpoints and selected steady law; authoring never supplies
+    // a range or changes signed heat into an absolute value.
+    if (basis === "reported_bounds" && !["assembly_mass_kg", "independent_surface_power_w"].includes(key)) {
+      throw Error("Guided reported-bound comparison supports assembly mass and steady sheet heat only; use an explicit nominal basis for other guided metrics and guards.");
     }
   };
   if (!Array.isArray(state.objectives) || !state.objectives.length || state.objectives.length > 16) throw Error("Choose 1–16 comparison objectives.");

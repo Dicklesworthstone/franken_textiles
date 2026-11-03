@@ -6654,6 +6654,51 @@ test('guided scenarios retain finite-stock and mixed-job goals beside shared dra
   }
 });
 
+test('guided heat ranges and signed interval limits reach single and saved named comparisons unchanged', async () => {
+  const {p,sources}=await guidedScenarioSetup(true);
+  p.e.guidedDrapeMassGoal.checked=false;p.e.guidedBasis.value='reported_bounds';
+  p.e.guidedHeatMinimumLimit.value='-12';p.e.guidedHeatPowerLimit.value='-7.5';
+  await p.e.scenario.onclick();let sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const policy=JSON.parse(sent.studyRequest).comparison;
+  assert.equal(policy.basis,'reported_bounds');
+  assert.deepEqual(policy.objectives,[{metric:'independent_surface_power_w',direction:'maximize'}]);
+  assert.deepEqual(policy.constraints,[{metric:'independent_surface_power_w',maximum:-7.5,minimum:-12}]);
+  assert.ok(sent.scenarioRequest.includes(sources.heatConditions));
+  p.emit(scenarioReport(),[{name:'study-request.json',text:sent.studyRequest}]);
+  const link=descendants(section(p,'Fresh drape and heat alternatives')).find(n=>n.download==='study-request.json');
+  assert.equal(await p.blobs.get(link.href).text(),sent.studyRequest);
+  p.e.guidedHeatMinimumLimit.value='-11';p.e.guidedHeatMinimumLimit.handlers.input();
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);assert.equal(p.live.has(link.href),false);
+
+  // A minimum-only guard is independent of the objective and has its own declared basis.
+  p.e.guidedHeatPowerGoal.checked=false;p.e.guidedHeatPowerLimit.value='';p.e.guidedDrapeMassGoal.checked=true;
+  p.e.guidedBasis.value='nominal';p.e.guidedLimitBasis.value='reported_bounds';
+  guidedNamedCases(p);p.e.guidedScenarioPolicySource.value='snapshot';await saveGuidedCase(p,'inward heat');
+  assert.match(p.e.guidedScenarioCaseCount.textContent,/1 of 8/);
+  p.e.guidedHeatMinimumLimit.value='-1';p.e.guidedHeatMinimumLimit.handlers.input();
+  await p.e.scenario.onclick();sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const matrix=JSON.parse(sent.scenarioRequest), saved=matrix.cases[0].comparison;
+  assert.equal(saved.basis,'nominal');
+  assert.deepEqual(saved.objectives,[{metric:'simulated_cloth_mass_kg',direction:'minimize'}]);
+  assert.deepEqual(saved.constraints,[{metric:'independent_surface_power_w',minimum:-11,basis:'reported_bounds'}]);
+  assert.equal(JSON.parse(sent.studyRequest).comparison.constraints[0].minimum,-1);
+  assert.ok(sent.scenarioRequest.includes(sources.heatConditions));
+});
+
+test('guided heat limits reject inverted intervals and unsupported range objectives before dispatch', async () => {
+  for(const invalid of ['inverted','nonfinite','nominal-only']) {
+    const {p}=await guidedScenarioSetup(true);p.e.guidedDrapeMassGoal.checked=false;
+    p.e.guidedBasis.value='reported_bounds';p.e.guidedHeatMinimumLimit.value='-5';p.e.guidedHeatPowerLimit.value='-10';
+    if(invalid==='nonfinite'){p.e.guidedHeatMinimumLimit.value='Infinity';p.e.guidedHeatPowerLimit.value='';}
+    if(invalid==='nominal-only'){p.e.guidedHeatMinimumLimit.value='';p.e.guidedHeatPowerLimit.value='';p.e.guidedDrapeMassGoal.checked=true;}
+    const before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before,invalid);assert.equal(p.e.error.hidden,false,invalid);
+    assert.match(p.e.error.textContent,invalid==='inverted'?/minimum|maximum|bounds|interval/:invalid==='nonfinite'?/finite/:/reported-bound.*assembly mass and steady sheet heat only/);
+  }
+});
+
 test('guided scenarios require explicit no-fit choice and refuse malformed sources, missing heat, direction or manufacturing misuse', async () => {
   const {p}=await guidedScenarioSetup();p.e.fit.files=[];
   let before=p.current().messages.length;await p.e.scenario.onclick();
@@ -6684,7 +6729,7 @@ test('guided scenarios snapshot before reads and reject stale posts and download
   assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(sources.heatConditions));
   assert.equal(JSON.parse(sent.scenarioRequest).options.spacing,100);
   assert.equal(JSON.parse(sent.studyRequest).comparison.objectives.at(-1).direction,'maximize');
-  for(const change of ['fit','heatConditions','spacing','goal','limit','direction','scenarioMode','studyMode','body','cancel']) {
+  for(const change of ['fit','heatConditions','spacing','goal','limit','minimum','direction','scenarioMode','studyMode','body','cancel']) {
     const {p,sources}=await guidedScenarioSetup(true);await p.e.scenario.onclick();
     const previous=p.current().messages.at(-1);p.emit(scenarioReport(),[{name:'scenario-request.json',text:previous.scenarioRequest}]);
     const delay=deferred();let reading=false;
@@ -6693,6 +6738,7 @@ test('guided scenarios snapshot before reads and reject stale posts and download
     if(change==='spacing'){p.e.guidedScenarioSpacing.value='125';p.e.guidedScenarioSpacing.handlers.input();}
     else if(change==='goal'){p.e.guidedStrainGoal.checked=true;p.e.guidedStrainGoal.handlers.change();}
     else if(change==='limit'){p.e.guidedHeatPowerLimit.value='-10';p.e.guidedHeatPowerLimit.handlers.input();}
+    else if(change==='minimum'){p.e.guidedHeatMinimumLimit.value='-12';p.e.guidedHeatMinimumLimit.handlers.input();}
     else if(change==='direction'){p.e.guidedHeatDirection.value='minimize';p.e.guidedHeatDirection.handlers.change();}
     else if(change==='scenarioMode'||change==='studyMode'){p.e[change].value='file';p.e[change].handlers.change();}
     else if(change==='cancel')p.e.cancel.onclick();

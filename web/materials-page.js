@@ -3965,8 +3965,12 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
     direction: id === "guidedHeatPower" ? $("guidedHeatDirection").value : "minimize" }));
   const limitBasis = $("guidedLimitBasis").value || "inherit";
   if (!["inherit", "nominal", "reported_bounds"].includes(limitBasis)) throw Error("Choose the basis for comparison limits.");
-  const constraints = metrics.filter(([id]) => $(`${id}Limit`).value.trim()).map(([id, metric]) => ({
-    metric, maximum: number(`${id}Limit`, `maximum for ${metric}`), ...(limitBasis === "inherit" ? {} : { basis: limitBasis }),
+  const constraints = metrics.filter(([id]) => $(`${id}Limit`).value.trim() ||
+    (id === "guidedHeatPower" && $("guidedHeatMinimumLimit").value.trim())).map(([id, metric]) => ({
+    metric, ...($(`${id}Limit`).value.trim() ? { maximum: number(`${id}Limit`, `maximum for ${metric}`) } : {}),
+    ...(id === "guidedHeatPower" && $("guidedHeatMinimumLimit").value.trim() ?
+      { minimum: number("guidedHeatMinimumLimit", "minimum signed sheet heat in watts") } : {}),
+    ...(limitBasis === "inherit" ? {} : { basis: limitBasis }),
   }));
   const requiredConsumers = guidedRequired.filter(([id, , scope]) => guidedStockScope(scope, stockMode) && $(id).checked).map(([, consumer]) => consumer);
   return { objectives, constraints, requiredConsumers, basis: $("guidedBasis").value };
@@ -4440,7 +4444,7 @@ $("clearStockRequest").onclick = () => selectStockRequest(null);
 for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
   "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
   "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignCase", "guidedDesignEvaluations",
-  "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis", "guidedHeatDirection",
+  "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis", "guidedHeatDirection", "guidedHeatMinimumLimit",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
   ...guidedMetrics.flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]), ...guidedRequired.map(([id]) => id)]) {
   const changed = () => {

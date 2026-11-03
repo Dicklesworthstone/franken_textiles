@@ -52,7 +52,7 @@ test('reported bounds require the explicit complete assembly inventory and prese
   assert.throws(()=>build({...input,assemblyMass:mass(false)}),/complete inventory/);
   const undeclared=mass();delete undeclared.inventory_complete;
   assert.throws(()=>build({...input,assemblyMass:undeclared}),/missing/);
-  assert.throws(()=>build({...state(),basis:'reported_bounds'}),/assembly mass only/);
+  assert.throws(()=>build({...state(),basis:'reported_bounds'}),/assembly mass and steady sheet heat only/);
   const raw=' {"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[{"id":"closure","seed":18446744073709551615,"value":1.0,"x":-0.0}]}\n';
   assert.ok(build({...input,assemblyMass:raw}).includes(raw));
   assert.throws(()=>build({...input,assemblyMass:JSON.parse(raw)}),/original inventory JSON/);
@@ -206,9 +206,9 @@ test('reported mass objectives compose with explicit nominal manufacturing guard
       {metric:'selected_observed_order_cost',minimum:0,maximum:50,basis:'nominal'}],requiredConsumers:['sewing','purchasing']};
   const result=JSON.parse(build(input));assert.deepEqual(result.comparison.constraints,input.constraints);
   assert.deepEqual(result.comparison.required_consumers,input.requiredConsumers);
-  assert.throws(()=>build({...input,constraints:[{metric:'sewing_modeled_production_seconds',maximum:3600}]}),/assembly mass only/);
-  assert.throws(()=>build({...input,constraints:[{metric:'selected_observed_order_cost',maximum:50,basis:'reported_bounds'}]}),/assembly mass only/);
-  assert.throws(()=>build({...input,objectives:[{metric:'cutting_modeled_path_seconds',direction:'minimize'}]}),/assembly mass only/);
+  assert.throws(()=>build({...input,constraints:[{metric:'sewing_modeled_production_seconds',maximum:3600}]}),/assembly mass and steady sheet heat only/);
+  assert.throws(()=>build({...input,constraints:[{metric:'selected_observed_order_cost',maximum:50,basis:'reported_bounds'}]}),/assembly mass and steady sheet heat only/);
+  assert.throws(()=>build({...input,objectives:[{metric:'cutting_modeled_path_seconds',direction:'minimize'}]}),/assembly mass and steady sheet heat only/);
   assert.equal(JSON.parse(build({...state(),constraints:[{metric:'stock_area_m2',minimum:null,maximum:2}]})).comparison.constraints[0].minimum,null);
 });
 
@@ -379,8 +379,8 @@ test('reported mass ranges compose with explicit nominal finite-stock and job li
     const input={...stockState(mode),assemblyMass:mass(),basis:'reported_bounds',
       objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],constraints:[{metric,maximum:20,basis:'nominal'}]};
     assert.deepEqual(JSON.parse(build(input)).comparison.constraints,input.constraints);
-    assert.throws(()=>build({...input,constraints:[{metric,maximum:20}]}),/assembly mass only/);
-    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]}),/assembly mass only/);
+    assert.throws(()=>build({...input,constraints:[{metric,maximum:20}]}),/assembly mass and steady sheet heat only/);
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]}),/assembly mass and steady sheet heat only/);
   }
 });
 
@@ -485,7 +485,42 @@ test('scenario-only comparisons retain signed heat direction and cannot leak int
   assert.deepEqual(JSON.parse(build(drapeOnly,{drape:true,surface:false})).comparison.required_consumers,['drape']);
 });
 
-test('bounded complete mass can use explicit nominal scenario guards without inventing scenario ranges', async () => {
+test('reported sheet heat retains signed objectives and inclusive guards without inventing source ranges', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const direction of ['minimize','maximize']) {
+    const input=state();delete input.cutting;
+    input.basis='reported_bounds';input.objectives=[{metric:'independent_surface_power_w',direction}];
+    input.constraints=[{metric:'independent_surface_power_w',minimum:-50,maximum:-1}];
+    input.requiredConsumers=['drape','surface'];
+    const before=JSON.stringify(input),raw=build(input,{drape:true,surface:true}),result=JSON.parse(raw);
+    assert.equal(JSON.stringify(input),before);assert.ok(raw.includes(input.candidates[0].selection));
+    assert.deepEqual(result.comparison,{basis:'reported_bounds',objectives:input.objectives,
+      constraints:input.constraints,required_consumers:input.requiredConsumers,allow_mixed_protocols:false});
+    for(const key of ['cutting','assembly_mass','scenario','surface','reported_bounds'])assert.equal(Object.hasOwn(result,key),false);
+    assert.throws(()=>build(input,{drape:true,surface:false}),/requested surface/);
+    assert.throws(()=>build({...input,cutting:cutting()}),/requested surface/);
+  }
+});
+
+test('reported sheet heat guards retain their own basis under nominal mechanical and production goals', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={drape:true,surface:true},input={...state(),
+    objectives:[{metric:'stock_area_m2',direction:'minimize'},{metric:'simulated_cloth_mass_kg',direction:'minimize'}],
+    constraints:[{metric:'independent_surface_power_w',basis:'reported_bounds',minimum:-12,maximum:-2},
+      {metric:'max_absolute_edge_strain_pct',basis:'nominal',maximum:8}],requiredConsumers:['surface']};
+  const result=JSON.parse(build(input,context));
+  assert.equal(result.comparison.basis,'nominal');assert.deepEqual(result.comparison.objectives,input.objectives);
+  assert.deepEqual(result.comparison.constraints,input.constraints);
+  const sameMetric={...input,objectives:[{metric:'independent_surface_power_w',direction:'maximize'}]};
+  assert.deepEqual(JSON.parse(build(sameMetric,context)).comparison.constraints,input.constraints);
+  assert.throws(()=>build(input,{drape:true,surface:false}),/requested surface/);
+  for(const constraint of [{metric:'independent_surface_power_w',basis:'reported_bounds',minimum:1,maximum:-1},
+    {metric:'independent_surface_power_w',basis:'reported_bounds',maximum:Infinity}]) {
+    assert.throws(()=>build({...input,constraints:[constraint]},context),/finite ordered inclusive bounds/);
+  }
+});
+
+test('bounded complete mass composes with steady heat ranges and separately nominal mechanical guards', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input={...state(),assemblyMass:mass(),basis:'reported_bounds',
     objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
@@ -493,9 +528,13 @@ test('bounded complete mass can use explicit nominal scenario guards without inv
       {metric:'max_absolute_edge_strain_pct',maximum:8,basis:'nominal'}],requiredConsumers:['drape','surface']};
   const context={drape:true,surface:true},result=JSON.parse(build(input,context));
   assert.deepEqual(result.comparison.constraints,input.constraints);
-  assert.throws(()=>build({...input,constraints:[{metric:'independent_surface_power_w',maximum:10}]},context),/assembly mass only/);
-  for(const metric of ['simulated_cloth_mass_kg','max_absolute_edge_strain_pct','independent_surface_power_w']) {
-    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/assembly mass only/);
+  const constraint={metric:'independent_surface_power_w',minimum:-10,maximum:10};
+  assert.deepEqual(JSON.parse(build({...input,constraints:[constraint]},context)).comparison.constraints,[constraint]);
+  const objectives=[...input.objectives,{metric:'independent_surface_power_w',direction:'maximize'}];
+  assert.deepEqual(JSON.parse(build({...input,objectives},context)).comparison.objectives,objectives);
+  for(const metric of ['simulated_cloth_mass_kg','max_absolute_edge_strain_pct','stock_area_m2']) {
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/assembly mass and steady sheet heat only/);
+    assert.throws(()=>build({...input,constraints:[{metric,maximum:10}]},context),/assembly mass and steady sheet heat only/);
   }
 });
 
@@ -847,7 +886,7 @@ test('adaptive guidance composes with finite jobs, source-reported mass and sepa
     design:adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative'})};
   assert.equal(JSON.parse(build(input)).comparison.basis,'reported_bounds');
   assert.throws(()=>build({...input,assemblyMass:mass(false)}),/complete inventory/);
-  assert.throws(()=>build({...input,constraints:[{metric:'stock_area_m2',maximum:0.25}]}),/assembly mass only/);
+  assert.throws(()=>build({...input,constraints:[{metric:'stock_area_m2',maximum:0.25}]}),/assembly mass and steady sheet heat only/);
 });
 
 const casePolicy = (metric='stock_area_m2',direction='minimize',changes={}) =>
@@ -991,6 +1030,36 @@ test('each inherited matrix heat policy needs its own surface while raw override
   const raw=namedContext([{key:'cold',surface:true,comparison:casePolicy('body_coverage_power_w','minimize',{
     required_consumers:['coverage']})},{key:'warm',surface:false,comparison:casePolicy('stock_area_m2')}]);
   assert.equal(JSON.parse(build(input,raw)).design_adaptive.case_key,'cold','Original policy consumers go to Rust instead of being silently omitted');
+});
+
+test('reported sheet heat respects effective named-case policies and adaptive guidance without changing sources', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),basis:'reported_bounds',
+    objectives:[{metric:'independent_surface_power_w',direction:'maximize'}],
+    constraints:[{metric:'independent_surface_power_w',minimum:-20,maximum:-1},
+      {metric:'max_absolute_edge_strain_pct',basis:'nominal',maximum:8}],requiredConsumers:['surface'],design:namedDesign()};
+  const inherited=namedContext([{key:'cold',surface:true},{key:'warm',surface:false}]);
+  assert.throws(()=>build(input,inherited),/warm inherits.*surface/);
+  const override=casePolicy('stock_area_m2','minimize',{constraints:[{metric:'stock_mass_kg',basis:'nominal',maximum:2}]}),
+    context=namedContext([{key:'cold',surface:true},{key:'warm',surface:false,comparison:override}]);
+  const before=JSON.stringify(input),original=JSON.stringify(context),result=JSON.parse(build(input,context));
+  assert.equal(JSON.stringify(input),before);assert.equal(JSON.stringify(context),original);
+  assert.equal(result.comparison.basis,'reported_bounds');assert.deepEqual(result.comparison.objectives,input.objectives);
+  assert.deepEqual(result.comparison.constraints,input.constraints);assert.equal(result.design_adaptive.case_key,'cold');
+  assert.equal(JSON.parse(build({...input,design:namedDesign({caseKey:'warm'})},context)).design_adaptive.case_key,'warm');
+
+  const worst=namedDesign({objective:'consumer_worst_case'});delete worst.caseKey;
+  const complete=namedContext([{key:'cold',surface:true},{key:'warm',surface:true,comparison:casePolicy(
+    'independent_surface_power_w','maximize',{basis:'reported_bounds',constraints:[
+      {metric:'independent_surface_power_w',minimum:-15,maximum:-5}],required_consumers:['surface']})}]);
+  const preserved=JSON.stringify(complete);
+  assert.equal(JSON.parse(build({...input,design:worst},complete)).design_adaptive.objective,'consumer_worst_case');
+  assert.equal(JSON.stringify(complete),preserved);
+  for(const changes of [{basis:'nominal'},{objectives:[{metric:'independent_surface_power_w',direction:'minimize'}]}]) {
+    const changed=namedContext([complete.matrix.cases[0],{...complete.matrix.cases[1],
+      comparison:{...complete.matrix.cases[1].comparison,...changes}}]);
+    assert.throws(()=>build({...input,design:worst},changed),/identical metric, direction and comparison basis/);
+  }
 });
 
 const scenarioSnapshot = (changes={}) => ' \r\n'+JSON.stringify({schema:'ftx-drape-scenario/1',
