@@ -122,7 +122,14 @@ fn targets_editor_fixture_replays_a_corrected_capture_through_the_ordinary_fitte
     } else {
         setup()
     };
-    let original = read(&dir, "input.json");
+    let mut original = read(&dir, "input.json");
+    for i in 0..2 {
+        let timestamp = 9_007_199_254_740_993_u64 + i as u64 * 200_000;
+        original["fit"]["frames"][i]["frame"]["timestamp_us"] = json!(timestamp);
+        for start in original["fit"]["starts"].as_array_mut().unwrap() {
+            start["poses"][i]["frame"]["timestamp_us"] = json!(timestamp);
+        }
+    }
     let mut good = capture::wrap(&dir, original);
     let hostile = "</script><script>globalThis.targetInjection=1</script>&\"";
     let target = good["model"]["keypoints"]
@@ -144,7 +151,13 @@ fn targets_editor_fixture_replays_a_corrected_capture_through_the_ordinary_fitte
     review(&dir, "review", 0);
     let page = std::fs::read_to_string(dir.join("review/index.html")).unwrap();
     assert!(!page.contains("<script>globalThis.targetInjection"));
+    for control in ["targetDraftFile", "targetDraftDownload", "targetDownload"] {
+        assert!(page.contains(&format!("id=\"{control}\"")));
+    }
     let mut annotations = read(&dir, "review/body-targets.json");
+    write(&dir, "annotations.json", &annotations);
+    apply(&dir, "incomplete", 3);
+    assert!(!dir.join("incomplete").exists());
     annotations["keypoints"] = good["model"]["keypoints"].clone();
     write(&dir, "annotations.json", &annotations);
     apply(&dir, "authored", 0);
@@ -161,6 +174,10 @@ fn targets_editor_fixture_replays_a_corrected_capture_through_the_ordinary_fitte
         frame["reference"] = json!(dir.join(format!("capture-reference-{i}.json")));
     }
     assert_eq!(authored, expected);
+    assert_eq!(
+        authored["fit"]["frames"][0]["source"]["metadata"]["frame"]["timestamp_us"].as_u64(),
+        Some(9_007_199_254_740_993)
+    );
     // Resolve all rebased paths from the output directory, not the original source cwd.
     command(
         &dir.join("authored"),

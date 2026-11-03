@@ -52,6 +52,31 @@ async function hidden(page) {
   assert(await page.locator("#targetDownload").isHidden());
   assert.equal(await page.locator("#targetDownload").getAttribute("href"), null);
 }
+async function allHidden(page) {
+  await hidden(page);
+  assert(await page.locator("#targetDraftDownload").isHidden());
+  assert.equal(await page.locator("#targetDraftDownload").getAttribute("href"), null);
+}
+async function saveDownload(page, id, filename) {
+  const event = page.waitForEvent("download");
+  await page.locator("#" + id).click();
+  const download = await event;
+  assert.equal(download.suggestedFilename(), filename);
+  const destination = path.join(out, filename);
+  await download.saveAs(destination);
+  return destination;
+}
+async function loadTargets(page, value, name = "saved-targets.json") {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value));
+  await page.locator("#targetDraftFile").setInputFiles({name, mimeType: "application/json", buffer});
+  assert.equal(await page.locator("#targetDraftFile").inputValue(), "");
+}
+async function restored(page) {
+  await page.waitForFunction(() => document.getElementById("targetStatus").textContent.includes("applied targets restored"));
+}
+async function targetNames(page) {
+  return page.locator("#targetList option").evaluateAll(nodes => nodes.map(node => node.value).sort());
+}
 async function newTarget(page, name, kind) {
   await page.locator("#targetList").selectOption("");
   await page.locator("#targetName").fill(name);
@@ -82,6 +107,15 @@ async function addP0(page, zoom) {
       globalThis.__revoked = [];
       const revoke = URL.revokeObjectURL.bind(URL);
       URL.revokeObjectURL = url => { globalThis.__revoked.push(url); return revoke(url); };
+      // Only file-read latency is controlled; real File bytes, decoder, picker and renderer execute.
+      const arrayBuffer = File.prototype.arrayBuffer;
+      File.prototype.arrayBuffer = function () {
+        const bytes = arrayBuffer.call(this);
+        if (!this.name.startsWith("slow-")) return bytes;
+        return new Promise((resolve, reject) => {
+          globalThis.__releaseTargetRead = () => bytes.then(resolve, reject);
+        });
+      };
     });
     const page = await context.newPage();
     page.on("pageerror", error => errors.push(String(error)));
@@ -91,6 +125,28 @@ async function addP0(page, zoom) {
     assert.equal(await page.evaluate(() => globalThis.targetInjection), undefined);
     assert.equal(await page.locator("script").count(), 2);
     await hidden(page);
+    assert.equal(await page.locator("#targetDraftDownload").count(), 1);
+    assert(await page.locator("#targetDraftDownload").isVisible());
+    await newTarget(page, "saved_surface", "surface");
+    await clickPoint(page, surfacePoint(5, [0.55, 0.2, 0.25]), 1);
+    await page.locator("#applyTarget").click();
+    await hidden(page);
+    const partialPath = await saveDownload(page, "targetDraftDownload", "body-targets-draft.json");
+    const partial = JSON.parse(fs.readFileSync(partialPath));
+    assert.equal(partial.source_input_sha256, seed.source_input_sha256);
+    assert.equal(partial.model_sha256, seed.model_sha256);
+    assert(!Object.hasOwn(partial.keypoints, "p0"));
+    assert.equal(partial.keypoints.saved_surface.kind, "surface");
+    await page.reload();
+    await page.waitForFunction(() => !document.getElementById("targetEditor").hidden);
+    await page.locator("#targetDraftFile").setInputFiles(partialPath);
+    await restored(page);
+    assert.equal(await page.locator("#targetDraftFile").inputValue(), "");
+    await hidden(page);
+    assert.match(await page.locator("#targetStatus").innerText(), /missing observed targets: p0/);
+    await page.locator("#targetList").selectOption("saved_surface");
+    assert.deepEqual(await candidate(page), partial.keypoints.saved_surface);
+    await page.locator("#removeTarget").click();
     await addP0(page, 1);
 
     // A queued view change must not select from the previous frame's projected triangles.
@@ -138,6 +194,78 @@ async function addP0(page, zoom) {
     await hidden(page);
     await page.locator("#cancelTarget").click();
 
+    const complete = {...seed, keypoints: good.model.keypoints};
+    const wrong = (key, value) => ({...complete, [key]: value});
+    const target = value => ({...complete, keypoints: {...complete.keypoints, p0: value}});
+    const invalid = [
+      wrong("schema", "ftx-body-targets/2"), wrong("source_input", seed.source_input + "-other"),
+      wrong("source_input_sha256", "0".repeat(64)), wrong("model_sha256", "0".repeat(64)),
+      wrong("extra", true), wrong("keypoints", null), wrong("keypoints", []), wrong("keypoints", {}),
+      wrong("keypoints", Object.fromEntries(Array.from({length: 129}, (_, i) => ["many" + i, {kind: "vertex", index: 0}]))),
+      ...[" ", "é".repeat(129), "\ud800"].map(name => wrong("keypoints", {[name]: {kind: "vertex", index: 0}})),
+      target(null), target({kind: "unknown"}), target({kind: "vertex"}),
+      target({kind: "vertex", index: 0, extra: true}), target({kind: "vertex", index: -1}),
+      target({kind: "vertex", index: 100000}), target({kind: "vertex", index: 0.5}),
+      target({kind: "vertex", index: 1}),
+      target({kind: "surface", face: 0, barycentric: [0, 1, 0]}),
+      target({kind: "surface", face: 200000, barycentric: [0.2, 0.3, 0.5]}),
+      target({kind: "surface", face: 0, barycentric: [-0.1, 0.6, 0.5]}),
+      target({kind: "surface", face: 0, barycentric: [0.2, 0.3, 0.4]}),
+      target({kind: "surface", face: 0, barycentric: [1, 0]}),
+      target({kind: "bone_head", bone: "absent"}), target({kind: "bone_tail", bone: "arm", index: 0}),
+      Buffer.from("{"), Buffer.from([0xff]),
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(complete))]),
+      Buffer.alloc(256 * 1024 + 1, 0x20),
+    ];
+    const names = await targetNames(page);
+    for (let i = 0; i < invalid.length; ++i) {
+      const oldUrl = await page.locator("#targetDownload").getAttribute("href");
+      assert(oldUrl);
+      await loadTargets(page, invalid[i], "invalid-" + i + ".json");
+      await page.waitForFunction(() => document.getElementById("targetStatus").textContent.startsWith("Saved targets not loaded:"));
+      await allHidden(page);
+      assert((await page.evaluate(() => globalThis.__revoked)).includes(oldUrl));
+      assert.deepEqual(await targetNames(page), names);
+      await page.locator("#targetList").selectOption("p0");
+      assert.deepEqual(await candidate(page), {kind: "vertex", index: 0});
+      assert(await page.locator("#targetDownload").isVisible());
+    }
+    const completeBytes = Buffer.from(JSON.stringify(complete));
+    await loadTargets(page, Buffer.concat([completeBytes, Buffer.alloc(256 * 1024 - completeBytes.length, 0x20)]));
+    await restored(page); await hidden(page);
+    await page.locator("#targetList").selectOption("p0");
+    await hidden(page);
+    await page.locator("#cancelTarget").click(); await hidden(page);
+    await page.locator("#applyTarget").click();
+    assert(await page.locator("#targetDownload").isVisible());
+
+    const races = ["name", "selection", "kind", "canvas", "cancel", "reset", "chooser", "replacement", "pagehide"];
+    for (const action of races) {
+      await page.locator("#targetList").selectOption("");
+      await loadTargets(page, {...seed, keypoints: {late: {kind: "vertex", index: 0}}}, "slow-" + action + ".json");
+      await page.waitForFunction(() => typeof globalThis.__releaseTargetRead === "function");
+      await allHidden(page);
+      if (action === "name") await page.locator("#targetName").fill("later-name");
+      if (action === "selection") await page.locator("#targetList").selectOption("p1");
+      if (action === "kind") await page.locator("#targetKind").selectOption("bone_head");
+      if (action === "canvas") await clickPoint(page, surfacePoint(5, [0.6, 0.2, 0.2]), 1);
+      if (action === "cancel") await page.locator("#cancelTarget").click();
+      if (action === "reset") await page.locator("#resetTargets").click();
+      if (action === "chooser") {
+        const choosing = page.waitForEvent("filechooser");
+        await page.locator("#targetDraftFile").click();
+        await (await choosing).setFiles([]);
+      }
+      if (action === "replacement") { await loadTargets(page, partial); await restored(page); }
+      if (action === "pagehide") await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
+      await page.evaluate(async () => { await globalThis.__releaseTargetRead(); globalThis.__releaseTargetRead = null; });
+      assert.equal(await page.locator('#targetList option[value="late"]').count(), 0, action);
+      assert(!((await page.locator("#targetStatus").innerText()).startsWith("Reading saved targets;")), action);
+      if (action === "replacement") assert.equal(await page.locator('#targetList option[value="saved_surface"]').count(), 1);
+      await page.locator("#resetTargets").click();
+      await addP0(page, 1);
+    }
+
     await page.locator("#resetTargets").click();
     await hidden(page);
     // A second aspect ratio and zoom catches wrong canvas-to-bitmap coordinate scaling.
@@ -155,6 +283,7 @@ async function addP0(page, zoom) {
     assert.deepEqual(errors, []);
     assert(requests.every(r => r.method === "GET" && r.url.startsWith("file:")));
     console.log(JSON.stringify({status: "PASS", authored_targets: Object.keys(annotation.keypoints).length,
+      draft: partialPath, invalid_drafts: invalid.length, read_races: races,
       exercised: ["vertex", "surface", "bone_head", "bone_tail", "pending", "cancel", "reset", "observed-name lock", "two viewport sizes"],
       download: destination, browser_errors: errors.length, local_requests: requests.length}));
   } finally {

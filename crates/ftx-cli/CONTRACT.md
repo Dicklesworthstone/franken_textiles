@@ -66,6 +66,11 @@ The fixed chest-band qualification schedule remains unchanged.
   preserves every other input value, including full-width timestamps, and rebases capture paths.
   New private directories, exact original bytes and report-last publication retain existing rules.
   No automatic anatomical mapping, photo observation, fit, READY or physical-accuracy approval.
+  The local picker saves nonempty applied partial maps as `body-targets-draft.json` and reopens
+  bounded strict UTF-8 annotations bound to the exact source/model. Imports validate all target
+  definitions before replacing work; later actions cancel pending reads. Loaded maps require
+  explicit review/application before the completed download, which still requires every observed
+  name. Native complete-map validation and all other input values remain unchanged.
 - `ftx measure video-mask-review MANIFEST.json --out NEW_DIR [--json]` and
   `ftx measure video-masks POLYGONS.json --out NEW_DIR [--json]`: author person/sheet sharpness
   regions in a private offline editor, then materialize opaque binary PNGs using the existing native

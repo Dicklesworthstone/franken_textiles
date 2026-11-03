@@ -1,11 +1,12 @@
 // Exact native topology and caller-authored correspondences; no observations enter this page.
 (() => {
   const byId = id => document.getElementById(id);
-  const link = byId("targetDownload"), status = byId("targetStatus");
+  const link = byId("targetDownload"), draftLink = byId("targetDraftDownload"), status = byId("targetStatus");
   let download = null;
   function withdraw() {
     if (download !== null) URL.revokeObjectURL(download);
     download = null; link.hidden = true; link.removeAttribute("href");
+    draftLink.hidden = true; draftLink.removeAttribute("href");
   }
   try {
     const data = JSON.parse(byId("targetData").textContent);
@@ -18,6 +19,7 @@
       throw Error("Invalid native preview geometry");
     }
     let edited = structuredClone(original), selected = "", candidate = null, pending = false;
+    let revision = 0, reading = false, needsReview = false;
     const canvas = byId("targetCanvas"), context = canvas.getContext("2d");
     if (!context) throw Error("This browser cannot display the local model canvas");
     const width = canvas.width, height = canvas.height;
@@ -33,19 +35,27 @@
       Object.defineProperty(edited.keypoints, name, {value: structuredClone(value), writable: true, enumerable: true, configurable: true});
     }
     function validName(name) {
-      return name.trim().length > 0 && utf8.encode(name).length <= 256;
+      return name.isWellFormed() && name.trim().length > 0 && utf8.encode(name).length <= 256;
+    }
+    function fields(value, names) {
+      return value !== null && typeof value === "object" && !Array.isArray(value) &&
+        Object.keys(value).length === names.length && names.every(name => own(value, name));
     }
     function checkTargets(targets, requireObserved = true) {
+      if (targets === null || typeof targets !== "object" || Array.isArray(targets)) throw Error("Targets must be a named map");
       const names = Object.keys(targets), locations = new Set();
       if (!names.length || names.length > 128) throw Error("Declare between one and 128 targets");
       for (const name of names) {
         if (!validName(name)) throw Error("Target names need one to 256 UTF-8 bytes");
         const target = targets[name];
+        if (target === null || typeof target !== "object" || Array.isArray(target)) throw Error("Invalid target definition");
         let identity;
         if (target.kind === "vertex") {
+          if (!fields(target, ["kind", "index"])) throw Error("Vertex targets need only kind and index");
           if (!Number.isSafeInteger(target.index) || target.index < 0 || target.index >= vertices.length) throw Error("Vertex is outside the native mesh");
           identity = [[target.index, 1]];
         } else if (target.kind === "surface") {
+          if (!fields(target, ["kind", "face", "barycentric"])) throw Error("Surface targets need only kind, face and barycentric weights");
           if (!Number.isSafeInteger(target.face) || target.face < 0 || target.face >= faces.length ||
               !Array.isArray(target.barycentric) || target.barycentric.length !== 3 ||
               target.barycentric.some(w => !Number.isFinite(w) || w < 0 || w > 1) ||
@@ -53,6 +63,7 @@
               new Set(faces[target.face]).size !== 3) throw Error("Invalid native triangle or barycentric weights");
           identity = faces[target.face].map((v, i) => [v, target.barycentric[i]]).filter(p => p[1] > 0).sort((a, b) => a[0] - b[0]);
         } else if (target.kind === "bone_head" || target.kind === "bone_tail") {
+          if (!fields(target, ["kind", "bone"])) throw Error("Bone targets need only kind and bone");
           if (!bones.has(target.bone)) throw Error("Unknown native rig bone");
           identity = [target.kind, target.bone];
         } else throw Error("Unknown correspondence type");
@@ -66,9 +77,9 @@
     }
     function updateDownload() {
       withdraw();
-      if (pending || JSON.stringify(edited.keypoints) === JSON.stringify(original.keypoints)) return;
+      if (pending) return;
       try {
-        checkTargets(edited.keypoints);
+        checkTargets(edited.keypoints, false);
       } catch (error) {
         status.textContent = error.message + ". No download published.";
         return;
@@ -76,6 +87,10 @@
       const output = structuredClone(edited);
       output.keypoints = Object.fromEntries(Object.entries(output.keypoints).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
       download = URL.createObjectURL(new Blob([JSON.stringify(output, null, 2) + "\n"], {type: "application/json"}));
+      draftLink.href = download; draftLink.hidden = false;
+      if (needsReview || JSON.stringify(edited.keypoints) === JSON.stringify(original.keypoints)) return;
+      try { checkTargets(edited.keypoints); }
+      catch (error) { status.textContent = error.message + ". Save the applied draft to continue later."; return; }
       link.href = download; link.hidden = false;
     }
     function location(target) {
@@ -203,9 +218,9 @@
         if (!candidate) throw Error("Choose a visible surface location or a named bone endpoint first");
         if (!own(edited.keypoints, name) && Object.keys(edited.keypoints).length >= 128) throw Error("At most 128 model targets are supported");
         const proposed = Object.fromEntries([...Object.entries(edited.keypoints).filter(([n]) => n !== name), [name, candidate]]);
-        // Missing observed definitions are permitted during authoring, but not in a download.
+        // A draft may lack observed names; the completed handoff and native command require them all.
         checkTargets(proposed, false);
-        putTarget(name, candidate); selected = name; pending = false; fillOptions(); select(name);
+        putTarget(name, candidate); selected = name; pending = false; needsReview = false; fillOptions(); select(name);
         status.textContent = "Applied " + name + ". " + Object.keys(edited.keypoints).length + " target(s).";
         updateDownload();
       } catch (error) { pending = true; status.textContent = error.message + ". No target or download published."; }
@@ -221,8 +236,48 @@
       select(selected); status.textContent = "Pending target edit cancelled; applied definitions are unchanged."; updateDownload();
     });
     byId("resetTargets").addEventListener("click", () => {
-      withdraw(); edited = structuredClone(original); selected = ""; pending = false; fillOptions(); select("");
+      withdraw(); edited = structuredClone(original); selected = ""; pending = false; needsReview = false; fillOptions(); select("");
       status.textContent = "All target changes reset to the original declaration.";
+    });
+    // A file read cannot replace later edits, another file choice or a closed page.
+    for (const event of ["input", "change", "click", "focusin"]) {
+      byId("targetEditor").addEventListener(event, () => {
+        ++revision;
+        if (reading) status.textContent = "Saved-target read cancelled by a later editor action; current definitions retained.";
+        reading = false;
+      }, true);
+    }
+    const saved = byId("targetDraftFile");
+    saved.addEventListener("focus", withdraw);
+    saved.addEventListener("click", withdraw);
+    saved.addEventListener("change", async () => {
+      const ticket = ++revision, file = saved.files[0];
+      saved.value = ""; withdraw();
+      if (!file) { status.textContent = "No saved targets selected; current definitions retained."; return; }
+      reading = true;
+      status.textContent = "Reading saved targets; current definitions remain unchanged until the file is checked.";
+      try {
+        if (file.size > 256 * 1024) throw Error("Saved targets exceed the 256 KiB limit");
+        const bytes = await file.arrayBuffer();
+        if (ticket !== revision) return;
+        if (bytes.byteLength > 256 * 1024) throw Error("Saved targets exceed the 256 KiB limit");
+        const proposed = JSON.parse(new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(bytes));
+        if (!fields(proposed, Object.keys(original)) ||
+            ["schema", "source_input", "source_input_sha256", "model_sha256"].some(name => proposed[name] !== original[name])) {
+          throw Error("Saved targets belong to a different source or model, or have unknown fields");
+        }
+        checkTargets(proposed.keypoints, false);
+        edited = {...structuredClone(original), keypoints: structuredClone(proposed.keypoints)};
+        pending = false; needsReview = true; selected = Object.keys(edited.keypoints).sort()[0];
+        fillOptions(); select(selected);
+        const missing = [...observed].filter(name => !own(edited.keypoints, name));
+        status.textContent = Object.keys(edited.keypoints).length + " applied targets restored. Review the definitions, then Apply a target before downloading completed annotations." +
+          (missing.length ? " Still missing observed targets: " + missing.join(", ") + "." : "");
+      } catch (error) {
+        if (ticket === revision) status.textContent = "Saved targets not loaded: " + error.message + ". Current definitions retained.";
+      } finally {
+        if (ticket === revision) reading = false;
+      }
     });
     canvas.addEventListener("click", event => {
       withdraw();
@@ -260,7 +315,11 @@
     byId("previewDetails").textContent = JSON.stringify(data.preview, null, 2);
     fillOptions(); select(""); byId("targetEditor").hidden = false;
     status.textContent = "Choose a required or existing name, or name a new target. Inspect the unfitted surface before selecting a location.";
-    window.addEventListener("pagehide", withdraw);
+    window.addEventListener("pagehide", () => {
+      ++revision;
+      if (reading) status.textContent = "Saved-target read cancelled when leaving the page; current definitions retained.";
+      reading = false; withdraw();
+    });
   } catch (error) {
     withdraw(); status.textContent = error.message + ". No annotations were published.";
     byId("targetEditor").hidden = false;
