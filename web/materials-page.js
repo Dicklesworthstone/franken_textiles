@@ -33,6 +33,8 @@ const guidedDesignButtons = [];
 let guidedDesignCurrent = 0;
 let guidedDesignVertexSource = null, guidedDesignVertexProblem = "";
 let guidedDesignNomination = null;
+let guidedScenarioCases = null, guidedScenarioCasesRead = 0;
+let guidedDesignCaseNomination = null;
 const guidedDesignFields = { key: "guidedDesignKey", kind: "guidedDesignKind", axis: "guidedDesignAxis",
   at: "guidedDesignAt", multiplier: "guidedDesignMultiplier", values: "guidedDesignValues", dx: "guidedDesignDx", dy: "guidedDesignDy",
   lower: "guidedDesignLower", upper: "guidedDesignUpper", initial: "guidedDesignInitial",
@@ -138,7 +140,7 @@ function controls() {
   $("guidedDesign").disabled = !source;
   $("guidedDesignControls").hidden = !$("guidedDesign").checked;
   for (const id of ["guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
-    "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignEvaluations"]) {
+    "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignCase", "guidedDesignEvaluations"]) {
     $(id).disabled = !source || !$("guidedDesign").checked;
   }
   const adaptiveDesign = $("guidedDesignMode").value === "adaptive";
@@ -147,10 +149,15 @@ function controls() {
   $("guidedDesignAdaptivePolicy").hidden = !adaptiveDesign;
   for (const id of ["guidedDesignValues", "guidedDesignGridBudget"]) $(id).disabled ||= adaptiveDesign;
   for (const id of ["guidedDesignLower", "guidedDesignUpper", "guidedDesignInitial", "guidedDesignInitialStep", "guidedDesignMinimumStep",
-    "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignEvaluations"]) $(id).disabled ||= !adaptiveDesign;
-  const consumerDesign = ["consumer_comparison", "consumer_pareto"].includes($("guidedDesignObjective").value);
+    "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignCase", "guidedDesignEvaluations"]) $(id).disabled ||= !adaptiveDesign;
+  const objective = $("guidedDesignObjective").value;
+  const consumerDesign = ["consumer_comparison", "consumer_pareto", "consumer_worst_case", "consumer_matrix_pareto"].includes(objective);
   $("guidedDesignMaterialField").hidden = !consumerDesign; $("guidedDesignMaterial").disabled ||= !consumerDesign;
   $("guidedDesignMaterialStatus").hidden = !consumerDesign || !guidedDesignNomination?.invalidated;
+  const nominatedCase = ["consumer_comparison", "consumer_pareto"].includes(objective) && !guidedScenarioMode();
+  $("guidedDesignCaseField").hidden = !nominatedCase;
+  $("guidedDesignCaseStatus").hidden = !nominatedCase;
+  $("guidedDesignCase").disabled ||= !nominatedCase || !guidedScenarioCases?.keys?.length;
   const movingVertices = $("guidedDesignKind").value === "move";
   if (source && $("guidedDesign").checked && movingVertices) ensureGuidedDesignVertices();
   $("guidedDesignSlash").hidden = movingVertices; $("guidedDesignMove").hidden = !movingVertices;
@@ -3888,6 +3895,50 @@ function refreshGuidedDesignMaterials() {
     `The nominated source for ${guidedDesignNomination.key} was removed or changed. Choose a current material explicitly, even if that name has been reused.` : "";
   $("guidedDesignMaterialStatus").hidden = !guidedDesignNomination?.invalidated;
 }
+function scenarioSourceFile() {
+  return roundFiles.has("scenarioRequest") ? roundFiles.get("scenarioRequest") : $("scenarioRequest").files[0];
+}
+function refreshGuidedDesignCases() {
+  const select = $("guidedDesignCase"); select.replaceChildren();
+  for (const key of ["", ...(guidedScenarioCases?.keys || [])]) {
+    const option = document.createElement("option"); option.value = key;
+    option.textContent = key || "Choose an explicit named case"; select.append(option);
+  }
+  select.value = guidedDesignCaseNomination && !guidedDesignCaseNomination.invalidated ? guidedDesignCaseNomination.key : "";
+  $("guidedDesignCaseStatus").textContent = guidedScenarioCases?.problem ||
+    (guidedDesignCaseNomination?.invalidated ? "The scenario source changed. Choose a current case explicitly, even if its name is unchanged." :
+      guidedScenarioCases?.keys?.length ? "Discovery follows the selected case's comparison policy. Every case must still admit each trial." :
+        guidedScenarioCases ? "This is a single scenario; a named guidance case is not needed." : "Load a named scenario matrix below to choose a case.");
+}
+async function loadGuidedScenarioCases() {
+  const generation = ++guidedScenarioCasesRead, original = scenarioSourceFile();
+  guidedScenarioCases = null;
+  if (guidedDesignCaseNomination) guidedDesignCaseNomination.invalidated = true;
+  refreshGuidedDesignCases();
+  if (!original) { controls(); return; }
+  $("guidedDesignCaseStatus").textContent = "Reading the named scenario cases…";
+  controls();
+  try {
+    const request = await read("scenarioRequest"), value = JSON.parse(request);
+    if (generation !== guidedScenarioCasesRead || original !== scenarioSourceFile()) return;
+    let keys = [];
+    if (value?.schema === "ftx-drape-scenario-matrix/1") {
+      if (!Array.isArray(value.cases) || value.cases.length < 1 || value.cases.length > 8 ||
+        value.cases.some(item => typeof item?.key !== "string" || !item.key.trim() || new Blob([item.key]).size > 128)) {
+        throw Error("A named matrix needs 1–8 cases with nonempty names of at most 128 UTF-8 bytes.");
+      }
+      keys = value.cases.map(item => item.key);
+      if (new Set(keys).size !== keys.length) throw Error("Named scenario cases must have unique names.");
+    } else if (value?.schema !== "ftx-drape-scenario/1") {
+      throw Error("Choose an ordinary scenario or named scenario matrix.");
+    }
+    guidedScenarioCases = { original, keys };
+  } catch (e) {
+    if (generation !== guidedScenarioCasesRead || original !== scenarioSourceFile()) return;
+    guidedScenarioCases = { original, keys: [], problem: String(e.message || e) };
+  }
+  refreshGuidedDesignCases(); controls();
+}
 async function guidedStudyInput(scenarioRead) {
   if (!source) throw Error("Load the original pattern first.");
   const number = (id, label) => {
@@ -3925,7 +3976,8 @@ async function guidedStudyInput(scenarioRead) {
   const input = { candidates: studyCandidates.map(candidate => ({ ...candidate })), target,
     pieceIds: source.pieces.map(p => p.id), ...(cutting ? { cutting } : {}), objectives, constraints,
     requiredConsumers, basis: $("guidedBasis").value };
-  if ($("guidedDesign").checked) input.design = guidedDesignInput(number);
+  if ($("guidedDesign").checked) input.design = guidedDesignInput(number, !!scenarioRead);
+  const nominatedCaseSource = input.design?.caseKey ? guidedDesignCaseNomination?.source : undefined;
   const retained = [], budget = 16 * 1024 * 1024;
   let sourceBytes = 0;
   const retain = (key, id, label) => {
@@ -3965,8 +4017,8 @@ async function guidedStudyInput(scenarioRead) {
     return [key, raw];
   })), scenarioRead]);
   const fragments = Object.fromEntries(sources);
-  if (input.design?.mode === "adaptive" && input.design.objective !== "fit_band_violation_mm" && scenario?.matrix) {
-    throw Error("Guided consumer discovery needs a single scenario. Use a complete study request to declare guidance across named scenarios.");
+  if (input.design?.caseKey && nominatedCaseSource !== scenario?.original) {
+    throw Error("The nominated guidance case belongs to a different scenario source. Choose a current case and run the scenario comparison.");
   }
   if (input.design) input.design.fitSpec = fragments.designFit;
   for (const key of ["cutting", "finiteStock", "cuttingJob", "sewing", "sewingSelection", "assemblyMass"]) {
@@ -3986,11 +4038,15 @@ async function guidedStudyInput(scenarioRead) {
 }
 async function scenarioInput() {
   if (!guidedScenarioMode()) {
+    const original = scenarioSourceFile();
     const request = await read("scenarioRequest"), value = JSON.parse(request);
-    const cases = value?.schema === "ftx-drape-scenario-matrix/1" && Array.isArray(value.cases) ?
+    const matrix = value?.schema === "ftx-drape-scenario-matrix/1";
+    const cases = matrix && Array.isArray(value.cases) ?
       value.cases.map(item => item?.scenario) : [value];
-    return { request, context: { drape: true, surface: cases.some(item => item?.surface != null) },
-      matrix: value?.schema === "ftx-drape-scenario-matrix/1" };
+    return { request, original, context: { drape: true, surface: cases.some(item => item?.surface != null),
+      ...(matrix ? { matrix: { maxEvaluations: value.max_evaluations,
+        cases: Array.isArray(value.cases) ? value.cases.map(item => ({ key: item?.key,
+          surface: item?.scenario?.surface != null, ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
   }
   const number = (id, label) => {
     const raw = $(id).value.trim();
@@ -4149,7 +4205,7 @@ async function execute(op) {
       // Alternatives always start at the original, never the currently bound single-material preview.
       msg.pattern = sourceText;
       const onBody = op === "study" && studyUsesBody();
-      const scenarioRead = op === "scenario" ? scenarioInput() : Promise.resolve(null);
+      const scenarioRead = op === "scenario" ? scenarioInput() : undefined;
       const [study, scenario] = await Promise.all([studyInput(scenarioRead), scenarioRead]);
       if (pending?.id !== id) return;
       msg.studyRequest = study;
@@ -4257,7 +4313,7 @@ $("clearGuidedInventory").onclick = () => {
 $("clearStockRequest").onclick = () => selectStockRequest(null);
 for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
   "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
-  "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignEvaluations",
+  "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignCase", "guidedDesignEvaluations",
   "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis", "guidedHeatDirection",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
   ...guidedMetrics.flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]), ...guidedRequired.map(([id]) => id)]) {
@@ -4266,6 +4322,12 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
       const key = $(id).value, original = guidedDesignMaterialSource(key);
       guidedDesignNomination = key && original !== null ? { key, source: original, invalidated: false } : null;
       refreshGuidedDesignMaterials();
+    }
+    if (id === "guidedDesignCase") {
+      const key = $(id).value;
+      guidedDesignCaseNomination = key && guidedScenarioCases?.original === scenarioSourceFile() && guidedScenarioCases.keys.includes(key) ?
+        { key, source: guidedScenarioCases.original, invalidated: false } : null;
+      refreshGuidedDesignCases();
     }
     if (Object.values(guidedDesignFields).includes(id) || ["guidedDesignPieces", "guidedDesignVertices"].includes(id)) {
       if (guidedDesignVariables.length) guidedDesignVariables[guidedDesignCurrent] = captureGuidedDesignVariable();
@@ -4409,7 +4471,7 @@ $("guidedDesignAdd").onclick = () => {
     guidedDesignVariables.push(newGuidedDesignVariable(`adjustment_${n}`)); guidedDesignCurrent = guidedDesignVariables.length - 1;
   });
 };
-function guidedDesignInput(number) {
+function guidedDesignInput(number, inScenario) {
   const mode = $("guidedDesignMode").value;
   if (!["grid", "adaptive"].includes(mode)) throw Error("Choose a listed grid or bounded adaptive discovery.");
   const drafts = guidedDesignVariables.map((draft, index) => index === guidedDesignCurrent ? captureGuidedDesignVariable() : draft);
@@ -4450,8 +4512,13 @@ function guidedDesignInput(number) {
     guidedDesignNomination.key !== materialKey || guidedDesignNomination.source !== guidedDesignMaterialSource(materialKey))) {
     throw Error("Choose a current frozen material explicitly to guide adaptive discovery.");
   }
+  const caseKey = inScenario && !guidedScenarioMode() && ["consumer_comparison", "consumer_pareto"].includes(objective) ? $("guidedDesignCase").value : "";
+  if (caseKey && (!guidedDesignCaseNomination || guidedDesignCaseNomination.invalidated ||
+    guidedDesignCaseNomination.key !== caseKey || guidedDesignCaseNomination.source !== scenarioSourceFile())) {
+    throw Error("Choose a current named scenario explicitly to guide adaptive discovery.");
+  }
   return { ...common, mode, objective, maxEvaluations: number("guidedDesignEvaluations", "unique discovery trial allowance"),
-    ...(objective === "fit_band_violation_mm" ? {} : { materialKey }) };
+    ...(objective === "fit_band_violation_mm" ? {} : { materialKey }), ...(caseKey ? { caseKey } : {}) };
 }
 function resetGuidedDesign() {
   $("guidedDesign").checked = false;
@@ -4462,6 +4529,7 @@ function resetGuidedDesign() {
   guidedDesignVariables.length = 0; guidedDesignVariables.push(newGuidedDesignVariable()); guidedDesignCurrent = 0;
   $("guidedDesignMode").value = "grid"; $("guidedDesignObjective").value = "fit_band_violation_mm";
   guidedDesignNomination = null;
+  guidedDesignCaseNomination = null; refreshGuidedDesignCases();
   $("guidedDesignMaterial").value = ""; $("guidedDesignEvaluations").value = ""; refreshGuidedDesignMaterials();
   $("guidedDesignMax").value = "1"; $("guidedDesignGridBudget").value = ""; loadGuidedDesignVariable();
 }
@@ -4686,12 +4754,16 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
+    let scenarioCasesLoading;
     if (id === "stockRequest") {
       selectedStockRequest = null; clear(["selectedStock"]);
       $("selectedStockFiles").replaceChildren(); $("selectedStockNote").hidden = true;
     }
     if (id === "studyRequest") $("studyMode").value = "file";
-    if (id === "scenarioRequest") $("scenarioMode").value = "file";
+    if (id === "scenarioRequest") {
+      $("scenarioMode").value = "file";
+      scenarioCasesLoading = loadGuidedScenarioCases();
+    }
     if (id === "measurements" || id === "body") cancelPhotoReturn();
     if (id === "fit") clearImportFit();
     if (id === "measurements") $("supplementalConsent").checked = false;
@@ -4706,6 +4778,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     invalidate([...keys, ...bodyDependentStudies(id), ...guidedKeys], guidedProcessSource || guidedKeys.length > 0 ||
       (studyBodyMode() === "preview" && ["drapeLegs", "drapeLegFraction"].includes(id)) ||
       ["measurements", "fit", "body", "selfContact", "scenarioBody", "heatConditions"].includes(id));
+    return scenarioCasesLoading;
   });
 }
 for (const id of ["drapeLegFraction", "maxSettleSteps"]) {

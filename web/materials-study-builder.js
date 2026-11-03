@@ -217,25 +217,54 @@ function adaptiveDomain(variable) {
   return [low, high, variable.initialMm];
 }
 
-function adaptiveGuidance(design, candidates, objectives) {
-  if (!["fit_band_violation_mm", "consumer_comparison", "consumer_pareto"].includes(design.objective)) {
-    throw Error("Choose fit-band, single-consumer-objective or Pareto adaptive guidance.");
+function adaptiveGuidance(design, candidates, comparison, matrix) {
+  if (!["fit_band_violation_mm", "consumer_comparison", "consumer_pareto", "consumer_worst_case", "consumer_matrix_pareto"].includes(design.objective)) {
+    throw Error("Choose fit-band, nominated-case, worst-case or Pareto adaptive guidance.");
   }
   if (design.objective === "fit_band_violation_mm") {
-    if (own(design, "materialKey")) throw Error("Fit-band discovery does not accept a guidance materialKey.");
+    if (own(design, "materialKey") || own(design, "caseKey")) throw Error("Fit-band discovery does not accept a guidance materialKey or caseKey.");
     return;
   }
   name(design.materialKey, "Adaptive guidance materialKey");
   if (design.materialKey !== "baseline" && !candidates.some(candidate => candidate?.key === design.materialKey)) {
     throw Error("Adaptive materialKey must identify the unchanged baseline or an existing material choice.");
   }
-  const count = Array.isArray(objectives) ? objectives.length : 0;
+  const allCases = ["consumer_worst_case", "consumer_matrix_pareto"].includes(design.objective);
+  if (!matrix && (allCases || own(design, "caseKey"))) {
+    throw Error("Named-case adaptive guidance requires a scenario matrix.");
+  }
+  let effective = comparison;
+  if (matrix) {
+    const policies = matrix.cases.map(item => item.comparison ?? comparison);
+    if (allCases) {
+      if (own(design, "caseKey")) throw Error("All-case adaptive guidance does not accept a caseKey.");
+      if (design.objective === "consumer_matrix_pareto") {
+        if (policies.some(policy => !Array.isArray(policy?.objectives) || !policy.objectives.length || policy.objectives.length > 16) ||
+          policies.reduce((count, policy) => count + policy.objectives.length, 0) < 2) {
+          throw Error("All-case Pareto guidance needs 1–16 objectives per case and at least two case/objective coordinates.");
+        }
+        return;
+      }
+      const first = policies[0];
+      if (policies.some(policy => !Array.isArray(policy?.objectives) || policy.objectives.length !== 1 ||
+        policy.basis !== first.basis || policy.objectives[0]?.metric !== first.objectives[0]?.metric ||
+        policy.objectives[0]?.direction !== first.objectives[0]?.direction)) {
+        throw Error("Worst-case guidance needs one identical metric, direction and comparison basis in every case.");
+      }
+      return;
+    }
+    name(design.caseKey, "Adaptive guidance caseKey");
+    const index = matrix.cases.findIndex(item => item.key === design.caseKey);
+    if (index < 0) throw Error("Adaptive caseKey must identify an existing named scenario case.");
+    effective = policies[index];
+  }
+  const count = Array.isArray(effective?.objectives) ? effective.objectives.length : 0;
   if (design.objective === "consumer_comparison" ? count !== 1 : count < 2 || count > 16) {
     throw Error("Single-consumer guidance needs exactly one comparison objective; Pareto guidance needs 2–16.");
   }
 }
 
-function linkedDesign(value, pieces, candidates, objectives) {
+function linkedDesign(value, pieces, candidates, comparison, matrix) {
   const multiple = !!value && typeof value === "object" && own(value, "variables");
   const mode = multiple && own(value, "mode") ? value.mode : "grid";
   if (!["grid", "adaptive"].includes(mode)) throw Error("Choose grid or adaptive linked design mode.");
@@ -243,13 +272,13 @@ function linkedDesign(value, pieces, candidates, objectives) {
   const fields = multiple ? ["variables", "maxDesigns", "fitSpec"] :
     ["pieceIds", "axis", "atMm", "multiplier", "values", "maxDesigns", "fitSpec"];
   const required = adaptive ? [...fields, "mode", "objective", "maxEvaluations"] : fields;
-  const allowed = adaptive ? [...required, "materialKey"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
+  const allowed = adaptive ? [...required, "materialKey", "caseKey"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
   const design = object(value, allowed, required, "Linked design");
   if (adaptive) {
     if (!Number.isSafeInteger(design.maxEvaluations) || design.maxEvaluations < 1 || design.maxEvaluations > 256) {
       throw Error("The adaptive evaluation allowance must be an integer from 1 to 256.");
     }
-    adaptiveGuidance(design, candidates, objectives);
+    adaptiveGuidance(design, candidates, comparison, matrix);
   }
   let authored = design.variables;
   if (!multiple) {
@@ -301,11 +330,44 @@ function linkedDesign(value, pieces, candidates, objectives) {
     throw Error("Design fit needs 1–32 explicit points and fabric-fit/1 when a schema is supplied.");
   }
   const search = JSON.stringify(adaptive ? { objective: design.objective,
-    ...(own(design, "materialKey") ? { material_key: design.materialKey } : {}), variables,
+    ...(own(design, "materialKey") ? { material_key: design.materialKey } : {}),
+    ...(own(design, "caseKey") ? { case_key: design.caseKey } : {}), variables,
     max_evaluations: design.maxEvaluations, max_designs: design.maxDesigns } :
     { variables, max_designs: design.maxDesigns, fit_screening: { max_candidates: maxCandidates } });
   bytes(search, 256 * 1024, `Linked design ${mode} exceeds 256 KiB of authored domain data.`);
-  return { [adaptive ? "adaptive" : "grid"]: search, fitSpec: design.fitSpec };
+  return { [adaptive ? "adaptive" : "grid"]: search, fitSpec: design.fitSpec, retainedDesigns: retained + 1,
+    probes: adaptive && design.objective !== "fit_band_violation_mm" ? design.maxEvaluations : 0 };
+}
+
+function matrixContext(value) {
+  const matrix = object(value, ["maxEvaluations", "cases"], ["maxEvaluations", "cases"], "Named scenario context");
+  if (!Array.isArray(matrix.cases) || !matrix.cases.length || matrix.cases.length > 8 ||
+    !Number.isSafeInteger(matrix.maxEvaluations) || matrix.maxEvaluations < matrix.cases.length || matrix.maxEvaluations > 64) {
+    throw Error("Named scenarios need 1–8 cases and an integer evaluation allowance covering every case, at most 64.");
+  }
+  const keys = new Set();
+  for (const item of matrix.cases) {
+    object(item, ["key", "surface", "comparison"], ["key", "surface"], "Named scenario case");
+    name(item.key, "Scenario case key");
+    bytes(item.key, 128, "Scenario case keys must not exceed 128 UTF-8 bytes.");
+    if (keys.has(item.key)) throw Error("Scenario case keys must be unique.");
+    keys.add(item.key);
+    if (typeof item.surface !== "boolean") throw Error("Each named case needs an explicit surface-request boolean.");
+    if (item.comparison != null) {
+      const policy = item.comparison;
+      if (typeof policy !== "object" || Array.isArray(policy) ||
+        !["nominal", "reported_bounds"].includes(policy.basis) || !Array.isArray(policy.objectives) ||
+        !policy.objectives.length || policy.objectives.length > 16 || policy.objectives.some(objective =>
+          !objective || typeof objective !== "object" || Array.isArray(objective) ||
+          typeof objective.metric !== "string" || !objective.metric.trim() ||
+          !["minimize", "maximize"].includes(objective.direction))) {
+        throw Error("Each supplied case comparison needs a declared basis and 1–16 explicit metric/direction objectives.");
+      }
+      // This is an original engine policy, not a guided-policy draft. Rust admits its complete
+      // metrics, guards, consumers and protocols; the browser only reads guidance coordinates.
+    }
+  }
+  return matrix;
 }
 
 /**
@@ -320,15 +382,25 @@ function linkedDesign(value, pieces, candidates, objectives) {
  * protocol consent is inferred. Original source text is embedded verbatim, including locked numbers.
  * Optional scenario context describes the separately dispatched drape/heat request, is never
  * serialized into the study, and does not enable scenario consumers in manufacturing-only calls.
+ * Its optional matrix retains ordered case keys, surface availability, original parsed comparison
+ * policies and the callback allowance. Only guidance selection and capacity are read here; the
+ * caller retains the original matrix JSON for native admission and exact replay.
  * Optional `design` authors ordered linked grid or adaptive variables and retains the original fit contract;
  * the original single-slash-variable shape remains supported without changing its serialized request.
  * Selected-body dispatch and canonical geometry/fit/consumer admission remain with the caller and Rust.
  */
 export function buildMaterialStudyRequest(state, scenario) {
+  let matrix;
   if (scenario !== undefined) {
-    object(scenario, ["drape", "surface"], ["drape", "surface"], "Scenario comparison context");
+    object(scenario, ["drape", "surface", "matrix"], ["drape", "surface"], "Scenario comparison context");
     if (scenario.drape !== true || typeof scenario.surface !== "boolean") {
       throw Error("Scenario comparison needs explicit drape: true and a boolean surface request.");
+    }
+    if (own(scenario, "matrix")) {
+      matrix = matrixContext(scenario.matrix);
+      if (scenario.surface !== matrix.cases.some(item => item.surface)) {
+        throw Error("Named scenario surface availability must describe its actual cases.");
+      }
     }
   }
   object(state, ["candidates", "target", "pieceIds", "cutting", "finiteStock", "cuttingJob", "assemblyMass", "objectives", "basis",
@@ -345,7 +417,14 @@ export function buildMaterialStudyRequest(state, scenario) {
     throw Error("Add 1–7 material choices; the unchanged baseline is included separately.");
   }
   if (!["nominal", "reported_bounds"].includes(state.basis)) throw Error("Choose nominal or reported-bound comparison.");
-  const design = own(state, "design") ? linkedDesign(state.design, pieces, state.candidates, state.objectives) : null;
+  const design = own(state, "design") ? linkedDesign(state.design, pieces, state.candidates,
+    { basis: state.basis, objectives: state.objectives }, matrix) : null;
+  if (matrix) {
+    const slots = ((design?.retainedDesigns ?? 1) * (state.candidates.length + 1) + (design?.probes ?? 0)) * matrix.cases.length;
+    if (slots > matrix.maxEvaluations) {
+      throw Error(`Named scenarios require ${slots} reserved case evaluations including probes, retained designs and both baselines; the matrix allows ${matrix.maxEvaluations}.`);
+    }
+  }
 
   if (["cutting", "finiteStock", "cuttingJob"].filter(key => own(state, key)).length > 1) {
     throw Error("Choose one stock plan: roll cutting, finite inventory or a complete cutting job.");
@@ -467,6 +546,11 @@ export function buildMaterialStudyRequest(state, scenario) {
   for (const consumer of required) {
     if (requiredSet.has(consumer)) throw Error("Required consumers must be unique.");
     requiredSet.add(consumer); requireConsumer(consumer);
+  }
+  if (matrix && (required.includes("surface") || [...state.objectives, ...constraints].some(item =>
+    METRIC_CONSUMERS[item.metric] === "surface"))) {
+    const missing = matrix.cases.find(item => item.comparison == null && !item.surface);
+    if (missing) throw Error(`Named case ${missing.key} inherits a comparison requiring surface inputs it does not request.`);
   }
 
   const parts = []; let size = 0;

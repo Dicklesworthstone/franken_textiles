@@ -4944,6 +4944,23 @@ named-case policies and restart controls. Source edits cancel obsolete work, exa
 replayable, and reports distinguish valid incumbents from unexplored coordinates. This advances
 `ftx-ds2`; finite software search does not establish physical garment fit or a global optimum.
 
+### 25.153 Guide ordinary adaptive discovery across named operating cases
+
+The guided linked-variable editor now reaches all four existing production-guided search modes
+with an original named-case matrix. Single-goal and within-case Pareto guidance explicitly choose
+one current case; worst-case and all-case Pareto guidance retain every case's effective policy.
+Per-case overrides, constraints, source ranges and consumer qualifications remain in the exact
+original request. Every case must admit a retained trial, including cases that do not guide its
+ranking. No weighted score or browser optimizer is introduced.
+
+Case nominations bind to the selected scenario source and require reselection after replacement.
+Edited inputs and cancellation withdraw obsolete results. Before dispatch, the authoring layer
+reserves discovery callbacks and the full retained design/material cross product for every case,
+including both baselines, against the existing 64-evaluation matrix limit. Manufacturing-only
+guidance keeps its independent comparison policy. This advances `ftx-ds2` and `ftx-ms2` through
+existing numerical engines; bounded exploration and synthetic replay establish no empirical
+garment fit, physical-process accuracy or global optimum.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

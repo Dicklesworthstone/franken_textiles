@@ -472,18 +472,28 @@ qualified combinations in grid order before downstream comparison.</p>
 <option value="fit_band_violation_mm">Satisfying the declared fit bands</option>
 <option value="consumer_comparison">Improving one comparison goal</option>
 <option value="consumer_pareto">Exploring tradeoffs across comparison goals</option>
+<option value="consumer_worst_case">Improving the worst named case for one shared goal</option>
+<option value="consumer_matrix_pareto">Exploring tradeoffs across all named cases</option>
 </select></label>
 <label id="guidedDesignMaterialField">Material whose outcomes guide discovery <select id="guidedDesignMaterial">
 <option value="">Choose an explicit material</option></select></label>
 <p id="guidedDesignMaterialStatus" class="note" role="status" hidden></p>
+<label id="guidedDesignCaseField" hidden>Named case whose goals guide discovery
+<select id="guidedDesignCase"><option value="">Choose an explicit named case</option></select></label>
+<p id="guidedDesignCaseStatus" class="note" role="status" hidden></p>
 <label>Maximum unique discovery trials <input id="guidedDesignEvaluations" type="number" min="1" max="256" step="1"></label>
 <p class="note">Fit discovery uses the declared body-fit bands and stops when enough qualifying designs are retained.
-Single-goal guidance requires exactly one comparison goal below; tradeoff guidance requires at least two. Both require an explicit
+Single-goal guidance requires exactly one comparison goal; tradeoff guidance requires at least two. Both require an explicit
 material choice and retain ordinary limits, required results and source qualifications. Selected geometries are subsequently
 compared with every shortlisted material, but those other materials do not guide discovery.</p>
+<p class="note">For a loaded named-case matrix, choose one case for single-goal or within-case tradeoff guidance.
+Its original comparison policy takes precedence over the goals below. Every case's limits and required results still apply.
+Worst-case guidance requires one shared goal, direction and comparison basis in every case. All-case tradeoff guidance keeps
+each case's own goals and basis, with at least two case–goal coordinates; it does not combine them into a score.</p>
 <p class="note">Adaptive search polls bounded coordinates using the existing engine and reuses retained evaluated results.
 The trial allowance and smallest steps limit discovery; successful results remain conditional on explored coordinates.
-Manufacturing and a single scenario are supported here. Use a complete study request for guidance across named scenarios.</p>
+A named matrix must reserve every discovery trial and every retained design/material combination for every case, up to
+64 evaluations in total. Increase its declared allowance or reduce the search, retained designs or shortlist if it does not fit.</p>
 </div>
 <p>Load the original garment fit contract in <a href="#materialConsumers">section 3</a>, with 1–32 explicit points of measure
 and a maximum file size of 256 KiB. Select the local body model and a body source below. Both comparison actions use those
