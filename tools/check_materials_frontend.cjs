@@ -13870,3 +13870,144 @@ test('compiled WASM guided named-case discovery preserves native guards and all 
     assert.equal(refused.files,undefined);
     t.diagnostic('Five complete generated named-case reports match native, public WASM and the worker, including all four guidance modes and an independently exhausted case. Synthetic software evidence only.');
   });
+
+function guidedMotionControls(p) {
+  for(const [id,value] of Object.entries({guidedMotionStep:'0.001',guidedMotionTrials:'16',guidedMotionPairs:'100000',
+    guidedMotionVertices:'10000',guidedScenarioMotionTrials:'64',guidedMotionStrainLimit:''}))p.e[id].value=value;
+  p.e.guidedScenarioMotion.checked=true;p.e.guidedScenarioMotion.handlers.change();
+  p.e.guidedMotionStrainGoal.checked=true;p.e.guidedMotionStrainGoal.handlers.change();
+  p.e.guidedRequireMotion.checked=true;p.e.guidedRequireMotion.handlers.change();
+}
+function guidedMotionDraft(p,time,arm,legs='standing',fraction=1) {
+  for(const [id,value] of Object.entries({guidedMotionTime:time,guidedMotionArm:arm,guidedMotionLegs:legs,
+    guidedMotionLegFraction:fraction}))p.e[id].value=String(value);
+  p.e.guidedMotionLegs.handlers.change();
+}
+async function addGuidedMotion(p,time,arm,legs='standing',fraction=1) {
+  guidedMotionDraft(p,time,arm,legs,fraction);await p.e.addMotionKeyframe.onclick();
+}
+async function guidedMotionAction(p,label) {
+  const button=descendants(p.e.guidedMotionKeyframes).find(n=>n.tag==='button'&&n.textContent===label);
+  assert.ok(button,label);assert.equal(button.disabled,false,label);await button.onclick();
+}
+
+test('guided motion forwards explicit endpoint poses and independent work limits to the existing worker and result view',async()=>{
+  const {p,sources}=await guidedScenarioSetup(true);guidedMotionControls(p);
+  await addGuidedMotion(p,0.002,35.1);await addGuidedMotion(p,0.004,35.2,'seated',0.125);
+  await addGuidedMotion(p,0.006,35,'squat',0.25);await addGuidedMotion(p,0.008,35);
+  p.e.guidedMotionStrainLimit.value='7.5';p.e.guidedMotionStrainLimit.handlers.input();
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.equal(sent.measurements,sources.scenarioBody);
+  const request=JSON.parse(sent.scenarioRequest),study=JSON.parse(sent.studyRequest);
+  const frames=[{time_s:0.002,arm_abduction_deg:35.1},
+    {time_s:0.004,arm_abduction_deg:35.2,leg_pose:{posture:'seated',fraction:0.125}},
+    {time_s:0.006,arm_abduction_deg:35,leg_pose:{posture:'squat',fraction:0.25}},
+    {time_s:0.008,arm_abduction_deg:35}];
+  assert.deepEqual(request.motion,{schema:'ftx-drape-motion/1',keyframes:frames,max_step_s:0.001,
+    max_trials:16,max_pairs:100000,max_sample_vertices:10000});assert.equal(request.max_motion_trials,64);
+  assert.ok(sent.scenarioRequest.includes(sources.fit));assert.ok(sent.scenarioRequest.includes(sources.heatConditions));
+  assert.ok(study.comparison.objectives.some(goal=>goal.metric==='motion_max_absolute_edge_strain_pct'&&goal.direction==='minimize'));
+  assert.ok(study.comparison.constraints.some(limit=>limit.metric==='motion_max_absolute_edge_strain_pct'&&limit.maximum===7.5));
+  assert.ok(study.comparison.required_consumers.includes('motion'));
+  const report=scenarioReport();report.scenario.scenario=request;
+  const initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  initial.motion=outcome({duration_s:0.008,samples:[{},{},{},{}],trials:8,path_sha256:'guided-motion-source',
+    metrics:{max_absolute_edge_strain_pct:6.25},keyframes:frames.map(frame=>({...frame,surface:omitted(),coverage:omitted()}))});
+  const w=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){}},material_scenario_study:(_model,...args)=>{
+    assert.deepEqual(args,[sent.pattern,sent.studyRequest,sent.scenarioRequest,sent.measurements]);return JSON.stringify(report);
+  }}});
+  const response=await w.send(sent);assert.equal(response.type,'result',response.message);p.current().emit(response);
+  const result=section(p,'Fresh drape and heat alternatives');
+  const table=label=>descendants(result).find(n=>n.tag==='table'&&n.children[0].textContent.startsWith(label));
+  assert.deepEqual(table('Prescribed motion').children[2].children.slice(3).map(n=>n.textContent),['0.008','4','8','6.25']);
+  assert.deepEqual(table('A: endpoint').children.slice(2).map(row=>row.children.slice(0,4).map(n=>n.textContent)),
+    [['0.002','35.1','standing','—'],['0.004','35.2','seated','0.125'],['0.006','35','squat','0.25'],['0.008','35','standing','—']]);
+  const download=descendants(result).find(n=>n.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(download.href).text(),sent.scenarioRequest);assert.match(visibleText(result),/not transient heat/);
+});
+
+test('guided motion keeps unsaved endpoint controls separate and replaces or removes only explicitly selected endpoints',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  await addGuidedMotion(p,0.002,35);await addGuidedMotion(p,0.004,35.2,'seated',0.1);
+  await p.e.scenario.onclick();const original=p.current().messages.at(-1).scenarioRequest;
+  p.emit(scenarioReport(),[{name:'retained-motion.json',text:'{}'}]);const result=section(p,'Fresh drape and heat alternatives');
+  guidedMotionDraft(p,0.003,42,'squat',0.2);p.e.guidedMotionTime.handlers.input();p.e.guidedMotionArm.handlers.input();
+  assert.equal(result.hidden,false);assert.ok(p.live.size);
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,original);p.emit(scenarioReport());
+  await guidedMotionAction(p,'Replace keyframe 2 from current controls');assert.equal(result.hidden,true);
+  await p.e.scenario.onclick();let request=JSON.parse(p.current().messages.at(-1).scenarioRequest);p.emit(scenarioReport());
+  assert.deepEqual(request.motion.keyframes[1],{time_s:0.003,arm_abduction_deg:42,leg_pose:{posture:'squat',fraction:0.2}});
+  await addGuidedMotion(p,0.001,35);assert.match(p.e.error.textContent,/increas|time|order/i);
+  assert.equal(p.e.guidedMotionKeyframes.children.length,2);
+  await guidedMotionAction(p,'Remove keyframe 1');await p.e.scenario.onclick();request=JSON.parse(p.current().messages.at(-1).scenarioRequest);
+  assert.equal(request.motion.keyframes.length,1);assert.equal(request.motion.keyframes[0].time_s,0.003);p.emit(scenarioReport());
+  p.e.clearMotionKeyframes.onclick();const before=p.current().messages.length;await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/keyframe|endpoint/i);
+  await addGuidedMotion(p,0.001,35);await p.load();assert.equal(p.e.guidedMotionKeyframes.children.length,0);
+  assert.equal(p.e.guidedScenarioMotion.checked,false);
+});
+
+test('named cases freeze their own motion trajectories and preserve all four guided adaptive objectives',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);
+  await addGuidedMotion(p,0.002,35,'seated',0.1);await saveGuidedCase(p,'bend');
+  guidedMotionDraft(p,0.003,36,'squat',0.2);await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  await saveGuidedCase(p,'reach');await p.e.scenario.onclick();const original=p.current().messages.at(-1).scenarioRequest;
+  const cases=JSON.parse(original).cases;assert.equal(cases[0].scenario.motion.keyframes[0].leg_pose.posture,'seated');
+  assert.equal(cases[1].scenario.motion.keyframes[0].leg_pose.posture,'squat');p.emit(scenarioReport());
+  const result=section(p,'Fresh drape and heat alternatives');
+  p.e.guidedMotionStep.value='invalid';p.e.guidedMotionStep.handlers.input();p.e.clearMotionKeyframes.onclick();
+  assert.equal(result.hidden,false);await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,original);p.emit(scenarioReport());
+  configureGuidedDesign(p);guidedDesignField(p,'guidedDesignMode','adaptive','change');
+  guidedAdaptiveDomain(p,[0,40,10,10,0.5]);guidedDesignField(p,'guidedDesignEvaluations','4');
+  guidedDesignField(p,'guidedDesignMaterial','baseline','change');
+  for(const mode of ['consumer_comparison','consumer_pareto','consumer_worst_case','consumer_matrix_pareto']) {
+    p.e.guidedDrapeMassGoal.checked=mode==='consumer_pareto';p.e.guidedDrapeMassGoal.handlers.change();
+    guidedDesignField(p,'guidedDesignObjective',mode,'change');
+    if(['consumer_comparison','consumer_pareto'].includes(mode))guidedDesignField(p,'guidedDesignCase','bend','change');
+    await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'scenario',mode+': '+p.e.error.textContent);
+    assert.equal(JSON.parse(sent.studyRequest).design_adaptive.objective,mode);assert.equal(sent.scenarioRequest,original);p.emit(scenarioReport());
+  }
+});
+
+test('guided motion edits cancel dependent reads and dispatched runs without installing stale named cases',async()=>{
+  for(const saving of [false,true])for(const change of ['endpoint','enabled','step','trials','pairs','samples','aggregate','fit','body']) {
+    const {p,sources}=await guidedScenarioSetup();if(saving)guidedNamedCases(p);guidedMotionControls(p);
+    await addGuidedMotion(p,0.002,35);const slow=deferred();
+    p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await slow.promise);
+    const old=p.current(),before=old.messages.length,running=saving?saveGuidedCase(p,'delayed'):p.e.scenario.onclick();
+    if(change==='endpoint')await guidedMotionAction(p,'Remove keyframe 1');
+    else if(change==='enabled')p.e.guidedScenarioMotion.handlers.change();
+    else if(change==='fit')p.e.fit.handlers.change();
+    else if(change==='body') {
+      if(saving){slow.resolve(sources.fit);await running;continue;}
+      p.e.body.handlers.change();
+    } else p.e[({step:'guidedMotionStep',trials:'guidedMotionTrials',pairs:'guidedMotionPairs',samples:'guidedMotionVertices',aggregate:'guidedScenarioMotionTrials'})[change]].handlers.input();
+    assert.equal(old.dead,true,`${saving}/${change}`);p.ready();slow.resolve(sources.fit);await running;
+    assert.equal(old.messages.length,before,`${saving}/${change}`);assert.equal(p.current().messages.length,0);
+    if(saving)assert.equal(p.e.guidedScenarioCases.children.length,0);
+  }
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);await addGuidedMotion(p,0.002,35);
+  await p.e.scenario.onclick();const old=p.current(),request=old.messages.at(-1).request;
+  await guidedMotionAction(p,'Remove keyframe 1');assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request,result:scenarioReport(),files:[{name:'stale-motion.json',text:'{}'}]});
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);assert.equal(p.live.size,0);
+});
+
+test('guided motion refuses impossible path work and aggregate matrix trials before worker dispatch',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);await addGuidedMotion(p,0.002,35);
+  for(const [id,value] of [['guidedMotionStep','0'],['guidedMotionTrials','1'],['guidedMotionPairs','1000001'],['guidedMotionVertices','2000001'],['guidedScenarioMotionTrials','32769']]) {
+    const previous=p.e[id].value;p.e[id].value=value;p.e[id].handlers.input();
+    const before=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,before,id);
+    assert.equal(p.e.error.hidden,false,id);p.e[id].value=previous;p.e[id].handlers.input();
+  }
+  // A small aggregate trial allowance is a valid request: Rust may refuse motion independently.
+  p.e.guidedScenarioMotionTrials.value='1';await p.e.scenario.onclick();
+  assert.equal(JSON.parse(p.current().messages.at(-1).scenarioRequest).max_motion_trials,1);p.emit(scenarioReport());
+  guidedNamedCases(p);p.e.guidedScenarioMotionTrials.value='20000';await saveGuidedCase(p,'first');
+  await saveGuidedCase(p,'overflow');assert.equal(p.e.guidedScenarioCases.children.length,1);
+  assert.match(p.e.error.textContent,/32768|aggregate/i);
+  p.e.guidedScenarioMotionTrials.value='12768';await saveGuidedCase(p,'second');await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.equal(JSON.parse(sent.scenarioRequest).cases.reduce((sum,item)=>sum+item.scenario.max_motion_trials,0),32768);
+});

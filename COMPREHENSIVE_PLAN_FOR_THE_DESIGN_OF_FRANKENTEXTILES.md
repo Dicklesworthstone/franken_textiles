@@ -5031,6 +5031,25 @@ nonlinear angular interpolation, establish a measured validity range, supply a c
 fabric or close the matched-specimen empirical gates in `ftx-tm2`/`ftx-tm8`. Those gates remain the
 highest-value path from useful numerical material swaps to reliable garment and production claims.
 
+### 25.158 Author prescribed movement through the ordinary scenario workbench
+
+Single and named scenarios now author up to sixteen timed arm and standing/seated/squat endpoints
+through ordinary controls. Explicit trajectory, collision, retained-geometry and shared case-attempt
+limits reach the existing motion authority. Each alternative continues its freshly sewn cloth on
+the exact selected body shape; no new solver, refit or independent pose restart is introduced.
+Saved cases retain their own endpoint and budget snapshots while unsaved edits remain drafts.
+
+Nominal peak panel-edge strain through the whole movement is available as a guided objective or
+inclusive limit, and complete motion can be required independently. Every inheriting case needs
+the requested consumer; original per-case policies retain independent native admission. All four
+adaptive guidance modes reuse these controls. Source changes and accepted endpoint edits cancel
+obsolete work, while failed paths retain the native separation of static and motion outcomes.
+
+This advances `ftx-ms2` and `ftx-ds2` through already implemented production consumers. The prescribed
+fixed-root vertex-chord path, source-model poses and computed edge metric do not establish anatomical
+validity, measured garment fit or a safe strain threshold. Transient and coupled transport policies
+retain their original-file route and independent qualification requirements.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

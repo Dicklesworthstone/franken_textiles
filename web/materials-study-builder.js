@@ -13,6 +13,7 @@ const METRIC_CONSUMERS = {
   selected_observed_order_cost: "purchasing", thread_observed_order_cost: "sewing_purchasing",
   cut_and_sew_selected_order_cost: "cut_and_sew_purchasing", thread_required_length_m: "sewing_consumables",
   simulated_cloth_mass_kg: "drape", max_absolute_edge_strain_pct: "drape",
+  motion_max_absolute_edge_strain_pct: "motion",
   independent_surface_power_w: "surface",
 };
 
@@ -70,9 +71,51 @@ function sourceObject(raw, label) {
   return value;
 }
 
-/** Author one fresh static drape; source files remain verbatim and Rust owns numerical admission. */
+/** Author prescribed source-model endpoints; Rust owns their geometry and numerical continuation. */
+export function buildMaterialMotionRequest(state) {
+  object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices"],
+    ["keyframes", "max_step_s", "max_trials", "max_pairs"], "Guided motion");
+  if (!Array.isArray(state.keyframes) || !state.keyframes.length || state.keyframes.length > 16) {
+    throw Error("Motion needs 1–16 explicitly authored endpoints.");
+  }
+  if (typeof state.max_step_s !== "number" || !Number.isFinite(state.max_step_s) ||
+    state.max_step_s < 1e-9 || state.max_step_s > 1) {
+    throw Error("Motion maximum step must be finite and from 1e-9 to 1 second.");
+  }
+  for (const [key, maximum] of [["max_trials", 512], ["max_pairs", 1000000], ["max_sample_vertices", 2000000]]) {
+    if (key === "max_sample_vertices" && !own(state, key)) continue;
+    if (!Number.isSafeInteger(state[key]) || state[key] < 1 || state[key] > maximum) {
+      throw Error(`Motion ${key} must be an integer from 1 to ${maximum}.`);
+    }
+  }
+  let previous = 0, minimumTrials = 0;
+  for (const frame of state.keyframes) {
+    object(frame, ["time_s", "arm_abduction_deg", "leg_pose"], ["time_s", "arm_abduction_deg"], "Motion endpoint");
+    if (typeof frame.time_s !== "number" || !Number.isFinite(frame.time_s) || frame.time_s > 60 ||
+      frame.time_s - previous < 1e-9) {
+      throw Error("Motion endpoint times must increase by at least 1e-9 seconds, through at most 60 seconds after the initial drape.");
+    }
+    if (typeof frame.arm_abduction_deg !== "number" || !Number.isFinite(frame.arm_abduction_deg) ||
+      frame.arm_abduction_deg < 0 || frame.arm_abduction_deg > 180) {
+      throw Error("Motion arm abduction must be finite and from 0 to 180 degrees.");
+    }
+    if (own(frame, "leg_pose") && frame.leg_pose !== null) {
+      const pose = object(frame.leg_pose, ["posture", "fraction"], ["posture", "fraction"], "Motion leg pose");
+      if (!["seated", "squat"].includes(pose.posture) || typeof pose.fraction !== "number" ||
+        !Number.isFinite(pose.fraction) || pose.fraction < 0 || pose.fraction > 1) {
+        throw Error("Motion leg pose needs seated or squat and a finite fraction from 0 to 1.");
+      }
+    }
+    minimumTrials += Math.ceil((frame.time_s - previous) / state.max_step_s - 1e-12);
+    previous = frame.time_s;
+  }
+  if (minimumTrials > state.max_trials) throw Error("Motion requires more nominal substeps than max_trials.");
+  return JSON.stringify({ schema: "ftx-drape-motion/1", ...state });
+}
+
+/** Author a fresh drape with optional continuation; source files remain verbatim. */
 export function buildMaterialScenarioRequest(state) {
-  object(state, ["fitSpec", "allowNoFit", "options", "maxMeshPoints", "maxVertexFrames", "surface"],
+  object(state, ["fitSpec", "allowNoFit", "options", "maxMeshPoints", "maxVertexFrames", "surface", "motion", "maxMotionTrials"],
     ["allowNoFit", "options", "maxMeshPoints", "maxVertexFrames"], "Guided scenario");
   if (typeof state.allowNoFit !== "boolean") throw Error("Declare the numerical-only study without a fit contract explicitly.");
   let fitSpec = "{}";
@@ -112,6 +155,16 @@ export function buildMaterialScenarioRequest(state) {
   if (!Number.isSafeInteger(state.maxVertexFrames) || state.maxVertexFrames < 1 || state.maxVertexFrames > 64000000) {
     throw Error("Scenario vertex-frame budget must be an integer from 1 to 64000000.");
   }
+  if (own(state, "motion") !== own(state, "maxMotionTrials")) {
+    throw Error("Motion and its explicit scenario maxMotionTrials allowance must be supplied together.");
+  }
+  let motion;
+  if (own(state, "motion")) {
+    if (!Number.isSafeInteger(state.maxMotionTrials) || state.maxMotionTrials < 1 || state.maxMotionTrials > 32768) {
+      throw Error("Scenario motion-trial budget must be an integer from 1 to 32768.");
+    }
+    motion = buildMaterialMotionRequest(state.motion);
+  }
   if (own(state, "surface")) {
     const surface = sourceObject(state.surface, "Independent-sheet heat conditions");
     if (surface.schema !== "ftx-steady-surface-conditions/1" || !Array.isArray(surface.boundaries) ||
@@ -121,6 +174,7 @@ export function buildMaterialScenarioRequest(state) {
   }
   const parts = ['{"schema":"ftx-drape-scenario/1","options":', JSON.stringify(options), ',"fit_spec":', fitSpec,
     ',"max_mesh_points":', String(state.maxMeshPoints), ',"max_vertex_frames":', String(state.maxVertexFrames),
+    ...(motion === undefined ? [] : [',"max_motion_trials":', String(state.maxMotionTrials), ',"motion":', motion]),
     ...(own(state, "surface") ? [',"surface":', state.surface] : []), '}'];
   let size = 0;
   for (const part of parts) {
@@ -166,7 +220,7 @@ export function buildMaterialScenarioMatrixRequest(state) {
     if (frames > 64000000 || trials > 32768) {
       throw Error("Named scenarios exceed 64000000 aggregate vertex frames or 32768 active motion trials.");
     }
-    context.cases.push({ key: item.key, surface: scenario.surface != null,
+    context.cases.push({ key: item.key, surface: scenario.surface != null, motion: scenario.motion != null,
       ...(own(item, "comparison") ? { comparison: parse(item.comparison, "Original case comparison") } : {}) });
     append(`${index ? "," : ""}{"key":${JSON.stringify(item.key)},"scenario":`); append(item.scenario);
     if (own(item, "comparison")) { append(',"comparison":'); append(item.comparison); }
@@ -394,12 +448,13 @@ function matrixContext(value) {
   }
   const keys = new Set();
   for (const item of matrix.cases) {
-    object(item, ["key", "surface", "comparison"], ["key", "surface"], "Named scenario case");
+    object(item, ["key", "surface", "motion", "comparison"], ["key", "surface"], "Named scenario case");
     name(item.key, "Scenario case key");
     bytes(item.key, 128, "Scenario case keys must not exceed 128 UTF-8 bytes.");
     if (keys.has(item.key)) throw Error("Scenario case keys must be unique.");
     keys.add(item.key);
     if (typeof item.surface !== "boolean") throw Error("Each named case needs an explicit surface-request boolean.");
+    if (own(item, "motion") && typeof item.motion !== "boolean") throw Error("Each named case motion request must be boolean when supplied.");
     if (item.comparison != null) {
       const policy = item.comparison;
       if (typeof policy !== "object" || Array.isArray(policy) ||
@@ -427,9 +482,9 @@ function matrixContext(value) {
  * request (original JSON text for sourced extras, or an authored object with no extras).
  * Objectives, inclusive constraints and required consumers are explicit; no completeness or
  * protocol consent is inferred. Original source text is embedded verbatim, including locked numbers.
- * Optional scenario context describes the separately dispatched drape/heat request, is never
+ * Optional scenario context describes the separately dispatched drape/heat/motion request, is never
  * serialized into the study, and does not enable scenario consumers in manufacturing-only calls.
- * Its optional matrix retains ordered case keys, surface availability, original parsed comparison
+ * Its optional matrix retains ordered case keys, surface/motion availability, original parsed comparison
  * policies and the callback allowance. Only guidance selection and capacity are read here; the
  * caller retains the original matrix JSON for native admission and exact replay.
  * Optional `design` authors ordered linked grid or adaptive variables and retains the original fit contract;
@@ -439,14 +494,18 @@ function matrixContext(value) {
 export function buildMaterialStudyRequest(state, scenario) {
   let matrix;
   if (scenario !== undefined) {
-    object(scenario, ["drape", "surface", "matrix"], ["drape", "surface"], "Scenario comparison context");
+    object(scenario, ["drape", "surface", "motion", "matrix"], ["drape", "surface"], "Scenario comparison context");
     if (scenario.drape !== true || typeof scenario.surface !== "boolean") {
       throw Error("Scenario comparison needs explicit drape: true and a boolean surface request.");
     }
+    if (own(scenario, "motion") && typeof scenario.motion !== "boolean") throw Error("Scenario motion request must be boolean when supplied.");
     if (own(scenario, "matrix")) {
       matrix = matrixContext(scenario.matrix);
       if (scenario.surface !== matrix.cases.some(item => item.surface)) {
         throw Error("Named scenario surface availability must describe its actual cases.");
+      }
+      if ((scenario.motion === true) !== matrix.cases.some(item => item.motion === true)) {
+        throw Error("Named scenario motion availability must describe its actual cases.");
       }
     }
   }
@@ -546,7 +605,7 @@ export function buildMaterialStudyRequest(state, scenario) {
     sewing_consumables: !!sewingOptions?.consumables,
     sewing_purchasing: !!sewingOptions?.consumables?.purchasing,
     cut_and_sew_purchasing: combinedPurchasing, assembly_mass: !!mass,
-    drape: !!scenario, surface: scenario?.surface === true,
+    drape: !!scenario, surface: scenario?.surface === true, motion: scenario?.motion === true,
   };
   const requireConsumer = consumer => {
     if (typeof consumer !== "string" || !own(consumers, consumer)) throw Error(`Unsupported guided consumer: ${consumer}.`);
@@ -596,10 +655,12 @@ export function buildMaterialStudyRequest(state, scenario) {
     if (requiredSet.has(consumer)) throw Error("Required consumers must be unique.");
     requiredSet.add(consumer); requireConsumer(consumer);
   }
-  if (matrix && (required.includes("surface") || [...state.objectives, ...constraints].some(item =>
-    METRIC_CONSUMERS[item.metric] === "surface"))) {
-    const missing = matrix.cases.find(item => item.comparison == null && !item.surface);
-    if (missing) throw Error(`Named case ${missing.key} inherits a comparison requiring surface inputs it does not request.`);
+  for (const consumer of ["surface", "motion"]) {
+    if (matrix && (required.includes(consumer) || [...state.objectives, ...constraints].some(item =>
+      METRIC_CONSUMERS[item.metric] === consumer))) {
+      const missing = matrix.cases.find(item => item.comparison == null && item[consumer] !== true);
+      if (missing) throw Error(`Named case ${missing.key} inherits a comparison requiring ${consumer} inputs it does not request.`);
+    }
   }
 
   const parts = []; let size = 0;

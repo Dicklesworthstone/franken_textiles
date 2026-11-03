@@ -433,7 +433,7 @@ These are numerical settings, not measured fabric thickness, friction or a runti
 Enable independent sheet heat to retain the exact section-3 heat conditions and evaluate each
 alternative's current geometry through the existing thermal engine.
 
-Guided material comparisons can combine the following nominal goals and inclusive maximums with
+Guided material comparisons can combine the following goals and inclusive limits with
 manufacturing objectives, or run without manufacturing consumers. For a scenario-only comparison,
 clear unused manufacturing goals and limits before disabling their inputs.
 
@@ -441,29 +441,67 @@ clear unused manufacturing goals and limits before disabling their inputs.
 |---|---|
 | Simulated cloth mass (kg) | Mass of the simulated pieces; it excludes unsimulated parts. Use the separate complete-inventory assembly-mass consumer for total garment mass. |
 | Maximum absolute panel-edge strain (%) | The existing edge-based simulation metric. It is not principal strain or a physical safe-fit threshold. |
-| Signed independent sheet power (W) | Declare minimize or maximize explicitly. Negative power stays negative; minimizing signed power does not minimize its magnitude. This is not layered coverage or whole-wearer comfort. |
+| Peak absolute panel-edge strain through movement (%) | Includes the initial drape and every accepted motion sample. Requires the complete requested trajectory; failed or incomplete motion cannot qualify. This remains an edge metric, not principal strain or a safe-fit threshold. |
+| Signed independent sheet power (W) | Declare minimize or maximize explicitly. Nominal values or complete source-reported ranges for constant thermal laws are available, with signed minimum/maximum limits. Negative power stays negative; minimizing signed power does not minimize its magnitude. This is not layered coverage or whole-wearer comfort. |
 
-Maximums remain active even when their objective checkbox is clear. Explicitly required drape and
-sheet-heat consumers can exclude alternatives without adding a goal. An unsettled or gating-flagged
+Maximums remain active even when their objective checkbox is clear. Explicitly required drape,
+sheet-heat and motion consumers can exclude alternatives without adding a goal. An unsettled or gating-flagged
 drape cannot qualify these comparisons. Missing mechanics, thermal evidence or work budget retains
 the native refusal and any independent manufacturing result. A reported-range assembly-mass
-objective may use an explicit nominal limit basis for these simulation guards; unsupported result
-ranges are not invented. Use **Recompute every alternative in the requested scenarios**; the
+or sheet-heat objective may use an explicit nominal limit basis for the cloth-mass and strain guards;
+unsupported result ranges are not invented. Source-range heat limits require the entire reported
+interval inside the declared limits; missing ranges retain nominal readings but exclude the range
+decision. Use **Recompute every alternative in the requested scenarios**; the
 manufacturing-only action refuses scenario goals rather than silently dropping them.
 
 The generated `study-request.json` and `scenario-request.json` retain the original fit, heat and
 material source text, alongside the exact pattern and body input downloads. Active source, goal,
 mode and numerical-setting edits withdraw stale results and cancel pending reads or worker work.
 Unconsumed section-3 files do not replace an advanced scenario's own sources. Select **Load a
-complete scenario or named matrix (advanced)** for authored motion, coverage or
+complete scenario or named matrix (advanced)** for coverage, transient heat, coupled transport or
 other existing scenario policies; its exact request remains authoritative.
+
+#### Continue the same sewn garment through movement
+
+Enable **Continue the sewn garment through a prescribed body movement**. Declare an endpoint's
+cumulative time after the initial drape, absolute arm angle and standing, seated or squat leg pose,
+then choose **Add motion keyframe**. Seated and squat endpoints also require an explicit fraction
+of that model pose. Returning to standing is an explicit endpoint choice; poses are not incremental.
+An unchanged pose at a later time is a hold. No movement is supplied automatically.
+
+The list supports explicit replacement from the endpoint controls and removal. Editing those
+controls prepares another endpoint without changing the saved path. Disabling motion retains the
+draft. Loading another pattern clears it. A single scenario uses the added endpoints; a named case
+freezes its own path and work limits when saved. Later draft edits do not change that saved case.
+
+The existing engine accepts 1–16 endpoints, increasing by at least 1e-9 seconds and ending within
+60 seconds, arm angles from 0 to 180 degrees and leg fractions from 0 to 1. Set the maximum implicit
+substep, attempted-substep allowance, collision-pair allowance and retained-vertex allowance
+explicitly. The trajectory needs enough attempted steps even for its nominal subdivision; actual
+collision/solver refinement can use more. The case-wide motion allowance is shared across material
+alternatives and discovery probes. Active named cases share at most 32768 motion attempts; this
+does not replace their separate vertex-frame and case-evaluation budgets.
+
+Use **Minimize peak absolute panel-edge strain through movement**, its inclusive maximum, or
+**Require a complete numerically admissible movement** in the ordinary comparison. Every case
+inheriting such a policy needs motion. Per-case policies can instead compare a static case and a
+moving case under independent goals. The existing four adaptive guidance modes consume the same
+motion objective and guards. These computed strain comparisons are nominal; no propagated strain
+range is invented.
+
+The production solver continues cloth positions, velocities and material history on the same
+selected body shape. Its fixed-root body path follows checked vertex chords between endpoints,
+without inferred chair/floor support or anatomical movement qualification. Use short explicit pose
+increments. A failed path retains the independent static result and publishes no partial trajectory.
+Existing motion inspection shows the accepted body/cloth samples at their recorded times. Optional
+sheet heat gives independent steady endpoint snapshots, not transient temperature evolution.
 
 #### Save several named cases from the ordinary controls
 
 Choose **Save and compare several named cases here** to prepare 1–8 scenarios on the same selected
-body and pose. Configure a case using the existing fit, drape and optional sheet-heat controls,
+body and initial pose. Configure a case using the fit, drape, optional sheet-heat and movement controls,
 give it a unique name, and choose **Save current settings as a named case**. Each saved case freezes
-the exact original fit and heat text and the declared numerical options. You can change those
+the exact original fit and heat text, declared numerical options and saved motion endpoints. You can change those
 source files and settings to prepare the next case without changing any saved case.
 
 For each case, choose one comparison policy:
@@ -490,8 +528,8 @@ The scenario action runs only the saved cases in this mode. Its `scenario-reques
 the complete replayable matrix and the exact retained source fragments. Switching between saved,
 single-scenario and original-file modes preserves their separate requests. Loading or adopting a
 different pattern clears saved cases so another garment cannot silently inherit them. The guided
-forms author static drape and optional independent-sheet heat; advanced motion, coverage and
-coupled transport requests retain their existing original-file route.
+forms author initial drape, prescribed movement and optional independent-sheet heat; coverage,
+transient heat and coupled transport requests retain their existing original-file route.
 
 The focused compiled-engine proof uses a small synthetic sewing-only fixture with zero gravity
 steps. Five complete native/direct-WASM/worker comparisons cover signed heat direction, explicit

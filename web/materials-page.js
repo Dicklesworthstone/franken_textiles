@@ -1,5 +1,5 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
-import { buildMaterialStudyRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest } from "./materials-study-builder.js";
+import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest } from "./materials-study-builder.js";
 
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
@@ -36,6 +36,7 @@ let guidedDesignNomination = null;
 let guidedScenarioCases = null, guidedScenarioCasesRead = 0;
 let guidedDesignCaseNomination = null;
 const guidedScenarioDrafts = [], guidedScenarioButtons = [];
+const guidedMotionKeyframes = [], guidedMotionButtons = [];
 let guidedScenarioDraftSource = {};
 const guidedDesignFields = { key: "guidedDesignKey", kind: "guidedDesignKind", axis: "guidedDesignAxis",
   at: "guidedDesignAt", multiplier: "guidedDesignMultiplier", values: "guidedDesignValues", dx: "guidedDesignDx", dy: "guidedDesignDy",
@@ -52,6 +53,7 @@ const guidedMetrics = [
   ["guidedJobArea", "cutting_job_stock_area_m2", "job"], ["guidedJobMass", "cutting_job_stock_mass_kg", "job"],
   ["guidedJobTime", "cutting_job_modeled_path_seconds", "job"], ["guidedJobCost", "cutting_job_selected_order_cost", "job"],
   ["guidedDrapeMass", "simulated_cloth_mass_kg"], ["guidedStrain", "max_absolute_edge_strain_pct"],
+  ["guidedMotionStrain", "motion_max_absolute_edge_strain_pct"],
   ["guidedHeatPower", "independent_surface_power_w"],
 ];
 const guidedRequired = [
@@ -63,6 +65,7 @@ const guidedRequired = [
   ["guidedRequireJob", "cutting_job", "job"], ["guidedRequireJobProgram", "cutting_job_program", "job"],
   ["guidedRequireJobPurchasing", "cutting_job_purchasing", "job"],
   ["guidedRequireDrape", "drape"], ["guidedRequireSurface", "surface"],
+  ["guidedRequireMotion", "motion"],
 ];
 let studyCandidateSequence = 0;
 const outfitTargets = new Map();
@@ -145,6 +148,13 @@ function controls() {
   $("addScenarioCase").disabled = !ready || !!pending || !source || !guidedMatrixMode() || guidedScenarioDrafts.length >= 8;
   $("clearScenarioCases").disabled = !guidedScenarioDrafts.length;
   for (const { button, unavailable, replace } of guidedScenarioButtons) button.disabled = unavailable || (replace && (!ready || !!pending));
+  const motion = $("guidedScenarioMotion").checked;
+  $("guidedMotionControls").hidden = !motion;
+  $("guidedMotionLegFraction").disabled = $("guidedMotionLegs").value === "standing";
+  $("addMotionKeyframe").disabled = !source || !guidedScenarioMode() || !motion || guidedMotionKeyframes.length >= 16;
+  $("clearMotionKeyframes").disabled = !guidedMotionKeyframes.length;
+  for (const button of guidedMotionButtons) button.disabled = !source || !guidedScenarioMode() || !motion;
+  $("addScenarioCase").disabled ||= motion && !guidedMotionKeyframes.length;
   $("guidedScenarioGoals").hidden = !guided;
   $("studyPieces").disabled = !source || $("studyTarget").value !== "pieces";
   $("guidedDesign").disabled = !source;
@@ -231,6 +241,7 @@ function controls() {
   if (studyUsesBody()) $("study").disabled ||= !has("body") || !studyBodyReady();
   $("scenario").disabled ||= !source || !studyReady || (!guidedScenarioMode() && !has("scenarioRequest")) || !has("body") || !studyBodyReady();
   $("scenario").disabled ||= guidedMatrixMode() && !guidedScenarioDrafts.length;
+  $("scenario").disabled ||= guidedScenarioMode() && !guidedMatrixMode() && motion && !guidedMotionKeyframes.length;
   if (!guided && $("combinationMode").checked && !combinationGroups.size) {
     $("study").disabled = true; $("scenario").disabled = true;
   }
@@ -4066,9 +4077,11 @@ function describeScenarioInput(request, original) {
   const value = JSON.parse(request), matrix = value?.schema === "ftx-drape-scenario-matrix/1";
   const cases = matrix && Array.isArray(value.cases) ? value.cases.map(item => item?.scenario) : [value];
   return { request, original, context: { drape: true, surface: cases.some(item => item?.surface != null),
+    motion: cases.some(item => item?.motion != null),
     ...(matrix ? { matrix: { maxEvaluations: value.max_evaluations,
       cases: Array.isArray(value.cases) ? value.cases.map(item => ({ key: item?.key,
-        surface: item?.scenario?.surface != null, ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
+        surface: item?.scenario?.surface != null, motion: item?.scenario?.motion != null,
+        ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
 }
 function guidedMatrixAllowance() {
   const raw = $("guidedScenarioMatrixBudget").value.trim(), value = Number(raw);
@@ -4087,6 +4100,69 @@ async function scenarioInput() {
   }
   return guidedScenarioInput();
 }
+function guidedMotionInput(keyframes = guidedMotionKeyframes) {
+  const number = (id, label) => {
+    const raw = $(id).value.trim();
+    if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
+    return Number(raw);
+  };
+  return { motion: {
+    keyframes: keyframes.map(frame => ({ ...frame, ...(frame.leg_pose ? { leg_pose: { ...frame.leg_pose } } : {}) })),
+    max_step_s: number("guidedMotionStep", "maximum motion substep in seconds"),
+    max_trials: number("guidedMotionTrials", "trajectory substep allowance"),
+    max_pairs: number("guidedMotionPairs", "collision candidate allowance"),
+    max_sample_vertices: number("guidedMotionVertices", "retained motion vertex allowance"),
+  }, maxMotionTrials: number("guidedScenarioMotionTrials", "case motion-attempt allowance") };
+}
+function showGuidedMotionKeyframes() {
+  const parent = $("guidedMotionKeyframes"); parent.replaceChildren(); guidedMotionButtons.length = 0;
+  for (const [index, frame] of guidedMotionKeyframes.entries()) {
+    const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
+    label.textContent = `${index + 1}: ${frame.time_s} s; arms ${frame.arm_abduction_deg}°; ` +
+      (frame.leg_pose ? `${frame.leg_pose.posture} at fraction ${frame.leg_pose.fraction}.` : "standing legs.");
+    row.append(label);
+    const replace = document.createElement("button"); replace.type = "button";
+    replace.textContent = `Replace keyframe ${index + 1} from current controls`;
+    replace.onclick = () => saveGuidedMotionKeyframe(frame);
+    const remove = document.createElement("button"); remove.type = "button";
+    remove.textContent = `Remove keyframe ${index + 1}`;
+    remove.onclick = () => {
+      const current = guidedMotionKeyframes.indexOf(frame);
+      if (current < 0) return;
+      guidedMotionKeyframes.splice(current, 1); changedGuidedMotionDraft();
+    };
+    row.append(replace, remove); guidedMotionButtons.push(replace, remove); parent.append(row);
+  }
+  $("guidedMotionSummary").textContent = guidedMotionKeyframes.length ?
+    `${guidedMotionKeyframes.length} of 16 keyframes saved, through ${guidedMotionKeyframes.at(-1).time_s} s. Only added endpoints run.` :
+    "No motion keyframes saved. Declare an endpoint time and pose, then add it before running motion.";
+}
+function changedGuidedMotionDraft() {
+  showGuidedMotionKeyframes();
+  if (guidedScenarioMode()) invalidate([guidedMatrixMode() ? "scenarioDraft" : "scenario"], true);
+  else controls();
+}
+function saveGuidedMotionKeyframe(replacing = null) {
+  if (!source || !guidedScenarioMode() || !$("guidedScenarioMotion").checked) return;
+  try {
+    const number = (id, label) => {
+      const raw = $(id).value.trim();
+      if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
+      return Number(raw);
+    };
+    const legs = $("guidedMotionLegs").value;
+    if (!["standing", "seated", "squat"].includes(legs)) throw Error("Choose standing, seated or squat legs explicitly.");
+    const frame = { time_s: number("guidedMotionTime", "endpoint time in seconds"),
+      arm_abduction_deg: number("guidedMotionArm", "arm angle in degrees"),
+      ...(legs === "standing" ? {} : { leg_pose: { posture: legs, fraction: number("guidedMotionLegFraction", "leg-pose fraction") } }) };
+    const keyframes = guidedMotionKeyframes.slice(), index = replacing ? keyframes.indexOf(replacing) : -1;
+    if (replacing && index < 0) throw Error("Choose a current keyframe to replace.");
+    if (replacing) keyframes[index] = frame; else keyframes.push(frame);
+    buildMaterialMotionRequest(guidedMotionInput(keyframes).motion);
+    guidedMotionKeyframes.splice(0, guidedMotionKeyframes.length, ...keyframes);
+    changedGuidedMotionDraft();
+  } catch (e) { error(String(e.message || e)); }
+}
 async function guidedScenarioInput(includeCasePolicy = false) {
   const number = (id, label) => {
     const raw = $(id).value.trim();
@@ -4097,6 +4173,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   if (!["file", "none"].includes(fitSource)) throw Error("Choose the original fit contract or explicitly request a numerical study without one.");
   const designFit = guidedStudyMode() && $("guidedDesign").checked;
   const surface = $("guidedScenarioHeat").checked;
+  const motion = $("guidedScenarioMotion").checked;
   const input = { allowNoFit: fitSource === "none", options: {
     spacing: number("guidedScenarioSpacing", "mesh spacing in millimetres"),
     sew_steps: number("guidedScenarioSewSteps", "sewing step count"),
@@ -4108,6 +4185,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   if ($("guidedScenarioSelfContact").checked) {
     input.options.self_contact = { dhat: 0.001, thickness: 0.002, kappa: 100, mu: 0.4, eps_v: 0.001 };
   }
+  if (motion) Object.assign(input, guidedMotionInput());
   // Both original files and every control are captured before starting a read.
   const policy = $("guidedScenarioPolicySource").value;
   if (includeCasePolicy && !["inherit", "snapshot", "file"].includes(policy)) throw Error("Choose the shared comparison, current guided goals or an original per-case policy.");
@@ -4138,17 +4216,19 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     return [key, raw];
   }));
   const { comparison, ...fragments } = Object.fromEntries(sources);
-  return { request: buildMaterialScenarioRequest({ ...input, ...fragments }), context: { drape: true, surface },
+  return { request: buildMaterialScenarioRequest({ ...input, ...fragments }), context: { drape: true, surface, motion },
     ...((comparison ?? authoredComparison) === undefined ? {} : { comparison: comparison ?? authoredComparison }) };
 }
 function showGuidedScenarioDrafts() {
   const parent = $("guidedScenarioCases"); parent.replaceChildren(); guidedScenarioButtons.length = 0;
-  let frames = 0;
+  let frames = 0, motionTrials = 0;
   for (const [index, item] of guidedScenarioDrafts.entries()) {
     const value = JSON.parse(item.scenario); frames += value.max_vertex_frames;
+    if (value.motion) motionTrials += value.max_motion_trials;
     const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
     label.textContent = `${item.key}: ${value.options.sew_steps} sewing + ${value.options.drape_steps} gravity steps, ` +
       `${value.max_vertex_frames} vertex-frames; ${value.surface ? "retained sheet heat" : "no sheet heat"}; ` +
+      (value.motion ? `${value.motion.keyframes.length} motion endpoints, ${value.max_motion_trials} motion attempts; ` : "static pose; ") +
       `${item.comparison && JSON.parse(item.comparison) !== null ? "retained case comparison" : "shared comparison at run time"}.`;
     row.append(label);
     const action = (title, handler, unavailable = false, replace = false) => {
@@ -4175,7 +4255,7 @@ function showGuidedScenarioDrafts() {
     parent.append(row);
   }
   $("guidedScenarioCaseCount").textContent = guidedScenarioDrafts.length ?
-    `${guidedScenarioDrafts.length} of 8 named cases saved; ${frames} of 64000000 vertex-frames allocated. Only saved cases run in named-case mode.` :
+    `${guidedScenarioDrafts.length} of 8 named cases saved; ${frames} of 64000000 vertex-frames and ${motionTrials} of 32768 motion attempts allocated. Only saved cases run in named-case mode.` :
     "No named cases saved. Configure a scenario, give it a name and save it before comparing.";
 }
 function changedGuidedScenarioDrafts() {
@@ -4419,6 +4499,17 @@ $("clearStudyCandidates").onclick = () => {
 };
 $("studyMode").addEventListener("change", () => invalidate(["study", "scenario",
   ...($("guidedScenarioPolicySource").value === "snapshot" ? ["scenarioDraft"] : [])], true));
+$("addMotionKeyframe").onclick = () => saveGuidedMotionKeyframe();
+$("clearMotionKeyframes").onclick = () => { guidedMotionKeyframes.length = 0; changedGuidedMotionDraft(); };
+$("guidedScenarioMotion").addEventListener("change", changedGuidedMotionDraft);
+for (const id of ["guidedMotionStep", "guidedMotionTrials", "guidedMotionPairs", "guidedMotionVertices", "guidedScenarioMotionTrials"]) {
+  const changed = () => { if ($("guidedScenarioMotion").checked) changedGuidedMotionDraft(); else controls(); };
+  $(id).addEventListener("change", changed); $(id).addEventListener("input", changed);
+}
+for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "guidedMotionLegFraction"]) {
+  $(id).addEventListener("change", controls);
+  if (id !== "guidedMotionLegs") $(id).addEventListener("input", controls);
+}
 for (const id of ["scenarioMode", "guidedScenarioFitSource", "guidedScenarioHeat", "guidedScenarioSelfContact",
   "guidedScenarioSpacing", "guidedScenarioSewSteps", "guidedScenarioDrapeSteps", "guidedScenarioStep",
   "guidedScenarioSettle", "guidedScenarioMeshBudget", "guidedScenarioFrameBudget"]) {
@@ -4667,6 +4758,9 @@ function resetGuidedDesign() {
 function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
   guidedScenarioDrafts.length = 0; guidedScenarioDraftSource = {};
   $("guidedScenarioCaseName").value = ""; showGuidedScenarioDrafts();
+  guidedMotionKeyframes.length = 0; $("guidedScenarioMotion").checked = false;
+  $("guidedMotionTime").value = ""; $("guidedMotionArm").value = "";
+  $("guidedMotionLegs").value = "standing"; $("guidedMotionLegFraction").value = "1"; showGuidedMotionKeyframes();
   resetGuidedDesign();
   source = data; sourceText = raw;
   $("patternName").textContent = `${label}: ${data.pieces.length} source pieces. Original retained.`;

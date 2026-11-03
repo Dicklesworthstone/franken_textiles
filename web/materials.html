@@ -850,6 +850,37 @@ qualify a drape-based comparison. Zero gravity steps describe a sewing-only expe
 <label><input id="guidedScenarioHeat" type="checkbox"> Evaluate independent sheet heat using the original section-3 heat conditions</label>
 <p class="note">Uses each alternative's fresh geometry and qualified thermal observations with the declared reservoir temperatures
 and boundary films. Independent sheet power is not layered body coverage, whole-wearer heat loss or a comfort score.</p>
+<label><input id="guidedScenarioMotion" type="checkbox"> Continue the sewn garment through a prescribed body movement</label>
+<fieldset id="guidedMotionControls" hidden><legend>Movement after the initial drape</legend>
+<p>Save 1–16 endpoints on the selected body shape. Times are cumulative seconds after the initial drape.
+Each endpoint gives an absolute arm and leg pose; selecting standing explicitly returns the legs to standing.</p>
+<div class="study-fields">
+<label>Endpoint time (s) <input id="guidedMotionTime" type="number" min="0.000000001" max="60" step="any" placeholder="Cumulative time"></label>
+<label>Arm angle from vertical (°) <input id="guidedMotionArm" type="number" min="0" max="180" step="any" placeholder="0–180"></label>
+<label>Leg posture <select id="guidedMotionLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
+<label>Fraction of seated or squat pose <input id="guidedMotionLegFraction" type="number" min="0" max="1" step="any" value="1" disabled></label>
+</div>
+<button id="addMotionKeyframe" type="button" disabled>Add motion keyframe</button>
+<p id="guidedMotionSummary" class="note" role="status">No motion keyframes saved.</p>
+<div id="guidedMotionKeyframes"></div>
+<button id="clearMotionKeyframes" type="button" disabled>Clear motion keyframes</button>
+<p class="note">Only added endpoints run. Changing the endpoint fields prepares another endpoint; use Replace to update a saved one.
+Times must increase by at least 0.000000001 s and end within 60 s. An unchanged pose at a later time is an explicit hold.
+Disabling motion keeps this draft for return. Saving a named case freezes its own movement and work limits.</p>
+<div class="study-fields">
+<label>Maximum accepted substep (s) <input id="guidedMotionStep" type="number" min="0.000000001" max="1" step="any" value="0.041666666666666664"></label>
+<label>Attempted substeps per trajectory <input id="guidedMotionTrials" type="number" min="1" max="512" step="1" value="128"></label>
+<label>Collision candidate pairs per query <input id="guidedMotionPairs" type="number" min="1" max="1000000" step="1" value="100000"></label>
+<label>Retained body/cloth vertex allowance <input id="guidedMotionVertices" type="number" min="1" max="2000000" step="1" value="500000"></label>
+<label>Motion attempts across this case's alternatives <input id="guidedScenarioMotionTrials" type="number" min="1" max="32768" step="1" value="4096"></label>
+</div>
+<p class="note">The trajectory allowance includes failed subdivisions. The case allowance is shared across its alternatives and adaptive probes;
+active named cases share at most 32768 attempts. Budgets bound work without guaranteeing convergence.</p>
+<p class="note">The same sewn cloth continues with its velocities and material history. Use short pose increments: the solver follows checked
+body-vertex chords between endpoints, with a fixed root and no chair or floor support. These prescribed model poses do not establish
+anatomical movement accuracy or physical garment fit. A failed movement publishes no partial trajectory. Optional sheet heat is recomputed
+at endpoints as independent steady snapshots; transient temperatures and coupled transport use the complete-file workflow.</p>
+</fieldset>
 <fieldset id="guidedScenarioCasePolicy" hidden><legend>Comparison policy for this case</legend>
 <label>Use <select id="guidedScenarioPolicySource">
 <option value="inherit">The shared comparison goals and limits at run time</option>
@@ -890,6 +921,8 @@ Use the scenario action below; the manufacturing-only action cannot evaluate the
 <input id="guidedDrapeMassLimit" type="number" min="0" step="any" aria-label="Maximum simulated cloth mass in kilograms" placeholder="No limit">
 <label><input id="guidedStrainGoal" type="checkbox"> Minimize maximum absolute panel-edge strain (%)</label>
 <input id="guidedStrainLimit" type="number" min="0" step="any" aria-label="Maximum absolute panel-edge strain percentage" placeholder="No limit">
+<label><input id="guidedMotionStrainGoal" type="checkbox"> Minimize peak absolute panel-edge strain through movement (%)</label>
+<input id="guidedMotionStrainLimit" type="number" min="0" step="any" aria-label="Maximum absolute panel-edge strain throughout movement" placeholder="No limit">
 <label><input id="guidedHeatPowerGoal" type="checkbox"> Compare signed independent sheet heat (W)</label>
 <input id="guidedHeatPowerLimit" type="number" step="any" aria-label="Maximum signed independent sheet heat power in watts" placeholder="No limit">
 </div>
@@ -899,11 +932,13 @@ Use the scenario action below; the manufacturing-only action cannot evaluate the
 aria-label="Minimum signed independent sheet heat power in watts" placeholder="No minimum"></label>
 <label><input id="guidedRequireDrape" type="checkbox"> Require a numerically admissible drape, even without a drape objective</label>
 <label><input id="guidedRequireSurface" type="checkbox"> Require a complete independent sheet heat result</label>
+<label><input id="guidedRequireMotion" type="checkbox"> Require a complete numerically admissible movement</label>
 <p class="note">Negative power is meaningful; minimizing signed power does not minimize its magnitude. Sheet heat supports nominal
 values or complete source-reported ranges for constant thermal laws. A reported-range limit admits only an entire interval inside
 the declared minimum and maximum; missing ranges keep the nominal heat visible but exclude that alternative from the range decision.
-Simulated cloth mass and panel-edge strain use nominal values. Cloth mass excludes unsimulated parts; use complete garment mass
-for an explicitly complete inventory. Panel-edge strain is not principal strain or a safe-fit threshold.
+Simulated cloth mass and static/motion panel-edge strain use nominal values. Cloth mass excludes unsimulated parts; use complete garment mass
+for an explicitly complete inventory. Motion strain includes the initial drape and every accepted movement sample.
+Panel-edge strain is not principal strain or a safe-fit threshold. A motion goal, limit or requirement needs a motion request in every inheriting case.
 Limits remain active without their goal checkbox. Select an explicit nominal limit basis when combining nominal-only constraints
 with reported-range mass or heat objectives.</p>
 </fieldset>
