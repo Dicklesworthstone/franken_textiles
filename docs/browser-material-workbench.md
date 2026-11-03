@@ -124,6 +124,17 @@ Download `cut-job-pattern.json` and `cut-job-request.json` to replay the frozen 
 downloads. Request or source edits, cancellation and refused replacements withdraw stale outputs.
 These review results do not reserve stock, place orders or authorize a machine.
 
+After a finite-stock allocation, **Use planned remaining stock** selects the exact Rust-generated
+residual request for the next allocation, identity check, price check or guided finite-stock study.
+Choose it only when treating that layout as consumed in the next planned job. Its consumed regions,
+zones, material identities, search policy and price locks remain intact; Rust rechecks them on the
+next run. A consumed item's old price binding may therefore be unavailable until requalified.
+The selected request has its own download. Choosing a stock file replaces it, and **Clear selected
+stock inventory** removes the current choice. Source or binding edits withdraw stale adoption
+buttons; no result automatically consumes stock. Each allocation retains its exact original bound
+pattern and stock request downloads alongside the plan and residual request. This records a planning
+decision, without confirming physical cuts or valuing offcuts.
+
 Drape arm angle applies to both tape-fitted and accepted shapes, from 0–180° with a 35° default.
 Blank or invalid angles refuse. Nondefault ordinary angles download `fold-settings.json` for
 native replay. Tape fitting and body checks retain their measurement pose. Body-dependent studies

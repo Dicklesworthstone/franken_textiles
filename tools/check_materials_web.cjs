@@ -6,7 +6,7 @@
 // --strip-proof DIR runs only strip browser checks against retained native reports (manifest.json).
 // --outfit-proof checks public-prior drafted garment composition with synthetic materials, without a model.
 // --compression-proof checks real history controls, heat/work answers and final material binding.
-// --purchasing-proof checks bounded roll orders and direct exact finite-stock identities/pricing.
+// --purchasing-proof checks bounded roll orders, exact finite-stock prices and residual adoption.
 // --area-proof DIR checks six-parameter area fitting against native-input.json/native-report.json.
 // --swatch-area-proof DIR checks joint swatch identification against retained native consent reports.
 // --adaptive-proof DIR checks guarded Pareto studies on the real page against retained native reports.
@@ -803,10 +803,52 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.locator('a[download="stock-price.json"]').count(),0);
       assert.equal(await page.locator('a[download="stock-identities.json"]').count(),0);
       assert.equal(await run('stockIdentities'),'');
+      assert.equal(await run('stock'),'');
+      const first=JSON.parse(await download('finite-stock-plan.json'));
+      assert.deepEqual(first,JSON.parse(invoke('stock-plan',stockPatternFile,stockRequestFile)));
+      assert.equal(await download('original-stock-pattern.json'),stockPattern);
+      assert.equal(await download('original-stock-request.json'),stockRequest);
+      const residual=await download('residual-stock-request.json'),residualFile=path.join(work,'adopted-stock.json');
+      fs.writeFileSync(residualFile,residual,{flag:'wx'});
+      assert.deepEqual(JSON.parse(residual),JSON.parse(invoke('stock-residual',stockPatternFile,stockRequestFile)));
+      assert.equal(await page.locator('#selectedStockNote').isVisible(),false);
+      await page.getByRole('button',{name:'Use planned remaining stock',exact:true}).click();
+      assert.equal(await download('selected-stock-request.json'),residual);
+      assert.equal(await page.locator('a[download="finite-stock-plan.json"]').count(),0);
+      assert.equal(await page.locator('a[download="stock-identities.json"]').count(),0);
+      assert.equal(await page.locator('#stockRequest').inputValue(),'');
+      assert.equal(await run('stock'),'');
+      const second=JSON.parse(await download('finite-stock-plan.json'));
+      assert.deepEqual(second,JSON.parse(invoke('stock-plan',stockPatternFile,residualFile)));
+      assert.equal(await download('original-stock-request.json'),residual);
+      assert.equal(second.hardware_execution_authorized,false);
+      assert.equal(first.markers[0].placements.length,2);assert.equal(second.markers[0].placements.length,2);
+      for(const a of first.markers[0].placements)for(const b of second.markers[0].placements) {
+        const x=a.bounds_mm,y=b.bounds_mm;
+        assert.ok(x[2]<=y[0]||y[2]<=x[0]||x[3]<=y[1]||y[3]<=x[1],'Second planned job cannot reuse consumed rectangles');
+      }
+      assert.equal(JSON.parse(await download('residual-stock-request.json')).stocks[0].occupied_mm.length,4);
+      assert.equal(await run('stockIdentities'),'');
+      assert.deepEqual(JSON.parse(await download('stock-identities.json')),JSON.parse(invoke('stock-identities',stockPatternFile,residualFile)));
+      assert.equal(await run('stockPrice'),'');
+      const stalePrice=JSON.parse(await download('stock-price.json'));
+      assert.deepEqual(stalePrice,JSON.parse(invoke('stock-price',stockPatternFile,residualFile,fixture('synthetic-stock-pricing.json'))));
+      assert.equal(stalePrice.least_observed_independent_order_total,null);
+      assert.match(stalePrice.stocks[0].binding_refusal.message,/stock snapshot changed/);
+      assert.match(await page.textContent('#outputs'),/old offer binding cannot price/);
+      await page.setInputFiles('#stockRequest',stockRequestFile);
+      assert.equal(await page.locator('#selectedStockNote').isVisible(),false);
+      assert.equal(await page.locator('a[download="selected-stock-request.json"]').count(),0);
+      assert.equal(await page.getByRole('button',{name:'Use planned remaining stock',exact:true}).count(),0);
+      assert.equal(await run('stockPrice'),'');
+      assert.equal(JSON.parse(await download('stock-price.json')).least_observed_independent_order_total,17);
+      await page.click('#clearStockRequest');assert.equal(await page.isDisabled('#stock'),true);
+      assert.equal(await page.isDisabled('#stockPrice'),true);
+      assert.equal(await page.locator('a[download="stock-price.json"]').count(),0);
       await input('patternFile',{schema:'fabric-pattern/1',pieces:[]});
       assert.equal(await page.locator('a[download="stock-identities.json"]').count(),0);
       assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m=>m==='GET'));
-      console.log('PASS: real Chromium renders bounded roll orders and exact finite-stock identities/prices matching native, retains source bytes and unknown totals, excludes insufficient stock and newer unavailable offers, and withdraws stale prices on edits/refusal/cancellation. Synthetic observations only; no live purchasing, fulfillment, optimal nesting or machine claim. Artifacts:',work);
+      console.log('PASS: real Chromium renders bounded roll orders and native-equal finite-stock identities/prices; adopts exact residual stock for a disjoint second job, keeps stale prices unknown, and respects manual replacement/clear. Sources, edits/refusal/cancellation and same-origin HTTP/blob GET checks pass. Synthetic observations only; no live purchasing, physical cuts, optimal nesting or machine claim. Artifacts:',work);
       return;
     }
     if (compressionProof) {

@@ -1004,6 +1004,8 @@ test('finite stock uses unmodified source text and previews the first allocated 
   assert.deepEqual(w.called.find(c => c[0] === 'stock-residual'), ['stock-residual', pattern, stockRequest]);
   assert.deepEqual(w.called.find(c => c[0] === 'stock-svg'), ['stock-svg', pattern, stockRequest, 1]);
   assert.match(r.files[0].text, /1\.0/); assert.match(r.files[1].text, /1\.0/);
+  assert.equal(r.files.find(f=>f.name==='original-stock-pattern.json').text,pattern);
+  assert.equal(r.files.find(f=>f.name==='original-stock-request.json').text,stockRequest);
 });
 
 test('screening and studies call production entry points and download unmodified source/request text', async () => {
@@ -5865,6 +5867,124 @@ function guidedStockSources(p) {
   return {finite:{id:'stockRequest',raw:stock,field:'finite_stock',goal:'guidedFiniteCountGoal',metric:'used_stock_count'},
     job:{id:'cutJobRequest',raw:job,field:'cutting_job',goal:'guidedJobAreaGoal',metric:'cutting_job_stock_area_m2'}};
 }
+
+// Transport-only residual: numerical stock exclusion is exercised by the compiled/native lane.
+const residualStockText=' {"schema":"ftx-finite-stock-request/1","stocks":[],"options":{"copies":1,"gap_mm":1.0,"edge_margin_mm":0,"seam_allowance_mm":0,"program":{"source":{"probe":18446744073709551615,"signed":-0.0}}}}\n';
+async function prepareResidualChoice(p,raw=residualStockText) {
+  await p.load();await p.bind();p.select('stockRequest',' {"original":1.0}\n');p.e.stockRequest.handlers.change();
+  await p.e.stock.onclick();
+  const report={used_stock_count:1,used_gross_area_m2:0.1,external_cut_area_m2:0.01,
+    markers:[{id:'synthetic-item',placements:[{}]}],limitations:['Synthetic transport test']};
+  p.emit(report,[{name:'residual-stock-request.json',text:raw,mime:'application/json'}]);
+  return descendants(section(p,'stock')).find(el=>el.tag==='button'&&el.textContent==='Use planned remaining stock');
+}
+test('planned remaining stock is explicitly selected verbatim for ordinary stock, identities, prices and guided studies',async()=>{
+  const p=await pageModule(),adopt=await prepareResidualChoice(p);
+  assert.ok(adopt);assert.notEqual(p.e.selectedStockNote.hidden,false,'Planning alone does not adopt an inventory');
+  await p.e.stock.onclick();assert.equal(p.current().messages.at(-1).stockRequest,' {"original":1.0}\n');
+  p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'deliberate replacement refusal'});
+  adopt.onclick();assert.notEqual(p.e.selectedStockNote.hidden,false,'A button from the replaced plan is inert');
+  const current=await prepareResidualChoice(p),bound=p.e.boundSummary.textContent;current.onclick();
+  assert.equal(p.e.selectedStockNote.hidden,false);assert.equal(p.e.boundSummary.textContent,bound);
+  const selected=p.e.selectedStockFiles.children[0];assert.equal(await p.blobs.get(selected.href).text(),residualStockText);
+  assert.equal(section(p,'stock').hidden,true);p.e.stockRequest.files=[];p.select('stockPricing',' {"lock":"unchanged"}\n');
+  for(const op of ['stock','stockIdentities','stockPrice']) {
+    assert.equal(p.e[op].disabled,false,op);await p.e[op].onclick();const msg=p.current().messages.at(-1);
+    assert.equal(msg.type,op);assert.equal(msg.stockRequest,residualStockText);
+    if(op==='stockPrice')assert.equal(msg.stockPricing,' {"lock":"unchanged"}\n');
+    p.current().emit({type:'error',request:msg.request,message:'deliberate consumer refusal'});
+    assert.equal(await p.blobs.get(selected.href).text(),residualStockText,'A refused job does not consume or rewrite selected inventory');
+  }
+  guidedControls(p);await addGuidedSelection(p);
+  p.e.guidedStockMode.value='finite';p.e.guidedStockMode.handlers.change();p.e.guidedFiniteCountGoal.checked=true;
+  await p.e.study.onclick();const study=p.current().messages.at(-1);assert.equal(study.type,'study',p.e.error.textContent);
+  assert.ok(study.studyRequest.includes('"finite_stock":'+residualStockText));
+  assert.ok(study.studyRequest.includes('18446744073709551615'));assert.ok(study.studyRequest.includes('-0.0'));
+});
+test('planned remaining stock yields to manual inventory and clear without retaining stale choices or prices',async()=>{
+  const p=await pageModule(),adopt=await prepareResidualChoice(p);adopt.onclick();
+  const saved=p.e.selectedStockFiles.children[0].href;
+  p.select('stockRequest',' {"manual":-0.0}\n');p.e.stockRequest.handlers.change();
+  assert.equal(p.e.selectedStockNote.hidden,true);assert.equal(p.live.has(saved),false);
+  adopt.onclick();assert.equal(p.e.selectedStockNote.hidden,true);
+  await p.e.stockIdentities.onclick();assert.equal(p.current().messages.at(-1).stockRequest,' {"manual":-0.0}\n');
+  const old=p.current();p.e.stockRequest.files=[];p.e.clearStockRequest.onclick();
+  assert.equal(old.dead,true);p.ready();assert.equal(p.e.stock.disabled,true);assert.equal(p.e.stockPrice.disabled,true);
+  old.emit({type:'result',request:old.messages.at(-1).request,result:{},files:[]});
+  assert.equal(section(p,'Exact physical-stock identities').hidden,true);assert.equal(p.e.selectedStockFiles.children.length,0);
+});
+test('planned remaining-stock choices are invalidated by source and material edits, replacements and cancellation',async()=>{
+  for(const change of ['pattern','bind','inventory','cancel']) {
+    const p=await pageModule(),adopt=await prepareResidualChoice(p);
+    if(change==='pattern')await p.load();
+    else if(change==='bind')await p.bind();
+    else if(change==='inventory')p.e.stockRequest.handlers.change();
+    else {await p.e.stock.onclick();p.e.cancel.onclick();p.ready();}
+    adopt.onclick();assert.notEqual(p.e.selectedStockNote.hidden,false,change);
+    assert.equal(section(p,'stock').hidden,true,change);
+  }
+});
+test('clearing selected remaining stock cancels a delayed guided source read without a stale study result',async()=>{
+  const p=await pageModule(),adopt=await prepareResidualChoice(p);adopt.onclick();p.e.stockRequest.files=[];
+  guidedControls(p);await addGuidedSelection(p);p.e.guidedStockMode.value='finite';p.e.guidedStockMode.handlers.change();
+  p.e.guidedFiniteCountGoal.checked=true;p.e.guidedMass.checked=true;
+  const delay=deferred();let reading=false;
+  p.e.guidedInventory.files=[{size:2,arrayBuffer:async()=>{reading=true;return new TextEncoder().encode(await delay.promise).buffer;}}];
+  const old=p.current(),before=old.messages.length,running=p.e.study.onclick();assert.equal(reading,true);
+  p.e.clearStockRequest.onclick();assert.equal(old.dead,true);p.ready();delay.resolve('{}');await running;
+  assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);assert.equal(p.e.selectedStockNote.hidden,true);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+});
+test('compiled WASM remaining-stock adoption replays native jobs without overlap or stale-price reuse',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_RESIDUAL_STOCK_NATIVE},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const native=path.resolve(process.env.FTX_RESIDUAL_STOCK_NATIVE),{execFileSync}=require('node:child_process');
+    const work=fs.mkdtempSync(path.join(process.env.FTX_RESIDUAL_STOCK_OUT||require('node:os').tmpdir(),'stock-adoption-'));
+    const save=(name,raw)=>{const file=path.join(work,name);fs.writeFileSync(file,raw,{flag:'wx'});return file;};
+    const fixture=name=>fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials',name),'utf8');
+    const original=fixture('synthetic-stock-pattern.json'),stock=fixture('synthetic-stock-request.json'),pricing=fixture('synthetic-stock-pricing.json');
+    const p=await pageModule(),w=await workerModule({bindings:ftx});p.select('patternFile',original);await p.e.patternFile.onchange();
+    await p.e.bind.onclick();const bound=await w.send(p.current().messages.at(-1));assert.equal(bound.type,'result',bound.message);p.current().emit(bound);
+    const patternFile=save('pattern.json',bound.result.pattern_json),stockFile=save('original-stock.json',stock),priceFile=save('pricing.json',pricing);
+    const invoke=(...args)=>JSON.parse(execFileSync(native,args,{encoding:'utf8',maxBuffer:64*1024*1024}));
+    const execute=async op=>{await p.e[op].onclick();const msg=p.current().messages.at(-1);assert.equal(msg.type,op,p.e.error.textContent);
+      const response=await w.send(msg);assert.equal(response.type,'result',response.message);p.current().emit(response);return {msg,response};};
+    p.select('stockRequest',stock);p.e.stockRequest.handlers.change();p.select('stockPricing',pricing);p.e.stockPricing.handlers.change();
+    const initialPrice=await execute('stockPrice');assert.equal(initialPrice.response.result.least_observed_independent_order_total,17);
+    const first=await execute('stock');assert.deepEqual(first.response.result,invoke('stock-plan',patternFile,stockFile));
+    assert.equal(first.response.files.find(file=>file.name==='original-stock-pattern.json').text,bound.result.pattern_json);
+    assert.equal(first.response.files.find(file=>file.name==='original-stock-request.json').text,stock);
+    const residual=first.response.files.find(file=>file.name==='residual-stock-request.json').text,residualFile=save('selected-stock.json',residual);
+    assert.deepEqual(JSON.parse(residual),invoke('stock-residual',patternFile,stockFile));
+    const adopt=descendants(section(p,'stock')).find(el=>el.tag==='button');assert.ok(adopt);adopt.onclick();p.e.stockRequest.files=[];
+    assert.equal(await p.blobs.get(p.e.selectedStockFiles.children[0].href).text(),residual);
+    const second=await execute('stock');assert.equal(second.msg.stockRequest,residual);
+    assert.deepEqual(second.response.result,invoke('stock-plan',patternFile,residualFile));
+    const firstPieces=first.response.result.markers[0].placements,secondPieces=second.response.result.markers[0].placements;
+    assert.equal(firstPieces.length,2);assert.equal(secondPieces.length,2);
+    for(const a of firstPieces)for(const b of secondPieces) {
+      const x=a.bounds_mm,y=b.bounds_mm;
+      assert.ok(x[2]<=y[0]||y[2]<=x[0]||x[3]<=y[1]||y[3]<=x[1],'Independent rectangle bounds exclude every prior placement');
+    }
+    assert.equal(JSON.parse(residual).stocks[0].occupied_mm.length,2);
+    assert.equal(JSON.parse(second.response.files.find(file=>file.name==='residual-stock-request.json').text).stocks[0].occupied_mm.length,4);
+    assert.equal(second.response.result.hardware_execution_authorized,false);
+    const identities=await execute('stockIdentities');assert.equal(identities.msg.stockRequest,residual);
+    assert.deepEqual(identities.response.result,invoke('stock-identities',patternFile,residualFile));
+    const priced=await execute('stockPrice');assert.equal(priced.msg.stockRequest,residual);assert.equal(priced.msg.stockPricing,pricing);
+    assert.deepEqual(priced.response.result,invoke('stock-price',patternFile,residualFile,priceFile));
+    assert.equal(priced.response.result.complete_offer_coverage,false);assert.equal(priced.response.result.least_observed_independent_order_total,null);
+    assert.match(priced.response.result.stocks[0].binding_refusal.message,/stock snapshot changed/);
+    guidedControls(p);p.e.guidedStockMode.value='finite';p.e.guidedStockMode.handlers.change();p.e.guidedFiniteCountGoal.checked=true;
+    p.e.selection.value=JSON.stringify(JSON.parse(original).fabric.material);p.e.selection.handlers.input();
+    const inspected=await execute('inspect');assert.ok(inspected.response.result.selection_json);p.e.addStudyCandidate.onclick();
+    const study=await execute('study');assert.ok(study.msg.studyRequest.includes('"finite_stock":'+residual));
+    const source=save('study-pattern.json',study.msg.pattern),request=save('study-request.json',study.msg.studyRequest);
+    assert.deepEqual(study.response.result,invoke('study',source,request));
+    console.log('Actual native/WASM residual adoption replay: '+work);
+  });
 
 test('guided finite and complete-job comparisons retain their original sources and active consumer ownership', async () => {
   for(const mode of ['finite','job']) {

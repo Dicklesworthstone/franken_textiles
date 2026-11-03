@@ -302,6 +302,9 @@ meaning. Omit this option for nominal-width planning. Finite hides and remnants 
 <label>Preview marker number <input id="rollPreview" type="number" min="1" step="1" value="1"></label>
 <button id="cut" data-command="cut" disabled>Plan rolls &amp; preview</button>
 <label>Finite hides / remnants with defect maps JSON <input id="stockRequest" type="file" accept=".json,application/json"></label>
+<button id="clearStockRequest" disabled>Clear selected stock inventory</button>
+<div id="selectedStockNote" class="note" hidden>Using the exact planned remaining-stock request selected below. Choosing a stock file replaces it. The next run rechecks geometry, material identities and price locks.
+<div id="selectedStockFiles" class="links"></div></div>
 <button id="stock" data-command="stock" disabled>Allocate finite stock &amp; preview</button>
 <p class="note">Use <code>ftx-finite-stock-request/1</code> for individually identified hides or remnants. Supply the actual boundary, exclusions and preferred cutting axis; each item must match the bound material. No roll width is invented.</p>
 <button id="stockIdentities" data-command="stockIdentities" disabled>Inspect exact stock identities</button>

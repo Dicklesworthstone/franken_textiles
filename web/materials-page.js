@@ -21,6 +21,7 @@ let photoEvidence = null, photoTransfer = null, photoProblem = null;
 let interfaceChange = null, interfaceRead = 0, interfaceReady = true;
 let calibratedPair = null;
 let sewingPreviewSource = null;
+let selectedStockRequest = null;
 const pieceChanges = new Map(), urls = new Map();
 const combinationGroups = new Map();
 const studyCandidates = [];
@@ -76,7 +77,7 @@ for (const op of operations) {
   sections.set(op, { section, summary, comparison, links, study: null, adoptions: [] });
 }
 const text = value => JSON.stringify(value, null, 2);
-const has = id => roundFiles.has(id) || !!$(id).files.length;
+const has = id => (id === "stockRequest" && selectedStockRequest !== null) || roundFiles.has(id) || !!$(id).files.length;
 const guidedStudyMode = () => $("studyMode").value === "guided";
 const guidedScenarioMode = () => $("scenarioMode").value === "guided";
 const guidedStockMode = () => $("guidedStockMode").value || "roll";
@@ -222,6 +223,7 @@ function controls() {
   $("stock").disabled ||= !has("stockRequest");
   $("stockIdentities").disabled ||= !has("stockRequest");
   $("stockPrice").disabled ||= !has("stockRequest") || !has("stockPricing");
+  $("clearStockRequest").disabled = !has("stockRequest");
   $("cutJob").disabled ||= !has("cutJobRequest");
   $("price").disabled ||= !has("cutOptions") || !has("quotes") || !has("market");
   $("sew").disabled ||= !has("sewOptions");
@@ -301,6 +303,14 @@ function invalidate(keys, dependentOnly = false) {
   if (keys.includes("sew") && !keys.includes("sewPreview")) keys = [...keys, "sewPreview"];
   if (pending && (!dependentOnly || keys.includes(pending.op))) start(); // terminate affected Rust work; never wait for its stale success
   clear(keys); $("error").hidden = true; $("progress").textContent = ""; controls();
+}
+function selectStockRequest(raw) {
+  selectedStockRequest = raw; $("stockRequest").value = "";
+  clear(["selectedStock"]); $("selectedStockFiles").replaceChildren();
+  $("selectedStockNote").hidden = raw === null;
+  if (raw !== null) link("selectedStock", $("selectedStockFiles"),
+    { name: "selected-stock-request.json", text: raw, mime: "application/json" });
+  invalidate(["stock", "stockIdentities", "stockPrice", ...guidedSourceStudies("stockRequest")], true);
 }
 function link(key, parent, f) {
   const url = URL.createObjectURL(new Blob([f.bytes || f.text], { type: f.mime }));
@@ -3712,9 +3722,24 @@ function show(op, msg, request) {
     // The parsed result is for display only: JSON.stringify changes 1.0/-0.0 and breaks locks.
     if (op === "fold") drape = msg.reportText;
     if (op === "sew") retainSewingPreview(r, request);
+    if (op === "stock") {
+      const residual = msg.files.find(f => f.name === "residual-stock-request.json")?.text;
+      if (typeof residual === "string") {
+        const adopt = document.createElement("button"); adopt.textContent = "Use planned remaining stock";
+        adopt.onclick = () => {
+          if (!ready || pending || !s.adoptions.includes(adopt)) return;
+          selectStockRequest(residual);
+        };
+        const note = document.createElement("p");
+        note.textContent = "Select this only when treating the displayed layout as consumed for your next planned job. " +
+          "Consumed regions stay excluded. Existing price locks are retained and may need requalification; no physical cutting is recorded.";
+        s.adoptions.push(adopt); s.comparison.append(note, adopt);
+      }
+    }
   }
 }
 async function read(id, binary = false) {
+  if (id === "stockRequest" && selectedStockRequest !== null) return selectedStockRequest;
   if (!binary && roundFiles.has(id)) return roundFiles.get(id);
   const f = binary && roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
   if (!f) throw Error(`Choose ${id} first.`);
@@ -3901,7 +3926,8 @@ async function guidedStudyInput(scenarioRead) {
   const retained = [], budget = 16 * 1024 * 1024;
   let sourceBytes = 0;
   const retain = (key, id, label) => {
-    const original = roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
+    const original = id === "stockRequest" && selectedStockRequest !== null ? selectedStockRequest :
+      roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
     if (!original) throw Error(`Choose ${label} first.`);
     const size = typeof original === "string" ? new Blob([original]).size : original.size;
     if (key === "designFit" && size > 256 * 1024) throw Error("Guided alteration fit contract exceeds 256 KiB; no source was read.");
@@ -4225,6 +4251,7 @@ $("clearGuidedInventory").onclick = () => {
   $("guidedInventory").value = ""; roundFiles.delete("guidedInventory");
   if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
 };
+$("clearStockRequest").onclick = () => selectStockRequest(null);
 for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
   "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
   "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignEvaluations",
@@ -4655,6 +4682,10 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
+    if (id === "stockRequest") {
+      selectedStockRequest = null; clear(["selectedStock"]);
+      $("selectedStockFiles").replaceChildren(); $("selectedStockNote").hidden = true;
+    }
     if (id === "studyRequest") $("studyMode").value = "file";
     if (id === "scenarioRequest") $("scenarioMode").value = "file";
     if (id === "measurements" || id === "body") cancelPhotoReturn();

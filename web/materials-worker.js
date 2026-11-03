@@ -581,6 +581,7 @@ self.onmessage = async ({ data: msg }) => {
             picture = ftx.stock_svg(msg.pattern, msg.stockRequest, i);
             files.push(file(`stock-${i}.svg`, picture, "image/svg+xml"));
           }
+          files.push(file("original-stock-pattern.json", msg.pattern), file("original-stock-request.json", msg.stockRequest));
           break;
         }
         if (typeof ftx.stock_job !== "function") throw Error("Rebuild web/pkg: invalid single-run finite-stock engine.");
@@ -609,6 +610,7 @@ self.onmessage = async ({ data: msg }) => {
         } else if (job.purchasing_json != null) {
           throw Error("Unexpected purchasing receipt without a priced stock plan.");
         }
+        files.push(file("original-stock-pattern.json", msg.pattern), file("original-stock-request.json", msg.stockRequest));
         break;
       }
       case "price":
