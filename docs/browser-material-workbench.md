@@ -554,9 +554,10 @@ manufacturing-only action refuses scenario goals rather than silently dropping t
 The generated `study-request.json` and `scenario-request.json` retain the original fit, heat and
 material source text, alongside the exact pattern and body input downloads. Active source, goal,
 mode and numerical-setting edits withdraw stale results and cancel pending reads or worker work.
-Unconsumed section-3 files do not replace an advanced scenario's own sources. Select **Load a
-complete scenario or named matrix (advanced)** for other transient, coupled-transport or
-existing scenario policies; its exact request remains authoritative.
+Unconsumed section-3 files do not replace an advanced scenario's own sources. Original motion
+requests retain their transient heat and coupled-transport policies inside guided single or named
+cases. Select **Load a complete scenario or named matrix (advanced)** for other existing scenario
+policies; its exact request remains authoritative.
 
 #### Compare layered heat and potential vapor transfer
 
@@ -614,6 +615,39 @@ initial state and every accepted sample. A history refusal preserves independent
 Each input and comparison policy can be frozen in a named case. Active-source changes cancel an
 obsolete read or run; selecting an inactive source leaves it untouched. Draft changes leave saved
 cases intact. Loading or adopting another pattern disables these garment-specific policies.
+
+#### Compare heat storage and temperatures through motion
+
+Choose **Retain an original motion request** with an explicitly authored `transient_surface`
+or `transient_coverage` policy. The two heat-history groups expose the existing native results as
+objectives and inclusive lower/upper limits. Each domain has six independent quantities:
+
+| Quantity | Unit | Interpretation |
+|---|---|---|
+| Inside-side energy | J | Signed integrated exchange at the inside boundary |
+| Net boundary energy | J | Signed total physical boundary exchange |
+| Minimum sampled temperature | °C | Minimum over the initial state and retained mechanical samples |
+| Maximum sampled temperature | °C | Maximum over the initial state and retained mechanical samples |
+| Final minimum temperature | °C | Minimum at the final accepted mechanical sample |
+| Final maximum temperature | °C | Maximum at the final accepted mechanical sample |
+
+Select every objective's direction explicitly. Negative energy and temperature limits remain signed;
+minimizing signed energy does not minimize its magnitude. Limits apply without their objective, and
+each history can also be required independently. These quantities support **nominal values only**.
+When combining them with source-reported mass or steady-heat objectives, choose an explicit nominal
+limit basis. No transient uncertainty interval is inferred.
+
+The same case must request motion and its corresponding transient policy. A transient sheet does
+not need an unrelated steady-sheet request, and transient coverage carries its own declared layer
+topology without requiring steady coverage. The original motion text retains initial temperatures,
+boundary schedules, source numbers and numerical allowances exactly. Saved cases freeze that text;
+the endpoint form alone does not invent a heat history. These criteria also enter existing linked
+grid and adaptive design comparisons under each case's own admission policy.
+
+Native comparison requires a complete, source-bound history. Missing heat capacity, failed motion
+or refused thermal work cannot become zero energy or a qualifying temperature. Independent available
+manufacturing and static results remain inspectable. Sampled extrema are not continuous-time bounds,
+and computed cloth temperature does not establish wearer comfort or a garment temperature rating.
 
 #### Track material-direction strain
 
@@ -730,8 +764,8 @@ the complete replayable matrix and the exact retained source fragments. Switchin
 single-scenario and original-file modes preserves their separate requests. Loading or adopting a
 different pattern clears saved cases so another garment cannot silently inherit them. The guided
 forms author initial drape and prescribed movement, retain original sheet/layered heat and vapor
-policies, and compare explicit vapor histories from original motion requests. Other transient heat
-and coupled transport requests retain their complete original-file route.
+policies, and compare explicit vapor and transient heat histories from original motion requests.
+Thermal schedules and coupled transport remain authored in their original request files.
 
 The focused compiled-engine proof uses a small synthetic sewing-only fixture with zero gravity
 steps. Five complete native/direct-WASM/worker comparisons cover signed heat direction, explicit

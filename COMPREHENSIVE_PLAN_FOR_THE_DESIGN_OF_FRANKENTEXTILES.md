@@ -5150,6 +5150,27 @@ cutting, mass and source-qualified steady heat; the original hide baseline retai
 roll cutting. Missing mechanics and heat storage stay unavailable. A separate synthetic signed-zero
 observation verifies exact source transport without changing or inventing the products' measured data.
 
+### 25.164 Use transient heat histories in material and design decisions
+
+The guided comparison now exposes all six existing transient quantities for independent sheets and
+body coverage: signed inside-side and net boundary energy, initial-inclusive sampled temperature
+extrema, and final-sample temperature extrema. Each has an explicit objective direction and inclusive
+minimum/maximum guards; either thermal history can also be required independently. These decisions
+remain nominal, including when an explicit nominal guard accompanies a source-reported mass or
+steady-heat objective. Signed values are preserved without an inferred uncertainty interval.
+
+The original motion request owns initial temperatures, boundary schedules, layer topology and
+numerical allowances. The workbench retains its exact text and derives each consumer from motion
+and the corresponding transient policy in the same case. Steady sheet and coverage requests are
+independent. Saved single/named scenarios and all existing linked grid/adaptive modes use the same
+native admission; no new thermal schedule editor, solver or whole-study optional-budget gate is added.
+
+This advances `ftx-ms2` and `ftx-ds2` through `ftx-ms2.12`. Only complete, source-bound histories can
+qualify a decision. Refused heat or motion does not become a zero reading, and independent available
+manufacturing, mechanical and other thermal results remain inspectable. Retained-sample extrema do
+not establish continuous-time bounds, physiological comfort or measured garment warmth. Matched
+material characterization and independent garment validation remain open.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

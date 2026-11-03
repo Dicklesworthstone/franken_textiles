@@ -27,6 +27,12 @@ const METRIC_CONSUMERS = {
   independent_vapor_potential_heat_flow_w: "vapor_surface", independent_vapor_potential_mass_flow_kg_s: "vapor_surface",
   covered_vapor_potential_heat_flow_w: "vapor_coverage", covered_vapor_potential_mass_flow_kg_s: "vapor_coverage",
   motion_covered_vapor_potential_energy_j: "motion_vapor_coverage", motion_covered_vapor_potential_mass_kg: "motion_vapor_coverage",
+  transient_surface_inside_energy_j: "transient_surface", transient_surface_net_boundary_energy_j: "transient_surface",
+  transient_surface_min_sample_temperature_c: "transient_surface", transient_surface_max_sample_temperature_c: "transient_surface",
+  transient_surface_final_min_temperature_c: "transient_surface", transient_surface_final_max_temperature_c: "transient_surface",
+  transient_coverage_inside_energy_j: "transient_coverage", transient_coverage_net_boundary_energy_j: "transient_coverage",
+  transient_coverage_min_sample_temperature_c: "transient_coverage", transient_coverage_max_sample_temperature_c: "transient_coverage",
+  transient_coverage_final_min_temperature_c: "transient_coverage", transient_coverage_final_max_temperature_c: "transient_coverage",
 };
 const REPORTED_BOUND_METRICS = new Set([
   "assembly_mass_kg", "independent_surface_power_w", "body_coverage_power_w",
@@ -351,6 +357,7 @@ export function buildMaterialScenarioMatrixRequest(state) {
       motion: scenario.motion != null, materialStrain: scenario.material_strain != null, contactLoads: scenario.contact_loads != null,
       coverage: scenario.coverage != null, vaporSurface: scenario.vapor_surface != null, vaporCoverage: scenario.vapor_coverage != null,
       motionVaporHistory: scenario.motion?.vapor_coverage_history != null,
+      transientSurface: scenario.motion?.transient_surface != null, transientCoverage: scenario.motion?.transient_coverage != null,
       ...(own(item, "comparison") ? { comparison: parse(item.comparison, "Original case comparison") } : {}) });
     append(`${index ? "," : ""}{"key":${JSON.stringify(item.key)},"scenario":`); append(item.scenario);
     if (own(item, "comparison")) { append(',"comparison":'); append(item.comparison); }
@@ -615,7 +622,9 @@ function scenarioConsumers(value) {
     motion_material_strain: enabled("motion") && enabled("materialStrain"), contact_loads: enabled("contactLoads"),
     motion_contact_loads: enabled("motion") && enabled("contactLoads"), coverage: enabled("coverage"),
     vapor_surface: enabled("vaporSurface"), vapor_coverage: enabled("vaporCoverage"),
-    motion_vapor_coverage: enabled("motion") && enabled("vaporCoverage") && enabled("motionVaporHistory") };
+    motion_vapor_coverage: enabled("motion") && enabled("vaporCoverage") && enabled("motionVaporHistory"),
+    transient_surface: enabled("motion") && enabled("transientSurface"),
+    transient_coverage: enabled("motion") && enabled("transientCoverage") };
 }
 
 function matrixContext(value) {
@@ -627,13 +636,14 @@ function matrixContext(value) {
   const keys = new Set();
   for (const item of matrix.cases) {
     object(item, ["key", "surface", "motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage",
-      "motionVaporHistory", "comparison"], ["key", "surface"], "Named scenario case");
+      "motionVaporHistory", "transientSurface", "transientCoverage", "comparison"], ["key", "surface"], "Named scenario case");
     name(item.key, "Scenario case key");
     bytes(item.key, 128, "Scenario case keys must not exceed 128 UTF-8 bytes.");
     if (keys.has(item.key)) throw Error("Scenario case keys must be unique.");
     keys.add(item.key);
     if (typeof item.surface !== "boolean") throw Error("Each named case needs an explicit surface-request boolean.");
-    for (const key of ["motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory"]) {
+    for (const key of ["motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory",
+      "transientSurface", "transientCoverage"]) {
       if (own(item, key) && typeof item[key] !== "boolean") throw Error(`Named case ${key} availability must be a boolean when supplied.`);
     }
     if (item.comparison != null) {
@@ -665,7 +675,8 @@ function matrixContext(value) {
  * protocol consent is inferred. Original source text is embedded verbatim, including locked numbers.
  * Optional scenario context describes the separately dispatched drape/heat/vapor/motion/strain/load request, is never
  * serialized into the study, and does not enable scenario consumers in manufacturing-only calls.
- * Optional consumer flags default to false; motionVaporHistory describes an actual requested motion subpolicy.
+ * Optional consumer flags default to false; motionVaporHistory, transientSurface and transientCoverage
+ * describe actual requested motion subpolicies, independently of the steady surface/coverage consumers.
  * Its optional matrix retains ordered case
  * keys, consumer availability, original parsed comparison
  * policies and the callback allowance. Only guidance selection and capacity are read here; the
@@ -680,16 +691,18 @@ export function buildMaterialStudyRequest(state, scenario) {
   let matrix;
   if (scenario !== undefined) {
     object(scenario, ["drape", "surface", "motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage",
-      "motionVaporHistory", "matrix"], ["drape", "surface"], "Scenario comparison context");
+      "motionVaporHistory", "transientSurface", "transientCoverage", "matrix"], ["drape", "surface"], "Scenario comparison context");
     if (scenario.drape !== true || typeof scenario.surface !== "boolean") {
       throw Error("Scenario comparison needs explicit drape: true and a boolean surface request.");
     }
-    for (const key of ["motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory"]) {
+    for (const key of ["motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory",
+      "transientSurface", "transientCoverage"]) {
       if (own(scenario, key) && typeof scenario[key] !== "boolean") throw Error(`Scenario ${key} availability must be a boolean when supplied.`);
     }
     if (own(scenario, "matrix")) {
       matrix = matrixContext(scenario.matrix);
-      for (const key of ["surface", "motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory"]) {
+      for (const key of ["surface", "motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory",
+        "transientSurface", "transientCoverage"]) {
         if ((own(scenario, key) && scenario[key] === true) !== matrix.cases.some(item => own(item, key) && item[key] === true)) {
           throw Error(`Named scenario ${key} availability must describe its actual cases.`);
         }
@@ -795,7 +808,7 @@ export function buildMaterialStudyRequest(state, scenario) {
     drape: !!scenario, ...scenarioConsumers(scenario),
   };
   if (matrix) {
-    for (const consumer of ["motion_material_strain", "motion_contact_loads", "motion_vapor_coverage"]) {
+    for (const consumer of ["motion_material_strain", "motion_contact_loads", "motion_vapor_coverage", "transient_surface", "transient_coverage"]) {
       consumers[consumer] = matrix.cases.some(item => scenarioConsumers(item)[consumer]);
     }
   }

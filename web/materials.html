@@ -1174,6 +1174,95 @@ Source-bound decisions need complete admitted intervals; missing bounds preserve
 Vapor limits use nonnegative potentials in the displayed units. Motion totals need complete admitted history,
 including its initial state and all accepted samples. The declared geometry allowance must fit the engine's shared work budget.</p>
 </fieldset>
+<fieldset><legend>Heat and temperature through motion</legend>
+<p class="note">Retain an original motion request with the corresponding heat history. These criteria need complete motion
+and nominal values. Choose an explicit nominal limit basis when other objectives use source-reported bounds.
+Energy and temperature limits preserve their signs; minimizing signed energy does not minimize its magnitude.
+Limits and required histories apply independently of goal checkboxes.</p>
+<p class="note">Sampled extrema include the initial state and retained motion samples. Final extrema use only the final
+sample. These values do not establish continuous-time temperature bounds or wearer comfort.</p>
+<details><summary>Independent sheet heat history</summary>
+<p class="note">Use the independent-sheet heat policy in the original motion request. No steady-sheet request is needed.</p>
+<label><input id="guidedTransientSurfaceInsideEnergyGoal" type="checkbox"> Compare inside-side energy (J)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientSurfaceInsideEnergyDirection"><option value="">Choose a direction</option><option value="minimize">Minimize signed energy</option><option value="maximize">Maximize signed energy</option></select></label>
+<label>Minimum inside-side energy (J) <input id="guidedTransientSurfaceInsideEnergyMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Maximum inside-side energy (J) <input id="guidedTransientSurfaceInsideEnergyLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTransientSurfaceNetEnergyGoal" type="checkbox"> Compare net boundary energy (J)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientSurfaceNetEnergyDirection"><option value="">Choose a direction</option><option value="minimize">Minimize signed energy</option><option value="maximize">Maximize signed energy</option></select></label>
+<label>Minimum net boundary energy (J) <input id="guidedTransientSurfaceNetEnergyMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Maximum net boundary energy (J) <input id="guidedTransientSurfaceNetEnergyLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTransientSurfaceSampleMinGoal" type="checkbox"> Compare minimum sampled temperature (°C)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientSurfaceSampleMinDirection"><option value="">Choose a direction</option><option value="minimize">Minimize temperature</option><option value="maximize">Maximize temperature</option></select></label>
+<label>Lower limit for minimum sampled temperature (°C) <input id="guidedTransientSurfaceSampleMinMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Upper limit for minimum sampled temperature (°C) <input id="guidedTransientSurfaceSampleMinLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTransientSurfaceSampleMaxGoal" type="checkbox"> Compare maximum sampled temperature (°C)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientSurfaceSampleMaxDirection"><option value="">Choose a direction</option><option value="minimize">Minimize temperature</option><option value="maximize">Maximize temperature</option></select></label>
+<label>Lower limit for maximum sampled temperature (°C) <input id="guidedTransientSurfaceSampleMaxMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Upper limit for maximum sampled temperature (°C) <input id="guidedTransientSurfaceSampleMaxLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTransientSurfaceFinalMinGoal" type="checkbox"> Compare final minimum temperature (°C)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientSurfaceFinalMinDirection"><option value="">Choose a direction</option><option value="minimize">Minimize temperature</option><option value="maximize">Maximize temperature</option></select></label>
+<label>Lower limit for final minimum temperature (°C) <input id="guidedTransientSurfaceFinalMinMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Upper limit for final minimum temperature (°C) <input id="guidedTransientSurfaceFinalMinLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTransientSurfaceFinalMaxGoal" type="checkbox"> Compare final maximum temperature (°C)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientSurfaceFinalMaxDirection"><option value="">Choose a direction</option><option value="minimize">Minimize temperature</option><option value="maximize">Maximize temperature</option></select></label>
+<label>Lower limit for final maximum temperature (°C) <input id="guidedTransientSurfaceFinalMaxMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Upper limit for final maximum temperature (°C) <input id="guidedTransientSurfaceFinalMaxLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+</details>
+<details><summary>Body and layer heat history</summary>
+<p class="note">Use the body-coverage heat policy and layer topology in the original motion request.
+An independent steady-coverage policy is not required.</p>
+<label><input id="guidedTransientCoverageInsideEnergyGoal" type="checkbox"> Compare inside-side energy (J)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientCoverageInsideEnergyDirection"><option value="">Choose a direction</option><option value="minimize">Minimize signed energy</option><option value="maximize">Maximize signed energy</option></select></label>
+<label>Minimum inside-side energy (J) <input id="guidedTransientCoverageInsideEnergyMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Maximum inside-side energy (J) <input id="guidedTransientCoverageInsideEnergyLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTransientCoverageNetEnergyGoal" type="checkbox"> Compare net boundary energy (J)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientCoverageNetEnergyDirection"><option value="">Choose a direction</option><option value="minimize">Minimize signed energy</option><option value="maximize">Maximize signed energy</option></select></label>
+<label>Minimum net boundary energy (J) <input id="guidedTransientCoverageNetEnergyMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Maximum net boundary energy (J) <input id="guidedTransientCoverageNetEnergyLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTransientCoverageSampleMinGoal" type="checkbox"> Compare minimum sampled temperature (°C)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientCoverageSampleMinDirection"><option value="">Choose a direction</option><option value="minimize">Minimize temperature</option><option value="maximize">Maximize temperature</option></select></label>
+<label>Lower limit for minimum sampled temperature (°C) <input id="guidedTransientCoverageSampleMinMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Upper limit for minimum sampled temperature (°C) <input id="guidedTransientCoverageSampleMinLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTransientCoverageSampleMaxGoal" type="checkbox"> Compare maximum sampled temperature (°C)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientCoverageSampleMaxDirection"><option value="">Choose a direction</option><option value="minimize">Minimize temperature</option><option value="maximize">Maximize temperature</option></select></label>
+<label>Lower limit for maximum sampled temperature (°C) <input id="guidedTransientCoverageSampleMaxMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Upper limit for maximum sampled temperature (°C) <input id="guidedTransientCoverageSampleMaxLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTransientCoverageFinalMinGoal" type="checkbox"> Compare final minimum temperature (°C)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientCoverageFinalMinDirection"><option value="">Choose a direction</option><option value="minimize">Minimize temperature</option><option value="maximize">Maximize temperature</option></select></label>
+<label>Lower limit for final minimum temperature (°C) <input id="guidedTransientCoverageFinalMinMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Upper limit for final minimum temperature (°C) <input id="guidedTransientCoverageFinalMinLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTransientCoverageFinalMaxGoal" type="checkbox"> Compare final maximum temperature (°C)</label>
+<div class="study-fields">
+<label>Direction <select id="guidedTransientCoverageFinalMaxDirection"><option value="">Choose a direction</option><option value="minimize">Minimize temperature</option><option value="maximize">Maximize temperature</option></select></label>
+<label>Lower limit for final maximum temperature (°C) <input id="guidedTransientCoverageFinalMaxMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Upper limit for final maximum temperature (°C) <input id="guidedTransientCoverageFinalMaxLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+</details>
+<label><input id="guidedRequireTransientSurface" type="checkbox"> Require a complete independent sheet heat history</label>
+<label><input id="guidedRequireTransientCoverage" type="checkbox"> Require a complete body/layer heat history</label>
+</fieldset>
 <label><input id="guidedRequireCoverage" type="checkbox"> Require body/layer heat</label>
 <label><input id="guidedRequireVaporSurface" type="checkbox"> Require independent-sheet vapor potential</label>
 <label><input id="guidedRequireVaporCoverage" type="checkbox"> Require vapor potential over the complete declared body domain</label>

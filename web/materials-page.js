@@ -96,6 +96,18 @@ const guidedTransportMetrics = [
   ["guidedVaporCoverageMass", "covered_vapor_potential_mass_flow_kg_s"],
   ["guidedMotionVaporEnergy", "motion_covered_vapor_potential_energy_j"],
   ["guidedMotionVaporMass", "motion_covered_vapor_potential_mass_kg"],
+  ["guidedTransientSurfaceInsideEnergy", "transient_surface_inside_energy_j"],
+  ["guidedTransientSurfaceNetEnergy", "transient_surface_net_boundary_energy_j"],
+  ["guidedTransientSurfaceSampleMin", "transient_surface_min_sample_temperature_c"],
+  ["guidedTransientSurfaceSampleMax", "transient_surface_max_sample_temperature_c"],
+  ["guidedTransientSurfaceFinalMin", "transient_surface_final_min_temperature_c"],
+  ["guidedTransientSurfaceFinalMax", "transient_surface_final_max_temperature_c"],
+  ["guidedTransientCoverageInsideEnergy", "transient_coverage_inside_energy_j"],
+  ["guidedTransientCoverageNetEnergy", "transient_coverage_net_boundary_energy_j"],
+  ["guidedTransientCoverageSampleMin", "transient_coverage_min_sample_temperature_c"],
+  ["guidedTransientCoverageSampleMax", "transient_coverage_max_sample_temperature_c"],
+  ["guidedTransientCoverageFinalMin", "transient_coverage_final_min_temperature_c"],
+  ["guidedTransientCoverageFinalMax", "transient_coverage_final_max_temperature_c"],
 ];
 const guidedTransportSources = [
   ["coverage", "guidedCoverage", "guidedCoverageFile", "the original scenario body/layer heat policy"],
@@ -116,6 +128,8 @@ const guidedRequired = [
   ["guidedRequireContactLoads", "contact_loads"], ["guidedRequireMotionContactLoads", "motion_contact_loads"],
   ["guidedRequireCoverage", "coverage"], ["guidedRequireVaporSurface", "vapor_surface"],
   ["guidedRequireVaporCoverage", "vapor_coverage"], ["guidedRequireMotionVaporCoverage", "motion_vapor_coverage"],
+  ["guidedRequireTransientSurface", "transient_surface"],
+  ["guidedRequireTransientCoverage", "transient_coverage"],
 ];
 let studyCandidateSequence = 0;
 const outfitTargets = new Map();
@@ -4215,9 +4229,11 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
     }
   }
   for (const [id, metric] of guidedTransportMetrics) {
-    if (metric === "body_coverage_power_w") continue;
+    const signed = metric === "body_coverage_power_w" || metric.startsWith("transient_");
     for (const suffix of ["MinimumLimit", "Limit"]) {
-      if ($(`${id}${suffix}`).value.trim() && number(`${id}${suffix}`, `limit for ${metric}`) < 0) {
+      const input = $(`${id}${suffix}`);
+      if (input.validity?.badInput) throw Error(`Supply a finite limit for ${metric}.`);
+      if (!signed && input.value.trim() && number(`${id}${suffix}`, `limit for ${metric}`) < 0) {
         throw Error("Vapor potential limits must be nonnegative in the displayed units.");
       }
     }
@@ -4348,6 +4364,8 @@ function describeScenarioInput(request, original) {
     coverage: cases.some(item => item?.coverage != null), vaporSurface: cases.some(item => item?.vapor_surface != null),
     vaporCoverage: cases.some(item => item?.vapor_coverage != null),
     motionVaporHistory: cases.some(item => item?.motion?.vapor_coverage_history != null),
+    transientSurface: cases.some(item => item?.motion?.transient_surface != null),
+    transientCoverage: cases.some(item => item?.motion?.transient_coverage != null),
     ...(matrix ? { matrix: { maxEvaluations: value.max_evaluations,
       cases: Array.isArray(value.cases) ? value.cases.map(item => ({ key: item?.key,
         surface: item?.scenario?.surface != null, motion: item?.scenario?.motion != null,
@@ -4356,6 +4374,8 @@ function describeScenarioInput(request, original) {
         coverage: item?.scenario?.coverage != null, vaporSurface: item?.scenario?.vapor_surface != null,
         vaporCoverage: item?.scenario?.vapor_coverage != null,
         motionVaporHistory: item?.scenario?.motion?.vapor_coverage_history != null,
+        transientSurface: item?.scenario?.motion?.transient_surface != null,
+        transientCoverage: item?.scenario?.motion?.transient_coverage != null,
         ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
 }
 function changedGuidedScenarioDraft() {
@@ -4516,9 +4536,13 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   }));
   const { comparison, ...fragments } = Object.fromEntries(sources);
   const request = buildMaterialScenarioRequest({ ...input, ...fragments });
-  const motionVaporHistory = motionMode === "file" && JSON.parse(fragments.motion).vapor_coverage_history != null;
+  const originalMotion = motionMode === "file" ? JSON.parse(fragments.motion) : null;
+  const motionVaporHistory = originalMotion?.vapor_coverage_history != null;
+  const transientSurface = originalMotion?.transient_surface != null;
+  const transientCoverage = originalMotion?.transient_coverage != null;
   return { request,
-    context: { drape: true, surface, motion: motionMode !== "none", materialStrain, contactLoads, ...transport, motionVaporHistory },
+    context: { drape: true, surface, motion: motionMode !== "none", materialStrain, contactLoads, ...transport,
+      motionVaporHistory, transientSurface, transientCoverage },
     ...((comparison ?? authoredComparison) === undefined ? {} : { comparison: comparison ?? authoredComparison }) };
 }
 function showGuidedScenarioDrafts() {

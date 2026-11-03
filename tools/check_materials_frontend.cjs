@@ -15652,6 +15652,283 @@ test('guided contact loads steer all four existing adaptive modes with explicit 
   assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/missing-loads|contact_loads|contact.*inputs/i);
 });
 
+// These are source-transport doubles; the compiled replay below owns numerical qualification.
+const guidedTransientReadings = [['Surface','surface'],['Coverage','coverage']].flatMap(([title,domain])=>
+  [['InsideEnergy','inside_energy_j','J'],['NetEnergy','net_boundary_energy_j','J'],
+    ['SampleMin','min_sample_temperature_c','C'],['SampleMax','max_sample_temperature_c','C'],
+    ['FinalMin','final_min_temperature_c','C'],['FinalMax','final_max_temperature_c','C']]
+    .map(([label,field,unit])=>['guidedTransient'+title+label,'transient_'+domain+'_'+field,unit,'transient_'+domain]));
+const guidedTransientOriginal = guidedMotionOriginal.replace('"transient_surface":null',
+  '"transient_surface":{"schema":"ftx-motion-surface-heat/1","initial_temperature_c":-0.0,"cells_per_layer":2,"max_cell_steps":18446744073709551615},'+
+  '"transient_coverage":{"schema":"ftx-motion-coverage-heat/1","initial_temperature_c":-12.0,"body_triangle_ids":[4],"instance_layers":{"front.R":"shell <β>"}}');
+function guidedTransientSource(p, raw=guidedTransientOriginal) {
+  guidedMotionSourceControls(p,'file');p.select('guidedMotionFile',raw);p.e.guidedMotionFile.handlers.change();
+}
+
+test('guided transient heat maps all twelve signed nominal criteria without inventing steady policies or rewriting original motion',async()=>{
+  const html=read('materials.html');
+  const control=(id,tag,type)=>{
+    const matches=[...html.matchAll(new RegExp('<([a-z]+)\\b[^>]*\\bid="'+id+'"[^>]*>','g'))];
+    assert.equal(matches.length,1,id+' must occur exactly once in actual HTML');assert.equal(matches[0][1],tag,id);
+    if(type)assert.match(matches[0][0],new RegExp('\\btype="'+type+'"'),id);
+    return matches[0][0];
+  };
+  for(const [prefix] of guidedTransientReadings) {
+    assert.doesNotMatch(control(prefix+'Goal','input','checkbox'),/\schecked(?:\s|=|>)/);
+    control(prefix+'Direction','select');
+    const options=html.match(new RegExp('<select\\b[^>]*\\bid="'+prefix+'Direction"[^>]*>([\\s\\S]*?)</select>'))[1];
+    const values=[...options.matchAll(/<option\b[^>]*\bvalue="([^"]*)"/g)].map(match=>match[1]);
+    assert.equal(values[0],'',prefix+' must start with an explicit unchosen direction');
+    assert.deepEqual(values.slice().sort(),['','maximize','minimize'],prefix);
+    for(const suffix of ['MinimumLimit','Limit']) {
+      const input=control(prefix+suffix,'input','number');assert.match(input,/\bstep="any"/);
+      assert.doesNotMatch(input,/\b(?:min|max)="/,prefix+suffix+' must admit signed finite criteria');
+    }
+  }
+  for(const id of ['guidedRequireTransientSurface','guidedRequireTransientCoverage'])
+    assert.doesNotMatch(control(id,'input','checkbox'),/\schecked(?:\s|=|>)/);
+  const {p}=await guidedScenarioSetup();guidedTransientSource(p);p.e.guidedDrapeMassGoal.checked=false;
+  const goals=[],limits=[];
+  for(const [index,[prefix,metric]] of guidedTransientReadings.entries()) {
+    assert.equal(p.e[prefix+'Goal'].checked,false);assert.equal(p.e[prefix+'Direction'].value,'');
+    for(const [suffix,event] of [['Goal','change'],['Direction','change'],['MinimumLimit','input'],['Limit','input']])
+      assert.equal(typeof p.e[prefix+suffix].handlers[event],'function',prefix+suffix);
+    const direction=index%2?'maximize':'minimize',minimum=-20-index,maximum=-1-index/100;
+    p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value=direction;
+    p.e[prefix+'MinimumLimit'].value=String(minimum);p.e[prefix+'Limit'].value=String(maximum);
+    goals.push({metric,direction});limits.push({metric,minimum,maximum});
+  }
+  p.e.guidedRequireTransientSurface.checked=true;p.e.guidedRequireTransientCoverage.checked=true;
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.ok(sent.scenarioRequest.includes(guidedTransientOriginal));
+  const scenario=JSON.parse(sent.scenarioRequest),policy=JSON.parse(sent.studyRequest).comparison;
+  assert.deepEqual(scenario.motion,JSON.parse(guidedTransientOriginal));
+  assert.equal(Object.hasOwn(scenario,'surface'),false);assert.equal(Object.hasOwn(scenario,'coverage'),false);
+  assert.equal(policy.basis,'nominal');assert.equal(policy.allow_mixed_protocols,false);
+  const byMetric=(a,b)=>a.metric.localeCompare(b.metric);
+  assert.deepEqual(policy.objectives.sort(byMetric),goals.sort(byMetric));assert.deepEqual(policy.constraints.sort(byMetric),limits.sort(byMetric));
+  assert.deepEqual(policy.required_consumers.sort(),['drape','transient_coverage','transient_surface']);
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest},{name:'study-request.json',text:sent.studyRequest}]);
+  const output=section(p,'Fresh drape and heat alternatives');
+  for(const [name,raw] of [['scenario-request.json',sent.scenarioRequest],['study-request.json',sent.studyRequest]]) {
+    const link=descendants(output).find(node=>node.download===name);assert.ok(link,name);assert.equal(await p.blobs.get(link.href).text(),raw);
+  }
+});
+
+test('guided transient heat refuses missing same-case histories, unsupported intervals and malformed signed guards before dispatch',async()=>{
+  for(const invalid of ['absent-surface','absent-coverage','no-motion','form-motion','direction','reported-objective','reported-guard',
+    'infinite','inverted','bad-input-minimum','bad-input-maximum']) {
+    const {p}=await guidedScenarioSetup();guidedTransientSource(p);
+    const prefix='guidedTransientSurfaceInsideEnergy';p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value='minimize';
+    if(invalid.startsWith('absent-')) {
+      const domain=invalid.slice(7),motion=JSON.parse(guidedTransientOriginal);motion['transient_'+domain]=null;
+      guidedTransientSource(p,JSON.stringify(motion));p.e[prefix+'Goal'].checked=false;
+      p.e[domain==='surface'?'guidedRequireTransientSurface':'guidedRequireTransientCoverage'].checked=true;
+    } else if(invalid==='no-motion') {p.e.guidedScenarioMotion.checked=false;p.e.guidedScenarioMotion.handlers.change();}
+    else if(invalid==='form-motion') {guidedMotionSourceControls(p);await addGuidedMotion(p,'0.002','35');}
+    else if(invalid==='direction')p.e[prefix+'Direction'].value='';
+    else if(invalid==='reported-objective')p.e.guidedBasis.value='reported_bounds';
+    else if(invalid==='reported-guard') {p.e[prefix+'Goal'].checked=false;p.e[prefix+'Limit'].value='-1';p.e.guidedLimitBasis.value='reported_bounds';}
+    else if(invalid==='infinite')p.e[prefix+'Limit'].value='Infinity';
+    else if(invalid==='inverted'){p.e[prefix+'MinimumLimit'].value='-1';p.e[prefix+'Limit'].value='-2';}
+    else {const suffix=invalid.endsWith('minimum')?'MinimumLimit':'Limit';p.e[prefix+suffix].value='';p.e[prefix+suffix].validity={badInput:true};}
+    const before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before,invalid);assert.equal(p.e.error.hidden,false,invalid);assert.ok(p.e.error.textContent,invalid);
+  }
+  // A union of capabilities across named cases cannot satisfy a requirement missing in either case.
+  for(const domain of ['surface','coverage']) {
+    const {p}=await guidedScenarioSetup();guidedNamedCases(p);
+    for(const [name,missing] of [['surface-only','coverage'],['coverage-only','surface']]) {
+      const motion=JSON.parse(guidedTransientOriginal);motion['transient_'+missing]=null;
+      guidedTransientSource(p,JSON.stringify(motion));await saveGuidedCase(p,name);
+    }
+    p.e[domain==='surface'?'guidedRequireTransientSurface':'guidedRequireTransientCoverage'].checked=true;
+    const before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before,domain);assert.match(p.e.error.textContent,/transient|case|history/i);
+  }
+});
+
+test('guided transient heat freezes named source histories and per-case signed criteria independently of later drafts',async()=>{
+  const {p}=await guidedScenarioSetup();guidedTransientSource(p);guidedNamedCases(p);
+  p.e.guidedScenarioPolicySource.value='snapshot';p.e.guidedDrapeMassGoal.checked=false;
+  p.e.guidedTransientSurfaceNetEnergyGoal.checked=true;p.e.guidedTransientSurfaceNetEnergyDirection.value='minimize';
+  p.e.guidedTransientSurfaceNetEnergyMinimumLimit.value='-20';p.e.guidedRequireTransientSurface.checked=true;
+  await saveGuidedCase(p,'surface original');
+  const later=guidedTransientOriginal.replace('"initial_temperature_c":-12.0','"initial_temperature_c":-10.0');
+  guidedTransientSource(p,later);p.e.guidedTransientSurfaceNetEnergyGoal.checked=false;
+  p.e.guidedTransientSurfaceNetEnergyMinimumLimit.value='';p.e.guidedRequireTransientSurface.checked=false;
+  p.e.guidedTransientCoverageFinalMinGoal.checked=true;p.e.guidedTransientCoverageFinalMinDirection.value='maximize';
+  p.e.guidedTransientCoverageFinalMinMinimumLimit.value='-15';p.e.guidedRequireTransientCoverage.checked=true;
+  await saveGuidedCase(p,'coverage original');await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.ok(sent.scenarioRequest.includes(guidedTransientOriginal));assert.ok(sent.scenarioRequest.includes(later));
+  const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases.map(item=>item.comparison.objectives),[
+    [{metric:'transient_surface_net_boundary_energy_j',direction:'minimize'}],
+    [{metric:'transient_coverage_final_min_temperature_c',direction:'maximize'}]]);
+  assert.deepEqual(cases.map(item=>item.comparison.constraints),[
+    [{metric:'transient_surface_net_boundary_energy_j',minimum:-20}],
+    [{metric:'transient_coverage_final_min_temperature_c',minimum:-15}]]);
+  assert.deepEqual(cases.map(item=>item.comparison.required_consumers),[['drape','transient_surface'],['drape','transient_coverage']]);
+  p.emit(scenarioMatrixReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const output=section(p,'Fresh drape and heat alternatives'),live=new Set(p.live);
+  p.select('guidedMotionFile','{');p.e.guidedMotionFile.handlers.change();
+  assert.equal(output.hidden,false);assert.deepEqual(p.live,live);
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
+test('guided transient heat source reads own their criteria and cancel stale work after active edits',async()=>{
+  const {p}=await guidedScenarioSetup();guidedTransientSource(p);
+  p.e.guidedTransientSurfaceInsideEnergyGoal.checked=true;p.e.guidedTransientSurfaceInsideEnergyDirection.value='minimize';
+  p.e.guidedTransientSurfaceInsideEnergyMinimumLimit.value='-3';
+  const delay=deferred();p.e.guidedMotionFile.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const running=p.e.scenario.onclick();p.select('guidedMotionFile','{}');
+  p.e.guidedTransientSurfaceInsideEnergyMinimumLimit.value='-999';delay.resolve(guidedTransientOriginal);await running;
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.ok(sent.scenarioRequest.includes(guidedTransientOriginal));
+  assert.equal(JSON.parse(sent.studyRequest).comparison.constraints.find(row=>row.metric==='transient_surface_inside_energy_j').minimum,-3);
+  const changes=[['guidedTransientSurfaceInsideEnergyGoal','change'],['guidedTransientSurfaceNetEnergyDirection','change'],
+    ['guidedTransientCoverageSampleMinMinimumLimit','input'],['guidedTransientCoverageFinalMaxLimit','input'],
+    ['guidedRequireTransientSurface','change'],['guidedRequireTransientCoverage','change'],['guidedMotionFile','change']];
+  for(const mode of ['single','draft'])for(const [id,event] of changes) {
+    const {p}=await guidedScenarioSetup();guidedTransientSource(p);
+    if(mode==='draft'){guidedNamedCases(p);await saveGuidedCase(p,'retained');p.e.guidedScenarioPolicySource.value='snapshot';}
+    const delay=deferred();let reading=false;p.e.guidedMotionFile.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+    const old=p.current(),before=old.messages.length,running=mode==='draft'?saveGuidedCase(p,'pending'):p.e.scenario.onclick();
+    assert.equal(reading,true,mode+':'+id);p.e[id].handlers[event]();assert.equal(old.dead,true,mode+':'+id);p.ready();
+    delay.resolve(guidedTransientOriginal);await running;assert.equal(old.messages.length,before,mode+':'+id);
+    assert.equal(p.current().messages.length,0,mode+':'+id);assert.equal(p.e.guidedScenarioCases.children.length,mode==='draft'?1:0,mode+':'+id);
+    assert.equal(p.live.size,0,mode+':'+id);
+  }
+});
+
+test('compiled WASM guided transient heat criteria retain complete native histories and independent domain refusals',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_SCENARIO_BODY||!process.env.FTX_GUIDED_SCENARIO_NATIVE},async t=>{
+    const source=path.resolve(process.env.FTX_GUIDED_SCENARIO_BODY),load=name=>fs.readFileSync(path.join(source,name));
+    const fixture=JSON.parse(load('pattern.json')),body=load('body-input.json').toString('utf8'),modelBytes=load('model.ftxbody');
+    // Existing accepted_body_workflow numerical fixture: a slightly stretched band settles on the cylinder.
+    const width=2*Math.PI*98;fixture.pieces[0].vertices.b[0]=width;fixture.pieces[0].vertices.c[0]=width;
+    fixture.pieces[0].placement.radius_mm=110;fixture.pieces[0].placement.x0=width/2;
+    delete fixture.fabric.material.expected_sha256;
+    fixture.fabric.material.record.properties.specific_heat={value:1000,unit:'J/(kg*K)',source:'test',evidence:'estimate',
+      method:'Synthetic transient-heat integration test; not measured textile data'};
+    const pattern=JSON.stringify(fixture),alternative=structuredClone(fixture.fabric.material);
+    alternative.id=alternative.record.id='synthetic-guided-transient-transport';alternative.record.properties.thermal_conductivity.value=0.1;
+    const films=[{inside_c:40,outside_c:5,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0.2},
+      {inside_c:5,outside_c:40,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0.2}];
+    const original={schema:'ftx-drape-motion/1',keyframes:[{time_s:0.004,arm_abduction_deg:35.1},{time_s:0.008,arm_abduction_deg:35.2}],
+      max_step_s:0.001,max_trials:16,max_pairs:100000,max_sample_vertices:10000,
+      transient_surface:{schema:'ftx-motion-surface-heat/1',initial_temperature_c:15,cells_per_layer:2,boundaries:films,
+        max_step_s:0.0005,max_cell_steps:100000},
+      transient_coverage:{schema:'ftx-motion-coverage-heat/1',body_triangle_ids:[4],instance_layers:{band:'shell'},
+        settings:{max_distance_m:0.12,min_normal_cosine:0.1,separation_tolerance_m:0.00001,cells_per_layer:2,interfaces:[]},
+        initial_temperature_c:15,boundaries:films,exposed_boundaries:films,max_step_s:0.0005,max_cell_steps:100000,max_geometry_operations:2000000}};
+    let motionRaw=' \r\n'+JSON.stringify(original).replace('"max_step_s":0.001','"max_step_s":0.0010')+'\r\n';
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const loaded=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    const ftx=typeof loaded.initSync==='function'?loaded:loaded.default;
+    if(typeof ftx.initSync==='function')ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:{...ftx,default:async()=>{}}}),{p}=await guidedScenarioSetup(true);
+    p.select('patternFile',pattern);await p.e.patternFile.onchange();
+    p.e.selection.value=JSON.stringify(alternative);p.e.selection.handlers.input();await p.e.inspect.onclick();
+    const inspection=await w.send(p.current().messages.at(-1));assert.equal(inspection.type,'result',inspection.message);
+    p.current().emit(inspection);p.e.studyCandidateName.value='transport';p.e.addStudyCandidate.onclick();
+    p.e.guidedScenarioFitSource.value='none';p.e.guidedScenarioFitSource.handlers.change();
+    for(const [id,value] of Object.entries({guidedScenarioSpacing:30,guidedScenarioSewSteps:12,guidedScenarioDrapeSteps:96,
+      guidedScenarioStep:0.005,guidedScenarioSettle:0,guidedScenarioMeshBudget:4096,guidedScenarioFrameBudget:2000000}))p.e[id].value=String(value);
+    p.select('scenarioBody',body);p.e.scenarioBody.handlers.change();p.e.body.files=[new Blob([modelBytes])];p.e.body.handlers.change();
+    guidedTransientSource(p,motionRaw);p.e.guidedDrapeMassGoal.checked=false;p.e.guidedHeatPowerGoal.checked=false;
+    p.e.guidedRequireTransientSurface.checked=true;p.e.guidedRequireTransientCoverage.checked=true;
+    for(const [prefix] of guidedTransientReadings){p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value='minimize';}
+    const native=path.resolve(process.env.FTX_GUIDED_SCENARIO_NATIVE);
+    const replay=process.env.FTX_GUIDED_SCENARIO_REPLAY?path.join(path.resolve(process.env.FTX_GUIDED_SCENARIO_REPLAY),'transient-criteria'):null;
+    const work=replay||fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-guided-transient-'));if(replay)fs.mkdirSync(replay,{recursive:true});
+    const retain=(name,raw)=>fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});
+    for(const [name,raw] of Object.entries({'pattern.json':pattern,'body-input.json':body,'model.ftxbody':modelBytes}))retain(name,raw);
+    const evaluate=async label=>{
+      await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',label+': '+p.e.error.textContent);
+      assert.equal(sent.pattern,pattern);assert.equal(sent.measurements,body);assert.ok(sent.scenarioRequest.includes(motionRaw));
+      const result=await w.send(sent);assert.equal(result.type,'result',label+': '+result.message);p.current().emit(result);
+      for(const [name,raw] of [['study-request.json',sent.studyRequest],['scenario-request.json',sent.scenarioRequest]]) {
+        assert.equal(result.files.find(file=>file.name===name).text,raw);
+        const link=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.download===name);
+        assert.ok(link,name);assert.equal(await p.blobs.get(link.href).text(),raw);
+      }
+      retain(label+'-study.json',sent.studyRequest);retain(label+'-scenario.json',sent.scenarioRequest);
+      const output=require('node:child_process').execFileSync(native,['scenario-study',path.join(work,'pattern.json'),
+        path.join(work,label+'-study.json'),path.join(work,label+'-scenario.json'),path.join(work,'body-input.json'),path.join(work,'model.ftxbody')],
+        {encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:64*1024*1024});
+      assert.deepEqual(result.result,JSON.parse(output),label+' native/WASM/worker equality');
+      if(label==='complete') {
+        const previous=globalThis.ftxProgress,model=new ftx.WebBody(modelBytes);globalThis.ftxProgress=()=>{};
+        try{assert.deepEqual(result.result,JSON.parse(ftx.material_scenario_study(model,pattern,sent.studyRequest,sent.scenarioRequest,body)));}
+        finally{model.free();if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;}
+      }
+      return result.result;
+    };
+    const simulation=(report,key)=>report.simulations.find(row=>row.key===key).evaluation.result;
+    const complete=await evaluate('complete');assert.equal(complete.comparison.motion_required,true);
+    assert.equal(complete.comparison.alternatives.length,2);
+    for(const row of complete.comparison.alternatives) {
+      assert.equal(row.eligible,true,JSON.stringify(row.exclusions));const initial=simulation(complete,row.key);
+      assert.equal(initial.drape.numerical.settled,true);assert.equal(initial.metrics.simulation_gating_clear,true);
+      assert.equal(initial.motion.status,'available');const motion=initial.motion.result;
+      assert.ok(motion.samples.length>2);assert.notDeepEqual(motion.samples.at(-1).body_positions_m,motion.initial_sample.body_positions_m);
+      for(const consumer of ['transient_surface','transient_coverage']) {
+        assert.equal(motion[consumer].status,'available');const heat=motion[consumer].result,trace=heat.trace;
+        assert.equal(heat.duration_s,motion.duration_s);assert.equal(heat.path_sha256,motion.path_sha256);
+        assert.equal(heat.initial_positions_sha256,motion.initial_positions_sha256);assert.equal(trace.length,motion.samples.length);
+        assert.deepEqual(trace.map(sample=>sample.time_s),motion.samples.map(sample=>sample.time_s));
+        assert.equal(trace.at(-1).time_s,original.keyframes.at(-1).time_s);assert.ok(Math.abs(heat.balance_error_j)<1e-8);
+        assert.equal(heat.physical_validation_claim,false);assert.equal(heat.comfort_claim,false);
+        const expected={inside_energy_j:heat.inside_energy_j,net_boundary_energy_j:heat.net_boundary_energy_j,
+          min_sample_temperature_c:Math.min(original[consumer].initial_temperature_c,...trace.map(sample=>sample.temperature_range_c[0])),
+          max_sample_temperature_c:Math.max(original[consumer].initial_temperature_c,...trace.map(sample=>sample.temperature_range_c[1])),
+          final_min_temperature_c:trace.at(-1).temperature_range_c[0],final_max_temperature_c:trace.at(-1).temperature_range_c[1]};
+        for(const [,metric,unit,domain] of guidedTransientReadings.filter(item=>item[3]===consumer)) {
+          const reading=row.readings[metric];assert.ok(reading,metric);assert.equal(reading.unit,unit);assert.equal(reading.consumer,domain);
+          assert.equal(reading.value,expected[metric.slice(consumer.length+1)],metric);assert.ok(Number.isFinite(reading.value));
+          assert.equal(reading.reported_bounds,undefined,'No uncertainty interval is manufactured for a transient history');
+        }
+      }
+    }
+    const metric='transient_surface_inside_energy_j',values=complete.comparison.alternatives.map(row=>[row.key,row.readings[metric].value]);
+    assert.ok(Math.abs(values[0][1]-values[1][1])>1e-10,'Changing source conductivity must change the computed history');
+    const ceiling=(values[0][1]+values[1][1])/2,admitted=values.find(([,value])=>value<ceiling)[0];
+    p.e.guidedTransientSurfaceInsideEnergyLimit.value=String(ceiling);p.e.guidedTransientSurfaceInsideEnergyLimit.handlers.input();
+    const guarded=await evaluate('energy-guard');assert.deepEqual(guarded.comparison.frontier,[admitted]);
+    assert.deepEqual(guarded.simulations,complete.simulations,'A declared criterion changes eligibility, not the physics');
+    for(const row of guarded.comparison.alternatives)assert.equal(row.eligible,row.key===admitted);
+    // Permit exactly the first complete endpoint's thermal work; refuse the next interval, without publishing a prefix.
+    const heat=simulation(complete,'baseline').motion.result.transient_surface.result;
+    const cellCost=heat.cell_steps/heat.thermal_steps,firstCost=cellCost*heat.trace.filter(sample=>sample.interval_index===0)
+      .reduce((sum,sample)=>sum+sample.thermal_substeps,0);
+    assert.ok(Number.isSafeInteger(firstCost)&&firstCost>0&&firstCost<heat.cell_steps);
+    const limited=structuredClone(original);limited.transient_surface.max_cell_steps=firstCost;
+    motionRaw=' \r\n'+JSON.stringify(limited)+'\r\n';guidedTransientSource(p,motionRaw);
+    const partial=await evaluate('late-surface-refusal');assert.deepEqual(partial.comparison.frontier,[]);
+    for(const row of partial.comparison.alternatives) {
+      assert.equal(row.eligible,false);const before=simulation(guarded,row.key),after=simulation(partial,row.key);
+      assert.equal(after.motion.status,'available');assert.deepEqual(after.motion.result.samples,before.motion.result.samples);
+      assert.deepEqual(after.drape,before.drape);assert.deepEqual(after.surface,before.surface);
+      const surface=after.motion.result.transient_surface;assert.equal(surface.status,'refused');assert.equal(surface.result,undefined);
+      assert.match(surface.refusal.message,/cell-step budget exhausted; no partial history published/);
+      const coverage=after.motion.result.transient_coverage,priorCoverage=before.motion.result.transient_coverage;
+      assert.equal(coverage.status,'available');assert.equal(coverage.result.path_sha256,after.motion.result.path_sha256);
+      assert.notEqual(coverage.result.path_sha256,priorCoverage.result.path_sha256,'The edited source motion receives its own identity');
+      assert.deepEqual(coverage,{...priorCoverage,result:{...priorCoverage.result,path_sha256:coverage.result.path_sha256}},
+        'Independent coverage numerics survive and remain bound to the new original-motion request');
+      for(const [,name,,consumer] of guidedTransientReadings) {
+        if(consumer==='transient_surface')assert.equal(Object.hasOwn(row.readings,name),false,name);
+        else assert.deepEqual(row.readings[name],guarded.comparison.alternatives.find(item=>item.key===row.key).readings[name]);
+      }
+    }
+    assert.match(visibleText(section(p,'Fresh drape and heat alternatives')),/no partial history published/);
+    t.diagnostic('Existing settled synthetic band: all twelve complete-history energy/temperature readings match native, public WASM and worker; '+
+      JSON.stringify(values)+' J, maximum '+ceiling+' J admits '+admitted+'. A late sheet-heat refusal preserves coverage, mechanics and steady heat. '+
+      'No empirical garment warmth, comfort, thermal feedback or uncertainty-propagation claim. Replay inputs: '+work);
+  });
+
 test('compiled WASM guided contact constraints retain nonzero native loads and independent case budgets',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_CONTACT_BODY||!process.env.FTX_GUIDED_CONTACT_NATIVE},async t=>{
     const source=path.resolve(process.env.FTX_GUIDED_CONTACT_BODY),load=name=>fs.readFileSync(path.join(source,name));

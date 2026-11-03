@@ -915,14 +915,16 @@ test('motion vapor criteria require the actual history policy with motion and co
 test('optional scenario consumers preserve old contexts and reject ambiguous availability flags', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const old={drape:true,surface:false},raw=build(state(),old);
-  const keys=['motion','materialStrain','contactLoads','coverage','vaporSurface','vaporCoverage','motionVaporHistory'];
+  const keys=['motion','materialStrain','contactLoads','coverage','vaporSurface','vaporCoverage','motionVaporHistory',
+    'transientSurface','transientCoverage'];
   const flags=Object.fromEntries(keys.map(key=>[key,false]));
   assert.equal(build(state(),{...old,...flags}),raw);
   for(const key of keys)for(const value of [null,undefined,'true',1,{}]) {
     assert.throws(()=>build(state(),{...old,[key]:value}),/availability must be a boolean/);
   }
   const inherited=Object.assign(Object.create(Object.fromEntries(keys.map(key=>[key,true]))),old);
-  for(const consumer of ['material_strain','motion','contact_loads','coverage','vapor_surface','vapor_coverage','motion_vapor_coverage']) {
+  for(const consumer of ['material_strain','motion','contact_loads','coverage','vapor_surface','vapor_coverage','motion_vapor_coverage',
+    'transient_surface','transient_coverage']) {
     assert.throws(()=>build({...state(),requiredConsumers:[consumer]},inherited),new RegExp(`requested ${consumer}`));
   }
 });
@@ -1447,6 +1449,7 @@ const namedContext = (cases=[{key:'cold',surface:false},{key:'warm',surface:fals
     materialStrain:cases.some(item=>item.materialStrain===true),contactLoads:cases.some(item=>item.contactLoads===true),
     coverage:cases.some(item=>item.coverage===true),vaporSurface:cases.some(item=>item.vaporSurface===true),
     vaporCoverage:cases.some(item=>item.vaporCoverage===true),motionVaporHistory:cases.some(item=>item.motionVaporHistory===true),
+    transientSurface:cases.some(item=>item.transientSurface===true),transientCoverage:cases.some(item=>item.transientCoverage===true),
     matrix:{maxEvaluations,cases}});
 const namedDesign = changes => adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative',
   caseKey:'cold',maxEvaluations:2,maxDesigns:1,...changes});
@@ -1880,6 +1883,158 @@ test('complete named scenario snapshots share an exact UTF-8 request limit inclu
   assert.throws(()=>build(input(padding+'x')),/16 MiB/);
   const shared='é'.repeat(3*1024*1024);
   assert.throws(()=>build({maxEvaluations:3,cases:Array.from({length:3},(_,i)=>({key:String(i),scenario:source(shared)}))}),/16 MiB/);
+});
+
+const transientDomains=[['transient_surface','transientSurface'],['transient_coverage','transientCoverage']];
+const transientSuffixes=['inside_energy_j','net_boundary_energy_j','min_sample_temperature_c','max_sample_temperature_c',
+  'final_min_temperature_c','final_max_temperature_c'];
+const transientMetrics=transientDomains.flatMap(([consumer,flag])=>transientSuffixes.map(suffix=>[consumer+'_'+suffix,consumer,flag]));
+
+test('all twelve transient heat criteria preserve signed nominal readings independently of steady heat', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={drape:true,surface:false,coverage:false,motion:true,transientSurface:true,transientCoverage:true};
+  const input={...state(),objectives:transientMetrics.map(([metric],i)=>({metric,direction:i%2?'maximize':'minimize'})),
+    constraints:transientMetrics.map(([metric])=>({metric,minimum:-20,maximum:-1})),
+    requiredConsumers:['transient_surface','transient_coverage']};
+  delete input.cutting;
+  const before=JSON.stringify(input),raw=build(input,context),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.ok(raw.includes(input.candidates[0].selection));
+  assert.deepEqual(result.comparison,{basis:'nominal',objectives:input.objectives,constraints:input.constraints,
+    required_consumers:input.requiredConsumers,allow_mixed_protocols:false});
+  for(const key of ['cutting','scenario','motion','surface','coverage','transient_surface','transient_coverage']) {
+    assert.equal(Object.hasOwn(result,key),false,'Context does not create or replace a physical request');
+  }
+  for(const [metric,consumer,flag] of transientMetrics) {
+    const independent={...state(),objectives:[{metric,direction:'maximize'}],requiredConsumers:[consumer]};
+    assert.ok(build(independent,{drape:true,surface:false,motion:true,[flag]:true}));
+  }
+});
+
+test('transient objectives, limits and required consumers need their own requested history plus motion', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const [consumer,flag] of transientDomains)for(const policy of [
+    {objectives:[{metric:consumer+'_inside_energy_j',direction:'minimize'}]},
+    {constraints:[{metric:consumer+'_final_min_temperature_c',minimum:-10}]},
+    {requiredConsumers:[consumer]}]) {
+    const input={...state(),...policy},context={drape:true,surface:false,motion:true,[flag]:true};
+    assert.ok(build(input,context));
+    assert.throws(()=>build(input),new RegExp(`requested ${consumer}`));
+    for(const key of ['motion',flag]) {
+      const absent={...context};delete absent[key];
+      for(const missing of [absent,{...context,[key]:false}]) {
+        assert.throws(()=>build(input,missing),new RegExp(`requested ${consumer}`));
+      }
+    }
+    const other=flag==='transientSurface'?'transientCoverage':'transientSurface';
+    assert.throws(()=>build(input,{drape:true,surface:true,coverage:true,motion:true,[other]:true}),new RegExp(`requested ${consumer}`));
+    const inherited=Object.assign(Object.create({[flag]:true}),{drape:true,surface:false,motion:true});
+    assert.throws(()=>build(input,inherited),new RegExp(`requested ${consumer}`));
+  }
+});
+
+test('transient heat stays nominal while signed guards coexist with independently bounded material objectives', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={drape:true,surface:false,motion:true,transientSurface:true,transientCoverage:true};
+  const input={...state(),assemblyMass:mass(),basis:'reported_bounds',
+    objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
+    constraints:transientMetrics.map(([metric])=>({metric,basis:'nominal',minimum:-5,maximum:-1}))};
+  assert.deepEqual(JSON.parse(build(input,context)).comparison.constraints,input.constraints);
+  for(const [metric] of transientMetrics) {
+    assert.throws(()=>build({...state(),basis:'reported_bounds',objectives:[{metric,direction:'minimize'}]},context),/explicit nominal basis/);
+    for(const basis of [undefined,'reported_bounds']) {
+      const constraint={metric,minimum:-5};if(basis!==undefined)constraint.basis=basis;
+      assert.throws(()=>build({...input,constraints:[constraint]},context),/explicit nominal basis/);
+    }
+  }
+  for(const constraint of [{minimum:NaN},{maximum:Infinity},{minimum:'-5'},{minimum:-1,maximum:-5}]) {
+    assert.throws(()=>build({...state(),constraints:[{metric:'transient_surface_final_min_temperature_c',...constraint}]},context),/finite ordered/);
+  }
+});
+
+test('named transient comparisons require motion and their heat domain in the same inheriting case', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const [consumer,flag] of transientDomains) {
+    const complete={key:'cold',surface:false,motion:true,[flag]:true};
+    const split=namedContext([{key:'moving',surface:false,motion:true},{key:'heated',surface:false,[flag]:true}]);
+    assert.throws(()=>build({...state(),requiredConsumers:[consumer]},split),new RegExp(`requested ${consumer}`));
+    for(const policy of [{objectives:[{metric:consumer+'_inside_energy_j',direction:'maximize'}]},
+      {constraints:[{metric:consumer+'_final_min_temperature_c',minimum:-5}]},{requiredConsumers:[consumer]}]) {
+      const input={...state(),...policy,design:namedDesign()},missing={key:'warm',surface:false,motion:true};
+      assert.throws(()=>build(input,namedContext([complete,missing])),new RegExp(`warm inherits.*${consumer}`));
+      const context=namedContext([complete,{...missing,comparison:casePolicy()}]),before=JSON.stringify(context);
+      assert.ok(build(input,context));assert.equal(JSON.stringify(context),before);
+    }
+    const both=namedContext([complete,{...complete,key:'warm'}]);
+    const absent={...both};delete absent[flag];
+    for(const context of [absent,{...both,[flag]:false}]) {
+      assert.throws(()=>build(state(),context),new RegExp(`${flag} availability.*actual cases`));
+    }
+    for(const value of [null,undefined,'true',1]) {
+      assert.throws(()=>build(state(),namedContext([{...complete,[flag]:value}])),/availability must be a boolean/);
+    }
+    const original=namedContext([{key:'cold',surface:false,comparison:casePolicy(consumer+'_inside_energy_j','minimize',{
+      constraints:[{metric:consumer+'_final_min_temperature_c',minimum:-5}],required_consumers:[consumer],allow_mixed_protocols:true})}]);
+    const before=JSON.stringify(original);assert.ok(build(state(),original));assert.equal(JSON.stringify(original),before,
+      'An original case policy keeps native consumer and protocol admission rather than inheriting the guided fallback');
+  }
+});
+
+test('transient criteria drive linked grids and every adaptive guidance mode without changing geometry or source policies', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const [consumer,flag] of transientDomains) {
+    const objectives=[{metric:consumer+'_final_min_temperature_c',direction:'maximize'},
+      {metric:consumer+'_inside_energy_j',direction:'minimize'}];
+    const input={...state(),objectives:objectives.slice(0,1),constraints:[{metric:consumer+'_final_max_temperature_c',maximum:30}],
+      requiredConsumers:[consumer]},context={drape:true,surface:false,motion:true,[flag]:true};
+    const grid={...input,design:linkedDesignInput({values:[0,5],maxDesigns:1})},raw=build(grid,context);
+    assert.equal(JSON.parse(raw).schema,'ftx-design-study/1');assert.ok(raw.includes(grid.design.fitSpec));
+    assert.ok(raw.includes(grid.candidates[0].selection));
+    for(const objective of ['consumer_comparison','consumer_pareto']) {
+      const candidate={...input,objectives:objective==='consumer_pareto'?objectives:objectives.slice(0,1),
+        design:adaptiveDesignInput({objective,materialKey:'alternative',maxEvaluations:2,maxDesigns:1})};
+      const result=JSON.parse(build(candidate,context));
+      assert.equal(result.design_adaptive.objective,objective);assert.deepEqual(result.comparison.objectives,candidate.objectives);
+    }
+    const cases=namedContext([{key:'cold',surface:false,motion:true,[flag]:true},
+      {key:'warm',surface:false,motion:true,[flag]:true}]),before=JSON.stringify(cases);
+    for(const objective of ['consumer_comparison','consumer_pareto','consumer_worst_case','consumer_matrix_pareto']) {
+      const design=namedDesign({objective});
+      if(['consumer_worst_case','consumer_matrix_pareto'].includes(objective))delete design.caseKey;
+      const candidate={...input,design,objectives:objective==='consumer_pareto'?objectives:objectives.slice(0,1)};
+      const result=JSON.parse(build(candidate,cases));
+      assert.equal(result.design_adaptive.objective,objective);assert.deepEqual(result.comparison.constraints,input.constraints);
+      assert.deepEqual(result.comparison.required_consumers,[consumer]);assert.equal(JSON.stringify(cases),before);
+    }
+  }
+});
+
+test('original transient policies remain exact through single and named motion snapshots without creating steady domains', async () => {
+  const {buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const film='{"inside_c":30.0,"outside_c":-10.0,"inside_resistance_m2_k_w":-0.0,"outside_resistance_m2_k_w":1.0}';
+  const surface=' {\r\n"schema":"ftx-motion-surface-heat/1","initial_temperature_c":-0.0,"cells_per_layer":1,'+
+    '"boundaries":['+film+','+film+'],"max_step_s":0.01,"max_cell_steps":1000}\r\n';
+  const coverage=' {\r\n"schema":"ftx-motion-coverage-heat/1","body_triangle_ids":[2],"instance_layers":{"band":"shell"},'+
+    '"settings":'+JSON.stringify(coveragePolicy().settings)+',"initial_temperature_c":-0.0,"boundaries":['+film+','+film+'],'+
+    '"exposed_boundaries":[null,null],"max_step_s":0.01,"max_cell_steps":1000,"max_geometry_operations":100000}\r\n';
+  const motion=' \r\n'+JSON.stringify(motionPolicy()).slice(0,-1)+',"transient_surface":'+surface+',"transient_coverage":'+coverage+'}\r\n';
+  const input={...scenarioState(),motion,maxMotionTrials:64,maxVertexFrames:32000000,allowNoFit:false,fitSpec:linkedFitSource()};
+  const before=JSON.stringify(input),snapshot=single(input),parsed=JSON.parse(snapshot);
+  assert.equal(JSON.stringify(input),before);
+  for(const original of [motion,surface,coverage,input.fitSpec])assert.ok(snapshot.includes(original));
+  for(const key of ['surface','coverage','transient_surface','transient_coverage'])assert.equal(Object.hasOwn(parsed,key),false);
+  const comparison=' {"basis":"nominal","objectives":[{"metric":"transient_surface_final_min_temperature_c","direction":"maximize"}],'+
+    '"constraints":[{"metric":"transient_coverage_inside_energy_j","maximum":-0.0}],'+
+    '"required_consumers":["transient_surface","transient_coverage"],"allow_mixed_protocols":false}\r\n';
+  const independent=single({...scenarioState(),maxVertexFrames:32000000});
+  const raw=matrix({maxEvaluations:4,cases:[{key:'moving heat',scenario:snapshot,comparison},{key:'static',scenario:independent}]}),result=JSON.parse(raw);
+  for(const original of [snapshot,motion,surface,coverage,comparison,independent])assert.ok(raw.includes(original));
+  assert.deepEqual(result.cases[0].comparison,JSON.parse(comparison));assert.equal(Object.hasOwn(result.cases[1].scenario,'motion'),false);
+  assert.equal(Object.hasOwn(result.cases[1],'comparison'),false);
+  for(const item of result.cases)for(const key of ['transientSurface','transientCoverage']) {
+    assert.equal(Object.hasOwn(item,key),false);assert.equal(Object.hasOwn(item.scenario,key),false);
+  }
+  const absent=single({...scenarioState(),maxMotionTrials:64,motion:JSON.stringify(motionPolicy({transient_surface:null,transient_coverage:null}))});
+  assert.equal(JSON.parse(absent).motion.transient_surface,null);assert.equal(JSON.parse(absent).motion.transient_coverage,null);
 });
 
 test('contact allowance exhaustion stays a native partial refusal across alternatives, probes and independent cases', async () => {
