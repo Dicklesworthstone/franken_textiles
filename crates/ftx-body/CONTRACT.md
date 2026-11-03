@@ -166,6 +166,9 @@ checks the installed files against the wheel's RECORD and every array against sp
 `~/.cache/franken_textiles/anny-0.6.1-default.ftxbody`). The reader refuses a wrong magic, version,
 dtype, shape, index range, bone order or (with `verify`) SHA-256. Blend shapes are CSR-sparse f64,
 reconstructing the package's dense array exactly.
+The loaded model caches which CSR rows contain exactly the identity vertex sequence. Those rows
+traverse sums and deltas directly, preserving the same shape order and multiply/add operations;
+all sparse, reordered and repeated-index rows retain the indexed path. The file format is unchanged.
 
 **Accepted shared shapes.** `accepted_shape::prepare` is the common file-free
 native/browser importer. It checks an ACCEPTED `ftx-body-fit/1` report against the

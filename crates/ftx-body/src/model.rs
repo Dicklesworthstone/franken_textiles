@@ -143,6 +143,16 @@ pub struct AnnyModel {
     data: AnnyData,
     /// For each of the 26 components: index into the feature list and into that feature's anchors.
     components: Vec<(usize, usize)>,
+    /// True only for CSR rows whose indices are exactly 0..vertices, in that order.
+    dense_rows: Vec<bool>,
+}
+
+fn is_dense_row(indices: &[u32], vertices: usize) -> bool {
+    indices.len() == vertices
+        && indices
+            .iter()
+            .enumerate()
+            .all(|(i, &vertex)| vertex as usize == i)
 }
 
 impl AnnyModel {
@@ -185,7 +195,20 @@ impl AnnyModel {
             };
             components.push((f, k));
         }
-        Ok(Self { data, components })
+        let dense_rows = data
+            .blendshape_row_ptr
+            .windows(2)
+            .map(|range| {
+                data.blendshape_vertex
+                    .get(range[0] as usize..range[1] as usize)
+                    .is_some_and(|row| is_dense_row(row, data.header.counts.vertices))
+            })
+            .collect();
+        Ok(Self {
+            data,
+            components,
+            dense_rows,
+        })
     }
 
     /// The underlying arrays and metadata.
@@ -311,11 +334,18 @@ impl AnnyModel {
                 d.blendshape_row_ptr[k] as usize,
                 d.blendshape_row_ptr[k + 1] as usize,
             );
-            for (&vi, &delta) in d.blendshape_vertex[a..b]
-                .iter()
-                .zip(&d.blendshape_delta[a..b])
-            {
-                sum[vi as usize] += delta * ck;
+            if self.dense_rows[k] {
+                // Identity indices preserve the sparse path's accumulation order exactly.
+                for (value, &delta) in sum.iter_mut().zip(&d.blendshape_delta[a..b]) {
+                    *value += delta * ck;
+                }
+            } else {
+                for (&vi, &delta) in d.blendshape_vertex[a..b]
+                    .iter()
+                    .zip(&d.blendshape_delta[a..b])
+                {
+                    sum[vi as usize] += delta * ck;
+                }
             }
             for j in 0..c.bones {
                 head_sum[j] += d.bone_heads_blendshapes[k * c.bones + j] * ck;
@@ -438,6 +468,22 @@ impl AnnyModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dense_rows_require_the_complete_identity_sequence() {
+        assert!(is_dense_row(&[0, 1, 2, 3], 4));
+        for row in [
+            &[][..],
+            &[0, 1, 2],
+            &[0, 2, 3],
+            &[1, 2, 3, 4],
+            &[0, 2, 1, 3],
+            &[0, 1, 1, 3],
+            &[0, 1, 2, 3, 3],
+        ] {
+            assert!(!is_dense_row(row, 4), "{row:?}");
+        }
+    }
 
     #[test]
     fn anchor_weights_follow_the_package_rules() {
