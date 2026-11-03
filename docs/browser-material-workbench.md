@@ -538,6 +538,26 @@ named cases. Missing instance scopes and exhausted budgets refuse the affected c
 independent results remain available. Required initial and complete-motion strain consumers can
 exclude an alternative without adding an objective. No failure or comfort threshold is supplied.
 
+#### Constrain body contact loads
+
+Enable **Track normal body forces on retained cloth** to select the whole retained garment or exact
+physical instance names from the drape report. Declare both vertex-sample and candidate-pair work
+allowances. Each case reserves these maxima across its alternatives, with separate limits of
+64000000 vertices and pairs. Scope selection does not reduce the complete geometry needed for
+contact evaluation. Missing instances or exhausted work refuse the affected load result while
+independent drape, strain, heat and motion outcomes remain visible.
+
+Four ordinary comparison criteria minimize or limit the initial resultant magnitude, initial
+maximum vertex force and their peaks across complete accepted motion. All use newtons and nominal
+values. Motion criteria require motion and contact-load tracking in the same case; initial or motion
+results can also be required without choosing a force objective. Use explicit nominal limits with
+source-reported heat or mass objectives. Saved named cases retain their exact scope and budgets,
+and the same criteria can guide existing grid and adaptive design discovery.
+
+These are discrete normal body forces. Opposing forces can cancel in the resultant, shared welded
+vertices keep their complete force, and nodal maxima depend on the mesh and contact policy. No
+contact area, pressure, tangential friction, physiological comfort or safe-fit threshold is inferred.
+
 #### Continue the same sewn garment through movement
 
 Enable **Continue the sewn garment through a prescribed body movement**. Declare an endpoint's

@@ -1008,3 +1008,16 @@ history can supply a supposedly complete peak.
 The materials workbench displays separate initial and motion load tables, signed resultant
 components, maxima, sample/time/vertex witnesses, selected instances and raw receipts. It displays
 the Rust comparison result without deriving a pressure or reranking the alternatives in JavaScript.
+
+In guided scenarios, enable **Track normal body forces on retained cloth**, choose all retained
+instances or exact physical instance names, and declare both work allowances. The four force
+criteria above can be minimized or given inclusive maximums independently of their goal checkboxes.
+Required initial or complete-motion loads can also be declared without a force objective. These
+criteria use nominal values; source-reported heat or mass objectives can retain explicit nominal
+force limits. A complete-motion criterion needs motion and contact-load tracking in the same case.
+
+Single, saved named, linked-grid and adaptive studies reuse the same request and native admission.
+Saved cases freeze their own scope and allowances; editing another draft leaves those cases intact.
+Controls are captured before source reads, edits cancel obsolete work, and removing or replacing
+the pattern clears its contact-load scope. Each named case has its own session's aggregate contact
+allowances; the authoring layer does not divide or increase them automatically.
