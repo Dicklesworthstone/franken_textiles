@@ -7,6 +7,44 @@ An optional prescribed body trajectory then continues that same sewn cloth throu
 No earlier alternative's cloth state, relaxation/plastic history, final pose or heat map is reused.
 This is a software delivery, not closure of the empirical or optimization gates in plan §25.10.
 
+## Guided browser studies
+
+The material workbench can author the same scenario directly, or retain a complete original
+scenario/matrix file. Guided cases include the original fit contract, optional independent-sheet
+heat conditions, an optional material-direction strain scope and prescribed body motion. Save
+1–8 named snapshots to compare the same body and material/design alternatives under different
+operating conditions. Each saved case keeps its original input fragments and numerical budgets;
+editing the next draft does not change saved cases. Replacing a pattern clears the garment-specific
+cases, motion endpoints and strain scope.
+
+Steady independent-sheet heat supports both nominal comparisons and complete source-reported
+bounds. Choose the signed objective direction explicitly, and optionally supply inclusive lower
+and upper power limits. A bounded decision requires the entire admitted interval to satisfy its
+limits; absent intervals retain the nominal result but cannot qualify that decision. Overlapping
+intervals are not a proved ordering. The selected comparison basis applies to objectives, while
+limits can explicitly choose a separate basis. Source bounds do not include unreported uncertainty
+in geometry, films or reservoir temperatures.
+
+Enable material-direction strain to inspect all retained physical instances or exact named
+instances from a drape report. Six initial and six complete-motion extrema expose warp E11,
+weft E22 and engineering shear 2E12. These are signed dimensionless Green strains; the guided
+controls never turn them into percent elongation or invent acceptable fabric limits. Raising a
+minimum and lowering a maximum are separate explicit objectives. Minimum-strain constraints
+apply lower bounds, and maximum-strain constraints apply upper bounds. All strain decisions use
+the nominal basis and can accompany reported-bound heat or mass objectives through explicit
+nominal limits.
+
+Motion can be authored as 1–16 absolute pose endpoints or supplied as original
+`ftx-drape-motion/1` JSON. The latter preserves complete transient heat/water inputs and source
+numbers. Form endpoints specify cumulative time after draping, arm abduction and standing,
+seated or squat legs; no endpoint pose is inferred from a previous one. The selected body shape
+is reused throughout. Separate trial, collision, retained-vertex and triangle-sample allowances
+bound the existing production consumers. Complete-motion extrema include the initial state and
+every accepted sample. Missing scope, exhausted work and refused trajectories stay explicit,
+while independent initial drape, heat and manufacturing results remain available. Source and
+policy edits cancel obsolete work and withdraw stale downloads; exact generated requests replay
+through the commands below.
+
 ## Native commands
 
 ```sh

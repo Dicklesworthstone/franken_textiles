@@ -850,6 +850,51 @@ qualify a drape-based comparison. Zero gravity steps describe a sewing-only expe
 <label><input id="guidedScenarioHeat" type="checkbox"> Evaluate independent sheet heat using the original section-3 heat conditions</label>
 <p class="note">Uses each alternative's fresh geometry and qualified thermal observations with the declared reservoir temperatures
 and boundary films. Independent sheet power is not layered body coverage, whole-wearer heat loss or a comfort score.</p>
+<fieldset><legend>Material-direction strain</legend>
+<label><input id="guidedMaterialStrain" type="checkbox"> Track warp, weft and shear on the actual cloth triangles</label>
+<div id="guidedMaterialStrainControls" hidden>
+<label>Cloth region <select id="guidedMaterialStrainScope"><option value="all">All retained physical instances</option>
+<option value="instances">Only the exact physical instance names below</option></select></label>
+<label>Physical instance names, one per line <textarea id="guidedMaterialStrainInstances" rows="3" disabled
+placeholder="For example: front.R&#10;front.L"></textarea></label>
+<small>Use names from the drape report. A source piece can expand into several physical instances.
+Blank lines are ignored; other spaces remain part of each name. Missing or unretained names refuse this consumer.</small>
+<label>Triangle-sample allowance per alternative <input id="guidedMaterialStrainBudget" type="number"
+min="1" max="64000000" step="1" value="1000000"></label>
+<p class="note">The allowance covers selected production triangles in the initial state and every accepted motion sample.
+Every alternative reserves its full allowance against a shared 64000000 triangle-sample limit, also shared across named cases.
+Warp E11, weft E22 and engineering shear 2E12 are signed, dimensionless Green strain, not percent elongation or principal strain.
+Enter independently justified limits below; no material failure or comfort threshold is supplied.</p>
+</div></fieldset>
+<fieldset><legend>Continue the sewn garment through body motion</legend>
+<label>Motion source <select id="guidedMotionSource"><option value="none">No motion — initial pose only</option>
+<option value="form">Author absolute pose endpoints here</option>
+<option value="file">Retain an original motion request</option></select></label>
+<div id="guidedMotionForm" hidden>
+<p>Each endpoint names a cumulative time after the initial drape and an absolute body pose. Add 1–16 endpoints in time order.</p>
+<div id="guidedMotionFrames"></div>
+<p id="guidedMotionCount" class="note" role="status">0 of 16 endpoints. Times are cumulative from the completed initial drape.</p>
+<button id="guidedMotionAdd" type="button" disabled>Add endpoint</button>
+<button id="guidedMotionClear" type="button" disabled>Clear endpoints</button>
+<div class="study-fields">
+<label>Maximum motion time step (s) <input id="guidedMotionStep" type="number" min="0.000000001" max="1" step="any" value="0.01"></label>
+<label>Attempted steps per alternative <input id="guidedMotionTrials" type="number" min="1" max="512" step="1" value="256"></label>
+<label>Collision candidate allowance <input id="guidedMotionPairs" type="number" min="1" max="1000000" step="1" value="100000"></label>
+<label>Retained motion vertex allowance <input id="guidedMotionSamples" type="number" min="1" max="2000000" step="1" value="500000"></label>
+</div>
+<p class="note">Endpoint times must be separated by at least 1 ns and end within 60 s. The attempted-step allowance must cover
+the stated time steps; adaptive subdivisions also consume it. Standing returns the legs to standing, including after a bend.
+Repeating the same complete pose at a later time requests a hold.</p>
+</div>
+<label id="guidedMotionFileField" hidden>Original motion JSON (<code>ftx-drape-motion/1</code>)
+<input id="guidedMotionFile" type="file" accept=".json,application/json"></label>
+<label id="guidedMotionBudgetField" hidden>Aggregate motion trial allowance for this case
+<input id="guidedMotionBudget" type="number" min="1" max="32768" step="1" value="4096"></label>
+<p class="note">Every alternative continues its own sewn cloth, velocity and material history on the same selected body shape.
+Body vertices follow straight chords between posed endpoints; this is not joint-angle interpolation. The root stays fixed and upright;
+seated and squat endpoints do not add a chair, floor or root descent. Original files retain their complete thermal and water requests.
+A failed trajectory has no partial motion result; independent initial drape and manufacturing results remain visible.</p>
+</fieldset>
 <fieldset id="guidedScenarioCasePolicy" hidden><legend>Comparison policy for this case</legend>
 <label>Use <select id="guidedScenarioPolicySource">
 <option value="inherit">The shared comparison goals and limits at run time</option>
@@ -870,10 +915,10 @@ An original policy file keeps its complete source. Shared comparison settings ap
 <p id="guidedScenarioCaseCount" class="note" role="status">No named cases saved.</p>
 <div id="guidedScenarioCases"></div>
 <button id="clearScenarioCases" type="button" disabled>Clear saved cases</button>
-<p class="note">Save 1–8 unique names. Every case retains its exact fit and heat sources and numerical settings.
+<p class="note">Save 1–8 unique names. Every case retains its exact fit, heat and motion sources, strain scope and numerical settings.
 Saved cases share the selected body source and current material/design choices. Their vertex-frame allowances must sum to
 at most 64000000; for example, explicitly allocate 32000000 each for two cases. The single-case default uses the full allowance.
-No budget is divided automatically.</p>
+Active motion trial allowances must sum to at most 32768. No budget is divided automatically.</p>
 <p class="note">Only saved cases run in this mode. Replace uses the current draft controls and source files while retaining that case's name.
 Removing, replacing or reordering cases withdraws old results and requires any nominated guidance case to be chosen again.
 Loading or adopting another pattern clears saved cases. Switching to a single scenario or a loaded request preserves them for return.</p>
@@ -892,6 +937,8 @@ Use the scenario action below; the manufacturing-only action cannot evaluate the
 <input id="guidedStrainLimit" type="number" min="0" step="any" aria-label="Maximum absolute panel-edge strain percentage" placeholder="No limit">
 <label><input id="guidedHeatPowerGoal" type="checkbox"> Compare signed independent sheet heat (W)</label>
 <input id="guidedHeatPowerLimit" type="number" step="any" aria-label="Maximum signed independent sheet heat power in watts" placeholder="No limit">
+<label><input id="guidedMotionStrainGoal" type="checkbox"> Minimize maximum absolute panel-edge strain over motion (%)</label>
+<input id="guidedMotionStrainLimit" type="number" min="0" step="any" aria-label="Maximum absolute panel-edge strain percentage over motion" placeholder="No limit">
 </div>
 <label>Signed heat objective <select id="guidedHeatDirection"><option value="">Choose a direction when comparing heat</option>
 <option value="minimize">Minimize signed outward power</option><option value="maximize">Maximize signed outward power</option></select></label>
@@ -899,6 +946,45 @@ Use the scenario action below; the manufacturing-only action cannot evaluate the
 aria-label="Minimum signed independent sheet heat power in watts" placeholder="No minimum"></label>
 <label><input id="guidedRequireDrape" type="checkbox"> Require a numerically admissible drape, even without a drape objective</label>
 <label><input id="guidedRequireSurface" type="checkbox"> Require a complete independent sheet heat result</label>
+<label><input id="guidedRequireMotion" type="checkbox"> Require a complete converged motion trajectory</label>
+<label><input id="guidedRequireMaterialStrain" type="checkbox"> Require initial material-direction strain</label>
+<label><input id="guidedRequireMotionMaterialStrain" type="checkbox"> Require material-direction strain over the complete motion</label>
+<details><summary>Signed material-direction goals and limits</summary>
+<p>Choose which extrema to improve, or enter limits without choosing an objective. Lower bounds apply to the minimum strain;
+upper bounds apply to the maximum. These signed, dimensionless Green-strain metrics support nominal values only.
+Choose nominal objectives, or an explicit nominal limit basis when combining strain limits with reported-range mass or heat objectives.</p>
+<div class="study-goals"><strong>Initial directional objective</strong><strong>Allowed bound (optional)</strong>
+<label><input id="guidedWarpMinGoal" type="checkbox"> Raise minimum warp E11</label>
+<input id="guidedWarpMinLimit" type="number" step="any" aria-label="Minimum allowed initial warp Green strain" placeholder="Minimum E11">
+<label><input id="guidedWarpMaxGoal" type="checkbox"> Lower maximum warp E11</label>
+<input id="guidedWarpMaxLimit" type="number" step="any" aria-label="Maximum allowed initial warp Green strain" placeholder="Maximum E11">
+<label><input id="guidedWeftMinGoal" type="checkbox"> Raise minimum weft E22</label>
+<input id="guidedWeftMinLimit" type="number" step="any" aria-label="Minimum allowed initial weft Green strain" placeholder="Minimum E22">
+<label><input id="guidedWeftMaxGoal" type="checkbox"> Lower maximum weft E22</label>
+<input id="guidedWeftMaxLimit" type="number" step="any" aria-label="Maximum allowed initial weft Green strain" placeholder="Maximum E22">
+<label><input id="guidedShearMinGoal" type="checkbox"> Raise minimum engineering shear 2E12</label>
+<input id="guidedShearMinLimit" type="number" step="any" aria-label="Minimum allowed initial engineering shear Green strain" placeholder="Minimum 2E12">
+<label><input id="guidedShearMaxGoal" type="checkbox"> Lower maximum engineering shear 2E12</label>
+<input id="guidedShearMaxLimit" type="number" step="any" aria-label="Maximum allowed initial engineering shear Green strain" placeholder="Maximum 2E12">
+</div>
+<div class="study-goals"><strong>Complete-motion directional objective</strong><strong>Allowed bound (optional)</strong>
+<label><input id="guidedMotionWarpMinGoal" type="checkbox"> Raise minimum warp E11 over motion</label>
+<input id="guidedMotionWarpMinLimit" type="number" step="any" aria-label="Minimum allowed warp Green strain over motion" placeholder="Minimum E11">
+<label><input id="guidedMotionWarpMaxGoal" type="checkbox"> Lower maximum warp E11 over motion</label>
+<input id="guidedMotionWarpMaxLimit" type="number" step="any" aria-label="Maximum allowed warp Green strain over motion" placeholder="Maximum E11">
+<label><input id="guidedMotionWeftMinGoal" type="checkbox"> Raise minimum weft E22 over motion</label>
+<input id="guidedMotionWeftMinLimit" type="number" step="any" aria-label="Minimum allowed weft Green strain over motion" placeholder="Minimum E22">
+<label><input id="guidedMotionWeftMaxGoal" type="checkbox"> Lower maximum weft E22 over motion</label>
+<input id="guidedMotionWeftMaxLimit" type="number" step="any" aria-label="Maximum allowed weft Green strain over motion" placeholder="Maximum E22">
+<label><input id="guidedMotionShearMinGoal" type="checkbox"> Raise minimum engineering shear 2E12 over motion</label>
+<input id="guidedMotionShearMinLimit" type="number" step="any" aria-label="Minimum allowed engineering shear Green strain over motion" placeholder="Minimum 2E12">
+<label><input id="guidedMotionShearMaxGoal" type="checkbox"> Lower maximum engineering shear 2E12 over motion</label>
+<input id="guidedMotionShearMaxLimit" type="number" step="any" aria-label="Maximum allowed engineering shear Green strain over motion" placeholder="Maximum 2E12">
+</div>
+<p class="note">Initial metrics require the directional strain request above. Motion metrics additionally require the complete
+trajectory and include the initial state and every accepted sample. Missing scopes, exhausted work or unavailable consumers
+exclude that decision without erasing independent results. No limit is a measured material failure threshold unless you supply that evidence.</p>
+</details>
 <p class="note">Negative power is meaningful; minimizing signed power does not minimize its magnitude. Sheet heat supports nominal
 values or complete source-reported ranges for constant thermal laws. A reported-range limit admits only an entire interval inside
 the declared minimum and maximum; missing ranges keep the nominal heat visible but exclude that alternative from the range decision.

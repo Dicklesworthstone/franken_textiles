@@ -5800,6 +5800,36 @@ async function guidedScenarioSetup(heat = false) {
   p.e.body.files=[new Blob([new Uint8Array([2,4,6])])];p.e.body.handlers.change();
   p.e.scenarioMode.handlers.change();return {p,sources};
 }
+// Transport fixture: the oversized advanced policy must reach Rust unchanged for its own refusal.
+const guidedMotionOriginal = ' {"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.0020,"arm_abduction_deg":-0.0,"leg_pose":null},' +
+  '{"time_s":0.0040,"arm_abduction_deg":35.0,"leg_pose":{"posture":"seated","fraction":0.0030}}],' +
+  '"max_step_s":0.0010,"max_trials":16,"max_pairs":100000,"transient_surface":null,' +
+  '"vapor_coverage_history":{"schema":"ftx-motion-vapor-coverage/1","integration":"right_endpoint","max_geometry_operations":18446744073709551615}}\r\n';
+function guidedStrainControls(p, instances = null) {
+  p.e.guidedMaterialStrain.checked=true;
+  p.e.guidedMaterialStrainScope.value=instances===null?'all':'instances';
+  p.e.guidedMaterialStrainInstances.value=instances===null?'':instances.join('\n');
+  p.e.guidedMaterialStrainBudget.value='100000';
+  p.e.guidedMaterialStrain.handlers.change();
+}
+function guidedMotionControls(p, mode = 'form') {
+  for(const [id,value] of Object.entries({guidedMotionSource:mode,guidedMotionBudget:'96',guidedMotionStep:'0.001',
+    guidedMotionTrials:'16',guidedMotionPairs:'100000',guidedMotionSamples:'10000'}))p.e[id].value=value;
+  p.e.guidedMotionSource.handlers.change();
+}
+function guidedMotionFields(p, index = 0) {
+  const row=p.e.guidedMotionFrames.children[index];assert.ok(row,'Endpoint '+(index+1));
+  return Object.fromEntries(descendants(row).filter(node=>node.name).map(node=>[node.name,node]));
+}
+function editGuidedMotion(p, index, key, value) {
+  const field=guidedMotionFields(p,index)[key];assert.ok(field,key);field.value=String(value);
+  field.handlers[key==='posture'?'change':'input']();
+}
+function addGuidedMotion(p, time, arm, posture = 'standing', fraction = '1') {
+  p.e.guidedMotionAdd.onclick();const index=p.e.guidedMotionFrames.children.length-1;
+  for(const [key,value] of Object.entries({time,arm,posture,fraction}))editGuidedMotion(p,index,key,value);
+  return guidedMotionFields(p,index);
+}
 function guidedNamedCases(p) {
   p.e.scenarioMode.value='guided_matrix';p.e.guidedScenarioPolicySource.value='inherit';
   p.e.guidedScenarioMatrixBudget.value='64';p.e.scenarioMode.handlers.change();
@@ -6630,6 +6660,225 @@ test('guided scenario-only choices reach the worker with exact sources, signed h
     assert.equal(await p.blobs.get(download.href).text(),raw);
   }
   p.windowEvents.pagehide();assert.equal(p.live.size,0);
+});
+
+test('guided motion preserves original advanced policies and directional scope through native refusal and exact replay',async()=>{
+  const {p,sources}=await guidedScenarioSetup(true);guidedStrainControls(p,['front.R','lining <β>']);
+  guidedMotionControls(p,'file');p.select('guidedMotionFile',guidedMotionOriginal);p.e.guidedMotionFile.handlers.change();
+  p.e.guidedMotionStrainGoal.checked=true;p.e.guidedRequireMotion.checked=true;
+  p.e.guidedRequireMaterialStrain.checked=true;p.e.guidedRequireMotionMaterialStrain.checked=true;
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(guidedMotionOriginal));
+  assert.ok(sent.scenarioRequest.includes(sources.fit));assert.equal(sent.measurements,sources.scenarioBody);
+  const request=JSON.parse(sent.scenarioRequest),comparison=JSON.parse(sent.studyRequest).comparison;
+  assert.equal(request.max_motion_trials,96);assert.equal(Object.hasOwn(request.motion,'max_sample_vertices'),false);
+  assert.deepEqual(request.material_strain,{schema:'ftx-material-strain/1',instances:['front.R','lining <β>'],max_triangle_samples:100000});
+  assert.deepEqual(comparison.required_consumers.sort(),['drape','material_strain','motion','motion_material_strain','surface']);
+  const report=scenarioReport();report.scenario.scenario=request;
+  const initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  initial.motion=refused('Advanced transient policy exceeded its native allowance');
+  initial.material_strain=refused('Requested retained instance is missing');
+  let calls=0,freed=0;
+  const w=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){freed++;}},
+    material_scenario_study:(_body,...args)=>{
+      calls++;assert.deepEqual(args,[sent.pattern,sent.studyRequest,sent.scenarioRequest,sources.scenarioBody]);
+      assert.ok(args[2].includes(guidedMotionOriginal));return JSON.stringify(report);
+    }}});
+  const result=await w.send(sent);assert.equal(result.type,'result',result.message);assert.equal(calls,1);assert.equal(freed,1);
+  p.current().emit(result);const output=section(p,'Fresh drape and heat alternatives');
+  assert.match(visibleText(output),/Advanced transient policy exceeded its native allowance/);
+  assert.match(visibleText(output),/Requested retained instance is missing/);
+  assert.match(visibleText(output),/-4.5/,'Independent initial sheet heat survives consumer refusal');
+  for(const [name,raw] of [['scenario-request.json',sent.scenarioRequest],['study-request.json',sent.studyRequest]]) {
+    const link=descendants(output).find(node=>node.download===name);assert.ok(link,name);
+    assert.equal(await p.blobs.get(link.href).text(),raw);
+  }
+});
+
+test('guided directional strain maps all signed static and motion goals, guards and required consumers',async()=>{
+  const {p}=await guidedScenarioSetup();guidedStrainControls(p);guidedMotionControls(p);
+  addGuidedMotion(p,'0.002','35','seated','0.2');addGuidedMotion(p,'0.004','40','squat','0.4');
+  addGuidedMotion(p,'0.006','35');
+  p.e.guidedDrapeMassGoal.checked=false;p.e.guidedMotionStrainGoal.checked=true;p.e.guidedMotionStrainLimit.value='4.5';
+  p.e.guidedRequireMaterialStrain.checked=true;p.e.guidedRequireMotion.checked=true;p.e.guidedRequireMotionMaterialStrain.checked=true;
+  const expectedGoals=[{metric:'motion_max_absolute_edge_strain_pct',direction:'minimize'}];
+  const expectedLimits=[{metric:'motion_max_absolute_edge_strain_pct',maximum:4.5}];
+  for(const [prefix,scope] of [['',''],['Motion','motion_']]) {
+    for(const [name,axis] of [['Warp','warp'],['Weft','weft'],['Shear','engineering_shear']]) {
+      for(const [side,extreme,direction,bound,value] of [['Min','min','maximize','minimum',-0.125],['Max','max','minimize','maximum',0.25]]) {
+        const id='guided'+prefix+name+side,metric=scope+extreme+'_'+axis+'_green_strain';
+        p.e[id+'Goal'].checked=true;p.e[id+'Limit'].value=String(value);
+        expectedGoals.push({metric,direction});expectedLimits.push({metric,[bound]:value});
+      }
+    }
+  }
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const scenario=JSON.parse(sent.scenarioRequest),comparison=JSON.parse(sent.studyRequest).comparison;
+  assert.deepEqual(scenario.material_strain,{schema:'ftx-material-strain/1',max_triangle_samples:100000});
+  assert.deepEqual(scenario.motion,{schema:'ftx-drape-motion/1',keyframes:[
+    {time_s:0.002,arm_abduction_deg:35,leg_pose:{posture:'seated',fraction:0.2}},
+    {time_s:0.004,arm_abduction_deg:40,leg_pose:{posture:'squat',fraction:0.4}},
+    {time_s:0.006,arm_abduction_deg:35}
+  ],max_step_s:0.001,max_trials:16,max_pairs:100000,max_sample_vertices:10000});
+  assert.equal(scenario.max_motion_trials,96);
+  const byMetric=(a,b)=>a.metric.localeCompare(b.metric);
+  assert.deepEqual(comparison.objectives.sort(byMetric),expectedGoals.sort(byMetric));
+  assert.deepEqual(comparison.constraints.sort(byMetric),expectedLimits.sort(byMetric));
+  assert.deepEqual(comparison.required_consumers.sort(),['drape','material_strain','motion','motion_material_strain']);
+  assert.equal(comparison.basis,'nominal');
+});
+
+test('guided motion endpoints start blank, require explicit poses and stay bounded after removal and clearing',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  assert.equal(p.e.guidedMotionFrames.children.length,0);
+  p.e.guidedMotionAdd.onclick();let fields=guidedMotionFields(p);
+  assert.deepEqual(Object.fromEntries(Object.entries(fields).map(([key,field])=>[key,field.value])),
+    {time:'',arm:'',posture:'standing',fraction:'1'});
+  assert.equal(fields.fraction.disabled,true);
+  let before=p.current().messages.length;await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/endpoint.*time/i);
+  editGuidedMotion(p,0,'time','0.002');await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/arm angle/i);
+  editGuidedMotion(p,0,'arm','35');editGuidedMotion(p,0,'posture','seated');editGuidedMotion(p,0,'fraction','');
+  assert.equal(guidedMotionFields(p).fraction.disabled,false);await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/leg fraction/i);
+  editGuidedMotion(p,0,'fraction','0.25');addGuidedMotion(p,'0.004','36');
+  const removed=guidedMotionFields(p).time;
+  descendants(p.e.guidedMotionFrames).find(node=>node.textContent==='Remove endpoint 1').onclick();
+  removed.value='55';removed.handlers.input();
+  assert.equal(p.e.guidedMotionFrames.children.length,1);assert.equal(guidedMotionFields(p).time.value,'0.004');
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).motion.keyframes,[{time_s:0.004,arm_abduction_deg:36}]);
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);p.e.guidedMotionClear.onclick();
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);assert.equal(p.live.size,0);
+  for(let i=0;i<16;i++)p.e.guidedMotionAdd.onclick();
+  assert.equal(p.e.guidedMotionFrames.children.length,16);assert.equal(p.e.guidedMotionAdd.disabled,true);
+  p.e.guidedMotionAdd.onclick();assert.equal(p.e.guidedMotionFrames.children.length,16);
+  assert.match(visibleText(p.e.guidedMotionFrames),/Endpoint 16/);
+  p.e.guidedMotionClear.onclick();assert.equal(p.e.guidedMotionFrames.children.length,0);assert.equal(p.e.guidedMotionClear.disabled,true);
+});
+
+test('guided directional consumers refuse absent scope, missing motion and unsupported uncertainty before dispatch',async()=>{
+  for(const invalid of ['empty-scope','duplicate-scope','missing-motion','motion-without-strain','reported-goal','reported-guard','missing-file']) {
+    const {p}=await guidedScenarioSetup();guidedStrainControls(p);
+    if(invalid==='empty-scope'||invalid==='duplicate-scope') {
+      p.e.guidedMaterialStrainScope.value='instances';p.e.guidedMaterialStrainInstances.value=invalid==='empty-scope'?'':'front.R\nfront.R';
+    } else if(invalid==='missing-motion')p.e.guidedMotionWarpMaxGoal.checked=true;
+    else if(invalid==='motion-without-strain') {
+      guidedMotionControls(p);addGuidedMotion(p,'0.002','35');p.e.guidedMaterialStrain.checked=false;
+      p.e.guidedRequireMotionMaterialStrain.checked=true;
+    } else if(invalid==='reported-goal') {
+      p.e.guidedDrapeMassGoal.checked=false;p.e.guidedWarpMaxGoal.checked=true;p.e.guidedBasis.value='reported_bounds';
+    } else if(invalid==='reported-guard') {
+      p.e.guidedWarpMinLimit.value='-0.1';p.e.guidedLimitBasis.value='reported_bounds';
+    } else guidedMotionControls(p,'file');
+    const before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before,invalid);assert.equal(p.e.error.hidden,false,invalid);
+    assert.ok(p.e.error.textContent,invalid);assert.equal(p.live.size,0,invalid);
+  }
+});
+
+test('guided motion and directional policies stay frozen in named cases when editor sources change',async()=>{
+  const {p}=await guidedScenarioSetup();guidedStrainControls(p,['front.R']);guidedMotionControls(p,'file');
+  p.select('guidedMotionFile',guidedMotionOriginal);p.e.guidedMotionFile.handlers.change();
+  p.e.guidedWarpMinGoal.checked=true;p.e.guidedWarpMinLimit.value='-0.125';
+  p.e.guidedRequireMotion.checked=true;p.e.guidedRequireMotionMaterialStrain.checked=true;
+  guidedNamedCases(p);p.e.guidedScenarioPolicySource.value='snapshot';await saveGuidedCase(p,'source motion');
+  assert.match(p.e.guidedScenarioCaseCount.textContent,/1 of 8/);
+  guidedMotionControls(p);addGuidedMotion(p,'0.002','50','squat','0.5');guidedStrainControls(p);
+  p.e.guidedMotionBudget.value='80';p.e.guidedMaterialStrainBudget.value='200000';p.e.guidedWarpMinLimit.value='-0.25';
+  await saveGuidedCase(p,'authored motion');await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.ok(sent.scenarioRequest.includes(guidedMotionOriginal));
+  assert.deepEqual(cases.map(item=>item.scenario.max_motion_trials),[96,80]);
+  assert.deepEqual(cases.map(item=>item.scenario.material_strain.max_triangle_samples),[100000,200000]);
+  assert.deepEqual(cases[0].scenario.material_strain.instances,['front.R']);
+  assert.equal(Object.hasOwn(cases[1].scenario.material_strain,'instances'),false);
+  assert.deepEqual(cases[1].scenario.motion.keyframes,[{time_s:0.002,arm_abduction_deg:50,leg_pose:{posture:'squat',fraction:0.5}}]);
+  assert.deepEqual(cases.map(item=>item.comparison.constraints),[
+    [{metric:'min_warp_green_strain',minimum:-0.125}],[{metric:'min_warp_green_strain',minimum:-0.25}]]);
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const output=section(p,'Fresh drape and heat alternatives'),live=new Set(p.live);
+  p.e.guidedMotionClear.onclick();p.select('guidedMotionFile','{');p.e.guidedMotionFile.handlers.change();
+  p.e.guidedMaterialStrainInstances.value='another-instance';p.e.guidedMaterialStrainInstances.handlers.input();
+  p.e.guidedMotionBudget.value='invalid';p.e.guidedMotionBudget.handlers.input();
+  assert.equal(output.hidden,false);assert.deepEqual(p.live,live);
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
+test('guided motion source reads snapshot inputs and reject stale single runs and pending named cases',async()=>{
+  const {p}=await guidedScenarioSetup();guidedStrainControls(p,['front.R']);guidedMotionControls(p,'file');
+  const delay=deferred();p.select('guidedMotionFile',guidedMotionOriginal);
+  p.e.guidedMotionFile.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const running=p.e.scenario.onclick();
+  p.select('guidedMotionFile','{}');p.e.guidedMaterialStrainInstances.value='changed-without-event';
+  p.e.guidedMotionBudget.value='1';delay.resolve(guidedMotionOriginal);await running;
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.ok(sent.scenarioRequest.includes(guidedMotionOriginal));
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).material_strain.instances,['front.R']);
+  assert.equal(JSON.parse(sent.scenarioRequest).max_motion_trials,96);
+  for(const mode of ['single','draft']) {
+    for(const change of ['time','arm','posture','fraction','remove','scope','budget','file','goal','guard','required']) {
+      const {p,sources}=await guidedScenarioSetup();guidedStrainControls(p,['front.R']);guidedMotionControls(p);
+      addGuidedMotion(p,'0.002','35','seated','0.25');
+      if(change==='file'){guidedMotionControls(p,'file');p.select('guidedMotionFile',guidedMotionOriginal);}
+      if(mode==='draft'){guidedNamedCases(p);await saveGuidedCase(p,'retained');p.e.guidedScenarioPolicySource.value='snapshot';}
+      const delay=deferred();let reading=false;
+      p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+      const old=p.current(),before=old.messages.length;
+      const running=mode==='draft'?saveGuidedCase(p,'pending'):p.e.scenario.onclick();assert.equal(reading,true,mode+':'+change);
+      if(['time','arm','posture','fraction'].includes(change))editGuidedMotion(p,0,change,{time:'0.003',arm:'36',posture:'squat',fraction:'0.3'}[change]);
+      else if(change==='remove')descendants(p.e.guidedMotionFrames).find(node=>node.textContent==='Remove endpoint 1').onclick();
+      else if(change==='scope')p.e.guidedMaterialStrainInstances.handlers.input();
+      else if(change==='budget')p.e.guidedMotionTrials.handlers.input();
+      else if(change==='file')p.e.guidedMotionFile.handlers.change();
+      else if(change==='goal')p.e.guidedMotionWarpMaxGoal.handlers.change();
+      else if(change==='guard')p.e.guidedWarpMinLimit.handlers.input();
+      else p.e.guidedRequireMotionMaterialStrain.handlers.change();
+      assert.equal(old.dead,true,mode+':'+change);p.ready();delay.resolve(sources.fit);await running;
+      assert.equal(old.messages.length,before,mode+':'+change);assert.equal(p.current().messages.length,0);
+      assert.equal(p.e.guidedScenarioCases.children.length,mode==='draft'?1:0);
+      assert.equal(p.live.size,0);
+    }
+  }
+});
+
+test('guided motion inactive files cannot cancel authored or static scenarios',async()=>{
+  for(const mode of ['none','form']) {
+    const {p}=await guidedScenarioSetup();guidedMotionControls(p,mode);
+    if(mode==='form')addGuidedMotion(p,'0.002','35');
+    const delay=deferred();let reading=false;
+    p.e.body.files=[{size:3,arrayBuffer:async()=>{reading=true;return delay.promise;}}];
+    const old=p.current(),running=p.e.scenario.onclick();await new Promise(setImmediate);assert.equal(reading,true,mode);
+    p.select('guidedMotionFile','{');p.e.guidedMotionFile.handlers.change();
+    assert.equal(old.dead,false,mode);delay.resolve(new Uint8Array([2,4,6]).buffer);await running;
+    const sent=old.messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+    assert.equal(Object.hasOwn(JSON.parse(sent.scenarioRequest),'motion'),mode==='form');
+    p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);const live=new Set(p.live);
+    p.e.guidedMotionFile.handlers.change();
+    assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false,mode);assert.deepEqual(p.live,live,mode);
+  }
+});
+
+test('guided motion and instance drafts clear when the garment is removed, replaced or adopted',async()=>{
+  for(const replacement of ['removed','file','malformed','candidate']) {
+    const {p}=await guidedScenarioSetup();guidedStrainControls(p,['front.R']);guidedMotionControls(p);
+    addGuidedMotion(p,'0.002','35','seated','0.25');guidedNamedCases(p);await saveGuidedCase(p,'old garment');
+    const stale=guidedMotionFields(p).time;
+    if(replacement==='candidate') {
+      await p.e.scenario.onclick();p.emit(scenarioReport());
+      descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.tag==='button'&&node.textContent==='Use A pattern').onclick();
+    } else {
+      if(replacement==='removed')p.e.patternFile.files=[];
+      else p.select('patternFile',replacement==='malformed'?'{':'{"pieces":[{"id":"replacement"}]}');
+      await p.e.patternFile.onchange();
+    }
+    assert.equal(p.e.guidedMotionFrames.children.length,0,replacement);assert.equal(p.e.guidedMotionSource.value,'none',replacement);
+    assert.equal(p.e.guidedMaterialStrain.checked,false,replacement);assert.equal(p.e.guidedMaterialStrainScope.value,'all',replacement);
+    assert.equal(p.e.guidedMaterialStrainInstances.value,'',replacement);assert.equal(p.e.guidedScenarioCases.children.length,0,replacement);
+    stale.value='0.01';stale.handlers.input();assert.equal(p.e.guidedMotionFrames.children.length,0,replacement);
+  }
 });
 
 test('guided scenarios retain finite-stock and mixed-job goals beside shared drape and signed heat requirements', async () => {
@@ -13589,6 +13838,107 @@ test('compiled WASM guided single-body comparisons preserve signed heat, budgets
       assert.equal(readings.independent_surface_power_w,undefined);
     }
     t.diagnostic(`Synthetic sewing-only proof: outward power ${base.metrics.independent_surface_power_w} W -> ${substitute.metrics.independent_surface_power_w} W; ${native?'five complete native/WASM/worker reports agree':'five complete direct/worker WASM reports agree'}. No physical fit or gravity-settled garment claim.`);
+  });
+
+test('compiled WASM guided heat bounds and moving directional strain reproduce native consumers through page controls',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_SCENARIO_BODY},async t=>{
+    const source=path.resolve(process.env.FTX_GUIDED_SCENARIO_BODY),load=name=>fs.readFileSync(path.join(source,name),'utf8');
+    const fixture=JSON.parse(load('pattern.json')),body=load('body-input.json'),modelBytes=fs.readFileSync(path.join(source,'model.ftxbody'));
+    // These explicit intervals qualify synthetic numerical inputs, not measured textile performance.
+    fixture.fabric.material.record.properties.thermal_conductivity.bounds=[0.04,0.06];
+    fixture.fabric.material.record.properties.thickness.bounds=[0.00036,0.00044];
+    const pattern=JSON.stringify(fixture),alternative=structuredClone(fixture.fabric.material);
+    delete alternative.expected_sha256;alternative.id=alternative.record.id='synthetic-guided-motion-insulating';
+    alternative.record.properties.thermal_conductivity.value=0.02;
+    alternative.record.properties.thermal_conductivity.bounds=[0.018,0.022];
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx}),{p}=await guidedScenarioSetup(true);
+    p.select('patternFile',pattern);await p.e.patternFile.onchange();
+    p.e.selection.value=JSON.stringify(alternative);p.e.selection.handlers.input();await p.e.inspect.onclick();
+    const inspection=await w.send(p.current().messages.at(-1));assert.equal(inspection.type,'result',inspection.message);
+    p.current().emit(inspection);p.e.studyCandidateName.value='insulating';p.e.addStudyCandidate.onclick();
+    p.e.guidedScenarioFitSource.value='none';p.e.guidedScenarioFitSource.handlers.change();
+    p.e.guidedScenarioFrameBudget.value='1000000';
+    p.select('scenarioBody',body);p.e.scenarioBody.handlers.change();
+    p.e.body.files=[new Blob([modelBytes])];p.e.body.handlers.change();
+    p.e.guidedDrapeMassGoal.checked=false;p.e.guidedBasis.value='reported_bounds';
+    p.e.guidedHeatMinimumLimit.value='-1000';p.e.guidedHeatPowerLimit.value='0';
+    const native=process.env.FTX_GUIDED_SCENARIO_NATIVE?path.resolve(process.env.FTX_GUIDED_SCENARIO_NATIVE):null;
+    const replay=process.env.FTX_GUIDED_SCENARIO_REPLAY?path.join(path.resolve(process.env.FTX_GUIDED_SCENARIO_REPLAY),'directional-motion'):null;
+    const work=replay||(native?fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-guided-motion-')):null);
+    if(replay)fs.mkdirSync(replay,{recursive:true});
+    const retain=(name,raw)=>{if(work)fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});};
+    for(const [name,raw] of Object.entries({'pattern.json':pattern,'body-input.json':body,'model.ftxbody':modelBytes}))retain(name,raw);
+    const evaluate=async label=>{
+      await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+      assert.equal(sent.type,'scenario',label+': '+p.e.error.textContent);
+      assert.equal(sent.pattern,pattern);assert.equal(sent.measurements,body);
+      const result=await w.send(sent);assert.equal(result.type,'result',label+': '+result.message);p.current().emit(result);
+      for(const [name,raw] of [['study-request.json',sent.studyRequest],['scenario-request.json',sent.scenarioRequest]]) {
+        assert.equal(result.files.find(file=>file.name===name).text,raw);
+        const link=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.download===name);
+        assert.equal(await p.blobs.get(link.href).text(),raw);
+      }
+      retain(label+'-study.json',sent.studyRequest);retain(label+'-scenario.json',sent.scenarioRequest);
+      if(native) {
+        const output=require('node:child_process').execFileSync(native,['scenario-study',path.join(work,'pattern.json'),
+          path.join(work,label+'-study.json'),path.join(work,label+'-scenario.json'),path.join(work,'body-input.json'),
+          path.join(work,'model.ftxbody')],{encoding:'utf8',maxBuffer:64*1024*1024});
+        assert.deepEqual(result.result,JSON.parse(output),label+' native/WASM/worker equality');
+      }
+      return result.result;
+    };
+    const simulation=(report,key)=>report.simulations.find(row=>row.key===key).evaluation.result;
+    const heat=await evaluate('reported-heat');
+    assert.deepEqual(heat.comparison.frontier,['insulating']);
+    for(const row of heat.comparison.alternatives) {
+      const reading=row.readings.independent_surface_power_w;assert.equal(row.eligible,true,JSON.stringify(row.exclusions));
+      assert.equal(reading.unit,'W');assert.ok(reading.value<0);assert.ok(reading.reported_bounds[0]<reading.reported_bounds[1]);
+      assert.ok(reading.reported_bounds[0]<=reading.value&&reading.value<=reading.reported_bounds[1]);
+    }
+    p.e.guidedBasis.value='nominal';p.e.guidedHeatPowerGoal.checked=false;
+    p.e.guidedHeatMinimumLimit.value='';p.e.guidedHeatPowerLimit.value='';
+    guidedStrainControls(p,['band']);guidedMotionControls(p);
+    p.e.guidedMotionStep.value='0.0005';p.e.guidedMotionSamples.value='100000';
+    addGuidedMotion(p,'0.001','35');addGuidedMotion(p,'0.002','35.1');
+    p.e.guidedRequireMaterialStrain.checked=true;p.e.guidedRequireMotion.checked=true;p.e.guidedRequireMotionMaterialStrain.checked=true;
+    const metrics=[];
+    for(const [prefix,scope] of [['',''],['Motion','motion_']])for(const [name,axis] of [['Warp','warp'],['Weft','weft'],['Shear','engineering_shear']]) {
+      for(const [side,extreme] of [['Min','min'],['Max','max']]) {
+        p.e['guided'+prefix+name+side+'Goal'].checked=true;metrics.push(scope+extreme+'_'+axis+'_green_strain');
+      }
+    }
+    const moving=await evaluate('directional-motion');
+    for(const row of moving.comparison.alternatives) {
+      assert.equal(row.eligible,true,JSON.stringify(row.exclusions));
+      for(const metric of metrics) {
+        assert.equal(row.readings[metric].unit,'1',metric);assert.ok(Number.isFinite(row.readings[metric].value),metric);
+        assert.equal(row.readings[metric].consumer,metric.startsWith('motion_')?'motion_material_strain':'material_strain');
+      }
+      const initial=simulation(moving,row.key),motion=initial.motion;
+      assert.equal(initial.material_strain.status,'available');assert.equal(motion.status,'available');
+      assert.equal(motion.result.material_strain.status,'available');assert.ok(motion.result.samples.length>=2);
+      assert.notDeepEqual(motion.result.samples.at(-1).body_positions_m,motion.result.initial_sample.body_positions_m,
+        'A nonzero model-bound arm change must actually move retained body vertices');
+      const history=motion.result.material_strain.result;
+      assert.equal(history.frames.length,motion.result.samples.length+1);
+      assert.equal(history.triangle_samples,initial.material_strain.result.triangle_samples*history.frames.length);
+      assert.equal(history.strain_convention,'material_green_E11_E22_2E12');assert.equal(history.safe_strain_claim,false);
+      assert.equal(history.physical_validation_claim,false);
+    }
+    p.e.guidedMaterialStrainInstances.value='missing-retained-instance';p.e.guidedMaterialStrainInstances.handlers.input();
+    const missing=await evaluate('missing-instance');assert.deepEqual(missing.comparison.frontier,[]);
+    for(const key of ['baseline','insulating']) {
+      const before=simulation(moving,key),after=simulation(missing,key);
+      assert.equal(after.material_strain.status,'refused');assert.match(after.material_strain.refusal.message,/unknown|unplaced|collapsed/);
+      assert.equal(after.motion.status,'available');assert.equal(after.motion.result.material_strain.status,'refused');
+      assert.deepEqual(after.motion.result.samples,before.motion.result.samples,'A source-bound strain refusal must not reset or erase mechanics');
+      assert.equal(after.metrics.independent_surface_power_w,before.metrics.independent_surface_power_w);
+    }
+    t.diagnostic('Synthetic sewing-only proof: signed source intervals, all twelve material-frame strain values and a genuinely moving model-bound trajectory; missing instance scope refuses only strain. '+
+      (native?'All three complete reports agree with native ftx-materials.':'Actual compiled WASM worker results retained.')+' No physical fit or gravity-settled garment claim.');
   });
 
 test('compiled WASM guided finite and mixed stock studies preserve shared inventory and independent refusals',

@@ -36,6 +36,7 @@ let guidedDesignNomination = null;
 let guidedScenarioCases = null, guidedScenarioCasesRead = 0;
 let guidedDesignCaseNomination = null;
 const guidedScenarioDrafts = [], guidedScenarioButtons = [];
+const guidedMotionFrames = [];
 let guidedScenarioDraftSource = {};
 const guidedDesignFields = { key: "guidedDesignKey", kind: "guidedDesignKind", axis: "guidedDesignAxis",
   at: "guidedDesignAt", multiplier: "guidedDesignMultiplier", values: "guidedDesignValues", dx: "guidedDesignDx", dy: "guidedDesignDy",
@@ -53,6 +54,22 @@ const guidedMetrics = [
   ["guidedJobTime", "cutting_job_modeled_path_seconds", "job"], ["guidedJobCost", "cutting_job_selected_order_cost", "job"],
   ["guidedDrapeMass", "simulated_cloth_mass_kg"], ["guidedStrain", "max_absolute_edge_strain_pct"],
   ["guidedHeatPower", "independent_surface_power_w"],
+  ["guidedMotionStrain", "motion_max_absolute_edge_strain_pct"],
+];
+// The lower extrema are raised, upper extrema lowered. Limits stay signed Green strain.
+const guidedDirectionalMetrics = [
+  ["guidedWarpMin", "min_warp_green_strain", "maximize", "minimum"],
+  ["guidedWarpMax", "max_warp_green_strain", "minimize", "maximum"],
+  ["guidedWeftMin", "min_weft_green_strain", "maximize", "minimum"],
+  ["guidedWeftMax", "max_weft_green_strain", "minimize", "maximum"],
+  ["guidedShearMin", "min_engineering_shear_green_strain", "maximize", "minimum"],
+  ["guidedShearMax", "max_engineering_shear_green_strain", "minimize", "maximum"],
+  ["guidedMotionWarpMin", "motion_min_warp_green_strain", "maximize", "minimum"],
+  ["guidedMotionWarpMax", "motion_max_warp_green_strain", "minimize", "maximum"],
+  ["guidedMotionWeftMin", "motion_min_weft_green_strain", "maximize", "minimum"],
+  ["guidedMotionWeftMax", "motion_max_weft_green_strain", "minimize", "maximum"],
+  ["guidedMotionShearMin", "motion_min_engineering_shear_green_strain", "maximize", "minimum"],
+  ["guidedMotionShearMax", "motion_max_engineering_shear_green_strain", "minimize", "maximum"],
 ];
 const guidedRequired = [
   ["guidedRequireCutting", "cutting", "roll"], ["guidedRequireCutProgram", "cutting_program", "roll"],
@@ -63,6 +80,8 @@ const guidedRequired = [
   ["guidedRequireJob", "cutting_job", "job"], ["guidedRequireJobProgram", "cutting_job_program", "job"],
   ["guidedRequireJobPurchasing", "cutting_job_purchasing", "job"],
   ["guidedRequireDrape", "drape"], ["guidedRequireSurface", "surface"],
+  ["guidedRequireMaterialStrain", "material_strain"], ["guidedRequireMotion", "motion"],
+  ["guidedRequireMotionMaterialStrain", "motion_material_strain"],
 ];
 let studyCandidateSequence = 0;
 const outfitTargets = new Map();
@@ -88,6 +107,7 @@ const has = id => (id === "stockRequest" && selectedStockRequest !== null) || ro
 const guidedStudyMode = () => $("studyMode").value === "guided";
 const guidedScenarioMode = () => ["guided", "guided_matrix"].includes($("scenarioMode").value);
 const guidedMatrixMode = () => $("scenarioMode").value === "guided_matrix";
+const guidedMotionMode = () => $("guidedMotionSource").value || "none";
 const guidedStockMode = () => $("guidedStockMode").value || "roll";
 const guidedStockScope = (scope, mode) => !scope || scope === mode || (scope === "priced" && ["roll", "job"].includes(mode));
 const studyUsesBody = () => guidedStudyMode() ? $("guidedDesign").checked : $("studyOnBody").checked;
@@ -146,6 +166,13 @@ function controls() {
   $("clearScenarioCases").disabled = !guidedScenarioDrafts.length;
   for (const { button, unavailable, replace } of guidedScenarioButtons) button.disabled = unavailable || (replace && (!ready || !!pending));
   $("guidedScenarioGoals").hidden = !guided;
+  $("guidedMaterialStrainControls").hidden = !$("guidedMaterialStrain").checked;
+  $("guidedMaterialStrainInstances").disabled = !$("guidedMaterialStrain").checked || $("guidedMaterialStrainScope").value !== "instances";
+  $("guidedMotionForm").hidden = guidedMotionMode() !== "form";
+  $("guidedMotionFileField").hidden = guidedMotionMode() !== "file";
+  $("guidedMotionBudgetField").hidden = guidedMotionMode() === "none";
+  $("guidedMotionAdd").disabled = !source || guidedMotionFrames.length >= 16;
+  $("guidedMotionClear").disabled = !guidedMotionFrames.length;
   $("studyPieces").disabled = !source || $("studyTarget").value !== "pieces";
   $("guidedDesign").disabled = !source;
   $("guidedDesignControls").hidden = !$("guidedDesign").checked;
@@ -3963,6 +3990,8 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
   const metrics = guidedMetrics.filter(([, , scope]) => guidedStockScope(scope, stockMode));
   const objectives = metrics.filter(([id]) => $(`${id}Goal`).checked).map(([id, metric]) => ({ metric,
     direction: id === "guidedHeatPower" ? $("guidedHeatDirection").value : "minimize" }));
+  objectives.push(...guidedDirectionalMetrics.filter(([id]) => $(`${id}Goal`).checked)
+    .map(([, metric, direction]) => ({ metric, direction })));
   const limitBasis = $("guidedLimitBasis").value || "inherit";
   if (!["inherit", "nominal", "reported_bounds"].includes(limitBasis)) throw Error("Choose the basis for comparison limits.");
   const constraints = metrics.filter(([id]) => $(`${id}Limit`).value.trim() ||
@@ -3972,6 +4001,9 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
       { minimum: number("guidedHeatMinimumLimit", "minimum signed sheet heat in watts") } : {}),
     ...(limitBasis === "inherit" ? {} : { basis: limitBasis }),
   }));
+  constraints.push(...guidedDirectionalMetrics.filter(([id]) => $(`${id}Limit`).value.trim())
+    .map(([id, metric, , bound]) => ({ metric, [bound]: number(`${id}Limit`, `${bound} for ${metric}`),
+      ...(limitBasis === "inherit" ? {} : { basis: limitBasis }) })));
   const requiredConsumers = guidedRequired.filter(([id, , scope]) => guidedStockScope(scope, stockMode) && $(id).checked).map(([, consumer]) => consumer);
   return { objectives, constraints, requiredConsumers, basis: $("guidedBasis").value };
 }
@@ -4066,9 +4098,71 @@ function describeScenarioInput(request, original) {
   const value = JSON.parse(request), matrix = value?.schema === "ftx-drape-scenario-matrix/1";
   const cases = matrix && Array.isArray(value.cases) ? value.cases.map(item => item?.scenario) : [value];
   return { request, original, context: { drape: true, surface: cases.some(item => item?.surface != null),
+    motion: cases.some(item => item?.motion != null), materialStrain: cases.some(item => item?.material_strain != null),
     ...(matrix ? { matrix: { maxEvaluations: value.max_evaluations,
       cases: Array.isArray(value.cases) ? value.cases.map(item => ({ key: item?.key,
-        surface: item?.scenario?.surface != null, ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
+        surface: item?.scenario?.surface != null, motion: item?.scenario?.motion != null,
+        materialStrain: item?.scenario?.material_strain != null,
+        ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
+}
+function changedGuidedScenarioDraft() {
+  if (guidedScenarioMode()) invalidate([guidedMatrixMode() ? "scenarioDraft" : "scenario"], true);
+  else controls();
+}
+function showGuidedMotionFrames() {
+  const parent = $("guidedMotionFrames"); parent.replaceChildren();
+  for (const [index, frame] of guidedMotionFrames.entries()) {
+    const row = document.createElement("fieldset"), legend = document.createElement("legend");
+    legend.textContent = `Endpoint ${index + 1}`; row.append(legend);
+    const fields = document.createElement("div"); fields.className = "study-fields";
+    const inputs = {};
+    for (const [key, title] of [["time", "Cumulative time after drape (s)"], ["arm", "Arm abduction (degrees)"],
+      ["posture", "Leg posture"], ["fraction", "Leg posture fraction (0–1)"]]) {
+      const label = document.createElement("label"), input = document.createElement(key === "posture" ? "select" : "input");
+      label.textContent = title; input.name = key;
+      if (key === "posture") {
+        for (const value of ["standing", "seated", "squat"]) {
+          const option = document.createElement("option"); option.value = value; option.textContent = value; input.append(option);
+        }
+      } else {
+        input.type = "number"; input.step = "any"; input.min = "0";
+        input.max = key === "time" ? "60" : key === "arm" ? "180" : "1";
+      }
+      input.value = frame[key]; inputs[key] = input;
+      const changed = () => {
+        if (!guidedMotionFrames.includes(frame)) return;
+        frame[key] = input.value; inputs.fraction.disabled = frame.posture === "standing";
+        changedGuidedScenarioDraft();
+      };
+      input.addEventListener("change", changed);
+      if (key !== "posture") input.addEventListener("input", changed);
+      label.append(input); fields.append(label);
+    }
+    inputs.fraction.disabled = frame.posture === "standing"; row.append(fields);
+    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = `Remove endpoint ${index + 1}`;
+    remove.onclick = () => {
+      const at = guidedMotionFrames.indexOf(frame); if (at < 0) return;
+      guidedMotionFrames.splice(at, 1); showGuidedMotionFrames(); changedGuidedScenarioDraft();
+    };
+    row.append(remove); parent.append(row);
+  }
+  $("guidedMotionCount").textContent = `${guidedMotionFrames.length} of 16 endpoints. Times are cumulative from the completed initial drape.`;
+}
+function guidedMotionInput(number) {
+  const keyframes = guidedMotionFrames.map((frame, index) => {
+    const finite = (key, label) => {
+      if (!frame[key].trim() || !Number.isFinite(Number(frame[key]))) throw Error(`Supply endpoint ${index + 1}'s ${label}.`);
+      return Number(frame[key]);
+    };
+    if (!["standing", "seated", "squat"].includes(frame.posture)) throw Error("Choose each endpoint's leg posture.");
+    return { time_s: finite("time", "cumulative time"), arm_abduction_deg: finite("arm", "arm angle"),
+      ...(frame.posture === "standing" ? {} : { leg_pose: { posture: frame.posture, fraction: finite("fraction", "leg fraction") } }) };
+  });
+  return JSON.stringify({ schema: "ftx-drape-motion/1", keyframes,
+    max_step_s: number("guidedMotionStep", "maximum motion time step"),
+    max_trials: number("guidedMotionTrials", "motion trial allowance per alternative"),
+    max_pairs: number("guidedMotionPairs", "motion collision candidate allowance"),
+    max_sample_vertices: number("guidedMotionSamples", "retained motion vertex allowance") });
 }
 function guidedMatrixAllowance() {
   const raw = $("guidedScenarioMatrixBudget").value.trim(), value = Number(raw);
@@ -4097,6 +4191,8 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   if (!["file", "none"].includes(fitSource)) throw Error("Choose the original fit contract or explicitly request a numerical study without one.");
   const designFit = guidedStudyMode() && $("guidedDesign").checked;
   const surface = $("guidedScenarioHeat").checked;
+  const motionMode = guidedMotionMode(), materialStrain = $("guidedMaterialStrain").checked;
+  if (!["none", "form", "file"].includes(motionMode)) throw Error("Choose no motion, authored endpoints or an original motion request.");
   const input = { allowNoFit: fitSource === "none", options: {
     spacing: number("guidedScenarioSpacing", "mesh spacing in millimetres"),
     sew_steps: number("guidedScenarioSewSteps", "sewing step count"),
@@ -4107,6 +4203,15 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     maxVertexFrames: number("guidedScenarioFrameBudget", "total vertex-frame budget") };
   if ($("guidedScenarioSelfContact").checked) {
     input.options.self_contact = { dhat: 0.001, thickness: 0.002, kappa: 100, mu: 0.4, eps_v: 0.001 };
+  }
+  if (motionMode !== "none") input.maxMotionTrials = number("guidedMotionBudget", "aggregate motion trial allowance");
+  if (motionMode === "form") input.motion = guidedMotionInput(number);
+  if (materialStrain) {
+    const scope = $("guidedMaterialStrainScope").value || "all";
+    if (!["all", "instances"].includes(scope)) throw Error("Choose all retained cloth or exact instance names for material strain.");
+    input.materialStrain = JSON.stringify({ schema: "ftx-material-strain/1",
+      ...(scope === "instances" ? { instances: $("guidedMaterialStrainInstances").value.split(/\r?\n/).filter(line => line.length) } : {}),
+      max_triangle_samples: number("guidedMaterialStrainBudget", "directional strain triangle-sample allowance") });
   }
   // Both original files and every control are captured before starting a read.
   const policy = $("guidedScenarioPolicySource").value;
@@ -4119,6 +4224,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   }
   const entries = [...(fitSource === "file" ? [["fitSpec", "fit", "the original section-3 fit contract"]] : []),
     ...(surface ? [["surface", "heatConditions", "the original section-3 sheet heat conditions"]] : []),
+    ...(motionMode === "file" ? [["motion", "guidedMotionFile", "the original prescribed-motion request"]] : []),
     ...(includeCasePolicy && policy === "file" ? [["comparison", "guidedScenarioComparison", "the original case comparison policy"]] : [])];
   const budget = 16 * 1024 * 1024; let total = 0;
   const retained = entries.map(([key, id, label]) => {
@@ -4138,17 +4244,21 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     return [key, raw];
   }));
   const { comparison, ...fragments } = Object.fromEntries(sources);
-  return { request: buildMaterialScenarioRequest({ ...input, ...fragments }), context: { drape: true, surface },
+  return { request: buildMaterialScenarioRequest({ ...input, ...fragments }),
+    context: { drape: true, surface, motion: motionMode !== "none", materialStrain },
     ...((comparison ?? authoredComparison) === undefined ? {} : { comparison: comparison ?? authoredComparison }) };
 }
 function showGuidedScenarioDrafts() {
   const parent = $("guidedScenarioCases"); parent.replaceChildren(); guidedScenarioButtons.length = 0;
-  let frames = 0;
+  let frames = 0, motionTrials = 0;
   for (const [index, item] of guidedScenarioDrafts.entries()) {
     const value = JSON.parse(item.scenario); frames += value.max_vertex_frames;
+    if (value.motion) motionTrials += value.max_motion_trials;
     const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
     label.textContent = `${item.key}: ${value.options.sew_steps} sewing + ${value.options.drape_steps} gravity steps, ` +
       `${value.max_vertex_frames} vertex-frames; ${value.surface ? "retained sheet heat" : "no sheet heat"}; ` +
+      `${value.motion ? `${value.motion.keyframes.length} motion endpoints, ${value.max_motion_trials} motion trials` : "static pose"}; ` +
+      `${value.material_strain ? `directional strain on ${value.material_strain.instances?.join(", ") || "all retained instances"}, ${value.material_strain.max_triangle_samples} triangle-samples` : "no directional strain request"}; ` +
       `${item.comparison && JSON.parse(item.comparison) !== null ? "retained case comparison" : "shared comparison at run time"}.`;
     row.append(label);
     const action = (title, handler, unavailable = false, replace = false) => {
@@ -4175,7 +4285,7 @@ function showGuidedScenarioDrafts() {
     parent.append(row);
   }
   $("guidedScenarioCaseCount").textContent = guidedScenarioDrafts.length ?
-    `${guidedScenarioDrafts.length} of 8 named cases saved; ${frames} of 64000000 vertex-frames allocated. Only saved cases run in named-case mode.` :
+    `${guidedScenarioDrafts.length} of 8 named cases saved; ${frames} of 64000000 vertex-frames and ${motionTrials} of 32768 motion trials allocated. Only saved cases run in named-case mode.` :
     "No named cases saved. Configure a scenario, give it a name and save it before comparing.";
 }
 function changedGuidedScenarioDrafts() {
@@ -4419,6 +4529,22 @@ $("clearStudyCandidates").onclick = () => {
 };
 $("studyMode").addEventListener("change", () => invalidate(["study", "scenario",
   ...($("guidedScenarioPolicySource").value === "snapshot" ? ["scenarioDraft"] : [])], true));
+$("guidedMotionAdd").onclick = () => {
+  if (!source || guidedMotionFrames.length >= 16) return;
+  guidedMotionFrames.push({ time: "", arm: "", posture: "standing", fraction: "1" });
+  showGuidedMotionFrames(); changedGuidedScenarioDraft();
+};
+$("guidedMotionClear").onclick = () => {
+  guidedMotionFrames.length = 0; showGuidedMotionFrames(); changedGuidedScenarioDraft();
+};
+for (const id of ["guidedMaterialStrain", "guidedMaterialStrainScope", "guidedMaterialStrainInstances", "guidedMaterialStrainBudget",
+  "guidedMotionSource", "guidedMotionBudget", "guidedMotionStep", "guidedMotionTrials", "guidedMotionPairs", "guidedMotionSamples"]) {
+  $(id).addEventListener("change", changedGuidedScenarioDraft);
+  if (!["guidedMaterialStrain", "guidedMaterialStrainScope", "guidedMotionSource"].includes(id)) $(id).addEventListener("input", changedGuidedScenarioDraft);
+}
+$("guidedMotionFile").addEventListener("change", () => {
+  if (guidedMotionMode() === "file") changedGuidedScenarioDraft();
+});
 for (const id of ["scenarioMode", "guidedScenarioFitSource", "guidedScenarioHeat", "guidedScenarioSelfContact",
   "guidedScenarioSpacing", "guidedScenarioSewSteps", "guidedScenarioDrapeSteps", "guidedScenarioStep",
   "guidedScenarioSettle", "guidedScenarioMeshBudget", "guidedScenarioFrameBudget"]) {
@@ -4446,7 +4572,8 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
   "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignCase", "guidedDesignEvaluations",
   "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis", "guidedHeatDirection", "guidedHeatMinimumLimit",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
-  ...guidedMetrics.flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]), ...guidedRequired.map(([id]) => id)]) {
+  ...[...guidedMetrics, ...guidedDirectionalMetrics].flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]),
+  ...guidedRequired.map(([id]) => id)]) {
   const changed = () => {
     if (id === "guidedDesignMaterial") {
       const key = $(id).value, original = guidedDesignMaterialSource(key);
@@ -4664,9 +4791,15 @@ function resetGuidedDesign() {
   $("guidedDesignMaterial").value = ""; $("guidedDesignEvaluations").value = ""; refreshGuidedDesignMaterials();
   $("guidedDesignMax").value = "1"; $("guidedDesignGridBudget").value = ""; loadGuidedDesignVariable();
 }
-function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
+function resetGuidedScenarios() {
   guidedScenarioDrafts.length = 0; guidedScenarioDraftSource = {};
   $("guidedScenarioCaseName").value = ""; showGuidedScenarioDrafts();
+  guidedMotionFrames.length = 0; $("guidedMotionSource").value = "none"; showGuidedMotionFrames();
+  $("guidedMaterialStrain").checked = false; $("guidedMaterialStrainScope").value = "all";
+  $("guidedMaterialStrainInstances").value = "";
+}
+function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
+  resetGuidedScenarios();
   resetGuidedDesign();
   source = data; sourceText = raw;
   $("patternName").textContent = `${label}: ${data.pieces.length} source pieces. Original retained.`;
@@ -4705,6 +4838,7 @@ function resetPatternInput(keepImport = false) {
   outfitTargets.clear();
   combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
   studyCandidates.length = 0; studyCandidateSequence = 0; showStudyCandidates(); $("studyPieces").replaceChildren();
+  resetGuidedScenarios();
   resetGuidedDesign();
   invalidate(["bodyCheck", "bind", ...boundOperations, "study", "scenario", "outfit", ...(keepImport ? [] : ["garmentcode"])]);
   $("patternName").textContent = "No pattern loaded.";
