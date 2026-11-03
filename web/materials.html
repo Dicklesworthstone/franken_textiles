@@ -611,12 +611,13 @@ A missing required value excludes an alternative; it is never treated as zero.</
 <p class="note">Costs use each declared market's currency. A complete selected order can be feasible without being proved least-cost.
 Cutting-path time excludes loading and inspection; sewing totals retain the scope and quantity declared by their source request.</p>
 <label>Compare using <select id="guidedBasis"><option value="nominal">Reported central values</option>
-<option value="reported_bounds">Complete reported ranges (garment mass only)</option></select></label>
-<label>Apply maximums using <select id="guidedLimitBasis"><option value="inherit">The same basis as the objectives</option>
-<option value="nominal">Nominal computed values</option><option value="reported_bounds">Complete reported ranges (garment mass only)</option></select></label>
+<option value="reported_bounds">Complete reported ranges (garment mass and steady sheet heat)</option></select></label>
+<label>Apply limits using <select id="guidedLimitBasis"><option value="inherit">The same basis as the objectives</option>
+<option value="nominal">Nominal computed values</option><option value="reported_bounds">Complete reported ranges (garment mass and steady sheet heat)</option></select></label>
 <p class="note">Multiple goals retain tradeoffs without a hidden combined score. Complete reported ranges need bounds for every
-mass contribution; overlapping ranges remain unresolved. Different measurement protocols may remain incomparable.
-Use explicitly nominal time or price limits alongside a reported-range mass objective. Unsupported range decisions refuse.
+mass contribution or every admitted constant thermal observation; overlapping ranges remain unresolved.
+Different measurement protocols may remain incomparable. Use explicitly nominal time or price limits alongside a reported-range
+mass or heat objective. Unsupported range decisions refuse; these source ranges do not include uncertainty in geometry or boundary conditions.
 Changing a consumer does not discard a maximum or required-result declaration in the current mode; clear or satisfy those declarations explicitly.
 Inactive stock modes keep their own declarations without applying them to another mode.</p>
 </fieldset>
@@ -894,12 +895,17 @@ Use the scenario action below; the manufacturing-only action cannot evaluate the
 </div>
 <label>Signed heat objective <select id="guidedHeatDirection"><option value="">Choose a direction when comparing heat</option>
 <option value="minimize">Minimize signed outward power</option><option value="maximize">Maximize signed outward power</option></select></label>
+<label>Minimum signed sheet heat (W, optional) <input id="guidedHeatMinimumLimit" type="number" step="any"
+aria-label="Minimum signed independent sheet heat power in watts" placeholder="No minimum"></label>
 <label><input id="guidedRequireDrape" type="checkbox"> Require a numerically admissible drape, even without a drape objective</label>
 <label><input id="guidedRequireSurface" type="checkbox"> Require a complete independent sheet heat result</label>
-<p class="note">Negative power is meaningful; minimizing signed power does not minimize its magnitude. These three goals use nominal
-computed values. Simulated cloth mass excludes unsimulated parts; use complete garment mass for an explicitly complete inventory.
-Panel-edge strain is not principal strain or a safe-fit threshold. Maximums remain active without their goal checkbox.
-Use an explicit nominal limit basis at left when combining these limits with reported-range garment mass.</p>
+<p class="note">Negative power is meaningful; minimizing signed power does not minimize its magnitude. Sheet heat supports nominal
+values or complete source-reported ranges for constant thermal laws. A reported-range limit admits only an entire interval inside
+the declared minimum and maximum; missing ranges keep the nominal heat visible but exclude that alternative from the range decision.
+Simulated cloth mass and panel-edge strain use nominal values. Cloth mass excludes unsimulated parts; use complete garment mass
+for an explicitly complete inventory. Panel-edge strain is not principal strain or a safe-fit threshold.
+Limits remain active without their goal checkbox. Select an explicit nominal limit basis when combining nominal-only constraints
+with reported-range mass or heat objectives.</p>
 </fieldset>
 <label>Separate body-source request JSON (<code>ftx-scenario-body/1</code>; select its source mode above) <input id="scenarioBody" type="file" accept=".json,application/json"></label>
 <button id="scenario" data-command="scenario" disabled>Recompute every alternative in the requested scenarios</button>
