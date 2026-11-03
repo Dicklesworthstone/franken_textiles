@@ -60,6 +60,16 @@ and the original `capture-choices.json` remain available for explicit JSON autho
 native command validates either route. Downloaded choices keep the absolute setup path, so keep
 that setup directory and its original local sources available when applying them.
 
+To revise completed choices, reopen the original setup page and select the saved
+`capture-choices.json` under **Reopen saved choices for this setup**. The file must retain that
+setup's exact path and hash. The local loader checks the existing choices format and restores
+the explicit frames, controls, tape observations and evidence for review; choose **Check choices
+and prepare download** again to save revisions. It accepts UTF-8 files up to 256 KiB. Invalid or
+different-setup files leave the current form intact, and later edits, cancellation, reset or a
+replacement file cancel pending reads. **Cancel pending edits** returns to the last choices
+applied in this page, or to its original incomplete setup. Native `capture-init` still rechecks
+the original sources, model and camera admission before constructing an input.
+
 Choose shared shape controls by their exact catalogue names. Each choice either fixes a value
 or fits a declared interval, for example the row structures
 `{"name":"height","choice":{"mode":"fixed","value":0.5}}` and

@@ -30,6 +30,8 @@ body{{font:16px system-ui;max-width:1150px;margin:2rem auto;padding:0 1rem;color
 <h1>Set up a body capture</h1>
 <p>Choose exact decoded frames and the model controls you intend to fit. This page prepares a declaration for the existing capture and body-fit workflow. Cameras, anatomical correspondences, observations and initialization vectors are reviewed in the following steps; no body has been estimated here.</p>
 <p>All images are original native copies from this setup. Labels retain exact decoded timestamps. The page runs locally and sends no images or choices anywhere.</p>
+<label>Reopen saved choices for this setup <input id="setupChoices" type="file" accept=".json,application/json"></label>
+<p>Load a completed <code>capture-choices.json</code> from this exact setup to revise it. Review the restored form and check it again before downloading. A different setup or invalid file leaves your current choices intact.</p>
 <div id="setupEditor" hidden>
 <h2>1. Choose 2–8 compatible frames</h2>
 <p>Use one acquisition cohort with the supplied checked calibration. A compatible image can still be blurred, occluded or unsuitable; inspect the source photographs. Selection establishes neither stillness nor independent views.</p>

@@ -178,6 +178,84 @@ async function saveDownload(page, name) {
     assert.deepEqual(await saveDownload(page, 'capture-choices.json'), expected);
     assert.deepEqual(fixture('setup-review/capture-choices.json'), seed);
 
+    // Reopen the actual saved file after a reload, then revise through the ordinary form.
+    await page.reload(); await page.waitForFunction(() => !document.getElementById('setupEditor').hidden);
+    assert.equal(await page.locator('#setupChoices').count(), 1, 'saved setup choices need a local loader');
+    const load = async bytes => {
+      await page.locator('#setupChoices').setInputFiles({name: 'saved-choices.json', mimeType: 'application/json', buffer: Buffer.from(bytes)});
+      await page.waitForFunction(() => !document.getElementById('setupStatus').textContent.startsWith('Reading saved choices'));
+    };
+    await page.locator('#setupChoices').setInputFiles(path.join(out, 'capture-choices.json'));
+    await page.waitForFunction(() => document.getElementById('setupStatus').textContent.startsWith('Saved choices restored'));
+    await hidden(page);
+    assert.equal(await page.locator('#setupFrames input:checked').count(), expected.frame_indices.length);
+    assert.equal(await page.locator('[data-group="shape"]').count(), expected.shapes.length);
+    assert.equal(await field(row(page, 'measurement', expected.measurements[0].name), 'partition').inputValue(), expected.measurements[0].partition);
+    await page.locator('#applySetup').click(); await visible(page);
+    assert.deepEqual(await saveDownload(page, 'reopened-choices.json'), expected);
+    const form = () => page.locator('#setupEditor input,#setupEditor select,#setupEditor textarea')
+      .evaluateAll(nodes => nodes.map(node => [node.value, node.checked, node.disabled]));
+    const badFiles = [Buffer.from('{'), Buffer.from([0xc3, 0x28]), Buffer.alloc(256 * 1024 + 1, 32)];
+    for (const edit of [
+      value => { value.source_setup += '-different'; }, value => { value.source_setup_sha256 = '0'.repeat(64); },
+      value => { value.schema = 'unsupported'; }, value => { value.extra = true; },
+      value => { value.age_years = '3'; }, value => { value.gender = null; },
+      value => { value.frame_indices = [expected.frame_indices[0], expected.frame_indices[0]]; },
+      value => { value.frame_indices[0] = 999999; }, value => { value.shapes[0].name = 'not-in-model'; },
+      value => { value.shapes.push(value.shapes[0]); }, value => { value.shapes[0].choice.extra = 1; },
+      value => { value.shapes[0].choice.lower = value.shapes[0].choice.upper; },
+      value => { value.roots.pop(); }, value => { value.joints[0].axis = [0, 0, 0]; },
+      value => { value.measurements = null; }, value => { value.measurements[0].partition = 'invented'; },
+      value => { value.observation_evidence = 'é'.repeat(2049); }
+    ]) { const value = structuredClone(expected); edit(value); badFiles.push(Buffer.from(JSON.stringify(value))); }
+    for (const bytes of badFiles) {
+      const before = await form(), oldUrl = await page.locator('#setupDownload').getAttribute('href');
+      await load(bytes);
+      assert.match(await page.locator('#setupStatus').innerText(), /were not loaded/);
+      assert.deepEqual(await form(), before); await visible(page);
+      assert.equal(await page.locator('#setupDownload').getAttribute('href'), oldUrl);
+    }
+    // A failed load also preserves incomplete edits, not just the last applied snapshot.
+    await page.locator('#setupAge').fill(''); const incomplete = await form();
+    await load('{'); assert.deepEqual(await form(), incomplete); await hidden(page);
+    await page.locator('#cancelSetup').click(); await visible(page);
+
+    // Hold the real File read, then resolve it after a newer action. No obsolete read may win.
+    await page.evaluate(() => {
+      const original = File.prototype.arrayBuffer;
+      globalThis.__holdChoices = false; globalThis.__choiceRead = null;
+      File.prototype.arrayBuffer = function () {
+        if (!globalThis.__holdChoices) return original.call(this);
+        globalThis.__holdChoices = false;
+        return new Promise((resolve, reject) => { globalThis.__choiceRead = {resolve, reject}; });
+      };
+    });
+    for (const reject of [false, true]) for (const action of ['edit', 'apply', 'cancel', 'reset', 'replace']) {
+      await load(JSON.stringify(expected)); await page.locator('#applySetup').click();
+      await page.evaluate(() => { globalThis.__holdChoices = true; globalThis.__choiceRead = null; });
+      await page.locator('#setupChoices').setInputFiles({name: 'delayed.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(expected))});
+      await page.waitForFunction(() => globalThis.__choiceRead !== null);
+      if (action === 'edit') await page.locator('#setupAge').fill('4.25');
+      else if (action === 'replace') {
+        const replacement = {...expected, age_years: 5.25}; await load(JSON.stringify(replacement));
+      } else await page.locator('#' + {apply: 'applySetup', cancel: 'cancelSetup', reset: 'resetSetup'}[action]).click();
+      const before = await form(), oldUrl = await page.locator('#setupDownload').getAttribute('href');
+      const oldStatus = await page.locator('#setupStatus').innerText();
+      await page.evaluate(({reject, text}) => {
+        const read = globalThis.__choiceRead;
+        if (reject) read.reject(new Error('obsolete read error'));
+        else read.resolve(new TextEncoder().encode(text).buffer);
+      }, {reject, text: JSON.stringify(expected)});
+      assert.deepEqual(await form(), before);
+      assert.equal(await page.locator('#setupDownload').getAttribute('href'), oldUrl);
+      assert.equal(await page.locator('#setupStatus').innerText(), oldStatus);
+    }
+    await load(JSON.stringify(expected)); await page.locator('#setupAge').fill('4.25');
+    await hidden(page); await page.locator('#applySetup').click(); await visible(page);
+    assert.deepEqual(await saveDownload(page, 'revised-choices.json'), {...expected, age_years: 4.25});
+    await load(JSON.stringify(expected)); await page.locator('#applySetup').click(); await visible(page);
+    assert.deepEqual(await saveDownload(page, 'capture-choices.json'), expected);
+
     // Only setup was authored in the browser. The following is the existing native pipeline,
     // with independent synthetic truth supplied explicitly for targets, observations and starts.
     command(['capture-init', 'capture-choices.json', '--model', model, '--out', 'constructed']);
@@ -222,6 +300,7 @@ async function saveDownload(page, name) {
       fit: fitted.status, initial_construction: 'byte-exact', later_cli_replay: 'semantic equality with independently checked input-byte digests and paths',
       chosen_frames: expected.frame_indices.length, browser_errors: errors.length, local_requests: requests.length,
       exercised: ['source photographs', 'explicit defaults', 'blank choices', 'frame count', 'bounds', 'root choices and rotation-vector limit', 'joint axes', 'tape role', 'UTF-8 evidence budget',
-        'duplicate prevention', 'remove', 'fixed controls', 'stale URL withdrawal', 'cancel', 'reset', 'byte-exact native construction', 'complete fit report equality']}));
+        'duplicate prevention', 'remove', 'fixed controls', 'stale URL withdrawal', 'cancel', 'reset', 'saved file reload/edit', 'invalid files preserve work',
+        'late reads versus edit/apply/cancel/reset/replacement', 'byte-exact native construction', 'complete fit report equality']}));
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

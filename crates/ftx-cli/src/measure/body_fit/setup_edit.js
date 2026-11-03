@@ -7,7 +7,7 @@
   const seed = copy(data.annotations), catalogue = data.catalogue;
   const download = byId('setupDownload'), status = byId('setupStatus');
   let shapeRows = [], rootRows = [], jointRows = [], measurementRows = [], frameInputs = [];
-  let applied = null, pending = false, downloadUrl = null;
+  let applied = null, pending = false, downloadUrl = null, revision = 0;
 
   function element(tag, text) {
     const node = document.createElement(tag);
@@ -55,6 +55,7 @@
       + (cohorts.size > 1 ? 'several acquisition cohorts selected — choose one cohort.' : 'choose 2–8 from one compatible cohort.');
   }
   function markPending() {
+    ++revision;
     pending = true;
     withdraw();
     byId('cancelSetup').disabled = false;
@@ -224,12 +225,18 @@
   function finite(input, label, bounds) {
     const text = input.value.trim(), value = Number(text);
     if (!text || !Number.isFinite(value)) throw new Error(`${label} needs an explicit finite number.`);
+    return checkedNumber(value, label, bounds);
+  }
+  function checkedNumber(value, label, bounds) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${label} needs an explicit finite number.`);
     if (bounds && (value < bounds.lower || value > bounds.upper)) throw new Error(`${label} must be between ${bounds.lower} and ${bounds.upper}.`);
     return value;
   }
   function textValue(input, label) {
-    const value = input.value;
-    if (!value.trim() || new TextEncoder().encode(value).length > 4096) throw new Error(`${label} needs nonempty evidence of at most 4096 UTF-8 bytes.`);
+    return checkedText(input.value, label);
+  }
+  function checkedText(value, label) {
+    if (typeof value !== 'string' || !value.trim() || new TextEncoder().encode(value).length > 4096) throw new Error(`${label} needs nonempty evidence of at most 4096 UTF-8 bytes.`);
     return value;
   }
   function readChoice(row) {
@@ -247,21 +254,11 @@
     if (new Set(selected.map(item => item.frame.cohort)).size !== 1) throw new Error('Choose frames from one acquisition cohort.');
     const shapes = shapeRows.map(row => ({ name: row.name, choice: readChoice(row) }));
     const roots = rootRows.map(row => ({ name: row.name, choice: readChoice(row) }));
-    const fixedRotation = ['root_rx_rad', 'root_ry_rad', 'root_rz_rad'].map(name => {
-      const choice = roots.find(item => item.name === name).choice;
-      return choice.mode === 'fixed' ? choice.value : 0;
-    });
-    if (Math.sqrt(fixedRotation.reduce((sum, value) => sum + value * value, 0)) > Math.PI) throw new Error('The fixed root rotation-vector components together must have length at most pi radians.');
     const joints = jointRows.map(row => {
       const axis = row.axes.map((input, i) => finite(input, `${row.name} axis ${'xyz'[i]}`, { lower: -1, upper: 1 }));
       if (Math.abs(Math.hypot(...axis) - 1) > 1e-10) throw new Error(`${row.name}: enter a unit axis; no automatic normalization is performed.`);
       return { bone: row.name, axis, choice: readChoice(row) };
     });
-    const shapeCount = shapes.filter(item => item.choice.mode === 'fit').length;
-    const poseCount = [...roots, ...joints].filter(item => item.choice.mode === 'fit').length;
-    if (shapeCount < 1 || shapeCount > 12) throw new Error('Declare 1–12 free shape controls.');
-    if (poseCount < 1 || poseCount > 18) throw new Error('Declare 1–18 free root/joint controls.');
-    if (shapeCount + poseCount * selected.length > 128) throw new Error('Shared shape plus independent poses exceed the 128-parameter native budget.');
     const measurements = measurementRows.map(row => {
       const value = finite(row.value, `${row.name} measured value`);
       if (!(value > 0)) throw new Error(`${row.name}: measured value must be positive metres.`);
@@ -270,13 +267,109 @@
       return { name: row.name, value_m: value, sigma_m: sigma,
         evidence: textValue(row.evidence, `${row.name} evidence`), partition: row.partition.value };
     });
-    return { ...copy(seed), frame_indices: selected.map(item => item.frame.frame_index),
+    return checkedChoices({ ...copy(seed), frame_indices: selected.map(item => item.frame.frame_index),
       age_years: finite(byId('setupAge'), 'Age in years', { lower: 0, upper: 110 }),
       gender: finite(byId('setupGender'), 'Model gender parameter', { lower: 0, upper: 1 }),
       shapes, roots, joints, measurements,
       metric_scale_source: textValue(byId('setupScale'), 'Metric scale source'),
-      observation_evidence: textValue(byId('setupEvidence'), 'Observation and capture evidence') };
+      observation_evidence: textValue(byId('setupEvidence'), 'Observation and capture evidence') });
   }
+  function keys(value, required, label, optional = []) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || required.some(key => !Object.hasOwn(value, key))
+      || Object.keys(value).some(key => !required.includes(key) && !optional.includes(key))) {
+      throw new Error(`${label}: missing or unsupported fields.`);
+    }
+  }
+  function checkedChoices(choices) {
+    keys(choices, Object.keys(seed).filter(key => key !== 'measurements'), 'Saved choices', ['measurements']);
+    for (const key of ['schema', 'source_setup', 'source_setup_sha256']) {
+      if (choices[key] !== seed[key]) throw new Error('Saved choices must belong to this exact setup.');
+    }
+    const list = (values, maximum, label) => {
+      if (!Array.isArray(values) || values.length > maximum) throw new Error(`${label}: invalid or oversized list.`);
+      return values;
+    };
+    const indices = list(choices.frame_indices, 8, 'Frames');
+    const selected = indices.map(index => data.frames.find(frame => frame.frame_index === index));
+    if (indices.length < 2 || new Set(indices).size !== indices.length
+      || selected.some(frame => !frame || !frame.eligible)
+      || new Set(selected.map(frame => frame.cohort)).size !== 1) throw new Error('Choose 2–8 distinct compatible frames from one acquisition cohort.');
+    checkedNumber(choices.age_years, 'Age in years', { lower: 0, upper: 110 });
+    checkedNumber(choices.gender, 'Model gender parameter', { lower: 0, upper: 1 });
+    checkedText(choices.metric_scale_source, 'Metric scale source');
+    checkedText(choices.observation_evidence, 'Observation and capture evidence');
+    const controls = (values, parameters, joint = false) => {
+      const names = new Set();
+      for (const item of list(values, joint ? 32 : parameters.length, 'Model controls')) {
+        const key = joint ? 'bone' : 'name';
+        keys(item, joint ? ['bone', 'axis', 'choice'] : ['name', 'choice'], 'Model control');
+        const parameter = parameters.find(parameter => parameter.name === item[key]);
+        if (!parameter || names.has(item[key])) throw new Error('Unknown or duplicate model control.');
+        names.add(item[key]);
+        const bounds = joint ? { lower: -Math.PI, upper: Math.PI } : parameter;
+        const choice = item.choice;
+        keys(choice, choice?.mode === 'fixed' ? ['mode', 'value'] : ['mode', 'lower', 'upper'], 'Control choice');
+        if (choice.mode === 'fixed') checkedNumber(choice.value, item[key], bounds);
+        else if (choice.mode === 'fit') {
+          checkedNumber(choice.lower, item[key], bounds); checkedNumber(choice.upper, item[key], bounds);
+          if (!(choice.lower < choice.upper) || !Number.isFinite(choice.upper - choice.lower)) throw new Error('Control lower bound must be smaller than upper bound.');
+        } else throw new Error('Explicitly choose fixed or free.');
+        if (joint) {
+          if (!Array.isArray(item.axis) || item.axis.length !== 3) throw new Error('Joint axes need three components.');
+          item.axis.forEach(value => checkedNumber(value, 'Joint axis', { lower: -1, upper: 1 }));
+          if (Math.abs(Math.hypot(...item.axis) - 1) > 1e-10) throw new Error('Enter a unit joint axis; no automatic normalization is performed.');
+        }
+      }
+    };
+    controls(choices.shapes, catalogue.shapes); controls(choices.roots, catalogue.roots); controls(choices.joints, catalogue.joints, true);
+    if (choices.roots.length !== catalogue.roots.length) throw new Error('Declare all six root controls.');
+    const rotation = ['root_rx_rad', 'root_ry_rad', 'root_rz_rad'].map(name => {
+      const choice = choices.roots.find(item => item.name === name).choice;
+      return choice.mode === 'fixed' ? choice.value : 0;
+    });
+    if (Math.sqrt(rotation.reduce((sum, value) => sum + value * value, 0)) > Math.PI) throw new Error('The fixed root rotation-vector components together must have length at most pi radians.');
+    const shapeCount = choices.shapes.filter(item => item.choice.mode === 'fit').length;
+    const poseCount = [...choices.roots, ...choices.joints].filter(item => item.choice.mode === 'fit').length;
+    if (shapeCount < 1 || shapeCount > 12) throw new Error('Declare 1–12 free shape controls.');
+    if (poseCount < 1 || poseCount > 18) throw new Error('Declare 1–18 free root/joint controls.');
+    if (shapeCount + poseCount * indices.length > 128) throw new Error('Shared shape plus independent poses exceed the 128-parameter native budget.');
+    const names = new Set(), measurements = choices.measurements === undefined ? [] : choices.measurements;
+    for (const item of list(measurements, 32, 'Tape observations')) {
+      keys(item, ['name', 'value_m', 'sigma_m', 'evidence', 'partition'], 'Tape observation');
+      if (!catalogue.measurements.includes(item.name) || names.has(item.name)) throw new Error('Unknown or duplicate tape functional.');
+      names.add(item.name);
+      if (!(checkedNumber(item.value_m, 'Tape value') > 0)) throw new Error('Tape values must be positive metres.');
+      checkedNumber(item.sigma_m, 'Tape sigma', { lower: 1e-6, upper: 1 });
+      checkedText(item.evidence, 'Tape evidence');
+      if (!['fit', 'held_out'].includes(item.partition)) throw new Error('Choose a predeclared FIT or CHECK tape role.');
+    }
+    return { ...choices, measurements };
+  }
+  byId('setupChoices').addEventListener('change', async () => {
+    const ticket = ++revision, file = byId('setupChoices').files[0];
+    byId('setupChoices').value = '';
+    if (!file) {
+      byId('cancelSetup').disabled = !pending;
+      status.textContent = 'No saved choices selected; current choices retained.';
+      return;
+    }
+    byId('cancelSetup').disabled = false;
+    status.textContent = 'Reading saved choices; your current form remains unchanged until the file is checked.';
+    try {
+      if (file.size > 256 * 1024) throw new Error('Saved choices exceed the 256 KiB limit.');
+      const bytes = await file.arrayBuffer();
+      if (ticket !== revision) return;
+      const choices = checkedChoices(JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)));
+      pending = true;
+      render(choices);
+      status.textContent = 'Saved choices restored for review. Check the complete form before downloading; native source and camera checks still apply.';
+    } catch (error) {
+      if (ticket === revision) status.textContent = `Saved choices were not loaded: ${error.message}`;
+    } finally {
+      if (ticket === revision) byId('cancelSetup').disabled = !pending;
+    }
+  });
   byId('setupEditor').addEventListener('input', markPending);
   byId('setupEditor').addEventListener('change', markPending);
   byId('addSetupShape').addEventListener('click', () => {
@@ -301,6 +394,7 @@
     markPending();
   });
   byId('applySetup').addEventListener('click', () => {
+    ++revision;
     withdraw();
     try {
       const choices = readChoices();
@@ -316,18 +410,20 @@
     }
   });
   byId('cancelSetup').addEventListener('click', () => {
+    ++revision;
     pending = false;
     render(applied === null ? seed : applied);
     publish();
     status.textContent = applied === null ? 'Pending edits canceled; original setup restored.' : 'Pending edits canceled; the last applied choices are restored.';
   });
   byId('resetSetup').addEventListener('click', () => {
+    ++revision;
     applied = null;
     pending = false;
     render(seed);
     status.textContent = 'Reset to the original setup. No edited download remains.';
   });
-  window.addEventListener('pagehide', withdraw);
+  window.addEventListener('pagehide', () => { ++revision; withdraw(); });
   render(seed);
   byId('setupEditor').hidden = false;
   status.textContent = 'Choose frames, age, gender, evidence and explicit fitting controls. Original root choices and model defaults are shown; nothing is inferred from the photographs.';
