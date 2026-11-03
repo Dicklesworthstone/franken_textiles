@@ -525,6 +525,7 @@ fn finite_vapor_dryout_uses_one_implicit_event_clock_and_refines_to_the_continuo
     );
     finite_energy_balance(&coarse);
 
+    // det-ok: independent continuous dryout oracle in this cfg(test)-only module.
     let continuous = -2.0_f64 * 0.75_f64.ln();
     let mut errors = Vec::new();
     for subdivisions in [4, 16, 64, 256] {
