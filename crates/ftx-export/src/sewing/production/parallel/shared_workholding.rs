@@ -17,6 +17,8 @@ const MAX_BINDINGS: usize = 128;
 const RELEASE_PROTOCOL: &str = "available_at_feed_completion_with_access_in_cell_handling/1";
 pub(in crate::sewing::production) const ROUTED_RELEASE_PROTOCOL: &str =
     "available_after_unload_with_access_in_cell_handling/1";
+pub(in crate::sewing::production) const RETAINED_ROUTED_RELEASE_PROTOCOL: &str =
+    "available_after_declared_release_unload_at_owning_cell/1";
 
 /// Separately qualified common inventory. This declaration replaces independence only for the
 /// explicitly bound cell resources; every other cell-local resource remains independent.
@@ -27,6 +29,7 @@ pub struct Policy {
     pub model: String,
     /// Exact protocol qualifying release at feed completion in parallel mode or after complete
     /// unloading in routed mode, with access included in the independently qualified cell handling.
+    /// Retained routing explicitly qualifies the declared release operation at the owning cell.
     /// No unobserved physical fixture transfer or return duration is inferred.
     pub release_protocol: String,
     /// Complete effective cell locks, including local fixture lifecycles and finally idle cells.
@@ -130,8 +133,17 @@ impl Policy {
         &self,
         options: &SewOptions,
         cells: &[&Cell],
+        retained: bool,
     ) -> Result<(), Refusal> {
-        self.validate_for(options, cells, ROUTED_RELEASE_PROTOCOL)
+        self.validate_for(
+            options,
+            cells,
+            if retained {
+                RETAINED_ROUTED_RELEASE_PROTOCOL
+            } else {
+                ROUTED_RELEASE_PROTOCOL
+            },
+        )
     }
 
     fn validate_for(

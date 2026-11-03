@@ -426,15 +426,15 @@ geometry drives stitches, previews, combined yarn purchases and study results. E
 independent attending labor through load/setup/feed/unload, with sufficient unloaded staging at
 every cell. One separately sourced transfer resource serializes complete ready-state-to-ready-state
 handoffs; cell and transfer finish windows are inclusive. Outer serial timing, parallel allocation,
-retained/transported occupied fixtures and implicit fixture transfer refuse. Plan `/18`, production `/6`, routing `/1`
+transported occupied fixtures and implicit fixture transfer refuse. Cross-operation reservations
+require the explicit retained protocol below. Plan `/18`, production `/6`, routing `/1`
 and stitch `/7` retain exact operation/copy/cell identities, source plans and complete timelines.
 Bounded fixed-route append dispatch retains a complete incumbent or reports unresolved failure;
 only matching an independent mandatory-work lower bound establishes `optimality_proven`.
 Two complete replays share the 200000-work cap, and all retained source tables share the 250000
 station bound. Serial ordering accessors withhold unrelated timing; the existing elapsed-completion
 consumer uses routing. Tests: `sewing_routing`.
-Measured factory qualification,
-retained-fixture composition and hardware authorization remain open. See
+Measured factory qualification, occupied-fixture transport and hardware authorization remain open. See
 `docs/sewing-production.md`.
 
 **Routed finite fixtures** (`production.routing.workholding` report). Optional existing
@@ -457,6 +457,24 @@ limits and at most 16 shared pools/128 bindings. Tests: `sewing_routing` known c
 reservations, complete unloading, summed/multiple pools, source/material invalidation, windows,
 bounded complete incumbents, exact stitch and material-study replay; `sewing_parallel` guards the
 shared source validator. Integer inventory does not establish physical grip/access or hardware permission.
+
+**Cell-retained routed fixtures** (`routing.protocol`, `ftx-pb2.2.16`). Explicit
+`unloaded_operations_with_cell_retained_fixtures/1` admits distinct acquisition/release operations
+at the same owning cell. Per-copy reservations cover acquisition loading through declared release
+unloading, including unloaded garment handoffs, work elsewhere and calendar gaps. Every operation
+still charges its supplied load/setup/feed/unload duration. Local and shared inventory are enforced
+continuously; pools independently qualify `available_after_declared_release_unload_at_owning_cell/1`.
+Eligible anchors must select the same actual cell in both directions; unused qualified alternatives
+cannot contribute releases. Per-lifecycle search state preserves unknown releases as open tails,
+checks future reservations in physical time and closes them only on actual release dispatch.
+`coupled_cell_retained_fixture_append_dispatch/1` exposes this conservative restriction: exhaustive
+search and thread-cost proof remain scoped; only the independent lower bound proves makespan
+optimality. Independent report reconstruction verifies both actual anchors and all capacity events.
+Plan `/25`, production `/13`, routing `/8` and workholding `/2` add optional `release_operation` on
+distinct-release holds; legacy protocol output and stitch `/7` remain unchanged. Existing source,
+work and qualification limits apply. Tests cover reentrant local/shared capacity, complete unloading,
+calendar gaps, eligible ownership, seed recovery, source locks and exact 200-stitch replay. Retained
+inventory does not authorize occupied-fixture transport, continuous clamping or physical execution.
 
 **Worker-owned routed handoffs** (`routing.transfer.attending_worker`). An explicit existing
 worker owns source pickup through destination deposit under the separately qualified

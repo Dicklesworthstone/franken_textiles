@@ -1,6 +1,6 @@
-//! Complete routed operations borrow finite fixtures from their source-qualified cell inventory.
-//! Shared pools remain occupied through unloading; reservations are checked in physical time,
-//! independently of the order in which the append-dispatch search constructs cell timelines.
+//! Routed operations reserve finite fixtures from their source-qualified owning cell inventory.
+//! Explicit retained lifecycles span operations without transporting an occupied fixture. Local
+//! and shared reservations are checked in physical time, independently of dispatch construction.
 
 use std::collections::BTreeMap;
 
@@ -11,7 +11,6 @@ use super::super::{parallel, workholding};
 use super::{MAX_EXACT_MILLISECONDS, Policy, Timeline as RouteTimeline};
 use crate::sewing::{SewOptions, bad};
 
-const MAX_POOLS: usize = 16;
 const MAX_SOURCE_HOLDS: usize = 64;
 const MAX_EXPANDED_HOLDS: usize = 1024;
 const MAX_QUALIFICATION_REFERENCES: usize = 256;
@@ -27,11 +26,11 @@ pub struct Cell {
     pub qualifications: BTreeMap<String, workholding::QualificationRef>,
     /// Independently qualified cell-local capacities, still enforced when bound to shared pools.
     pub resources: Vec<workholding::Resource>,
-    /// Source lifecycles, each confined to one complete load/setup/feed/unload operation.
+    /// Source lifecycles; retained mode reserves inventory through the declared release operation.
     pub holds: Vec<workholding::Hold>,
 }
 
-/// One physical fixture reservation, from the beginning of loading through complete unloading.
+/// One cell-owned fixture reservation, from acquisition loading through release unloading.
 #[derive(Clone, Debug, Serialize)]
 pub struct Hold {
     /// Physical specialist cell.
@@ -47,8 +46,11 @@ pub struct Hold {
     pub pool: Option<String>,
     /// Integer units continuously reserved over the full half-open interval.
     pub units: u32,
-    /// Exact copy-scoped operation identity.
+    /// Exact copy-scoped acquisition operation identity.
     pub operation: String,
+    /// Distinct copy-scoped release operation for a retained lifecycle; omitted for ordinary holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_operation: Option<String>,
     /// Reservation begins before loading, setup and feed.
     pub acquired_at_milliseconds: u64,
     /// Complete unloading releases the reservation; a simultaneous acquisition may reuse it.
@@ -73,7 +75,7 @@ pub struct Timeline {
 /// Source-qualified fixture enforcement on the actual routed baseline and selected execution.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `ftx-sewing-routed-workholding/1`.
+    /// `/1` complete-operation holds; `/2` explicitly retained cell-owned lifecycles.
     pub schema: &'static str,
     /// Exact release/access convention, independent of any garment handoff protocol.
     pub release_protocol: &'static str,
@@ -92,21 +94,33 @@ pub struct Report {
     pub physical_pool_access_validated: bool,
 }
 
-/// One reserved complete operation. Pool demand follows its actual eligible cell.
+/// One exact physical copy's source lifecycle. An undispatched release has no invented end time.
 #[derive(Clone)]
 pub(super) struct Reservation {
-    route: usize,
-    cell: usize,
+    lifecycle: usize,
+    copy: usize,
     start: u64,
-    finish: u64,
+    finish: Option<u64>,
+}
+
+struct Lifecycle {
+    cell: usize,
+    acquire: usize,
+    release: usize,
+    local: usize,
+    pool: Option<usize>,
+    units: u32,
 }
 
 pub(super) struct Compiled {
     cells: Vec<Cell>,
     shared: Option<parallel::shared_workholding::Policy>,
-    demands: Vec<Vec<[u32; MAX_POOLS]>>,
+    demands: Vec<Vec<Vec<u32>>>,
+    retained_demands: Vec<Vec<Vec<u32>>>,
     capacities: Vec<u32>,
+    lifecycles: Vec<Lifecycle>,
     maximum_holds: usize,
+    retained: bool,
 }
 
 impl Compiled {
@@ -122,21 +136,19 @@ impl Compiled {
             return Ok(None);
         }
         if let Some(shared) = &policy.shared_workholding {
-            shared.validate_routed(options, &policy.cells.iter().collect::<Vec<_>>())?;
+            shared.validate_routed(
+                options,
+                &policy.cells.iter().collect::<Vec<_>>(),
+                policy.retained_fixtures(),
+            )?;
         }
-        let capacities = policy
+        let mut capacities: Vec<u32> = policy
             .shared_workholding
             .as_ref()
             .map(|shared| shared.resources.iter().map(|pool| pool.capacity).collect())
             .unwrap_or_default();
-        let mut compiled = Self {
-            cells: Vec::new(),
-            shared: policy.shared_workholding.clone(),
-            demands: vec![vec![[0; MAX_POOLS]; policy.cells.len()]; policy.route.len()],
-            capacities,
-            maximum_holds: 0,
-        };
-        let mut hold_counts = vec![vec![0usize; policy.cells.len()]; policy.route.len()];
+        let mut cells = Vec::new();
+        let mut local_offsets = vec![None; policy.cells.len()];
         let mut source_holds = 0usize;
         let mut qualification_references = 0usize;
         for (index, cell) in policy.cells.iter().enumerate() {
@@ -154,59 +166,89 @@ impl Compiled {
                     "routed workholding supports at most 64 total source holds, 1024 expanded holds and 256 qualification references",
                 ));
             }
-            let mut local_demands: BTreeMap<(&str, &str), u32> = BTreeMap::new();
-            for hold in &local.holds {
-                if hold.acquire != hold.release {
-                    return Err(bad(
-                        "unloaded routing requires every fixture hold to start and end on one operation; retained or transported occupied fixtures need a different qualified protocol",
-                    ));
-                }
-                let route = policy
-                    .route
-                    .iter()
-                    .position(|step| {
-                        step.cells().any(|id| id == cell.id) && step.operation == hold.acquire
-                    })
-                    .ok_or_else(|| bad("routed hold omits its exact owning cell and operation"))?;
-                hold_counts[route][index] += 1;
-                let local_units = local_demands
-                    .entry((hold.acquire.as_str(), hold.resource.as_str()))
-                    .or_default();
-                *local_units = local_units
-                    .checked_add(hold.units)
-                    .ok_or_else(|| bad("routed local fixture demand overflows"))?;
-                let capacity = local
-                    .resources
-                    .iter()
-                    .find(|resource| resource.id == hold.resource)
-                    .expect("admitted local resource")
-                    .capacity;
-                if *local_units > capacity {
-                    return Err(bad(format!(
-                        "{}: complete operation fixture demand exceeds local resource {} capacity",
-                        hold.acquire, hold.resource
-                    )));
-                }
-                if let Some(pool) = compiled.pool(&cell.id, &hold.resource) {
-                    compiled.demands[route][index][pool] = compiled.demands[route][index][pool]
-                        .checked_add(hold.units)
-                        .ok_or_else(|| bad("routed shared fixture demand overflows"))?;
-                    if compiled.demands[route][index][pool] > compiled.capacities[pool] {
-                        return Err(bad(format!(
-                            "{}: complete operation fixture demand exceeds shared pool {} capacity",
-                            hold.acquire,
-                            compiled.shared.as_ref().expect("bound pool").resources[pool].id
-                        )));
-                    }
-                }
-            }
-            compiled.cells.push(Cell {
+            local_offsets[index] = Some(capacities.len());
+            capacities.extend(local.resources.iter().map(|resource| resource.capacity));
+            cells.push(Cell {
                 cell: cell.id.clone(),
                 machine_sha256: local.machine_sha256.clone(),
                 qualifications,
                 resources: local.resources.clone(),
                 holds: local.holds.clone(),
             });
+        }
+        let demands = vec![vec![vec![0; capacities.len()]; policy.cells.len()]; policy.route.len()];
+        let mut compiled = Self {
+            cells,
+            shared: policy.shared_workholding.clone(),
+            retained_demands: demands.clone(),
+            demands,
+            capacities,
+            lifecycles: Vec::with_capacity(source_holds),
+            maximum_holds: 0,
+            retained: policy.retained_fixtures(),
+        };
+        let mut hold_counts = vec![vec![0usize; policy.cells.len()]; policy.route.len()];
+        for (index, cell) in policy.cells.iter().enumerate() {
+            let Some(local) = &cell.workholding else {
+                continue;
+            };
+            for hold in &local.holds {
+                if hold.acquire != hold.release && !compiled.retained {
+                    return Err(bad(
+                        "retained or transported occupied fixtures require a qualified protocol; cell-retained reservations need the explicit retained protocol and never authorize occupied fixture transport",
+                    ));
+                }
+                let anchor = |operation: &str| {
+                    policy
+                        .route
+                        .iter()
+                        .position(|step| {
+                            step.cells().any(|id| id == cell.id) && step.operation == operation
+                        })
+                        .ok_or_else(|| bad("routed hold omits its exact owning cell and operation"))
+                };
+                let acquire = anchor(&hold.acquire)?;
+                let release = anchor(&hold.release)?;
+                if release < acquire {
+                    return Err(bad("routed fixture release precedes its acquisition"));
+                }
+                hold_counts[acquire][index] += 1;
+                let local_index = local_offsets[index].expect("admitted local inventory")
+                    + local
+                        .resources
+                        .iter()
+                        .position(|resource| resource.id == hold.resource)
+                        .expect("admitted local resource");
+                let pool = compiled.pool(&cell.id, &hold.resource);
+                for resource in std::iter::once(local_index).chain(pool) {
+                    compiled.demands[acquire][index][resource] = compiled.demands[acquire][index]
+                        [resource]
+                        .checked_add(hold.units)
+                        .ok_or_else(|| bad("routed fixture acquisition demand overflows"))?;
+                    if compiled.demands[acquire][index][resource] > compiled.capacities[resource] {
+                        let scope = if Some(resource) == pool {
+                            "shared pool"
+                        } else {
+                            "local resource"
+                        };
+                        return Err(bad(format!(
+                            "{}: fixture acquisition exceeds {scope} capacity",
+                            hold.acquire
+                        )));
+                    }
+                    if acquire != release {
+                        compiled.retained_demands[acquire][index][resource] += hold.units;
+                    }
+                }
+                compiled.lifecycles.push(Lifecycle {
+                    cell: index,
+                    acquire,
+                    release,
+                    local: local_index,
+                    pool,
+                    units: hold.units,
+                });
+            }
         }
         compiled.maximum_holds = hold_counts
             .iter()
@@ -249,47 +291,54 @@ impl Compiled {
         if required.iter().all(|&units| units == 0) {
             return Ok(Some(earliest));
         }
+        let retained = &self.retained_demands[route][cell];
         let mut events = Vec::with_capacity(2 * reservations.len());
         for (index, reservation) in reservations.iter().enumerate() {
-            if reservation.finish <= earliest
-                || !required
-                    .iter()
-                    .zip(&self.demands[reservation.route][reservation.cell])
-                    .any(|(&need, &held)| need != 0 && held != 0)
+            let lifecycle = &self.lifecycles[reservation.lifecycle];
+            let finish = reservation.finish.unwrap_or(MAX_EXACT_MILLISECONDS);
+            if finish <= earliest
+                || std::iter::once(lifecycle.local)
+                    .chain(lifecycle.pool)
+                    .all(|resource| required[resource] == 0)
             {
                 continue;
             }
             events.push((reservation.start, true, index));
-            events.push((reservation.finish, false, index));
+            events.push((finish, false, index));
         }
         events.sort_unstable();
-        let mut occupied = [0u32; MAX_POOLS];
+        let mut occupied = vec![0u32; self.capacities.len()];
         let mut previous = 0;
         let mut start = earliest;
         for (time, acquire, index) in events {
-            let blocked = self
+            let blocked_short = self
                 .capacities
                 .iter()
                 .enumerate()
-                .any(|(pool, &capacity)| occupied[pool] + required[pool] > capacity);
+                .any(|(resource, &capacity)| occupied[resource] > capacity - required[resource]);
+            let blocked_retained = self
+                .capacities
+                .iter()
+                .enumerate()
+                .any(|(resource, &capacity)| occupied[resource] > capacity - retained[resource]);
             if previous < time
-                && blocked
                 && start < time
-                && (start > previous || duration > previous - start)
+                && (blocked_retained
+                    || blocked_short && (start > previous || duration > previous - start))
             {
-                // Every admissible start within this forbidden interval must wait until it ends.
-                // Repeating over all sorted intervals also handles future reservations and short
-                // gaps; inspecting occupancy only at the requested start would miss these cases.
+                // A new retained hold has no known release yet. Keep its entire open tail within
+                // capacity, including reservations already placed later in physical time. Its
+                // declared release can only shorten this conservative interval. An existing open
+                // hold blocks through the exact-clock bound; no future release time is guessed.
                 start = time;
             }
-            for (held, &units) in occupied
-                .iter_mut()
-                .zip(&self.demands[reservations[index].route][reservations[index].cell])
-            {
+            let lifecycle = &self.lifecycles[reservations[index].lifecycle];
+            for resource in std::iter::once(lifecycle.local).chain(lifecycle.pool) {
+                let held = &mut occupied[resource];
                 *held = if acquire {
-                    held.checked_add(units)
+                    held.checked_add(lifecycle.units)
                 } else {
-                    held.checked_sub(units)
+                    held.checked_sub(lifecycle.units)
                 }
                 .ok_or_else(|| bad("routed fixture reservation sweep is inconsistent"))?;
             }
@@ -303,22 +352,84 @@ impl Compiled {
         Ok((duration <= MAX_EXACT_MILLISECONDS - start).then_some(start))
     }
 
+    pub(super) fn can_dispatch(
+        &self,
+        reservations: &[Reservation],
+        copy: usize,
+        route: usize,
+        cell: usize,
+    ) -> bool {
+        // Release must occur at the actual acquisition cell, and selecting a release cell cannot
+        // silently borrow a source lifecycle whose acquisition was routed to another alternative.
+        reservations.iter().all(|reservation| {
+            let lifecycle = &self.lifecycles[reservation.lifecycle];
+            reservation.copy != copy
+                || reservation.finish.is_some()
+                || lifecycle.release != route
+                || lifecycle.cell == cell
+        }) && self
+            .lifecycles
+            .iter()
+            .enumerate()
+            .all(|(index, lifecycle)| {
+                lifecycle.cell != cell
+                    || lifecycle.release != route
+                    || lifecycle.acquire == lifecycle.release
+                    || reservations.iter().any(|reservation| {
+                        reservation.copy == copy
+                            && reservation.lifecycle == index
+                            && reservation.finish.is_none()
+                    })
+            })
+    }
+
     pub(super) fn reserve(
         &self,
         reservations: &mut Vec<Reservation>,
+        copy: usize,
         route: usize,
         cell: usize,
         start: u64,
         finish: u64,
-    ) {
-        if self.demands[route][cell].iter().any(|&units| units != 0) {
+    ) -> Result<(), Refusal> {
+        if !self.can_dispatch(reservations, copy, route, cell) {
+            return Err(bad(
+                "routed fixture release changed its owning copy or cell",
+            ));
+        }
+        for (index, lifecycle) in self
+            .lifecycles
+            .iter()
+            .enumerate()
+            .filter(|(_, lifecycle)| lifecycle.acquire == route && lifecycle.cell == cell)
+        {
             reservations.push(Reservation {
-                route,
-                cell,
+                lifecycle: index,
+                copy,
                 start,
-                finish,
+                finish: (lifecycle.acquire == lifecycle.release).then_some(finish),
             });
         }
+        for reservation in reservations.iter_mut().filter(|reservation| {
+            let lifecycle = &self.lifecycles[reservation.lifecycle];
+            reservation.copy == copy
+                && reservation.finish.is_none()
+                && lifecycle.release == route
+                && lifecycle.cell == cell
+        }) {
+            if finish <= reservation.start {
+                return Err(bad(
+                    "routed fixture release precedes its actual acquisition",
+                ));
+            }
+            reservation.finish = Some(finish);
+        }
+        if reservations.len() > self.maximum_holds {
+            return Err(bad(
+                "routed fixture reservations exceed their admitted lifecycle bound",
+            ));
+        }
+        Ok(())
     }
 
     fn timeline(&self, route: &RouteTimeline) -> Result<Timeline, Refusal> {
@@ -332,11 +443,34 @@ impl Compiled {
                     "routed fixture lifetime must include a complete positive operation",
                 ));
             }
-            for hold in cell
-                .holds
-                .iter()
-                .filter(|hold| hold.acquire == operation.operation_id)
-            {
+            for hold in cell.holds.iter().filter(|hold| {
+                hold.acquire == operation.operation_id || hold.release == operation.operation_id
+            }) {
+                let acquire = route
+                    .operations
+                    .iter()
+                    .find(|candidate| {
+                        candidate.copy == operation.copy && candidate.operation_id == hold.acquire
+                    })
+                    .ok_or_else(|| bad("routed fixture replay omits its acquisition operation"))?;
+                let release = route
+                    .operations
+                    .iter()
+                    .find(|candidate| {
+                        candidate.copy == operation.copy && candidate.operation_id == hold.release
+                    })
+                    .ok_or_else(|| bad("routed fixture replay omits its release operation"))?;
+                if acquire.cell != cell.cell
+                    || release.cell != cell.cell
+                    || release.finish_milliseconds < acquire.finish_milliseconds
+                {
+                    return Err(bad(
+                        "routed fixture replay changed its cell ownership or lifecycle order",
+                    ));
+                }
+                if hold.acquire != operation.operation_id {
+                    continue;
+                }
                 holds.push(Hold {
                     cell: cell.cell.clone(),
                     copy: operation.copy,
@@ -349,8 +483,9 @@ impl Compiled {
                     }),
                     units: hold.units,
                     operation: operation.id.clone(),
+                    release_operation: (hold.release != hold.acquire).then(|| release.id.clone()),
                     acquired_at_milliseconds: operation.loading_start_milliseconds,
-                    released_at_milliseconds: operation.finish_milliseconds,
+                    released_at_milliseconds: release.finish_milliseconds,
                 });
             }
         }
@@ -453,8 +588,16 @@ impl Compiled {
         selected: &RouteTimeline,
     ) -> Result<Report, Refusal> {
         Ok(Report {
-            schema: "ftx-sewing-routed-workholding/1",
-            release_protocol: parallel::shared_workholding::ROUTED_RELEASE_PROTOCOL,
+            schema: if self.retained {
+                "ftx-sewing-routed-workholding/2"
+            } else {
+                "ftx-sewing-routed-workholding/1"
+            },
+            release_protocol: if self.retained {
+                parallel::shared_workholding::RETAINED_ROUTED_RELEASE_PROTOCOL
+            } else {
+                parallel::shared_workholding::ROUTED_RELEASE_PROTOCOL
+            },
             cells: self.cells.clone(),
             shared_workholding: self.shared.clone(),
             baseline: self.timeline(baseline)?,

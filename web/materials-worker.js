@@ -252,6 +252,15 @@ self.onmessage = async ({ data: msg }) => {
           file("vapor-replay-request.json", result.replay_request_json)];
         break;
       }
+      case "linearizeOrigin": {
+        if (typeof ftx.material_linearize_origin !== "function") throw Error("Rebuild web/pkg: missing bounded origin-membrane engine.");
+        raw = ftx.material_linearize_origin(msg.originRequest); result = json(raw);
+        if (typeof result.selection_json !== "string") throw Error("Rebuild web/pkg: missing exact origin-membrane selection bridge.");
+        result.inspection = json(ftx.material_inspect(result.selection_json));
+        files = [file("origin-membrane-report.json", raw), file("origin-membrane-selection.json", result.selection_json),
+          file("origin-membrane-request.json", msg.originRequest)];
+        break;
+      }
       case "pressure": {
         const schema = json(msg.compressionRequest).schema;
         const history = ["ftx-compressed-thermal-history/1", "ftx-compressed-thermal-history/2", "ftx-compressed-thermal-history/3"].includes(schema);

@@ -5031,6 +5031,83 @@ nonlinear angular interpolation, establish a measured validity range, supply a c
 fabric or close the matched-specimen empirical gates in `ftx-tm2`/`ftx-tm8`. Those gates remain the
 highest-value path from useful numerical material swaps to reliable garment and production claims.
 
+### 25.158 Author prescribed movement through the ordinary scenario workbench
+
+Single and named scenarios now author up to sixteen timed arm and standing/seated/squat endpoints
+through ordinary controls. Explicit trajectory, collision, retained-geometry and shared case-attempt
+limits reach the existing motion authority. Each alternative continues its freshly sewn cloth on
+the exact selected body shape; no new solver, refit or independent pose restart is introduced.
+Saved cases retain their own endpoint and budget snapshots while unsaved edits remain drafts.
+
+Nominal peak panel-edge strain through the whole movement is available as a guided objective or
+inclusive limit, and complete motion can be required independently. Every inheriting case needs
+the requested consumer; original per-case policies retain independent native admission. All four
+adaptive guidance modes reuse these controls. Source changes and accepted endpoint edits cancel
+obsolete work, while failed paths retain the native separation of static and motion outcomes.
+
+This advances `ftx-ms2` and `ftx-ds2` through already implemented production consumers. The prescribed
+fixed-root vertex-chord path, source-model poses and computed edge metric do not establish anatomical
+validity, measured garment fit or a safe strain threshold. Transient and coupled transport policies
+retain their original-file route and independent qualification requirements.
+
+### 25.159 Prepare source-origin materials through ordinary browser controls
+
+The workbench now authors the existing bounded-origin request from an exact inspected material,
+six explicitly chosen Green-strain limits and a dated approximation rationale. The inspected
+selection must already admit estimates; a separate confirmation applies to the newly authored
+local approximation. No domain is prefilled, no source quantity is rounded through JavaScript,
+and no policy is changed under an existing frozen digest.
+
+The worker invokes the same WASM evaluator and adopts its exact selection JSON for ordinary
+inspection, pattern-piece binding and comparison. Downloads retain the exact request, report and
+derived selection. The original source remains available for domain revision; changing inputs or
+sources withdraws obsolete results and cancels dependent temperature work. Actual compiled-WASM
+tests cover source inspection, preparation, download/adoption and real piece binding, alongside
+domain, evidence, unstable-source and cancellation refusals. This closes the browser delivery
+slice `ftx-wg3`; incomplete mechanics and empirical garment qualification remain explicit.
+
+### 25.160 Retain source-qualified cell inventory across routed production operations
+
+The ordinary specialist-route engine now supports an explicit cell-retained fixture protocol.
+Each physical garment copy acquires its qualified inventory at one operation and retains it until
+the declared release operation finishes unloading at the same actual cell. The garment may leave
+unloaded for another specialist and return; the fixture is reserved at its owning cell. Local and
+shared capacities stay occupied across processing, staging, transfers and closed calendar gaps,
+while every supplied handling and feed duration remains charged.
+
+The same source-qualified lifecycle, machine/material/process locks, eligible-cell authority and
+bounded schedule search apply. Actual acquire/release choices must agree in both directions;
+an unused alternative cannot supply a release. Reservations with an undispatched release retain
+an unknown end and conservatively block conflicting work, including future intervals introduced by
+nonchronological dispatch. Complete baseline and selected reports independently reconstruct both
+anchors and replay local/shared occupancy to zero. The explicit search scope preserves incomplete
+search and cost-proof limits; the independent lower bound remains required for makespan optimality.
+
+This delivers the numerical retained-inventory slice `ftx-pb2.2.16` of the open manufacturing parent.
+The synthetic A → B → A batch changes from 41.1 to 23.2 seconds when its local jig inventory grows
+from one to two, while all 200 stitch identities remain unchanged. This is software evidence for
+resource-constrained scheduling, not measured throughput, occupied-fixture transport, continuous
+clamping, grip adequacy, robot motion or hardware authorization. Those physical qualifications
+remain open under `ftx-pb2.2` and `ftx-sp2`.
+
+### 25.161 Keep seam compatibility inside guided design discovery
+
+Guided grid and adaptive searches now retain an explicit ordered sequence of canonical seam-truing
+and sleeve-cap-ease operations after every variable's linked sites. The editor selects original seam
+and piece identities, requires the B-side endpoint or cap ratio, and preserves operation order.
+Their combined operation and root-search reservations remain with the existing design engine.
+
+Each candidate still passes ordinary outline, original seam-contract and selected-body fit checks
+before material and scenario evaluation. Failed roots retain the existing refusal; the original
+baseline receives no operations. All named cases share the same prepared geometry, and saved
+sequence changes invalidate dependent work while draft fields remain separate. This advances
+`ftx-ds2` through existing alteration and discovery authorities, without inferred repairs, relaxed
+seam contracts or empirical garment-fit claims.
+
+Actual native, public WASM and worker reports agree for a repaired linked grid, its unrepaired
+refusal and a cap-ease adaptive search with real manufacturing probes. These synthetic selected-body
+cases verify the connected operations and admission path; measured garment acceptance stays open.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

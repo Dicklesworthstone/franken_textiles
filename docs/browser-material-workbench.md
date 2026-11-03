@@ -41,6 +41,30 @@ portable `Selection` JSON containing a local characterization record. The page d
 pages or add a second database. Estimates remain disabled unless the selection explicitly admits them.
 A source-locked record cannot be modified while keeping its old digest.
 
+**Prepare a bounded membrane approximation from published fabric stiffness** turns an inspected
+Wang et al. (2011) source origin into the ordinary bounded material law through
+`material_linearize_origin`, the same core as `ftx materials linearize-origin`. Inspect a selection
+with `allow_estimates:true`, explicitly enter all six limits for `[E11, E22, 2E12]`, and supply an
+approximation reference, access date and rationale. The controls start empty. Each interval must span
+zero; the core checks the physical domain, source/specimen/basis consistency and tangent stability.
+The browser performs no stiffness calculation and chooses no validity interval. Confirm the local
+estimate separately; this confirmation resets when the selected source changes. Admission is part of
+the frozen material identity, so the page never flips `allow_estimates` under an existing digest.
+
+The result displays the authored domain, source identity, dated rationale, tangent and model scope,
+and inspects the exact returned `selection_json`. Assign that selection to an original pattern piece
+or add it to the ordinary material comparison. Downloads retain the exact source report, portable
+derived selection and request containing the original frozen source. Changing the domain or rationale
+withdraws the prepared result and restores the original source in the editor, so preparing again does
+not accidentally approximate an already-derived law. Cancellation and source edits defeat late worker
+results. An already assigned or shortlisted material remains its explicit immutable snapshot.
+
+This is an estimated constant tangent on the operator's declared Green-strain box, not the paper's
+complete nonlinear model or an empirically measured validity range. Existing incomplete material
+capabilities remain incomplete: no bending, contact friction, thickness or thermal data is supplied.
+The source with an unstable origin block still refuses in the shared core. See
+[wang2011-materials.md](wang2011-materials.md) for the model and native workflow.
+
 Load an original `fabric-pattern/1` pattern and assign an inspected selection to its default or an exact
 source-piece ID. A source-piece assignment affects that piece's mirrored/cut instances. Freeze and bind
 creates a new in-memory pattern through `ftx_pattern::material_binding::Changes`; it never edits the
@@ -216,7 +240,7 @@ Use **Add another variable** for a coupled adjustment. Each variable has its own
 1–64 strictly increasing values. **Edit**, **Move … earlier** and **Remove** preserve the other
 drafts; order matters because linked operations are applied sequentially. Merely viewing another
 variable leaves an active study running. Changing its values, sites or order cancels affected work.
-There may be at most 16 alteration sites across all variables. The vertex picker is populated only
+Linked sites and optional seam adjustments share a limit of 16 operations per design. The vertex picker is populated only
 when needed and supports up to 2048 original vertices; larger sources can still use complete design
 requests, slash-and-spread and independent material workflows.
 
@@ -244,6 +268,44 @@ The existing single-variable synthetic numerical test screens nine values and re
 adjustment, producing two 130 mm panels. Complete native, compiled-WASM and actual-worker reports
 match, and the selected bound pattern reproduces its retained cutting plan. That is software and
 declared-target evidence; physical wearer fit and continuous or global optimality remain separate.
+
+#### Adjust seams inside each candidate
+
+Under **Adjust seams after the linked alterations**, add the canonical operations that each searched
+design needs after applying all its variable sites. Both listed-grid and adaptive discovery retain
+the same ordered sequence:
+
+- **True a seam by moving its B-side endpoint:** select an original seam and explicitly choose its
+  start or end endpoint. The existing operator searches the bounded B-side slide while retaining
+  that seam's declared ratio and tolerance.
+- **Adjust sleeve-cap height to a declared ease ratio:** select the original cap piece, one or more
+  original cap/armhole seams, and a positive target total cap/armhole length ratio. The existing
+  operator adjusts cap height; original seam metadata and each half's validation remain intact.
+
+Choose **Add seam adjustment** to retain the operation. Draft field changes do not change an active
+sequence. Use **Replace … from current controls**, Move, Remove or Clear to change it explicitly.
+Operation order is preserved and can affect the resulting geometry. Exact source piece/seam names
+are required; an ambiguous seam name refuses. The picker supports up to 2048 named source seams;
+larger sources retain the complete-request workflow and other guided design operations.
+
+The total number of variable sites plus these operations must not exceed 16. Each seam-truing or
+cap-ease operation reserves 64 document passes per trial under the existing native work accounting.
+Reduce the authored search allowance if its full reservation is too large. A missing root or failed
+outline, seam or selected-body fit check remains a refused candidate, with its existing diagnostics.
+Only admitted designs continue to material and scenario consumers. No original seam contract is
+relaxed to make an alteration pass.
+
+The unchanged baseline receives no adjustments. The resulting `design_grid.after` or
+`design_adaptive.after` reaches the existing Rust evaluator unchanged, and all named cases share
+that same studied geometry. Accepted sequence edits cancel affected work; loading or adopting a
+different pattern clears the sequence. Complete study files retain their own operation policy.
+This connects existing geometry operators to design discovery and does not establish physical fit.
+
+The executable synthetic example moves three linked corners by 10 mm, then trues the original
+side seam into two 20 × 110 mm panels. Removing that explicit repair leaves the candidate refused.
+A second adaptive example adjusts a cap against its original 1.1 seam ratio and admits the selected
+geometry to assembly-mass comparison. Complete reports match across the native command, public
+WASM API and worker, including selected-body fit, preserved seam metadata and baseline refusals.
 
 #### Discover values and production tradeoffs adaptively
 
@@ -433,7 +495,7 @@ These are numerical settings, not measured fabric thickness, friction or a runti
 Enable independent sheet heat to retain the exact section-3 heat conditions and evaluate each
 alternative's current geometry through the existing thermal engine.
 
-Guided material comparisons can combine the following nominal goals and inclusive maximums with
+Guided material comparisons can combine the following goals and inclusive limits with
 manufacturing objectives, or run without manufacturing consumers. For a scenario-only comparison,
 clear unused manufacturing goals and limits before disabling their inputs.
 
@@ -441,29 +503,89 @@ clear unused manufacturing goals and limits before disabling their inputs.
 |---|---|
 | Simulated cloth mass (kg) | Mass of the simulated pieces; it excludes unsimulated parts. Use the separate complete-inventory assembly-mass consumer for total garment mass. |
 | Maximum absolute panel-edge strain (%) | The existing edge-based simulation metric. It is not principal strain or a physical safe-fit threshold. |
-| Signed independent sheet power (W) | Declare minimize or maximize explicitly. Negative power stays negative; minimizing signed power does not minimize its magnitude. This is not layered coverage or whole-wearer comfort. |
+| Peak absolute panel-edge strain through movement (%) | Includes the initial drape and every accepted motion sample. Requires the complete requested trajectory; failed or incomplete motion cannot qualify. This remains an edge metric, not principal strain or a safe-fit threshold. |
+| Signed independent sheet power (W) | Declare minimize or maximize explicitly. Nominal values or complete source-reported ranges for constant thermal laws are available, with signed minimum/maximum limits. Negative power stays negative; minimizing signed power does not minimize its magnitude. This is not layered coverage or whole-wearer comfort. |
 
-Maximums remain active even when their objective checkbox is clear. Explicitly required drape and
-sheet-heat consumers can exclude alternatives without adding a goal. An unsettled or gating-flagged
+Maximums remain active even when their objective checkbox is clear. Explicitly required drape,
+sheet-heat and motion consumers can exclude alternatives without adding a goal. An unsettled or gating-flagged
 drape cannot qualify these comparisons. Missing mechanics, thermal evidence or work budget retains
 the native refusal and any independent manufacturing result. A reported-range assembly-mass
-objective may use an explicit nominal limit basis for these simulation guards; unsupported result
-ranges are not invented. Use **Recompute every alternative in the requested scenarios**; the
+or sheet-heat objective may use an explicit nominal limit basis for the cloth-mass and strain guards;
+unsupported result ranges are not invented. Source-range heat limits require the entire reported
+interval inside the declared limits; missing ranges retain nominal readings but exclude the range
+decision. Use **Recompute every alternative in the requested scenarios**; the
 manufacturing-only action refuses scenario goals rather than silently dropping them.
 
 The generated `study-request.json` and `scenario-request.json` retain the original fit, heat and
 material source text, alongside the exact pattern and body input downloads. Active source, goal,
 mode and numerical-setting edits withdraw stale results and cancel pending reads or worker work.
 Unconsumed section-3 files do not replace an advanced scenario's own sources. Select **Load a
-complete scenario or named matrix (advanced)** for authored motion, coverage or
+complete scenario or named matrix (advanced)** for coverage, transient heat, coupled transport or
 other existing scenario policies; its exact request remains authoritative.
+
+#### Track material-direction strain
+
+Enable **Track warp, weft and shear on the actual cloth triangles** to use all retained physical
+instances or exact instance names from the drape report. The six initial and six complete-motion
+extrema expose signed warp E11, weft E22 and engineering shear 2E12 in dimensionless Green strain.
+They are distinct from the panel-edge percentage metric. Raise selected minima or lower selected
+maxima, and enter independently justified lower or upper limits. These metrics support nominal
+decisions; use explicit nominal guards alongside source-reported heat or mass objectives.
+
+The declared triangle-sample allowance covers the initial state and every accepted motion sample.
+Each alternative reserves its allowance against the shared 64000000-sample budget, including across
+named cases. Missing instance scopes and exhausted budgets refuse the affected consumer while
+independent results remain available. Required initial and complete-motion strain consumers can
+exclude an alternative without adding an objective. No failure or comfort threshold is supplied.
+
+#### Continue the same sewn garment through movement
+
+Enable **Continue the sewn garment through a prescribed body movement**. Declare an endpoint's
+cumulative time after the initial drape, absolute arm angle and standing, seated or squat leg pose,
+then choose **Add motion keyframe**. Seated and squat endpoints also require an explicit fraction
+of that model pose. Returning to standing is an explicit endpoint choice; poses are not incremental.
+An unchanged pose at a later time is a hold. No movement is supplied automatically.
+
+Alternatively, choose **Retain an original motion request** and select `ftx-drape-motion/1` JSON.
+The complete original text, including transient thermal/water requests and source numbers, is
+retained for native admission and replay. This mode does not need saved form endpoints. Its case
+motion-attempt allowance remains explicit; the form's inactive trajectory limits do not change it.
+Switching sources retains both drafts and withdraws obsolete work.
+
+The list supports explicit replacement from the endpoint controls and removal. Editing those
+controls prepares another endpoint without changing the saved path. Disabling motion retains the
+draft. Removing, replacing or adopting a pattern clears its saved endpoints, cases and strain scope. A single scenario uses the added endpoints; a named case
+freezes its own path and work limits when saved. Later draft edits do not change that saved case.
+
+The existing engine accepts 1–16 endpoints, increasing by at least 1e-9 seconds and ending within
+60 seconds, arm angles from 0 to 180 degrees and leg fractions from 0 to 1. Set the maximum implicit
+substep, attempted-substep allowance, collision-pair allowance and retained-vertex allowance
+explicitly. The trajectory needs enough attempted steps even for its nominal subdivision; actual
+collision/solver refinement can use more. The case-wide motion allowance is shared across material
+alternatives and discovery probes. Active named cases share at most 32768 motion attempts; this
+does not replace their separate vertex-frame and case-evaluation budgets.
+
+Use **Minimize peak absolute panel-edge strain through movement**, its inclusive maximum, or
+**Require a complete numerically admissible movement** in the ordinary comparison. Every case
+inheriting such a policy needs motion. Per-case policies can instead compare a static case and a
+moving case under independent goals. The existing four adaptive guidance modes consume the same
+motion objective and guards. These computed strain comparisons are nominal; no propagated strain
+range is invented.
+
+The production solver continues cloth positions, velocities and material history on the same
+selected body shape. Its fixed-root body path follows checked vertex chords between endpoints,
+without inferred chair/floor support or anatomical movement qualification. Use short explicit pose
+increments. A failed path retains the independent static result and publishes no partial trajectory.
+Existing motion inspection shows the accepted body/cloth samples at their recorded times. Optional
+sheet heat gives independent steady endpoint snapshots, not transient temperature evolution.
 
 #### Save several named cases from the ordinary controls
 
 Choose **Save and compare several named cases here** to prepare 1–8 scenarios on the same selected
-body and pose. Configure a case using the existing fit, drape and optional sheet-heat controls,
+body and initial pose. Configure a case using the fit, drape, optional sheet-heat, directional-strain and movement controls,
 give it a unique name, and choose **Save current settings as a named case**. Each saved case freezes
-the exact original fit and heat text and the declared numerical options. You can change those
+the exact original fit and heat text, declared strain scope and numerical options, and saved motion endpoints
+or original motion file. You can change those
 source files and settings to prepare the next case without changing any saved case.
 
 For each case, choose one comparison policy:
@@ -490,8 +612,8 @@ The scenario action runs only the saved cases in this mode. Its `scenario-reques
 the complete replayable matrix and the exact retained source fragments. Switching between saved,
 single-scenario and original-file modes preserves their separate requests. Loading or adopting a
 different pattern clears saved cases so another garment cannot silently inherit them. The guided
-forms author static drape and optional independent-sheet heat; advanced motion, coverage and
-coupled transport requests retain their existing original-file route.
+forms author initial drape, prescribed movement and optional independent-sheet heat; coverage,
+transient heat and coupled transport requests retain their existing original-file route.
 
 The focused compiled-engine proof uses a small synthetic sewing-only fixture with zero gravity
 steps. Five complete native/direct-WASM/worker comparisons cover signed heat direction, explicit

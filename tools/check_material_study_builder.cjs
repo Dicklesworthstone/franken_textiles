@@ -398,6 +398,12 @@ const scenarioState = () => ({allowNoFit:true,
   maxMeshPoints:32768,maxVertexFrames:64000000});
 const heatSource = () => ' {\r\n"schema":"ftx-steady-surface-conditions/1","boundaries":[{"inside_c":20.0,"outside_c":30.0,"inside_resistance_m2_k_w":-0.0,"outside_resistance_m2_k_w":1.0}]}\r\n';
 const selfContact = () => ({dhat:0.001,thickness:0.002,kappa:100,mu:0.4,eps_v:0.001});
+const motionPolicy = (changes={}) => ({schema:'ftx-drape-motion/1',keyframes:[
+  {time_s:0.1,arm_abduction_deg:50,leg_pose:{posture:'seated',fraction:0.5}},
+  {time_s:0.2,arm_abduction_deg:35}],max_step_s:0.01,max_trials:32,max_pairs:1000,...changes});
+const strainPolicy = (changes={}) => ({schema:'ftx-material-strain/1',max_triangle_samples:10000,...changes});
+const motionState = () => ({keyframes:[{time_s:0.25,arm_abduction_deg:30}],max_step_s:0.125,
+  max_trials:128,max_pairs:100000,max_sample_vertices:500000});
 
 test('guided scenarios preserve exact fit and heat sources and only author declared numerical controls', async () => {
   const {buildMaterialScenarioRequest:build}=await modulePromise;
@@ -413,6 +419,71 @@ test('guided scenarios preserve exact fit and heat sources and only author decla
   assert.equal(Object.hasOwn(ordinary,'surface'),false);assert.equal(Object.hasOwn(ordinary.options,'self_contact'),false);
   const off={...scenarioState(),options:{...scenarioState().options,self_contact:null}};
   assert.equal(JSON.parse(build(off)).options.self_contact,null);
+});
+
+test('guided motion preserves ordered absolute endpoints and original scenario sources', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:build}=await modulePromise;
+  const request={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:25,leg_pose:{posture:'seated',fraction:0.5}},
+    {time_s:0.5,arm_abduction_deg:35,leg_pose:{posture:'squat',fraction:0.25}},
+    {time_s:0.75,arm_abduction_deg:0}]};
+  const before=JSON.stringify(request),rawMotion=motion(request);
+  assert.deepEqual(JSON.parse(rawMotion),{schema:'ftx-drape-motion/1',...request});
+  assert.equal(Object.hasOwn(JSON.parse(rawMotion).keyframes[2],'leg_pose'),false,'Returning to standing omits leg pose, rather than carrying the prior endpoint forward');
+  const fit=' {"schema":"fabric-fit/1","source":{"seed":18446744073709551615,"x":-0.0}}\r\n';
+  const raw=build({...scenarioState(),motion:request,maxMotionTrials:4096,fitSpec:fit,surface:heatSource()}),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(request),before);assert.ok(raw.includes(rawMotion));assert.ok(raw.includes(fit));assert.ok(raw.includes(heatSource()));
+  assert.deepEqual(result.motion,JSON.parse(rawMotion));assert.equal(result.max_motion_trials,4096);
+  assert.equal(Object.hasOwn(result,'maxMotionTrials'),false);
+  const omitted=motionState();delete omitted.max_sample_vertices;
+  assert.equal(Object.hasOwn(JSON.parse(motion(omitted)),'max_sample_vertices'),false,'Omission retains the native 500000 default');
+});
+
+test('guided motion rejects ambiguous endpoints, invalid poses and unordered physical times', async () => {
+  const {buildMaterialMotionRequest:build}=await modulePromise;
+  const frame=motionState().keyframes[0],withFrames=keyframes=>({...motionState(),keyframes});
+  for(const keyframes of [null,{},[],[null],[{}],Array(17).fill(frame)]) assert.throws(()=>build(withFrames(keyframes)));
+  for(const time_s of [0,-1,5e-10,60.0001,NaN,Infinity,'0.25']) {
+    assert.throws(()=>build(withFrames([{...frame,time_s}])));
+  }
+  for(const time_s of [0.25,0.1,0.25+5e-10]) assert.throws(()=>build(withFrames([frame,{...frame,time_s}])));
+  for(const arm_abduction_deg of [-0.001,180.001,NaN,Infinity,'30']) {
+    assert.throws(()=>build(withFrames([{...frame,arm_abduction_deg}])));
+  }
+  for(const leg_pose of [{},{posture:'standing',fraction:0},{posture:'seated'},
+    ...[-0.01,1.01,NaN,Infinity,'0.5'].map(fraction=>({posture:'squat',fraction})),
+    {posture:'seated',fraction:0.5,extra:true}]) assert.throws(()=>build(withFrames([{...frame,leg_pose}])));
+  assert.throws(()=>build(withFrames([{...frame,extra:true}])));
+  for(const extra of [{schema:'ftx-drape-motion/1'},{transient_surface:{}},{unknown:true}]) {
+    assert.throws(()=>build({...motionState(),...extra}),/unsupported/,'Advanced source policies use their original JSON route');
+  }
+  const endpoints=Array.from({length:16},(_,i)=>({time_s:(i+1)/16,arm_abduction_deg:i*12}));
+  assert.equal(JSON.parse(build({...motionState(),keyframes:endpoints})).keyframes.length,16);
+});
+
+test('motion work limits and nominal substeps match canonical bounds without inventing convergence', async () => {
+  const {buildMaterialMotionRequest:build,buildMaterialScenarioRequest:scenario}=await modulePromise;
+  for(const max_step_s of [0,5e-10,1.001,NaN,Infinity,'0.1']) assert.throws(()=>build({...motionState(),max_step_s}));
+  for(const [key,maximum] of [['max_trials',512],['max_pairs',1000000],['max_sample_vertices',2000000]]) {
+    for(const value of [0,-1,1.5,maximum+1,NaN,Infinity,'1',undefined]) assert.throws(()=>build({...motionState(),[key]:value}));
+  }
+  const rounded={...motionState(),keyframes:[{time_s:0.1,arm_abduction_deg:0},{time_s:0.30000000000000004,arm_abduction_deg:180}],
+    max_step_s:0.1,max_trials:3};
+  assert.equal(JSON.parse(build(rounded)).max_trials,3);
+  assert.throws(()=>build({...rounded,max_trials:2}),/nominal substeps/);
+  const minimum={keyframes:[{time_s:1e-9,arm_abduction_deg:0,leg_pose:{posture:'seated',fraction:0}}],
+    max_step_s:1e-9,max_trials:1,max_pairs:1,max_sample_vertices:1};
+  assert.equal(JSON.parse(build(minimum)).max_sample_vertices,1);
+  const maximum={keyframes:[{time_s:60,arm_abduction_deg:180,leg_pose:{posture:'squat',fraction:1}}],
+    max_step_s:1,max_trials:512,max_pairs:1000000,max_sample_vertices:2000000};
+  assert.equal(JSON.parse(build(maximum)).keyframes[0].time_s,60);
+  assert.equal(JSON.parse(scenario({...scenarioState(),motion:maximum,maxMotionTrials:1})).max_motion_trials,1,
+    'The native session may preserve static results while refusing motion when its allowance cannot cover the requested trials');
+  for(const maxMotionTrials of [0,-1,32769,1.5,NaN,Infinity,'4096',undefined]) {
+    assert.throws(()=>scenario({...scenarioState(),motion:motionState(),maxMotionTrials}),/motion-trial budget/);
+  }
+  assert.throws(()=>scenario({...scenarioState(),motion:motionState()}),/supplied together/);
+  assert.throws(()=>scenario({...scenarioState(),maxMotionTrials:4096}),/supplied together/);
+  assert.equal(JSON.parse(scenario({...scenarioState(),motion:motionState(),maxMotionTrials:32768})).max_motion_trials,32768);
 });
 
 test('guided scenarios require explicit no-fit consent and refuse wrong or malformed original sources', async () => {
@@ -463,6 +534,109 @@ test('original scenario sources share a UTF-8 request budget before combined ser
   assert.throws(()=>build({...scenarioState(),fitSpec,surface}),/16 MiB/);
 });
 
+test('guided motion and material strain preserve exact source fragments and omitted native defaults', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  const motion=' {\r\n"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.1,"arm_abduction_deg":-0.0,'+
+    '"leg_pose":{"posture":"squat","fraction":1.0}},{"time_s":0.2,"arm_abduction_deg":35.0,"leg_pose":null}],'+
+    '"max_step_s":0.01,"max_trials":32,"max_pairs":1000,"transient_surface":{"source":{"n":18446744073709551615,'+
+    '"x":-0.0,"label":"é 🧵"}},"transient_coverage":null,"vapor_coverage_history":{}}\r\n';
+  const materialStrain=' {\r\n"schema":"ftx-material-strain/1","instances":["front:left","lining"],"max_triangle_samples":10000}\r\n';
+  const input={...scenarioState(),motion,maxMotionTrials:4096,materialStrain},before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.ok(raw.includes(motion));assert.ok(raw.includes(materialStrain));
+  assert.match(raw,/18446744073709551615/);assert.match(raw,/"x":-0\.0/);assert.match(raw,/"fraction":1\.0/);
+  assert.deepEqual(result.motion,JSON.parse(motion));assert.deepEqual(result.material_strain,JSON.parse(materialStrain));
+  assert.equal(result.max_motion_trials,4096);assert.equal(Object.hasOwn(result.motion,'max_sample_vertices'),false);
+  for(const key of ['motion','material_strain','max_motion_trials'])assert.equal(Object.hasOwn(JSON.parse(build(scenarioState())),key),false);
+  for(const instances of [undefined,null]) {
+    const all=JSON.stringify(strainPolicy(instances===undefined?{}:{instances}));
+    const independent=JSON.parse(build({...scenarioState(),materialStrain:all}));
+    assert.deepEqual(independent.material_strain,JSON.parse(all));assert.equal(Object.hasOwn(independent,'motion'),false);
+  }
+});
+
+test('authored motion and exact original motion compose with material strain without changing their contracts', async () => {
+  const {buildMaterialMotionRequest:author,buildMaterialScenarioRequest:build}=await modulePromise;
+  const motion=motionState(),original=' \r\n'+author(motion)+'\r\n',materialStrain=JSON.stringify(strainPolicy());
+  const before=JSON.stringify(motion),input={...scenarioState(),maxMotionTrials:1,materialStrain};
+  const authored=build({...input,motion}),retained=build({...input,motion:original});
+  assert.deepEqual(JSON.parse(authored),JSON.parse(retained));assert.ok(retained.includes(original));
+  assert.equal(JSON.stringify(motion),before);
+  assert.equal(JSON.parse(authored).max_motion_trials,1,'A smaller aggregate allowance remains a native admission decision for both routes');
+  assert.ok(authored.includes(materialStrain));assert.ok(retained.includes(materialStrain));
+  assert.throws(()=>build({...input,motion:JSON.parse(original)}),/unsupported/,'Schema-bearing source objects must use original JSON text');
+  for(const buildMotion of [author,value=>build({...input,motion:value})]) {
+    assert.throws(()=>buildMotion({...motion,keyframes:[{...motion.keyframes[0],leg_pose:undefined}]}),/object/);
+    assert.doesNotThrow(()=>buildMotion({...motion,keyframes:[{...motion.keyframes[0],leg_pose:null}]}));
+  }
+});
+
+test('guided motion refuses invalid ordered poses and reserves the actual nominal substeps', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  const check=policy=>build({...scenarioState(),motion:JSON.stringify(policy),maxMotionTrials:4096});
+  for(const policy of [null,[],{},motionPolicy({schema:'wrong'}),motionPolicy({keyframes:[]}),
+    motionPolicy({keyframes:Array(17).fill(motionPolicy().keyframes[0])}),motionPolicy({extra:1})])assert.throws(()=>check(policy));
+  for(const key of ['schema','keyframes','max_step_s','max_trials','max_pairs']) {
+    const missing=motionPolicy();delete missing[key];assert.throws(()=>check(missing),/missing/);
+  }
+  for(const time_s of [0,-1,5e-10,60.1,Infinity,NaN,'0.1']) {
+    assert.throws(()=>check(motionPolicy({keyframes:[{time_s,arm_abduction_deg:35}]})),/separated/);
+  }
+  for(const time_s of [0.1,0.05,0.1+5e-10]) {
+    assert.throws(()=>check(motionPolicy({keyframes:[{time_s:0.1,arm_abduction_deg:35},{time_s,arm_abduction_deg:35}]})),/separated/);
+  }
+  for(const arm_abduction_deg of [-1,180.1,Infinity,NaN,'35']) {
+    assert.throws(()=>check(motionPolicy({keyframes:[{time_s:0.1,arm_abduction_deg}]})),/arm angles/);
+  }
+  for(const leg_pose of [{},{posture:'standing',fraction:0},{posture:'seated',fraction:-1},
+    {posture:'squat',fraction:1.1},{posture:'squat',fraction:'0.5'},{posture:'seated',fraction:0.5,extra:1}]) {
+    assert.throws(()=>check(motionPolicy({keyframes:[{time_s:0.1,arm_abduction_deg:35,leg_pose}]})));
+  }
+  assert.throws(()=>check(motionPolicy({keyframes:[{time_s:0.1,arm_abduction_deg:35,extra:1}]})),/unsupported/);
+  for(const max_step_s of [0,1e-10,1.01,Infinity,'0.01'])assert.throws(()=>check(motionPolicy({max_step_s})),/maximum substep/);
+  for(const [key,maximum] of [['max_trials',512],['max_pairs',1000000],['max_sample_vertices',2000000]]) {
+    for(const value of [0,-1,maximum+1,1.5,'1',null])assert.throws(()=>check(motionPolicy({[key]:value})),/must be an integer/);
+    assert.equal(JSON.parse(check(motionPolicy({[key]:maximum}))).motion[key],maximum);
+  }
+  assert.throws(()=>check(motionPolicy({max_trials:19})),/more nominal substeps/);
+  assert.equal(JSON.parse(check(motionPolicy({max_trials:20}))).motion.max_trials,20);
+  assert.equal(JSON.parse(check(motionPolicy({keyframes:[{time_s:1e-9,arm_abduction_deg:0}],max_step_s:1e-9,max_trials:1}))).motion.max_trials,1);
+  assert.equal(JSON.parse(check(motionPolicy({keyframes:[{time_s:60,arm_abduction_deg:180}],max_step_s:1,max_trials:60}))).motion.keyframes[0].time_s,60);
+  for(const key of ['transient_surface','transient_coverage','vapor_coverage_history'])for(const value of [[],false,'{}',1]) {
+    assert.throws(()=>check(motionPolicy({[key]:value})),/original object or null/);
+  }
+});
+
+test('guided motion requires its explicit aggregate budget and bounded original JSON text', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  const input={...scenarioState(),motion:JSON.stringify(motionPolicy())};
+  assert.throws(()=>build(input),/explicit integer scenario motion-trial budget/);
+  for(const maxMotionTrials of [0,-1,32769,1.5,'1',null,Infinity])assert.throws(()=>build({...input,maxMotionTrials}),/motion-trial budget/);
+  const inherited=Object.assign(Object.create({maxMotionTrials:4096}),input);
+  assert.throws(()=>build(inherited),/explicit integer/);
+  for(const maxMotionTrials of [1,32768])assert.equal(JSON.parse(build({...input,maxMotionTrials})).max_motion_trials,maxMotionTrials);
+  assert.throws(()=>build({...scenarioState(),maxMotionTrials:4096}),/requires a prescribed motion/);
+  for(const motion of [motionPolicy(),null,'null','[]','{bad','\ufeff'+input.motion])assert.throws(()=>build({...input,motion,maxMotionTrials:4096}));
+  const fitSpec=JSON.stringify({source:'é'.repeat(4*1024*1024)}),
+    motion=JSON.stringify(motionPolicy({transient_surface:{source:'x'.repeat(9*1024*1024)}}));
+  assert.throws(()=>build({...input,fitSpec,motion,maxMotionTrials:4096}),/16 MiB/);
+});
+
+test('guided material strain validates exact distinct instance scope and explicit triangle-sample limits', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  const check=policy=>build({...scenarioState(),materialStrain:JSON.stringify(policy)});
+  for(const policy of [null,[],{},strainPolicy({schema:'wrong'}),strainPolicy({unknown:true})])assert.throws(()=>check(policy));
+  for(const max_triangle_samples of [undefined,0,-1,64000001,1.5,null,'1',Infinity])assert.throws(()=>check(strainPolicy({max_triangle_samples})));
+  for(const max_triangle_samples of [1,64000000])assert.equal(JSON.parse(check(strainPolicy({max_triangle_samples}))).material_strain.max_triangle_samples,max_triangle_samples);
+  for(const instances of [[],[''],[' '],['front','front'],[1],{},Array.from({length:4097},(_,i)=>String(i)),['é'.repeat(2049)]]) {
+    assert.throws(()=>check(strainPolicy({instances})));
+  }
+  const instances=['é'.repeat(2048),'__proto__','front:right'];
+  assert.deepEqual(JSON.parse(check(strainPolicy({instances}))).material_strain.instances,instances);
+  for(const materialStrain of [strainPolicy(),'null','[]','{bad','\ufeff'+JSON.stringify(strainPolicy())]) {
+    assert.throws(()=>build({...scenarioState(),materialStrain}));
+  }
+});
+
 test('scenario-only comparisons retain signed heat direction and cannot leak into manufacturing mode', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input=state();delete input.cutting;
@@ -483,6 +657,62 @@ test('scenario-only comparisons retain signed heat direction and cannot leak int
   }
   const drapeOnly={...input,objectives:[{metric:'max_absolute_edge_strain_pct',direction:'minimize'}],constraints:[],requiredConsumers:['drape']};
   assert.deepEqual(JSON.parse(build(drapeOnly,{drape:true,surface:false})).comparison.required_consumers,['drape']);
+});
+
+const staticStrainMetrics=['min_warp_green_strain','max_warp_green_strain','min_weft_green_strain','max_weft_green_strain',
+  'min_engineering_shear_green_strain','max_engineering_shear_green_strain'];
+const motionStrainMetrics=staticStrainMetrics.map(metric=>'motion_'+metric);
+
+test('directional strain and complete-motion metrics retain signed goals and independent consumer requirements', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={drape:true,surface:false,motion:true,materialStrain:true},metrics=[...staticStrainMetrics,...motionStrainMetrics,'motion_max_absolute_edge_strain_pct'];
+  const input=state();delete input.cutting;
+  input.objectives=metrics.map((metric,i)=>({metric,direction:i%2?'minimize':'maximize'}));
+  input.constraints=[{metric:'min_warp_green_strain',minimum:-0.04,maximum:-0.01},
+    {metric:'motion_max_engineering_shear_green_strain',minimum:-0.1,maximum:0.1}];
+  input.requiredConsumers=['material_strain','motion','motion_material_strain'];
+  const before=JSON.stringify(input),result=JSON.parse(build(input,context));
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(result.comparison.objectives,input.objectives);
+  assert.deepEqual(result.comparison.constraints,input.constraints);assert.deepEqual(result.comparison.required_consumers,input.requiredConsumers);
+  for(const metric of staticStrainMetrics) {
+    const staticOnly={...input,objectives:[{metric,direction:'maximize'}],constraints:[],requiredConsumers:['material_strain']};
+    assert.equal(JSON.parse(build(staticOnly,{...context,motion:false})).comparison.objectives[0].metric,metric);
+    assert.throws(()=>build(staticOnly,{drape:true,surface:false}),/requested material_strain/);
+  }
+  for(const metric of motionStrainMetrics) {
+    const moving={...input,objectives:[{metric,direction:'minimize'}],constraints:[],requiredConsumers:[]};
+    for(const missing of [{motion:false},{materialStrain:false}])assert.throws(()=>build(moving,{...context,...missing}),/requested motion_material_strain/);
+  }
+  const edgeOnly={...input,objectives:[{metric:'motion_max_absolute_edge_strain_pct',direction:'minimize'}],constraints:[],requiredConsumers:['motion']};
+  assert.equal(JSON.parse(build(edgeOnly,{...context,materialStrain:false})).comparison.objectives[0].metric,'motion_max_absolute_edge_strain_pct');
+  assert.throws(()=>build(edgeOnly,{...context,motion:false}),/requested motion/);
+  for(const consumer of ['material_strain','motion','motion_material_strain']) {
+    assert.throws(()=>build({...state(),requiredConsumers:[consumer]},{drape:true,surface:false}),/requires requested/);
+  }
+});
+
+test('directional strain and motion refuse reported ranges while retaining explicit nominal guards', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={drape:true,surface:true,motion:true,materialStrain:true},input={...state(),basis:'reported_bounds',
+    objectives:[{metric:'independent_surface_power_w',direction:'minimize'}],constraints:[],requiredConsumers:['surface']};
+  for(const metric of [...staticStrainMetrics,...motionStrainMetrics,'motion_max_absolute_edge_strain_pct']) {
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/steady sheet heat only/);
+    assert.throws(()=>build({...input,constraints:[{metric,minimum:-0.1,maximum:0.1}]},context),/steady sheet heat only/);
+    const guard={metric,basis:'nominal',minimum:-0.1,maximum:0.1};
+    assert.deepEqual(JSON.parse(build({...input,constraints:[guard]},context)).comparison.constraints,[guard]);
+  }
+});
+
+test('optional motion and strain availability preserves old contexts and rejects ambiguous flags', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const old={drape:true,surface:false},raw=build(state(),old);
+  assert.equal(build(state(),{...old,motion:false,materialStrain:false}),raw);
+  for(const key of ['motion','materialStrain'])for(const value of [null,undefined,'true',1,{}]) {
+    assert.throws(()=>build(state(),{...old,[key]:value}),/availability must be a boolean/);
+  }
+  const inherited=Object.assign(Object.create({materialStrain:true,motion:true}),old);
+  assert.throws(()=>build({...state(),requiredConsumers:['material_strain']},inherited),/requested material_strain/);
+  assert.throws(()=>build({...state(),requiredConsumers:['motion']},inherited),/requested motion/);
 });
 
 test('reported sheet heat retains signed objectives and inclusive guards without inventing source ranges', async () => {
@@ -538,6 +768,28 @@ test('bounded complete mass composes with steady heat ranges and separately nomi
   }
 });
 
+test('motion objectives, guards and required results need actual motion and explicit nominal basis', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const metric='motion_max_absolute_edge_strain_pct',context={drape:true,surface:false,motion:true};
+  const objective={...state(),objectives:[{metric,direction:'minimize'}]},guard={...state(),constraints:[{metric,maximum:8}]};
+  const required={...state(),requiredConsumers:['motion']};
+  for(const input of [objective,guard,required]) {
+    const raw=build(input,context);assert.equal(Object.hasOwn(JSON.parse(raw),'motion'),false);
+    for(const missing of [undefined,{drape:true,surface:false},{...context,motion:false}]) {
+      assert.throws(()=>build(input,missing),/requested motion/);
+    }
+    for(const motion of [null,'true',1,undefined]) assert.throws(()=>build(input,{...context,motion}),/boolean/);
+  }
+  const bounded={...state(),assemblyMass:mass(),basis:'reported_bounds',objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
+    constraints:[{metric,maximum:8,basis:'nominal'}],requiredConsumers:['motion']};
+  assert.deepEqual(JSON.parse(build(bounded,context)).comparison.constraints,bounded.constraints);
+  assert.throws(()=>build({...bounded,objectives:objective.objectives},context),/assembly mass and steady sheet heat only/);
+  assert.throws(()=>build({...bounded,constraints:guard.constraints},context),/assembly mass and steady sheet heat only/);
+  const heat={...bounded,objectives:[{metric:'independent_surface_power_w',direction:'maximize'}]};
+  assert.deepEqual(JSON.parse(build(heat,{...context,surface:true})).comparison.constraints,bounded.constraints,
+    'A source-bounded heat objective composes with a nominal motion-strain guard');
+});
+
 test('finite and mixed objectives compose with separately requested scenario consumers', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   for(const [mode,metric,consumer] of [['finiteStock','used_stock_count','finite_stock'],
@@ -578,6 +830,93 @@ test('linked design authoring retains exact fit and material sources with indepe
   assert.deepEqual(result.variants[0],{key:'baseline',changes:{schema:'ftx-material-bindings/1'}});
   assert.deepEqual(Object.keys(result.variants[1].changes.pieces),['lining']);
   for(const key of ['design','designs','design_adaptive','scenario'])assert.equal(Object.hasOwn(result,key),false);
+});
+
+test('guided seam adjustments retain canonical fixture identities and ordered operations in every search mode', async () => {
+  const {buildMaterialStudyRequest:build,buildGuidedDesignAfterOperations:adjust}=await modulePromise;
+  const source=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-sewing-pattern.json'),'utf8'));
+  const pieceIds=source.pieces.map(piece=>piece.id),seamIds=source.seams.map(seam=>seam.id);
+  const after=[{op:'true_seam',seam:'side',end:'start'},
+    {op:'cap_ease',piece:'front',seams:['side'],target_ratio:1.1},{op:'true_seam',seam:'side',end:'end'}];
+  const before=JSON.stringify(after),copy=adjust(after,pieceIds,seamIds);
+  assert.deepEqual(copy,after);assert.notEqual(copy,after);
+  copy[0].end='end';copy[1].seams[0]='changed';assert.equal(JSON.stringify(after),before);
+  const legacy=linkedDesignInput({pieceIds:['front'],values:[0,10],after});
+  const grid=multiDesignInput({variables:[{key:'length',values:[0,10],sites:[
+    {piece:'front',axis:'y',at_mm:50,multiplier:1}]}],after});
+  const adaptive=adaptiveDesignInput({variables:[{key:'length',boundsMm:[0,20],initialMm:0,
+    initialStepMm:10,minimumStepMm:1,sites:grid.variables[0].sites}],after});
+  for(const design of [legacy,grid,adaptive]) {
+    const input={...state(),pieceIds,seamIds,target:{scope:'pieces',ids:['back']},design},frozen=JSON.stringify(input);
+    const raw=build(input),result=JSON.parse(raw),search=result.design_adaptive??result.design_grid;
+    assert.equal(JSON.stringify(input),frozen);assert.deepEqual(search.after,after);
+    assert.equal(Object.hasOwn(result,'seamIds'),false);assert.equal(Object.hasOwn(search,'seamIds'),false);
+    assert.ok(raw.includes(design.fitSpec));assert.ok(raw.includes(input.candidates[0].selection));
+    assert.deepEqual(Object.keys(result.variants[1].changes.pieces),['back'],'Seam adjustments do not change independent material targets');
+  }
+});
+
+test('seam adjustment authoring rejects ambiguous sources and malformed explicit operations', async () => {
+  const {buildGuidedDesignAfterOperations:build}=await modulePromise;
+  const pieces=['front','lining'],seams=['side','cap'],truing={op:'true_seam',seam:'side',end:'end'},
+    cap={op:'cap_ease',piece:'front',seams:['side','cap'],target_ratio:1.1};
+  for(const after of [null,{},'[]',[null],Array(1),Array(17).fill(truing)]) assert.throws(()=>build(after,pieces,seams));
+  for(const operation of [{},{op:'move',piece:'front',vertex:'a',dx_mm:1,dy_mm:0},
+    {...truing,extra:1},{...cap,extra:1}]) assert.throws(()=>build([operation],pieces,seams));
+  for(const end of [undefined,null,'START',0,'both']) assert.throws(()=>build([{...truing,end}],pieces,seams),/start or end/);
+  for(const seam of ['','missing',null,1]) assert.throws(()=>build([{...truing,seam}],pieces,seams));
+  for(const sourceIds of [undefined,null,{},[],['side','side']]) assert.throws(()=>build([truing],pieces,sourceIds));
+  for(const piece of ['missing','',null,1]) assert.throws(()=>build([{...cap,piece}],pieces,seams));
+  for(const selected of [[],null,{},['missing'],['side','side'],['side',undefined]]) {
+    assert.throws(()=>build([{...cap,seams:selected}],pieces,seams));
+  }
+  for(const target_ratio of [0,-0,-1,NaN,Infinity,-Infinity,'1',null,undefined]) {
+    assert.throws(()=>build([{...cap,target_ratio}],pieces,seams),/finite and positive/);
+  }
+  for(const target_ratio of [0.1,4,Number.MIN_VALUE,Number.MAX_VALUE]) {
+    assert.equal(build([{...cap,target_ratio}],pieces,seams)[0].target_ratio,target_ratio,
+      'The native 0.3–3 cap-height search interval is not a target-ratio limit; root refusal remains native');
+  }
+  assert.deepEqual(build([truing],pieces,['side','other','other',undefined,null]),[truing],
+    'Only the selected source identity must be unique here; Rust still validates the complete pattern');
+  const inherited=Object.create({end:'end'});Object.assign(inherited,{op:'true_seam',seam:'side'});
+  assert.throws(()=>build([inherited],pieces,seams),/missing/);
+});
+
+test('all linked sites and seam adjustments share the native sixteen-operation allowance before source reads', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const operation={op:'true_seam',seam:'side',end:'end'};
+  for(const design of [linkedDesignInput(),multiDesignInput(),adaptiveDesignInput()]) {
+    const sites=design.variables?.reduce((sum,variable)=>sum+variable.sites.length,0)??design.pieceIds.length;
+    const after=Array.from({length:16-sites},()=>({...operation}));
+    const result=JSON.parse(build({...state(),seamIds:['side'],design:{...design,after}}));
+    assert.equal((result.design_grid??result.design_adaptive).after.length,16-sites);
+    let reads=0;const candidates=[{key:'alternative',get selection(){reads++;throw Error('Unread material snapshot');}}];
+    assert.throws(()=>build({...state(),candidates,seamIds:['side'],design:{...design,after:[...after,operation]}}),/16 ordered alteration operations/);
+    assert.equal(reads,0);
+  }
+});
+
+test('omitted seam adjustments preserve old request bytes and explicit empty lists retain authored intent', async () => {
+  const {buildMaterialStudyRequest:build,buildGuidedDesignAfterOperations:adjust}=await modulePromise;
+  assert.deepEqual(adjust([]),[]);
+  for(const design of [linkedDesignInput(),multiDesignInput(),adaptiveDesignInput()]) {
+    const input={...state(),design},before=build(input);
+    assert.equal(build({...input,seamIds:['side','side']}),before,'Unused source identity context does not enter the request');
+    const empty=build({...input,design:{...design,after:[]}}),result=JSON.parse(empty);
+    assert.deepEqual((result.design_grid??result.design_adaptive).after,[]);
+    assert.equal(empty.replace(',"after":[]',''),before);
+  }
+});
+
+test('seam adjustment names share the complete search request byte budget without rewriting source identities', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const seam='é'.repeat(128*1024),after=[{op:'true_seam',seam,end:'start'}];
+  for(const design of [linkedDesignInput(),adaptiveDesignInput()]) {
+    let reads=0;const candidates=[{key:'alternative',get selection(){reads++;throw Error('Unread material snapshot');}}];
+    assert.throws(()=>build({...state(),candidates,seamIds:[seam],design:{...design,after}}),/exceeds 256 KiB/);
+    assert.equal(reads,0);
+  }
 });
 
 test('linked design rejects invalid or nonfinite sites and domains without sorting or dropping values', async () => {
@@ -805,7 +1144,7 @@ test('grid and adaptive inputs never mix policies and explicit grid mode preserv
   assert.equal(check({...grid,mode:'grid'}),check(grid));
   for(const mode of ['',null,undefined,'adaptive_grid'])assert.throws(()=>check({...grid,mode}),/grid or adaptive/);
   for(const extra of [{maxCandidates:2},{values:[0,1]},{caseKey:'winter'},{restartPointsMm:[]},
-    {after:[]},{maxEvaluations:undefined}])assert.throws(()=>check({...adaptive,...extra}));
+    {after:null},{maxEvaluations:undefined}])assert.throws(()=>check({...adaptive,...extra}));
   for(const extra of [{objective:'fit_band_violation_mm'},{materialKey:'baseline'},{maxEvaluations:8}]) {
     assert.throws(()=>check({...grid,...extra}),/unsupported/);
   }
@@ -892,7 +1231,8 @@ test('adaptive guidance composes with finite jobs, source-reported mass and sepa
 const casePolicy = (metric='stock_area_m2',direction='minimize',changes={}) =>
   ({basis:'nominal',objectives:[{metric,direction}],...changes});
 const namedContext = (cases=[{key:'cold',surface:false},{key:'warm',surface:false}],maxEvaluations=64) =>
-  ({drape:true,surface:cases.some(item=>item.surface),matrix:{maxEvaluations,cases}});
+  ({drape:true,surface:cases.some(item=>item.surface),motion:cases.some(item=>item.motion===true),
+    materialStrain:cases.some(item=>item.materialStrain===true),matrix:{maxEvaluations,cases}});
 const namedDesign = changes => adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative',
   caseKey:'cold',maxEvaluations:2,maxDesigns:1,...changes});
 
@@ -1032,6 +1372,61 @@ test('each inherited matrix heat policy needs its own surface while raw override
   assert.equal(JSON.parse(build(input,raw)).design_adaptive.case_key,'cold','Original policy consumers go to Rust instead of being silently omitted');
 });
 
+test('motion and strain matrix comparisons require each inherited consumer in the same actual case', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const contextFor=cases=>({...namedContext(cases),motion:cases.some(item=>item.motion===true),
+    materialStrain:cases.some(item=>item.materialStrain===true)});
+  const complete={key:'cold',surface:false,motion:true,materialStrain:true};
+  for(const [metric,consumer,missing] of [
+    ['max_warp_green_strain','material_strain',{motion:true}],
+    ['motion_max_absolute_edge_strain_pct','motion',{materialStrain:true}],
+    ['motion_min_engineering_shear_green_strain','motion_material_strain',{motion:true}],
+  ]) {
+    const cases=[complete,{key:'warm',surface:false,...missing}],context=contextFor(cases);
+    for(const policy of [{constraints:[{metric,minimum:-0.1,maximum:0.1}]},{requiredConsumers:[consumer]},
+      {objectives:[{metric,direction:'maximize'}]}]) {
+      const input={...state(),...policy,design:namedDesign()};
+      assert.throws(()=>build(input,context),new RegExp(`warm inherits.*${consumer}`));
+      const override=contextFor([complete,{...cases[1],comparison:casePolicy('stock_area_m2')}]),before=JSON.stringify(override);
+      const result=JSON.parse(build(input,override));
+      assert.equal(result.design_adaptive.case_key,'cold');assert.equal(JSON.stringify(override),before);
+      if(policy.constraints)assert.deepEqual(result.comparison.constraints,policy.constraints);
+      if(policy.requiredConsumers)assert.deepEqual(result.comparison.required_consumers,policy.requiredConsumers);
+    }
+  }
+  const separate=contextFor([{key:'cold',surface:false,motion:true},{key:'warm',surface:false,materialStrain:true}]);
+  assert.throws(()=>build({...state(),requiredConsumers:['motion_material_strain']},separate),/requested motion_material_strain/);
+  assert.throws(()=>build({...state(),objectives:[{metric:'motion_max_warp_green_strain',direction:'minimize'}]},separate),/requested motion_material_strain/);
+  const both=contextFor([complete,{...complete,key:'warm'}]);
+  const input={...state(),objectives:[{metric:'motion_max_warp_green_strain',direction:'minimize'}],design:namedDesign()};
+  assert.equal(JSON.parse(build(input,both)).comparison.objectives[0].metric,'motion_max_warp_green_strain');
+  for(const key of ['motion','materialStrain']) {
+    const absent={...both};delete absent[key];assert.throws(()=>build(input,absent),/actual cases/);
+    assert.throws(()=>build(input,{...both,[key]:false}),/actual cases/);
+    for(const value of [null,undefined,'true',1])assert.throws(()=>build(state(),contextFor([{...complete,[key]:value}])),/availability must be a boolean/);
+  }
+});
+
+test('named motion comparisons admit inherited consumers case by case and retain original policy authority', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const metric='motion_max_absolute_edge_strain_pct';
+  const cases=[{key:'moving',surface:false,motion:true},{key:'static',surface:false,motion:false}];
+  for(const input of [{...state(),objectives:[{metric,direction:'minimize'}]},
+    {...state(),constraints:[{metric,maximum:8}]},{...state(),requiredConsumers:['motion']}]) {
+    const context=namedContext(cases);assert.throws(()=>build(input,context),/static inherits.*motion/);
+    assert.ok(build(input,namedContext([cases[0],{...cases[1],comparison:casePolicy()}])));
+    assert.throws(()=>build(input,{...context,motion:false}),/motion availability/);
+  }
+  const advanced=casePolicy('motion_max_body_contact_vertex_force_n','minimize',{
+    constraints:[{metric,maximum:8,basis:'nominal'}],required_consumers:['motion','motion_contact_loads'],allow_mixed_protocols:true});
+  const context=namedContext([{...cases[0],comparison:advanced},{...cases[1],comparison:advanced}]);
+  const before=JSON.stringify(context);assert.ok(build(state(),context));assert.equal(JSON.stringify(context),before,
+    'Original supplied policies and their complete consumer admission remain with Rust, including a deliberately missing motion input');
+  for(const motion of [null,'true',1,undefined]) {
+    assert.throws(()=>build(state(),namedContext([{...cases[0],motion}])),/boolean/);
+  }
+});
+
 test('reported sheet heat respects effective named-case policies and adaptive guidance without changing sources', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input={...state(),basis:'reported_bounds',
@@ -1083,6 +1478,20 @@ test('named scenario authoring preserves every original scenario and case policy
   assert.equal(Object.hasOwn(result.cases[1].scenario,'surface'),false,'A case never inherits another case’s heat input');
   const explicit=build({maxEvaluations:1,cases:[{key:'null policy',scenario:second,comparison:' \nnull\r\n'}]});
   assert.ok(explicit.includes(' \nnull\r\n'));assert.equal(JSON.parse(explicit).cases[0].comparison,null);
+});
+
+test('named scenarios retain authored motion and strain budgets without sharing optional consumers across cases', async () => {
+  const {buildMaterialScenarioMatrixRequest:build,buildMaterialScenarioRequest:single}=await modulePromise;
+  const motion=' \r\n'+JSON.stringify(motionPolicy())+'\r\n',materialStrain=' \r\n'+JSON.stringify(strainPolicy({instances:['front:right']}))+'\r\n';
+  const moving=single({...scenarioState(),motion,maxMotionTrials:16384,materialStrain,maxVertexFrames:32000000}),
+    stationary=single({...scenarioState(),maxVertexFrames:32000000});
+  const raw=build({maxEvaluations:4,cases:[{key:'moving',scenario:moving},{key:'stationary',scenario:stationary}]}),result=JSON.parse(raw);
+  for(const original of [moving,stationary,motion,materialStrain])assert.ok(raw.includes(original));
+  assert.equal(result.cases[0].scenario.max_motion_trials,16384);
+  for(const key of ['motion','material_strain','max_motion_trials'])assert.equal(Object.hasOwn(result.cases[1].scenario,key),false);
+  assert.equal(JSON.parse(build({maxEvaluations:4,cases:[{key:'one',scenario:moving},{key:'two',scenario:moving}]})).cases.length,2);
+  const excessive=single({...scenarioState(),motion,maxMotionTrials:16385,materialStrain,maxVertexFrames:32000000});
+  assert.throws(()=>build({maxEvaluations:4,cases:[{key:'one',scenario:moving},{key:'two',scenario:excessive}]}),/32768 active motion trials/);
 });
 
 test('matrix snapshot resources use native active-motion defaults and complete aggregate limits', async () => {
