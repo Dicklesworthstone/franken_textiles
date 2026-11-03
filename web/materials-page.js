@@ -1,5 +1,5 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
-import { buildMaterialStudyRequest, buildMaterialScenarioRequest } from "./materials-study-builder.js";
+import { buildMaterialStudyRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest } from "./materials-study-builder.js";
 
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
@@ -33,6 +33,10 @@ const guidedDesignButtons = [];
 let guidedDesignCurrent = 0;
 let guidedDesignVertexSource = null, guidedDesignVertexProblem = "";
 let guidedDesignNomination = null;
+let guidedScenarioCases = null, guidedScenarioCasesRead = 0;
+let guidedDesignCaseNomination = null;
+const guidedScenarioDrafts = [], guidedScenarioButtons = [];
+let guidedScenarioDraftSource = {};
 const guidedDesignFields = { key: "guidedDesignKey", kind: "guidedDesignKind", axis: "guidedDesignAxis",
   at: "guidedDesignAt", multiplier: "guidedDesignMultiplier", values: "guidedDesignValues", dx: "guidedDesignDx", dy: "guidedDesignDy",
   lower: "guidedDesignLower", upper: "guidedDesignUpper", initial: "guidedDesignInitial",
@@ -82,7 +86,8 @@ for (const op of operations) {
 const text = value => JSON.stringify(value, null, 2);
 const has = id => (id === "stockRequest" && selectedStockRequest !== null) || roundFiles.has(id) || !!$(id).files.length;
 const guidedStudyMode = () => $("studyMode").value === "guided";
-const guidedScenarioMode = () => $("scenarioMode").value === "guided";
+const guidedScenarioMode = () => ["guided", "guided_matrix"].includes($("scenarioMode").value);
+const guidedMatrixMode = () => $("scenarioMode").value === "guided_matrix";
 const guidedStockMode = () => $("guidedStockMode").value || "roll";
 const guidedStockScope = (scope, mode) => !scope || scope === mode || (scope === "priced" && ["roll", "job"].includes(mode));
 const studyUsesBody = () => guidedStudyMode() ? $("guidedDesign").checked : $("studyOnBody").checked;
@@ -105,14 +110,15 @@ function guidedSourceStudies(id) {
   const scenarioSource = guidedScenarioMode() &&
     ((id === "fit" && $("guidedScenarioFitSource").value === "file") ||
       (id === "heatConditions" && $("guidedScenarioHeat").checked));
-  if (!guidedStudyMode()) return scenarioSource ? ["scenario"] : [];
+  const scenarioKeys = scenarioSource ? [guidedMatrixMode() ? "scenarioDraft" : "scenario"] : [];
+  if (!guidedStudyMode()) return scenarioKeys;
   const mode = guidedStockMode(), cutting = $("guidedCutting").checked;
   const used = (id === "fit" && $("guidedDesign").checked) ||
     (id === "cutOptions" && cutting && mode === "roll" && $("guidedCuttingSource").value === "file") ||
     (id === "stockRequest" && cutting && mode === "finite") || (id === "cutJobRequest" && cutting && mode === "job") ||
     (["sewOptions", "sewOptimize"].includes(id) && $("guidedSewing").checked) ||
     (["quotes", "market"].includes(id) && mode === "roll" && $("guidedPurchasing").checked);
-  return used ? ["study", "scenario"] : scenarioSource ? ["scenario"] : [];
+  return used ? ["study", "scenario", ...scenarioKeys] : scenarioKeys;
 }
 function controls() {
   const guided = guidedStudyMode();
@@ -133,12 +139,18 @@ function controls() {
   $("studyFileControls").hidden = guided;
   $("guidedScenario").hidden = !guidedScenarioMode();
   $("scenarioFileControls").hidden = guidedScenarioMode();
+  $("guidedScenarioMatrix").hidden = !guidedMatrixMode();
+  $("guidedScenarioCasePolicy").hidden = !guidedMatrixMode();
+  $("guidedScenarioComparison").disabled = !guidedMatrixMode() || $("guidedScenarioPolicySource").value !== "file";
+  $("addScenarioCase").disabled = !ready || !!pending || !source || !guidedMatrixMode() || guidedScenarioDrafts.length >= 8;
+  $("clearScenarioCases").disabled = !guidedScenarioDrafts.length;
+  for (const { button, unavailable, replace } of guidedScenarioButtons) button.disabled = unavailable || (replace && (!ready || !!pending));
   $("guidedScenarioGoals").hidden = !guided;
   $("studyPieces").disabled = !source || $("studyTarget").value !== "pieces";
   $("guidedDesign").disabled = !source;
   $("guidedDesignControls").hidden = !$("guidedDesign").checked;
   for (const id of ["guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
-    "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignEvaluations"]) {
+    "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignCase", "guidedDesignEvaluations"]) {
     $(id).disabled = !source || !$("guidedDesign").checked;
   }
   const adaptiveDesign = $("guidedDesignMode").value === "adaptive";
@@ -147,10 +159,15 @@ function controls() {
   $("guidedDesignAdaptivePolicy").hidden = !adaptiveDesign;
   for (const id of ["guidedDesignValues", "guidedDesignGridBudget"]) $(id).disabled ||= adaptiveDesign;
   for (const id of ["guidedDesignLower", "guidedDesignUpper", "guidedDesignInitial", "guidedDesignInitialStep", "guidedDesignMinimumStep",
-    "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignEvaluations"]) $(id).disabled ||= !adaptiveDesign;
-  const consumerDesign = ["consumer_comparison", "consumer_pareto"].includes($("guidedDesignObjective").value);
+    "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignCase", "guidedDesignEvaluations"]) $(id).disabled ||= !adaptiveDesign;
+  const objective = $("guidedDesignObjective").value;
+  const consumerDesign = ["consumer_comparison", "consumer_pareto", "consumer_worst_case", "consumer_matrix_pareto"].includes(objective);
   $("guidedDesignMaterialField").hidden = !consumerDesign; $("guidedDesignMaterial").disabled ||= !consumerDesign;
   $("guidedDesignMaterialStatus").hidden = !consumerDesign || !guidedDesignNomination?.invalidated;
+  const nominatedCase = ["consumer_comparison", "consumer_pareto"].includes(objective) && (!guidedScenarioMode() || guidedMatrixMode());
+  $("guidedDesignCaseField").hidden = !nominatedCase;
+  $("guidedDesignCaseStatus").hidden = !nominatedCase;
+  $("guidedDesignCase").disabled ||= !nominatedCase || !currentGuidedScenarioCases()?.keys?.length;
   const movingVertices = $("guidedDesignKind").value === "move";
   if (source && $("guidedDesign").checked && movingVertices) ensureGuidedDesignVertices();
   $("guidedDesignSlash").hidden = movingVertices; $("guidedDesignMove").hidden = !movingVertices;
@@ -213,6 +230,7 @@ function controls() {
   $("study").disabled ||= !source || !studyReady;
   if (studyUsesBody()) $("study").disabled ||= !has("body") || !studyBodyReady();
   $("scenario").disabled ||= !source || !studyReady || (!guidedScenarioMode() && !has("scenarioRequest")) || !has("body") || !studyBodyReady();
+  $("scenario").disabled ||= guidedMatrixMode() && !guidedScenarioDrafts.length;
   if (!guided && $("combinationMode").checked && !combinationGroups.size) {
     $("study").disabled = true; $("scenario").disabled = true;
   }
@@ -3888,6 +3906,71 @@ function refreshGuidedDesignMaterials() {
     `The nominated source for ${guidedDesignNomination.key} was removed or changed. Choose a current material explicitly, even if that name has been reused.` : "";
   $("guidedDesignMaterialStatus").hidden = !guidedDesignNomination?.invalidated;
 }
+function scenarioSourceFile() {
+  return roundFiles.has("scenarioRequest") ? roundFiles.get("scenarioRequest") : $("scenarioRequest").files[0];
+}
+function currentGuidedScenarioCases() {
+  return guidedMatrixMode() ? { original: guidedScenarioDraftSource, keys: guidedScenarioDrafts.map(item => item.key) } : guidedScenarioCases;
+}
+function scenarioSourceIdentity() { return guidedMatrixMode() ? guidedScenarioDraftSource : scenarioSourceFile(); }
+function refreshGuidedDesignCases() {
+  const cases = currentGuidedScenarioCases();
+  if (guidedDesignCaseNomination && (!guidedScenarioMode() || guidedMatrixMode()) &&
+    guidedDesignCaseNomination.source !== scenarioSourceIdentity()) guidedDesignCaseNomination.invalidated = true;
+  const select = $("guidedDesignCase"); select.replaceChildren();
+  for (const key of ["", ...(cases?.keys || [])]) {
+    const option = document.createElement("option"); option.value = key;
+    option.textContent = key || "Choose an explicit named case"; select.append(option);
+  }
+  select.value = guidedDesignCaseNomination && !guidedDesignCaseNomination.invalidated ? guidedDesignCaseNomination.key : "";
+  $("guidedDesignCaseStatus").textContent = cases?.problem ||
+    (guidedDesignCaseNomination?.invalidated ? "The scenario source changed. Choose a current case explicitly, even if its name is unchanged." :
+      cases?.keys?.length ? "Discovery follows the selected case's comparison policy. Every case must still admit each trial." :
+        guidedMatrixMode() ? "Save at least one named case below to choose it for guidance." :
+          cases ? "This is a single scenario; a named guidance case is not needed." : "Load a named scenario matrix below to choose a case.");
+}
+async function loadGuidedScenarioCases() {
+  const generation = ++guidedScenarioCasesRead, original = scenarioSourceFile();
+  guidedScenarioCases = null;
+  if (guidedDesignCaseNomination) guidedDesignCaseNomination.invalidated = true;
+  refreshGuidedDesignCases();
+  if (!original) { controls(); return; }
+  $("guidedDesignCaseStatus").textContent = "Reading the named scenario cases…";
+  controls();
+  try {
+    const request = await read("scenarioRequest"), value = JSON.parse(request);
+    if (generation !== guidedScenarioCasesRead || original !== scenarioSourceFile()) return;
+    let keys = [];
+    if (value?.schema === "ftx-drape-scenario-matrix/1") {
+      if (!Array.isArray(value.cases) || value.cases.length < 1 || value.cases.length > 8 ||
+        value.cases.some(item => typeof item?.key !== "string" || !item.key.trim() || new Blob([item.key]).size > 128)) {
+        throw Error("A named matrix needs 1–8 cases with nonempty names of at most 128 UTF-8 bytes.");
+      }
+      keys = value.cases.map(item => item.key);
+      if (new Set(keys).size !== keys.length) throw Error("Named scenario cases must have unique names.");
+    } else if (value?.schema !== "ftx-drape-scenario/1") {
+      throw Error("Choose an ordinary scenario or named scenario matrix.");
+    }
+    guidedScenarioCases = { original, keys };
+  } catch (e) {
+    if (generation !== guidedScenarioCasesRead || original !== scenarioSourceFile()) return;
+    guidedScenarioCases = { original, keys: [], problem: String(e.message || e) };
+  }
+  refreshGuidedDesignCases(); controls();
+}
+function guidedComparisonInput(number, stockMode = guidedStockMode()) {
+  if (!["roll", "finite", "job"].includes(stockMode)) throw Error("Choose roll, finite stock or a complete cutting job.");
+  const metrics = guidedMetrics.filter(([, , scope]) => guidedStockScope(scope, stockMode));
+  const objectives = metrics.filter(([id]) => $(`${id}Goal`).checked).map(([id, metric]) => ({ metric,
+    direction: id === "guidedHeatPower" ? $("guidedHeatDirection").value : "minimize" }));
+  const limitBasis = $("guidedLimitBasis").value || "inherit";
+  if (!["inherit", "nominal", "reported_bounds"].includes(limitBasis)) throw Error("Choose the basis for comparison limits.");
+  const constraints = metrics.filter(([id]) => $(`${id}Limit`).value.trim()).map(([id, metric]) => ({
+    metric, maximum: number(`${id}Limit`, `maximum for ${metric}`), ...(limitBasis === "inherit" ? {} : { basis: limitBasis }),
+  }));
+  const requiredConsumers = guidedRequired.filter(([id, , scope]) => guidedStockScope(scope, stockMode) && $(id).checked).map(([, consumer]) => consumer);
+  return { objectives, constraints, requiredConsumers, basis: $("guidedBasis").value };
+}
 async function guidedStudyInput(scenarioRead) {
   if (!source) throw Error("Load the original pattern first.");
   const number = (id, label) => {
@@ -3911,21 +3994,12 @@ async function guidedStudyInput(scenarioRead) {
     edge_margin_mm: number("guidedEdge", "side margin in millimetres"), end_margin_mm: number("guidedEnd", "end margin in millimetres"),
     ...allowance,
   } : undefined;
-  const metrics = guidedMetrics.filter(([, , scope]) => guidedStockScope(scope, stockMode));
-  const objectives = metrics.filter(([id]) => $(`${id}Goal`).checked).map(([id, metric]) => ({ metric,
-    direction: id === "guidedHeatPower" ? $("guidedHeatDirection").value : "minimize" }));
-  const limitBasis = $("guidedLimitBasis").value || "inherit";
-  if (!["inherit", "nominal", "reported_bounds"].includes(limitBasis)) throw Error("Choose the basis for comparison limits.");
-  const constraints = metrics.filter(([id]) => $(`${id}Limit`).value.trim()).map(([id, metric]) => ({
-    metric, maximum: number(`${id}Limit`, `maximum for ${metric}`), ...(limitBasis === "inherit" ? {} : { basis: limitBasis }),
-  }));
-  const requiredConsumers = guidedRequired.filter(([id, , scope]) => guidedStockScope(scope, stockMode) && $(id).checked).map(([, consumer]) => consumer);
   // Freeze controls AND files before any read. execute() rejects an obsolete request after edits;
   // original UTF-8 fragments reach Rust without JS number reserialization or BOM replacement.
   const input = { candidates: studyCandidates.map(candidate => ({ ...candidate })), target,
-    pieceIds: source.pieces.map(p => p.id), ...(cutting ? { cutting } : {}), objectives, constraints,
-    requiredConsumers, basis: $("guidedBasis").value };
-  if ($("guidedDesign").checked) input.design = guidedDesignInput(number);
+    pieceIds: source.pieces.map(p => p.id), ...(cutting ? { cutting } : {}), ...guidedComparisonInput(number, stockMode) };
+  if ($("guidedDesign").checked) input.design = guidedDesignInput(number, !!scenarioRead);
+  const nominatedCaseSource = input.design?.caseKey ? guidedDesignCaseNomination?.source : undefined;
   const retained = [], budget = 16 * 1024 * 1024;
   let sourceBytes = 0;
   const retain = (key, id, label) => {
@@ -3965,8 +4039,8 @@ async function guidedStudyInput(scenarioRead) {
     return [key, raw];
   })), scenarioRead]);
   const fragments = Object.fromEntries(sources);
-  if (input.design?.mode === "adaptive" && input.design.objective !== "fit_band_violation_mm" && scenario?.matrix) {
-    throw Error("Guided consumer discovery needs a single scenario. Use a complete study request to declare guidance across named scenarios.");
+  if (input.design?.caseKey && nominatedCaseSource !== scenario?.original) {
+    throw Error("The nominated guidance case belongs to a different scenario source. Choose a current case and run the scenario comparison.");
   }
   if (input.design) input.design.fitSpec = fragments.designFit;
   for (const key of ["cutting", "finiteStock", "cuttingJob", "sewing", "sewingSelection", "assemblyMass"]) {
@@ -3984,14 +4058,32 @@ async function guidedStudyInput(scenarioRead) {
   }
   return buildMaterialStudyRequest(input, scenario?.context);
 }
+function describeScenarioInput(request, original) {
+  const value = JSON.parse(request), matrix = value?.schema === "ftx-drape-scenario-matrix/1";
+  const cases = matrix && Array.isArray(value.cases) ? value.cases.map(item => item?.scenario) : [value];
+  return { request, original, context: { drape: true, surface: cases.some(item => item?.surface != null),
+    ...(matrix ? { matrix: { maxEvaluations: value.max_evaluations,
+      cases: Array.isArray(value.cases) ? value.cases.map(item => ({ key: item?.key,
+        surface: item?.scenario?.surface != null, ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
+}
+function guidedMatrixAllowance() {
+  const raw = $("guidedScenarioMatrixBudget").value.trim(), value = Number(raw);
+  if (!raw || !Number.isSafeInteger(value) || value < 1 || value > 64) throw Error("Declare a named-case evaluation allowance from 1 to 64.");
+  return value;
+}
 async function scenarioInput() {
-  if (!guidedScenarioMode()) {
-    const request = await read("scenarioRequest"), value = JSON.parse(request);
-    const cases = value?.schema === "ftx-drape-scenario-matrix/1" && Array.isArray(value.cases) ?
-      value.cases.map(item => item?.scenario) : [value];
-    return { request, context: { drape: true, surface: cases.some(item => item?.surface != null) },
-      matrix: value?.schema === "ftx-drape-scenario-matrix/1" };
+  if (guidedMatrixMode()) {
+    const original = guidedScenarioDraftSource;
+    const request = buildMaterialScenarioMatrixRequest({ maxEvaluations: guidedMatrixAllowance(), cases: guidedScenarioDrafts });
+    return describeScenarioInput(request, original);
   }
+  if (!guidedScenarioMode()) {
+    const original = scenarioSourceFile();
+    return describeScenarioInput(await read("scenarioRequest"), original);
+  }
+  return guidedScenarioInput();
+}
+async function guidedScenarioInput(includeCasePolicy = false) {
   const number = (id, label) => {
     const raw = $(id).value.trim();
     if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
@@ -4013,8 +4105,17 @@ async function scenarioInput() {
     input.options.self_contact = { dhat: 0.001, thickness: 0.002, kappa: 100, mu: 0.4, eps_v: 0.001 };
   }
   // Both original files and every control are captured before starting a read.
+  const policy = $("guidedScenarioPolicySource").value;
+  if (includeCasePolicy && !["inherit", "snapshot", "file"].includes(policy)) throw Error("Choose the shared comparison, current guided goals or an original per-case policy.");
+  let authoredComparison;
+  if (includeCasePolicy && policy === "snapshot") {
+    if (!guidedStudyMode()) throw Error("Select guided material comparisons before saving their current goals as a case policy.");
+    const { requiredConsumers, ...comparison } = guidedComparisonInput(number);
+    authoredComparison = JSON.stringify({ ...comparison, required_consumers: requiredConsumers, allow_mixed_protocols: false });
+  }
   const entries = [...(fitSource === "file" ? [["fitSpec", "fit", "the original section-3 fit contract"]] : []),
-    ...(surface ? [["surface", "heatConditions", "the original section-3 sheet heat conditions"]] : [])];
+    ...(surface ? [["surface", "heatConditions", "the original section-3 sheet heat conditions"]] : []),
+    ...(includeCasePolicy && policy === "file" ? [["comparison", "guidedScenarioComparison", "the original case comparison policy"]] : [])];
   const budget = 16 * 1024 * 1024; let total = 0;
   const retained = entries.map(([key, id, label]) => {
     const original = roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
@@ -4025,13 +4126,83 @@ async function scenarioInput() {
     if (total > budget) throw Error("Guided scenario source files exceed 16 MiB combined; no source was read.");
     return { key, original };
   });
+  let decodedBytes = 0;
   const sources = await Promise.all(retained.map(async ({ key, original }) => {
     const raw = typeof original === "string" ? original : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await original.arrayBuffer());
-    if (new Blob([raw]).size > budget) throw Error("Guided scenario source exceeds 16 MiB.");
+    decodedBytes += new Blob([raw]).size;
+    if (decodedBytes > budget) throw Error("Guided scenario sources exceed 16 MiB combined.");
     return [key, raw];
   }));
-  return { request: buildMaterialScenarioRequest({ ...input, ...Object.fromEntries(sources) }),
-    context: { drape: true, surface } };
+  const { comparison, ...fragments } = Object.fromEntries(sources);
+  return { request: buildMaterialScenarioRequest({ ...input, ...fragments }), context: { drape: true, surface },
+    ...((comparison ?? authoredComparison) === undefined ? {} : { comparison: comparison ?? authoredComparison }) };
+}
+function showGuidedScenarioDrafts() {
+  const parent = $("guidedScenarioCases"); parent.replaceChildren(); guidedScenarioButtons.length = 0;
+  let frames = 0;
+  for (const [index, item] of guidedScenarioDrafts.entries()) {
+    const value = JSON.parse(item.scenario); frames += value.max_vertex_frames;
+    const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
+    label.textContent = `${item.key}: ${value.options.sew_steps} sewing + ${value.options.drape_steps} gravity steps, ` +
+      `${value.max_vertex_frames} vertex-frames; ${value.surface ? "retained sheet heat" : "no sheet heat"}; ` +
+      `${item.comparison && JSON.parse(item.comparison) !== null ? "retained case comparison" : "shared comparison at run time"}.`;
+    row.append(label);
+    const action = (title, handler, unavailable = false, replace = false) => {
+      const button = document.createElement("button"); button.type = "button"; button.textContent = title; button.onclick = handler;
+      guidedScenarioButtons.push({ button, unavailable, replace }); row.append(button);
+    };
+    action(`Replace ${item.key} from current controls`, () => freezeGuidedScenarioCase(item), false, true);
+    action(`Move ${item.key} earlier`, () => {
+      const i = guidedScenarioDrafts.indexOf(item);
+      if (i <= 0) return;
+      [guidedScenarioDrafts[i - 1], guidedScenarioDrafts[i]] = [guidedScenarioDrafts[i], guidedScenarioDrafts[i - 1]];
+      changedGuidedScenarioDrafts();
+    }, index === 0);
+    action(`Move ${item.key} later`, () => {
+      const i = guidedScenarioDrafts.indexOf(item);
+      if (i < 0 || i + 1 >= guidedScenarioDrafts.length) return;
+      [guidedScenarioDrafts[i], guidedScenarioDrafts[i + 1]] = [guidedScenarioDrafts[i + 1], guidedScenarioDrafts[i]];
+      changedGuidedScenarioDrafts();
+    }, index + 1 === guidedScenarioDrafts.length);
+    action(`Remove case ${item.key}`, () => {
+      const i = guidedScenarioDrafts.indexOf(item);
+      if (i >= 0) { guidedScenarioDrafts.splice(i, 1); changedGuidedScenarioDrafts(); }
+    });
+    parent.append(row);
+  }
+  $("guidedScenarioCaseCount").textContent = guidedScenarioDrafts.length ?
+    `${guidedScenarioDrafts.length} of 8 named cases saved; ${frames} of 64000000 vertex-frames allocated. Only saved cases run in named-case mode.` :
+    "No named cases saved. Configure a scenario, give it a name and save it before comparing.";
+}
+function changedGuidedScenarioDrafts() {
+  guidedScenarioDraftSource = {};
+  showGuidedScenarioDrafts(); refreshGuidedDesignCases();
+  invalidate(["scenario", "scenarioDraft"], true);
+}
+async function freezeGuidedScenarioCase(replacing = null) {
+  if (!ready || pending || !source || !guidedMatrixMode()) return;
+  const id = ++sequence; pending = { id, op: "scenarioDraft" }; $("error").hidden = true;
+  $("status").textContent = "Saving the exact named-case inputs…"; controls();
+  try {
+    const key = replacing ? replacing.key : $("guidedScenarioCaseName").value;
+    if (!key.trim() || new Blob([key]).size > 128) throw Error("Give the case a nonempty name of at most 128 UTF-8 bytes.");
+    const index = replacing ? guidedScenarioDrafts.indexOf(replacing) : -1;
+    if ((replacing && index < 0) || (!replacing && (guidedScenarioDrafts.length >= 8 || guidedScenarioDrafts.some(item => item.key === key)))) {
+      throw Error("Save at most eight uniquely named cases; use Replace to update an existing case.");
+    }
+    const maxEvaluations = guidedMatrixAllowance(), retained = guidedScenarioDrafts.slice();
+    const snapshot = await guidedScenarioInput(true);
+    if (pending?.id !== id) return;
+    const item = { key, scenario: snapshot.request, ...(snapshot.comparison === undefined ? {} : { comparison: snapshot.comparison }) };
+    if (replacing) retained[index] = item; else retained.push(item);
+    buildMaterialScenarioMatrixRequest({ maxEvaluations, cases: retained });
+    pending = null; guidedScenarioDrafts.splice(0, guidedScenarioDrafts.length, ...retained);
+    if (!replacing) $("guidedScenarioCaseName").value = "";
+    changedGuidedScenarioDrafts(); $("status").textContent = `Saved ${key} with its original inputs.`;
+  } catch (e) {
+    if (pending?.id !== id) return;
+    pending = null; error(String(e.message || e)); $("status").textContent = "Case not saved; existing cases are unchanged."; controls();
+  }
 }
 function showCombinations() {
   const parent = $("combinationGroups"); parent.replaceChildren();
@@ -4149,7 +4320,7 @@ async function execute(op) {
       // Alternatives always start at the original, never the currently bound single-material preview.
       msg.pattern = sourceText;
       const onBody = op === "study" && studyUsesBody();
-      const scenarioRead = op === "scenario" ? scenarioInput() : Promise.resolve(null);
+      const scenarioRead = op === "scenario" ? scenarioInput() : undefined;
       const [study, scenario] = await Promise.all([studyInput(scenarioRead), scenarioRead]);
       if (pending?.id !== id) return;
       msg.studyRequest = study;
@@ -4242,13 +4413,24 @@ $("clearStudyCandidates").onclick = () => {
   studyCandidates.length = 0; showStudyCandidates();
   if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
 };
-$("studyMode").addEventListener("change", () => invalidate(["study", "scenario"], true));
+$("studyMode").addEventListener("change", () => invalidate(["study", "scenario",
+  ...($("guidedScenarioPolicySource").value === "snapshot" ? ["scenarioDraft"] : [])], true));
 for (const id of ["scenarioMode", "guidedScenarioFitSource", "guidedScenarioHeat", "guidedScenarioSelfContact",
   "guidedScenarioSpacing", "guidedScenarioSewSteps", "guidedScenarioDrapeSteps", "guidedScenarioStep",
   "guidedScenarioSettle", "guidedScenarioMeshBudget", "guidedScenarioFrameBudget"]) {
-  const changed = () => invalidate(["scenario"], true);
+  const changed = () => {
+    if (id === "scenarioMode") refreshGuidedDesignCases();
+    invalidate(id === "scenarioMode" ? ["scenario", "scenarioDraft"] : [guidedMatrixMode() ? "scenarioDraft" : "scenario"], true);
+  };
   $(id).addEventListener("change", changed);
   if (!["scenarioMode", "guidedScenarioFitSource", "guidedScenarioHeat", "guidedScenarioSelfContact"].includes(id)) $(id).addEventListener("input", changed);
+}
+$("addScenarioCase").onclick = () => freezeGuidedScenarioCase();
+$("clearScenarioCases").onclick = () => { guidedScenarioDrafts.length = 0; changedGuidedScenarioDrafts(); };
+for (const id of ["guidedScenarioCaseName", "guidedScenarioPolicySource", "guidedScenarioComparison", "guidedScenarioMatrixBudget"]) {
+  const changed = () => invalidate(id === "guidedScenarioMatrixBudget" ? ["scenario", "scenarioDraft"] : ["scenarioDraft"], true);
+  $(id).addEventListener("change", changed);
+  if (["guidedScenarioCaseName", "guidedScenarioMatrixBudget"].includes(id)) $(id).addEventListener("input", changed);
 }
 $("clearGuidedInventory").onclick = () => {
   $("guidedInventory").value = ""; roundFiles.delete("guidedInventory");
@@ -4257,7 +4439,7 @@ $("clearGuidedInventory").onclick = () => {
 $("clearStockRequest").onclick = () => selectStockRequest(null);
 for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
   "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
-  "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignEvaluations",
+  "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignCase", "guidedDesignEvaluations",
   "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis", "guidedHeatDirection",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
   ...guidedMetrics.flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]), ...guidedRequired.map(([id]) => id)]) {
@@ -4266,6 +4448,12 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
       const key = $(id).value, original = guidedDesignMaterialSource(key);
       guidedDesignNomination = key && original !== null ? { key, source: original, invalidated: false } : null;
       refreshGuidedDesignMaterials();
+    }
+    if (id === "guidedDesignCase") {
+      const key = $(id).value, cases = currentGuidedScenarioCases();
+      guidedDesignCaseNomination = key && cases?.original === scenarioSourceIdentity() && cases.keys.includes(key) ?
+        { key, source: cases.original, invalidated: false } : null;
+      refreshGuidedDesignCases();
     }
     if (Object.values(guidedDesignFields).includes(id) || ["guidedDesignPieces", "guidedDesignVertices"].includes(id)) {
       if (guidedDesignVariables.length) guidedDesignVariables[guidedDesignCurrent] = captureGuidedDesignVariable();
@@ -4281,7 +4469,8 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
     }
     if (id === "guidedPurchasing" && !$(id).checked) $("guidedOrderCostGoal").checked = false;
     if (id === "guidedCombinedCost" && !$(id).checked) $("guidedCombinedCostGoal").checked = false;
-    if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
+    if (guidedStudyMode()) invalidate(["study", "scenario",
+      ...($("guidedScenarioPolicySource").value === "snapshot" ? ["scenarioDraft"] : [])], true); else controls();
   };
   $(id).addEventListener("change", changed);
   if (id.endsWith("Limit") || ["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
@@ -4409,7 +4598,7 @@ $("guidedDesignAdd").onclick = () => {
     guidedDesignVariables.push(newGuidedDesignVariable(`adjustment_${n}`)); guidedDesignCurrent = guidedDesignVariables.length - 1;
   });
 };
-function guidedDesignInput(number) {
+function guidedDesignInput(number, inScenario) {
   const mode = $("guidedDesignMode").value;
   if (!["grid", "adaptive"].includes(mode)) throw Error("Choose a listed grid or bounded adaptive discovery.");
   const drafts = guidedDesignVariables.map((draft, index) => index === guidedDesignCurrent ? captureGuidedDesignVariable() : draft);
@@ -4450,8 +4639,13 @@ function guidedDesignInput(number) {
     guidedDesignNomination.key !== materialKey || guidedDesignNomination.source !== guidedDesignMaterialSource(materialKey))) {
     throw Error("Choose a current frozen material explicitly to guide adaptive discovery.");
   }
+  const caseKey = inScenario && (!guidedScenarioMode() || guidedMatrixMode()) && ["consumer_comparison", "consumer_pareto"].includes(objective) ? $("guidedDesignCase").value : "";
+  if (caseKey && (!guidedDesignCaseNomination || guidedDesignCaseNomination.invalidated ||
+    guidedDesignCaseNomination.key !== caseKey || guidedDesignCaseNomination.source !== scenarioSourceIdentity())) {
+    throw Error("Choose a current named scenario explicitly to guide adaptive discovery.");
+  }
   return { ...common, mode, objective, maxEvaluations: number("guidedDesignEvaluations", "unique discovery trial allowance"),
-    ...(objective === "fit_band_violation_mm" ? {} : { materialKey }) };
+    ...(objective === "fit_band_violation_mm" ? {} : { materialKey }), ...(caseKey ? { caseKey } : {}) };
 }
 function resetGuidedDesign() {
   $("guidedDesign").checked = false;
@@ -4462,10 +4656,13 @@ function resetGuidedDesign() {
   guidedDesignVariables.length = 0; guidedDesignVariables.push(newGuidedDesignVariable()); guidedDesignCurrent = 0;
   $("guidedDesignMode").value = "grid"; $("guidedDesignObjective").value = "fit_band_violation_mm";
   guidedDesignNomination = null;
+  guidedDesignCaseNomination = null; refreshGuidedDesignCases();
   $("guidedDesignMaterial").value = ""; $("guidedDesignEvaluations").value = ""; refreshGuidedDesignMaterials();
   $("guidedDesignMax").value = "1"; $("guidedDesignGridBudget").value = ""; loadGuidedDesignVariable();
 }
 function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
+  guidedScenarioDrafts.length = 0; guidedScenarioDraftSource = {};
+  $("guidedScenarioCaseName").value = ""; showGuidedScenarioDrafts();
   resetGuidedDesign();
   source = data; sourceText = raw;
   $("patternName").textContent = `${label}: ${data.pieces.length} source pieces. Original retained.`;
@@ -4686,12 +4883,16 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
+    let scenarioCasesLoading;
     if (id === "stockRequest") {
       selectedStockRequest = null; clear(["selectedStock"]);
       $("selectedStockFiles").replaceChildren(); $("selectedStockNote").hidden = true;
     }
     if (id === "studyRequest") $("studyMode").value = "file";
-    if (id === "scenarioRequest") $("scenarioMode").value = "file";
+    if (id === "scenarioRequest") {
+      $("scenarioMode").value = "file";
+      scenarioCasesLoading = loadGuidedScenarioCases();
+    }
     if (id === "measurements" || id === "body") cancelPhotoReturn();
     if (id === "fit") clearImportFit();
     if (id === "measurements") $("supplementalConsent").checked = false;
@@ -4706,6 +4907,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     invalidate([...keys, ...bodyDependentStudies(id), ...guidedKeys], guidedProcessSource || guidedKeys.length > 0 ||
       (studyBodyMode() === "preview" && ["drapeLegs", "drapeLegFraction"].includes(id)) ||
       ["measurements", "fit", "body", "selfContact", "scenarioBody", "heatConditions"].includes(id));
+    return scenarioCasesLoading;
   });
 }
 for (const id of ["drapeLegFraction", "maxSettleSteps"]) {

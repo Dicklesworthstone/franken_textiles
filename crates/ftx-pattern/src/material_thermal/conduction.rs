@@ -292,6 +292,29 @@ impl ConductionLaw {
         self.domain
     }
 
+    /// Full-sheet resistance for an admitted constant transport law, in m² K/W.
+    /// Temperature-series observations retain their domain even when every knot is equal;
+    /// a scalar stack cannot silently discard that domain or choose an evaluation temperature.
+    ///
+    /// # Errors
+    /// A temperature-dependent transport law, or nonphysical/overflowed resistance.
+    pub fn constant_resistance(&self) -> Result<f64, Refusal> {
+        let Law::Constant(value) = self.transport else {
+            return Err(invalid(
+                "temperature-dependent transport requires the steady conduction consumer with explicit face temperatures; no temperature-independent scalar resistance is available",
+            ));
+        };
+        self.resistance(value)
+    }
+
+    fn resistance(&self, transport: f64) -> Result<f64, Refusal> {
+        positive(
+            self.thickness
+                .map_or(transport, |thickness| thickness / transport),
+            "thermal resistance",
+        )
+    }
+
     /// Check a material temperature, not a reservoir temperature behind a declared film.
     ///
     /// # Errors
@@ -312,11 +335,7 @@ impl ConductionLaw {
     /// Out-of-domain temperature or nonphysical/overflowed resistance.
     pub fn resistance_at(&self, t: f64) -> Result<f64, Refusal> {
         self.check_temperature(t)?;
-        let value = self.transport.at(t)?;
-        positive(
-            self.thickness.map_or(value, |thickness| thickness / value),
-            "thermal resistance",
-        )
+        self.resistance(self.transport.at(t)?)
     }
 
     /// Steady Fourier flux in W/m², positive from the first face toward the second.

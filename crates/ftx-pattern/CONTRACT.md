@@ -1,5 +1,30 @@
 # ftx-pattern contract
 
+**Bounded origin approximation.** `material_linearization::linearize` transfers exact Wang2011
+origin coefficients into the existing `TabulatedMembrane`, with G12=C33/2, explicit estimate consent,
+operator-authored physical Green-strain bounds and dated rationale. Original observations and
+parent hashes survive. Existing laws/history, source/specimen mismatches and unstable tensors refuse;
+no other physical property is filled. Result selections feed the ordinary strip/cloth consumers.
+Checks: `material_linearization`, CLI `material_origin_workflow`; source/usage: `wang2011-materials.md`.
+
+**Published source-origin observations.** Ten Wang2011 study specimens supply 50 attributed
+mass/origin-matrix quantities with exact tensor-shear basis and missing conditioning retained.
+These do not activate a membrane law; the indefinite Navy origin remains unchanged. Source/freeze
+checks: `wang2011_catalog`; details: `docs/wang2011-materials.md`.
+
+**Self-contained material ingress.** `textile_import::resolve_fabric` resolves an embedded record
+through the existing canonical resolver against an empty catalog, preserving all unit, override,
+source, policy and digest checks. Identifier-only lookup still uses the merged catalog, and callers
+that explicitly provide a catalog still validate it. No global cache or malformed-record fallback
+is introduced. Regression coverage: `textile_import` unit tests.
+
+**Canonical scalar thermal admission.** `Material::thermal_resistance` and `ThermalStack` use
+`ConductionLaw::constant_resistance` after the shared form, source, evidence and declared thermal
+specimen/conditioning checks. Fiber/yarn observations remain inspectable but cannot impersonate a
+finished insulating layer. Constant stacks retain their arithmetic and output. A temperature series
+retains its domain even if its knots are equal and requires the existing temperature-aware steady
+consumer. Regressions: `thermal_conduction`; CLI inspection reports independent steady/storage readiness.
+
 **Contact-specific mechanical admission** (`Material::mechanics_for_contacts`,
 `ResolvedMaterial::mechanics_for_contacts`). Body-contact sheet mechanics can retain absent
 same-sheet friction when self-contact is disabled. `Mechanics.friction_self` is optional and

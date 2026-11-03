@@ -30,6 +30,17 @@ use calibration::{read, simulation_readiness};
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if action == "linearize-origin" {
+        known_options(args, "materials", &[])?;
+        let [path] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials linearize-origin REQUEST.json [--json]",
+            ));
+        };
+        let result = calibration::linearize_origin(path)?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if matches!(action, "cut-plan" | "cut-job" | "cut-price" | "cut-svg") {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {
@@ -372,6 +383,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                     selected.allows_estimates(),
                 )
                 .map(|law| law.domain());
+                let thermal_ready = steady.is_ok();
                 let readiness = |result: Result<Option<[f64; 2]>, Refusal>| match result {
                     Ok(domain) => json!({"ready":true,"temperature_domain_c":domain}),
                     Err(refusal) => json!({"ready":false,"refusal":refusal}),
@@ -385,7 +397,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                     "mechanics_ready":selected.mechanics().is_ok(),
                     "sewing_thickness_m":sewing,
                     "steady_conduction":readiness(steady),"transient_thermal":readiness(transient),
-                    "thermal_ready":selected.thermal_resistance().is_ok()})
+                    "thermal_ready":thermal_ready})
             };
             let text = serde_json::to_string_pretty(&result)
                 .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
@@ -438,5 +450,30 @@ mod tests {
         let frozen = run(&freeze).unwrap().0;
         assert!(frozen["selection"]["expected_sha256"].is_string());
         assert_eq!(frozen["sha256"], frozen["selection"]["expected_sha256"]);
+    }
+
+    #[test]
+    fn thermal_readiness_matches_the_temperature_qualified_steady_consumer() {
+        let id = "nist/7282/cotton-duck";
+        let show = super::super::parse(&[
+            "materials".into(),
+            "show".into(),
+            id.into(),
+            "--allow-estimates".into(),
+        ])
+        .unwrap();
+        let (report, status, _) = run(&show).unwrap();
+        assert_eq!(status, 0);
+        assert_eq!(report["thermal_ready"], true);
+        assert_eq!(report["steady_conduction"]["ready"], true);
+        assert!(report["steady_conduction"]["temperature_domain_c"].is_array());
+        assert_eq!(report["transient_thermal"]["ready"], false);
+        assert_eq!(report["mechanics_ready"], false);
+
+        let unadmitted =
+            super::super::parse(&["materials".into(), "show".into(), id.into()]).unwrap();
+        let report = run(&unadmitted).unwrap().0;
+        assert_eq!(report["thermal_ready"], false);
+        assert_eq!(report["steady_conduction"]["ready"], false);
     }
 }

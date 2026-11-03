@@ -204,6 +204,16 @@ offer. Missing stock numbers never mean infinite stock or zero cost.
 
 ## Verification
 
+The optional `ftx-wang2011-linearization/1` request prepares an ordinary frozen material from exact
+source-origin observations; it is not a second constitutive solver. It requires explicit estimate
+admission, a dated approximation rationale and a physical Green-strain box in `[E11,E22,2E12]` order.
+All four source coefficients must name the same source/specimen/conditioning and tensor-shear
+origin basis. The conversion uses G12=C33/2 and the unchanged source normal block. Existing
+membrane/history laws, conflicting source identities and unstable origins refuse. The generated
+`TabulatedMembrane` carries estimate evidence and enforced domain bounds; original observations and
+the parent material hash are retained. No unrelated bending/contact/thermal property is inferred.
+Native and portable consumers share this operation. See [Wang2011 materials](../wang2011-materials.md).
+
 Synthetic unit tests cover anisotropy, explicit estimate admission, missing fields, dimensional mistakes,
 non-finite inputs, constitutive stability, zero friction/bending, unsupported material levels, blend mass
 balance, source references/bounds, duplicate catalog IDs and a known-answer series thermal stack. These

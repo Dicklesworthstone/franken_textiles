@@ -4944,6 +4944,93 @@ named-case policies and restart controls. Source edits cancel obsolete work, exa
 replayable, and reports distinguish valid incumbents from unexplored coordinates. This advances
 `ftx-ds2`; finite software search does not establish physical garment fit or a global optimum.
 
+### 25.153 Guide ordinary adaptive discovery across named operating cases
+
+The guided linked-variable editor now reaches all four existing production-guided search modes
+with an original named-case matrix. Single-goal and within-case Pareto guidance explicitly choose
+one current case; worst-case and all-case Pareto guidance retain every case's effective policy.
+Per-case overrides, constraints, source ranges and consumer qualifications remain in the exact
+original request. Every case must admit a retained trial, including cases that do not guide its
+ranking. No weighted score or browser optimizer is introduced.
+
+Case nominations bind to the selected scenario source and require reselection after replacement.
+Edited inputs and cancellation withdraw obsolete results. Before dispatch, the authoring layer
+reserves discovery callbacks and the full retained design/material cross product for every case,
+including both baselines, against the existing 64-evaluation matrix limit. Manufacturing-only
+guidance keeps its independent comparison policy. This advances `ftx-ds2` and `ftx-ms2` through
+existing numerical engines; bounded exploration and synthetic replay establish no empirical
+garment fit, physical-process accuracy or global optimum.
+
+### 25.154 Keep thermal material admission consistent across consumers
+
+The original scalar material/stack API now uses the same conduction compiler as the temperature-aware
+steady engine. A fiber or yarn observation cannot silently become finished-layer resistance, and
+declared thermal specimen/conditioning identities remain mandatory in both paths. Constant stacks
+retain their existing format and arithmetic. Temperature-dependent observations require explicit face
+temperatures through the existing steady solver; no representative temperature or extrapolation is
+invented. Ordinary catalog inspection reports steady readiness independently from heat storage and
+mechanics, including source-qualified conductivity-only materials.
+
+This advances `ftx-tma` by fixing inconsistent software admission and discovery. It does not close
+the matched-specimen, uncertainty or independent thermal-validation gates. Material substitutions
+must continue to preserve usable independent consumers while refusing only unsupported capabilities.
+
+### 25.155 Add useful source-model observations and make frozen replay self-contained
+
+Ten named Wang2011 study fabrics add 50 published observations: mass per area and four exact
+origin-node membrane coefficients per specimen. Composition, source basis, source checksum and
+unreported conditioning remain attached. These are source-model parameters, not generic fiber
+constants or a complete cloth law. Preserve negative coupling and the one indefinite origin;
+never repair source data to create a usable preset. A subsequent explicitly estimated, bounded
+origin approximation may feed the existing membrane consumer, but must retain missing bending,
+thickness, contact and thermal properties and distinguish numerical behavior from measured agreement.
+
+An embedded material selection now resolves through the unchanged canonical source/unit/evidence/hash
+authority without parsing every unrelated bundled record. Identifier-only selections still load the
+unified catalog. This makes the existing self-contained replay contract independent of future catalog
+growth and removes repeated catalog construction from per-piece substitutions. Exact serialized
+snapshots, refusals and complete binding results remain unchanged. `ftx-wg1` and `ftx-fr1` track these
+deliveries; `ftx-wg2` tracks the bounded approximation and real native/portable consumer checks.
+
+### 25.156 Author named operating cases from retained ordinary scenario controls
+
+The workbench now builds a named matrix from one to eight explicitly saved static drape and
+optional sheet-heat scenarios. Each case retains its original fit and heat sources, numerical
+policy and either an inherited comparison, a snapshot of the current guided goals, or an original
+case comparison file. Opposing operating goals can therefore be authored through the existing
+controls without writing a matrix document. All cases reuse the selected body and current
+material/design choices through the existing production consumers.
+
+Saving, replacing and ordering cases are explicit actions. Draft edits leave saved snapshots
+intact; source edits during a pending save cancel it. Saved-case edits invalidate prior results
+and case nominations, while pattern replacement clears the garment-specific collection. The
+serializer preserves original fragments and applies the existing aggregate frame, motion-trial,
+evaluation and input-size limits without allocating unstated budgets. Exact matrix downloads
+replay through the same native and portable authority. This advances `ftx-ms2`; synthetic software
+and numerical evidence do not close measured material, garment-fit or process-qualification gates.
+
+### 25.157 Use explicit source-origin approximations in ordinary membrane consumers
+
+The native commands and portable/WASM API now prepare an ordinary frozen material from Wang2011
+origin observations through one shared evaluator. Operators explicitly consent to estimates, provide
+a dated approximation rationale and choose a finite physical Green-strain box spanning the origin.
+The source normal block is retained and tensor shear is converted using G12=C33/2. The existing
+tabulated membrane compiler supplies work-conjugate energy, stress, tangent and domain enforcement;
+there is no additional solver or inferred constitutive law. Nine published origins are stable in
+this local approximation; the indefinite Navy origin refuses without modifying the source.
+
+Original quantities, specimen/conditioning identities, source hashes and exact frozen replay survive.
+Existing constitutive laws or history cannot be overwritten. Missing bending, thickness, contact,
+heat and process observations remain missing. The ideal strip consumer can use a bounded membrane
+alone, allowing fixed geometry and loading to demonstrate a real material-only numerical response.
+The native and portable workflow regressions cover those production reactions, solver residuals,
+out-of-domain refusal and source-locked replay alongside independent analytic energy checks.
+
+This delivers `ftx-wg2` as an explicitly estimated local model. It does not reproduce the paper's
+nonlinear angular interpolation, establish a measured validity range, supply a complete drape-ready
+fabric or close the matched-specimen empirical gates in `ftx-tm2`/`ftx-tm8`. Those gates remain the
+highest-value path from useful numerical material swaps to reliable garment and production claims.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

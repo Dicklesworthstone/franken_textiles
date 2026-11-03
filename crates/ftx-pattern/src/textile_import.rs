@@ -10,7 +10,9 @@ use serde_json::Value;
 
 use crate::Pattern;
 use crate::material_catalog::{ResolvedMaterial, Selection};
-use crate::materials::{Catalog, Component, Evidence, Form, Material, Quantity, Source};
+use crate::materials::{
+    CATALOG_SCHEMA, Catalog, Component, Evidence, Form, Material, Quantity, Source,
+};
 
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
@@ -197,6 +199,8 @@ pub fn catalog() -> Result<Catalog, Refusal> {
 /// Resolves one pattern's shared `fabric.material` selection, or the `material_id` convenience form.
 /// The latter cannot consent to estimates; use the full selection to choose its evidence policy.
 /// Legacy physical values cannot coexist with a selected material.
+/// Embedded records are self-contained: they use the canonical resolver without loading unrelated
+/// bundled records. Sources, overrides, units, evidence policy and snapshot locks are still checked.
 ///
 /// # Errors
 /// Malformed or conflicting selectors, unknown IDs, invalid evidence or failed snapshot locks.
@@ -227,7 +231,15 @@ pub fn resolve_fabric(fabric: &Value) -> Result<Option<ResolvedMaterial>, Refusa
             ..Selection::default()
         },
     };
-    catalog()?.resolve(&selection).map(Some)
+    let available = if selection.record.is_some() {
+        Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: Vec::new(),
+        }
+    } else {
+        catalog()?
+    };
+    available.resolve(&selection).map(Some)
 }
 
 #[cfg(test)]
@@ -316,5 +328,111 @@ mod tests {
             resolve_fabric(&json!({"material_id":"fs_il019_natural", "bending_Nm":1})).is_err()
         );
         assert!(resolve_fabric(&json!({"material":{}, "material_id":"fs_il019_natural"})).is_err());
+    }
+
+    #[test]
+    fn embedded_records_preserve_canonical_overrides_units_policy_and_frozen_replay() {
+        let mut c = catalog().unwrap();
+        let record: Material = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-nonlinear.json"
+        ))
+        .unwrap();
+        assert!(c.get(&record.id).is_err());
+        let mut selected = Selection {
+            id: record.id.clone(),
+            record: Some(record),
+            allow_estimates: true,
+            ..Selection::default()
+        };
+        selected.sources.insert(
+            "replacement".into(),
+            Source {
+                reference: "test:frozen-record-replacement".into(),
+                accessed_on: "2026-11-03".into(),
+                note: "Synthetic replacement, not a textile measurement".into(),
+            },
+        );
+        selected.overrides.insert(
+            "thickness".into(),
+            Quantity {
+                value: 1.25,
+                unit: "mm".into(),
+                source: "replacement".into(),
+                evidence: Evidence::Estimate,
+                method: "Synthetic frozen-replay regression".into(),
+                conditions: BTreeMap::from([("scope".into(), "software test".into())]),
+                bounds: Some([1.0, 1.5]),
+            },
+        );
+        let expected = c.resolve(&selected).unwrap();
+        let actual = resolve_fabric(&json!({"material":selected}))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&actual).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+        assert_eq!(actual.mechanics().unwrap().thickness_m, 0.00125);
+        assert_eq!(actual.authored().properties["thickness"].unit, "mm");
+        assert_eq!(
+            actual.material().properties["thickness"].bounds,
+            Some([0.001, 0.0015])
+        );
+        let frozen = actual.frozen_selection();
+        let replay = resolve_fabric(&json!({"material":frozen}))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&actual).unwrap(),
+            serde_json::to_value(&replay).unwrap()
+        );
+
+        selected.allow_estimates = false;
+        let unadmitted = resolve_fabric(&json!({"material":selected}))
+            .unwrap()
+            .unwrap();
+        assert!(!unadmitted.allows_estimates());
+        assert!(unadmitted.mechanics().is_err());
+        assert_ne!(unadmitted.sha256(), actual.sha256());
+        // Catalog callers still validate their complete supplied collection, including when
+        // the selected record is embedded. Only the pattern's self-contained ingress skips it.
+        c.schema = "invalid".into();
+        assert!(c.resolve(&frozen).is_err());
+    }
+
+    #[test]
+    fn malformed_embedded_records_refuse_without_falling_back_to_the_named_catalog_entry() {
+        let c = catalog().unwrap();
+        let named = c
+            .resolve(&Selection {
+                id: "fs_il019_natural".into(),
+                ..Selection::default()
+            })
+            .unwrap()
+            .frozen_selection();
+        for mutation in 0..6 {
+            let mut selected = named.clone();
+            selected.expected_sha256 = None;
+            let record = selected.record.as_mut().unwrap();
+            match mutation {
+                0 => record.id = "different-specimen".into(),
+                1 => record.properties.get_mut("areal_density").unwrap().unit = "Pa".into(),
+                2 => selected.expected_sha256 = Some("0".repeat(64)),
+                3 => {
+                    let key = record.properties["areal_density"].source.clone();
+                    let mut source = record.sources[&key].clone();
+                    source.reference = "test:rebound-source".into();
+                    selected.sources.insert(key, source);
+                }
+                4 => {
+                    record.properties.get_mut("areal_density").unwrap().source = "missing".into();
+                }
+                _ => record.name.clear(),
+            }
+            let expected = c.resolve(&selected).unwrap_err();
+            let actual = resolve_fabric(&json!({"material":selected})).unwrap_err();
+            assert_eq!(actual, expected, "mutation {mutation}");
+        }
+        assert!(resolve_fabric(&json!({"material_id":"unknown-specimen"})).is_err());
     }
 }

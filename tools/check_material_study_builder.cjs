@@ -849,3 +849,242 @@ test('adaptive guidance composes with finite jobs, source-reported mass and sepa
   assert.throws(()=>build({...input,assemblyMass:mass(false)}),/complete inventory/);
   assert.throws(()=>build({...input,constraints:[{metric:'stock_area_m2',maximum:0.25}]}),/assembly mass only/);
 });
+
+const casePolicy = (metric='stock_area_m2',direction='minimize',changes={}) =>
+  ({basis:'nominal',objectives:[{metric,direction}],...changes});
+const namedContext = (cases=[{key:'cold',surface:false},{key:'warm',surface:false}],maxEvaluations=64) =>
+  ({drape:true,surface:cases.some(item=>item.surface),matrix:{maxEvaluations,cases}});
+const namedDesign = changes => adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative',
+  caseKey:'cold',maxEvaluations:2,maxDesigns:1,...changes});
+
+test('guided named-case discovery uses the nominated effective policy without changing the original matrix', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const override=casePolicy('independent_surface_power_w','maximize',{
+    constraints:[{metric:'max_absolute_edge_strain_pct',minimum:-0,maximum:8}],
+    required_consumers:['drape','surface'],allow_mixed_protocols:true});
+  const context=namedContext([{key:'cold',surface:false},{key:'warm',surface:true,comparison:override}]);
+  const input={...state(),design:namedDesign({caseKey:'warm'})},original=JSON.stringify(context),before=JSON.stringify(input);
+  const raw=build(input,context),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(context),original);assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(result.design_adaptive.case_key,'warm');assert.equal(result.design_adaptive.material_key,'alternative');
+  assert.deepEqual(result.comparison.objectives,input.objectives,'The authored fallback is not replaced by the nominated override');
+  assert.equal(Object.hasOwn(result,'matrix'),false);assert.equal(Object.hasOwn(result,'scenario'),false);
+  assert.ok(raw.includes(input.design.fitSpec));assert.ok(raw.includes(input.candidates[0].selection));
+  const fallback=JSON.parse(build({...input,design:namedDesign()},context));
+  assert.equal(fallback.design_adaptive.case_key,'cold');
+  const pareto=casePolicy('stock_area_m2','minimize',{objectives:[
+    {metric:'stock_area_m2',direction:'minimize'},{metric:'stock_mass_kg',direction:'minimize'}]});
+  const two=namedContext([{key:'cold',surface:false,comparison:pareto},{key:'warm',surface:false}]);
+  assert.equal(JSON.parse(build({...input,design:namedDesign({objective:'consumer_pareto'})},two)).design_adaptive.objective,'consumer_pareto');
+  assert.throws(()=>build({...input,design:namedDesign()},two),/exactly one/);
+  assert.throws(()=>build({...input,design:namedDesign({objective:'consumer_pareto',caseKey:'warm'})},two),/2–16/);
+});
+
+test('guided matrix context bounds original case identities and refuses stale or ambiguous nominations', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),design:namedDesign()};
+  for(const caseKey of ['',null,undefined,'gone'])assert.throws(()=>build({...input,design:namedDesign({caseKey})},namedContext()),/caseKey/);
+  const missing={...input.design};delete missing.caseKey;
+  assert.throws(()=>build({...input,design:missing},namedContext()),/caseKey/);
+  for(const context of [undefined,{drape:true,surface:false}])assert.throws(()=>build(input,context),/requires a scenario matrix/);
+  for(const cases of [[],Array.from({length:9},(_,i)=>({key:String(i),surface:false})),
+    [{key:'same',surface:false},{key:'same',surface:false}],[{key:' ',surface:false}],
+    [{key:'é'.repeat(65),surface:false}],[{key:'cold',surface:1}],[{key:'cold',surface:false,unknown:true}]]) {
+    assert.throws(()=>build(input,namedContext(cases)));
+  }
+  const key='é'.repeat(64),context=namedContext([{key,surface:false}]);
+  assert.equal(JSON.parse(build({...input,design:namedDesign({caseKey:key})},context)).design_adaptive.case_key,key);
+  for(const maxEvaluations of [0,1,65,NaN,1.5,'64',null])assert.throws(()=>build(input,namedContext(undefined,maxEvaluations)),/allowance/);
+  assert.throws(()=>build(input,{...namedContext(),surface:true}),/actual cases/);
+  assert.throws(()=>build(input,{...namedContext(),matrix:null}),/must be an object/);
+  const renamed=namedContext([{key:'replacement',surface:false},{key:'warm',surface:false}]);
+  assert.throws(()=>build(input,renamed),/existing named scenario/);
+});
+
+test('all-case worst guidance retains independent guards while requiring an identical objective and basis', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const design=namedDesign({objective:'consumer_worst_case'});delete design.caseKey;
+  const input={...state(),design},context=namedContext([
+    {key:'cold',surface:false,comparison:casePolicy('stock_area_m2','minimize',{constraints:[{metric:'stock_mass_kg',maximum:0.2}]})},
+    {key:'warm',surface:false,comparison:casePolicy('stock_area_m2','minimize',{required_consumers:['cutting']})}]);
+  const before=JSON.stringify(context),result=JSON.parse(build(input,context));
+  assert.equal(result.design_adaptive.objective,'consumer_worst_case');assert.equal(Object.hasOwn(result.design_adaptive,'case_key'),false);
+  assert.equal(JSON.stringify(context),before);
+  assert.equal(JSON.parse(build(input,namedContext())).design_adaptive.objective,'consumer_worst_case');
+  assert.equal(JSON.parse(build(input,namedContext([{key:'cold',surface:false,comparison:null},{key:'warm',surface:false}]))).design_adaptive.objective,'consumer_worst_case');
+  for(const comparison of [casePolicy('stock_mass_kg'),casePolicy('stock_area_m2','maximize'),
+    casePolicy('stock_area_m2','minimize',{basis:'reported_bounds'}),
+    casePolicy('stock_area_m2','minimize',{objectives:[...input.objectives,{metric:'stock_mass_kg',direction:'minimize'}]})]) {
+    assert.throws(()=>build(input,namedContext([{key:'cold',surface:false},{key:'warm',surface:false,comparison}])),/identical metric/);
+  }
+  assert.throws(()=>build({...input,design:{...design,caseKey:'cold'}},context),/does not accept a caseKey/);
+  assert.throws(()=>build(input),/requires a scenario matrix/);
+});
+
+test('all-case Pareto guidance preserves original advanced policies and independent case directions', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const design=namedDesign({objective:'consumer_matrix_pareto'});delete design.caseKey;
+  const input={...state(),design},context=namedContext([
+    {key:'cold',surface:false,comparison:casePolicy('transient_coverage_inside_energy_j','minimize',{
+      basis:'reported_bounds',constraints:[{metric:'motion_max_absolute_edge_strain_pct',basis:'nominal',maximum:8}],
+      required_consumers:['motion','transient_coverage'],allow_mixed_protocols:true})},
+    {key:'warm',surface:false,comparison:casePolicy('transient_coverage_inside_energy_j','maximize')},
+  ]);
+  const before=JSON.stringify(context),result=JSON.parse(build(input,context));
+  assert.equal(result.design_adaptive.objective,'consumer_matrix_pareto');assert.equal(Object.hasOwn(result.design_adaptive,'case_key'),false);
+  assert.equal(JSON.stringify(context),before,'Raw engine policies are read only, never reduced to guided metrics');
+  assert.deepEqual(result.comparison.objectives,input.objectives);
+  assert.throws(()=>build(input,namedContext([{key:'cold',surface:false}])),/at least two/);
+  const two=casePolicy('stock_area_m2','minimize',{objectives:[...input.objectives,{metric:'stock_mass_kg',direction:'minimize'}]});
+  assert.equal(JSON.parse(build(input,namedContext([{key:'cold',surface:false,comparison:two}]))).design_adaptive.objective,'consumer_matrix_pareto');
+  assert.throws(()=>build({...input,design:{...design,caseKey:'cold'}},context),/does not accept a caseKey/);
+  assert.throws(()=>build(input),/requires a scenario matrix/);
+});
+
+test('matrix guidance refuses malformed objective coordinates without rewriting other original policy fields', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),design:namedDesign()};
+  for(const comparison of [false,[],{},casePolicy('stock_area_m2','minimize',{basis:null}),
+    casePolicy('stock_area_m2','minimize',{objectives:[]}),casePolicy('stock_area_m2','minimize',{objectives:Array(17).fill(input.objectives[0])}),
+    casePolicy('stock_area_m2','minimize',{objectives:[null]}),casePolicy('','minimize'),casePolicy('stock_area_m2','automatic')]) {
+    assert.throws(()=>build(input,namedContext([{key:'cold',surface:false,comparison}])),/declared basis/);
+  }
+  const fit=adaptiveDesignInput({maxDesigns:1,maxEvaluations:256});
+  assert.equal(JSON.parse(build({...state(),design:fit},namedContext())).design_adaptive.objective,'fit_band_violation_mm');
+  for(const extra of [{caseKey:'cold'},{caseKey:null},{materialKey:'baseline'}]) {
+    assert.throws(()=>build({...state(),design:{...fit,...extra}},namedContext()),/does not accept/);
+  }
+});
+
+test('matrix reservation covers every probe, retained design and baseline before material snapshots are read', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),design:namedDesign()},context=namedContext(undefined,12);
+  assert.equal(JSON.parse(build(input,context)).design_adaptive.max_evaluations,2,'Two probes plus four final rows, each in two cases');
+  assert.throws(()=>build(input,namedContext(undefined,11)),/12 reserved case evaluations/);
+  let reads=0;
+  const candidates=[{key:'alternative',get selection(){reads++;throw Error('Snapshot must remain unread');}}];
+  assert.throws(()=>build({...input,candidates},namedContext(undefined,11)),/reserved case evaluations/);assert.equal(reads,0);
+  assert.equal(JSON.parse(build(state(),namedContext(undefined,4))).variants.length,2);
+  assert.throws(()=>build(state(),namedContext(undefined,3)),/4 reserved case evaluations/);
+  const fit={...state(),design:adaptiveDesignInput({maxDesigns:2,maxEvaluations:256})};
+  assert.equal(JSON.parse(build(fit,namedContext(undefined,12))).design_adaptive.max_evaluations,256,'Fit-only probes do not invoke scenario callbacks');
+  assert.throws(()=>build(fit,namedContext(undefined,11)),/12 reserved case evaluations/);
+  const grid={...state(),design:linkedDesignInput({maxDesigns:31,values:[0]})};
+  assert.equal(JSON.parse(build(grid,namedContext(undefined,8))).design_grid.max_designs,31,'A smaller grid domain retains its original authored cap');
+  assert.throws(()=>build(grid,namedContext(undefined,7)),/8 reserved case evaluations/);
+  const exact={...state(),design:namedDesign({maxDesigns:3,maxEvaluations:24})};
+  assert.equal(JSON.parse(build(exact,namedContext())).design_adaptive.max_evaluations,24);
+  assert.throws(()=>build({...exact,design:{...exact.design,maxEvaluations:25}},namedContext()),/66 reserved case evaluations/);
+});
+
+test('each inherited matrix heat policy needs its own surface while raw overrides retain native admission', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),objectives:[{metric:'independent_surface_power_w',direction:'minimize'}],design:namedDesign()};
+  const context=namedContext([{key:'cold',surface:true},{key:'warm',surface:false}]);
+  assert.throws(()=>build(input,context),/warm inherits.*surface/);
+  const override={...context,matrix:{...context.matrix,cases:[context.matrix.cases[0],
+    {...context.matrix.cases[1],comparison:casePolicy('stock_area_m2')}]}};
+  assert.equal(JSON.parse(build(input,override)).design_adaptive.case_key,'cold');
+  const guard={...state(),constraints:[{metric:'independent_surface_power_w',maximum:1}],design:namedDesign()};
+  assert.throws(()=>build(guard,context),/warm inherits.*surface/);
+  assert.throws(()=>build({...state(),requiredConsumers:['surface'],design:namedDesign()},context),/warm inherits.*surface/);
+  const raw=namedContext([{key:'cold',surface:true,comparison:casePolicy('body_coverage_power_w','minimize',{
+    required_consumers:['coverage']})},{key:'warm',surface:false,comparison:casePolicy('stock_area_m2')}]);
+  assert.equal(JSON.parse(build(input,raw)).design_adaptive.case_key,'cold','Original policy consumers go to Rust instead of being silently omitted');
+});
+
+const scenarioSnapshot = (changes={}) => ' \r\n'+JSON.stringify({schema:'ftx-drape-scenario/1',
+  options:scenarioState().options,fit_spec:{},max_mesh_points:32768,max_vertex_frames:8000000,...changes})+'\r\n';
+
+test('named scenario authoring preserves every original scenario and case policy fragment in declared order', async () => {
+  const {buildMaterialScenarioMatrixRequest:build,buildMaterialScenarioRequest:single}=await modulePromise;
+  const fit=' {"schema":"fabric-fit/1","points":[],"source":{"seed":18446744073709551615,"zero":-0.0,"label":"é 🧵"}}\r\n';
+  const first=single({...scenarioState(),allowNoFit:false,fitSpec:fit,surface:heatSource(),maxVertexFrames:32000000});
+  const second=single({...scenarioState(),maxVertexFrames:32000000});
+  const policy=' {"basis":"nominal","objectives":[{"metric":"independent_surface_power_w","direction":"maximize"}],'+
+    '"constraints":[{"metric":"max_absolute_edge_strain_pct","minimum":-0.0,"maximum":8.0}],'+
+    '"required_consumers":["drape","surface"],"allow_mixed_protocols":true}\r\n';
+  const input={maxEvaluations:8,cases:[{key:'warm "outside"',scenario:first,comparison:policy},{key:'cold 🧵',scenario:second}]};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.equal(result.schema,'ftx-drape-scenario-matrix/1');assert.equal(result.max_evaluations,8);
+  assert.deepEqual(result.cases.map(item=>item.key),['warm "outside"','cold 🧵']);
+  for(const original of [first,second,policy,fit,heatSource()])assert.ok(raw.includes(original));
+  assert.match(raw,/18446744073709551615/);assert.match(raw,/"minimum":-0\.0/);assert.match(raw,/"maximum":8\.0/);
+  assert.deepEqual(result.cases[0].comparison,JSON.parse(policy));assert.equal(Object.hasOwn(result.cases[1],'comparison'),false);
+  assert.equal(Object.hasOwn(result.cases[1].scenario,'surface'),false,'A case never inherits another case’s heat input');
+  const explicit=build({maxEvaluations:1,cases:[{key:'null policy',scenario:second,comparison:' \nnull\r\n'}]});
+  assert.ok(explicit.includes(' \nnull\r\n'));assert.equal(JSON.parse(explicit).cases[0].comparison,null);
+});
+
+test('matrix snapshot resources use native active-motion defaults and complete aggregate limits', async () => {
+  const {buildMaterialScenarioMatrixRequest:build}=await modulePromise;
+  const motion={schema:'ftx-drape-motion/1',keyframes:[{time_s:0.1,arm_abduction_deg:35}],
+    max_step_s:0.01,max_trials:10,max_pairs:100,max_sample_vertices:1000};
+  const cases=Array.from({length:8},(_,i)=>({key:'case-'+i,scenario:scenarioSnapshot({motion})}));
+  const raw=build({maxEvaluations:8,cases}),result=JSON.parse(raw);
+  assert.equal(result.cases.length,8);
+  assert.ok(result.cases.every(item=>!Object.hasOwn(item.scenario,'max_motion_trials')),'The4096 default is counted, never inserted into retained source');
+  const replace=(changes)=>[{...cases[0],scenario:scenarioSnapshot({motion,...changes})},...cases.slice(1)];
+  assert.throws(()=>build({maxEvaluations:8,cases:replace({max_motion_trials:4097})}),/32768 active motion trials/);
+  assert.throws(()=>build({maxEvaluations:8,cases:replace({max_vertex_frames:8000001})}),/64000000 aggregate vertex frames/);
+  assert.equal(JSON.parse(build({maxEvaluations:8,cases:replace({motion:null,max_motion_trials:32768})})).cases[0].scenario.max_motion_trials,32768,
+    'An inactive case’s declared trial budget does not consume the active-motion sum');
+  const inactive={schema:'ftx-drape-scenario/1',options:scenarioState().options,fit_spec:{},max_mesh_points:32768,
+    max_vertex_frames:32000000,max_motion_trials:32768};
+  assert.equal(JSON.parse(build({maxEvaluations:2,cases:[{key:'one',scenario:JSON.stringify(inactive)},
+    {key:'two',scenario:JSON.stringify(inactive)}]})).cases.length,2);
+  for(const max_motion_trials of [0,-1,1.5,32769,null,'4096']) {
+    assert.throws(()=>build({maxEvaluations:1,cases:[{key:'invalid',scenario:scenarioSnapshot({max_motion_trials})}]}),/motion-trial budgets/);
+  }
+  for(const max_vertex_frames of [undefined,0,-1,1.5,64000001,null,'8000000']) {
+    assert.throws(()=>build({maxEvaluations:1,cases:[{key:'invalid',scenario:scenarioSnapshot({max_vertex_frames})}]}),/explicit integer vertex-frame/);
+  }
+});
+
+test('named snapshot authoring rejects ambiguous envelopes, duplicate keys and invalid source encodings', async () => {
+  const {buildMaterialScenarioMatrixRequest:build}=await modulePromise;
+  const sample={key:'case',scenario:scenarioSnapshot()},input={maxEvaluations:1,cases:[sample]};
+  for(const value of [null,[],{}, {...input,unknown:1}, {...input,cases:[]},
+    {...input,cases:Array.from({length:9},(_,i)=>({...sample,key:String(i)}))}])assert.throws(()=>build(value));
+  for(const maxEvaluations of [0,65,1.5,NaN,Infinity,'1',null])assert.throws(()=>build({...input,maxEvaluations}),/allowance/);
+  assert.throws(()=>build({maxEvaluations:1,cases:[sample,{...sample,key:'second'}]}),/covering every case/);
+  assert.throws(()=>build({maxEvaluations:2,cases:[sample,sample]}),/unique/);
+  for(const key of ['',null,42,'é'.repeat(65)])assert.throws(()=>build({...input,cases:[{...sample,key}]}));
+  assert.equal(JSON.parse(build({...input,cases:[{...sample,key:'é'.repeat(64)}]})).cases[0].key,'é'.repeat(64));
+  for(const item of [null,{}, {...sample,unknown:true}, {...sample,scenario:JSON.parse(sample.scenario)},
+    {...sample,scenario:'\ufeff'+sample.scenario}, {...sample,scenario:'null'}, {...sample,scenario:'['},
+    {...sample,scenario:'{"schema":"ftx-drape-scenario-matrix/1"}'}])assert.throws(()=>build({...input,cases:[item]}));
+  for(const comparison of [{},undefined,'[]','false','{}','{bad','\ufeffnull',
+    JSON.stringify(casePolicy('stock_area_m2','automatic'))]) {
+    assert.throws(()=>build({...input,cases:[{...sample,comparison}]}));
+  }
+});
+
+test('matrix envelopes retain advanced original scenarios and policies without recreating numerical admission', async () => {
+  const {buildMaterialScenarioMatrixRequest:build}=await modulePromise;
+  const original=scenarioSnapshot({max_motion_trials:5000,
+    motion:{schema:'ftx-drape-motion/1',keyframes:[{time_s:0.2,arm_abduction_deg:50,leg_pose:{posture:'seated',fraction:0.5}}],
+      max_step_s:0.01,max_trials:40,max_pairs:50000,max_sample_vertices:40000},
+    material_strain:{schema:'ftx-material-strain/1',max_triangle_samples:100000}});
+  const comparison=' \n'+JSON.stringify(casePolicy('motion_min_warp_green_strain','maximize',{
+    constraints:[{metric:'motion_max_body_contact_vertex_force_n',basis:'nominal',maximum:5}],
+    required_consumers:['motion','motion_material_strain','motion_contact_loads'],allow_mixed_protocols:true}))+'\r\n';
+  const raw=build({maxEvaluations:1,cases:[{key:'prescribed motion',scenario:original,comparison}]});
+  assert.ok(raw.includes(original));assert.ok(raw.includes(comparison));
+  assert.deepEqual(JSON.parse(raw).cases[0].scenario,JSON.parse(original));
+  assert.deepEqual(JSON.parse(raw).cases[0].comparison,JSON.parse(comparison));
+});
+
+test('complete named scenario snapshots share an exact UTF-8 request limit including framing bytes', async () => {
+  const {buildMaterialScenarioMatrixRequest:build}=await modulePromise;
+  const base=scenarioSnapshot({max_vertex_frames:1});
+  const source=padding=>base.replace('"fit_spec":{}','"fit_spec":{"note":"'+padding+'"}');
+  const input=padding=>({maxEvaluations:2,cases:[{key:'first 🧵',scenario:source(padding)},
+    {key:'second',scenario:base,comparison:'null'}]});
+  const overhead=Buffer.byteLength(build(input(''))),remaining=16*1024*1024-overhead;
+  const padding='é'.repeat(Math.floor(remaining/2))+'x'.repeat(remaining%2);
+  const raw=build(input(padding));assert.equal(Buffer.byteLength(raw),16*1024*1024);
+  assert.throws(()=>build(input(padding+'x')),/16 MiB/);
+  const shared='é'.repeat(3*1024*1024);
+  assert.throws(()=>build({maxEvaluations:3,cases:Array.from({length:3},(_,i)=>({key:String(i),scenario:source(shared)}))}),/16 MiB/);
+});

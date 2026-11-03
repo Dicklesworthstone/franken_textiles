@@ -262,6 +262,10 @@ Choose what guides discovery:
   Nominate the unchanged material baseline or one exact frozen shortlist choice explicitly.
 - **Exploring tradeoffs across comparison goals** uses two or more ordinary goals and one explicit
   material nominee. It retains admitted tradeoffs without combining the goals into a weighted score.
+- **Improving the worst named case for one shared goal** uses a loaded named-case matrix whose
+  effective policies share exactly one metric, direction and comparison basis.
+- **Exploring tradeoffs across all named cases** keeps every case's own comparison goals and basis.
+  At least two case/objective coordinates are required; each case may have different goals.
 
 For production guidance, every trial must pass the ordinary geometry and selected-body fit gates,
 then the existing comparison's limits, required results and source/protocol admission. Missing or
@@ -276,11 +280,23 @@ also apply. The existing engine caches evaluated coordinates and reuses retained
 instead of rerunning them for final comparison. Trial/step limits and later refusals keep valid
 incumbents visible, with the unexplored continuous domain still unknown.
 
-Guided production discovery supports manufacturing and a single scenario. Use a complete study
-request for named-case guidance or explicit restart points. Fit-only adaptive requests may still
-run through the existing named-matrix scenario path. Exact original fit, body, material and process
-inputs remain in replay downloads. These authoring controls add no numerical optimizer, physical
-fit certification or global optimum claim.
+For a loaded named-case matrix, single-goal and within-case tradeoff guidance require an explicit
+selection from that file's case names. The selected case's original comparison policy takes
+precedence over the ordinary comparison controls; an omitted case policy inherits those controls.
+Every case must still admit every retained trial. Replacing the scenario file clears the nominated
+case, even when the replacement uses the same name. All-case guidance omits that nomination.
+
+The matrix's declared `max_evaluations` must cover
+`case_count × (discovery_trials + (retained_designs + 1) × material_choices_including_baseline)`
+for consumer-guided discovery, up to 64. Fit-only discovery does not run the consumers during its
+probes, so it reserves only final comparisons. Admission never reduces your search or retention
+allowance to fit a budget. Manufacturing-only comparison remains independent of a loaded matrix.
+
+Exact original matrix, fit, body, material and process inputs remain in replay downloads. The
+matrix's complete source policies retain advanced consumers and reported ranges; Rust performs
+their numerical and source admission. Explicit restart points still require a complete study
+request. These authoring controls add no numerical optimizer, physical fit certification or global
+optimum claim.
 
 ### Combine reported-range objectives with nominal constraints
 
@@ -439,8 +455,43 @@ The generated `study-request.json` and `scenario-request.json` retain the origin
 material source text, alongside the exact pattern and body input downloads. Active source, goal,
 mode and numerical-setting edits withdraw stale results and cancel pending reads or worker work.
 Unconsumed section-3 files do not replace an advanced scenario's own sources. Select **Load a
-complete scenario or named matrix (advanced)** for authored motion, coverage, named cases or
+complete scenario or named matrix (advanced)** for authored motion, coverage or
 other existing scenario policies; its exact request remains authoritative.
+
+#### Save several named cases from the ordinary controls
+
+Choose **Save and compare several named cases here** to prepare 1–8 scenarios on the same selected
+body and pose. Configure a case using the existing fit, drape and optional sheet-heat controls,
+give it a unique name, and choose **Save current settings as a named case**. Each saved case freezes
+the exact original fit and heat text and the declared numerical options. You can change those
+source files and settings to prepare the next case without changing any saved case.
+
+For each case, choose one comparison policy:
+
+- Inherit the shared goals and limits as they stand when you run the comparison.
+- Save the current guided goals, limits, bases and required consumers with the case. This lets one
+  case keep a minimizing heat goal and another keep a maximizing goal without authoring JSON.
+- Retain an original case comparison-policy file, preserving its source text and full engine policy.
+
+The saved-case list shows which policy each case uses. **Replace … from current controls** explicitly
+updates that case's source snapshot while preserving its name. Remove and reorder actions change
+the matrix order; these changes withdraw obsolete reports and any nominated adaptive case must be
+chosen again. A refused or cancelled save leaves existing cases intact. Draft-only changes do not
+invalidate a finished matrix; the selected body, material/design choices and inherited shared
+comparison remain live dependencies.
+
+Set **Total case evaluations allowed** to cover the complete comparison, including adaptive probes
+when requested, with a maximum of 64. The cases' vertex-frame allowances must total at most
+64000000. The existing single-case default consumes that whole allowance; explicitly choose, for
+example, 32000000 each for two cases. Nothing divides or truncates budgets automatically. All
+cases share the current selected body, and each alternative still receives a fresh scenario state.
+
+The scenario action runs only the saved cases in this mode. Its `scenario-request.json` contains
+the complete replayable matrix and the exact retained source fragments. Switching between saved,
+single-scenario and original-file modes preserves their separate requests. Loading or adopting a
+different pattern clears saved cases so another garment cannot silently inherit them. The guided
+forms author static drape and optional independent-sheet heat; advanced motion, coverage and
+coupled transport requests retain their existing original-file route.
 
 The focused compiled-engine proof uses a small synthetic sewing-only fixture with zero gravity
 steps. Five complete native/direct-WASM/worker comparisons cover signed heat direction, explicit

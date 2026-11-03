@@ -78,6 +78,7 @@ ftx-materials compression-stack REQUEST.json
 ftx-materials treatment REQUEST.json
 ftx-materials treatment-pattern PATTERN.json REQUEST.json [NEW-PATTERN.json]
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
+ftx-materials linearize-origin REQUEST.json
 ftx-materials calibrate-nonlinear SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
 ftx-materials calibrate-membrane-plasticity HISTORIES.json [--allow-estimates]
@@ -131,6 +132,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal-steady-surface` evaluates source-locked drape triangles without requiring heat storage; no inferred body coverage.
 `thermal-steady-coverage` recomputes layered body coverage and heat directly from retained drape materials, without invented storage.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
+`linearize-origin` creates an explicitly estimated, bounded membrane approximation from published Wang2011 origin coefficients; its request owns the domain, estimate consent and operator rationale.
 `calibrate-nonlinear` identifies signed nonlinear membrane curves from nominal forces without extrapolating.
 `calibrate-membrane-plasticity` identifies permanent stretch and hardening from source-qualified loading cycles; unresolved fits retain their report without publishing a selection.
 `strip-acquisition` preserves the complete retained source curves, protocol, metadata and hashes without inferring local strain or transverse width.
@@ -245,6 +247,7 @@ struct StackInput {
 fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["linearize-origin", path] => calibration::linearize_origin(path),
         ["calibrate-nonlinear", path] => nonlinear_calibration::run(path, false),
         ["calibrate-nonlinear", path, "--allow-estimates"] => {
             nonlinear_calibration::run(path, true)

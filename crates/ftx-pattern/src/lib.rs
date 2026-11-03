@@ -20,6 +20,7 @@ pub mod material_compression;
 pub mod material_cost;
 pub mod material_elastic;
 pub mod material_friction;
+pub mod material_linearization;
 pub mod material_mass;
 pub mod material_membrane_plasticity;
 pub mod material_optics;

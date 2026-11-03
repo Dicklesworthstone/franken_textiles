@@ -20,6 +20,7 @@ mod neoprene;
 mod nist;
 mod sportswear;
 mod thermal_apparel;
+mod wang2011;
 mod wet_denim;
 
 /// A selection for `fabric.material`. A frozen record makes custom/edited patterns self-contained.
@@ -244,6 +245,7 @@ impl Catalog {
         catalog.materials.extend(laundered_denim::records());
         catalog.materials.extend(fabric101::records());
         catalog.materials.extend(thermal_apparel::records());
+        catalog.materials.extend(wang2011::records());
         catalog.materials.extend(knit_strips::records()?);
         let woven = Self::from_json(include_str!("material_catalog/woven-measurements.json"))?;
         catalog.materials.extend(woven.materials);
