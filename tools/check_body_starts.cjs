@@ -110,6 +110,31 @@ async function add(page, start) {
     assert.equal(await appliedCount(page), 1);
     await hidden(page);
 
+    // Preserve the first applied start before the complete native set exists.
+    assert.equal(await page.locator('#startDraftDownload').count(), 1, 'one valid start needs a resumable draft');
+    const partialEvent = page.waitForEvent('download');
+    await page.locator('#startDraftDownload').click();
+    const partialDownload = await partialEvent;
+    assert.equal(partialDownload.suggestedFilename(), 'body-starts-draft.json');
+    const partialPath = path.join(out, 'one-start-draft.json');
+    await partialDownload.saveAs(partialPath);
+    const partial = {...expected, starts: [expected.starts[0]]};
+    assert.deepEqual(JSON.parse(fs.readFileSync(partialPath)), partial);
+    const refused = spawnSync(binary, ['measure', 'fit-starts', partialPath, '--model', path.join(root, 'model.ftxbody'),
+      '--out', path.join(out, 'partial-refused'), '--json'], {encoding: 'utf8', timeout: 120000});
+    assert.ifError(refused.error); assert.equal(refused.status, 3, refused.stdout + refused.stderr);
+    assert.match(JSON.parse(refused.stdout).refusal.message, /2\.\.4/);
+    assert(!fs.existsSync(path.join(out, 'partial-refused')));
+    await page.reload(); await page.waitForFunction(() => !document.getElementById('startEditor').hidden);
+    await page.locator('#startDraftFile').setInputFiles(partialPath);
+    await page.waitForFunction(() => document.getElementById('startStatus').textContent.includes('starts restored'));
+    assert.equal(await page.locator('#startDraftFile').inputValue(), '');
+    assert.equal(await appliedCount(page), 1); await hidden(page);
+    for (const [index, value] of partial.starts[0].shape.entries()) assert.equal(Number(await control(page, 'shape', index).inputValue()), value);
+    for (const pose of partial.starts[0].poses) for (const [index, value] of pose.values.entries()) {
+      assert.equal(Number(await control(page, 'pose', index, pose.frame_index).inputValue()), value);
+    }
+
     await page.locator("#duplicateStart").click();
     await page.locator("#applyStart").click();
     assert.equal(await appliedCount(page), 1);
@@ -119,6 +144,74 @@ async function add(page, start) {
     await page.locator("#applyStart").click();
     assert.equal(await appliedCount(page), 2);
     await visible(page);
+
+    const load = async bytes => {
+      await page.locator('#startDraftFile').setInputFiles({name: 'saved-starts.json', mimeType: 'application/json', buffer: Buffer.from(bytes)});
+      await page.waitForFunction(() => !document.getElementById('startStatus').textContent.startsWith('Reading saved starts'));
+    };
+    await load(JSON.stringify(expected)); await hidden(page);
+    await page.locator('#startList').selectOption('1'); await hidden(page);
+    await page.locator('#applyStart').click(); await visible(page);
+    const form = () => page.locator('#startParameters input').evaluateAll(nodes => nodes.map(node => node.value));
+    const badFiles = [Buffer.from('{'), Buffer.from([0xc3, 0x28]), Buffer.alloc(256 * 1024 + 1, 32)];
+    for (const edit of [
+      value => { value.source_input += '-different'; }, value => { value.source_input_sha256 = '0'.repeat(64); },
+      value => { value.model_sha256 = '0'.repeat(64); }, value => { value.capture_sources_sha256 = '0'.repeat(64); },
+      value => { value.silhouettes = {path: 'other', sha256: '0'.repeat(64)}; },
+      value => { value.extra = true; }, value => { value.schema = 'unsupported'; },
+      value => { value.starts.push(...value.starts, value.starts[0]); },
+      value => { value.starts[0].shape.pop(); }, value => { value.starts[0].shape[0] = report.model.shape[0].lower; },
+      value => { value.starts[0].shape[0] = '0.5'; }, value => { value.starts[0].extra = true; },
+      value => { value.starts[0].poses[0].frame_index = 9999; },
+      value => { value.starts[0].poses[1].frame_index = value.starts[0].poses[0].frame_index; },
+      value => { value.starts[0].poses[0].values.pop(); }, value => { value.starts[1] = value.starts[0]; }
+    ]) { const value = structuredClone(expected); edit(value); badFiles.push(Buffer.from(JSON.stringify(value))); }
+    for (const bytes of badFiles) {
+      const before = await form(), oldUrl = await page.locator('#startDownload').getAttribute('href');
+      const oldDraft = await page.locator('#startDraftDownload').getAttribute('href');
+      await load(bytes); assert.match(await page.locator('#startStatus').innerText(), /Draft not loaded/);
+      assert.deepEqual(await form(), before); assert.equal(await appliedCount(page), 2);
+      assert.equal(await page.locator('#startDownload').getAttribute('href'), oldUrl);
+      assert.equal(await page.locator('#startDraftDownload').getAttribute('href'), oldDraft);
+    }
+    await control(page, 'shape', 0).fill(''); const incomplete = await form();
+    await load('{'); assert.deepEqual(await form(), incomplete); await hidden(page);
+    assert(await page.locator('#startDraftDownload').isHidden());
+    await page.locator('#cancelStart').click(); await visible(page);
+
+    await page.evaluate(() => {
+      const original = File.prototype.arrayBuffer;
+      globalThis.__holdStartRead = false; globalThis.__startRead = null;
+      File.prototype.arrayBuffer = function () {
+        if (!globalThis.__holdStartRead) return original.call(this);
+        globalThis.__holdStartRead = false;
+        return new Promise((resolve, reject) => { globalThis.__startRead = {resolve, reject}; });
+      };
+    });
+    for (const reject of [false, true]) for (const action of ['edit', 'focus', 'select', 'new', 'duplicate', 'midpoint', 'apply', 'remove', 'cancel', 'reset', 'replace']) {
+      await load(JSON.stringify(expected)); await page.locator('#applyStart').click();
+      await page.evaluate(() => { globalThis.__holdStartRead = true; globalThis.__startRead = null; });
+      await page.locator('#startDraftFile').setInputFiles({name: 'delayed.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(partial))});
+      await page.waitForFunction(() => globalThis.__startRead !== null);
+      if (action === 'edit') await control(page, 'shape', 0).fill('');
+      else if (action === 'focus') await page.locator('#startParameters label').first().click();
+      else if (action === 'select') await page.locator('#startList').selectOption('1');
+      else if (action === 'replace') await load(JSON.stringify(partial));
+      else await page.locator('#' + {new: 'newStart', duplicate: 'duplicateStart', midpoint: 'midpointStart', apply: 'applyStart',
+        remove: 'removeStart', cancel: 'cancelStart', reset: 'resetStarts'}[action]).click();
+      const before = await form(), count = await appliedCount(page), message = await page.locator('#startStatus').innerText();
+      assert(!message.startsWith('Reading saved starts'));
+      const links = await page.locator('#startDownload,#startDraftDownload').evaluateAll(nodes => nodes.map(node => [node.hidden, node.getAttribute('href')]));
+      await page.evaluate(({reject, text}) => {
+        if (reject) globalThis.__startRead.reject(new Error('obsolete read error'));
+        else globalThis.__startRead.resolve(new TextEncoder().encode(text).buffer);
+      }, {reject, text: JSON.stringify(partial)});
+      assert.deepEqual(await form(), before); assert.equal(await appliedCount(page), count);
+      assert.equal(await page.locator('#startStatus').innerText(), message);
+      assert.deepEqual(await page.locator('#startDownload,#startDraftDownload').evaluateAll(nodes => nodes.map(node => [node.hidden, node.getAttribute('href')])), links);
+    }
+    await load(JSON.stringify(expected)); await page.locator('#startList').selectOption('1');
+    await page.locator('#applyStart').click(); await visible(page);
 
     let url = await page.locator("#startDownload").getAttribute("href");
     await control(page, "shape", 0).fill("");
@@ -197,7 +290,7 @@ async function add(page, start) {
     assert.deepEqual(errors, []);
     assert(requests.every(request => request.method === "GET" && request.url.startsWith("file:")));
     console.log(JSON.stringify({status: "PASS", authored_starts: expected.starts.length, fit: fitted.status,
-      exercised: ["empty bootstrap", "named bounded parameters", "midpoint", "copy", "distinctness", "partial edit", "boundary", "cancel", "remove", "maximum starts", "reset", "frozen native previews", "exact native frame identities", "download to ordinary fit"],
+      exercised: ["empty bootstrap", "named bounded parameters", "midpoint", "copy", "distinctness", "partial edit", "boundary", "cancel", "remove", "maximum starts", "reset", "one-start save/reload/resume", "partial native refusal", "invalid file preservation", "late-read ownership", "frozen native previews", "exact native frame identities", "download to ordinary fit"],
       download: destination, browser_errors: errors.length, local_requests: requests.length}));
   } finally {
     await browser.close();

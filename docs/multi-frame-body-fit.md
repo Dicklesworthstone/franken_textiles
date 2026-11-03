@@ -257,6 +257,17 @@ not generate a placeholder body. Downloading and applying a completed initializa
 the ordinary fitter's two to four distinct, strictly interior starts. Incomplete fields, bounds
 violations and duplicate starts withdraw the download; cancel and reset discard pending edits.
 
+After applying a valid first start, **Save applied start draft** preserves it in
+`body-starts-draft.json` even before a second start exists. Reopen the same review page and
+choose that file under **Reopen an applied start draft for this source** to continue. The
+existing annotation format retains the exact source/model/capture/silhouette bindings and
+native frame ordinals. The local loader accepts UTF-8 files up to 256 KiB, checks every value
+and refuses different bindings without replacing current work. Pending edits withdraw both
+downloads; only applied values are saved. After loading, review the starts and choose **Apply
+this start** before preparing completed annotations. A one-start draft still refuses native
+materialization; add a distinct second start to use the ordinary commands below. Original
+previews stay unchanged, and later editor actions cancel pending file reads.
+
 The existing mesh and image overlays remain the **original** preview while values are edited. To
 evaluate an edited initialization through the real model, download `body-starts.json`, materialize
 it, and generate a fresh review:

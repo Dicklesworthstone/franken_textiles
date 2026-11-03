@@ -322,6 +322,8 @@ fn page(data: &Value) -> Result<String, Refusal> {
 <p>Enter shared shape and one pose for each source frame. Values must be strictly inside the named bounds. A complete download needs 2–4 distinct starts. Empty drafts do not guess a body or pose; the midpoint button is an explicit starting guess only.</p>
 <p><a href="body-starts.json">Original initialization annotations</a></p>
 <p id="startPreviewNotice"><strong>All photographs, projections and meshes below show the original input.</strong> Editing values does not regenerate them. Materialize the download and generate a new native review to inspect edited starts.</p>
+<label>Reopen an applied start draft for this source <input id="startDraftFile" type="file" accept=".json,application/json"></label>
+<p>A draft replaces the applied start list after its source bindings and values are checked. Review loaded starts before preparing completed annotations. Invalid files leave current work intact.</p>
 <div id="startEditor" hidden>
 <label>Applied initialization <select id="startList" aria-label="Applied initialization"></select></label>
 <p><button id="newStart" type="button">Add blank start</button> <button id="duplicateStart" type="button">Duplicate selected start</button> <button id="removeStart" type="button">Remove selected start</button></p>
@@ -330,6 +332,7 @@ fn page(data: &Value) -> Result<String, Refusal> {
 <p><button id="applyStart" type="button">Apply this start</button> <button id="cancelStart" type="button">Cancel pending edit</button></p>
 <p id="startStatus" role="status"></p>
 <p><button id="resetStarts" type="button">Reset all start changes</button> · <a id="startDownload" download="body-starts.json" hidden>Download body-starts.json</a></p>
+<p><a id="startDraftDownload" download="body-starts-draft.json" hidden>Save applied start draft</a>. Save one valid applied start and reopen it here later. Pending edits must be applied or canceled first. A draft is not a fitted body; native materialization still requires 2–4 distinct starts.</p>
 <p>Apply with <code>ftx measure fit-starts body-starts.json --model MODEL --out NEW_DIR</code>. Then run <code>ftx measure fit-start-review NEW_DIR/input.json --model MODEL --out NEW_REVIEW</code> before fitting. Keep observations and FIT/CHECK roles fixed; do not tune starts to held-out residuals.</p>
 </div><noscript><p>The supplied local script is required to edit starts. Original input and previews remain available.</p></noscript>
 <script type="application/json" id="startData">{payload}</script><script src="start-editor.js" defer></script></section>

@@ -7,27 +7,34 @@
   const original = copy(data.annotations.starts);
   let starts = copy(original), selected = starts.length ? 0 : null;
   let draft = selected === null ? null : copy(starts[selected]);
-  let adding = false, pending = false, downloadUrl = null;
+  let adding = false, pending = false, downloadUrl = null, revision = 0, needsReview = false;
   let shapeInputs = [], poseInputs = [];
   const list = byId('startList'), status = byId('startStatus');
   const download = byId('startDownload');
+  const draftDownload = byId('startDraftDownload');
   const changed = () => JSON.stringify(starts) !== JSON.stringify(original);
 
   function withdraw() {
     download.hidden = true;
     download.removeAttribute('href');
+    draftDownload.hidden = true;
+    draftDownload.removeAttribute('href');
     if (downloadUrl !== null) URL.revokeObjectURL(downloadUrl);
     downloadUrl = null;
   }
 
   function updateDownload() {
     withdraw();
-    if (pending || !changed() || starts.length < 2 || starts.length > 4) return;
+    if (pending || !starts.length) return;
     const annotations = { ...copy(data.annotations), starts: copy(starts) };
     downloadUrl = URL.createObjectURL(new Blob([JSON.stringify(annotations, null, 2) + '\n'],
       { type: 'application/json' }));
-    download.href = downloadUrl;
-    download.hidden = false;
+    draftDownload.href = downloadUrl;
+    draftDownload.hidden = false;
+    if (!needsReview && changed() && starts.length >= 2 && starts.length <= 4) {
+      download.href = downloadUrl;
+      download.hidden = false;
+    }
   }
 
   function updateButtons() {
@@ -122,10 +129,12 @@
 
   function valueOf(control, location) {
     const text = control.input.value.trim();
-    const value = Number(text);
-    const p = control.parameter;
+    return checkedValue(text ? Number(text) : NaN, control.parameter, location);
+  }
+
+  function checkedValue(value, p, location) {
     const normalized = (value - p.lower) / (p.upper - p.lower);
-    if (!text || !Number.isFinite(value) || !(normalized > 0 && normalized < 1)) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || !(normalized > 0 && normalized < 1)) {
       throw new Error(`${location}: ${p.name} (${p.unit}) needs a finite value strictly between ${p.lower} and ${p.upper}.`);
     }
     return value;
@@ -158,6 +167,78 @@
         }
       }
     }
+  }
+
+  function fields(value, expected) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).length !== expected.length || expected.some(key => !Object.hasOwn(value, key))) {
+      throw new Error('Missing or unsupported initialization fields.');
+    }
+  }
+
+  function checkedAnnotations(annotations) {
+    fields(annotations, Object.keys(data.annotations));
+    for (const key of ['schema', 'source_input', 'source_input_sha256', 'model_sha256', 'capture_sources_sha256']) {
+      if (annotations[key] !== data.annotations[key]) throw new Error('The draft belongs to a different source, model or capture.');
+    }
+    const masks = data.annotations.silhouettes;
+    if (masks === null) {
+      if (annotations.silhouettes !== null) throw new Error('The draft has different silhouette bindings.');
+    } else {
+      fields(annotations.silhouettes, ['path', 'sha256']);
+      if (annotations.silhouettes.path !== masks.path || annotations.silhouettes.sha256 !== masks.sha256) {
+        throw new Error('The draft has different silhouette bindings.');
+      }
+    }
+    if (!Array.isArray(annotations.starts) || annotations.starts.length > 4) throw new Error('A draft supports at most four applied starts.');
+    for (const start of annotations.starts) {
+      fields(start, ['shape', 'poses']);
+      if (!Array.isArray(start.shape) || start.shape.length !== data.shape.length) throw new Error('Every shared shape value is required.');
+      start.shape.forEach((value, index) => checkedValue(value, data.shape[index], 'Shared shape'));
+      if (!Array.isArray(start.poses) || start.poses.length !== data.frames.length) throw new Error('Every original frame pose is required.');
+      const seen = new Set();
+      for (const pose of start.poses) {
+        fields(pose, ['frame_index', 'values']);
+        if (!data.frames.some(frame => frame.frame_index === pose.frame_index) || seen.has(pose.frame_index)) throw new Error('Unknown or duplicate frame ordinal.');
+        seen.add(pose.frame_index);
+        if (!Array.isArray(pose.values) || pose.values.length !== data.pose.length) throw new Error('Every named pose value is required.');
+        pose.values.forEach((value, index) => checkedValue(value, data.pose[index], 'Frame pose'));
+      }
+    }
+    validateDistinct(annotations.starts);
+    return annotations.starts;
+  }
+
+  byId('startDraftFile').addEventListener('change', async () => {
+    const ticket = ++revision, file = byId('startDraftFile').files[0];
+    byId('startDraftFile').value = '';
+    if (!file) { updateButtons(); status.textContent = 'No draft selected; current starts retained.'; return; }
+    byId('cancelStart').disabled = false;
+    status.textContent = 'Reading saved starts. Current values remain unchanged until the draft is checked.';
+    try {
+      if (file.size > 256 * 1024) throw new Error('The draft exceeds the 256 KiB limit.');
+      const bytes = await file.arrayBuffer();
+      if (ticket !== revision) return;
+      const proposed = checkedAnnotations(JSON.parse(new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(bytes)));
+      starts = proposed;
+      selected = starts.length ? 0 : null;
+      draft = selected === null ? null : copy(starts[selected]);
+      adding = false; pending = false; needsReview = true;
+      render();
+      status.textContent = `${starts.length} applied starts restored. Review every start, then Apply this start to prepare completed annotations. Original previews remain unchanged.`;
+    } catch (error) {
+      if (ticket === revision) status.textContent = `Draft not loaded: ${error.message}`;
+    } finally {
+      if (ticket === revision) updateButtons();
+    }
+  });
+
+  for (const event of ['input', 'change', 'click']) {
+    byId('startEditor').addEventListener(event, () => {
+      ++revision;
+      if (status.textContent.startsWith('Reading saved starts.')) status.textContent = 'Draft read canceled by a later editor action; current starts retained.';
+      updateButtons();
+    });
   }
 
   function begin(value) {
@@ -199,10 +280,11 @@
       selected = index;
       adding = false;
       pending = false;
+      needsReview = false;
       draft = copy(starts[selected]);
       render();
       status.textContent = `${starts.length} applied start${starts.length === 1 ? '' : 's'}. `
-        + (starts.length < 2 ? 'Add a distinct second start before downloading.'
+        + (starts.length < 2 ? 'Save the applied start draft, or add a distinct second start for completed annotations.'
           : changed() ? 'Download the edited annotations and materialize them with the native command.'
             : 'Values match the original annotations.');
     } catch (error) {
@@ -245,10 +327,11 @@
     draft = selected === null ? null : copy(starts[selected]);
     adding = false;
     pending = false;
+    needsReview = false;
     render();
-    status.textContent = 'All start changes reset to the original input. No edited download remains.';
+    status.textContent = 'All start changes reset to the original input. No completed edited download remains.';
   });
-  window.addEventListener('pagehide', withdraw);
+  window.addEventListener('pagehide', () => { ++revision; withdraw(); });
   render();
   byId('startEditor').hidden = false;
   status.textContent = `${starts.length} original start${starts.length === 1 ? '' : 's'}. Add or edit explicit values; a download needs 2–4 distinct starts.`;
