@@ -187,6 +187,7 @@ async function saveDownload(page, name) {
     };
     await page.locator('#setupChoices').setInputFiles(path.join(out, 'capture-choices.json'));
     await page.waitForFunction(() => document.getElementById('setupStatus').textContent.startsWith('Saved choices restored'));
+    assert.equal(await page.locator('#setupChoices').inputValue(), '', 'the same saved file can be selected again');
     await hidden(page);
     assert.equal(await page.locator('#setupFrames input:checked').count(), expected.frame_indices.length);
     assert.equal(await page.locator('[data-group="shape"]').count(), expected.shapes.length);
