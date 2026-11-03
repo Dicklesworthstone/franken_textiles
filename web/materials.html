@@ -236,6 +236,10 @@ An empty list <code>[]</code> explicitly removes all pairs; omitting a replaceme
 It does not replace the inspected material selection. Freeze selections &amp; bind to use the staged pair with the current garment.</p>
 <button id="bind" data-command="bind" disabled>Freeze selections &amp; bind</button>
 <div id="boundSummary"></div><div id="bindFiles" class="links"></div>
+<button id="openPatternWorkbench" type="button" disabled>Check or alter this pattern</button>
+<p class="note">Open the current bound pattern in Pattern Workbench's ordinary checks and alteration controls.
+The exact pattern stays local. Select wearer and fit evidence there, then explicitly check;
+material binding does not establish measurement readiness or physical fit.</p>
 </section></div>
 <section id="materialConsumers"><h2>3. Recompute supported consumers</h2>
 <p>The body check uses only its selected body evidence. Garment operations use the current bound pattern. Each checks its own missing-data and geometry constraints; changing inputs withdraws affected outputs immediately.</p>

@@ -1845,6 +1845,45 @@ test('material accepted-body controls preserve source text and withdraw stale bo
   p.e.bodyFitFile.files = []; p.e.clearBodyFit.onclick(); assert.equal(p.e.bodyArmDeg.disabled, false);
   await p.e.fold.onclick(); assert.equal(p.current().messages.at(-1).bodyFit, undefined);
 });
+test('bound pattern handoff sends only exact current geometry to its requesting Pattern Workbench',async()=>{
+  const p=await pageModule();assert.equal(p.e.openPatternWorkbench.disabled,true);await p.load();
+  const raw=' {"pieces":[{"id":"front"}],"value":-0.0,"sequence":18446744073709551615}\n';
+  await p.e.bind.onclick();p.e.openPatternWorkbench.onclick();assert.equal(p.popups.length,0,'Pending binding cannot transfer geometry');
+  p.emit({pattern:{pieces:[{id:'front'}]},pattern_json:raw,pieces:[],pattern_sha256:'d'.repeat(64)});
+  assert.equal(p.e.openPatternWorkbench.disabled,false);p.e.openPatternWorkbench.onclick();
+  const {target,url}=p.popups[0],token=new URL(url).searchParams.get('materialImport');
+  assert.equal(new URL(url).pathname,'/index.html');assert.ok(token);
+  p.e.openPatternWorkbench.onclick();assert.equal(p.popups.length,1,'One pending transfer cannot orphan its tab');
+  const ready={type:'ftx-material-pattern-ready',token};
+  for(const [origin,source,data] of [['https://foreign.invalid',target,ready],['https://unit.invalid',{},ready],
+    ['https://unit.invalid',target,{...ready,token:'wrong'}],['https://unit.invalid',target,{...ready,type:'ftx-trace-pattern-ready'}]]) {
+    await p.windowEvents.message({origin,source,data});assert.equal(p.popups[0].messages.length,0);
+  }
+  await p.windowEvents.message({origin:'https://unit.invalid',source:target,data:ready});
+  const sent=p.popups[0].messages[0];assert.equal(sent.origin,'https://unit.invalid');
+  assert.equal(sent.data.type,'ftx-material-pattern');assert.equal(sent.data.source_sha256,'d'.repeat(64));
+  assert.equal(await sent.data.pattern.text(),raw);assert.equal(sent.data.measurements,undefined);assert.equal(sent.data.bodySource,undefined);
+  await p.windowEvents.message({origin:'https://unit.invalid',source:target,data:ready});assert.equal(p.popups[0].messages.length,1);
+  p.select('patternFile','{"pieces":[]}');await p.e.patternFile.onchange();assert.equal(p.e.openPatternWorkbench.disabled,true);
+  assert.equal(await sent.data.pattern.text(),raw,'Received snapshots remain immutable after source replacement');
+});
+test('bound pattern handoff withdraws pending geometry on edits, rebind, cancellation and failed replacement',async()=>{
+  for(const change of ['assign','rebind','cancel','source']) {
+    const p=await pageModule();await p.load();await p.inspect('new');await p.e.bind.onclick();
+    p.emit({pattern:{pieces:[{id:'front'}]},pattern_json:'{"pieces":[{"id":"front"}]}',pieces:[],pattern_sha256:'e'.repeat(64)});
+    p.e.openPatternWorkbench.onclick();const {target,url}=p.popups[0],token=new URL(url).searchParams.get('materialImport');
+    if(change==='assign')p.e.assign.onclick();
+    else if(change==='rebind'){await p.e.bind.onclick();p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'binding refused'});}
+    else if(change==='cancel'){await p.e.cut.onclick();p.e.cancel.onclick();}
+    else {p.select('patternFile','{');await p.e.patternFile.onchange();}
+    await p.windowEvents.message({origin:'https://unit.invalid',source:target,data:{type:'ftx-material-pattern-ready',token}});
+    assert.equal(p.popups[0].messages[0].data.type,'ftx-material-pattern-cancelled',change);
+    assert.equal(p.popups[0].messages[0].data.pattern,undefined);
+  }
+  const p=await pageModule();await p.load();await p.e.bind.onclick();
+  p.emit({pattern:{pieces:[]},pattern_json:'{}',pieces:[],pattern_sha256:'f'.repeat(64)});
+  p.window.open=()=>null;p.e.openPatternWorkbench.onclick();assert.match(p.e.status.textContent,/popup blocked/);
+});
 test('traced material handoff retains exact geometry without inferring wearer or running consumers',async()=>{
   const token='a'.repeat(32),p=await pageModule({traceToken:token});
   assert.equal(p.openerMessages[0]?.data.type,'ftx-trace-pattern-ready');
@@ -4769,7 +4808,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 
 // The original inline workshop script, using a small DOM transport double. These tests inspect
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
-function draftingPage({traceToken=null,photoToken=null,audit=false}={}) {
+function draftingPage({traceToken=null,materialToken=null,photoToken=null,audit=false}={}) {
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
@@ -4788,7 +4827,7 @@ function draftingPage({traceToken=null,photoToken=null,audit=false}={}) {
   class LocalURL extends URL {}
   LocalURL.createObjectURL=blob=>{const u=`blob:${++next}`;live.set(u,blob);return u;};
   LocalURL.revokeObjectURL=u=>assert.equal(live.delete(u),true);
-  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,crypto:{getRandomValues:a=>a.fill(5)},location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:photoToken?'?photoImport='+photoToken:'')},
+  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,crypto:{getRandomValues:a=>a.fill(5)},location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:materialToken?'?materialImport='+materialToken:photoToken?'?photoImport='+photoToken:'')},
     window:{opener,open:(url,target)=>{const popup={url,target,closed:false,messages:[],postMessage(data,origin){this.messages.push({data,origin});}};popups.push(popup);return popup;},
       addEventListener:(name,fn)=>{const previous=windowEvents[name];windowEvents[name]=(...args)=>{previous?.(...args);return fn(...args);};}},
     localStorage:{getItem:key=>audit&&key==='fab-wb-program'?'"audit"':null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},
@@ -5089,27 +5128,33 @@ test('workbench photo handoff preserves original evidence, explicit wearer conse
   }
 });
 
-test('workbench tracing handoff uses ordinary pattern checks and rejects foreign or superseded imports',async()=>{
-  const token='1'.repeat(32),p=draftingPage({traceToken:token});assert.ok(p.e.traceImportNote,'Visible local tracing handoff');
-  assert.equal(p.openerMessages[0].data.type,'ftx-trace-pattern-ready');assert.equal(p.openerMessages[0].origin,'https://unit.invalid');
-  const pattern={schema:'fabric-pattern/1',pieces:[],seams:[]},data={type:'ftx-trace-pattern',token,source_sha256:'a'.repeat(64),pattern:new Blob([JSON.stringify(pattern)])};
+for(const [kind,query] of [['trace','traceToken'],['material','materialToken']])
+test(`workbench ${kind} handoff uses ordinary pattern checks and rejects foreign or superseded imports`,async()=>{
+  const token='1'.repeat(32),options={[query]:token},p=draftingPage(options);assert.ok(p.e.traceImportNote,'Visible local pattern handoff');
+  assert.equal(p.openerMessages[0].data.type,`ftx-${kind}-pattern-ready`);assert.equal(p.openerMessages[0].origin,'https://unit.invalid');
+  const raw=' {"schema":"fabric-pattern/1","pieces":[],"seams":[],"sequence":18446744073709551615,"zero":-0.0}\n';
+  const pattern=JSON.parse(raw),data={type:`ftx-${kind}-pattern`,token,source_sha256:'a'.repeat(64),pattern:new Blob([raw])};
   for(const [origin,source,m] of [['https://wrong.invalid',p.opener,data],['https://unit.invalid',{},data],['https://unit.invalid',p.opener,{...data,token:'wrong'}]]){
     p.windowEvents.message({origin,source,data:m});await p.e.go.handlers.click();assert.equal(p.last('run'),undefined);
   }
   p.e.stature.value='105';p.e.age.value='40';
   p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});assert.equal(p.last('run'),undefined,'Never automatically runs');
   assert.equal(p.hasOpener(),false,'Opener released after one-use handshake');
-  await p.e.go.handlers.click();assert.deepEqual(plain(p.last('run').req.pattern),pattern);assert.equal(p.last('run').req.body.mode,'chart');
+  await p.e.go.handlers.click();assert.deepEqual(p.last('run').req.pattern,pattern);assert.equal(p.last('run').req.body.mode,'chart');
+  assert.ok(p.messages.findLast(m=>m.type==='run').req.includes('"pattern":'+raw),'Original raw numeric spellings reach the ordinary worker');
   assert.equal(p.last('run').req.body.stature_cm,105);assert.equal(p.last('run').req.body.age_months,40);
   p.e.clearTraceImport.handlers.click();p.result();assert.equal(p.e.results.classList.contains('hidden'),true);
   p.e.patternFile.files=[new Blob(['{"manual":true}'])];p.dispatch('patternFile','change');
   await p.e.go.handlers.click();assert.deepEqual(plain(p.last('run').req.pattern),{manual:true});
-  const q=draftingPage({traceToken:token});q.e.patternFile.files=[new Blob(['{"manual":true}'])];q.dispatch('patternFile','change');
+  const q=draftingPage(options);q.e.patternFile.files=[new Blob(['{"manual":true}'])];q.dispatch('patternFile','change');
   assert.equal(q.hasOpener(),false);
   q.windowEvents.message({origin:'https://unit.invalid',source:q.opener,data});await q.e.go.handlers.click();
   assert.deepEqual(plain(q.last('run').req.pattern),{manual:true},'Manual choice wins over a late handoff');
-  const r=draftingPage({traceToken:token});r.windowEvents.message({origin:'https://unit.invalid',source:r.opener,data:{...data,pattern:'not a Blob'}});
+  const r=draftingPage(options);r.windowEvents.message({origin:'https://unit.invalid',source:r.opener,data:{...data,pattern:'not a Blob'}});
   await r.e.go.handlers.click();assert.equal(r.last('run'),undefined);assert.match(r.e.traceImportText.textContent,/refused/);
+  const cancelled=draftingPage(options);cancelled.windowEvents.message({origin:'https://unit.invalid',source:cancelled.opener,
+    data:{type:`ftx-${kind}-pattern-cancelled`,token}});
+  await cancelled.e.go.handlers.click();assert.equal(cancelled.last('run'),undefined);assert.equal(cancelled.hasOpener(),false);
 });
 
 test('primary workshop withdraws obsolete rounds and folds while retaining the latest positive workflow', async () => {

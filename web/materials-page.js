@@ -9,6 +9,7 @@ const operations = [...boundOperations, "screen", "study", "scenario", "pressure
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
+let patternTransfer = null;
 let preparedBy = null;
 let preparedTreatment = null;
 let preparedImport = null, adoptedImport = false, selectedImportFit = null;
@@ -120,6 +121,7 @@ function controls() {
     for (const button of section.adoptions) button.disabled = !ready || !!pending;
   }
   $("bind").disabled ||= !source || !interfaceReady;
+  $("openPatternWorkbench").disabled = !ready || !!pending || !bound;
   $("sew").textContent = $("sewOptimize").checked ? "Choose recipes & evaluate stitch paths" : "Evaluate sewing & stitch paths";
   $("assign").disabled = !!pending || !source || !inspected;
   $("reset").disabled = !!pending || !source;
@@ -258,7 +260,10 @@ function clear(keys) {
       $("sewPreviewCell").replaceChildren(); $("sewPreviewOperation").replaceChildren();
       $("sewPreviewSummary").textContent = "";
     }
-    if (key === "bind") { bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren(); }
+    if (key === "bind") {
+      if (patternTransfer) patternTransfer.pattern = null;
+      bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren();
+    }
     if (key === "treatment") preparedTreatment = null;
     if (key === "garmentcode") { preparedImport = null; $("useGarmentcodeFit").checked = false; }
     if (key === "calibrate") {
@@ -4291,7 +4296,8 @@ $("sewPreviewCell").addEventListener("change", () => {
 $("sewPreviewOperation").addEventListener("change", () => {
   invalidate(["sewPreview"], true); describeSewingPreviewSelection(); controls();
 });
-$("cancel").onclick = () => { cancelPhotoReturn(); clear(["sewPreview"]); start(); $("status").textContent = "Cancelled; reloading local engine."; };
+$("cancel").onclick = () => { cancelPhotoReturn(); if (patternTransfer) patternTransfer.pattern = null;
+  clear(["sewPreview"]); start(); $("status").textContent = "Cancelled; reloading local engine."; };
 $("catalog").onchange = () => {
   if (!$("catalog").value) return;
   invalidateThermalPoint();
@@ -4757,6 +4763,27 @@ function clearRoundSources() {
 }
 $("clearRoundImport").onclick = () => { clearRoundSources(); resetPatternInput(); controls(); };
 const roundOrigin = new URL(window.location.href).origin;
+$("openPatternWorkbench").onclick = () => {
+  if (!ready || pending || !bound || typeof bound.pattern_json !== "string" || !/^[0-9a-f]{64}$/.test(bound.pattern_sha256)) return;
+  if (patternTransfer && !patternTransfer.target.closed) {
+    $("status").textContent = "A Pattern Workbench handoff is still opening. Finish or close that tab before opening another."; return;
+  }
+  const token = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2,"0")).join("");
+  const url = new URL("index.html", import.meta.url); url.searchParams.set("materialImport", token);
+  const target = window.open(url.href, "_blank");
+  if (!target) { $("status").textContent = "Pattern Workbench popup blocked. Download pattern.json and select it there instead."; return; }
+  patternTransfer = { target, token, pattern: new Blob([bound.pattern_json], { type: "application/json" }), source_sha256: bound.pattern_sha256 };
+  $("status").textContent = "Pattern Workbench opened. Select wearer and fit evidence there, then explicitly check before altering the pattern.";
+};
+window.addEventListener("message", event => {
+  const transfer = patternTransfer, m = event.data;
+  if (!transfer || event.origin !== roundOrigin || event.source !== transfer.target ||
+      m?.type !== "ftx-material-pattern-ready" || m.token !== transfer.token) return;
+  transfer.target.postMessage(transfer.pattern ? { type: "ftx-material-pattern", token: transfer.token,
+    pattern: transfer.pattern, source_sha256: transfer.source_sha256 } :
+    { type: "ftx-material-pattern-cancelled", token: transfer.token }, roundOrigin);
+  patternTransfer = null;
+});
 const handoffType = traceImport ? "ftx-trace-pattern" : "ftx-round-sources";
 if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" && window.opener) {
   const sender = window.opener;

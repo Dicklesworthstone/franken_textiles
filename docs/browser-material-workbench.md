@@ -65,6 +65,13 @@ checks, not evidence that meshing, contact or a complete simulation will succeed
 can still be selected for a supported manufacturing or thermal consumer. No missing coefficient is
 filled from a fiber name, construction label or a brand.
 
+After binding, **Check or alter this pattern** opens Pattern Workbench with the exact current
+bound pattern and its reported hash. Select measurement evidence and a fit contract there, then
+explicitly **Draft and check** to use its ordinary alteration controls. No wearer, accepted body,
+readiness or cutting approval is transferred. Source/assignment edits, re-binding or cancellation
+before receipt cancel the handoff; an already received pattern is an immutable snapshot. A manual
+pattern file or **Clear material handoff** replaces it. Blocked popups can use `pattern.json` instead.
+
 The bridge retains a `pattern_json` string and original Rust drape/report JSON. JavaScript parses
 copies for display but does **not** reserialize source-bound numeric data for subsequent consumers or
 downloads. Otherwise values such as `1.0` and `-0.0` change representation and invalidate the existing

@@ -299,7 +299,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   let foldable = false, bodyLoaded = false, folding = false, dead = false;
   let bodyCheckable = false, bodyChecking = false, bodyCheckRequest = 0, bodyCheckUrls = [];
   let bodyFitText = null, bodyFitReady = true, bodyFitRead = 0;
-  let tracedPattern = null, traceToken = new URL(location.href).searchParams.get("traceImport");
+  const patternQuery = new URL(location.href).searchParams;
+  const materialImport = !patternQuery.has("traceImport") && patternQuery.has("materialImport");
+  const patternMessage = materialImport ? "ftx-material-pattern" : "ftx-trace-pattern";
+  let tracedPattern = null, traceToken = patternQuery.get(materialImport ? "materialImport" : "traceImport");
   function clearTraceImport() {if(traceToken)window.opener=null;tracedPattern=traceToken=null;$("traceImportNote").hidden=true;}
   let editedPattern = null, editedFit = null, editedBodyProgram = null, previousAlteration = null, editedUrl = null;
   let alterationBase = null, alterationRequest = 0, alterationBusy = false;
@@ -888,7 +891,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       invalidateRound();
     });
   }
-  $("clearTraceImport").addEventListener("click",()=>{clearTraceImport();invalidateRound();status("Tracing handoff cleared; choose a pattern.json file.");});
+  $("clearTraceImport").addEventListener("click",()=>{clearTraceImport();invalidateRound();status("Pattern handoff cleared; choose a pattern.json file.");});
   for (const id of ["stature", "age", "sex", "nappies", "measFile", "supplementalFiles"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event, invalidateEvidence);
   }
@@ -995,24 +998,30 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   const traceOrigin=new URL(location.href).origin;
   if(traceToken && /^[0-9a-f]{32}$/.test(traceToken) && traceOrigin!=="null" && window.opener) {
     const source=window.opener;
-    program="audit";$("traceImportNote").hidden=false;$("traceImportText").textContent="Waiting for the current local tracing review…";
+    program="audit";$("traceImportNote").hidden=false;
+    if(materialImport) $("clearTraceImport").textContent="Clear material handoff";
+    $("traceImportText").textContent=materialImport ? "Waiting for the current local material-bound pattern…" : "Waiting for the current local tracing review…";
     window.addEventListener("message",event=>{
       const m=event.data;
       if(!traceToken || event.origin!==traceOrigin || event.source!==source || m?.token!==traceToken) return;
-      if(m.type==="ftx-trace-pattern-cancelled") {
-        traceToken=null;window.opener=null;$("traceImportText").textContent="Tracing review changed before transfer. Choose a pattern.json file or export the current review again.";return;
+      if(m.type===`${patternMessage}-cancelled`) {
+        traceToken=null;window.opener=null;$("traceImportText").textContent=materialImport ?
+          "Material binding changed before transfer. Bind the current sources again or choose a pattern.json file." :
+          "Tracing review changed before transfer. Choose a pattern.json file or export the current review again.";return;
       }
-      if(m.type!=="ftx-trace-pattern") return;
+      if(m.type!==patternMessage) return;
       // The opener is needed only for this one-use handshake.
       traceToken=null;window.opener=null;
       if(!(m.pattern instanceof Blob) || m.pattern.size>64*1024*1024 || !/^[0-9a-f]{64}$/.test(m.source_sha256)) {
-        $("traceImportText").textContent="Tracing handoff refused. Choose a pattern.json file.";return;
+        $("traceImportText").textContent=`${materialImport ? "Material" : "Tracing"} handoff refused. Choose a pattern.json file.`;return;
       }
       tracedPattern=m.pattern;
-      $("traceImportText").textContent=`Loaded the local tracing review for image ${m.source_sha256}. Choose measurement evidence and a fit contract, then Draft and check. Tracing remains REVIEW_ONLY.`;
+      $("traceImportText").textContent=materialImport ?
+        `Loaded the local material-bound pattern ${m.source_sha256}. Choose measurement evidence and a fit contract, then Draft and check before altering. Binding does not establish readiness or physical fit.` :
+        `Loaded the local tracing review for image ${m.source_sha256}. Choose measurement evidence and a fit contract, then Draft and check. Tracing remains REVIEW_ONLY.`;
       if(ready) {renderPrograms();onProgram();}
     });
-    source.postMessage({type:"ftx-trace-pattern-ready",token:traceToken},traceOrigin);
+    source.postMessage({type:`${patternMessage}-ready`,token:traceToken},traceOrigin);
   }
   if(photoToken && !traceToken && /^[0-9a-f]{32}$/.test(photoToken) && traceOrigin!=="null" && window.opener) {
     const source=window.opener;

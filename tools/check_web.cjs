@@ -195,6 +195,13 @@ async function tracingEdits(browser, origin) {
   await context.addInitScript(()=>{
     const NativeDate=Date;
     window.Date=class extends NativeDate {constructor(...a){super(...(a.length?a:[2026,9,29,12,0]));}};
+    const Original=window.Worker;
+    window.Worker=class extends Original {
+      constructor(...args){super(...args);this.addEventListener("message",e=>{
+        if(e.data.type==="result")window.__materialAlterationSource=e.data.alterationSources?.pattern;
+      });}
+      postMessage(message,...rest){if(message.type==="run")window.__materialRoundRequest=message.req;return super.postMessage(message,...rest);}
+    };
   });
   await context.route("**/worker.js",async route=>{
     const response=await route.fetch();
@@ -291,9 +298,38 @@ async function tracingEdits(browser, origin) {
       fs.writeFileSync(path.join(work,"native-trace-cut-plan.json"),nativePlan);
       assert.deepEqual(JSON.parse(tracePlan),JSON.parse(nativePlan),"Complete native/WASM cutting equality for the transferred pattern");
     } else console.log("SKIP native traced cutting replay: supply --ftx beside an ftx-materials binary.");
+    const returning=directMaterial.waitForEvent("popup");await directMaterial.click("#openPatternWorkbench");const returned=await returning;
+    returned.on("pageerror",e=>errors.push(String(e)));
+    await returned.waitForFunction(()=>!document.getElementById("go").disabled&&document.getElementById("traceImportText").textContent.startsWith("Loaded the local material-bound pattern"));
+    assert.equal(await returned.isVisible("#results"),false,"Bound-pattern handoff never starts a round");
+    assert.equal(await returned.evaluate(()=>window.opener===null),true);
+    await returned.click("#go");await returned.waitForFunction(()=>!document.getElementById("results").classList.contains("hidden")||!document.getElementById("errorBox").classList.contains("hidden"));
+    assert.equal(await returned.isVisible("#errorBox"),false,await returned.textContent("#errorText"));
+    assert.ok((await returned.evaluate(()=>window.__materialRoundRequest)).includes('"pattern":'+boundTrace.toString()),"The ordinary round receives the exact bound JSON text");
+    const alterationSource=await returned.evaluate(()=>window.__materialAlterationSource),piece=JSON.parse(alterationSource).pieces[0];
+    assert.deepEqual(JSON.parse(alterationSource).fabric,JSON.parse(boundTrace).fabric,"The alteration retains the bound material selections");
+    const vertex=Object.keys(piece.vertices)[0],alterSource=path.join(work,"material-alter-source.json"),alterNative=path.join(work,"native-material-altered.json");
+    fs.writeFileSync(alterSource,alterationSource);
+    execFileSync(ftx,["alter","move",alterSource,"--piece",piece.id,"--vertex",vertex,"--dx","0","--dy","-1","--out",alterNative,"--json"]);
+    await returned.selectOption("#alterOperation","move");await returned.selectOption("#alterPiece",piece.id);
+    await returned.selectOption("#alterVertex",vertex);await returned.fill("#alterDx","0");await returned.fill("#alterDy","-1");
+    await returned.click("#alterApply");await returned.waitForFunction(()=>!document.getElementById("results").classList.contains("hidden")||!document.getElementById("errorBox").classList.contains("hidden"));
+    assert.equal(await returned.isVisible("#errorBox"),false,await returned.textContent("#errorText"));
+    const altered=await returned.locator("#alterDownload").evaluate(async a=>new Uint8Array(await(await fetch(a.href)).arrayBuffer()).reduce((out,v)=>(out.push(v),out),[]));
+    assert.ok(Buffer.from(altered).equals(fs.readFileSync(alterNative)),"Returned material pattern uses the existing native alteration exactly");
+    assert.equal(await returned.isVisible("#traceImportNote"),false,"Adopting an alteration replaces the imported source");
+    await returned.setInputFiles("#patternFile",{name:"manual-bound.json",mimeType:"application/json",buffer:boundTrace});
+    assert.equal(await returned.locator("#resFiles a").count(),0);await returned.close();
+    let releaseReturn,arrivedReturn;const returnParked=new Promise(resolve=>{arrivedReturn=resolve;}),returnFilter=/\/index\.html\?materialImport=/;
+    const holdReturn=route=>{releaseReturn=route;arrivedReturn();};await context.route(returnFilter,holdReturn);
+    const returnWaiting=directMaterial.waitForEvent("popup");await directMaterial.click("#openPatternWorkbench");await returnParked;
+    await directMaterial.click("#assign");await releaseReturn.continue();await context.unroute(returnFilter,holdReturn);const staleReturn=await returnWaiting;
+    await staleReturn.waitForFunction(()=>document.getElementById("traceImportText").textContent.startsWith("Material binding changed")&&!document.getElementById("go").disabled);
+    assert.equal(await staleReturn.isVisible("#results"),false);await staleReturn.close();
     await directMaterial.click("#clearRoundImport");assert.equal(await directMaterial.isDisabled("#bind"),true);
     assert.equal(await directMaterial.locator('a[download="cut-plan.json"]').count(),0);await directMaterial.close();
     console.log("PASS trace-to-materials: exact reviewed source, explicit material assignment/binding, compiled-WASM cutting and cleared dependent outputs.");
+    console.log("PASS material-to-Pattern-Workbench: exact bound source, explicit round, existing native-equal alteration, clear and source-edit cancellation.");
     const opened=page.waitForEvent("popup");await page.click("#openPattern");const bench=await opened;
     await bench.waitForFunction(()=>!document.getElementById("go").disabled && document.getElementById("traceImportText").textContent.startsWith("Loaded the local tracing"));
     assert.equal(await bench.isChecked('input[name="program"][value="audit"]'),true);
