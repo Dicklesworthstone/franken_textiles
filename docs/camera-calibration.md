@@ -150,6 +150,7 @@ ftx measure calibrate-camera --images capture/views.json \
 The explicit `rust` backend needs no Python or OpenCV. The native command retains its existing
 default `python3` adapter for compatibility; an explicit Python path also selects that optional
 adapter and requires `opencv-python-headless==4.13.0.92`. Installation is never performed by `ftx`.
+That optional adapter retains its `DICT_4X4_50` restriction; select `rust` for the other captured prefixes.
 The browser and coordinate-only command require no Python.
 The Rust and browser image paths accept the same 27 captured dictionary names/aliases as the
 printable-sheet generator. For example, add `--dictionary DICT_7X7_50` to the `calib-sheet`

@@ -825,7 +825,7 @@ fn pure_rust_charuco_detector_covers_generated_warped_brown_distorted_and_refuse
         );
         assert_eq!(scale["result"]["ok"], false);
         let mut wrong = sidecar;
-        wrong["board"]["dictionary"] = json!("DICT_5X5_50");
+        wrong["board"]["dictionary"] = json!("DICT_UNKNOWN");
         write_json(&dir, "wrong.json", &wrong);
         let report = run(
             &dir,

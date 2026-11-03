@@ -259,8 +259,8 @@ These cover every generated Letter/A4 board; a name ending in `1000` does not en
 1000-marker board. Detection refuses a board beyond its retained prefix. A mismatched dictionary
 cannot publish measurement records; a failed scale may remain available for diagnosis.
 
-The optional OpenCV detector uses a local Python environment instead. Nothing is
-downloaded or installed implicitly by `ftx`; the measurement library itself has no Python/OpenCV
+The optional OpenCV detector uses a local Python environment and retains its `DICT_4X4_50`
+restriction. Nothing is downloaded or installed implicitly by `ftx`; the measurement library itself has no Python/OpenCV
 dependency. The tested OpenCV dependency can be installed in a separate environment:
 
 ```bash

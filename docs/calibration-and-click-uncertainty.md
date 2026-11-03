@@ -49,16 +49,17 @@ ftx measure calib-sheet --paper letter --square-mm 23 --marker-mm 15 \
   --dictionary DICT_5X5_50 --out ./calibration-5x5 --json
 ```
 
-The built-in photo detector still accepts only `DICT_4X4_50`. Other printed
-dictionaries require a matching external detector or reviewed corner coordinates;
-printing support does not extend the detector's vocabulary.
+Rust and browser image detection accept all 27 names using the shared captured prefixes:
+50 codes for the 4×4 family, 28 for each other table, sufficient for every generated board.
+Use its matching sidecar; larger uncaptured boards refuse. The optional Python/OpenCV adapter
+still accepts only `DICT_4X4_50`. These are software capabilities, not physical print/camera qualification.
 The canonical non-legacy board starts with a black top-left square, with marker
 IDs increasing row by row across white squares.
 
 Print at **100% / Actual size**, not Fit to page. Check both ruler directions
 before using the sheet. A digital reference does not prove that a printer has
 preserved scale or that the paper is flat. The sidecar is a reference definition,
-not a detection result: image corner detection remains external. In particular,
+not a detection result: actual photo pixels must still pass image detection. In particular,
 its page-layout origin is not an estimated camera pose.
 
 Implementation boundaries relative to spec 02 A.9: the export stroke font replaces
