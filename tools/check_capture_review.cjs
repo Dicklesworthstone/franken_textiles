@@ -9,6 +9,9 @@ if (process.argv.length !== 4) throw Error("Usage: node tools/check_capture_revi
 const root = path.resolve(process.argv[2]), out = path.resolve(process.argv[3]);
 const reviewDir = path.join(root, "edit-review");
 const read = name => JSON.parse(fs.readFileSync(path.join(root, name)));
+const exact = bytes => JSON.parse(bytes.toString(), (_key, value, context) =>
+  typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value) && /^-?\d+$/.test(context.source)
+    ? BigInt(context.source) : value);
 const report = read("edit-review/review.json"), replay = read("edit-review/capture.json"), good = read("good.json");
 const hash = b => crypto.createHash("sha256").update(b).digest("hex");
 const frame = 0, point = 3;
@@ -32,7 +35,7 @@ async function download(page, name, expected) {
   const destination = path.join(out, name);
   assert(!fs.existsSync(destination));
   await file.saveAs(destination);
-  assert.deepEqual(JSON.parse(fs.readFileSync(destination)), expected);
+  assert.deepEqual(exact(fs.readFileSync(destination)), expected);
   return destination;
 }
 async function hidden(page) {
@@ -643,21 +646,76 @@ async function sheetReview(page, records = report) {
     await staticMasks.goto(pathToFileURL(path.join(maskDir, "index.html")).href);
     assert.equal(await staticMasks.locator("g[data-silhouette]").count(), 10);
     assert(await staticMasks.locator("#captureEditor").isHidden());
-    const unsafePage = await context.newPage();
-    await unsafePage.goto(pathToFileURL(path.join(root, "numeric-unsafe/review/index.html")).href);
-    await unsafePage.waitForFunction(() => !document.getElementById("captureEditor").hidden);
-    assert.match(await unsafePage.locator("#editStatus").innerText(), /Editor unavailable:.*safe browser numeric precision/);
-    await hidden(unsafePage);
-    assert(await unsafePage.locator("#applyPoint").isDisabled());
-    assert(await unsafePage.locator("#preparePoint").isDisabled());
-    assert.equal(await unsafePage.locator("#newPointFields").evaluate(n => n.disabled), true);
-    assert.equal(await unsafePage.locator("#silhouetteFields").evaluate(n => n.disabled), true);
-    assert.equal(await unsafePage.locator("section > svg circle").count(), 20);
-    assert((await unsafePage.locator("#captureInput").textContent()).includes("9007199254740993"));
+    const integerFiles = [];
+    const maximumCodec = await page.evaluate(() => {
+      const value = JSON.parse('{"timestamp_us":18446744073709551615}', (key, item, context) =>
+        key === "timestamp_us" ? BigInt(context.source) : item);
+      return JSON.stringify(structuredClone(value), (_key, item) =>
+        typeof item === "bigint" ? JSON.rawJSON(item.toString()) : item);
+    });
+    assert.equal(maximumCodec, '{"timestamp_us":18446744073709551615}');
+    for (const [name, first, last] of [
+      ["numeric-unsafe", 9007199254740993n, 9007199254940993n],
+      ["numeric-u64-near-max", 18446744073708551615n, 18446744073708751615n],
+    ]) {
+      const directory = path.join(root, name, "review"), records = read(name + "/review/review.json");
+      verifyFiles(directory, records);
+      const expected = exact(fs.readFileSync(path.join(directory, "capture.json")));
+      assert.equal(expected.fit.frames[0].source.metadata.frame.timestamp_us, first);
+      assert.equal(expected.fit.frames[1].source.metadata.frame.timestamp_us, last);
+      const integerPage = await context.newPage();
+      await integerPage.goto(pathToFileURL(path.join(directory, "index.html")).href);
+      await integerPage.waitForFunction(() => !document.getElementById("captureEditor").hidden);
+      assert.match(await integerPage.locator("#editStatus").innerText(), /^Select a point/);
+      await integerPage.locator('.edit-point[data-frame="0"][data-point="3"]').click();
+      assert((await integerPage.locator("#editStatus").innerText()).includes(String(first)));
+      expected.fit.frames[0].keypoints[3].pixel_px[0] += 0.125;
+      await integerPage.locator("#editX").fill(String(expected.fit.frames[0].keypoints[3].pixel_px[0]));
+      await hidden(integerPage);
+      await integerPage.locator("#applyPoint").click();
+      const file = await download(integerPage, name + "-edited.json", expected);
+      const bytes = fs.readFileSync(file, "utf8");
+      assert(bytes.includes(String(first)) && bytes.includes(String(last)));
+      integerFiles.push(file);
+      await integerPage.locator("#resetPoints").click(); await hidden(integerPage);
+      verifyFiles(directory, records);
+    }
+    // Capability-disabled modes exercise the original refusal, not an approximation fallback.
+    for (const missing of ["raw-json", "numeric-source"]) {
+      const legacy = await browser.newContext({userAgent}); observe(legacy);
+      await legacy.addInitScript(missing => {
+        if (missing === "raw-json") JSON.rawJSON = undefined;
+        else {
+          const parse = JSON.parse;
+          JSON.parse = (text, reviver) => parse(text, typeof reviver === "function"
+            ? function (key, value) { return reviver.call(this, key, value); } : reviver);
+        }
+      }, missing);
+      const unsafePage = await legacy.newPage();
+      await unsafePage.goto(pathToFileURL(path.join(root, "numeric-unsafe/review/index.html")).href);
+      await unsafePage.waitForFunction(() => !document.getElementById("captureEditor").hidden);
+      assert.match(await unsafePage.locator("#editStatus").innerText(), /Editor unavailable:.*safe browser numeric precision/);
+      await hidden(unsafePage);
+      assert(await unsafePage.locator("#applyPoint").isDisabled());
+      assert(await unsafePage.locator("#preparePoint").isDisabled());
+      assert.equal(await unsafePage.locator("#newPointFields").evaluate(n => n.disabled), true);
+      assert.equal(await unsafePage.locator("#silhouetteFields").evaluate(n => n.disabled), true);
+      assert.equal(await unsafePage.locator("section > svg circle").count(), 20);
+      assert((await unsafePage.locator("#captureInput").textContent()).includes("9007199254740993"));
+      const safePage = await legacy.newPage(), expected = structuredClone(replay);
+      await safePage.goto(pathToFileURL(path.join(reviewDir, "index.html")).href);
+      await safePage.waitForFunction(() => !document.getElementById("captureEditor").hidden);
+      await safePage.locator('.edit-point[data-frame="0"][data-point="3"]').click();
+      expected.fit.frames[0].keypoints[3].pixel_px[0] = good.fit.frames[0].keypoints[3].pixel_px[0];
+      await safePage.locator("#editX").fill(String(expected.fit.frames[0].keypoints[3].pixel_px[0]));
+      await safePage.locator("#applyPoint").click();
+      await download(safePage, "legacy-" + missing + "-safe.json", expected);
+      await legacy.close();
+    }
     assert.deepEqual(errors, []);
     verifyFiles(maskDir, maskReport);
     assert.deepEqual(maskSources.map(file => hash(fs.readFileSync(path.join(root, file)))), maskHashes);
-    const allowed = [reviewDir, emptyDir, maskDir, inlineDir, path.join(root, "numeric-unsafe/review")].map(dir => pathToFileURL(dir + path.sep).href);
+    const allowed = [reviewDir, emptyDir, maskDir, inlineDir, path.join(root, "numeric-unsafe/review"), path.join(root, "numeric-u64-near-max/review")].map(dir => pathToFileURL(dir + path.sep).href);
     assert(requests.every(r => r.method === "GET" && allowed.some(prefix => r.url.startsWith(prefix))));
     verifyFiles();
     console.log(JSON.stringify({status: "PASS", frames: 2, points: 20, clickLayouts: 3,
@@ -666,6 +724,7 @@ async function sheetReview(page, records = report) {
       observedSlices: 10, sheetPoints, maskedFile, maskedSha256: hash(fs.readFileSync(maskedFile)),
       authoredSlices: 10, inlineFile, inlineSha256: hash(fs.readFileSync(inlineFile)),
       crossEditorPendingCases: 4,
+      integerFiles, maximumCodec, integerFallbacks: ["raw-json", "numeric-source"],
       removedFile, noCheckFile,
       boundary: "Synthetic actual page and data only; fit acceptance is a separate ordinary CLI run"}, null, 2));
   } finally { await browser.close(); }

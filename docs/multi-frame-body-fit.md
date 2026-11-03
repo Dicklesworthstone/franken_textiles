@@ -161,8 +161,12 @@ Pending/invalid edits or **Cancel placement** withdraw the old download. **Reset
 restores the original point lists and inline silhouettes, removing in-memory additions, and revokes the corrected input.
 Original files and preparation evidence stay unchanged;
 SVG/report links explicitly refer to that original review. Nothing is stored in browser storage.
-If any input integer exceeds JavaScript's exact range, the editor refuses and the original native
-review remains available. Use an integer-preserving JSON tool for that document; do not round timestamps.
+Browsers with JSON numeric-source and raw-JSON support preserve full-width integer identities,
+including decoded timestamps, through edits and downloads. These opaque values are never converted
+to approximate browser numbers. Without either capability, an input containing an integer outside
+JavaScript's exact range still refuses editing; its original native review remains available.
+Use an integer-preserving JSON tool in that case; do not round timestamps.
+Native selection and fitting constraints, including selection-window timestamp overflow, still apply.
 
 `review.json` says `PREPARED`, not accepted shape or READY. It retains the original input bytes'
 SHA-256 and complete source/camera evidence. `capture.json` rebases only local paths and adds

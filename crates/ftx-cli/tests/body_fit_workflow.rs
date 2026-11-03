@@ -1269,23 +1269,36 @@ fn capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_referenc
     }
     save(&dir, &bad);
     eprintln!("CAPTURE_EDITOR_CASE={}", dir.display());
-    let unsafe_dir = dir.join("numeric-unsafe");
-    std::fs::create_dir(&unsafe_dir).unwrap();
-    let (_, mut unsafe_input) = fixture();
-    for i in 0..2 {
-        let timestamp = 9_007_199_254_740_993u64 + i as u64 * 200_000;
-        unsafe_input["fit"]["frames"][i]["frame"]["timestamp_us"] = json!(timestamp);
-        for start in unsafe_input["fit"]["starts"].as_array_mut().unwrap() {
-            start["poses"][i]["frame"]["timestamp_us"] = json!(timestamp);
+    for (name, first_timestamp) in [
+        ("numeric-unsafe", 9_007_199_254_740_993_u64),
+        // Both 150000-us selection windows must end within u64; overflow still refuses.
+        ("numeric-u64-near-max", u64::MAX - 1_000_000),
+    ] {
+        let unsafe_dir = dir.join(name);
+        std::fs::create_dir(&unsafe_dir).unwrap();
+        let (model, mut unsafe_input) = fixture();
+        std::fs::write(unsafe_dir.join("model.ftxbody"), model).unwrap();
+        for i in 0..2 {
+            let timestamp = first_timestamp + i as u64 * 200_000;
+            unsafe_input["fit"]["frames"][i]["frame"]["timestamp_us"] = json!(timestamp);
+            for start in unsafe_input["fit"]["starts"].as_array_mut().unwrap() {
+                start["poses"][i]["frame"]["timestamp_us"] = json!(timestamp);
+            }
         }
+        let unsafe_input = capture::wrap(&unsafe_dir, unsafe_input);
+        save(&unsafe_dir, &unsafe_input);
+        let unsafe_review = capture_review(&unsafe_dir, "review", 0);
+        assert_eq!(
+            unsafe_review["result"]["frames"][0]["frame"]["timestamp_us"].as_u64(),
+            Some(first_timestamp)
+        );
+        let fitted = run(&unsafe_dir, &["--out", "expected-fit.json"], 0);
+        assert_eq!(fitted["result"]["status"], "ACCEPTED");
+        assert_eq!(
+            fitted["result"]["solution"]["poses"][1]["frame"]["timestamp_us"].as_u64(),
+            Some(first_timestamp + 200_000)
+        );
     }
-    let unsafe_input = capture::wrap(&unsafe_dir, unsafe_input);
-    save(&unsafe_dir, &unsafe_input);
-    let unsafe_review = capture_review(&unsafe_dir, "review", 0);
-    assert_eq!(
-        unsafe_review["result"]["frames"][0]["frame"]["timestamp_us"].as_u64(),
-        Some(9_007_199_254_740_993)
-    );
     // Same authored rays on the checked capture sensor, independently rasterized into masks.
     let mut mask_input = fixture().1;
     for i in 0..2 {

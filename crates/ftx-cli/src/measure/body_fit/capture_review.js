@@ -8,9 +8,17 @@
     download = null; link.hidden = true; link.removeAttribute("href");
   }
   try {
-    const original = JSON.parse(byId("captureInput").textContent);
-    // A u64 decoded timestamp may exceed JavaScript's exact integer range. Refuse editing the
-    // document instead of quietly changing its source identity during JSON parse/stringify.
+    const original = JSON.parse(byId("captureInput").textContent, (_key, value, context) => {
+      if (typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value) &&
+          typeof JSON.rawJSON === "function" && context?.source && /^-?\d+$/.test(context.source)) {
+        return BigInt(context.source);
+      }
+      return value;
+    });
+    const json = (value, space) => JSON.stringify(value, (_key, item) =>
+      typeof item === "bigint" ? JSON.rawJSON(item.toString()) : item, space);
+    // Opaque integer identities survive clones as BigInt and serialize from exact decimal tokens.
+    // If the browser lacks either JSON capability, retain the original unsafe-number refusal.
     function requireSafeNumbers(value) {
       if (typeof value === "number" && (!Number.isFinite(value) ||
           (Number.isInteger(value) && !Number.isSafeInteger(value)))) {
@@ -48,7 +56,7 @@
       chooser.value = [...chooser.options].some(o => o.value === old) ? old : "";
       const name = chooser.value;
       byId("targetDefinition").textContent = name && Object.hasOwn(original.model.keypoints, name)
-        ? "Declared target: " + JSON.stringify(original.model.keypoints[name]) : "";
+        ? "Declared target: " + json(original.model.keypoints[name]) : "";
     }
     function appendDisplay(i, j, point) {
       const row = document.createElement("tr");
@@ -60,7 +68,7 @@
       row.children[1].textContent = point.partition === "fit" ? "FIT" : "CHECK";
       row.children[2].className = "point-coordinates";
       row.children[3].textContent = point.sigma_px;
-      row.children[4].textContent = JSON.stringify(original.model.keypoints[point.name]);
+      row.children[4].textContent = json(original.model.keypoints[point.name]);
       sections[i].querySelector("tbody").append(row);
       const svg = name => document.createElementNS("http://www.w3.org/2000/svg", name);
       const mark = svg("g"), title = svg("title"), circle = svg("circle"), text = svg("text");
@@ -99,11 +107,11 @@
         });
         changed += original.fit.frames[i].keypoints.filter(before =>
           !frame.keypoints.some(point => point.name === before.name)).length;
-        if (JSON.stringify(frame.silhouette) !== JSON.stringify(original.fit.frames[i].silhouette)) ++changed;
+        if (json(frame.silhouette) !== json(original.fit.frames[i].silhouette)) ++changed;
         if (silhouetteEditable[i]) renderSilhouette(i);
       });
       if (changed && !pending && !silhouettePending) {
-        download = URL.createObjectURL(new Blob([JSON.stringify(edited, null, 2) + "\n"], {type: "application/json"}));
+        download = URL.createObjectURL(new Blob([json(edited, 2) + "\n"], {type: "application/json"}));
         link.href = download; link.hidden = false;
       }
       selectionDisplay();

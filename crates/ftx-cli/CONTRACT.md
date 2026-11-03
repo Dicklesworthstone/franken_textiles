@@ -117,6 +117,9 @@ The fixed chest-band qualification schedule remains unchanged.
   restores the original names/roles/sigmas too. Insufficient FIT evidence retains native refusals;
   missing CHECK evidence retains the explicit no-held-out advisory rather than a new refusal.
   Original files remain unchanged and script-disabled original review remains available.
+  Where JSON numeric-source and raw-JSON capabilities exist, opaque full-width integers remain
+  exact through local edits and serialization. Otherwise the existing unsafe-number refusal
+  applies before editing; no timestamp or other source identity is rounded to enable a download.
   Each frame's read-only stationary-sheet review shows the exact admitted correspondences,
   FIT/CHECK roles, metric positions, camera projections and residuals on the same stored pixels.
   Lens/reference identities and calibration/reference hashes remain visible. No camera refit,
