@@ -139,6 +139,9 @@ pub struct Alternative {
     pub material_id: String,
     /// Present only after successful resolution; directly usable by `material_binding::Changes`.
     pub selection: Option<Selection>,
+    /// The same frozen selection serialized by the canonical authority. Browser consumers must
+    /// retain this text when adopting a row so JavaScript number formatting cannot change its hash.
+    pub selection_json: Option<String>,
     /// Requested, admitted observations in canonical units, with original method/conditions/source.
     pub readings: BTreeMap<String, Quantity>,
     /// Every encountered exclusion; missing data is never assigned a score or treated as zero.
@@ -318,6 +321,7 @@ impl Request {
             key: candidate.key.clone(),
             material_id: candidate.selection.id.clone(),
             selection: None,
+            selection_json: None,
             readings: BTreeMap::new(),
             exclusions: Vec::new(),
             eligible: false,
@@ -330,7 +334,16 @@ impl Request {
                 return row;
             }
         };
-        row.selection = Some(resolved.frozen_selection());
+        let selection = resolved.frozen_selection();
+        let selection_json = match serde_json::to_string(&selection) {
+            Ok(text) => text,
+            Err(error) => {
+                row.exclusions.push(invalid(error.to_string()));
+                return row;
+            }
+        };
+        row.selection = Some(selection);
+        row.selection_json = Some(selection_json);
         let material = resolved.material();
         if !self.forms.is_empty() && !self.forms.contains(&material.form) {
             row.exclusions

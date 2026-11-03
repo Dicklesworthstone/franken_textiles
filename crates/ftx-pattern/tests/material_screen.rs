@@ -52,6 +52,10 @@ fn tradeoffs_ties_units_and_sources_are_preserved() {
     let frozen = report.alternatives[0].selection.as_ref().unwrap();
     assert!(frozen.expected_sha256.is_some());
     assert_eq!(
+        report.alternatives[0].selection_json.as_deref(),
+        Some(serde_json::to_string(frozen).unwrap().as_str())
+    );
+    assert_eq!(
         frozen.record.as_ref().unwrap().properties["areal_density"].unit,
         "g/m2"
     );
@@ -186,6 +190,86 @@ fn frozen_alternatives_replay_offline_and_refuse_tampering() {
     let tampered = r.evaluate(&empty).unwrap();
     assert!(!tampered.alternatives[3].eligible);
     assert!(tampered.alternatives[3].selection.is_none());
+    assert!(tampered.alternatives[3].selection_json.is_none());
+}
+
+#[test]
+fn frozen_json_keeps_override_precision_and_replays_without_a_catalog() {
+    let db = database();
+    let mut selected = Selection {
+        id: "a".into(),
+        allow_estimates: true,
+        ..Selection::default()
+    };
+    let mut observation = db.materials[0].properties["areal_density"].clone();
+    observation.unit = "1".into();
+    observation.value = -0.0;
+    observation.bounds = Some([-0.0, 0.0]);
+    observation
+        .conditions
+        .insert("specimen_id".into(), "18446744073709551615".into());
+    selected
+        .overrides
+        .insert("synthetic_zero".into(), observation.clone());
+    observation.value = f64::from_bits(0x3fd3_3333_3333_3334);
+    observation.bounds = None;
+    selected
+        .overrides
+        .insert("synthetic_precision".into(), observation);
+    let expected = db.resolve(&selected).unwrap();
+    let mut r = request();
+    r.allow_catalog_estimates = false;
+    r.candidates = vec![ftx_pattern::material_screen::Candidate {
+        key: "exact".into(),
+        selection: selected,
+    }];
+    let report = r.evaluate(&db).unwrap();
+    let row = &report.alternatives[0];
+    assert!(row.eligible);
+    let text = row.selection_json.as_deref().unwrap();
+    assert_eq!(
+        text,
+        serde_json::to_string(row.selection.as_ref().unwrap()).unwrap()
+    );
+    assert!(text.contains("\"value\":-0.0"));
+    let frozen: Selection = serde_json::from_str(text).unwrap();
+    let record = frozen.record.as_ref().unwrap();
+    assert_eq!(
+        record.properties["synthetic_zero"].value.to_bits(),
+        (-0.0_f64).to_bits()
+    );
+    assert_eq!(
+        record.properties["synthetic_precision"].value.to_bits(),
+        0x3fd3_3333_3333_3334
+    );
+    assert_eq!(
+        record.properties["synthetic_zero"].conditions["specimen_id"],
+        "18446744073709551615"
+    );
+    let empty = Catalog::from_json(r#"{"schema":"ftx-textile-catalog/1","materials":[]}"#).unwrap();
+    let replay = empty.resolve(&frozen).unwrap();
+    assert_eq!(replay.sha256(), expected.sha256());
+    assert_eq!(
+        serde_json::to_string(&replay.frozen_selection()).unwrap(),
+        text
+    );
+
+    // Losing the signed zero must fail its source lock, never silently produce an adoptable row.
+    let mut changed = frozen;
+    changed
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("synthetic_zero")
+        .unwrap()
+        .value = 0.0;
+    r.candidates[0].selection = changed;
+    let refused = r.evaluate(&empty).unwrap();
+    assert!(!refused.alternatives[0].eligible);
+    assert!(refused.alternatives[0].selection.is_none());
+    assert!(refused.alternatives[0].selection_json.is_none());
+    assert!(!refused.alternatives[0].exclusions.is_empty());
 }
 
 #[test]

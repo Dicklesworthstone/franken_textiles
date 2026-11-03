@@ -1378,6 +1378,83 @@ fn screening_reuses_canonical_library_and_requires_an_explicit_comparison_basis(
 }
 
 #[test]
+fn screening_selection_text_preserves_source_and_pattern_identity_through_binding() {
+    let mut selected = selection(1.6, 0.4);
+    selected["record"]["properties"]["synthetic_zero"] = json!({
+        "value":-0.0,"unit":"1","evidence":"estimate","source":"test",
+        "method":"Signed-zero serialization test only",
+        "conditions":{"specimen_id":"18446744073709551615"}
+    });
+    let input = json!({"schema":"ftx-material-screen/1","basis":"nominal",
+        "candidates":[{"key":"exact","selection":selected}],
+        "required_capabilities":["mechanics","steady_conduction","transient_thermal"]});
+    let result: Value =
+        serde_json::from_str(&materials::screen(&input.to_string()).unwrap()).unwrap();
+    let row = &result["alternatives"][0];
+    assert_eq!(result["frontier"], json!(["exact"]));
+    let text = row["selection_json"].as_str().unwrap();
+    assert!(text.contains("\"value\":-0.0"));
+    assert_eq!(
+        serde_json::from_str::<Value>(text).unwrap(),
+        row["selection"]
+    );
+    let detail: Value = serde_json::from_str(&materials::inspect(text).unwrap()).unwrap();
+    assert_eq!(detail["selection_json"], text);
+    let hash = row["selection"]["expected_sha256"].as_str().unwrap();
+    let empty = ftx_pattern::materials::Catalog::from_json(
+        r#"{"schema":"ftx-textile-catalog/1","materials":[]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        empty
+            .resolve(&serde_json::from_str(text).unwrap())
+            .unwrap()
+            .sha256(),
+        hash
+    );
+
+    // The original pattern permits integer metadata; keep it outside JavaScript number parsing too.
+    let mut pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    pattern["meta"]["source_serial"] = json!(u64::MAX);
+    pattern["meta"]["source_zero"] = json!(-0.0);
+    let original = pattern.to_string();
+    let edits = format!(r#"{{"schema":"ftx-material-bindings/1","default":{text}}}"#);
+    let bound: Value = serde_json::from_str(&materials::bind(&original, &edits).unwrap()).unwrap();
+    assert_eq!(bound["geometry_changed"], false);
+    assert_eq!(bound["pattern"]["pieces"], pattern["pieces"]);
+    assert_eq!(
+        bound["pattern"]["meta"]["source_serial"].as_u64(),
+        Some(u64::MAX)
+    );
+    assert_eq!(bound["drape_materials_with_self_contact"]["ready"], true);
+    let bound_text = bound["pattern_json"].as_str().unwrap();
+    assert!(bound_text.contains("18446744073709551615"));
+    assert!(bound_text.contains("\"source_zero\":-0.0"));
+    assert_eq!(
+        bound["pattern_sha256"],
+        ftx_core::receipt::sha256_hex(bound_text.as_bytes())
+    );
+    let resolved = ftx_drape::material::resolve(
+        &Pattern::from_json(bound_text).unwrap(),
+        &ftx_drape::run::DrapeOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(resolved.report["record_sha256"], hash);
+
+    let mut changed = input;
+    changed["candidates"][0]["selection"] = row["selection"].clone();
+    changed["candidates"][0]["selection"]["record"]["properties"]["synthetic_zero"]["value"] =
+        json!(0.0);
+    let refused: Value =
+        serde_json::from_str(&materials::screen(&changed.to_string()).unwrap()).unwrap();
+    assert_eq!(refused["alternatives"][0]["eligible"], false);
+    for field in ["selection", "selection_json"] {
+        assert!(refused["alternatives"][0][field].is_null(), "{field}");
+    }
+    assert!(refused["frontier"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn study_reuses_production_planners_and_preserves_material_source_locks() {
     let input = include_str!("../../../tests/fixtures/materials/study-insulation.json");
     let request: ftx_export::material_study::Request = serde_json::from_str(input).unwrap();
