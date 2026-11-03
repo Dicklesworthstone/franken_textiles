@@ -65,6 +65,15 @@ Workbench and choose **Check my own pattern.json** with your measurement evidenc
 and fit contract. The workshop itself never creates PDF, DXF or other cutting
 files. Its `REVIEW_ONLY` status is not a convergence verdict.
 
+After fitting the trace scale, **Choose materials** opens Material Workbench directly with the current reviewed pattern and
+source image hash. It retains the exact Rust-generated pattern bytes; assign materials and
+**Freeze selections and bind** before running cutting or another supported consumer. Select any
+needed measurements, fit contract and body evidence separately. The handoff never runs a round or
+establishes scale, sewability, physical fit or cutting approval. Source edits before receipt cancel
+the transfer. Manual pattern selection or **Clear received tracing pattern** withdraws the received
+pattern and dependent results. Unscaled traces keep the Pattern Workbench route for scale review;
+the direct material receiver also checks the fitted-scale marker. The ordinary download/reupload route remains available.
+
 ## Limits and verification
 
 The browser rejects PNGs over 16 MiB or four million decoded pixels **before

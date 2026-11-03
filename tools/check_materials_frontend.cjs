@@ -1335,7 +1335,7 @@ class Element {
       moveTo: (...point) => this.paint.push(['move', ...point]), lineTo: (...point) => this.paint.push(['line', ...point]) };
   }
 }
-async function pageModule({roundToken=null}={}) {
+async function pageModule({roundToken=null,traceToken=null}={}) {
   const html = read('materials.html');
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
   for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices'])
@@ -1356,7 +1356,7 @@ async function pageModule({roundToken=null}={}) {
   LocalURL.createObjectURL = blob => { const id = `blob:${++next}`; live.add(id); blobs.set(id, blob); return id; };
   LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true); blobs.delete(id); };
   const openerMessages=[],opener={postMessage:(data,origin)=>openerMessages.push({data,origin})},popups=[];
-  const window={opener,location:{href:'https://unit.invalid/materials.html'+(roundToken?'?roundImport='+roundToken:'')},
+  const window={opener,location:{href:'https://unit.invalid/materials.html'+(roundToken?'?roundImport='+roundToken:traceToken?'?traceImport='+traceToken:'')},
     open:url=>{const messages=[],target={closed:false,postMessage:(data,origin)=>messages.push({data,origin})};popups.push({url,target,messages});return target;},
     addEventListener:(name,fn)=>{const old=windowEvents[name];windowEvents[name]=old?(...args)=>Promise.all([old(...args),fn(...args)]):fn;}};
   const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder, TextEncoder,crypto:require('node:crypto').webcrypto, document: {
@@ -1844,6 +1844,64 @@ test('material accepted-body controls preserve source text and withdraw stale bo
   }
   p.e.bodyFitFile.files = []; p.e.clearBodyFit.onclick(); assert.equal(p.e.bodyArmDeg.disabled, false);
   await p.e.fold.onclick(); assert.equal(p.current().messages.at(-1).bodyFit, undefined);
+});
+test('traced material handoff retains exact geometry without inferring wearer or running consumers',async()=>{
+  const token='a'.repeat(32),p=await pageModule({traceToken:token});
+  assert.equal(p.openerMessages[0]?.data.type,'ftx-trace-pattern-ready');
+  const raw=' {"meta":{"scale_status":"FITTED"},"pieces":[{"id":"front"}],"sequence":18446744073709551615,"value":-0.0}\n';
+  const data={type:'ftx-trace-pattern',token,pattern:new Blob([raw]),source_sha256:'ab'.repeat(32),
+    files:{measurements:new Blob(['{"invented":true}']),fit:new Blob(['{}'])},bodySource:{fit:new Blob(['{}']),armDeg:90}};
+  for(const [origin,source,m] of [['https://foreign.invalid',p.opener,data],['https://unit.invalid',{},data],
+    ['https://unit.invalid',p.opener,{...data,token:'wrong'}],['https://unit.invalid',p.opener,{...data,type:'ftx-round-sources'}]]) {
+    await p.windowEvents.message({origin,source,data:m});assert.equal(p.e.bind.disabled,true);assert.equal(p.hasOpener(),true);
+  }
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
+  assert.equal(p.hasOpener(),false);assert.equal(p.current().messages.length,0,'No automatic operation');
+  assert.equal(p.e.bind.disabled,false);assert.equal(p.e.exports.disabled,true);assert.equal(p.e.fold.disabled,true);
+  assert.ok(p.e.roundImportText.textContent.includes(data.source_sha256));
+  assert.match(p.e.roundImportText.textContent,/REVIEW_ONLY/);
+  await p.e.bind.onclick();assert.equal(p.current().messages.at(-1).pattern,raw);
+  p.emit({pattern:{pieces:[{id:'front'}]},pattern_json:raw,pieces:[],pattern_sha256:'test'});
+  const count=p.current().messages.length;await p.e.exports.onclick();
+  assert.equal(p.current().messages.length,count,'Missing measurements cannot borrow injected trace metadata');
+  assert.match(p.e.error.textContent,/measurements/i);
+  p.select('measurements',' {"primary":true}\n');p.e.measurements.handlers.change();
+  p.select('fit',' {"manual":true}\n');p.e.fit.handlers.change();
+  await p.e.exports.onclick();const req=p.current().messages.at(-1);
+  assert.equal(req.pattern,raw);assert.equal(req.measurements,' {"primary":true}\n');assert.equal(req.fit,' {"manual":true}\n');
+  assert.equal(req.bodyFit,undefined);
+  p.emit({},[{name:'export.zip',bytes:new Uint8Array([1])}]);
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{...data,pattern:new Blob(['{}'])}});
+  assert.equal(p.e.bind.disabled,false,'Transfer is one-use');
+  p.e.clearRoundImport.onclick();assert.equal(p.e.bind.disabled,true);assert.equal(p.e.exports.disabled,true);assert.equal(p.live.size,0);
+});
+test('traced material handoff refuses invalid sources and cancelled reviews',async()=>{
+  const token='b'.repeat(32),data={type:'ftx-trace-pattern',token,pattern:new Blob(['{"meta":{"scale_status":"FITTED"},"pieces":[]}']),source_sha256:'cd'.repeat(32)};
+  for(const change of [{pattern:new Blob(['{'])},{pattern:new Blob(['\ufeff{}'])},{pattern:new Blob([new Uint8Array([0xc3,0x28])])},
+    {pattern:new Blob(['[]'])},{pattern:new Blob(['{"pieces":[]}'])},
+    {pattern:new Blob(['{"meta":{"scale_status":"UNSCALED"},"pieces":[]}']),scale_status:'FITTED'},
+    {source_sha256:'wrong'},{source_sha256:null},{type:'ftx-trace-pattern-cancelled'}]) {
+    const p=await pageModule({traceToken:token});
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{...data,...change}});
+    assert.equal(p.e.bind.disabled,true);assert.equal(p.hasOpener(),false);assert.match(p.e.roundImportText.textContent,/refused/i);
+    assert.equal(p.live.size,0);assert.equal(p.current().messages.length,0);
+  }
+});
+test('traced material handoff yields to manual files and clearing during delayed reads',async()=>{
+  const token='c'.repeat(32);
+  for(const action of ['pattern','fit','clear']) {
+    const p=await pageModule({traceToken:token}),delayed=new Blob(['{"meta":{"scale_status":"FITTED"},"pieces":[{"id":"traced"}]}']);let release;
+    delayed.arrayBuffer=()=>new Promise(resolve=>{release=resolve;});
+    const wait=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+      data:{type:'ftx-trace-pattern',token,pattern:delayed,source_sha256:'ef'.repeat(32)}});
+    if(action==='pattern'){p.select('patternFile','{"pieces":[{"id":"manual"}]}');await p.e.patternFile.onchange();}
+    else if(action==='fit'){p.select('fit','{}');p.e.fit.handlers.change();}
+    else p.e.clearRoundImport.onclick();
+    release(await Blob.prototype.arrayBuffer.call(delayed));await wait;
+    assert.equal(p.e.bind.disabled,action!=='pattern');
+    if(action==='pattern'){await p.e.bind.onclick();assert.match(p.current().messages.at(-1).pattern,/manual/);}
+    else assert.equal(p.live.size,0);
+  }
 });
 test('material round handoff retains three exact sources and requires explicit binding and consumers',async()=>{
   const token='3'.repeat(32),p=await pageModule({roundToken:token});

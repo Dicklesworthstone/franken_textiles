@@ -222,6 +222,7 @@ async function tracingEdits(browser, origin) {
   };
   try {
     await page.goto(origin+"/trace.html");await trace(image);
+    assert.equal(await page.isDisabled("#openMaterials"),true,"Unscaled trace cannot bypass scale review through materials");
     assert.equal(await page.locator("#saveDraft").count(),1,"Reopen saved tracing edits");
     assert.equal(await page.locator("#openPattern").count(),1,"Check traced pattern without download/reupload");
     assert.equal(JSON.parse(await page.textContent("#details")).source_sha256,sha(image));
@@ -261,6 +262,38 @@ async function tracingEdits(browser, origin) {
       const set=Storage.prototype.setItem;Storage.prototype.setItem=function(...a){window.traceStored=true;return set.apply(this,a);};
     });
     await trace(image);await load(bytes);await action("apply");
+    const directOpened=page.waitForEvent("popup");await page.click("#openMaterials");const directMaterial=await directOpened;
+    directMaterial.on("pageerror",e=>errors.push(String(e)));
+    await directMaterial.waitForFunction(()=>document.getElementById("roundImportText").textContent.startsWith("Received traced pattern.json")&&!document.getElementById("bind").disabled);
+    assert.equal(await directMaterial.evaluate(()=>window.opener===null),true);
+    assert.ok((await directMaterial.textContent("#roundImportText")).includes(sha(image)));
+    assert.equal(await directMaterial.isDisabled("#exports"),true,"No automatic binding or export");
+    assert.equal(await directMaterial.isDisabled("#fold"),true,"Trace review provides no body");
+    const materialRun=async id=>{
+      await directMaterial.click("#"+id);
+      await directMaterial.waitForFunction(op=>new RegExp(`^${op} (complete|refused)`).test(document.getElementById("status").textContent),id);
+      assert.equal(await directMaterial.isVisible("#error"),false,await directMaterial.textContent("#error"));
+    };
+    await directMaterial.fill("#selection",JSON.stringify({id:"blackbird/FL9910",allow_estimates:true}));
+    await materialRun("inspect");await directMaterial.click("#assign");await materialRun("bind");
+    assert.ok((await download("original-pattern.json",directMaterial)).equals(pattern),"Direct material binding retains exact reviewed trace bytes");
+    const boundTrace=await download("pattern.json",directMaterial);
+    assert.deepEqual(JSON.parse(boundTrace).pieces,JSON.parse(pattern).pieces,"Material binding preserves traced geometry");
+    const cutOptions=Buffer.from(JSON.stringify({copies:1,gap_mm:2,edge_margin_mm:0,end_margin_mm:0}));
+    await directMaterial.setInputFiles("#cutOptions",{name:"cut.json",mimeType:"application/json",buffer:cutOptions});
+    await materialRun("cut");const tracePlan=await download("cut-plan.json",directMaterial);
+    assert.ok(JSON.parse(tracePlan).rolls.length>0,"A real cutting consumer plans the traced pieces");
+    const boundPath=path.join(work,"trace-material-bound.json"),cutPath=path.join(work,"trace-cut-options.json");
+    fs.writeFileSync(boundPath,boundTrace);fs.writeFileSync(cutPath,cutOptions);fs.writeFileSync(path.join(work,"trace-cut-plan.json"),tracePlan);
+    const materialNative=path.join(path.dirname(ftx),"ftx-materials");
+    if(fs.existsSync(materialNative)) {
+      const nativePlan=execFileSync(materialNative,["cut-plan",boundPath,cutPath],{maxBuffer:64*1024*1024});
+      fs.writeFileSync(path.join(work,"native-trace-cut-plan.json"),nativePlan);
+      assert.deepEqual(JSON.parse(tracePlan),JSON.parse(nativePlan),"Complete native/WASM cutting equality for the transferred pattern");
+    } else console.log("SKIP native traced cutting replay: supply --ftx beside an ftx-materials binary.");
+    await directMaterial.click("#clearRoundImport");assert.equal(await directMaterial.isDisabled("#bind"),true);
+    assert.equal(await directMaterial.locator('a[download="cut-plan.json"]').count(),0);await directMaterial.close();
+    console.log("PASS trace-to-materials: exact reviewed source, explicit material assignment/binding, compiled-WASM cutting and cleared dependent outputs.");
     const opened=page.waitForEvent("popup");await page.click("#openPattern");const bench=await opened;
     await bench.waitForFunction(()=>!document.getElementById("go").disabled && document.getElementById("traceImportText").textContent.startsWith("Loaded the local tracing"));
     assert.equal(await bench.isChecked('input[name="program"][value="audit"]'),true);
@@ -282,11 +315,19 @@ async function tracingEdits(browser, origin) {
     assert.equal(await material.evaluate(()=>window.opener===null),true);
     assert.equal(await material.isDisabled('#exports'),true,'No automatic material binding');
     assert.equal(await material.isDisabled('#fold'),true,'No body is transferred');
-    const bind=async tab=>{await tab.click('#bind');await tab.waitForFunction(()=>!document.getElementById('exports').disabled||!document.getElementById('error').hidden);
+    const bind=async tab=>{
+      await tab.fill('#selection',JSON.stringify({id:'blackbird/FL9910',allow_estimates:true}));await tab.click('#inspect');
+      await tab.waitForFunction(()=>/^inspect (complete|refused)/.test(document.getElementById('status').textContent));
+      assert.equal(await tab.isVisible('#error'),false,await tab.textContent('#error'));await tab.click('#assign');
+      await tab.click('#bind');await tab.waitForFunction(()=>!document.getElementById('exports').disabled||!document.getElementById('error').hidden);
       assert.equal(await tab.isVisible('#error'),false,await tab.textContent('#error'));};
     await bind(material);
     assert.ok((await download('original-pattern.json',material)).equals(sources['pattern.json']),'Original pattern bytes come from the native round');
-    const exportRound=async tab=>{await tab.click('#exports');await tab.locator('a[download="export.zip"]').waitFor();return download('export.zip',tab);};
+    const exportRound=async tab=>{await tab.click('#exports');
+      await tab.waitForFunction(()=>/^exports (complete|refused)/.test(document.getElementById('status').textContent)||!document.getElementById('error').hidden);
+      assert.equal(await tab.isVisible('#error'),false,await tab.textContent('#error'));
+      const archives=tab.locator('a[download$=".zip"]');assert.equal(await archives.count(),1);
+      return download(await archives.getAttribute('download'),tab);};
     const materialZip=await exportRound(material),boundPattern=await download('pattern.json',material);
     const materialManual=await context.newPage();await materialManual.goto(origin+'/materials.html');
     await materialManual.waitForFunction(()=>document.getElementById('status').textContent.startsWith('Ready'));
@@ -295,7 +336,7 @@ async function tracingEdits(browser, origin) {
     await bind(materialManual);
     assert.ok((await download('pattern.json',materialManual)).equals(boundPattern),'Same native material binding');
     assert.ok((await exportRound(materialManual)).equals(materialZip),'Handed round and manual three-file upload produce identical complete material export archives');
-    await material.click('#clearRoundImport');assert.equal(await material.locator('a[download="export.zip"]').count(),0);
+    await material.click('#clearRoundImport');assert.equal(await material.locator('a[download$=".zip"]').count(),0);
     assert.equal(await material.isDisabled('#bind'),true);assert.equal(await material.isDisabled('#exports'),true);
     await material.close();await materialManual.close();
     console.log('PASS round-to-material: exact native saved files, explicit binding/exports, complete manual-upload archive equality, no body transfer and clear withdraws outputs.');
@@ -347,7 +388,18 @@ async function tracingEdits(browser, origin) {
     await context.route(filter,hold);const waiting=page.waitForEvent("popup");await page.click("#openPattern");await parked;
     await page.fill("#names","{}");await release.continue();await context.unroute(filter,hold);const stale=await waiting;
     await stale.waitForFunction(()=>document.getElementById("traceImportText").textContent.startsWith("Tracing review changed"));
-    assert.equal(await stale.isVisible("#results"),false);await stale.close();
+    assert.equal(await stale.isVisible("#results"),false);
+    await stale.waitForFunction(()=>!document.getElementById("go").disabled);await stale.close();
+    await load(bytes);await action("apply");
+    const materialFilter=/\/materials\.html\?traceImport=/;let releaseMaterial,arrivedMaterial;
+    const materialParked=new Promise(resolve=>{arrivedMaterial=resolve;});
+    const holdMaterial=route=>{releaseMaterial=route;arrivedMaterial();};
+    await context.route(materialFilter,holdMaterial);const materialWaiting=page.waitForEvent("popup");await page.click("#openMaterials");await materialParked;
+    await page.fill("#names","{}");await releaseMaterial.continue();await context.unroute(materialFilter,holdMaterial);const staleMaterial=await materialWaiting;
+    await staleMaterial.waitForFunction(()=>document.getElementById("roundImportText").textContent.startsWith("Tracing handoff refused"));
+    assert.equal(await staleMaterial.isDisabled("#bind"),true);assert.equal(await staleMaterial.isDisabled("#cut"),true);
+    assert.equal(await staleMaterial.evaluate(()=>window.opener===null),true);
+    await staleMaterial.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Ready"));await staleMaterial.close();
     assert.equal(await page.evaluate(()=>window.traceStored),false,"Tracing handoff performs no storage writes");
     assert.deepEqual(await page.evaluate(()=>Object.fromEntries(Object.keys(localStorage).map(k=>[k,localStorage.getItem(k)]))),{"fab-wb-bodyMode":'"chart"',"fab-wb-program":'"audit"'},"Only existing Workbench preferences persist, never a pattern");
     assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.url.startsWith(origin+"/")&&r.method==="GET"));

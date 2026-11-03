@@ -55,7 +55,7 @@ async function pageModule() {
   class LocalURL extends URL {}
   LocalURL.createObjectURL = blob => { const id = `blob:${++next}`; live.add(id); blobs.set(id, blob); return id; };
   LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true); blobs.delete(id); };
-  const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, document: {
+  const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder, document: {
     getElementById: id => { assert.ok(e[id], `HTML missing ${id}`); return e[id]; },
     querySelectorAll: () => commands, createElement: tag => Object.assign(new Element(), { tag }),
   }, window: { location: { href: 'https://unit.invalid/materials.html' }, opener: null,
@@ -66,7 +66,10 @@ async function pageModule() {
     return new vm.SourceTextModule(read('materials-study-builder.js'), { context });
   }); await module.evaluate();
   const current = () => workers.at(-1), ready = () => current().emit({ type: 'ready' }); ready();
-  const select = (id, text = '{}') => { e[id].files = [{ name: `${id}.json`, size: text.length, text: async () => text }]; };
+  const select = (id, text = '{}') => {
+    const bytes = new TextEncoder().encode(text);
+    e[id].files = [{ name: `${id}.json`, size: bytes.length, arrayBuffer: async () => bytes.buffer }];
+  };
   const emit = (result, files = [], reportText = JSON.stringify(result)) => current().emit({ type: 'result', request: current().messages.at(-1).request, result, files, reportText });
   const pattern = { pieces: [{ id: 'front' }, { id: 'lining' }] };
   const load = async () => { select('patternFile', JSON.stringify(pattern)); await e.patternFile.onchange(); };

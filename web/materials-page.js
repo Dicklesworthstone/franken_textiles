@@ -15,7 +15,9 @@ let preparedImport = null, adoptedImport = false, selectedImportFit = null;
 let sourceText = null, outfit = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
-let roundRead = 0, roundToken = new URL(window.location.href).searchParams.get("roundImport");
+const sourceQuery = new URL(window.location.href).searchParams;
+const traceImport = !sourceQuery.has("roundImport") && sourceQuery.has("traceImport");
+let roundRead = 0, roundToken = sourceQuery.get(traceImport ? "traceImport" : "roundImport");
 const roundFiles = new Map();
 let photoEvidence = null, photoTransfer = null, photoProblem = null;
 let interfaceChange = null, interfaceRead = 0, interfaceReady = true;
@@ -4755,21 +4757,27 @@ function clearRoundSources() {
 }
 $("clearRoundImport").onclick = () => { clearRoundSources(); resetPatternInput(); controls(); };
 const roundOrigin = new URL(window.location.href).origin;
+const handoffType = traceImport ? "ftx-trace-pattern" : "ftx-round-sources";
 if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" && window.opener) {
   const sender = window.opener;
   $("roundImportNote").hidden = false;
-  $("roundImportText").textContent = "Waiting for the current flat round. Material binding and every computation require your action.";
+  if (traceImport) $("clearRoundImport").textContent = "Clear received tracing pattern";
+  $("roundImportText").textContent = traceImport ? "Waiting for the current tracing review. Material binding and every computation require your action." :
+    "Waiting for the current flat round. Material binding and every computation require your action.";
   window.addEventListener("message", async event => {
     const m = event.data;
     if (!roundToken || event.origin !== roundOrigin || event.source !== sender || m?.token !== roundToken ||
-      !["ftx-round-sources", "ftx-round-sources-cancelled"].includes(m.type)) return;
+      ![handoffType, `${handoffType}-cancelled`].includes(m.type)) return;
     roundToken = null; window.opener = null;
     const rev = ++roundRead;
     $("supplementalConsent").checked = false;
     resetPatternInput();
     try {
-      if (m.type === "ftx-round-sources-cancelled") throw Error("The source round changed before transfer. Draft and check it again.");
-      const settings = m.drapeSettings;
+      if (m.type.endsWith("-cancelled")) throw Error("The source review changed before transfer. Review it again.");
+      if (traceImport && (typeof m.source_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(m.source_sha256))) {
+        throw Error("A traced pattern needs its source image SHA-256.");
+      }
+      const settings = traceImport ? undefined : m.drapeSettings;
       if (settings !== undefined && (!settings || typeof settings !== "object" || Array.isArray(settings) ||
           ![0, 2].includes(settings.self_contact_mm) || typeof settings.two_start !== "boolean" ||
           !["standing", "seated", "squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
@@ -4780,16 +4788,19 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
         throw Error("Received drape arm angle must be from 0 to 180 degrees.");
       }
       const files = new Map();
-      for (const [key, id] of [["pattern", "patternFile"], ["measurements", "measurements"], ["fit", "fit"]]) {
-        const blob = m.files?.[key];
-        if (!(blob instanceof Blob) || blob.size > 64 * 1024 * 1024) throw Error("Each of the three round files must be JSON within 64 MiB.");
+      const inputs = traceImport ? [["pattern", "patternFile"]] : [["pattern", "patternFile"], ["measurements", "measurements"], ["fit", "fit"]];
+      for (const [key, id] of inputs) {
+        const blob = traceImport ? m.pattern : m.files?.[key];
+        if (!(blob instanceof Blob) || blob.size > 64 * 1024 * 1024) throw Error("Each transferred file must be JSON within 64 MiB.");
         const bytes = await blob.arrayBuffer();
         if (rev !== roundRead) return;
         if (bytes.byteLength > 64 * 1024 * 1024) throw Error("A round file exceeds 64 MiB.");
         const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-        JSON.parse(raw); files.set(id, raw);
+        const parsed = JSON.parse(raw);
+        if (traceImport && parsed?.meta?.scale_status !== "FITTED") throw Error("Fit and review the trace scale before choosing materials; use Pattern Workbench for an unscaled trace.");
+        files.set(id, raw);
       }
-      const context = m.bodySource;
+      const context = traceImport ? undefined : m.bodySource;
       if (context != null) {
         if (typeof context !== "object" || Array.isArray(context) || (!context.model && !context.fit)) throw Error("Body context needs a model or an accepted-fit source.");
         if (context.model != null) {
@@ -4809,7 +4820,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
           files.set("bodyFitFile", raw);
         } else if (context.armDeg != null) throw Error("A received drape pose requires an accepted-fit source.");
       }
-      installPattern(files.get("patternFile"), "Received round pattern.json");
+      installPattern(files.get("patternFile"), traceImport ? `Traced pattern.json — image ${m.source_sha256}` : "Received round pattern.json");
       for (const [id, raw] of files) roundFiles.set(id, raw);
       $("bodyArmDeg").value = String(hasArm ? settings.arm_abduction_deg : context?.fit ? context.armDeg : 35);
       if (settings !== undefined) {
@@ -4819,7 +4830,9 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       }
       $("supplementalConsent").checked = false;
       $("bodyFitConsent").checked = false; showReceivedBody();
-      $("roundImportText").textContent = "Received pattern.json, measurements.json and fit_spec.json. Originals retained in this tab. Review sources, then Freeze selections and bind before running a consumer. " +
+      $("roundImportText").textContent = traceImport ?
+        `Received traced pattern.json for image ${m.source_sha256}. Exact source retained. Assign materials, then Freeze selections and bind before running a consumer. Select measurements, fit and body evidence separately. Tracing remains REVIEW_ONLY; unscaled geometry is not ready for cutting. Manual file choices replace received inputs.` :
+        "Received pattern.json, measurements.json and fit_spec.json. Originals retained in this tab. Review sources, then Freeze selections and bind before running a consumer. " +
         (context ? "Selected body sources also arrived; review them and confirm the accepted-fit association separately before draping. " : "Choose a body separately for draping. ") +
         (settings !== undefined ? "Drape controls retain the source round's posture, settling, contact and sewing-path choices. " : "") +
         "Manual file choices replace received inputs.";
@@ -4827,11 +4840,11 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
     } catch (e) {
       if (rev !== roundRead) return;
       roundFiles.clear(); showReceivedBody(); resetPatternInput();
-      $("roundImportText").textContent = `Round handoff refused: ${e.message || e} Choose the files manually or return to the current round.`;
+      $("roundImportText").textContent = `${traceImport ? "Tracing" : "Round"} handoff refused: ${e.message || e} Choose the files manually or return to the current review.`;
       controls();
     }
   });
-  sender.postMessage({ type: "ftx-round-sources-ready", token: roundToken }, roundOrigin);
+  sender.postMessage({ type: `${handoffType}-ready`, token: roundToken }, roundOrigin);
 } else roundToken = null;
 window.addEventListener("pagehide", () => { clearPhotoEvidence(); clearRoundSources(); ++epoch; worker?.terminate(); clear(["bind", ...operations]); });
 start();

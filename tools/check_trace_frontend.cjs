@@ -130,11 +130,23 @@ async function pageModule() {
   return { e: elements, workers, current, select, result, live,blobs,trace,events,popups,blockPopups:()=>{popupBlocked=true;} };
 }
 
-test('trace pattern handoff sends only current review to its same-origin requesting window',async()=>{
-  const p=await pageModule();assert.ok(p.e.openPattern,'Check traced pattern without download/reupload');p.select();await p.trace();
-  p.e.openPattern.onclick();const child=p.popups[0],token=new URL(child.url).searchParams.get('traceImport');
+for(const [button,destination] of [['openPattern','index.html'],['openMaterials','materials.html']])
+test(`trace ${button} handoff sends only current review to its same-origin requesting window`,async()=>{
+  const p=await pageModule();assert.ok(p.e[button],'Continue traced pattern without download/reupload');p.select();
+  const prepare=async()=>{
+    await p.trace();
+    if(button==='openMaterials') {
+      assert.equal(p.e.openMaterials.disabled,true,'Unscaled traces keep ordinary Pattern Workbench review');
+      const count=p.popups.length;p.e.openMaterials.onclick();assert.equal(p.popups.length,count);
+      p.e.apply.onclick();const message=p.result(p.current().messages.at(-1).request);
+      message.report.scale_status='FITTED';p.current().emit(message);assert.equal(p.e.openMaterials.disabled,false);
+    }
+  };
+  await prepare();
+  p.e[button].onclick();const child=p.popups[0],token=new URL(child.url).searchParams.get('traceImport');
+  assert.equal(new URL(child.url).pathname,'/'+destination);
   assert.equal(child.target,'_blank');assert.equal(new URL(child.url).origin,'https://unit.invalid');assert.ok(token);
-  p.e.openPattern.onclick();assert.equal(p.popups.length,1,'One pending handoff cannot orphan an earlier tab');
+  p.e[button].onclick();assert.equal(p.popups.length,1,'One pending handoff cannot orphan an earlier tab');
   const ready={type:'ftx-trace-pattern-ready',token};
   for(const [origin,source,data] of [['https://wrong.invalid',child,ready],['https://unit.invalid',{},ready],['https://unit.invalid',child,{...ready,token:'wrong'}]]){
     p.events.message({origin,source,data});assert.equal(child.messages.length,0);
@@ -144,10 +156,10 @@ test('trace pattern handoff sends only current review to its same-origin request
   assert.equal(sent.data.type,'ftx-trace-pattern');assert.equal(sent.data.source_sha256,'a'.repeat(64));
   assert.deepEqual([...new Uint8Array(await sent.data.pattern.arrayBuffer())],[1,2]);
   p.events.message({origin:'https://unit.invalid',source:child,data:ready});assert.equal(child.messages.length,1);
-  p.e.openPattern.onclick();const stale=p.popups[1],oldToken=new URL(stale.url).searchParams.get('traceImport');
+  p.e[button].onclick();const stale=p.popups[1],oldToken=new URL(stale.url).searchParams.get('traceImport');
   p.e.names.handlers.input();p.events.message({origin:'https://unit.invalid',source:stale,data:{...ready,token:oldToken}});
   assert.equal(stale.messages[0].data.type,'ftx-trace-pattern-cancelled');assert.equal(stale.messages[0].data.pattern,undefined);
-  await p.trace();p.blockPopups();p.e.openPattern.onclick();assert.match(p.e.status.textContent,/popup blocked/);
+  await prepare();p.blockPopups();p.e[button].onclick();assert.match(p.e.status.textContent,/popup blocked/);
 });
 
 test('tracing edit drafts retain exact text before applying and after native refusal',async()=>{

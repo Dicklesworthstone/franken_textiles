@@ -18,6 +18,7 @@ function controls() {
   $("saveDraft").disabled = busy || !hasSheet || !sheetSource?.source_sha256;
   $("draftFile").disabled = !hasSheet || !sheetSource?.source_sha256 || (busy && !draftLoading);
   $("openPattern").disabled = busy || !reviewPattern;
+  $("openMaterials").disabled = busy || reviewPattern?.scale_status !== "FITTED";
 }
 
 function clearDraft() {
@@ -25,7 +26,7 @@ function clearDraft() {
   for(const url of draftUrls.splice(0)) URL.revokeObjectURL(url);
 }
 function clearResults() {
-  reviewPattern = null; $("openPattern").disabled = true;
+  reviewPattern = null; $("openPattern").disabled = $("openMaterials").disabled = true;
   if(workbenchTransfer) workbenchTransfer.pattern = null;
   clearDraft();
   $("results").hidden = true;
@@ -224,7 +225,7 @@ function show({ report, files }) {
   for (const { name, bytes } of files) {
     const png = name.endsWith(".png");
     const blob = new Blob([bytes], { type: png ? "image/png" : name.endsWith(".zip") ? "application/zip" : "application/json" });
-    if(name === "pattern.json") reviewPattern = {pattern:blob,source_sha256:report.source_sha256};
+    if(name === "pattern.json") reviewPattern = {pattern:blob,source_sha256:report.source_sha256,scale_status:report.scale_status};
     const url = URL.createObjectURL(blob);
     urls.push(url);
     const a = document.createElement("a");
@@ -241,18 +242,23 @@ function show({ report, files }) {
   $("status").textContent = "Review ready. Inspect the scale residuals and every audit finding.";
 }
 
-$("openPattern").onclick = () => {
+function openWorkbench(page) {
   if(busy || !reviewPattern) return;
+  if(page==="materials.html" && reviewPattern.scale_status!=="FITTED") return;
   if(workbenchTransfer && !workbenchTransfer.target.closed) {
     $("status").textContent="A Workbench handoff is still opening. Finish or close that tab before opening another.";return;
   }
   const token=Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,"0")).join("");
-  const url=new URL("index.html",import.meta.url);url.searchParams.set("traceImport",token);
+  const url=new URL(page,import.meta.url);url.searchParams.set("traceImport",token);
   const target=window.open(url.href,"_blank");
   if(!target) {$("status").textContent="Workbench popup blocked. Download pattern.json and open it in the Workbench instead.";return;}
   workbenchTransfer={target,token,...reviewPattern};
-  $("status").textContent="Workbench opened. Choose measurement evidence and run its ordinary checks there.";
-};
+  $("status").textContent=page==="materials.html" ?
+    "Material Workbench opened. Review the traced pattern, assign materials and explicitly bind before running a consumer." :
+    "Workbench opened. Choose measurement evidence and run its ordinary checks there.";
+}
+$("openPattern").onclick = () => openWorkbench("index.html");
+$("openMaterials").onclick = () => openWorkbench("materials.html");
 window.addEventListener("message",event=>{
   const transfer=workbenchTransfer,origin=new URL(import.meta.url).origin,m=event.data;
   if(!transfer || event.origin!==origin || event.source!==transfer.target ||

@@ -19,6 +19,13 @@ to cut. A round without body sources still uses the original three-file route.
 The handoff also preserves the ordinary arm angle without an accepted report. Old packets without
 an explicit drape angle retain 35°, or their accepted-source angle when present. Conflicting angles refuse.
 
+The tracing workshop's **Choose materials** action also opens this page with its exact reviewed
+pattern and source image hash after the trace scale is fitted. Unscaled traces use Pattern Workbench
+for scale review. It transfers no wearer, fit or body evidence. Assign materials and
+explicitly bind before running a supported consumer; the trace retains its scale/audit limitations
+and `REVIEW_ONLY` scope. **Clear received tracing pattern** or a manual pattern file replaces that
+source and withdraws dependent results. A source edit before receipt cancels the pending transfer.
+
 The tabs exchange immutable local files through the same origin, window and a one-use token;
 no files enter browser storage or a server. Editing the source round, selected model, accepted
 report, wearer association or pose before the receiving tab requests its files cancels the pending
