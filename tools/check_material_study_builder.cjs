@@ -52,7 +52,7 @@ test('reported bounds require the explicit complete assembly inventory and prese
   assert.throws(()=>build({...input,assemblyMass:mass(false)}),/complete inventory/);
   const undeclared=mass();delete undeclared.inventory_complete;
   assert.throws(()=>build({...input,assemblyMass:undeclared}),/missing/);
-  assert.throws(()=>build({...state(),basis:'reported_bounds'}),/mass, steady heat and vapor potential only/);
+  assert.throws(()=>build({...state(),basis:'reported_bounds'}),/mass, steady heat, vapor potential and final body-water totals only/);
   const raw=' {"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[{"id":"closure","seed":18446744073709551615,"value":1.0,"x":-0.0}]}\n';
   assert.ok(build({...input,assemblyMass:raw}).includes(raw));
   assert.throws(()=>build({...input,assemblyMass:JSON.parse(raw)}),/original inventory JSON/);
@@ -206,9 +206,9 @@ test('reported mass objectives compose with explicit nominal manufacturing guard
       {metric:'selected_observed_order_cost',minimum:0,maximum:50,basis:'nominal'}],requiredConsumers:['sewing','purchasing']};
   const result=JSON.parse(build(input));assert.deepEqual(result.comparison.constraints,input.constraints);
   assert.deepEqual(result.comparison.required_consumers,input.requiredConsumers);
-  assert.throws(()=>build({...input,constraints:[{metric:'sewing_modeled_production_seconds',maximum:3600}]}),/mass, steady heat and vapor potential only/);
-  assert.throws(()=>build({...input,constraints:[{metric:'selected_observed_order_cost',maximum:50,basis:'reported_bounds'}]}),/mass, steady heat and vapor potential only/);
-  assert.throws(()=>build({...input,objectives:[{metric:'cutting_modeled_path_seconds',direction:'minimize'}]}),/mass, steady heat and vapor potential only/);
+  assert.throws(()=>build({...input,constraints:[{metric:'sewing_modeled_production_seconds',maximum:3600}]}),/mass, steady heat, vapor potential and final body-water totals only/);
+  assert.throws(()=>build({...input,constraints:[{metric:'selected_observed_order_cost',maximum:50,basis:'reported_bounds'}]}),/mass, steady heat, vapor potential and final body-water totals only/);
+  assert.throws(()=>build({...input,objectives:[{metric:'cutting_modeled_path_seconds',direction:'minimize'}]}),/mass, steady heat, vapor potential and final body-water totals only/);
   assert.equal(JSON.parse(build({...state(),constraints:[{metric:'stock_area_m2',minimum:null,maximum:2}]})).comparison.constraints[0].minimum,null);
 });
 
@@ -379,8 +379,8 @@ test('reported mass ranges compose with explicit nominal finite-stock and job li
     const input={...stockState(mode),assemblyMass:mass(),basis:'reported_bounds',
       objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],constraints:[{metric,maximum:20,basis:'nominal'}]};
     assert.deepEqual(JSON.parse(build(input)).comparison.constraints,input.constraints);
-    assert.throws(()=>build({...input,constraints:[{metric,maximum:20}]}),/mass, steady heat and vapor potential only/);
-    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]}),/mass, steady heat and vapor potential only/);
+    assert.throws(()=>build({...input,constraints:[{metric,maximum:20}]}),/mass, steady heat, vapor potential and final body-water totals only/);
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]}),/mass, steady heat, vapor potential and final body-water totals only/);
   }
 });
 
@@ -817,8 +817,8 @@ test('directional strain and motion refuse reported ranges while retaining expli
   const context={drape:true,surface:true,motion:true,materialStrain:true},input={...state(),basis:'reported_bounds',
     objectives:[{metric:'independent_surface_power_w',direction:'minimize'}],constraints:[],requiredConsumers:['surface']};
   for(const metric of [...staticStrainMetrics,...motionStrainMetrics,'motion_max_absolute_edge_strain_pct']) {
-    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/mass, steady heat and vapor potential only/);
-    assert.throws(()=>build({...input,constraints:[{metric,minimum:-0.1,maximum:0.1}]},context),/mass, steady heat and vapor potential only/);
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/mass, steady heat, vapor potential and final body-water totals only/);
+    assert.throws(()=>build({...input,constraints:[{metric,minimum:-0.1,maximum:0.1}]},context),/mass, steady heat, vapor potential and final body-water totals only/);
     const guard={metric,basis:'nominal',minimum:-0.1,maximum:0.1};
     assert.deepEqual(JSON.parse(build({...input,constraints:[guard]},context)).comparison.constraints,[guard]);
   }
@@ -856,8 +856,8 @@ test('contact-load criteria remain nominal and compose with independently bounde
   const context={drape:true,surface:true,motion:true,contactLoads:true},input={...state(),basis:'reported_bounds',
     objectives:[{metric:'independent_surface_power_w',direction:'maximize'}],requiredConsumers:['contact_loads','motion_contact_loads']};
   for(const metric of [...initialContactMetrics,...movingContactMetrics]) {
-    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/mass, steady heat and vapor potential only/);
-    assert.throws(()=>build({...input,constraints:[{metric,maximum:2}]},context),/mass, steady heat and vapor potential only/);
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/mass, steady heat, vapor potential and final body-water totals only/);
+    assert.throws(()=>build({...input,constraints:[{metric,maximum:2}]},context),/mass, steady heat, vapor potential and final body-water totals only/);
     const constraint={metric,basis:'nominal',minimum:0,maximum:2};
     assert.deepEqual(JSON.parse(build({...input,constraints:[constraint]},context)).comparison.constraints,[constraint]);
   }
@@ -915,7 +915,7 @@ test('motion vapor criteria require the actual history policy with motion and co
 test('optional scenario consumers preserve old contexts and reject ambiguous availability flags', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const old={drape:true,surface:false},raw=build(state(),old);
-  const keys=['motion','materialStrain','contactLoads','coverage','vaporSurface','vaporCoverage','motionVaporHistory',
+  const keys=['motion','materialStrain','contactLoads','coverage','vaporSurface','vaporCoverage','motionVaporHistory','motionWetFilm',
     'transientSurface','transientCoverage'];
   const flags=Object.fromEntries(keys.map(key=>[key,false]));
   assert.equal(build(state(),{...old,...flags}),raw);
@@ -923,7 +923,7 @@ test('optional scenario consumers preserve old contexts and reject ambiguous ava
     assert.throws(()=>build(state(),{...old,[key]:value}),/availability must be a boolean/);
   }
   const inherited=Object.assign(Object.create(Object.fromEntries(keys.map(key=>[key,true]))),old);
-  for(const consumer of ['material_strain','motion','contact_loads','coverage','vapor_surface','vapor_coverage','motion_vapor_coverage',
+  for(const consumer of ['material_strain','motion','contact_loads','coverage','vapor_surface','vapor_coverage','motion_vapor_coverage','motion_wet_film',
     'transient_surface','transient_coverage']) {
     assert.throws(()=>build({...state(),requiredConsumers:[consumer]},inherited),new RegExp(`requested ${consumer}`));
   }
@@ -977,8 +977,8 @@ test('bounded complete mass composes with steady heat ranges and separately nomi
   const objectives=[...input.objectives,{metric:'independent_surface_power_w',direction:'maximize'}];
   assert.deepEqual(JSON.parse(build({...input,objectives},context)).comparison.objectives,objectives);
   for(const metric of ['simulated_cloth_mass_kg','max_absolute_edge_strain_pct','stock_area_m2']) {
-    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/mass, steady heat and vapor potential only/);
-    assert.throws(()=>build({...input,constraints:[{metric,maximum:10}]},context),/mass, steady heat and vapor potential only/);
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/mass, steady heat, vapor potential and final body-water totals only/);
+    assert.throws(()=>build({...input,constraints:[{metric,maximum:10}]},context),/mass, steady heat, vapor potential and final body-water totals only/);
   }
 });
 
@@ -997,8 +997,8 @@ test('motion objectives, guards and required results need actual motion and expl
   const bounded={...state(),assemblyMass:mass(),basis:'reported_bounds',objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
     constraints:[{metric,maximum:8,basis:'nominal'}],requiredConsumers:['motion']};
   assert.deepEqual(JSON.parse(build(bounded,context)).comparison.constraints,bounded.constraints);
-  assert.throws(()=>build({...bounded,objectives:objective.objectives},context),/mass, steady heat and vapor potential only/);
-  assert.throws(()=>build({...bounded,constraints:guard.constraints},context),/mass, steady heat and vapor potential only/);
+  assert.throws(()=>build({...bounded,objectives:objective.objectives},context),/mass, steady heat, vapor potential and final body-water totals only/);
+  assert.throws(()=>build({...bounded,constraints:guard.constraints},context),/mass, steady heat, vapor potential and final body-water totals only/);
   const heat={...bounded,objectives:[{metric:'independent_surface_power_w',direction:'maximize'}]};
   assert.deepEqual(JSON.parse(build(heat,{...context,surface:true})).comparison.constraints,bounded.constraints,
     'A source-bounded heat objective composes with a nominal motion-strain guard');
@@ -1439,7 +1439,7 @@ test('adaptive guidance composes with finite jobs, source-reported mass and sepa
     design:adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative'})};
   assert.equal(JSON.parse(build(input)).comparison.basis,'reported_bounds');
   assert.throws(()=>build({...input,assemblyMass:mass(false)}),/complete inventory/);
-  assert.throws(()=>build({...input,constraints:[{metric:'stock_area_m2',maximum:0.25}]}),/mass, steady heat and vapor potential only/);
+  assert.throws(()=>build({...input,constraints:[{metric:'stock_area_m2',maximum:0.25}]}),/mass, steady heat, vapor potential and final body-water totals only/);
 });
 
 const casePolicy = (metric='stock_area_m2',direction='minimize',changes={}) =>
@@ -1449,6 +1449,7 @@ const namedContext = (cases=[{key:'cold',surface:false},{key:'warm',surface:fals
     materialStrain:cases.some(item=>item.materialStrain===true),contactLoads:cases.some(item=>item.contactLoads===true),
     coverage:cases.some(item=>item.coverage===true),vaporSurface:cases.some(item=>item.vaporSurface===true),
     vaporCoverage:cases.some(item=>item.vaporCoverage===true),motionVaporHistory:cases.some(item=>item.motionVaporHistory===true),
+    motionWetFilm:cases.some(item=>item.motionWetFilm===true),
     transientSurface:cases.some(item=>item.transientSurface===true),transientCoverage:cases.some(item=>item.transientCoverage===true),
     matrix:{maxEvaluations,cases}});
 const namedDesign = changes => adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative',
@@ -2050,4 +2051,117 @@ test('contact allowance exhaustion stays a native partial refusal across alterna
     'The authoring helper does not multiply optional declared contact work across consumer probes and retained alternatives');
   const optional=JSON.parse(build(state(),context));assert.deepEqual(optional.comparison.required_consumers,[]);
   assert.equal(optional.variants.length,2,'A full first reservation can refuse later optional contact results without blocking independent study outcomes');
+});
+
+const wetFilmMetrics=['motion_wet_film_evaporated_mass_kg','motion_wet_film_remaining_liquid_mass_kg',
+  'motion_wet_film_unmet_demand_mass_kg','motion_wet_film_supplied_mass_kg','motion_wet_film_body_reservoir_latent_energy_j'];
+const wetFilmContext=()=>({drape:true,surface:false,motion:true,vaporCoverage:true,motionVaporHistory:true,motionWetFilm:true});
+
+test('finite body-water criteria retain all five explicit nominal or source-bound decisions and independent nominal guards', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={...wetFilmContext(),contactLoads:true,transientSurface:true};
+  for(const basis of ['nominal','reported_bounds']) {
+    const input={...state(),basis,objectives:wetFilmMetrics.map((metric,i)=>({metric,direction:i%2?'maximize':'minimize'})),
+      constraints:wetFilmMetrics.map(metric=>({metric,minimum:0,maximum:1})),requiredConsumers:['motion_wet_film']};
+    delete input.cutting;
+    input.constraints.push({metric:'body_contact_resultant_n',basis:'nominal',maximum:2},
+      {metric:'transient_surface_final_min_temperature_c',basis:'nominal',minimum:-5});
+    const before=JSON.stringify(input),raw=build(input,context),result=JSON.parse(raw);
+    assert.equal(JSON.stringify(input),before);assert.ok(raw.includes(input.candidates[0].selection));
+    assert.deepEqual(result.comparison,{basis,objectives:input.objectives,constraints:input.constraints,
+      required_consumers:input.requiredConsumers,allow_mixed_protocols:false});
+    for(const key of ['motion','wet_film','motionWetFilm','vapor_coverage','reported_bounds'])assert.equal(Object.hasOwn(result,key),false);
+    assert.throws(()=>build({...input,constraints:[{metric:wetFilmMetrics[0],minimum:1,maximum:0}]},context),/finite ordered/);
+  }
+  const input={...state(),constraints:wetFilmMetrics.map(metric=>({metric,basis:'reported_bounds',maximum:1}))};
+  assert.deepEqual(JSON.parse(build(input,context)).comparison.constraints,input.constraints,
+    'Bounded final water guards can accompany an independent nominal production objective');
+});
+
+test('finite body-water objectives, limits and required results need motion, coverage, history and an actual film policy', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context=wetFilmContext();
+  for(const metric of wetFilmMetrics)for(const policy of [
+    {basis:'reported_bounds',objectives:[{metric,direction:'maximize'}]},
+    {constraints:[{metric,basis:'reported_bounds',minimum:0,maximum:1}]},{requiredConsumers:['motion_wet_film']}]) {
+    const input={...state(),...policy};assert.ok(build(input,context));
+    assert.throws(()=>build(input),/requested motion_wet_film/);
+    for(const key of ['motion','vaporCoverage','motionVaporHistory','motionWetFilm']) {
+      const absent={...context};delete absent[key];
+      for(const missing of [absent,{...context,[key]:false}])assert.throws(()=>build(input,missing),/requested motion_wet_film/);
+    }
+    assert.throws(()=>build(input,{...context,motionWetFilm:false,transientSurface:true}),/requested motion_wet_film/,
+      'Textile temperature or water does not supply a body-film policy');
+  }
+});
+
+test('named finite body-water decisions require all dependencies in one inheriting case and retain native override authority', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const complete={key:'cold',surface:false,motion:true,vaporCoverage:true,motionVaporHistory:true,motionWetFilm:true};
+  for(const metric of wetFilmMetrics)for(const policy of [
+    {basis:'reported_bounds',objectives:[{metric,direction:'maximize'}]},
+    {constraints:[{metric,basis:'reported_bounds',maximum:1}]},{requiredConsumers:['motion_wet_film']}]) {
+    const input={...state(),...policy,design:namedDesign()};
+    for(const flag of ['motion','vaporCoverage','motionVaporHistory','motionWetFilm']) {
+      const missing={...complete,key:'warm',[flag]:false};
+      assert.throws(()=>build(input,namedContext([complete,missing])),/warm inherits.*motion_wet_film/);
+      const original=namedContext([complete,{...missing,comparison:casePolicy()}]),before=JSON.stringify(original);
+      assert.ok(build(input,original));assert.equal(JSON.stringify(original),before);
+    }
+  }
+  const split=namedContext([{key:'covered motion',surface:false,motion:true,vaporCoverage:true,motionVaporHistory:true},
+    {key:'unrelated film',surface:false,motionWetFilm:true,comparison:casePolicy()}]);
+  assert.throws(()=>build({...state(),requiredConsumers:['motion_wet_film']},split),/requested motion_wet_film/);
+  const both=namedContext([complete,{...complete,key:'warm'}]),absent={...both};delete absent.motionWetFilm;
+  for(const context of [absent,{...both,motionWetFilm:false}])assert.throws(()=>build(state(),context),/motionWetFilm availability.*actual cases/);
+  for(const value of [null,undefined,'true',1])assert.throws(()=>build(state(),namedContext([{...complete,motionWetFilm:value}])),/availability must be a boolean/);
+  const original=namedContext([{key:'cold',surface:false,comparison:casePolicy(wetFilmMetrics[0],'maximize',{
+    basis:'reported_bounds',required_consumers:['motion_wet_film'],allow_mixed_protocols:true})}]),before=JSON.stringify(original);
+  assert.ok(build(state(),original));assert.equal(JSON.stringify(original),before,
+    'The complete original comparison retains native physical, source and protocol admission');
+});
+
+test('original body-film and motion sources survive single and named snapshots without inferred water or global optional-budget gates', async () => {
+  const {buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,buildMaterialStudyRequest:build}=await modulePromise;
+  const film=' {\r\n"schema":"ftx-body-wet-film/1","body_mesh_sha256":"'+'a'.repeat(64)+'",'+
+    '"source":"declared synthetic water \\u03bc","basis":"prescribed local initial liquid and supply",'+
+    '"initial_liquid_mass_kg":[0.0000000000000001000000000000001],"supply_rate_kg_s":[-0.0]}\r\n';
+  const history=' {"schema":"ftx-motion-vapor-coverage/1","integration":"composite_trapezoid",'+
+    '"max_geometry_operations":20000000,"wet_film":'+film+'}\r\n';
+  const motion=' \r\n'+JSON.stringify(motionPolicy()).slice(0,-1)+',"vapor_coverage_history":'+history+'}\r\n';
+  const vaporCoverage=' \r\n'+JSON.stringify(vaporCoveragePolicy())+'\r\n';
+  const input={...scenarioState(),motion,vaporCoverage,maxMotionTrials:64,maxVertexFrames:32000000},before=JSON.stringify(input);
+  const snapshot=single(input),independent=single({...scenarioState(),maxVertexFrames:32000000});
+  assert.equal(JSON.stringify(input),before);
+  const comparison=' {"basis":"reported_bounds","objectives":[{"metric":"'+wetFilmMetrics[0]+'","direction":"maximize"}],'+
+    '"constraints":[{"metric":"'+wetFilmMetrics[1]+'","minimum":-0.0}],"required_consumers":["motion_wet_film"]}\r\n';
+  const raw=matrix({maxEvaluations:64,cases:[{key:'cold',scenario:snapshot,comparison},{key:'static',scenario:independent}]}),parsed=JSON.parse(raw);
+  for(const source of [film,history,motion,vaporCoverage,snapshot,independent,comparison])assert.ok(raw.includes(source));
+  assert.equal(Object.hasOwn(parsed.cases[1].scenario,'motion'),false);assert.equal(Object.hasOwn(parsed.cases[1].scenario,'wet_film'),false);
+  const unresolved=film.replace('a'.repeat(64),'stale-body').replace('[0.0000000000000001000000000000001]','[-1]');
+  assert.ok(single({...input,motion:motion.replace(film,unresolved)}).includes(unresolved),
+    'Body identity and finite-liquid semantic admission stay with the independent native history consumer');
+  const empty=single({...input,motion:motion.replace(film,'null')});
+  assert.equal(JSON.parse(empty).motion.vapor_coverage_history.wet_film,null);
+  const available={surface:false,motion:true,vaporCoverage:true,motionVaporHistory:true,motionWetFilm:true};
+  const context=namedContext([{key:'cold',...available},{key:'warm',...available}]);
+  assert.equal(JSON.parse(build({...state(),objectives:[{metric:wetFilmMetrics[0],direction:'maximize'}],design:namedDesign()},context)).design_adaptive.max_evaluations,2,
+    'Optional geometry reservations are not multiplied across alternatives or probes by the authoring layer');
+});
+
+test('finite body-water criteria guide linked grids and all four adaptive modes without changing source policies', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const objectives=[{metric:wetFilmMetrics[0],direction:'maximize'},{metric:wetFilmMetrics[2],direction:'minimize'}];
+  const input={...state(),basis:'reported_bounds',objectives:objectives.slice(0,1),
+    constraints:[{metric:wetFilmMetrics[1],minimum:0}],requiredConsumers:['motion_wet_film']};
+  const grid={...input,design:linkedDesignInput({values:[0,5],maxDesigns:1})},raw=build(grid,wetFilmContext());
+  assert.equal(JSON.parse(raw).schema,'ftx-design-study/1');assert.ok(raw.includes(grid.design.fitSpec));assert.ok(raw.includes(grid.candidates[0].selection));
+  const available={surface:false,motion:true,vaporCoverage:true,motionVaporHistory:true,motionWetFilm:true};
+  const cases=namedContext([{key:'cold',...available},{key:'warm',...available}]),before=JSON.stringify(cases);
+  for(const objective of ['consumer_comparison','consumer_pareto','consumer_worst_case','consumer_matrix_pareto']) {
+    const design=namedDesign({objective});if(['consumer_worst_case','consumer_matrix_pareto'].includes(objective))delete design.caseKey;
+    const candidate={...input,design,objectives:objective==='consumer_pareto'?objectives:objectives.slice(0,1)},result=JSON.parse(build(candidate,cases));
+    assert.equal(result.design_adaptive.objective,objective);assert.deepEqual(result.comparison.constraints,input.constraints);
+    assert.deepEqual(result.comparison.required_consumers,['motion_wet_film']);assert.equal(JSON.stringify(cases),before);
+  }
 });

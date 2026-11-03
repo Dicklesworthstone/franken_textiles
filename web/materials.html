@@ -982,6 +982,10 @@ they do not establish available sweat, actual evaporation, cooling feedback or c
 <code>vapor_coverage_history</code> with schema <code>ftx-motion-vapor-coverage/1</code>, explicit
 <code>right_endpoint</code> or <code>composite_trapezoid</code> integration and a geometry work allowance.
 Enable covered-body vapor in the same case. Saved endpoints alone do not request a transport history.</p>
+<p class="note">To account for finite body water, that history must also retain an explicit <code>wet_film</code>
+policy (<code>ftx-body-wet-film/1</code>) with its source, basis, exact body-mesh identity and per-triangle initial
+liquid and supply. The engine limits modeled evaporation to that inventory. No film, supply or dry state is assumed
+when the policy is absent. Use the finite-water goals below to compare the complete admitted history.</p>
 </fieldset>
 <fieldset><legend>Material-direction strain</legend>
 <label><input id="guidedMaterialStrain" type="checkbox"> Track warp, weft and shear on the actual cloth triangles</label>
@@ -1173,6 +1177,57 @@ Source-bound decisions need complete admitted intervals; missing bounds preserve
 <p class="note">Signed heat limits preserve negative values; minimizing signed power does not minimize its magnitude.
 Vapor limits use nonnegative potentials in the displayed units. Motion totals need complete admitted history,
 including its initial state and all accepted samples. The declared geometry allowance must fit the engine's shared work budget.</p>
+</fieldset>
+<fieldset><legend>Finite body water through motion</legend>
+<p class="note">Use an original motion request with a body-bound <code>wet_film</code> policy inside
+<code>vapor_coverage_history</code>, and enable covered-body vapor in the same case. Complete coverage is required
+at the initial state and every accepted sample. Each body triangle owns its declared initial water and supply;
+water is not pooled between triangles. Vapor potential may exceed the modeled evaporation that inventory permits.</p>
+<p class="note">Choose each objective's direction explicitly. Inclusive limits and the required-history checkbox apply
+independently of goal checkboxes. All five quantities support nominal or final source-reported bounds.</p>
+<label><input id="guidedBodyWaterEvaporatedGoal" type="checkbox"> Compare modeled evaporation from body water (kg)</label>
+<div class="study-fields">
+<label>Evaporation direction <select id="guidedBodyWaterEvaporatedDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize modeled evaporation</option><option value="maximize">Maximize modeled evaporation</option></select></label>
+<label>Minimum modeled evaporation (kg) <input id="guidedBodyWaterEvaporatedMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum modeled evaporation (kg) <input id="guidedBodyWaterEvaporatedLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedBodyWaterRemainingGoal" type="checkbox"> Compare remaining body liquid (kg)</label>
+<div class="study-fields">
+<label>Remaining-liquid direction <select id="guidedBodyWaterRemainingDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize remaining liquid</option><option value="maximize">Maximize remaining liquid</option></select></label>
+<label>Minimum remaining liquid (kg) <input id="guidedBodyWaterRemainingMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum remaining liquid (kg) <input id="guidedBodyWaterRemainingLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedBodyWaterUnmetGoal" type="checkbox"> Compare unmet covered vapor demand (kg)</label>
+<div class="study-fields">
+<label>Unmet-demand direction <select id="guidedBodyWaterUnmetDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize unmet demand</option><option value="maximize">Maximize unmet demand</option></select></label>
+<label>Minimum unmet demand (kg) <input id="guidedBodyWaterUnmetMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum unmet demand (kg) <input id="guidedBodyWaterUnmetLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedBodyWaterSuppliedGoal" type="checkbox"> Compare declared supplied body water (kg)</label>
+<div class="study-fields">
+<label>Supplied-water direction <select id="guidedBodyWaterSuppliedDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize supplied water</option><option value="maximize">Maximize supplied water</option></select></label>
+<label>Minimum supplied water (kg) <input id="guidedBodyWaterSuppliedMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum supplied water (kg) <input id="guidedBodyWaterSuppliedLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedBodyWaterLatentGoal" type="checkbox"> Compare prescribed-body latent energy (J)</label>
+<div class="study-fields">
+<label>Latent-energy direction <select id="guidedBodyWaterLatentDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize latent energy</option><option value="maximize">Maximize latent energy</option></select></label>
+<label>Minimum body-reservoir latent energy (J) <input id="guidedBodyWaterLatentMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum body-reservoir latent energy (J) <input id="guidedBodyWaterLatentLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedRequireBodyWater" type="checkbox"> Require a complete finite body-water history</label>
+<p class="note">Final cumulative source ranges replay the low/high material vapor-resistance endpoints with the declared
+water inventory, supply, geometry, boundaries and integration held fixed. Remaining liquid reverses the demand endpoint order.
+Supplied water has a fixed singleton range and does not need resistance bounds, but still needs an admitted history.
+Missing bounds retain nominal readings without qualifying the other bounded water decisions.</p>
+<p class="note">These are conditional body-film results. Latent energy comes from the prescribed body reservoir;
+it does not provide textile-temperature feedback, bare-body evaporation, physiological sweating or wearer cooling.
+Textile-owned water and its thermal/mechanical coupling are separate policies.</p>
 </fieldset>
 <fieldset><legend>Heat and temperature through motion</legend>
 <p class="note">Retain an original motion request with the corresponding heat history. These criteria need complete motion

@@ -96,6 +96,11 @@ const guidedTransportMetrics = [
   ["guidedVaporCoverageMass", "covered_vapor_potential_mass_flow_kg_s"],
   ["guidedMotionVaporEnergy", "motion_covered_vapor_potential_energy_j"],
   ["guidedMotionVaporMass", "motion_covered_vapor_potential_mass_kg"],
+  ["guidedBodyWaterEvaporated", "motion_wet_film_evaporated_mass_kg"],
+  ["guidedBodyWaterRemaining", "motion_wet_film_remaining_liquid_mass_kg"],
+  ["guidedBodyWaterUnmet", "motion_wet_film_unmet_demand_mass_kg"],
+  ["guidedBodyWaterSupplied", "motion_wet_film_supplied_mass_kg"],
+  ["guidedBodyWaterLatent", "motion_wet_film_body_reservoir_latent_energy_j"],
   ["guidedTransientSurfaceInsideEnergy", "transient_surface_inside_energy_j"],
   ["guidedTransientSurfaceNetEnergy", "transient_surface_net_boundary_energy_j"],
   ["guidedTransientSurfaceSampleMin", "transient_surface_min_sample_temperature_c"],
@@ -128,6 +133,7 @@ const guidedRequired = [
   ["guidedRequireContactLoads", "contact_loads"], ["guidedRequireMotionContactLoads", "motion_contact_loads"],
   ["guidedRequireCoverage", "coverage"], ["guidedRequireVaporSurface", "vapor_surface"],
   ["guidedRequireVaporCoverage", "vapor_coverage"], ["guidedRequireMotionVaporCoverage", "motion_vapor_coverage"],
+  ["guidedRequireBodyWater", "motion_wet_film"],
   ["guidedRequireTransientSurface", "transient_surface"],
   ["guidedRequireTransientCoverage", "transient_coverage"],
 ];
@@ -4234,7 +4240,7 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
       const input = $(`${id}${suffix}`);
       if (input.validity?.badInput) throw Error(`Supply a finite limit for ${metric}.`);
       if (!signed && input.value.trim() && number(`${id}${suffix}`, `limit for ${metric}`) < 0) {
-        throw Error("Vapor potential limits must be nonnegative in the displayed units.");
+        throw Error("Water and vapor limits must be nonnegative in the displayed units.");
       }
     }
   }
@@ -4364,6 +4370,7 @@ function describeScenarioInput(request, original) {
     coverage: cases.some(item => item?.coverage != null), vaporSurface: cases.some(item => item?.vapor_surface != null),
     vaporCoverage: cases.some(item => item?.vapor_coverage != null),
     motionVaporHistory: cases.some(item => item?.motion?.vapor_coverage_history != null),
+    motionWetFilm: cases.some(item => item?.motion?.vapor_coverage_history?.wet_film != null),
     transientSurface: cases.some(item => item?.motion?.transient_surface != null),
     transientCoverage: cases.some(item => item?.motion?.transient_coverage != null),
     ...(matrix ? { matrix: { maxEvaluations: value.max_evaluations,
@@ -4374,6 +4381,7 @@ function describeScenarioInput(request, original) {
         coverage: item?.scenario?.coverage != null, vaporSurface: item?.scenario?.vapor_surface != null,
         vaporCoverage: item?.scenario?.vapor_coverage != null,
         motionVaporHistory: item?.scenario?.motion?.vapor_coverage_history != null,
+        motionWetFilm: item?.scenario?.motion?.vapor_coverage_history?.wet_film != null,
         transientSurface: item?.scenario?.motion?.transient_surface != null,
         transientCoverage: item?.scenario?.motion?.transient_coverage != null,
         ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
@@ -4538,11 +4546,12 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const request = buildMaterialScenarioRequest({ ...input, ...fragments });
   const originalMotion = motionMode === "file" ? JSON.parse(fragments.motion) : null;
   const motionVaporHistory = originalMotion?.vapor_coverage_history != null;
+  const motionWetFilm = originalMotion?.vapor_coverage_history?.wet_film != null;
   const transientSurface = originalMotion?.transient_surface != null;
   const transientCoverage = originalMotion?.transient_coverage != null;
   return { request,
     context: { drape: true, surface, motion: motionMode !== "none", materialStrain, contactLoads, ...transport,
-      motionVaporHistory, transientSurface, transientCoverage },
+      motionVaporHistory, motionWetFilm, transientSurface, transientCoverage },
     ...((comparison ?? authoredComparison) === undefined ? {} : { comparison: comparison ?? authoredComparison }) };
 }
 function showGuidedScenarioDrafts() {
@@ -4561,6 +4570,7 @@ function showGuidedScenarioDrafts() {
       `${value.vapor_surface ? "retained independent-sheet vapor" : "no sheet vapor"}; ` +
       `${value.vapor_coverage ? "retained covered-body vapor" : "no covered-body vapor"}; ` +
       `${value.motion?.vapor_coverage_history ? "requested complete-motion vapor history" : "no motion vapor history"}; ` +
+      `${value.motion?.vapor_coverage_history?.wet_film != null ? "retained finite body-water policy" : "no body-water inventory"}; ` +
       `${item.comparison && JSON.parse(item.comparison) !== null ? "retained case comparison" : "shared comparison at run time"}.`;
     row.append(label);
     const action = (title, handler, unavailable = false, replace = false) => {

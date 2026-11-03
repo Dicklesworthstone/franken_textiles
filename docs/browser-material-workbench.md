@@ -616,6 +616,37 @@ Each input and comparison policy can be frozen in a named case. Active-source ch
 obsolete read or run; selecting an inactive source leaves it untouched. Draft changes leave saved
 cases intact. Loading or adopting another pattern disables these garment-specific policies.
 
+#### Compare finite body-water outcomes
+
+The **Finite body water through motion** group compares modeled evaporation, remaining liquid,
+unmet vapor demand, prescribed supplied water and prescribed-body latent energy. Each has an
+explicit minimizing or maximizing direction and optional inclusive lower/upper limits in kg or J.
+Limits and **Require a complete finite body-water history** apply independently of goal checkboxes.
+These criteria also enter existing linked grid and adaptive design comparisons.
+
+Choose **Retain an original motion request** containing
+`vapor_coverage_history.wet_film` with schema `ftx-body-wet-film/1`. The film retains its source and
+basis, the exact selected initial body-mesh identity, and nonnegative `initial_liquid_mass_kg` and
+`supply_rate_kg_s` arrays in the coverage policy's declared body-triangle order. Enable covered-body
+vapor in that same case. A missing or null film is not a dry-film assumption. Saved endpoints alone
+do not request a film, and separate matrix cases cannot supply one another's dependencies.
+
+All five quantities support nominal or conditional final source-reported bounds. Complete coverage
+is required initially and throughout the admitted trajectory. Each triangle conserves its own
+initial and supplied water; different vapor potentials can yield the same evaporation after both
+materials exhaust the available liquid. Bounded comparisons replay the source Ret endpoints with
+water, supply, geometry, boundaries and integration fixed. Remaining-liquid bounds reverse the
+demand endpoint order. Declared supply has a singleton range even without Ret bounds, but still
+needs complete nominal history admission. Missing bounds retain nominal readings without admitting
+the other bounded decisions. No per-sample water ranges or general water-state uncertainty are inferred.
+
+Named cases freeze the exact original film and comparison policy. Active motion-source or criterion
+edits cancel stale work; source-domain refusal preserves independent static heat, mechanics and
+manufacturing results. Malformed typed requests can still fail native deserialization. This model
+describes body-owned liquid under prescribed reservoirs, not textile-owned liquid, physiological
+sweating, actual wearer cooling or textile-temperature feedback. See the
+[native finite-water contract](material-scenario-studies.md#finite-body-water-through-complete-motion).
+
 #### Compare heat storage and temperatures through motion
 
 Choose **Retain an original motion request** with an explicitly authored `transient_surface`

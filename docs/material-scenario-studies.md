@@ -593,6 +593,13 @@ anatomical garment or measured fit.
 
 ### Finite body water through complete motion
 
+The guided workbench exposes all five quantities below with explicit directions, inclusive
+minimum/maximum guards and an independently required complete history. Choose the original motion
+file with its body-bound `vapor_coverage_history.wet_film` and request covered-body vapor in the same
+single or named case. Source presence is taken from that exact retained file; form endpoints, a
+different case's film or textile-owned water cannot satisfy it. The same policies reach existing
+linked grid and adaptive discovery. See the [guided controls](browser-material-workbench.md#compare-finite-body-water-outcomes).
+
 When `scenario.motion.vapor_coverage_history.wet_film` declares an exact body-bound initial liquid
 inventory and constant supply, the `motion_wet_film` consumer makes its conservative water results
 available to nominal or conditional reported-bound objectives and constraints. It reuses the actual
