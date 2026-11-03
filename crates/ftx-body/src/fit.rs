@@ -853,22 +853,34 @@ pub fn fit_tape(
         }
         p
     };
-    // the tape readings, then the mass (kg)
-    let read = |th: &[f64; N_FREE]| -> Result<[Option<f64>; N_TAPE + 1], Refusal> {
-        let rest = model.rest(&params_of(th))?;
-        let anthro = model.anthropometry(&rest);
-        let posed = model.pose(&rest, &pose_deltas(model, &rest, pose, 1.0)?)?;
-        let frames = BodyFrames::new(model, &posed)?;
-        let t = partial_tape_readings(&faces, anthro.height, &posed, &frames);
-        Ok(std::array::from_fn(|k| {
-            if k < N_TAPE { t[k] } else { Some(anthro.mass) }
-        }))
-    };
+    let needs_posed_tapes = rows.iter().any(|row| row.field > 0 && row.field < N_TAPE);
+    // Height and mass do not use posed sections. Keep model/pose/frame admission on every
+    // evaluation, and defer only the unused tape functionals until the final diagnostics.
+    let read =
+        |th: &[f64; N_FREE], include_tapes: bool| -> Result<[Option<f64>; N_TAPE + 1], Refusal> {
+            let rest = model.rest(&params_of(th))?;
+            let anthro = model.anthropometry(&rest);
+            let posed = model.pose(&rest, &pose_deltas(model, &rest, pose, 1.0)?)?;
+            let frames = BodyFrames::new(model, &posed)?;
+            let t = if include_tapes {
+                partial_tape_readings(&faces, anthro.height, &posed, &frames)
+            } else {
+                let mut t = [None; N_TAPE];
+                t[0] = Some(anthro.height * 1000.0);
+                t
+            };
+            Ok(std::array::from_fn(|k| {
+                if k < N_TAPE { t[k] } else { Some(anthro.mass) }
+            }))
+        };
     let TapeSolution {
         free,
-        readings,
+        mut readings,
         iterations,
-    } = optimize_tape(&rows, base.height, read)?;
+    } = optimize_tape(&rows, base.height, |th| read(th, needs_posed_tapes))?;
+    if !needs_posed_tapes {
+        readings = read(&free, true)?;
+    }
     let residuals = rows
         .iter()
         .filter(|r| r.field < N_TAPE)

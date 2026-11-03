@@ -193,6 +193,10 @@ only available predictions. Square-frustum, analytic-optimizer and articulated-p
 regressions cover these boundaries; they do not establish new anatomical validity, uncertainty
 or measurement readiness.
 
+Stature/weight-only solves retain model, pose and frame admission on every evaluation, while
+deferring unused posed tape functionals. All final independently available tape diagnostics are
+evaluated once at the fitted parameters; other tape-target solves retain their complete reading path.
+
 **Units and frames.** Metres, +Z up, the body faces −Y, +X is the body's left. Rest bodies sit in the
 template frame (soles near z = −0.82 m); posed bodies are root-relative. Nothing is grounded here.
 

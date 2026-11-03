@@ -107,6 +107,9 @@ fn synthetic_targets_are_recovered() {
             &pose,
         )
         .unwrap();
+        if std::env::var_os("FTX_TAPE_DIAGNOSTICS").is_some() {
+            println!("FIT_TAPE_DIAGNOSTICS {fit:?}");
+        }
         let dm = fit.mass_kg / mass - 1.0;
         println!(
             "  weight         target {mass:7.2}  body {:7.2}  ({:+.2} %)",
@@ -286,6 +289,10 @@ fn stature_and_weight_alone() {
             &pose,
         )
         .unwrap();
+        assert!(fit.readings.iter().all(Option::is_some));
+        if std::env::var_os("FTX_TAPE_DIAGNOSTICS").is_some() {
+            println!("FIT_TAPE_DIAGNOSTICS {fit:?}");
+        }
         println!(
             "{years} y {stature} mm {kg} kg: body {:.1} mm {:.2} kg, waist {:.1} mm, free {:?}",
             fit.readings[0].unwrap(),
@@ -306,6 +313,20 @@ fn stature_and_weight_alone() {
         waists[1] > waists[0] + 20.0,
         "a heavier toddler has a larger waist: {waists:?}"
     );
+}
+
+#[test]
+#[ignore = "needs the converted Anny model"]
+fn stature_and_weight_fit_retains_pose_validation() {
+    let model = model();
+    let wearer = Wearer {
+        years: 2.5,
+        gender: 0.5,
+        stature_mm: 920.0,
+        weight_kg: Some(12.0),
+    };
+    let refusal = fit_tape(&model, &wearer, &[], &Pose::a_pose(f64::NAN)).unwrap_err();
+    assert_eq!(refusal.code, ftx_core::RefusalCode::OutOfRange);
 }
 
 #[test]
