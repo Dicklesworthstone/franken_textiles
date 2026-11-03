@@ -992,3 +992,73 @@ pub fn detect_charuco(
         }
     }))
 }
+
+#[cfg(test)]
+mod dictionary_tests {
+    use super::*;
+
+    fn sidecar(dictionary: &str) -> Value {
+        json!({"schema":"fabric-calib-sheet/1","paper":"letter",
+            "board":{"type":"charuco","dictionary":dictionary,"squares_x":8,"squares_y":6,
+                "square_mm":22.0,"marker_mm":16.0}})
+    }
+
+    #[test]
+    fn captured_provider_marker_words_decode_in_all_four_orientations() {
+        let oracle: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/oracle/measure/calibration_sheets.json"
+        )).unwrap();
+        for entry in oracle["dictionaries"].as_array().unwrap() {
+            let name = entry["name"].as_str().unwrap();
+            let spec = parse_board(&sidecar(name)).unwrap();
+            let n = entry["marker_bits"].as_u64().unwrap() as usize;
+            let id = entry["codes_hex"].as_array().unwrap().len() - 1;
+            let code = u64::from_str_radix(entry["codes_hex"][id].as_str().unwrap(), 16).unwrap();
+            for rotation in 0..4 {
+                let pitch = 12;
+                let w = (n + 6) * pitch;
+                let mut gray = GrayImage { w, h:w, data:vec![255.0; w*w] };
+                for r in 0..n+2 {
+                    for c in 0..n+2 {
+                        let white = if r == 0 || c == 0 || r == n+1 || c == n+1 { false } else {
+                            let (r,c) = (r-1,c-1);
+                            let (r,c) = match rotation {
+                                0 => (r,c), 1 => (n-1-c,r), 2 => (n-1-r,n-1-c), _ => (c,n-1-r),
+                            };
+                            code & (1 << (n*n-1-r*n-c)) != 0
+                        };
+                        for y in (r+2)*pitch..(r+3)*pitch {
+                            for x in (c+2)*pitch..(c+3)*pitch { gray.data[y*w+x] = if white {255.0} else {0.0}; }
+                        }
+                    }
+                }
+                let lo = (2*pitch) as f64 - 0.5;
+                let hi = ((n+4)*pitch) as f64 - 0.5;
+                let quad = [[lo,lo],[hi,lo],[hi,hi],[lo,hi]];
+                let actual = decode_marker_quad(&gray, quad, &spec).unwrap_or_else(|| panic!("{name} rotation{rotation}"));
+                assert_eq!(actual.id,id,"{name} rotation{rotation}");
+                assert_eq!(actual.corners[0],quad[rotation],"{name} rotation{rotation}");
+                // Two corrupted border cells must not be silently accepted as a marker.
+                for c in 0..2 {
+                    for y in 2*pitch..3*pitch {
+                        for x in (c+2)*pitch..(c+3)*pitch {gray.data[y*w+x]=255.0;}
+                    }
+                }
+                assert!(decode_marker_quad(&gray,quad,&spec).is_none(),"{name} border");
+            }
+        }
+    }
+
+    #[test]
+    fn dictionary_names_and_retained_code_capacity_are_explicit() {
+        for name in ftx_core::aruco::NAMES {
+            assert!(parse_board(&sidecar(name)).is_ok(),"{name}");
+        }
+        assert!(parse_board(&sidecar("DICT_UNKNOWN")).is_err());
+        let mut sheet = sidecar("DICT_5X5_50");
+        sheet["board"]["squares_y"] = json!(8);
+        assert!(parse_board(&sheet).is_err());
+        sheet["board"]["dictionary"] = json!("DICT_4X4_50");
+        assert!(parse_board(&sheet).is_ok());
+    }
+}
