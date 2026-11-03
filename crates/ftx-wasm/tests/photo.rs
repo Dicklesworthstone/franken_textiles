@@ -185,6 +185,90 @@ fn charuco_photo_uses_native_detection_diagnostics_and_original_sheet_identity()
     assert!(Photo::with_reference(SHEET_PNG, &" ".repeat(256 * 1024 + 1), "", "{}").is_err());
 }
 
+#[test]
+fn every_printable_dictionary_reaches_native_and_portable_photo_and_camera_acquisition() {
+    use ftx_measure::photo::{calibration_images::Acquisition, detect_charuco};
+
+    for name in ftx_trace::calibration_sheet::dictionaries() {
+        // The renderer's existing 108 provider-raster hashes independently pin these board pixels.
+        let sheet = ftx_trace::calibration_sheet::render("letter", 22.0, 16.0, name).unwrap();
+        let raw = String::from_utf8(sheet.sidecar_json()).unwrap();
+        let photo = Photo::with_reference(&sheet.png, &raw, "", "{}")
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let report = photo.report();
+        assert_eq!(report["ok"], true, "{name}");
+        assert_eq!(report["inliers"], 35, "{name}");
+        let diagnostic = &report["image_input"]["charuco_detection"];
+        assert_eq!(diagnostic["implementation"]["dictionary"], *name);
+        assert_eq!(diagnostic["sheet_sha256"], sha256_hex(raw.as_bytes()));
+        assert_eq!(diagnostic["sheet"], sheet.sidecar);
+        let (image, decoded) = load_photo_with_limit(&sheet.png, 16_000_000).unwrap();
+        let (native, _) =
+            analyze_charuco_image(&image.data, image.w, image.h, &sheet.sidecar, None).unwrap();
+        assert_eq!(native.report()["inliers"], report["inliers"]);
+        let board = &sheet.sidecar["board"];
+        let pixel = |x: f64, y: f64| {
+            [
+                board["origin_px"][0].as_f64().unwrap() - 0.5
+                    + x * board["size_px"][0].as_f64().unwrap() / 176.0,
+                board["origin_px"][1].as_f64().unwrap() - 0.5
+                    + y * board["size_px"][1].as_f64().unwrap() / 132.0,
+            ]
+        };
+        let points = json!({"across_back":[pixel(44.0,44.0),pixel(132.0,44.0)]});
+        let measured = photo.measure(&points.to_string(), "{}").unwrap();
+        assert!(
+            (measured["records"][0]["value_mm"].as_f64().unwrap() - 88.0).abs() < 0.2,
+            "{name}"
+        );
+        assert_eq!(
+            measured["records"],
+            measure_photo(&native, &points, &PhotoOptions::default()).unwrap()["records"]
+        );
+        assert_eq!(measured["records"][0]["provenance"], "PHOTO_ESTIMATED");
+        let mut manifest = camera_manifest();
+        manifest["image_size_px"] = json!([image.w, image.h]);
+        let manifest = manifest.to_string();
+        let mut portable = CameraCalibration::new(&manifest, &raw, "").unwrap();
+        let receipt = portable.add_image("view0.png", &sheet.png).unwrap();
+        let mut acquisition = Acquisition::new(manifest.as_bytes(), raw.as_bytes()).unwrap();
+        let native_receipt = acquisition
+            .add_image(
+                "view0.png",
+                &image.data,
+                [image.w, image.h],
+                decoded,
+                |sidecar| detect_charuco(&image.data, image.w, image.h, sidecar, None),
+            )
+            .unwrap();
+        assert_eq!(receipt["detector"], native_receipt["detector"], "{name}");
+        assert_eq!(receipt["detector"]["dictionary"], *name);
+        assert!(
+            portable.finish().is_err(),
+            "One flat view cannot silently finish a camera calibration"
+        );
+    }
+}
+
+#[test]
+fn nondefault_dictionary_mismatch_and_uncaptured_board_capacity_refuse() {
+    let sheet = ftx_trace::calibration_sheet::render("letter", 22.0, 16.0, "DICT_5X5_50").unwrap();
+    let mut wrong = sheet.sidecar.clone();
+    wrong["board"]["dictionary"] = json!("DICT_7X7_50");
+    let rejected = Photo::with_reference(&sheet.png, &wrong.to_string(), "", "{}").unwrap();
+    assert_eq!(rejected.report()["ok"], false);
+    assert!(
+        rejected
+            .measure(r#"{"across_back":[[500,500],[600,500]]}"#, "{}")
+            .is_err()
+    );
+    wrong["board"]["dictionary"] = json!("DICT_5X5_50");
+    wrong["board"]["squares_y"] = json!(8);
+    let manifest = camera_manifest().to_string();
+    assert!(CameraCalibration::new(&manifest, &wrong.to_string(), "").is_err());
+    assert!(Photo::with_reference(&sheet.png, &wrong.to_string(), "", "{}").is_err());
+}
+
 // Same independent analytic Brown lens used by the calibration authority's known-answer tests.
 // The measurement image below is a separate raster acquisition, not a fitted calibration view.
 fn retained_brown() -> &'static Value {
@@ -500,7 +584,7 @@ fn camera_manifest() -> Value {
 
 // Independent ray/plane renderer. The page-to-board pixel convention is fixed by the public
 // sheet sidecar; neither the candidate camera projection nor a fitted homography renders pixels.
-fn pinhole_photo(index: usize) -> (Vec<u8>, [[f64; 2]; 2]) {
+fn pinhole_photo(index: usize, sheet_png: &[u8]) -> (Vec<u8>, [[f64; 2]; 2]) {
     let angles: [(f64, f64, f64); 5] = [
         (25., -17., 4.),
         (-23., 24., -7.),
@@ -515,7 +599,7 @@ fn pinhole_photo(index: usize) -> (Vec<u8>, [[f64; 2]; 2]) {
     let t = Vec3::new(-0.085, -0.063, 0.40 + index as f64 * 0.02);
     let inverse = r.transpose();
     let origin = inverse.mul_vec(t);
-    let board = load_png(SHEET_PNG).unwrap();
+    let board = load_png(sheet_png).unwrap();
     let mut photo = Gray::filled(1600, 1200, 85);
     for y in 0..photo.h {
         for x in 0..photo.w {
@@ -550,12 +634,23 @@ fn pinhole_photo(index: usize) -> (Vec<u8>, [[f64; 2]; 2]) {
 
 #[test]
 fn local_images_calibrate_through_shared_acquisition_and_replay_into_photo_measurement() {
+    calibrate_and_replay_images(SHEET_PNG, SHEET, None);
+}
+
+#[test]
+fn seven_bit_dictionary_calibrates_and_replays_an_independent_photo() {
+    let sheet = ftx_trace::calibration_sheet::render("letter", 22.0, 16.0, "DICT_7X7_50").unwrap();
+    let raw = String::from_utf8(sheet.sidecar_json()).unwrap();
+    calibrate_and_replay_images(&sheet.png, &raw, Some("7x7"));
+}
+
+fn calibrate_and_replay_images(sheet_png: &[u8], sheet: &str, fixture_subdir: Option<&str>) {
     use ftx_measure::photo::{
         calibration_images::Acquisition, detect_charuco, intrinsics::calibrate_document,
     };
     let manifest = serde_json::to_string_pretty(&camera_manifest()).unwrap();
-    let mut portable = CameraCalibration::new(&manifest, SHEET, "").unwrap();
-    let mut native = Acquisition::new(manifest.as_bytes(), SHEET.as_bytes()).unwrap();
+    let mut portable = CameraCalibration::new(&manifest, sheet, "").unwrap();
+    let mut native = Acquisition::new(manifest.as_bytes(), sheet.as_bytes()).unwrap();
     assert_eq!(
         portable.image_ids(),
         ["view0.png", "view1.png", "view2.png", "view3.png"]
@@ -568,7 +663,7 @@ fn local_images_calibrate_through_shared_acquisition_and_replay_into_photo_measu
     );
     let mut images = Vec::new();
     for (i, id) in portable.image_ids().iter().enumerate() {
-        let (bytes, _) = pinhole_photo(i);
+        let (bytes, _) = pinhole_photo(i, sheet_png);
         let receipt = portable.add_image(id, &bytes).unwrap();
         let (image, decoded) = load_photo_with_limit(&bytes, 16_000_000).unwrap();
         let shared = native
@@ -604,7 +699,7 @@ fn local_images_calibrate_through_shared_acquisition_and_replay_into_photo_measu
     );
     assert_eq!(
         report["image_acquisition"]["sheet_sha256"],
-        sha256_hex(SHEET.as_bytes())
+        sha256_hex(sheet.as_bytes())
     );
     assert_eq!(report["input"]["views"][3]["partition"], "held_out");
     for view in report["input"]["views"].as_array().unwrap() {
@@ -632,10 +727,10 @@ fn local_images_calibrate_through_shared_acquisition_and_replay_into_photo_measu
     }
     assert_eq!(portable.finish().unwrap(), report);
     assert!(portable.add_image("view0.png", &images[0]).is_err());
-    let (independent, points) = pinhole_photo(4);
+    let (independent, points) = pinhole_photo(4, sheet_png);
     let photo = Photo::with_reference(
         &independent,
-        SHEET,
+        sheet,
         &report.to_string(),
         r#"{"capture_lens_id":"synthetic-pinhole","rotation_cw_deg":0}"#,
     )
@@ -649,10 +744,12 @@ fn local_images_calibrate_through_shared_acquisition_and_replay_into_photo_measu
     if let Ok(directory) = std::env::var("FTX_CAMERA_WEB_FIXTURES") {
         use std::io::Write;
         let directory = std::path::Path::new(&directory);
-        std::fs::create_dir_all(directory).unwrap();
+        let directory =
+            fixture_subdir.map_or_else(|| directory.to_path_buf(), |s| directory.join(s));
+        std::fs::create_dir_all(&directory).unwrap();
         let mut exports = vec![
             ("manifest.json".to_string(), manifest.as_bytes().to_vec()),
-            ("sheet.json".to_string(), SHEET.as_bytes().to_vec()),
+            ("sheet.json".to_string(), sheet.as_bytes().to_vec()),
             (
                 "report.json".to_string(),
                 serde_json::to_vec(&report).unwrap(),

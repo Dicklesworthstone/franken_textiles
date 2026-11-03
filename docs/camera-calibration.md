@@ -151,6 +151,15 @@ The explicit `rust` backend needs no Python or OpenCV. The native command retain
 default `python3` adapter for compatibility; an explicit Python path also selects that optional
 adapter and requires `opencv-python-headless==4.13.0.92`. Installation is never performed by `ftx`.
 The browser and coordinate-only command require no Python.
+The Rust and browser image paths accept the same 27 captured dictionary names/aliases as the
+printable-sheet generator. For example, add `--dictionary DICT_7X7_50` to the `calib-sheet`
+command and use its matching sidecar for every view. Their shared tables retain 50 codes for
+the 4×4 family and 28 for each other family, sufficient for every generated Letter/A4 board;
+larger uncaptured prefixes refuse. This changes marker identification, not calibration acceptance:
+complete tilted views, held-out observations and the declared camera/noise model are still required.
+Synthetic raster tests exercise nondefault dictionary calibration and a separate measurement image;
+they do not qualify a physical camera or print.
+
 Print at actual size, check both reference rulers, and use a rigid flat board. Photograph
 it at different **out-of-plane** tilts without changing the camera settings or image
 geometry. Apply orientation before exporting opaque 8-bit RGB/grayscale PNGs without EXIF.

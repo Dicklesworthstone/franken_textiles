@@ -1,12 +1,13 @@
 // Actual local photo controls through compiled WASM. Native captures are made by ftx measure.
 // FTX_PLAYWRIGHT_MODULE=playwright-core NODE_PATH=... node tools/check_photo_web.cjs NATIVE_DIR
 // Use --section for the standalone synthetic front/side section and Workbench handoff workflow.
+// Use --charuco NATIVE_DIR for a printed dictionary's real photo controls and native report replay.
 const {chromium}=require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
 const assert=require("node:assert/strict"), fs=require("node:fs"), path=require("node:path"), http=require("node:http"), os=require("node:os");
 const sha256=bytes=>require("node:crypto").createHash("sha256").update(bytes).digest("hex");
-const root=path.resolve(__dirname,".."), web=path.join(root,"web"), sectionOnly=process.argv[2]==="--section", native=sectionOnly?null:process.argv[2];
+const root=path.resolve(__dirname,".."), web=path.join(root,"web"), sectionOnly=process.argv[2]==="--section", charucoOnly=process.argv[2]==="--charuco", native=sectionOnly?null:process.argv[charucoOnly?3:2];
 const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(web,"pkg");
-if(!native && !sectionOnly) throw Error("Supply the directory containing native photo scale and measurement captures, or --section");
+if(!native && !sectionOnly) throw Error("Supply native captures, --charuco NATIVE_DIR, or --section");
 const work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-photo-browser-"));
 async function photoHandoff(browser,origin) {
   const context=await browser.newContext({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"}),errors=[],requests=[];
@@ -228,6 +229,44 @@ const server=http.createServer((req,res)=>{
   try {
     if(sectionOnly) {await sectionWorkflow(browser,origin);return;}
     await page.goto(origin+"/photo.html");
+    if(charucoOnly) {
+      const sheetName=fs.existsSync(path.join(native,'calib-sheet-letter.json'))?'calib-sheet-letter':'calib-sheet-a4';
+      const source=fs.readFileSync(path.join(native,sheetName+'.json'),'utf8'),sheet=JSON.parse(source);
+      const charucoExpected=measured=>{
+        const value=expected(measured?'native-measurements.json':'native-scale.json',measured);
+        const receipt=(measured?value.photo:value).image_input.charuco_detection;
+        // The CLI additionally annotates filesystem sources and its embedded optional adapter.
+        assert.equal(receipt.sheet_path,path.join(native,sheetName+'.json'));
+        assert.equal(receipt.adapter_sha256,sha256(fs.readFileSync(path.join(root,'crates/ftx-cli/src/measure/charuco_detector.py'))));
+        delete receipt.sheet_path;delete receipt.adapter_sha256;
+        return value;
+      };
+      await page.selectOption('#referenceMode','charuco');await upload(sheetName+'.png');
+      await page.setInputFiles('#sheet',path.join(native,sheetName+'.json'));await action('analyze');
+      assert.equal(await page.textContent('#error'),'');
+      const scale=JSON.parse(await download('photo-scale.json'));
+      assert.deepEqual(scale,charucoExpected(false));assert.equal(scale.ok,true);
+      assert.equal(scale.image_input.charuco_detection.implementation.dictionary,sheet.board.dictionary);
+      assert.equal(scale.image_input.charuco_detection.sheet_sha256,sha256(source));
+      assert.equal((await download('photo-sheet.json')).toString(),source);
+      await page.fill('#points',fs.readFileSync(path.join(native,'points.json'),'utf8'));
+      await page.setInputFiles('#optionsFile',{name:'options.json',mimeType:'application/json',buffer:Buffer.from('{}')});
+      await page.waitForFunction(()=>document.getElementById('status').textContent.startsWith('Settings loaded'));
+      await action('measure');assert.equal(await page.textContent('#error'),'');
+      const measured=JSON.parse(await download('photo-measurements.json'));
+      assert.deepEqual(measured,charucoExpected(true));
+      assert.ok(Math.abs(measured.records[0].value_mm-88)<.2);assert.equal(measured.records[0].provenance,'PHOTO_ESTIMATED');
+      const wrong=structuredClone(sheet);wrong.board.dictionary=sheet.board.dictionary.startsWith('DICT_7X7_')?'DICT_5X5_50':'DICT_7X7_50';
+      await page.setInputFiles('#sheet',{name:'wrong.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(wrong))});
+      await absent();assert.equal(await page.isDisabled('#measure'),true);await action('analyze');
+      const wrongScale=await page.locator('a[download="photo-scale.json"]').count()?JSON.parse(await download('photo-scale.json')):null;
+      if(wrongScale)assert.equal(wrongScale.ok,false);else assert.notEqual(await page.textContent('#error'),'');
+      assert.equal(await page.isDisabled('#measure'),true);await absent();
+      assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.url.startsWith(origin+'/')&&r.method==='GET'));
+      assert.equal(await page.evaluate(()=>localStorage.length),0);
+      console.log('PASS printed dictionary -> real photo worker -> exact native scale/measurement reports, original sheet receipt, mismatch refusal and stale-output clearing:',sheet.board.dictionary,work);
+      return;
+    }
     let annotationDraft;
     for(const [file,tag,width,height,end,knownLength] of [["photo.png","png",720,960,630,400],["photo.jpg","jpeg",600,800,530,250]]) {
       await upload(file); await absent(); assert.equal(await page.isDisabled("#measure"),true);

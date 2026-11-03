@@ -783,6 +783,44 @@ test('compiled WASM camera acquisition uses original ChArUco pixels and refuses 
     }finally{builder.free();}
   });
 
+test('compiled WASM uses every printable dictionary for photo measurement and camera acquisition',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const ftx=await compiledPhotoBindings(),hash=bytes=>require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+    const names=JSON.parse(ftx.calibration_dictionaries());assert.equal(names.length,27);
+    for(const name of names) {
+      const board=new ftx.WebCalibrationSheet('letter',22,16,name);
+      let photo,builder;
+      try {
+        const bytes=board.png(),source=board.sidecar(),sheet=JSON.parse(source),b=sheet.board;
+        photo=ftx.WebPhoto.from_reference(bytes,source,'','{}');
+        const report=JSON.parse(photo.report());assert.equal(report.ok,true,name);assert.equal(report.inliers,35,name);
+        assert.equal(report.image_input.sha256,hash(bytes));
+        assert.equal(report.image_input.charuco_detection.sheet_sha256,hash(source));
+        assert.equal(report.image_input.charuco_detection.implementation.dictionary,name);
+        const pixel=(x,y)=>[b.origin_px[0]-.5+x*b.size_px[0]/176,b.origin_px[1]-.5+y*b.size_px[1]/132];
+        const measured=JSON.parse(photo.measure(JSON.stringify({across_back:[pixel(44,44),pixel(132,44)]}),'{}'));
+        assert.ok(Math.abs(measured.records[0].value_mm-88)<.2,name);
+        assert.equal(measured.records[0].provenance,'PHOTO_ESTIMATED');
+        const manifest={schema:'ftx-camera-calibration-images/1',image_model:'pinhole_zero_skew',lens_id:'synthetic-board',
+          pinhole_evidence:'Synthetic rendered board; no physical camera claim',reference_evidence:'Synthetic 22 mm squares',
+          image_size_px:[2550,3300],rotation_cw_deg:0,held_out_corner_ids:[0,6,28,34],
+          views:['a.png','b.png','c.png','check.png'].map((image,i)=>({image,frame:{stream:'synthetic',timestamp_us:i*100000},partition:i===3?'held_out':'fit'}))};
+        builder=new ftx.WebCameraCalibration(JSON.stringify(manifest),source,'');
+        const receipt=JSON.parse(builder.add_image('a.png',bytes));
+        assert.equal(receipt.corners_detected,35,name);assert.equal(receipt.detector.dictionary,name);
+        assert.throws(()=>builder.finish(),/complete|missing|acquir|views/i);
+        const wrong=structuredClone(sheet);wrong.board.dictionary=name.startsWith('DICT_7X7_')?'DICT_5X5_50':'DICT_7X7_50';
+        let rejected;
+        try {rejected=ftx.WebPhoto.from_reference(bytes,JSON.stringify(wrong),'','{}');}
+        catch(error) {assert.match(String(error),/ChArUco|marker|corner|scale/i);}
+        if(rejected)try {
+          assert.equal(JSON.parse(rejected.report()).ok,false,name);
+          assert.throws(()=>rejected.measure(JSON.stringify({across_back:[pixel(44,44),pixel(132,44)]}),'{}'));
+        } finally {rejected.free();}
+      } finally {builder?.free();photo?.free();board.free();}
+    }
+  });
+
 test('compiled WASM replays the complete native raster acquisition and accepted camera report',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_CAMERA_WEB_FIXTURES},async()=>{
     const ftx=await compiledPhotoBindings(),dir=process.env.FTX_CAMERA_WEB_FIXTURES;

@@ -51,7 +51,9 @@ struct Board {
 
 fn board(sheet: &Value) -> Result<Board, Refusal> {
     let b = &sheet["board"];
-    let capacity = b["dictionary"].as_str().and_then(ftx_core::aruco::lookup)
+    let capacity = b["dictionary"]
+        .as_str()
+        .and_then(ftx_core::aruco::lookup)
         .map_or(0, |(_, codes)| codes.len());
     let count = |name| {
         b[name]

@@ -250,7 +250,16 @@ position of that board in the photograph.
 
 By default a pure-Rust detector (`ftx_measure::photo::detect_charuco`, receipt backend
 `rust_charuco`) identifies the markers and refines the chessboard corners; it needs no Python or
-OpenCV. The optional OpenCV detector uses a local Python environment instead. Nothing is
+OpenCV. It accepts all 27 predefined dictionary names and aliases supported by the sheet generator,
+including 5×5, 6×6, 7×7, AprilTag, MIP and original ArUco sheets. Choose one with
+`ftx measure calib-sheet --paper letter --dictionary DICT_7X7_50 --out calibration --json`,
+and keep that sheet's exact JSON sidecar. Native and browser detection share the same marker data:
+the first 50 codes of the 4×4 family and the first 28 codes of each other captured table.
+These cover every generated Letter/A4 board; a name ending in `1000` does not enable an arbitrary
+1000-marker board. Detection refuses a board beyond its retained prefix. A mismatched dictionary
+cannot publish measurement records; a failed scale may remain available for diagnosis.
+
+The optional OpenCV detector uses a local Python environment instead. Nothing is
 downloaded or installed implicitly by `ftx`; the measurement library itself has no Python/OpenCV
 dependency. The tested OpenCV dependency can be installed in a separate environment:
 
@@ -596,6 +605,14 @@ protocol. The end-to-end Rust CLI tests additionally use the actual `calib-sheet
 independently calculated 88 mm landmark pairs and a known projective camera. They verify
 scale, inlier counts, click/depth uncertainty, bootstrap acceptance, repeatability,
 validation/fusion, provenance, input protection and explicit failures.
+The shared-prefix extension also exercises all 27 printable dictionary names through native,
+portable and actual compiled-WASM photo measurement and camera-image admission. A complete 7×7
+multi-view raster calibration replays identically in WASM, then scales a separate image. Actual
+Chromium uploads of Letter 5×5 and A4 7×7 sheets reproduce the native numerical reports and shared
+source receipts, including all 28 A4 marker IDs; the CLI's local-path/optional-adapter annotations
+are checked separately. Wrong-family sidecars publish no measurements and withdraw stale results.
+These are synthetic software checks, not new physical-camera accuracy or full-dictionary claims.
+
 Known-lens tests additionally render distorted pixels from a rigid tilted camera, recover
 132 mm and 200 mm distances (including landmarks beyond the board), check inverse-lens
 Jacobians independently for both lengths and angles, and reject mismatched capture metadata
