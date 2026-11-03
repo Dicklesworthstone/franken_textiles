@@ -594,33 +594,16 @@ impl Material {
 
     /// Dry through-thickness thermal resistance (m²·K/W) for the stated test condition.
     /// Prefers a measured/published resistance to thickness/conductivity. Neither branch infers
-    /// conductivity from composition, fill power, marketing warmth labels or areal mass.
+    /// conductivity from composition, fill power, marketing warmth labels or areal mass. The
+    /// canonical conduction compiler supplies form, source, evidence and conditioning admission.
+    /// Temperature-dependent observations need the steady consumer with explicit temperatures.
     ///
     /// # Errors
-    /// Incomplete, unapproved, nonpositive or non-finite thermal data.
+    /// Unsupported fiber/yarn form, incomplete or mismatched observations, unapproved estimates,
+    /// nonpositive/non-finite resistance, or a temperature-dependent law without scalar resistance.
     pub fn thermal_resistance(&self, allow_estimates: bool) -> Result<f64, Refusal> {
-        self.validate()?;
-        self.require_dry_mass_transport()?;
-        let r = if self.properties.contains_key("thermal_resistance") {
-            self.require("thermal_resistance", "m2*K/W", allow_estimates)?
-        } else {
-            let t = self.require("thickness", "m", allow_estimates)?;
-            let k = self.require("thermal_conductivity", "W/(m*K)", allow_estimates)?;
-            if t <= 0.0 || k <= 0.0 {
-                return Err(invalid(format!(
-                    "{}: thickness and conductivity must be positive",
-                    self.id
-                )));
-            }
-            t / k
-        };
-        if !r.is_finite() || r <= 0.0 {
-            return Err(invalid(format!(
-                "{}: thermal resistance must be finite and positive",
-                self.id
-            )));
-        }
-        Ok(r)
+        crate::material_thermal::ConductionLaw::from_material(self, allow_estimates)?
+            .constant_resistance()
     }
 }
 
@@ -637,6 +620,8 @@ impl ThermalStack {
     /// Adds layers in series with an explicitly supplied combined boundary-film resistance.
     /// Positive heat flow means the inner surface loses heat to the outer environment. No implicit
     /// air gaps, wind, evaporation, compression or body thermoregulation are modeled.
+    /// Layers use the canonical constant-conduction authority; temperature-dependent observations
+    /// require the existing steady solver rather than an assumed representative temperature.
     ///
     /// # Errors
     /// Empty stack, invalid boundary conditions or incomplete/invalid material thermal data.

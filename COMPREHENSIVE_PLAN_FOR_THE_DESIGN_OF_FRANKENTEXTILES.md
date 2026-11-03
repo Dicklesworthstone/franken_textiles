@@ -4961,6 +4961,20 @@ guidance keeps its independent comparison policy. This advances `ftx-ds2` and `f
 existing numerical engines; bounded exploration and synthetic replay establish no empirical
 garment fit, physical-process accuracy or global optimum.
 
+### 25.154 Keep thermal material admission consistent across consumers
+
+The original scalar material/stack API now uses the same conduction compiler as the temperature-aware
+steady engine. A fiber or yarn observation cannot silently become finished-layer resistance, and
+declared thermal specimen/conditioning identities remain mandatory in both paths. Constant stacks
+retain their existing format and arithmetic. Temperature-dependent observations require explicit face
+temperatures through the existing steady solver; no representative temperature or extrapolation is
+invented. Ordinary catalog inspection reports steady readiness independently from heat storage and
+mechanics, including source-qualified conductivity-only materials.
+
+This advances `ftx-tma` by fixing inconsistent software admission and discovery. It does not close
+the matched-specimen, uncertainty or independent thermal-validation gates. Material substitutions
+must continue to preserve usable independent consumers while refusing only unsupported capabilities.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

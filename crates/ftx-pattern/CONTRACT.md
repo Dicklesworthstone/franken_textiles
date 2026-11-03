@@ -1,5 +1,12 @@
 # ftx-pattern contract
 
+**Canonical scalar thermal admission.** `Material::thermal_resistance` and `ThermalStack` use
+`ConductionLaw::constant_resistance` after the shared form, source, evidence and declared thermal
+specimen/conditioning checks. Fiber/yarn observations remain inspectable but cannot impersonate a
+finished insulating layer. Constant stacks retain their arithmetic and output. A temperature series
+retains its domain even if its knots are equal and requires the existing temperature-aware steady
+consumer. Regressions: `thermal_conduction`; CLI inspection reports independent steady/storage readiness.
+
 **Contact-specific mechanical admission** (`Material::mechanics_for_contacts`,
 `ResolvedMaterial::mechanics_for_contacts`). Body-contact sheet mechanics can retain absent
 same-sheet friction when self-contact is disabled. `Mechanics.friction_self` is optional and

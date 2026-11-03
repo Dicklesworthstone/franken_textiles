@@ -2,7 +2,7 @@
 use ftx_pattern::{
     material_catalog::Selection,
     material_thermal::{ConductionLaw, ReportedConductionBounds, ThermalLaw},
-    materials::{Catalog, Form, Material},
+    materials::{Catalog, Form, Material, ThermalStack},
 };
 use serde_json::{Value, json};
 
@@ -212,6 +212,101 @@ fn scalar_resistance_uses_the_same_qualification_path() {
     assert_eq!(law.domain(), None);
     near(law.flux_between(-10.0, 40.0).unwrap(), -100.0);
     assert!(law.flux_between(-274.0, 0.0).is_err());
+}
+
+#[test]
+fn scalar_stack_refuses_fiber_and_yarn_without_disabling_characterized_fill() {
+    let mut m = resistance(0.4, None);
+    for form in [Form::Fiber, Form::Yarn] {
+        m.form = form;
+        m.validate().unwrap(); // The observation can be retained without becoming a sheet law.
+        assert!(ConductionLaw::from_material(&m, true).is_err());
+        assert!(m.thermal_resistance(true).is_err());
+        assert!(ThermalStack::evaluate(&[&m], 0.5, 30., 10., 0.1, true).is_err());
+    }
+    for form in [
+        Form::Woven,
+        Form::Knit,
+        Form::Nonwoven,
+        Form::Hide,
+        Form::Fill,
+    ] {
+        m.form = form;
+        near(m.thermal_resistance(true).unwrap(), 0.4);
+        let stack = ThermalStack::evaluate(&[&m], 0.5, 30., 10., 0.1, true).unwrap();
+        near(stack.resistance_m2_k_w, 0.4);
+        near(stack.heat_flow_w, 20.);
+        assert!(m.thermal_resistance(false).is_err());
+    }
+}
+
+#[test]
+fn scalar_stack_preserves_thermal_specimen_and_conditioning_admission() {
+    let input: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-variable-thermal.json"
+    ))
+    .unwrap();
+    let original: Material = serde_json::from_value(input["layers"][0]["record"].clone()).unwrap();
+    for direct in [false, true] {
+        let mut m = original.clone();
+        m.thermal_response.as_mut().unwrap().conductivity = None;
+        let mut quantity = m.properties["thickness"].clone();
+        let key = if direct {
+            quantity.value = 0.4;
+            quantity.unit = "m2*K/W".into();
+            "thermal_resistance"
+        } else {
+            quantity.value = 0.0025;
+            quantity.unit = "W/(m*K)".into();
+            "thermal_conductivity"
+        };
+        m.properties.insert(key.into(), quantity);
+        let law = ConductionLaw::from_material(&m, true).unwrap();
+        near(
+            m.thermal_resistance(true).unwrap(),
+            law.resistance_at(20.).unwrap(),
+        );
+        near(m.thermal_resistance(true).unwrap(), 0.4);
+        // A steady comparison still does not require unrelated storage observations.
+        m.properties.remove("areal_density");
+        assert!(m.thermal_resistance(true).is_ok());
+        for property in if direct {
+            vec![key]
+        } else {
+            vec![key, "thickness"]
+        } {
+            for condition in ["specimen", "conditioning"] {
+                let mut mismatched = m.clone();
+                mismatched
+                    .properties
+                    .get_mut(property)
+                    .unwrap()
+                    .conditions
+                    .insert(
+                        condition.into(),
+                        "a different observed specimen or state".into(),
+                    );
+                mismatched.validate().unwrap();
+                let expected = ConductionLaw::from_material(&mismatched, true).unwrap_err();
+                let actual = mismatched.thermal_resistance(true).unwrap_err();
+                assert_eq!(actual.message, expected.message);
+                assert!(ThermalStack::evaluate(&[&mismatched], 0.5, 30., 10., 0.1, true).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn temperature_series_stay_available_to_steady_physics_but_not_the_scalar_stack() {
+    let m = material();
+    let law = ConductionLaw::from_material(&m, true).unwrap();
+    near(law.flux_between(30., 10.).unwrap(), 50.);
+    let refusal = m.thermal_resistance(true).unwrap_err();
+    assert!(
+        refusal.message.contains("temperature-dependent"),
+        "{refusal}"
+    );
+    assert!(ThermalStack::evaluate(&[&m], 0.5, 30., 10., 0.1, true).is_err());
 }
 
 #[test]
