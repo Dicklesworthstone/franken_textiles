@@ -1386,7 +1386,7 @@ class Element {
 async function pageModule({roundToken=null,traceToken=null}={}) {
   const html = read('materials.html');
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
-  for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices'])
+  for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices','guidedDesignAfterSeams'])
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
@@ -14532,3 +14532,258 @@ test('guided motion refuses impossible path work and aggregate matrix trials bef
   const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
   assert.equal(JSON.parse(sent.scenarioRequest).cases.reduce((sum,item)=>sum+item.scenario.max_motion_trials,0),32768);
 });
+
+test('compiled WASM guided motion preserves native continuation, pose return and admitted strain',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_MOTION_BODY||!process.env.FTX_GUIDED_MOTION_NATIVE},async t=>{
+    const source=path.resolve(process.env.FTX_GUIDED_MOTION_BODY),load=name=>fs.readFileSync(path.join(source,name));
+    const pattern=load('pattern.json').toString('utf8'),body=load('body-input.json').toString('utf8'),bytes=load('model.ftxbody');
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const builder=new vm.SourceTextModule(read('materials-study-builder.js'));
+    await builder.link(()=>{throw Error('Unexpected guided-builder import');});await builder.evaluate();
+    const heavy=structuredClone(JSON.parse(pattern).fabric.material);delete heavy.expected_sha256;
+    heavy.id=heavy.record.id='synthetic-guided-motion-heavy';heavy.record.properties.areal_density.value=0.4;
+    const selection=' \r\n'+JSON.parse(ftx.material_inspect(JSON.stringify(heavy))).selection_json+'\r\n';
+    const keyframes=[{time_s:0.002,arm_abduction_deg:35.1,leg_pose:{posture:'seated',fraction:0.0001}},
+      {time_s:0.004,arm_abduction_deg:35.2,leg_pose:{posture:'squat',fraction:0.0002}},
+      {time_s:0.006,arm_abduction_deg:35}];
+    const heat=' {"schema":"ftx-steady-surface-conditions/1","boundaries":[{"inside_c":10.0,"outside_c":30.0,"inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}]}\r\n';
+    const scenario=builder.namespace.buildMaterialScenarioRequest({allowNoFit:true,
+      options:{spacing:100,sew_steps:120,drape_steps:0,step:0.001,max_settle_steps:0},
+      maxMeshPoints:4096,maxVertexFrames:2000000,surface:heat,maxMotionTrials:32,
+      motion:{keyframes,max_step_s:0.001,max_trials:16,max_pairs:100000,max_sample_vertices:10000}});
+    const study=builder.namespace.buildMaterialStudyRequest({candidates:[{key:'heavy',selection}],
+      target:{scope:'default'},pieceIds:['band'],basis:'nominal',requiredConsumers:['motion'],
+      objectives:[{metric:'motion_max_absolute_edge_strain_pct',direction:'minimize'}]},
+      {drape:true,surface:true,motion:true});
+    assert.ok(study.includes(selection));assert.ok(scenario.includes(heat));
+    const worker=await workerModule({bindings:ftx});
+    const output=await worker.send({type:'scenario',request:981,pattern,studyRequest:study,scenarioRequest:scenario,
+      measurements:body,bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+    assert.equal(output.type,'result',output.message);
+    const previous=globalThis.ftxProgress,model=new ftx.WebBody(bytes);globalThis.ftxProgress=()=>{};
+    try{assert.deepEqual(output.result,JSON.parse(ftx.material_scenario_study(model,pattern,study,scenario,body)));}
+    finally{model.free();if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;}
+    for(const [name,raw] of [['original-pattern.json',pattern],['study-request.json',study],['scenario-request.json',scenario],['body-input.json',body]])
+      assert.equal(output.files.find(file=>file.name===name).text,raw);
+    const work=process.env.FTX_GUIDED_MOTION_REPLAY?path.resolve(process.env.FTX_GUIDED_MOTION_REPLAY):
+      fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-guided-motion-'));
+    if(process.env.FTX_GUIDED_MOTION_REPLAY)fs.mkdirSync(work,{recursive:true});
+    const save=(name,raw)=>fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});
+    for(const [name,raw] of [['pattern.json',pattern],['study.json',study],['scenario.json',scenario],['body-input.json',body],['model.ftxbody',bytes]])save(name,raw);
+    const native=require('node:child_process').execFileSync(path.resolve(process.env.FTX_GUIDED_MOTION_NATIVE),
+      ['scenario-study',...['pattern.json','study.json','scenario.json','body-input.json','model.ftxbody'].map(name=>path.join(work,name))],
+      {encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:64*1024*1024});
+    assert.deepEqual(output.result,JSON.parse(native));save('native-report.json',native);
+    const report=output.result;assert.equal(report.comparison.motion_required,true);
+    for(const row of report.simulations) {
+      assert.equal(row.evaluation.status,'available',JSON.stringify(row.evaluation.refusal));
+      const initial=row.evaluation.result,motion=initial.motion;
+      assert.equal(motion.status,'available',JSON.stringify(motion.refusal));
+      const result=motion.result;assert.equal(result.duration_s,0.006);assert.equal(result.continuous_contact_checked,true);
+      assert.notEqual(result.initial_positions_sha256,result.final_positions_sha256);
+      assert.deepEqual(result.keyframes.map(({time_s,arm_abduction_deg,leg_pose})=>({time_s,arm_abduction_deg,...(leg_pose?{leg_pose}:{})})),keyframes);
+      const sample=endpoint=>result.samples[endpoint.sample_index];
+      assert.notDeepEqual(sample(result.keyframes[0]).body_positions_m,result.initial_sample.body_positions_m);
+      assert.deepEqual(sample(result.keyframes[2]).body_positions_m,result.initial_sample.body_positions_m);
+      assert.ok(result.keyframes.every(frame=>frame.surface.status==='available'&&frame.surface.result.steady.power_w<0));
+      const compared=report.comparison.alternatives.find(item=>item.key===row.key);
+      assert.equal(compared.eligible,true,JSON.stringify(compared.exclusions));
+      assert.equal(compared.readings.motion_max_absolute_edge_strain_pct.value,result.metrics.max_absolute_edge_strain_pct);
+    }
+    t.diagnostic('Generated seated/squat/standing continuation matches native, public WASM and worker reports for both material alternatives, with source-preserved requests and actual motion-strain admission. Synthetic numerical evidence only. Replay: '+work);
+  });
+
+const guidedSeamPattern=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-sewing-pattern.json'),'utf8');
+function guidedAfterDraft(p,operation) {
+  guidedDesignField(p,'guidedDesignAfterKind',operation.op,'change');
+  if(operation.op==='true_seam') {
+    guidedDesignField(p,'guidedDesignAfterSeam',operation.seam,'change');
+    guidedDesignField(p,'guidedDesignAfterEnd',operation.end,'change');
+  } else {
+    guidedDesignField(p,'guidedDesignAfterPiece',operation.piece,'change');
+    for(const option of p.e.guidedDesignAfterSeams.children)option.selected=operation.seams.includes(option.value);
+    p.e.guidedDesignAfterSeams.handlers.change();guidedDesignField(p,'guidedDesignAfterRatio',String(operation.target_ratio));
+  }
+}
+function guidedAfterAction(p,label) {
+  const button=descendants(p.e.guidedDesignAfterList).find(node=>node.tag==='button'&&node.textContent===label);
+  assert.ok(button,label);assert.equal(button.disabled,false,label);button.onclick();
+}
+const guidedTrueSeam={op:'true_seam',seam:'side',end:'start'};
+const guidedCapEase={op:'cap_ease',piece:'front',seams:['side'],target_ratio:1.1};
+function addGuidedAfter(p,operation) {
+  const before=p.e.guidedDesignAfterList.children.length;guidedAfterDraft(p,operation);p.e.guidedDesignAfterAdd.onclick();
+  assert.equal(p.e.guidedDesignAfterList.children.length,before+1,p.e.error.textContent);
+}
+
+test('guided seam adjustments preserve ordered grid and adaptive requests through the selected-body worker',async()=>{
+  for(const mode of ['grid','adaptive']) {
+    const {p,fit,body}=await guidedDesignSetup(guidedSeamPattern);
+    addGuidedAfter(p,guidedTrueSeam);addGuidedAfter(p,guidedCapEase);
+    p.e.studyTarget.value='pieces';p.e.studyTarget.handlers.change();
+    for(const option of p.e.studyPieces.children)option.selected=option.value==='back';
+    if(mode==='adaptive') {
+      guidedDesignField(p,'guidedDesignMode','adaptive','change');guidedAdaptiveDomain(p,[0,10,0,5,1]);
+      guidedDesignField(p,'guidedDesignEvaluations','4');
+    }
+    await p.e.study.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'study',p.e.error.textContent);assert.equal(sent.onBody,true);
+    assert.equal(sent.pattern,guidedSeamPattern);assert.equal(sent.measurements,body);
+    assert.ok(sent.studyRequest.includes(fit));assert.ok(sent.studyRequest.includes(guidedSelection()));
+    const request=JSON.parse(sent.studyRequest),search=request[mode==='grid'?'design_grid':'design_adaptive'];
+    assert.deepEqual(search.after,[guidedTrueSeam,guidedCapEase]);assert.equal(Object.hasOwn(request,'seamIds'),false);
+    assert.deepEqual(Object.keys(request.variants[1].changes.pieces),['back']);
+    assert.deepEqual(search.variables[0].sites.map(site=>site.piece),['front','back']);
+    const report={...studyReport(),schema:'ftx-design-study-report/1'};let freed=0;
+    const worker=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){freed++;}},
+      material_study_on_body:(_model,...args)=>{assert.deepEqual(args,[sent.pattern,sent.studyRequest,body]);return JSON.stringify(report);}}});
+    const output=await worker.send(sent);assert.equal(output.type,'result',output.message);assert.equal(freed,1);p.current().emit(output);
+    const link=descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(node=>node.download==='study-request.json');
+    assert.equal(await p.blobs.get(link.href).text(),sent.studyRequest);
+  }
+});
+
+test('guided seam adjustments change only on explicit ordered edits and clear with a new original pattern',async()=>{
+  const {p}=await guidedDesignSetup(guidedSeamPattern);addGuidedAfter(p,guidedTrueSeam);addGuidedAfter(p,guidedCapEase);
+  await p.e.study.onclick();p.emit(studyReport(),[{name:'study-request.json',text:p.current().messages.at(-1).studyRequest}]);
+  const old=p.current();guidedAfterDraft(p,{...guidedTrueSeam,end:'end'});
+  assert.equal(old.dead,false);assert.ok(p.live.size);assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,false);
+  await p.e.study.onclick();assert.deepEqual(JSON.parse(p.current().messages.at(-1).studyRequest).design_grid.after,[guidedTrueSeam,guidedCapEase]);
+  p.emit(studyReport(),[{name:'finished.json',text:'{}'}]);guidedAfterAction(p,'Replace adjustment 1 from current controls');
+  assert.equal(p.live.size,0);assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  guidedAfterAction(p,'Move adjustment 2 earlier');await p.e.study.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).studyRequest).design_grid.after,[guidedCapEase,{...guidedTrueSeam,end:'end'}]);
+  p.emit(studyReport());guidedAfterAction(p,'Move adjustment 1 later');guidedAfterAction(p,'Remove adjustment 1');
+  await p.e.study.onclick();assert.deepEqual(JSON.parse(p.current().messages.at(-1).studyRequest).design_grid.after,[guidedCapEase]);
+  p.emit(studyReport());p.e.guidedDesignAfterClear.onclick();await p.e.study.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).studyRequest).design_grid,'after'),false);p.emit(studyReport());
+  addGuidedAfter(p,guidedTrueSeam);await p.load();assert.equal(p.e.guidedDesignAfterList.children.length,0);
+  assert.equal(p.e.guidedDesign.checked,false);assert.equal(p.e.guidedDesignAfterEnd.value,'');
+  assert.equal(p.e.guidedDesignAfterRatio.value,'');assert.match(p.e.guidedDesignAfterSummary.textContent,/No seam adjustments/);
+});
+
+test('guided seam adjustments freeze pending inputs and cancel obsolete requests only after accepted edits',async()=>{
+  for(const change of ['draft','add','replace','earlier','remove','clear']) {
+    const {p,fit}=await guidedDesignSetup(guidedSeamPattern);addGuidedAfter(p,guidedTrueSeam);addGuidedAfter(p,guidedCapEase);
+    const delay=deferred();let reading=false;
+    p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return new TextEncoder().encode(await delay.promise).buffer;};
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();assert.equal(reading,true,change);
+    guidedAfterDraft(p,{...guidedTrueSeam,end:'end'});assert.equal(old.dead,false,'Unsaved controls retain the pending snapshot');
+    if(change==='add')p.e.guidedDesignAfterAdd.onclick();
+    else if(change==='replace')guidedAfterAction(p,'Replace adjustment 1 from current controls');
+    else if(change==='earlier')guidedAfterAction(p,'Move adjustment 2 earlier');
+    else if(change==='remove')guidedAfterAction(p,'Remove adjustment 1');
+    else if(change==='clear')p.e.guidedDesignAfterClear.onclick();
+    if(change!=='draft'){assert.equal(old.dead,true,change);p.ready();}
+    delay.resolve(fit);await running;
+    if(change==='draft') {
+      assert.deepEqual(JSON.parse(old.messages.at(-1).studyRequest).design_grid.after,[guidedTrueSeam,guidedCapEase]);continue;
+    }
+    assert.equal(old.messages.length,before,change);assert.equal(p.current().messages.length,0,change);
+    old.emit({type:'result',request:999,result:studyReport(),files:[{name:'stale-seam.json',text:'{}'}]});
+    assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);assert.equal(p.live.size,0);
+  }
+});
+
+test('guided seam adjustments refuse ambiguous source choices and combined work overflow without losing accepted edits',async()=>{
+  const {p}=await guidedDesignSetup(guidedSeamPattern);addGuidedAfter(p,guidedTrueSeam);
+  for(const bad of [{...guidedTrueSeam,end:''},{...guidedTrueSeam,seam:'not-an-original-seam'},
+    {...guidedCapEase,target_ratio:0},{...guidedCapEase,seams:[]}]) {
+    guidedAfterDraft(p,bad);p.e.guidedDesignAfterAdd.onclick();assert.equal(p.e.guidedDesignAfterList.children.length,1);
+    assert.equal(p.e.error.hidden,false);guidedAfterAction(p,'Replace adjustment 1 from current controls');
+    assert.equal(p.e.guidedDesignAfterList.children.length,1);
+  }
+  await p.e.study.onclick();assert.deepEqual(JSON.parse(p.current().messages.at(-1).studyRequest).design_grid.after,[guidedTrueSeam]);p.emit(studyReport());
+  while(p.e.guidedDesignAfterList.children.length<15)addGuidedAfter(p,guidedTrueSeam);
+  const before=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/16.*operations|operations.*16/i);assert.equal(p.e.guidedDesignAfterList.children.length,15);
+  const ambiguous=JSON.parse(guidedSeamPattern);ambiguous.seams.push({...ambiguous.seams[0]});
+  const duplicate=await guidedDesignSetup(JSON.stringify(ambiguous));guidedAfterDraft(duplicate.p,guidedTrueSeam);
+  duplicate.p.e.guidedDesignAfterAdd.onclick();assert.equal(duplicate.p.e.guidedDesignAfterList.children.length,0);
+  assert.match(duplicate.p.e.error.textContent,/unique|exactly one|ambiguous|one original/i);
+});
+
+test('compiled WASM guided seam adjustments preserve native fit-screened repair and adaptive cap ease',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_SEAM_BODY||!process.env.FTX_GUIDED_SEAM_NATIVE},async t=>{
+    const source=path.resolve(process.env.FTX_GUIDED_SEAM_BODY),load=name=>fs.readFileSync(path.join(source,name));
+    const body=load('body-input.json').toString('utf8'),bytes=load('model.ftxbody');
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const builder=new vm.SourceTextModule(read('materials-study-builder.js'));
+    await builder.link(()=>{throw Error('Unexpected guided-builder import');});await builder.evaluate();
+    const example=JSON.parse(fs.readFileSync(path.join(__dirname,'../examples/design-study.json'),'utf8'));
+    const selection=' \r\n'+JSON.parse(ftx.material_inspect(JSON.stringify(example.variants[0].changes.default))).selection_json+'\r\n';
+    // Reuse the accepted-body fixture's explicit numerical band on the sewing fixture's front.
+    const fit=' {"schema":"fabric-fit/1","points":[{"id":"declared-height-band","kind":"vertical","instance":"front","from":"a","to":"d","body":"stature","body_scale":0.05,"target_mm":[0.0,20.0,100.0]}]}\r\n';
+    const common={candidates:[{key:'light',selection}],target:{scope:'default'},pieceIds:['front','back'],seamIds:['side'],
+      basis:'nominal',requiredConsumers:['assembly_mass'],objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
+      assemblyMass:{schema:'ftx-assembly-mass/1',inventory_complete:true,seam_allowance_mm:0,extras:[]}};
+    const grid={variables:[{key:'length',values:[10],sites:[['front','c'],['front','d'],['back','c']].map(([piece,vertex])=>
+      ({op:'move',piece,vertex,dx_multiplier:0,dy_multiplier:1}))}],maxDesigns:1,fitSpec:fit,after:[guidedTrueSeam]};
+    const capSource=JSON.parse(guidedSeamPattern);capSource.seams[0].ratio=1.1;
+    const cap={mode:'adaptive',objective:'consumer_comparison',materialKey:'light',maxEvaluations:2,maxDesigns:1,fitSpec:fit,
+      variables:[{key:'width',boundsMm:[0,8],initialMm:0,initialStepMm:8,minimumStepMm:8,
+        sites:['front','back'].map(piece=>({piece,axis:'x',at_mm:10,multiplier:1}))}],after:[guidedCapEase]};
+    const unrepaired=structuredClone(grid);delete unrepaired.after;
+    const work=process.env.FTX_GUIDED_SEAM_REPLAY?path.resolve(process.env.FTX_GUIDED_SEAM_REPLAY):
+      fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-guided-seam-'));
+    if(process.env.FTX_GUIDED_SEAM_REPLAY)fs.mkdirSync(work,{recursive:true});
+    const save=(name,raw)=>fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});
+    save('body-input.json',body);save('model.ftxbody',bytes);
+    const worker=await workerModule({bindings:ftx}),previous=globalThis.ftxProgress,model=new ftx.WebBody(bytes);
+    globalThis.ftxProgress=()=>{};
+    try {
+      for(const [index,[name,pattern,design]] of [
+        ['trued-grid',guidedSeamPattern,grid],['unrepaired-grid',guidedSeamPattern,unrepaired],
+        ['cap-adaptive',JSON.stringify(capSource),cap]].entries()) {
+        const study=builder.namespace.buildMaterialStudyRequest({...common,design});
+        assert.ok(study.includes(selection));assert.ok(study.includes(fit));
+        const output=await worker.send({type:'study',onBody:true,request:991+index,pattern,studyRequest:study,
+          measurements:body,bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+        assert.equal(output.type,'result',output.message);
+        assert.deepEqual(output.result,JSON.parse(ftx.material_study_on_body(model,pattern,study,body)));
+        for(const [file,raw] of [['original-pattern.json',pattern],['study-request.json',study],['body-input.json',body]])
+          assert.equal(output.files.find(item=>item.name===file).text,raw);
+        save(name+'-pattern.json',pattern);save(name+'-study.json',study);
+        const native=require('node:child_process').execFileSync(path.resolve(process.env.FTX_GUIDED_SEAM_NATIVE),
+          ['study-on-body',...['-pattern.json','-study.json'].map(suffix=>path.join(work,name+suffix)),path.join(work,'body-input.json'),path.join(work,'model.ftxbody')],
+          {encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:64*1024*1024});
+        assert.deepEqual(output.result,JSON.parse(native));save(name+'-native-report.json',native);
+        const report=output.result,search=report.design_search,original=JSON.parse(pattern);
+        assert.equal(search.global_optimum_claim,false);
+        for(const baseline of report.alternatives.filter(row=>row.design.key==='baseline')) {
+          assert.deepEqual(baseline.design.operations,[]);assert.equal(baseline.design.geometry_changed,false);
+          assert.deepEqual(JSON.parse(baseline.design.altered_pattern_json),original);
+        }
+        if(name==='unrepaired-grid') {
+          assert.equal(search.generated_designs,0);assert.equal(search.fit_screening.rejected_designs,1);
+          assert.equal(search.fit_screening.qualified_designs,0);assert.ok(search.fit_screening.rows[0].refusal);
+          assert.ok(report.alternatives.every(row=>row.design.key==='baseline'));continue;
+        }
+        const selected=report.alternatives.find(row=>row.design.key!=='baseline'&&JSON.parse(row.key)[1]==='light');
+        assert.ok(selected);assert.equal(selected.binding.status,'available');assert.equal(selected.assembly_mass.status,'available');
+        assert.equal(selected.design.validation.passed,true);assert.equal(selected.design.fit.result.passed,true);
+        assert.equal(selected.design.fit.result.validation.points[0].body_mm,65);
+        assert.equal(selected.design.fit.result.body_identity.fit_claim,false);
+        assert.deepEqual(selected.design.operations.at(-1),design.after[0]);
+        const altered=JSON.parse(selected.design.altered_pattern_json);assert.deepEqual(altered.seams,original.seams);
+        const compared=report.comparison.alternatives.find(row=>row.key===selected.key);assert.equal(compared.eligible,true);
+        if(name==='trued-grid') {
+          assert.equal(search.fit_screening.qualified_designs,1);
+          for(const piece of altered.pieces)assert.deepEqual(piece.vertices,{a:[0,0],b:[20,0],c:[20,110],d:[0,110]});
+          assert.ok(Math.abs(compared.readings.assembly_mass_kg.value-0.000792)<1e-12);
+        } else {
+          assert.equal(search.evaluations,2);assert.equal(search.consumer_guidance.evaluations,2);
+          assert.equal(selected.design.variables_mm.width,0);assert.equal(search.best_trial_key,selected.design.key);
+          assert.ok(Math.abs(altered.pieces[0].vertices.c[1]-110)<1e-9);
+          assert.deepEqual(altered.pieces[1],original.pieces[1]);assert.equal(altered.seams[0].ratio,1.1);
+          assert.ok(Math.abs(compared.readings.assembly_mass_kg.value-0.000756)<1e-12);
+          assert.ok(report.alternatives.filter(row=>row.design.key==='baseline').every(row=>row.binding.status==='refused'));
+        }
+      }
+    } finally {model.free();if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;}
+    t.diagnostic('Generated true-seam grid repair, unrepaired flat refusal and two-probe cap-ease adaptive mass guidance match native, public WASM and worker reports against the accepted synthetic body. No drape or physical-fit claim. Replay: '+work);
+  });

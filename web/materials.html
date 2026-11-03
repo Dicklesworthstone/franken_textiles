@@ -471,7 +471,7 @@ endpoints; independent marks stay fixed. Canonical outline, seam and fit checks 
 <label>Listed variable values, mm before the site multipliers
 <input id="guidedDesignValues" type="text" maxlength="4096" placeholder="Enter comma-separated values in increasing order"></label>
 <p class="note">Declare 1–64 finite, strictly increasing values per variable. Each site receives its own movement from that value;
-this is not a total garment circumference adjustment. Up to 16 sites are allowed across all variables.</p>
+this is not a total garment circumference adjustment. Linked sites and the optional seam adjustments below share a limit of 16 operations per design.</p>
 </div>
 <div id="guidedDesignAdaptiveDomain" hidden>
 <div class="study-fields">
@@ -485,6 +485,33 @@ this is not a total garment circumference adjustment. Up to 16 sites are allowed
 than the initial step and the initial step no larger than the domain span. Values are millimetres before each site's multipliers.
 Grid lists and adaptive domains remain separate when switching methods.</p>
 </div>
+<fieldset><legend>Adjust seams after the linked alterations</legend>
+<p>Each candidate first applies every variable's linked sites, then runs these adjustments in their displayed order.
+Use the original pattern's seam contracts and source pieces. No adjustment runs unless you add it.</p>
+<label>Adjustment <select id="guidedDesignAfterKind"><option value="true_seam">True a seam by moving its B-side endpoint</option>
+<option value="cap_ease">Adjust sleeve-cap height to a declared ease ratio</option></select></label>
+<p id="guidedDesignAfterSourceStatus" class="note" role="status" hidden></p>
+<div id="guidedDesignAfterTrueFields" class="study-fields">
+<label>Original seam <select id="guidedDesignAfterSeam"><option value="">Choose an original seam</option></select></label>
+<label>B-side endpoint <select id="guidedDesignAfterEnd"><option value="">Choose the endpoint explicitly</option>
+<option value="start">Start</option><option value="end">End</option></select></label>
+</div>
+<div id="guidedDesignAfterCapFields" hidden>
+<label>Original sleeve-cap source piece <select id="guidedDesignAfterPiece"><option value="">Choose an original piece</option></select></label>
+<label>Original cap/armhole seams <select id="guidedDesignAfterSeams" multiple size="4" aria-label="Original seams for cap ease"></select></label>
+<label>Target total cap / armhole length ratio <input id="guidedDesignAfterRatio" type="number" min="0" step="any" placeholder="Explicit positive ratio"></label>
+</div>
+<button id="guidedDesignAfterAdd" type="button" disabled>Add seam adjustment</button>
+<p id="guidedDesignAfterSummary" class="note" role="status">No seam adjustments added.</p>
+<div id="guidedDesignAfterList"></div>
+<button id="guidedDesignAfterClear" type="button" disabled>Clear seam adjustments</button>
+<p class="note">Editing the fields prepares an adjustment; Add or Replace changes the active sequence. Order matters.
+These operations share the 16-operation limit with every linked alteration site, in both grid and adaptive search.</p>
+<p class="note">Seam truing uses the existing bounded B-side endpoint slide. Cap ease changes cap height to the declared aggregate ratio;
+it does not rewrite the original seam ratios or override each half's validation. Each operation reserves up to 64 document passes per trial
+in the native work budget. A missing root, invalid geometry or failed seam/fit check remains a refused candidate. Reduce the search allowance
+if the complete operation budget does not fit. The unchanged baseline receives none of these operations.</p>
+</fieldset>
 <div class="study-fields">
 <label>Maximum retained altered designs <input id="guidedDesignMax" type="number" min="1" max="31" step="1" value="1"></label>
 <label id="guidedDesignGridBudgetField">Maximum grid points to screen <input id="guidedDesignGridBudget" type="number" min="1" max="256" step="1"

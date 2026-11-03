@@ -240,7 +240,7 @@ Use **Add another variable** for a coupled adjustment. Each variable has its own
 1–64 strictly increasing values. **Edit**, **Move … earlier** and **Remove** preserve the other
 drafts; order matters because linked operations are applied sequentially. Merely viewing another
 variable leaves an active study running. Changing its values, sites or order cancels affected work.
-There may be at most 16 alteration sites across all variables. The vertex picker is populated only
+Linked sites and optional seam adjustments share a limit of 16 operations per design. The vertex picker is populated only
 when needed and supports up to 2048 original vertices; larger sources can still use complete design
 requests, slash-and-spread and independent material workflows.
 
@@ -268,6 +268,44 @@ The existing single-variable synthetic numerical test screens nine values and re
 adjustment, producing two 130 mm panels. Complete native, compiled-WASM and actual-worker reports
 match, and the selected bound pattern reproduces its retained cutting plan. That is software and
 declared-target evidence; physical wearer fit and continuous or global optimality remain separate.
+
+#### Adjust seams inside each candidate
+
+Under **Adjust seams after the linked alterations**, add the canonical operations that each searched
+design needs after applying all its variable sites. Both listed-grid and adaptive discovery retain
+the same ordered sequence:
+
+- **True a seam by moving its B-side endpoint:** select an original seam and explicitly choose its
+  start or end endpoint. The existing operator searches the bounded B-side slide while retaining
+  that seam's declared ratio and tolerance.
+- **Adjust sleeve-cap height to a declared ease ratio:** select the original cap piece, one or more
+  original cap/armhole seams, and a positive target total cap/armhole length ratio. The existing
+  operator adjusts cap height; original seam metadata and each half's validation remain intact.
+
+Choose **Add seam adjustment** to retain the operation. Draft field changes do not change an active
+sequence. Use **Replace … from current controls**, Move, Remove or Clear to change it explicitly.
+Operation order is preserved and can affect the resulting geometry. Exact source piece/seam names
+are required; an ambiguous seam name refuses. The picker supports up to 2048 named source seams;
+larger sources retain the complete-request workflow and other guided design operations.
+
+The total number of variable sites plus these operations must not exceed 16. Each seam-truing or
+cap-ease operation reserves 64 document passes per trial under the existing native work accounting.
+Reduce the authored search allowance if its full reservation is too large. A missing root or failed
+outline, seam or selected-body fit check remains a refused candidate, with its existing diagnostics.
+Only admitted designs continue to material and scenario consumers. No original seam contract is
+relaxed to make an alteration pass.
+
+The unchanged baseline receives no adjustments. The resulting `design_grid.after` or
+`design_adaptive.after` reaches the existing Rust evaluator unchanged, and all named cases share
+that same studied geometry. Accepted sequence edits cancel affected work; loading or adopting a
+different pattern clears the sequence. Complete study files retain their own operation policy.
+This connects existing geometry operators to design discovery and does not establish physical fit.
+
+The executable synthetic example moves three linked corners by 10 mm, then trues the original
+side seam into two 20 × 110 mm panels. Removing that explicit repair leaves the candidate refused.
+A second adaptive example adjusts a cap against its original 1.1 seam ratio and admits the selected
+geometry to assembly-mass comparison. Complete reports match across the native command, public
+WASM API and worker, including selected-body fit, preserved seam metadata and baseline refusals.
 
 #### Discover values and production tradeoffs adaptively
 

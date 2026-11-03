@@ -832,6 +832,93 @@ test('linked design authoring retains exact fit and material sources with indepe
   for(const key of ['design','designs','design_adaptive','scenario'])assert.equal(Object.hasOwn(result,key),false);
 });
 
+test('guided seam adjustments retain canonical fixture identities and ordered operations in every search mode', async () => {
+  const {buildMaterialStudyRequest:build,buildGuidedDesignAfterOperations:adjust}=await modulePromise;
+  const source=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-sewing-pattern.json'),'utf8'));
+  const pieceIds=source.pieces.map(piece=>piece.id),seamIds=source.seams.map(seam=>seam.id);
+  const after=[{op:'true_seam',seam:'side',end:'start'},
+    {op:'cap_ease',piece:'front',seams:['side'],target_ratio:1.1},{op:'true_seam',seam:'side',end:'end'}];
+  const before=JSON.stringify(after),copy=adjust(after,pieceIds,seamIds);
+  assert.deepEqual(copy,after);assert.notEqual(copy,after);
+  copy[0].end='end';copy[1].seams[0]='changed';assert.equal(JSON.stringify(after),before);
+  const legacy=linkedDesignInput({pieceIds:['front'],values:[0,10],after});
+  const grid=multiDesignInput({variables:[{key:'length',values:[0,10],sites:[
+    {piece:'front',axis:'y',at_mm:50,multiplier:1}]}],after});
+  const adaptive=adaptiveDesignInput({variables:[{key:'length',boundsMm:[0,20],initialMm:0,
+    initialStepMm:10,minimumStepMm:1,sites:grid.variables[0].sites}],after});
+  for(const design of [legacy,grid,adaptive]) {
+    const input={...state(),pieceIds,seamIds,target:{scope:'pieces',ids:['back']},design},frozen=JSON.stringify(input);
+    const raw=build(input),result=JSON.parse(raw),search=result.design_adaptive??result.design_grid;
+    assert.equal(JSON.stringify(input),frozen);assert.deepEqual(search.after,after);
+    assert.equal(Object.hasOwn(result,'seamIds'),false);assert.equal(Object.hasOwn(search,'seamIds'),false);
+    assert.ok(raw.includes(design.fitSpec));assert.ok(raw.includes(input.candidates[0].selection));
+    assert.deepEqual(Object.keys(result.variants[1].changes.pieces),['back'],'Seam adjustments do not change independent material targets');
+  }
+});
+
+test('seam adjustment authoring rejects ambiguous sources and malformed explicit operations', async () => {
+  const {buildGuidedDesignAfterOperations:build}=await modulePromise;
+  const pieces=['front','lining'],seams=['side','cap'],truing={op:'true_seam',seam:'side',end:'end'},
+    cap={op:'cap_ease',piece:'front',seams:['side','cap'],target_ratio:1.1};
+  for(const after of [null,{},'[]',[null],Array(1),Array(17).fill(truing)]) assert.throws(()=>build(after,pieces,seams));
+  for(const operation of [{},{op:'move',piece:'front',vertex:'a',dx_mm:1,dy_mm:0},
+    {...truing,extra:1},{...cap,extra:1}]) assert.throws(()=>build([operation],pieces,seams));
+  for(const end of [undefined,null,'START',0,'both']) assert.throws(()=>build([{...truing,end}],pieces,seams),/start or end/);
+  for(const seam of ['','missing',null,1]) assert.throws(()=>build([{...truing,seam}],pieces,seams));
+  for(const sourceIds of [undefined,null,{},[],['side','side']]) assert.throws(()=>build([truing],pieces,sourceIds));
+  for(const piece of ['missing','',null,1]) assert.throws(()=>build([{...cap,piece}],pieces,seams));
+  for(const selected of [[],null,{},['missing'],['side','side'],['side',undefined]]) {
+    assert.throws(()=>build([{...cap,seams:selected}],pieces,seams));
+  }
+  for(const target_ratio of [0,-0,-1,NaN,Infinity,-Infinity,'1',null,undefined]) {
+    assert.throws(()=>build([{...cap,target_ratio}],pieces,seams),/finite and positive/);
+  }
+  for(const target_ratio of [0.1,4,Number.MIN_VALUE,Number.MAX_VALUE]) {
+    assert.equal(build([{...cap,target_ratio}],pieces,seams)[0].target_ratio,target_ratio,
+      'The native 0.3–3 cap-height search interval is not a target-ratio limit; root refusal remains native');
+  }
+  assert.deepEqual(build([truing],pieces,['side','other','other',undefined,null]),[truing],
+    'Only the selected source identity must be unique here; Rust still validates the complete pattern');
+  const inherited=Object.create({end:'end'});Object.assign(inherited,{op:'true_seam',seam:'side'});
+  assert.throws(()=>build([inherited],pieces,seams),/missing/);
+});
+
+test('all linked sites and seam adjustments share the native sixteen-operation allowance before source reads', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const operation={op:'true_seam',seam:'side',end:'end'};
+  for(const design of [linkedDesignInput(),multiDesignInput(),adaptiveDesignInput()]) {
+    const sites=design.variables?.reduce((sum,variable)=>sum+variable.sites.length,0)??design.pieceIds.length;
+    const after=Array.from({length:16-sites},()=>({...operation}));
+    const result=JSON.parse(build({...state(),seamIds:['side'],design:{...design,after}}));
+    assert.equal((result.design_grid??result.design_adaptive).after.length,16-sites);
+    let reads=0;const candidates=[{key:'alternative',get selection(){reads++;throw Error('Unread material snapshot');}}];
+    assert.throws(()=>build({...state(),candidates,seamIds:['side'],design:{...design,after:[...after,operation]}}),/16 ordered alteration operations/);
+    assert.equal(reads,0);
+  }
+});
+
+test('omitted seam adjustments preserve old request bytes and explicit empty lists retain authored intent', async () => {
+  const {buildMaterialStudyRequest:build,buildGuidedDesignAfterOperations:adjust}=await modulePromise;
+  assert.deepEqual(adjust([]),[]);
+  for(const design of [linkedDesignInput(),multiDesignInput(),adaptiveDesignInput()]) {
+    const input={...state(),design},before=build(input);
+    assert.equal(build({...input,seamIds:['side','side']}),before,'Unused source identity context does not enter the request');
+    const empty=build({...input,design:{...design,after:[]}}),result=JSON.parse(empty);
+    assert.deepEqual((result.design_grid??result.design_adaptive).after,[]);
+    assert.equal(empty.replace(',"after":[]',''),before);
+  }
+});
+
+test('seam adjustment names share the complete search request byte budget without rewriting source identities', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const seam='é'.repeat(128*1024),after=[{op:'true_seam',seam,end:'start'}];
+  for(const design of [linkedDesignInput(),adaptiveDesignInput()]) {
+    let reads=0;const candidates=[{key:'alternative',get selection(){reads++;throw Error('Unread material snapshot');}}];
+    assert.throws(()=>build({...state(),candidates,seamIds:[seam],design:{...design,after}}),/exceeds 256 KiB/);
+    assert.equal(reads,0);
+  }
+});
+
 test('linked design rejects invalid or nonfinite sites and domains without sorting or dropping values', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const check=design=>build({...state(),design});
@@ -1057,7 +1144,7 @@ test('grid and adaptive inputs never mix policies and explicit grid mode preserv
   assert.equal(check({...grid,mode:'grid'}),check(grid));
   for(const mode of ['',null,undefined,'adaptive_grid'])assert.throws(()=>check({...grid,mode}),/grid or adaptive/);
   for(const extra of [{maxCandidates:2},{values:[0,1]},{caseKey:'winter'},{restartPointsMm:[]},
-    {after:[]},{maxEvaluations:undefined}])assert.throws(()=>check({...adaptive,...extra}));
+    {after:null},{maxEvaluations:undefined}])assert.throws(()=>check({...adaptive,...extra}));
   for(const extra of [{objective:'fit_band_violation_mm'},{materialKey:'baseline'},{maxEvaluations:8}]) {
     assert.throws(()=>check({...grid,...extra}),/unsupported/);
   }

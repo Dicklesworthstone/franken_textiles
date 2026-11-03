@@ -1,5 +1,6 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
-import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest } from "./materials-study-builder.js";
+import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest,
+  buildGuidedDesignAfterOperations } from "./materials-study-builder.js";
 
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
@@ -33,6 +34,8 @@ const combinationGroups = new Map();
 const studyCandidates = [];
 const guidedDesignVariables = [];
 const guidedDesignButtons = [];
+const guidedDesignAfter = [], guidedDesignAfterButtons = [];
+let guidedDesignAfterSource = null, guidedDesignAfterProblem = "";
 let guidedDesignCurrent = 0;
 let guidedDesignVertexSource = null, guidedDesignVertexProblem = "";
 let guidedDesignNomination = null;
@@ -211,6 +214,16 @@ function controls() {
   $("guidedDesignVertices").disabled ||= !!guidedDesignVertexProblem;
   $("guidedDesignAdd").disabled = !source || !$("guidedDesign").checked || guidedDesignVariables.length >= 3;
   for (const { button, unavailable } of guidedDesignButtons) button.disabled = !source || !$("guidedDesign").checked || unavailable;
+  const afterActive = !!source && guided && $("guidedDesign").checked;
+  if (afterActive) ensureGuidedDesignAfterSources();
+  const capEase = $("guidedDesignAfterKind").value === "cap_ease";
+  $("guidedDesignAfterTrueFields").hidden = capEase;
+  $("guidedDesignAfterCapFields").hidden = !capEase;
+  for (const id of ["guidedDesignAfterKind", "guidedDesignAfterSeam", "guidedDesignAfterEnd", "guidedDesignAfterPiece",
+    "guidedDesignAfterSeams", "guidedDesignAfterRatio"]) $(id).disabled = !afterActive || !!guidedDesignAfterProblem;
+  $("guidedDesignAfterAdd").disabled = !afterActive || !!guidedDesignAfterProblem || guidedDesignAfter.length >= 16;
+  $("guidedDesignAfterClear").disabled = !guidedDesignAfter.length;
+  for (const { button, unavailable } of guidedDesignAfterButtons) button.disabled = !afterActive || unavailable;
   const stockMode = guidedStockMode(), cutting = $("guidedCutting").checked;
   for (const [mode, prefix] of [["roll", "guidedRoll"], ["finite", "guidedFinite"], ["job", "guidedJob"]]) {
     for (const suffix of ["Sources", "Goals", "Required"]) $(prefix + suffix).hidden = stockMode !== mode;
@@ -4096,7 +4109,10 @@ async function guidedStudyInput(scenarioRead) {
   // original UTF-8 fragments reach Rust without JS number reserialization or BOM replacement.
   const input = { candidates: studyCandidates.map(candidate => ({ ...candidate })), target,
     pieceIds: source.pieces.map(p => p.id), ...(cutting ? { cutting } : {}), ...guidedComparisonInput(number, stockMode) };
-  if ($("guidedDesign").checked) input.design = guidedDesignInput(number, !!scenarioRead);
+  if ($("guidedDesign").checked) {
+    input.design = guidedDesignInput(number, !!scenarioRead);
+    if (guidedDesignAfter.length) input.seamIds = guidedDesignSeamIds();
+  }
   const nominatedCaseSource = input.design?.caseKey ? guidedDesignCaseNomination?.source : undefined;
   const retained = [], budget = 16 * 1024 * 1024;
   let sourceBytes = 0;
@@ -4601,6 +4617,13 @@ $("clearStudyCandidates").onclick = () => {
 };
 $("studyMode").addEventListener("change", () => invalidate(["study", "scenario",
   ...($("guidedScenarioPolicySource").value === "snapshot" ? ["scenarioDraft"] : [])], true));
+$("guidedDesignAfterAdd").onclick = () => saveGuidedDesignAfter();
+$("guidedDesignAfterClear").onclick = () => { guidedDesignAfter.length = 0; changedGuidedDesignAfter(); };
+for (const id of ["guidedDesignAfterKind", "guidedDesignAfterSeam", "guidedDesignAfterEnd", "guidedDesignAfterPiece",
+  "guidedDesignAfterSeams", "guidedDesignAfterRatio"]) {
+  $(id).addEventListener("change", controls);
+  if (id === "guidedDesignAfterRatio") $(id).addEventListener("input", controls);
+}
 for (const id of ["guidedMaterialStrain", "guidedMaterialStrainScope", "guidedMaterialStrainInstances", "guidedMaterialStrainBudget"]) {
   $(id).addEventListener("change", changedGuidedScenarioDraft);
   if (!["guidedMaterialStrain", "guidedMaterialStrainScope"].includes(id)) $(id).addEventListener("input", changedGuidedScenarioDraft);
@@ -4731,6 +4754,91 @@ function parsePattern(raw) {
   if (!Array.isArray(data?.pieces) || data.pieces.length > 4096) throw Error("Pattern needs at most 4096 source pieces.");
   return data;
 }
+function guidedDesignSeamIds() {
+  return (Array.isArray(source?.seams) ? source.seams : []).map(seam => seam?.id).filter(id => typeof id === "string");
+}
+function ensureGuidedDesignAfterSources() {
+  if (!source || guidedDesignAfterSource === source) return;
+  guidedDesignAfterSource = source; guidedDesignAfterProblem = "";
+  for (const id of ["guidedDesignAfterSeam", "guidedDesignAfterPiece", "guidedDesignAfterSeams"]) $(id).replaceChildren();
+  const option = (id, value, label) => {
+    const node = document.createElement("option"); node.value = value; node.textContent = label; $(id).append(node);
+  };
+  option("guidedDesignAfterSeam", "", "Choose an original seam");
+  option("guidedDesignAfterPiece", "", "Choose an original piece");
+  const seams = guidedDesignSeamIds().filter(id => id.trim());
+  if (seams.length > 2048) {
+    guidedDesignAfterProblem = "The guided seam selector supports up to 2048 named source seams. Use a complete design request for this larger source; linked alterations without these adjustments remain available.";
+  } else {
+    for (const id of seams) {
+      option("guidedDesignAfterSeam", id, id); option("guidedDesignAfterSeams", id, id);
+    }
+    for (const piece of source.pieces) option("guidedDesignAfterPiece", piece.id, piece.id);
+  }
+  $("guidedDesignAfterSourceStatus").textContent = guidedDesignAfterProblem ||
+    (!seams.length ? "The original pattern has no named seams to select. Other linked alterations remain available." : "");
+  $("guidedDesignAfterSourceStatus").hidden = !$("guidedDesignAfterSourceStatus").textContent;
+  $("guidedDesignAfterSeam").value = ""; $("guidedDesignAfterPiece").value = "";
+}
+function showGuidedDesignAfter() {
+  const parent = $("guidedDesignAfterList"); parent.replaceChildren(); guidedDesignAfterButtons.length = 0;
+  for (const [index, operation] of guidedDesignAfter.entries()) {
+    const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
+    label.textContent = `${index + 1}: ` + (operation.op === "true_seam" ?
+      `true ${operation.seam}, B-side ${operation.end}.` :
+      `cap ease on ${operation.piece}, seams ${operation.seams.join(", ")}, total ratio ${operation.target_ratio}.`);
+    row.append(label);
+    const action = (title, handler, unavailable = false) => {
+      const button = document.createElement("button"); button.type = "button"; button.textContent = title; button.onclick = handler;
+      guidedDesignAfterButtons.push({ button, unavailable }); row.append(button);
+    };
+    action(`Replace adjustment ${index + 1} from current controls`, () => saveGuidedDesignAfter(operation));
+    action(`Move adjustment ${index + 1} earlier`, () => {
+      const i = guidedDesignAfter.indexOf(operation); if (i <= 0) return;
+      [guidedDesignAfter[i - 1], guidedDesignAfter[i]] = [guidedDesignAfter[i], guidedDesignAfter[i - 1]];
+      changedGuidedDesignAfter();
+    }, index === 0);
+    action(`Move adjustment ${index + 1} later`, () => {
+      const i = guidedDesignAfter.indexOf(operation); if (i < 0 || i + 1 >= guidedDesignAfter.length) return;
+      [guidedDesignAfter[i], guidedDesignAfter[i + 1]] = [guidedDesignAfter[i + 1], guidedDesignAfter[i]];
+      changedGuidedDesignAfter();
+    }, index + 1 === guidedDesignAfter.length);
+    action(`Remove adjustment ${index + 1}`, () => {
+      const i = guidedDesignAfter.indexOf(operation); if (i < 0) return;
+      guidedDesignAfter.splice(i, 1); changedGuidedDesignAfter();
+    });
+    parent.append(row);
+  }
+  $("guidedDesignAfterSummary").textContent = guidedDesignAfter.length ?
+    `${guidedDesignAfter.length} ordered seam adjustments. These share the 16-operation limit with every linked site.` :
+    "No seam adjustments added. Linked alterations retain the original seam checks.";
+}
+function changedGuidedDesignAfter() {
+  showGuidedDesignAfter();
+  if (guidedStudyMode() && $("guidedDesign").checked) invalidate(["study", "scenario"], true);
+  else controls();
+}
+function saveGuidedDesignAfter(replacing = null) {
+  if (!source || !guidedStudyMode() || !$("guidedDesign").checked) return;
+  try {
+    ensureGuidedDesignAfterSources();
+    if (guidedDesignAfterProblem) throw Error(guidedDesignAfterProblem);
+    const kind = $("guidedDesignAfterKind").value;
+    let operation;
+    if (kind === "true_seam") operation = { op: kind, seam: $("guidedDesignAfterSeam").value, end: $("guidedDesignAfterEnd").value };
+    else if (kind === "cap_ease") {
+      const ratio = $("guidedDesignAfterRatio").value.trim();
+      if (!ratio) throw Error("Declare a positive target total cap / armhole length ratio.");
+      operation = { op: kind, piece: $("guidedDesignAfterPiece").value,
+        seams: Array.from($("guidedDesignAfterSeams").selectedOptions, option => option.value), target_ratio: Number(ratio) };
+    } else throw Error("Choose seam truing or cap ease.");
+    const operations = guidedDesignAfter.slice(), index = replacing ? operations.indexOf(replacing) : -1;
+    if (replacing && index < 0) throw Error("Choose a current adjustment to replace.");
+    if (replacing) operations[index] = operation; else operations.push(operation);
+    const retained = buildGuidedDesignAfterOperations(operations, source.pieces.map(piece => piece.id), guidedDesignSeamIds());
+    guidedDesignAfter.splice(0, guidedDesignAfter.length, ...retained); changedGuidedDesignAfter();
+  } catch (e) { error(String(e.message || e)); }
+}
 function newGuidedDesignVariable(key = "linked_adjustment") {
   return { key, kind: "slash", axis: "x", at: "", multiplier: "1", values: "", dx: "", dy: "",
     lower: "", upper: "", initial: "", initialStep: "", minimumStep: "", pieces: [], vertices: [] };
@@ -4847,7 +4955,9 @@ function guidedDesignInput(number, inScenario) {
     } else throw Error("Choose slash-and-spread or source-vertex movement.");
     return { key: draft.key, ...domain, sites };
   });
-  const common = { variables, maxDesigns: number("guidedDesignMax", "maximum retained altered designs") };
+  const common = { variables, maxDesigns: number("guidedDesignMax", "maximum retained altered designs"),
+    ...(guidedDesignAfter.length ? { after: guidedDesignAfter.map(operation => ({ ...operation,
+      ...(operation.seams ? { seams: [...operation.seams] } : {}) })) } : {}) };
   if (mode === "grid") return { ...common,
     ...($("guidedDesignGridBudget").value.trim() ? { maxCandidates: number("guidedDesignGridBudget", "grid screening allowance") } : {}) };
   const objective = $("guidedDesignObjective").value;
@@ -4868,6 +4978,10 @@ function resetGuidedDesign() {
   $("guidedDesign").checked = false;
   $("guidedDesignPieces").replaceChildren();
   $("guidedDesignVertices").replaceChildren();
+  guidedDesignAfter.length = 0; guidedDesignAfterSource = null; guidedDesignAfterProblem = "";
+  for (const id of ["guidedDesignAfterSeam", "guidedDesignAfterPiece", "guidedDesignAfterSeams"]) $(id).replaceChildren();
+  $("guidedDesignAfterKind").value = "true_seam"; $("guidedDesignAfterEnd").value = ""; $("guidedDesignAfterRatio").value = "";
+  $("guidedDesignAfterSourceStatus").textContent = ""; $("guidedDesignAfterSourceStatus").hidden = true; showGuidedDesignAfter();
   guidedDesignVertexSource = null; guidedDesignVertexProblem = "";
   $("guidedDesignVertexStatus").textContent = ""; $("guidedDesignVertexStatus").hidden = true;
   guidedDesignVariables.length = 0; guidedDesignVariables.push(newGuidedDesignVariable()); guidedDesignCurrent = 0;

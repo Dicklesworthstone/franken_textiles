@@ -5090,6 +5090,24 @@ resource-constrained scheduling, not measured throughput, occupied-fixture trans
 clamping, grip adequacy, robot motion or hardware authorization. Those physical qualifications
 remain open under `ftx-pb2.2` and `ftx-sp2`.
 
+### 25.161 Keep seam compatibility inside guided design discovery
+
+Guided grid and adaptive searches now retain an explicit ordered sequence of canonical seam-truing
+and sleeve-cap-ease operations after every variable's linked sites. The editor selects original seam
+and piece identities, requires the B-side endpoint or cap ratio, and preserves operation order.
+Their combined operation and root-search reservations remain with the existing design engine.
+
+Each candidate still passes ordinary outline, original seam-contract and selected-body fit checks
+before material and scenario evaluation. Failed roots retain the existing refusal; the original
+baseline receives no operations. All named cases share the same prepared geometry, and saved
+sequence changes invalidate dependent work while draft fields remain separate. This advances
+`ftx-ds2` through existing alteration and discovery authorities, without inferred repairs, relaxed
+seam contracts or empirical garment-fit claims.
+
+Actual native, public WASM and worker reports agree for a repaired linked grid, its unrepaired
+refusal and a cap-ease adaptive search with real manufacturing probes. These synthetic selected-body
+cases verify the connected operations and admission path; measured garment acceptance stays open.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

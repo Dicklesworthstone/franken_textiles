@@ -433,7 +433,44 @@ function adaptiveGuidance(design, candidates, comparison, matrix) {
   }
 }
 
-function linkedDesign(value, pieces, candidates, comparison, matrix) {
+/** Author ordered canonical seam adjustments; root finding and geometry admission stay in Rust. */
+export function buildGuidedDesignAfterOperations(after, pieceIds, seamIds) {
+  if (!Array.isArray(after) || after.length > 16) throw Error("Choose at most 16 ordered seam adjustments.");
+  if (!after.length) return [];
+  const pieces = uniqueNames(pieceIds, "Pattern source pieces", 4096);
+  if (!Array.isArray(seamIds)) throw Error("Seam adjustments require the original source seam identities.");
+  const counts = new Map();
+  for (const id of seamIds) if (typeof id === "string") counts.set(id, (counts.get(id) || 0) + 1);
+  const seam = id => {
+    name(id, "Adjusted source seam");
+    if (counts.get(id) !== 1) throw Error(`Seam adjustment needs exactly one original source seam named ${id}.`);
+  };
+  return Array.from(after, value => {
+    if (value?.op === "true_seam") {
+      object(value, ["op", "seam", "end"], ["op", "seam", "end"], "Seam truing");
+      seam(value.seam);
+      if (!["start", "end"].includes(value.end)) throw Error("Seam truing needs an explicit B-side start or end endpoint.");
+      return { op: "true_seam", seam: value.seam, end: value.end };
+    }
+    if (value?.op !== "cap_ease") throw Error("Guided seam adjustments support only true_seam and cap_ease.");
+    object(value, ["op", "piece", "seams", "target_ratio"], ["op", "piece", "seams", "target_ratio"], "Cap ease");
+    name(value.piece, "Cap source piece");
+    if (!pieces.has(value.piece)) throw Error("Cap ease names a missing source piece.");
+    if (!Array.isArray(value.seams) || !value.seams.length) throw Error("Cap ease needs at least one original source seam.");
+    const selected = new Set();
+    for (const id of value.seams) {
+      seam(id);
+      if (selected.has(id)) throw Error("Cap-ease seam names must be unique.");
+      selected.add(id);
+    }
+    if (typeof value.target_ratio !== "number" || !Number.isFinite(value.target_ratio) || value.target_ratio <= 0) {
+      throw Error("Cap-ease target ratio must be finite and positive.");
+    }
+    return { op: "cap_ease", piece: value.piece, seams: [...value.seams], target_ratio: value.target_ratio };
+  });
+}
+
+function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
   const multiple = !!value && typeof value === "object" && own(value, "variables");
   const mode = multiple && own(value, "mode") ? value.mode : "grid";
   if (!["grid", "adaptive"].includes(mode)) throw Error("Choose grid or adaptive linked design mode.");
@@ -442,7 +479,8 @@ function linkedDesign(value, pieces, candidates, comparison, matrix) {
     ["pieceIds", "axis", "atMm", "multiplier", "values", "maxDesigns", "fitSpec"];
   const required = adaptive ? [...fields, "mode", "objective", "maxEvaluations"] : fields;
   const allowed = adaptive ? [...required, "materialKey", "caseKey"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
-  const design = object(value, allowed, required, "Linked design");
+  const design = object(value, [...allowed, "after"], required, "Linked design");
+  const after = own(design, "after") ? buildGuidedDesignAfterOperations(design.after, [...pieces], seamIds) : undefined;
   if (adaptive) {
     if (!Number.isSafeInteger(design.maxEvaluations) || design.maxEvaluations < 1 || design.maxEvaluations > 256) {
       throw Error("The adaptive evaluation allowance must be an integer from 1 to 256.");
@@ -458,7 +496,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix) {
   }
   if (!Array.isArray(authored) || !authored.length || authored.length > 3) throw Error("Linked design needs 1–3 variables.");
   const keys = new Set();
-  let totalPoints = 1, totalSites = 0;
+  let totalPoints = 1, totalSites = after?.length ?? 0;
   const variables = Array.from(authored, value => {
     const fields = adaptive ? ["key", "boundsMm", "initialMm", "initialStepMm", "minimumStepMm", "sites"] : ["key", "values", "sites"];
     const variable = object(value, fields, fields, "Linked variable");
@@ -468,7 +506,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix) {
     const values = adaptive ? adaptiveDomain(variable) : linkedValues(variable.values);
     if (!Array.isArray(variable.sites) || !variable.sites.length) throw Error("Each linked variable needs alteration sites.");
     totalSites += variable.sites.length;
-    if (totalSites > 16) throw Error("Linked design exceeds 16 ordered alteration sites per generated design.");
+    if (totalSites > 16) throw Error("Linked design exceeds 16 ordered alteration operations including variable sites and seam adjustments.");
     const sites = Array.from(variable.sites, site => linkedSite(site, pieces, values));
     if (adaptive) return { key: variable.key, bounds_mm: variable.boundsMm, initial_mm: variable.initialMm,
       initial_step_mm: variable.initialStepMm, minimum_step_mm: variable.minimumStepMm, sites };
@@ -501,8 +539,9 @@ function linkedDesign(value, pieces, candidates, comparison, matrix) {
   const search = JSON.stringify(adaptive ? { objective: design.objective,
     ...(own(design, "materialKey") ? { material_key: design.materialKey } : {}),
     ...(own(design, "caseKey") ? { case_key: design.caseKey } : {}), variables,
+    ...(after === undefined ? {} : { after }),
     max_evaluations: design.maxEvaluations, max_designs: design.maxDesigns } :
-    { variables, max_designs: design.maxDesigns, fit_screening: { max_candidates: maxCandidates } });
+    { variables, ...(after === undefined ? {} : { after }), max_designs: design.maxDesigns, fit_screening: { max_candidates: maxCandidates } });
   bytes(search, 256 * 1024, `Linked design ${mode} exceeds 256 KiB of authored domain data.`);
   return { [adaptive ? "adaptive" : "grid"]: search, fitSpec: design.fitSpec, retainedDesigns: retained + 1,
     probes: adaptive && design.objective !== "fit_band_violation_mm" ? design.maxEvaluations : 0 };
@@ -566,6 +605,8 @@ function matrixContext(value) {
  * caller retains the original matrix JSON for native admission and exact replay.
  * Optional `design` authors ordered linked grid or adaptive variables and retains the original fit contract;
  * the original single-slash-variable shape remains supported without changing its serialized request.
+ * Its optional `after` applies explicit seam adjustments after those sites, under the same operation cap.
+ * `seamIds` are original source identities for these adjustments and never enter the study request.
  * Selected-body dispatch and canonical geometry/fit/consumer admission remain with the caller and Rust.
  */
 export function buildMaterialStudyRequest(state, scenario) {
@@ -587,7 +628,7 @@ export function buildMaterialStudyRequest(state, scenario) {
       }
     }
   }
-  object(state, ["candidates", "target", "pieceIds", "cutting", "finiteStock", "cuttingJob", "assemblyMass", "objectives", "basis",
+  object(state, ["candidates", "target", "pieceIds", "seamIds", "cutting", "finiteStock", "cuttingJob", "assemblyMass", "objectives", "basis",
     "sewing", "sewingSelection", "purchasing", "cutAndSewPurchasing", "constraints", "requiredConsumers", "design"],
     ["candidates", "target", "pieceIds", "objectives", "basis"], "Guided study");
   const pieces = uniqueNames(state.pieceIds, "Pattern source pieces", 4096);
@@ -602,7 +643,7 @@ export function buildMaterialStudyRequest(state, scenario) {
   }
   if (!["nominal", "reported_bounds"].includes(state.basis)) throw Error("Choose nominal or reported-bound comparison.");
   const design = own(state, "design") ? linkedDesign(state.design, pieces, state.candidates,
-    { basis: state.basis, objectives: state.objectives }, matrix) : null;
+    { basis: state.basis, objectives: state.objectives }, matrix, state.seamIds) : null;
   if (matrix) {
     const slots = ((design?.retainedDesigns ?? 1) * (state.candidates.length + 1) + (design?.probes ?? 0)) * matrix.cases.length;
     if (slots > matrix.maxEvaluations) {
