@@ -5050,6 +5050,22 @@ fixed-root vertex-chord path, source-model poses and computed edge metric do not
 validity, measured garment fit or a safe strain threshold. Transient and coupled transport policies
 retain their original-file route and independent qualification requirements.
 
+### 25.159 Prepare source-origin materials through ordinary browser controls
+
+The workbench now authors the existing bounded-origin request from an exact inspected material,
+six explicitly chosen Green-strain limits and a dated approximation rationale. The inspected
+selection must already admit estimates; a separate confirmation applies to the newly authored
+local approximation. No domain is prefilled, no source quantity is rounded through JavaScript,
+and no policy is changed under an existing frozen digest.
+
+The worker invokes the same WASM evaluator and adopts its exact selection JSON for ordinary
+inspection, pattern-piece binding and comparison. Downloads retain the exact request, report and
+derived selection. The original source remains available for domain revision; changing inputs or
+sources withdraws obsolete results and cancels dependent temperature work. Actual compiled-WASM
+tests cover source inspection, preparation, download/adoption and real piece binding, alongside
+domain, evidence, unstable-source and cancellation refusals. This closes the browser delivery
+slice `ftx-wg3`; incomplete mechanics and empirical garment qualification remain explicit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

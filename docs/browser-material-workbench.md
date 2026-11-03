@@ -41,6 +41,30 @@ portable `Selection` JSON containing a local characterization record. The page d
 pages or add a second database. Estimates remain disabled unless the selection explicitly admits them.
 A source-locked record cannot be modified while keeping its old digest.
 
+**Prepare a bounded membrane approximation from published fabric stiffness** turns an inspected
+Wang et al. (2011) source origin into the ordinary bounded material law through
+`material_linearize_origin`, the same core as `ftx materials linearize-origin`. Inspect a selection
+with `allow_estimates:true`, explicitly enter all six limits for `[E11, E22, 2E12]`, and supply an
+approximation reference, access date and rationale. The controls start empty. Each interval must span
+zero; the core checks the physical domain, source/specimen/basis consistency and tangent stability.
+The browser performs no stiffness calculation and chooses no validity interval. Confirm the local
+estimate separately; this confirmation resets when the selected source changes. Admission is part of
+the frozen material identity, so the page never flips `allow_estimates` under an existing digest.
+
+The result displays the authored domain, source identity, dated rationale, tangent and model scope,
+and inspects the exact returned `selection_json`. Assign that selection to an original pattern piece
+or add it to the ordinary material comparison. Downloads retain the exact source report, portable
+derived selection and request containing the original frozen source. Changing the domain or rationale
+withdraws the prepared result and restores the original source in the editor, so preparing again does
+not accidentally approximate an already-derived law. Cancellation and source edits defeat late worker
+results. An already assigned or shortlisted material remains its explicit immutable snapshot.
+
+This is an estimated constant tangent on the operator's declared Green-strain box, not the paper's
+complete nonlinear model or an empirically measured validity range. Existing incomplete material
+capabilities remain incomplete: no bending, contact friction, thickness or thermal data is supplied.
+The source with an unstable origin block still refuses in the shared core. See
+[wang2011-materials.md](wang2011-materials.md) for the model and native workflow.
+
 Load an original `fabric-pattern/1` pattern and assign an inspected selection to its default or an exact
 source-piece ID. A source-piece assignment affects that piece's mirrored/cut instances. Freeze and bind
 creates a new in-memory pattern through `ftx_pattern::material_binding::Changes`; it never edits the

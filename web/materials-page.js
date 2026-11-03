@@ -4,13 +4,16 @@ import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialSce
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "stockIdentities", "stockPrice", "cutJob", "price", "sew", "sewPreview"];
-const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "treatment", "vapor", "calibrate",
+const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "linearizeOrigin", "treatment", "vapor", "calibrate",
   "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode", "bodyCheck"];
-const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
+const selectionOperations = ["inspect", "pressure", "linearizeOrigin", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
 let patternTransfer = null;
 let preparedBy = null;
+let originSource = null;
+const originDomainFields = [["originWarpMin", "originWarpMax"], ["originWeftMin", "originWeftMax"], ["originShearMin", "originShearMax"]];
+const originRationaleFields = ["originReference", "originAccessedOn", "originNote"];
 let preparedTreatment = null;
 let preparedImport = null, adoptedImport = false, selectedImportFit = null;
 let sourceText = null, outfit = null;
@@ -74,7 +77,8 @@ for (const op of operations) {
   const section = document.createElement("div"); section.hidden = true;
   const title = document.createElement("h3"); title.textContent = ({ screen: "Source-qualified screening",
     study: "Fixed-pattern manufacturing alternatives", scenario: "Fresh drape and heat alternatives",
-    pressure: "Pressure-conditioned material", treatment: "Laundering and dimensional treatment", vapor: "Potential evaporative transfer", calibrate: "Identified material behavior",
+    pressure: "Pressure-conditioned material", linearizeOrigin: "Bounded origin membrane approximation",
+    treatment: "Laundering and dimensional treatment", vapor: "Potential evaporative transfer", calibrate: "Identified material behavior",
     thermalPoint: "Material at the stated temperature", thermalHistory: "Dry heating and cooling history",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
     stripHistory: "Strip loading and recovery", vaporSurface: "Vapor transfer on this drape",
@@ -217,6 +221,8 @@ function controls() {
   $("clearInterfaces").disabled = interfaceChange === null && interfaceReady;
   for (const op of boundOperations) $(op).disabled ||= !bound;
   $("screen").disabled ||= !has("screenRequest");
+  $("linearizeOrigin").disabled ||= !originSource?.allowEstimates || !$("originEstimates").checked ||
+    [...originDomainFields.flat(), ...originRationaleFields].some(id => !$(id).value.trim());
   $("pressure").disabled ||= !has("compressionRequest");
   $("treatment").disabled ||= !has("treatmentRequest");
   $("useTreatment").disabled = !ready || !!pending || !preparedTreatment;
@@ -2242,9 +2248,41 @@ function vaporComparison(op, parent, alternatives) {
     }
   }
 }
+function resetOriginSource() {
+  originSource = null; $("originEstimates").checked = false;
+  $("originSourceSummary").textContent = "Inspect an exact source selection before preparing an approximation.";
+  clear(["linearizeOrigin"]);
+}
+function originRequest() {
+  if (!originSource) throw Error("Inspect an exact source selection before preparing an approximation.");
+  if (!originSource.allowEstimates) throw Error("Author and inspect a new selection with allow_estimates:true before preparing an estimated law. Do not edit an existing digest in place.");
+  if (!$("originEstimates").checked) throw Error("Explicitly admit the estimated local law over your authored strain domain.");
+  const domain = originDomainFields.map(pair => pair.map(id => {
+    const value = $(id).value.trim();
+    if (!value || !Number.isFinite(Number(value))) throw Error("Supply all six finite Green strain limits; no domain is inferred.");
+    return Number(value);
+  }));
+  const [reference, accessed_on, note] = originRationaleFields.map(id => $(id).value.trim());
+  if (!reference || !accessed_on || !note) throw Error("Supply an approximation reference, access date and rationale for this domain.");
+  // Only the operator's new fields are serialized here. Preserve the source's exact Rust JSON,
+  // including its evidence policy and digest; all constitutive admission stays in the core.
+  return `{"schema":"ftx-wang2011-linearization/1","material":${originSource.selectionJson},` +
+    `"green_strain_domain":${JSON.stringify(domain)},"approximation_source":${JSON.stringify({ reference, accessed_on, note })}}`;
+}
 function inspectResult(r, selectionJson) {
   clear(["thermalPoint"]);
   inspected = selectionJson || r.selection_json || text(r.selection);
+  if (preparedBy !== "linearizeOrigin") {
+    resetOriginSource();
+    const exact = selectionJson || r.selection_json;
+    if (typeof exact === "string") {
+      const selection = JSON.parse(exact); // Display and policy only; never reserialize the retained source.
+      originSource = { selectionJson: exact, allowEstimates: selection.allow_estimates === true };
+      $("originSourceSummary").textContent = `Retained source: ${selection.id}. SHA-256: ${selection.expected_sha256 || "not supplied"}. ` +
+        (originSource.allowEstimates ? "Estimate policy admitted; choose and confirm the local domain below." :
+          "Estimates are disabled. Author and inspect a new selection with allow_estimates:true to use this approximation.");
+    }
+  }
   $("detail").textContent = text(r.snapshot);
   $("capabilities").replaceChildren();
   const table = document.createElement("table");
@@ -2255,6 +2293,18 @@ function inspectResult(r, selectionJson) {
     row.append(a, b); table.append(row);
   }
   $("capabilities").append(table);
+}
+function originResult(parent, r) {
+  const domain = table(parent, "Authored approximation domain", ["Green strain component", "Lower", "Upper"]);
+  for (const [i, label] of ["Warp E11", "Weft E22", "Engineering Green shear γ = 2E12"].entries()) {
+    cells(domain, [label, ...r.input.green_strain_domain[i].map(metric)]);
+  }
+  const scope = document.createElement("p"); scope.textContent = r.model_scope; parent.append(scope);
+  detail(parent, "Dated approximation rationale", r.input.approximation_source);
+  detail(parent, "Source origin tangent in N/m (display only)", r.origin_tangent_n_m);
+  return { schema: r.schema, source_material_id: r.input.material.id, source_sha256: r.source_sha256,
+    input_sha256: r.input_sha256, prepared_material_sha256: r.selection.expected_sha256,
+    next: "Review the prepared material's capabilities, then assign it or add it to a comparison. The original source remains retained for an explicit domain revision; this estimate does not establish garment fit or fill missing properties." };
 }
 function thermalPointResult(parent, r) {
   const properties = table(parent, "Source-qualified thermal properties", ["Quantity", "Value", "Unit"]);
@@ -3674,12 +3724,12 @@ function show(op, msg, request) {
       calibratedPair = r.interface_json;
       $("calibratedInterfaceSummary").textContent = `Calibrated pair: ${r.binding.interface.materials.join(" / ")}. Stage this pair after assigning those exact materials.`;
     }
-    if (op === "pressure" || (op === "calibrate" && !pairCalibration) || op === "stripFit") {
+    if (op === "pressure" || op === "linearizeOrigin" || (op === "calibrate" && !pairCalibration) || op === "stripFit") {
       clear(["thermalPoint"]);
       ++selectionRead; preparedBy = op;
       if (typeof r.selection_json === "string" && (op !== "stripFit" || r.calibration?.accepted === true)) {
         $("selection").value = r.selection_json;
-        inspectResult(op === "pressure" ? r.inspection : r.material, r.selection_json);
+        inspectResult(["pressure", "linearizeOrigin"].includes(op) ? r.inspection : r.material, r.selection_json);
       } else {
         $("selection").value = "";
         inspected = null;
@@ -3696,6 +3746,7 @@ function show(op, msg, request) {
       [{ key: "Current bound pattern", cutting_job: { status: "available", result: r } }], false);
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
       op === "bodyCheck" ? bodyCheckResult(s.comparison, r) :
+      op === "linearizeOrigin" ? originResult(s.comparison, r) :
       op === "calibrate" ? calibrationResult(s.comparison, r) :
       op === "stripHistory" ? stripHistoryResult(s.comparison, r) :
       ["stripAcquisition", "stripExperiment", "stripFit"].includes(op) ? stripResult(s.comparison, op, r) :
@@ -4346,6 +4397,8 @@ async function execute(op) {
   else if (op === "fold") clear(["fold", "heat", "vaporSurface", "coverage"]);
   else if (sections.has(op)) clear([op]);
   if (selectionOperations.includes(op) && !(op === "calibrate" && $("calibrationMode").value === "friction_pair")) {
+    if (op !== "linearizeOrigin") resetOriginSource();
+    else if (originSource) { $("selection").value = originSource.selectionJson; clear(["thermalPoint"]); }
     ++selectionRead; preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
   }
   const id = ++sequence; pending = { id, op }; $("error").hidden = true;
@@ -4354,6 +4407,7 @@ async function execute(op) {
     const msg = { type: op, request: id };
     if (op === "catalog") msg.query = $("query").value;
     else if (op === "inspect") msg.selection = $("selection").value;
+    else if (op === "linearizeOrigin") msg.originRequest = originRequest();
     else if (op === "thermalPoint") {
       if (!$("thermalPointTemperature").value.trim() || !Number.isFinite(Number($("thermalPointTemperature").value))) throw Error("Supply a finite material temperature in degrees Celsius.");
       msg.selection = $("selection").value; msg.temperatureC = Number($("thermalPointTemperature").value);
@@ -4585,6 +4639,7 @@ $("cancel").onclick = () => { cancelPhotoReturn(); if (patternTransfer) patternT
 $("catalog").onchange = () => {
   if (!$("catalog").value) return;
   invalidateThermalPoint();
+  resetOriginSource();
   ++selectionRead;
   if (selectionOperations.includes(pending?.op)) start();
   $("selection").value = text({ id: $("catalog").value, allow_estimates: false });
@@ -4592,12 +4647,14 @@ $("catalog").onchange = () => {
 };
 $("selection").addEventListener("input", () => {
   invalidateThermalPoint();
+  resetOriginSource();
   ++selectionRead;
   preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
   if (selectionOperations.includes(pending?.op)) start(); controls();
 });
 $("selectionFile").onchange = async () => {
   invalidateThermalPoint();
+  resetOriginSource();
   const rev = ++selectionRead; preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
   if (selectionOperations.includes(pending?.op)) start(); controls();
   try { const data = await read("selectionFile"); if (rev !== selectionRead) return;
@@ -4917,10 +4974,22 @@ $("interfacesFile").onchange = async () => {
     error(String(e.message || e)); controls();
   }
 };
+for (const id of [...originDomainFields.flat(), ...originRationaleFields, "originEstimates"]) {
+  $(id).addEventListener(id === "originEstimates" ? "change" : "input", () => {
+    if (preparedBy === "linearizeOrigin") {
+      invalidateThermalPoint();
+      ++selectionRead; preparedBy = null; inspected = null;
+      $("selection").value = originSource?.selectionJson || "";
+      $("detail").textContent = ""; $("capabilities").replaceChildren();
+    }
+    invalidate(["linearizeOrigin"], true);
+  });
+}
 for (const [id, operation] of [["compressionRequest", "pressure"], ["compressionLayer", "pressure"], ["calibrationRequest", "calibrate"],
   ["calibrationMode", "calibrate"], ["calibrationEstimates", "calibrate"], ["stripFitRequest", "stripFit"]]) {
   $(id).addEventListener(id === "compressionLayer" ? "input" : "change", () => {
     if (preparedBy === operation) {
+      resetOriginSource();
       ++selectionRead; preparedBy = null; inspected = null;
       $("detail").textContent = ""; $("capabilities").replaceChildren();
     }

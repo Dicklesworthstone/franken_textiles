@@ -1076,6 +1076,54 @@ test('pressure conditioning preserves exact request and frozen selection through
   assert.equal(result.result.inspection.selection.id, 'compressed');
 });
 
+// Source/transport doubles only. The compiled lane below checks actual catalog admission and reuse.
+const originSourceSelection = ' {"id":"source-origin","allow_estimates":true,"expected_sha256":"source-lock","value":-0.0,"coefficient":1.0000000000000001110223024625156540}\n';
+function originReport(source = originSourceSelection) {
+  const selection = ' {"id":"bounded-origin","allow_estimates":true,"expected_sha256":"derived-lock","value":-0.0,"coefficient":1.0000000000000001110223024625156540}\n';
+  return { schema:'ftx-origin-membrane-linearization/1', input:{material:JSON.parse(source),
+    green_strain_domain:[[-0.02,0.03],[-0.01,0.02],[-0.005,0.01]],
+    approximation_source:{reference:'test:local-domain',accessed_on:'2026-11-03',note:'Explicit synthetic operator choice; not measured validation.'}},
+    source_sha256:'source-lock',input_sha256:'input-lock',origin_tangent_n_m:[[2,1,0],[1,3,0],[0,0,1]],
+    selection:JSON.parse(selection),selection_json:selection,
+    model_scope:'Estimated local domain only. Missing material properties remain unavailable.',
+    inspection:{snapshot:{id:'bounded-origin'},capabilities:{}} };
+}
+function fillOrigin(p, input = originReport().input) {
+  for (const [i,prefix] of ['Warp','Weft','Shear'].entries()) for (const [j,suffix] of ['Min','Max'].entries()) {
+    const el=p.e[`origin${prefix}${suffix}`];el.value=String(input.green_strain_domain[i][j]);el.handlers.input();
+  }
+  for (const [id,key] of [['originReference','reference'],['originAccessedOn','accessed_on'],['originNote','note']]) {
+    p.e[id].value=input.approximation_source[key];p.e[id].handlers.input();
+  }
+  p.e.originEstimates.checked=true;p.e.originEstimates.handlers.change();
+}
+async function inspectOrigin(p, selection = originSourceSelection) {
+  p.e.selection.value=selection;p.e.selection.handlers.input();await p.e.inspect.onclick();
+  p.emit({selection:JSON.parse(selection),selection_json:selection,snapshot:{id:JSON.parse(selection).id},capabilities:{}});
+}
+test('bounded origin worker preserves the exact request, source report and selection before ordinary inspection', async()=>{
+  const report=originReport(),raw=` ${JSON.stringify(report)}\n`,calls=[];
+  const w=await workerModule({bindings:{default:async()=>{},
+    material_linearize_origin:r=>{calls.push(['prepare',r]);return raw;},
+    material_inspect:s=>{calls.push(['inspect',s]);return JSON.stringify({selection:JSON.parse(s)});}}});
+  const request=`{"schema":"ftx-wang2011-linearization/1","material":${originSourceSelection}}`;
+  const result=await w.send({type:'linearizeOrigin',request:301,originRequest:request});
+  assert.equal(result.type,'result',result.message);assert.equal(result.request,301);
+  assert.deepEqual(calls,[['prepare',request],['inspect',report.selection_json]]);
+  assert.deepEqual(plain(result.files.map(f=>[f.name,f.text])),[
+    ['origin-membrane-report.json',raw],['origin-membrane-selection.json',report.selection_json],['origin-membrane-request.json',request]]);
+  assert.equal(result.result.inspection.selection.id,'bounded-origin');
+});
+test('bounded origin worker publishes no selection for missing APIs, missing exact bytes or core refusal',async()=>{
+  for (const [bindings,reason] of [[{},/missing bounded/],
+    [{material_linearize_origin:()=>JSON.stringify({selection:{id:'unsafe-display-copy'}})},/exact origin/],
+    [{material_linearize_origin:()=>{throw Error('source normal block is unstable');}},/unstable/]]) {
+    const w=await workerModule({bindings:{default:async()=>{},...bindings}});
+    const result=await w.send({type:'linearizeOrigin',originRequest:'{}'});
+    assert.equal(result.type,'error');assert.match(result.message,reason);assert.equal(result.files,undefined);
+  }
+});
+
 test('compression histories use the shared heat API and preserve every final layer selection', async () => {
   for (const version of [1, 2, 3]) {
     const request = ` {"schema":"ftx-compressed-thermal-history/${version}","source_value":-0.0}\n`;
@@ -3789,6 +3837,111 @@ test('replacing a vapor request cancels delayed file reads and stale worker resu
   assert.equal(section(p,'Potential evaporative transfer').hidden,true);
   await p.e.vapor.onclick(); assert.equal(p.current().messages.at(-1).vaporRequest,newRequest);
 });
+
+test('bounded origin controls require explicit source policy, all limits, dated rationale and separate domain admission',async()=>{
+  const p=await pageModule();
+  assert.equal(p.e.linearizeOrigin.disabled,true);
+  for(const id of ['originWarpMin','originWarpMax','originWeftMin','originWeftMax','originShearMin','originShearMax','originAccessedOn']) assert.equal(p.e[id].value,'');
+  await inspectOrigin(p,originSourceSelection.replace('"allow_estimates":true','"allow_estimates":false'));
+  fillOrigin(p);assert.equal(p.e.linearizeOrigin.disabled,true);
+  const messages=p.current().messages.length;await p.e.linearizeOrigin.onclick();
+  assert.equal(p.current().messages.length,messages);assert.match(p.e.error.textContent,/new selection with allow_estimates:true/);
+  await inspectOrigin(p);assert.equal(p.e.originEstimates.checked,false);assert.equal(p.e.linearizeOrigin.disabled,true);
+  fillOrigin(p);p.e.originNote.value='';p.e.originNote.handlers.input();assert.equal(p.e.linearizeOrigin.disabled,true);
+  await p.e.linearizeOrigin.onclick();assert.match(p.e.error.textContent,/rationale/);
+  fillOrigin(p);p.e.originWarpMin.value='NaN';p.e.originWarpMin.handlers.input();
+  await p.e.linearizeOrigin.onclick();assert.match(p.e.error.textContent,/six finite/);
+  assert.match(p.e.originSourceSummary.textContent,/source-origin.*source-lock/);
+});
+test('bounded origin selection reaches ordinary bindings exactly and domain revision reuses the retained original source',async()=>{
+  const p=await pageModule();await p.load();await inspectOrigin(p);fillOrigin(p);
+  assert.equal(p.e.linearizeOrigin.disabled,false);await p.e.linearizeOrigin.onclick();
+  const request=p.current().messages.at(-1).originRequest,input=JSON.parse(request),report=originReport();
+  assert.ok(request.includes(originSourceSelection));assert.deepEqual(input.green_strain_domain,report.input.green_strain_domain);
+  assert.deepEqual(input.approximation_source,report.input.approximation_source);
+  const files=[{name:'origin-membrane-selection.json',text:report.selection_json,mime:'application/json'}];
+  p.emit(report,files);assert.equal(p.e.selection.value,report.selection_json);assert.equal(p.e.assign.disabled,false);
+  assert.match(visibleText(section(p,'Bounded origin membrane approximation')),/source-lock/);
+  assert.equal(await p.blobs.get([...p.live][0]).text(),report.selection_json);
+  p.e.target.value='front';p.e.assign.onclick();await p.e.bind.onclick();
+  assert.ok(p.current().messages.at(-1).changes.includes(report.selection_json));
+  p.emit({pattern:{},pattern_json:'{}',pieces:[],pattern_sha256:'bound'});
+  p.e.originWarpMax.value='0.04';p.e.originWarpMax.handlers.input();
+  assert.equal(p.e.assign.disabled,true);assert.equal(p.e.selection.value,originSourceSelection);
+  assert.equal(section(p,'Bounded origin membrane approximation').hidden,true);assert.equal(p.live.size,0);
+  await p.e.linearizeOrigin.onclick();const revised=p.current().messages.at(-1).originRequest;
+  assert.ok(revised.includes(originSourceSelection));assert.ok(!revised.includes(report.selection_json));
+  assert.equal(JSON.parse(revised).green_strain_domain[0][1],0.04);
+  p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'domain refused'});
+  assert.equal(p.e.assign.disabled,true);assert.equal(p.live.size,0);assert.match(p.e.error.textContent,/domain refused/);
+});
+test('bounded origin source, domain and consent edits cancel active work and defeat stale success',async()=>{
+  for (const edit of ['domain','rationale','consent','catalog','selection','file','cancel']) {
+    const p=await pageModule();await p.load();await inspectOrigin(p);fillOrigin(p);await p.e.linearizeOrigin.onclick();
+    const old=p.current(),request=old.messages.at(-1).request;
+    if(edit==='domain'){p.e.originShearMax.value='0.02';p.e.originShearMax.handlers.input();}
+    if(edit==='rationale'){p.e.originAccessedOn.value='2026-11-04';p.e.originAccessedOn.handlers.input();}
+    if(edit==='consent'){p.e.originEstimates.checked=false;p.e.originEstimates.handlers.change();}
+    if(edit==='catalog'){p.e.catalog.value='replacement';p.e.catalog.onchange();}
+    if(edit==='selection'){p.e.selection.value='{"id":"replacement"}';p.e.selection.handlers.input();}
+    if(edit==='file'){p.select('selectionFile','{"id":"replacement"}');await p.e.selectionFile.onchange();}
+    if(edit==='cancel')p.e.cancel.onclick();
+    assert.equal(old.dead,true,edit);p.ready();
+    old.emit({type:'result',request,result:originReport(),files:[{name:'stale.json',text:'{}',mime:'application/json'}]});
+    assert.equal(p.e.assign.disabled,true,edit);assert.equal(p.live.size,0,edit);
+    assert.equal(section(p,'Bounded origin membrane approximation').hidden,true,edit);
+    if(['catalog','selection','file'].includes(edit)) {
+      assert.equal(p.e.originEstimates.checked,false);assert.equal(p.e.linearizeOrigin.disabled,true);
+      assert.equal(JSON.parse(p.e.selection.value).id,'replacement');
+    }
+  }
+});
+test('bounded origin revisions cancel pending temperature checks on the withdrawn derived material',async()=>{
+  const p=await pageModule();await inspectOrigin(p);fillOrigin(p);await p.e.linearizeOrigin.onclick();p.emit(originReport());
+  p.e.thermalPointTemperature.value='25';p.e.thermalPointTemperature.handlers.input();await p.e.thermalPoint.onclick();
+  const old=p.current(),request=old.messages.at(-1).request;
+  assert.equal(old.messages.at(-1).selection,originReport().selection_json);
+  p.e.originNote.value='A revised approximation rationale';p.e.originNote.handlers.input();assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request,result:{},files:[{name:'stale-temperature.json',text:'{}',mime:'application/json'}]});
+  assert.equal(section(p,'Material at the stated temperature').hidden,true);assert.equal(p.live.size,0);
+  assert.equal(p.e.selection.value,originSourceSelection);
+});
+
+test('compiled WASM bounded origin controls prepare, bind and replay exact source selections with core refusals',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const imported=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    const ftx=typeof imported.default==='object'?{...imported.default,default:async()=>{}}:imported;
+    if(typeof ftx.initSync==='function')ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx}),p=await pageModule();
+    const input=JSON.parse(fs.readFileSync(path.join(__dirname,'../examples/wang2011-origin-linearization.json'),'utf8'));
+    const pattern=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-stock-pattern.json'),'utf8');
+    p.select('patternFile',pattern);await p.e.patternFile.onchange();
+    p.e.selection.value=JSON.stringify(input.material);p.e.selection.handlers.input();await p.e.inspect.onclick();
+    const inspected=await w.send(p.current().messages.at(-1));assert.equal(inspected.type,'result',inspected.message);p.current().emit(inspected);
+    fillOrigin(p,input);await p.e.linearizeOrigin.onclick();const request=p.current().messages.at(-1);
+    assert.ok(request.originRequest.includes(inspected.result.selection_json));
+    const prepared=await w.send(request);assert.equal(prepared.type,'result',prepared.message);p.current().emit(prepared);
+    const raw=prepared.files.find(f=>f.name==='origin-membrane-report.json').text;
+    assert.equal(raw,ftx.material_linearize_origin(request.originRequest));
+    assert.equal(prepared.files.find(f=>f.name==='origin-membrane-request.json').text,request.originRequest);
+    assert.equal(p.e.selection.value,prepared.result.selection_json);
+    assert.equal(prepared.result.inspection.capabilities.mechanical_coefficients.ready,false);
+    assert.equal(prepared.result.source_sha256,inspected.result.selection.expected_sha256);
+    p.e.target.value='front';p.e.assign.onclick();await p.e.bind.onclick();
+    const binding=await w.send(p.current().messages.at(-1));assert.equal(binding.type,'result',binding.message);p.current().emit(binding);
+    assert.equal(binding.result.geometry_changed,false);
+    assert.equal(binding.result.pieces.find(piece=>piece.piece_id==='front')?.material_sha256,
+      prepared.result.selection.expected_sha256);
+    p.e.originWarpMin.value='0';p.e.originWarpMin.handlers.input();await p.e.linearizeOrigin.onclick();
+    const refused=await w.send(p.current().messages.at(-1));assert.equal(refused.type,'error');assert.match(refused.message,/span zero/);
+    p.current().emit(refused);assert.equal(p.e.assign.disabled,true);
+    p.e.selection.value='{"id":"wang/2011/navy-sparkle-sweat","allow_estimates":true}';p.e.selection.handlers.input();
+    await p.e.inspect.onclick();const unstable=await w.send(p.current().messages.at(-1));assert.equal(unstable.type,'result',unstable.message);p.current().emit(unstable);
+    fillOrigin(p,input);await p.e.linearizeOrigin.onclick();const unstableResult=await w.send(p.current().messages.at(-1));
+    assert.equal(unstableResult.type,'error');assert.match(unstableResult.message,/not stable/i);
+    p.current().emit(unstableResult);assert.equal(p.e.assign.disabled,true);assert.equal(section(p,'Bounded origin membrane approximation').hidden,true);
+  });
 
 test('pressure-conditioned selections enter ordinary piece bindings without a numeric JSON round trip', async () => {
   const p = await pageModule(); await p.load();

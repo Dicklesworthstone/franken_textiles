@@ -43,6 +43,32 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <small><a href="#materialPattern">Load a pattern in section 2</a> to enable the shortlist. Keep up to seven exact inspected selections, then
 <a href="#materialComparison">compare them on your pattern</a>.</small>
 <div id="capabilities"></div><details><summary>Original observations, normalized units and sources</summary><pre id="detail"></pre></details>
+<details><summary>Prepare a bounded membrane approximation from published fabric stiffness</summary>
+<p class="note">Use an inspected Wang et al. (2011) fabric with source-qualified stiffness at zero strain.
+This creates an estimated local membrane law for the ordinary material consumers. It does not reproduce the
+paper's complete nonlinear model or supply missing bending, thickness, friction or thermal properties.</p>
+<p id="originSourceSummary" role="status">Inspect an exact source selection before preparing an approximation.</p>
+<fieldset><legend>Authored Green strain limits (dimensionless)</legend>
+<p class="note">Choose every lower and upper limit explicitly. Each interval must span zero; the engine validates
+the full domain. No validity range is inferred from the source coefficients. Use the source material axes;
+these are Green strain components, not percentage extension.</p>
+<div class="study-fields">
+<label>Warp E11 lower <input id="originWarpMin" type="number" step="any"></label>
+<label>Warp E11 upper <input id="originWarpMax" type="number" step="any"></label>
+<label>Weft E22 lower <input id="originWeftMin" type="number" step="any"></label>
+<label>Weft E22 upper <input id="originWeftMax" type="number" step="any"></label>
+<label>Engineering Green shear γ = 2E12 lower <input id="originShearMin" type="number" step="any"></label>
+<label>Engineering Green shear γ = 2E12 upper <input id="originShearMax" type="number" step="any"></label>
+</div></fieldset>
+<label>Approximation reference <input id="originReference" type="text" maxlength="4096" placeholder="Your experiment or design note"></label>
+<label>Reference access date <input id="originAccessedOn" type="date"></label>
+<label>Why this approximation and domain are appropriate <textarea id="originNote" rows="3" maxlength="4096"></textarea></label>
+<label><input id="originEstimates" type="checkbox"> Admit this estimated local law over my authored strain domain</label>
+<p class="note">The inspected selection must already set <code>allow_estimates</code> to <code>true</code>.
+To change that policy, author and inspect a new selection; never edit a digest-locked selection in place.
+Changing the selected source resets this confirmation. Changing approximation inputs withdraws the prepared result.</p>
+<button id="linearizeOrigin" data-command="linearizeOrigin" disabled>Prepare bounded membrane law</button>
+</details>
 <h3>Material temperature and dry heating / cooling</h3>
 <label>Material temperature (°C) <input id="thermalPointTemperature" type="number" step="any" placeholder="50"></label>
 <button id="thermalPoint" data-command="thermalPoint" disabled>Evaluate selected material at this temperature</button>
