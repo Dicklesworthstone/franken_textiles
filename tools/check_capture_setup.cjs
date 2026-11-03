@@ -261,6 +261,10 @@ async function saveDownload(page, name) {
     // with independent synthetic truth supplied explicitly for targets, observations and starts.
     command(['capture-init', 'capture-choices.json', '--model', model, '--out', 'constructed']);
     assert.deepEqual(fs.readFileSync(path.join(out, 'constructed/input.json')), fs.readFileSync(path.join(root, 'constructed/input.json')));
+    command(['capture-init', 'revised-choices.json', '--model', model, '--out', 'revised-constructed']);
+    const originalInput = read(path.join(out, 'constructed/input.json'));
+    assert.deepEqual(read(path.join(out, 'revised-constructed/input.json')),
+      {...originalInput, model: {...originalInput.model, age_years: 4.25}});
     command(['body-target-review', 'constructed/input.json', '--model', model, '--out', 'target-review']);
     const targets = read(path.join(out, 'target-review/body-targets.json'));
     assert.deepEqual(targets.keypoints, {}); targets.keypoints = truth.model.keypoints; write('targets.json', targets);
