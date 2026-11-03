@@ -202,8 +202,10 @@ function controls() {
   $("guidedScenarioGoals").hidden = !guided;
   $("guidedMaterialStrainControls").hidden = !$("guidedMaterialStrain").checked;
   $("guidedMaterialStrainInstances").disabled = !$("guidedMaterialStrain").checked || $("guidedMaterialStrainScope").value !== "instances";
-  $("guidedContactLoadsControls").hidden = !$("guidedContactLoads").checked;
-  $("guidedContactLoadsInstances").disabled = !$("guidedContactLoads").checked || $("guidedContactLoadsScope").value !== "instances";
+  const contactLoads = $("guidedContactLoads").checked;
+  $("guidedContactLoadsControls").hidden = !contactLoads;
+  for (const id of ["guidedContactLoadsScope", "guidedContactVertexBudget", "guidedContactPairBudget"]) $(id).disabled = !contactLoads;
+  $("guidedContactLoadsInstances").disabled = !contactLoads || $("guidedContactLoadsScope").value !== "instances";
   for (const [, id, file] of guidedTransportSources) $(file).disabled = !$(id).checked;
   $("guidedMotionForm").hidden = motionMode !== "form";
   $("guidedMotionFileField").hidden = motionMode !== "file";
@@ -4698,8 +4700,12 @@ for (const id of ["guidedMaterialStrain", "guidedMaterialStrainScope", "guidedMa
   if (!["guidedMaterialStrain", "guidedMaterialStrainScope"].includes(id)) $(id).addEventListener("input", changedGuidedScenarioDraft);
 }
 for (const id of ["guidedContactLoads", "guidedContactLoadsScope", "guidedContactLoadsInstances", "guidedContactVertexBudget", "guidedContactPairBudget"]) {
-  $(id).addEventListener("change", changedGuidedScenarioDraft);
-  if (!["guidedContactLoads", "guidedContactLoadsScope"].includes(id)) $(id).addEventListener("input", changedGuidedScenarioDraft);
+  const changed = () => {
+    if (id === "guidedContactLoads" || $("guidedContactLoads").checked) changedGuidedScenarioDraft();
+    else controls();
+  };
+  $(id).addEventListener("change", changed);
+  if (!["guidedContactLoads", "guidedContactLoadsScope"].includes(id)) $(id).addEventListener("input", changed);
 }
 for (const [, id, file] of guidedTransportSources) {
   $(id).addEventListener("change", changedGuidedScenarioDraft);

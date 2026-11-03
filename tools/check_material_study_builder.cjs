@@ -1881,3 +1881,18 @@ test('complete named scenario snapshots share an exact UTF-8 request limit inclu
   const shared='é'.repeat(3*1024*1024);
   assert.throws(()=>build({maxEvaluations:3,cases:Array.from({length:3},(_,i)=>({key:String(i),scenario:source(shared)}))}),/16 MiB/);
 });
+
+test('contact allowance exhaustion stays a native partial refusal across alternatives, probes and independent cases', async () => {
+  const {buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,buildMaterialStudyRequest:build}=await modulePromise;
+  const contactLoads=' \r\n'+JSON.stringify(contactPolicy({max_vertex_samples:64000000,max_pair_evaluations:64000000}))+'\r\n';
+  const snapshot=single({...scenarioState(),contactLoads,maxVertexFrames:32000000}),
+    cases=[{key:'cold',scenario:snapshot},{key:'warm',scenario:snapshot}];
+  const source=matrix({maxEvaluations:64,cases});
+  assert.equal(source.split(contactLoads).length-1,2,'Each case retains its own full allowances rather than a cross-case sum');
+  const context=namedContext(cases.map(({key})=>({key,surface:false,contactLoads:true})));
+  const input={...state(),design:namedDesign(),objectives:[{metric:'body_contact_resultant_n',direction:'minimize'}]};
+  assert.equal(JSON.parse(build(input,context)).design_adaptive.max_evaluations,2,
+    'The authoring helper does not multiply optional declared contact work across consumer probes and retained alternatives');
+  const optional=JSON.parse(build(state(),context));assert.deepEqual(optional.comparison.required_consumers,[]);
+  assert.equal(optional.variants.length,2,'A full first reservation can refuse later optional contact results without blocking independent study outcomes');
+});

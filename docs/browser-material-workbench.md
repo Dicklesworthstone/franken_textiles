@@ -611,6 +611,11 @@ results can also be required without choosing a force objective. Use explicit no
 source-reported heat or mass objectives. Saved named cases retain their exact scope and budgets,
 and the same criteria can guide existing grid and adaptive design discovery.
 
+Initial and accepted motion samples share each evaluation's allocation. Native partial results stay
+available: an initial reading can survive an exhausted motion-load request, and later alternatives
+can lose only their optional force results. The authoring controls do not reject a whole study just
+because its probes and alternatives would exhaust those optional per-case reservations.
+
 These are discrete normal body forces. Opposing forces can cancel in the resultant, shared welded
 vertices keep their complete force, and nodal maxima depend on the mesh and contact policy. No
 contact area, pressure, tangential friction, physiological comfort or safe-fit threshold is inferred.

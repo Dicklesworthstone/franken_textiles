@@ -15214,3 +15214,144 @@ test('compiled WASM guided seam adjustments preserve native fit-screened repair 
     } finally {model.free();if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;}
     t.diagnostic('Generated true-seam grid repair, unrepaired flat refusal and two-probe cap-ease adaptive mass guidance match native, public WASM and worker reports against the accepted synthetic body. No drape or physical-fit claim. Replay: '+work);
   });
+
+const guidedContactGoals=[['guidedContactResultant','body_contact_resultant_n'],
+  ['guidedContactVertex','max_body_contact_vertex_force_n'],['guidedMotionContactResultant','motion_peak_body_contact_resultant_n'],
+  ['guidedMotionContactVertex','motion_max_body_contact_vertex_force_n']];
+
+test('guided inactive contact controls preserve pending runs and original scenario files',async()=>{
+  for(const mode of ['disabled','file']) {
+    const {p}=await guidedScenarioSetup();guidedContactControls(p);
+    assert.equal(p.e.guidedContactLoadsInstances.disabled,true);
+    p.e.guidedContactLoadsScope.value='instances';p.e.guidedContactLoadsScope.handlers.change();
+    assert.equal(p.e.guidedContactLoadsInstances.disabled,false);
+    const original=' {"schema":"ftx-drape-scenario/1","options":{"spacing":30,"sew_steps":12,"drape_steps":96,"step":0.005},"fit_spec":{},'+
+      '"max_mesh_points":4096,"max_vertex_frames":2000000,"contact_loads":{"schema":"ftx-contact-loads/1","instances":["original"],"max_vertex_samples":108,"max_pair_evaluations":64000000}}\r\n';
+    if(mode==='file') {
+      p.select('scenarioRequest',original);p.e.scenarioRequest.handlers.change();
+      p.e.scenarioMode.value='file';p.e.scenarioMode.handlers.change();
+      p.e.guidedContactResultantGoal.checked=true;p.e.guidedRequireContactLoads.checked=true;
+    } else {
+      p.e.guidedContactLoads.checked=false;p.e.guidedContactLoads.handlers.change();
+      for(const id of ['guidedContactLoadsScope','guidedContactLoadsInstances','guidedContactVertexBudget','guidedContactPairBudget'])
+        assert.equal(p.e[id].disabled,true,id);
+    }
+    p.e.guidedContactLoadsInstances.value='';p.e.guidedContactVertexBudget.value='invalid';p.e.guidedContactPairBudget.value='-1';
+    const delay=deferred();let reading=false;
+    p.e.body.files=[{size:3,arrayBuffer:async()=>{reading=true;return delay.promise;}}];
+    const old=p.current(),running=p.e.scenario.onclick();await new Promise(setImmediate);
+    assert.equal(reading,true,mode+': '+p.e.error.textContent);
+    p.e.guidedContactLoadsScope.handlers.change();
+    for(const id of ['guidedContactLoadsInstances','guidedContactVertexBudget','guidedContactPairBudget'])p.e[id].handlers.input();
+    assert.notEqual(old.dead,true,mode);
+    delay.resolve(new Uint8Array([2,4,6]).buffer);await running;
+    const sent=old.messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+    if(mode==='file')assert.equal(sent.scenarioRequest,original);
+    else assert.equal(JSON.parse(sent.scenarioRequest).contact_loads,undefined);
+  }
+});
+
+test('guided contact loads steer all four existing adaptive modes with explicit named-case authority',async()=>{
+  const {p}=await guidedScenarioSetup();guidedContactControls(p);guidedMotionSourceControls(p);await addGuidedMotion(p,0.002,35.1);
+  p.e.guidedDrapeMassGoal.checked=false;p.e.guidedContactResultantGoal.checked=true;p.e.guidedRequireContactLoads.checked=true;
+  p.e.guidedRequireMotionContactLoads.checked=true;guidedNamedCases(p);await saveGuidedCase(p,'first');await saveGuidedCase(p,'second');
+  configureGuidedDesign(p);guidedDesignField(p,'guidedDesignMode','adaptive','change');guidedAdaptiveDomain(p,[0,10,0,10,10]);
+  guidedDesignField(p,'guidedDesignEvaluations','2');
+  for(const mode of ['consumer_comparison','consumer_pareto','consumer_worst_case','consumer_matrix_pareto']) {
+    p.e.guidedMotionContactVertexGoal.checked=mode.includes('pareto');p.e.guidedMotionContactVertexGoal.handlers.change();
+    guidedDesignField(p,'guidedDesignObjective',mode,'change');guidedDesignField(p,'guidedDesignMaterial','material-1','change');
+    if(['consumer_comparison','consumer_pareto'].includes(mode))guidedDesignField(p,'guidedDesignCase','first','change');
+    await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+    const request=JSON.parse(sent.studyRequest);assert.equal(request.design_adaptive.objective,mode);
+    assert.equal(request.design_adaptive.material_key,'material-1');
+    assert.equal(request.design_adaptive.case_key,['consumer_comparison','consumer_pareto'].includes(mode)?'first':undefined);
+    assert.equal(request.comparison.objectives.length,mode.includes('pareto')?2:1);
+    assert.ok(JSON.parse(sent.scenarioRequest).cases.every(item=>item.scenario.contact_loads.schema==='ftx-contact-loads/1'));
+    p.emit(scenarioMatrixReport());
+  }
+  p.e.guidedContactLoads.checked=false;p.e.guidedContactLoads.handlers.change();
+  await saveGuidedCase(p,'missing-loads');const before=p.current().messages.length;await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/missing-loads|contact_loads|contact.*inputs/i);
+});
+
+test('compiled WASM guided contact constraints retain nonzero native loads and independent case budgets',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_CONTACT_BODY||!process.env.FTX_GUIDED_CONTACT_NATIVE},async t=>{
+    const source=path.resolve(process.env.FTX_GUIDED_CONTACT_BODY),load=name=>fs.readFileSync(path.join(source,name));
+    const body=load('body-input.json').toString('utf8'),bytes=load('model.ftxbody');
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const builder=new vm.SourceTextModule(read('materials-study-builder.js'));
+    await builder.link(()=>{throw Error('Unexpected guided-builder import');});await builder.evaluate();
+    // Existing accepted_body_workflow positive: the stretched band settles around the synthetic cylinder.
+    const original=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-scenario-pattern.json'),'utf8'));
+    const width=2*Math.PI*98;original.pieces[0].vertices.b[0]=width;original.pieces[0].vertices.c[0]=width;
+    original.pieces[0].placement.radius_mm=110;original.pieces[0].placement.x0=width/2;const pattern=JSON.stringify(original);
+    const transport=structuredClone(original.fabric.material);transport.id=transport.record.id='synthetic-contact-transport';
+    transport.record.properties.thermal_conductivity.value=0.1;
+    const selection=' \r\n'+JSON.parse(ftx.material_inspect(JSON.stringify(transport))).selection_json+'\r\n';
+    const contact=' {"schema":"ftx-contact-loads/1","instances":["band"],"max_vertex_samples":40000000,"max_pair_evaluations":40000000}\r\n';
+    const strain=' {"schema":"ftx-material-strain/1","instances":["band"],"max_triangle_samples":100000}\r\n';
+    const heat=' {"schema":"ftx-steady-surface-conditions/1","boundaries":[{"inside_c":10.0,"outside_c":30.0,"inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}]}\r\n';
+    const state={allowNoFit:true,options:{spacing:30,sew_steps:12,drape_steps:96,step:0.005,max_settle_steps:0},
+      maxMeshPoints:4096,maxVertexFrames:2000000,maxMotionTrials:16,contactLoads:contact,materialStrain:strain,surface:heat,
+      motion:{keyframes:[{time_s:0.001,arm_abduction_deg:35.1}],max_step_s:0.001,max_trials:4,max_pairs:100000,max_sample_vertices:10000}};
+    const objectives=guidedContactGoals.map(([,metric])=>({metric,direction:'minimize'}));
+    const guard=' {"basis":"nominal","required_consumers":["contact_loads","motion_contact_loads"],"objectives":'+
+      JSON.stringify(objectives)+',"constraints":[{"metric":"max_body_contact_vertex_force_n","maximum":0.0}]}\r\n';
+    const cases=[{key:'complete',scenario:builder.namespace.buildMaterialScenarioRequest(state)},
+      {key:'zero-force-limit',scenario:builder.namespace.buildMaterialScenarioRequest({...state,surface:heat.replace('30.0','35.0')}),comparison:guard}];
+    for(const item of cases){assert.ok(item.scenario.includes(contact));assert.ok(item.scenario.includes(strain));}
+    const scenario=builder.namespace.buildMaterialScenarioMatrixRequest({maxEvaluations:4,cases});assert.ok(scenario.includes(guard));
+    const study=builder.namespace.buildMaterialStudyRequest({candidates:[{key:'transport',selection}],target:{scope:'default'},pieceIds:['band'],
+      basis:'nominal',objectives,requiredConsumers:['contact_loads','motion_contact_loads']},
+      {drape:true,surface:true,motion:true,materialStrain:true,contactLoads:true,matrix:{maxEvaluations:4,
+        cases:cases.map(item=>({key:item.key,surface:true,motion:true,materialStrain:true,contactLoads:true,
+          ...(item.comparison?{comparison:JSON.parse(item.comparison)}:{})}))}});
+    const worker=await workerModule({bindings:ftx});const output=await worker.send({type:'scenario',request:1001,
+      pattern,studyRequest:study,scenarioRequest:scenario,measurements:body,
+      bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+    assert.equal(output.type,'result',output.message);
+    const previous=globalThis.ftxProgress,model=new ftx.WebBody(bytes);globalThis.ftxProgress=()=>{};
+    try{assert.deepEqual(output.result,JSON.parse(ftx.material_scenario_study(model,pattern,study,scenario,body)));}
+    finally{model.free();if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;}
+    for(const [name,raw] of [['original-pattern.json',pattern],['study-request.json',study],['scenario-request.json',scenario],['body-input.json',body]])
+      assert.equal(output.files.find(item=>item.name===name).text,raw);
+    const work=process.env.FTX_GUIDED_CONTACT_REPLAY?path.resolve(process.env.FTX_GUIDED_CONTACT_REPLAY):
+      fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-guided-contact-'));
+    if(process.env.FTX_GUIDED_CONTACT_REPLAY)fs.mkdirSync(work,{recursive:true});
+    const save=(name,raw)=>fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});
+    for(const [name,raw] of [['pattern.json',pattern],['study.json',study],['scenario.json',scenario],['body-input.json',body],['model.ftxbody',bytes]])save(name,raw);
+    const native=require('node:child_process').execFileSync(path.resolve(process.env.FTX_GUIDED_CONTACT_NATIVE),
+      ['scenario-study',...['pattern.json','study.json','scenario.json','body-input.json','model.ftxbody'].map(name=>path.join(work,name))],
+      {encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:64*1024*1024});
+    assert.deepEqual(output.result,JSON.parse(native));save('native-report.json',native);
+    for(const item of output.result.cases) {
+      const first=item.simulations.find(row=>row.key==='baseline').evaluation.result;
+      assert.equal(first.drape.numerical.settled,true);assert.equal(first.metrics.simulation_gating_clear,true);
+      assert.equal(first.contact_loads.status,'available');assert.equal(first.motion.status,'available');
+      const loads=first.contact_loads.result,moving=first.motion.result.contact_loads;
+      assert.equal(moving.status,'available');assert.ok(loads.max_body_vertex_force_n>0);assert.ok(moving.result.max_body_vertex_force_n>0);
+      assert.equal(loads.pressure_claim,false);assert.equal(moving.result.pressure_claim,false);
+      const reading=item.comparison.alternatives.find(row=>row.key==='baseline');
+      for(const [metric,result,field] of [['body_contact_resultant_n',loads,'peak_body_resultant_n'],
+        ['max_body_contact_vertex_force_n',loads,'max_body_vertex_force_n'],
+        ['motion_peak_body_contact_resultant_n',moving.result,'peak_body_resultant_n'],
+        ['motion_max_body_contact_vertex_force_n',moving.result,'max_body_vertex_force_n']]) {
+        assert.equal(reading.readings[metric].value,result[field]);assert.equal(reading.readings[metric].unit,'N');
+      }
+      assert.equal(reading.eligible,item.key==='complete');
+      if(item.key!=='complete')assert.match(JSON.stringify(reading.exclusions),/max_body_contact_vertex_force_n|constraint|maximum/i);
+      const later=item.simulations.find(row=>row.key==='transport').evaluation.result;
+      assert.equal(later.contact_loads.status,'refused');assert.match(later.contact_loads.refusal.message,/aggregate contact-load/);
+      assert.equal(later.motion.status,'available');assert.equal(later.motion.result.contact_loads.status,'refused');
+      for(const value of [first,later]) {
+        assert.equal(value.material_strain.status,'available');assert.equal(value.motion.result.material_strain.status,'available');
+        assert.equal(value.surface.status,'available');assert.ok(value.surface.result.steady.power_w<0);
+      }
+      assert.deepEqual(first.positions_m,later.positions_m);
+      assert.equal(first.motion.result.final_positions_sha256,later.motion.result.final_positions_sha256);
+    }
+    assert.deepEqual(output.result.comparison.frontier,[]);
+    t.diagnostic('All four nonzero load metrics and explicit force guard match native, public WASM and worker; each case independently admits its first40m reservation and refuses the later optional loads while preserving identical motion, strain and signed heat. Synthetic numerical evidence only. Replay: '+work);
+  });

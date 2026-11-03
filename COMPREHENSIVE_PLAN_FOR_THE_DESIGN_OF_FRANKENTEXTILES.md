@@ -5108,6 +5108,23 @@ Actual native, public WASM and worker reports agree for a repaired linked grid, 
 refusal and a cap-ease adaptive search with real manufacturing probes. These synthetic selected-body
 cases verify the connected operations and admission path; measured garment acceptance stays open.
 
+### 25.162 Constrain guided garment discovery with regional body contact loads
+
+Ordinary single and named scenarios now request the existing body barrier-force consumer on all
+retained cloth or an explicit physical-instance union. The workbench exposes all four initial and
+complete-motion resultant/nodal maxima as nominal objectives and limits, with independent required
+consumers. The same policies reach grid and all four consumer-guided adaptive search modes.
+
+Each saved case freezes its scope and vertex/pair work allowances. Inheriting comparisons require
+their consumers in that case; original comparison policies remain authoritative. The native per-case
+reservation and optional-refusal behavior remain intact: unavailable motion or later contact work
+does not erase an available initial reading or independent drape, strain, heat and manufacturing.
+Exact requests, source-bound force vectors, extrema witnesses and numerical policies stay inspectable.
+
+This advances the existing `ftx-ms2` and `ftx-ds2` functionality without another contact solver or
+inferred area, pressure, physiological comfort, safe-fit limit or continuous-time force bound.
+Computed barrier loads and synthetic replay remain separate from measured garment qualification.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
