@@ -5125,6 +5125,31 @@ This advances the existing `ftx-ms2` and `ftx-ds2` functionality without another
 inferred area, pressure, physiological comfort, safe-fit limit or continuous-time force bound.
 Computed barrier loads and synthetic replay remain separate from measured garment qualification.
 
+### 25.163 Connect source-qualified catalog discovery to actual garment choices
+
+Ordinary workbench controls now author the existing material-screening request: construction/fiber
+search, all supported material forms, explicit nominal or source-reported bounds, exact observation
+qualifiers, inclusive property intervals and independent objectives. Mechanics, steady conduction
+and transient thermal requirements call their real native compilers. Missing unrelated capabilities
+remain independent; estimates and cross-protocol comparisons require separate explicit consent.
+
+Every successfully resolved row retains canonical native selection text alongside its typed display
+record. Inspection, downloads and eligible-row shortlist adoption preserve that exact frozen source,
+including digest and evidence policy, without JavaScript number reserialization. The chosen record
+then reaches existing pattern-piece binding, manufacturing and single/named material/design studies.
+Input changes cancel obsolete discovery while previously selected immutable alternatives remain
+explicit choices. No new material database, scalar physics score or inferred property is introduced.
+
+This delivers `ftx-ms2.11` as the practical database-to-garment discovery path. Compiler readiness and
+scalar frontiers do not establish measured nonlinear response, garment warmth, physical fit or machine
+qualification. Those empirical and material-completeness gates remain open in their existing parents.
+
+Actual current native, public WASM and worker reports agree for catalog discovery, source inspection,
+binding and a two-insulation manufacturing comparison. Both C100/C200 selections retain their own
+cutting, mass and source-qualified steady heat; the original hide baseline retains mass while refusing
+roll cutting. Missing mechanics and heat storage stay unavailable. A separate synthetic signed-zero
+observation verifies exact source transport without changing or inventing the products' measured data.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

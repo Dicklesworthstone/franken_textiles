@@ -1390,6 +1390,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
+  e.screenMode.value='guided';e.guidedScreenProperty.value='areal_density';
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
     const el = e[/id="([^"]+)"/.exec(m[1])[1]]; el.dataset = { command: /data-command="([^"]+)"/.exec(m[1])[1] }; return el;
   });
@@ -1413,8 +1414,8 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   }, window });
   const module = new vm.SourceTextModule(read('materials-page.js'), { context, initializeImportMeta: m => { m.url = 'https://unit.invalid/materials-page.js'; } });
   await module.link(specifier => {
-    assert.equal(specifier, './materials-study-builder.js', 'unexpected material page import');
-    return new vm.SourceTextModule(read('materials-study-builder.js'), { context });
+    assert.ok(['./materials-study-builder.js','./materials-screen-builder.js'].includes(specifier), 'unexpected material page import');
+    return new vm.SourceTextModule(read(specifier.slice(2)), { context });
   }); await module.evaluate();
   const current = () => workers.at(-1), ready = () => current().emit({ type: 'ready' }); ready();
   const select = (id, text = '{}') => {
@@ -8628,6 +8629,251 @@ test('screening is available without a pattern and retains excluded source evide
   assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
 });
 
+function guidedCatalogControls(p,basis='nominal') {
+  p.e.screenMode.value='guided';p.e.guidedScreenBasis.value=basis;p.e.screenMode.handlers.change();
+}
+function draftCatalogRule(p,{property='custom',key='',unit='',minimum='',maximum='',direction='',method='',conditions=''}={}) {
+  p.e.guidedScreenProperty.value=property;p.e.guidedScreenProperty.handlers.change();
+  for(const [id,value] of Object.entries({guidedScreenKey:key,guidedScreenMinimum:minimum,guidedScreenMaximum:maximum,
+    guidedScreenDirection:direction,guidedScreenMethod:method,guidedScreenConditions:conditions}))p.e[id].value=String(value);
+  if(property==='custom')p.e.guidedScreenUnit.value=unit;
+}
+function catalogScreenRow(key,raw=guidedSelection(),eligible=true) {
+  const selection=JSON.parse(raw);
+  return {key,material_id:selection.id,selection,selection_json:raw,eligible,dominated_by:[],
+    readings:{areal_density:{value:0.2,unit:'kg/m2',bounds:[0.19,0.21]}},
+    exclusions:eligible?[]:[{message:'Requested mechanics are unavailable for this source'}]};
+}
+function catalogScreenReport(rows) {
+  return {schema:'ftx-material-screen-report/1',basis:'nominal',allow_mixed_protocols:false,
+    physical_validation_claim:false,frontier:rows.filter(row=>row.eligible).map(row=>row.key),alternatives:rows};
+}
+const screenAction=(p,label)=>descendants(section(p,'Source-qualified screening')).find(node=>node.tag==='button'&&node.textContent===label);
+
+test('guided catalog screening preserves exact qualifiers, explicit units and added-rule ownership through the worker',async()=>{
+  const p=await pageModule();assert.equal(p.e.screenMode.value,'guided');assert.equal(p.e.screen.disabled,true);
+  const before=p.current().messages.length;await p.e.screen.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/basis|nominal|reported/i);
+  guidedCatalogControls(p,'reported_bounds');p.e.guidedScreenQuery.value=' linen <β> ';p.e.guidedScreenForm.value='woven';
+  p.e.guidedScreenEstimates.checked=true;
+  for(const id of ['guidedScreenMechanics','guidedScreenSteady','guidedScreenThermal'])p.e[id].checked=true;
+  const conditions=' \n{"conditioning":"dry","batch":"18446744073709551615","specimen":"<β>"}\r\n';
+  draftCatalogRule(p,{property:'areal_density',minimum:0.1,maximum:0.3,direction:'minimize',method:' exact method ',conditions});
+  assert.equal(p.e.guidedScreenUnit.value,'kg/m2');assert.equal(p.e.guidedScreenUnit.disabled,true);p.e.addScreenAttribute.onclick();
+  draftCatalogRule(p,{key:'source-specific <β>',unit:'1',minimum:0,direction:'maximize'});p.e.addScreenAttribute.onclick();
+  assert.equal(p.e.guidedScreenAttributes.children.length,2);
+  await p.e.screen.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'screen',p.e.error.textContent);
+  const attribute={key:'areal_density',unit:'kg/m2',method:' exact method ',conditions:JSON.parse(conditions)};
+  assert.deepEqual(JSON.parse(sent.screenRequest),{schema:'ftx-material-screen/1',basis:'reported_bounds',query:' linen <β> ',forms:['woven'],
+    allow_catalog_estimates:true,allow_mixed_protocols:false,required_capabilities:['mechanics','steady_conduction','transient_thermal'],
+    constraints:[{attribute,minimum:0.1,maximum:0.3},{attribute:{key:'source-specific <β>',unit:'1'},minimum:0}],
+    objectives:[{attribute,direction:'minimize'},{attribute:{key:'source-specific <β>',unit:'1'},direction:'maximize'}]});
+  assert.equal(sent.screenRequest.split(conditions).length-1,2,'Both native attribute occurrences retain the exact source-condition fragment');
+  let calls=0;const raw=' '+JSON.stringify(screenReport())+'\r\n';
+  const worker=await workerModule({bindings:{default:async()=>{},material_screen:request=>{calls++;assert.equal(request,sent.screenRequest);return raw;}}});
+  const result=await worker.send(sent);assert.equal(result.type,'result',result.message);assert.equal(calls,1);p.current().emit(result);
+  const sectionNode=section(p,'Source-qualified screening'),live=new Set(p.live);
+  draftCatalogRule(p,{key:'unadded',unit:'wrong',maximum:'NaN',conditions:'{broken'});
+  assert.equal(sectionNode.hidden,false);assert.deepEqual(p.live,live,'Editing an unadded rule does not change a completed request');
+  const link=descendants(sectionNode).find(node=>node.download==='screen-request.json');assert.equal(await p.blobs.get(link.href).text(),sent.screenRequest);
+  assert.equal(descendants(sectionNode).some(node=>'innerHTML' in node),false);
+  await p.e.screen.onclick();assert.equal(p.current().messages.at(-1).screenRequest,sent.screenRequest);p.emit(screenReport());
+  const remove=descendants(p.e.guidedScreenAttributes).find(node=>node.textContent==='Remove property 1');remove.onclick();
+  assert.equal(p.e.guidedScreenAttributes.children.length,1);assert.equal(sectionNode.hidden,true);
+  p.e.clearScreenAttributes.onclick();remove.onclick();assert.equal(p.e.guidedScreenAttributes.children.length,0);
+  await p.e.screen.onclick();const cleared=JSON.parse(p.current().messages.at(-1).screenRequest);
+  assert.deepEqual(cleared.constraints,[]);assert.deepEqual(cleared.objectives,[]);
+});
+
+test('guided catalog screening rejects invalid drafts and preserves complete-file authority during delayed reads',async()=>{
+  const p=await pageModule();guidedCatalogControls(p);
+  draftCatalogRule(p,{property:'areal_density',maximum:0.3});p.e.addScreenAttribute.onclick();
+  for(const bad of [{property:'areal_density',maximum:0.2},{key:'x',unit:'1',minimum:2,maximum:1},
+    {key:'x',unit:'1',maximum:'Infinity'},{key:'x',unit:'1'},{key:' ',unit:'1',maximum:1},
+    {key:'x',unit:' ',maximum:1},{key:'x',unit:'1',maximum:1,conditions:'[]'},
+    {key:'x',unit:'1',maximum:1,conditions:'{"temperature":20}'},{key:'x',unit:'1',maximum:1,direction:'invented'}]) {
+    draftCatalogRule(p,bad);p.e.addScreenAttribute.onclick();assert.equal(p.e.guidedScreenAttributes.children.length,1,JSON.stringify(bad));
+    assert.equal(p.e.error.hidden,false);assert.ok(p.e.error.textContent);
+  }
+  draftCatalogRule(p,{key:'incomplete-number',unit:'1',direction:'minimize'});
+  p.e.guidedScreenMaximum.validity={badInput:true};p.e.addScreenAttribute.onclick();
+  assert.equal(p.e.guidedScreenAttributes.children.length,1,'An incomplete browser number cannot silently remove a requested limit');
+  delete p.e.guidedScreenMaximum.validity;
+  const raw=' {"schema":"ftx-material-screen/1","basis":"nominal","query":"file <β>","forms":[]}\r\n';
+  p.select('screenRequest',raw);p.e.screenRequest.handlers.change();assert.equal(p.e.screenMode.value,'file');
+  const delay=deferred();let reading=false;p.e.screenRequest.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+  const old=p.current(),run=p.e.screen.onclick();assert.equal(reading,true);
+  p.e.guidedScreenQuery.value='inactive changes';p.e.guidedScreenQuery.handlers.input();
+  p.e.guidedScreenBasis.value='invalid';p.e.guidedScreenBasis.handlers.change();
+  assert.equal(old.dead,false);delay.resolve(raw);await run;assert.equal(old.messages.at(-1).screenRequest,raw);
+  p.emit(screenReport());const result=section(p,'Source-qualified screening');
+  p.e.guidedScreenQuery.handlers.input();assert.equal(result.hidden,false);
+  const delayed=deferred();p.e.screenRequest.files[0].arrayBuffer=async()=>utf8Buffer(await delayed.promise);
+  const count=old.messages.length,pending=p.e.screen.onclick();guidedCatalogControls(p);p.ready();delayed.resolve(raw);await pending;
+  assert.equal(old.dead,true);assert.equal(old.messages.length,count);assert.equal(p.current().messages.length,0);assert.equal(result.hidden,true);
+});
+
+test('guided catalog screening adopts exact native source text and retains excluded or malformed rows without unsafe actions',async()=>{
+  const p=await pageModule();guidedCatalogControls(p);
+  const exact=guidedSelection('a','frozen <β>'),excluded=guidedSelection('b','excluded source');
+  const rows=[catalogScreenRow('baseline',exact),catalogScreenRow('<excluded>',excluded,false),
+    {...catalogScreenRow('legacy',guidedSelection('c','old report')),selection_json:null},
+    {...catalogScreenRow('mismatched',guidedSelection('d','wrong lock')),selection:{id:'wrong lock',expected_sha256:'e'.repeat(64),allow_estimates:false}}];
+  const report=catalogScreenReport(rows);await p.e.screen.onclick();p.emit(report);
+  assert.equal(screenAction(p,'Add baseline to comparisons').disabled,true);
+  assert.ok(screenAction(p,'Inspect <excluded> source'));assert.equal(screenAction(p,'Add <excluded> to comparisons'),undefined);
+  assert.equal(screenAction(p,'Inspect legacy source'),undefined);assert.equal(screenAction(p,'Inspect mismatched source'),undefined);
+  await screenAction(p,'Inspect <excluded> source').onclick();
+  assert.equal(p.current().messages.at(-1).selection,excluded);assert.equal(p.e.selection.value,excluded);
+  p.emit({selection:JSON.parse(excluded),selection_json:excluded,snapshot:{id:'excluded source'},capabilities:{}});
+  await p.load();guidedControls(p);await p.e.screen.onclick();p.emit(report);
+  const add=screenAction(p,'Add baseline to comparisons');add.onclick();assert.equal(p.e.studyCandidates.children.length,1);
+  assert.match(visibleText(p.e.studyCandidates),/material-1: frozen <β>/);assert.equal(add.disabled,true);
+  await screenAction(p,'Inspect baseline source').onclick();assert.equal(p.current().messages.at(-1).selection,exact);
+  p.emit({selection:JSON.parse(exact),selection_json:exact,snapshot:{id:'frozen <β>'},capabilities:{}});
+  p.e.target.value='';p.e.assign.onclick();await p.e.bind.onclick();assert.ok(p.current().messages.at(-1).changes.includes(exact));
+  p.emit({pattern_json:'{"pieces":[]}',pieces:[],pattern_sha256:'bound'});
+  await p.e.study.onclick();assert.ok(p.current().messages.at(-1).studyRequest.includes(exact));
+  assert.equal(JSON.parse(p.current().messages.at(-1).studyRequest).variants[1].key,'material-1');p.emit(studyReport());
+  const saved=descendants(section(p,'Source-qualified screening')).find(node=>node.download==='screened-material-1.json');
+  assert.equal(await p.blobs.get(saved.href).text(),exact);
+  p.e.guidedScreenQuery.value='another source';p.e.guidedScreenQuery.handlers.input();
+  const count=p.current().messages.length;add.onclick();assert.equal(p.current().messages.length,count);assert.equal(p.e.studyCandidates.children.length,1);
+  await p.e.study.onclick();assert.ok(p.current().messages.at(-1).studyRequest.includes(exact));
+});
+
+test('guided catalog screening enforces shortlist revision deduplication, capacity and stale worker ownership',async()=>{
+  const p=await pageModule();await p.load();guidedControls(p);guidedCatalogControls(p);
+  const rows=Array.from({length:8},(_,i)=>catalogScreenRow('choice-'+i,guidedSelection((i+1).toString(16),'source-'+i)));
+  rows.push(catalogScreenRow('same revision','\n'+rows[0].selection_json));
+  const report=catalogScreenReport(rows);await p.e.screen.onclick();p.emit(report);
+  const oldInspect=screenAction(p,'Inspect choice-0 source'),oldAdd=screenAction(p,'Add choice-0 to comparisons');
+  await p.e.screen.onclick();const count=p.current().messages.length;
+  oldInspect.onclick();oldAdd.onclick();assert.equal(p.current().messages.length,count);assert.equal(p.e.studyCandidates.children.length,0);
+  p.emit(report);oldInspect.onclick();oldAdd.onclick();assert.equal(p.e.studyCandidates.children.length,0,'Previous report actions stay obsolete');
+  screenAction(p,'Add choice-0 to comparisons').onclick();
+  assert.equal(screenAction(p,'Add same revision to comparisons').disabled,true);
+  screenAction(p,'Add same revision to comparisons').onclick();assert.equal(p.e.studyCandidates.children.length,1);
+  for(let i=1;i<7;i++)screenAction(p,`Add choice-${i} to comparisons`).onclick();
+  assert.equal(p.e.studyCandidates.children.length,7);const over=screenAction(p,'Add choice-7 to comparisons');assert.equal(over.disabled,true);
+  over.onclick();assert.equal(p.e.studyCandidates.children.length,7);
+  await p.e.screen.onclick();const stale=p.current(),request=stale.messages.at(-1).request;
+  p.e.guidedScreenMixed.checked=true;p.e.guidedScreenMixed.handlers.change();assert.equal(stale.dead,true);p.ready();
+  stale.emit({type:'result',request,result:report,files:[{name:'stale-screen.json',text:'{}'}]});
+  assert.equal(section(p,'Source-qualified screening').hidden,true);assert.equal(p.live.size,0);assert.equal(p.e.studyCandidates.children.length,7);
+  await p.e.study.onclick();const study=p.current().messages.at(-1).studyRequest;
+  for(const row of rows.slice(0,7))assert.ok(study.includes(row.selection_json));
+});
+
+test('compiled WASM guided catalog screening adopts exact selections into independent material consumers',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async t=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const loaded=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    const ftx=typeof loaded.initSync==='function'?loaded:loaded.default;
+    if(typeof ftx.initSync==='function')ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const worker=await workerModule({bindings:{...ftx,default:async()=>{}}}),p=await pageModule();
+    const source=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-stock-pattern.json'),'utf8'));
+    source.fabric.material.record.properties.width={value:0.1,unit:'m',evidence:'estimate',source:'test',method:'Synthetic miniature roll width'};
+    const pattern=JSON.stringify(source);p.select('patternFile',pattern);await p.e.patternFile.onchange();guidedControls(p);
+    guidedCatalogControls(p);p.e.guidedScreenQuery.value='3m_thinsulate_c';p.e.guidedScreenForm.value='nonwoven';
+    p.e.guidedScreenSteady.checked=true;
+    draftCatalogRule(p,{property:'areal_density',maximum:0.3,direction:'minimize'});p.e.addScreenAttribute.onclick();
+    draftCatalogRule(p,{property:'thermal_resistance',direction:'maximize'});p.e.addScreenAttribute.onclick();
+    const native=process.env.FTX_GUIDED_SCENARIO_NATIVE?path.resolve(process.env.FTX_GUIDED_SCENARIO_NATIVE):null;
+    const work=native?fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-guided-catalog-')):null;
+    const save=(name,text)=>{const file=path.join(work,name);fs.writeFileSync(file,text,{flag:'wx'});return file;};
+    const nativeReport=(command,...files)=>JSON.parse(require('node:child_process').execFileSync(native,[command,...files],
+      {encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:64*1024*1024}));
+    const dispatch=async op=>{
+      await p.e[op].onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,op,p.e.error.textContent);
+      const output=await worker.send(sent);assert.equal(output.type,'result',output.message);p.current().emit(output);return {sent,output};
+    };
+    const executeScreen=async label=>{
+      const {sent,output}=await dispatch('screen');
+      assert.deepEqual(output.result,JSON.parse(ftx.material_screen(sent.screenRequest)));
+      assert.equal(output.files.find(file=>file.name==='screen-request.json').text,sent.screenRequest);
+      if(native)assert.deepEqual(output.result,nativeReport('screen',save(label+'-screen.json',sent.screenRequest)));
+      return output.result;
+    };
+    const screen=await executeScreen('catalog'),ids=['3m_thinsulate_c100_2020','3m_thinsulate_c200_2020'];
+    const selected=ids.map(id=>screen.alternatives.find(row=>row.material_id===id));
+    assert.ok(selected.every(row=>row?.eligible));assert.deepEqual(screen.frontier,ids);
+    assert.equal(screen.physical_validation_claim,false);assert.ok(screen.alternatives.some(row=>!row.eligible&&row.exclusions.length));
+    for(const row of selected) {
+      assert.equal(typeof row.selection_json,'string');assert.equal(row.selection.allow_estimates,false);
+      assert.match(row.selection.expected_sha256,/^[0-9a-f]{64}$/);
+      assert.deepEqual(JSON.parse(row.selection_json),row.selection);
+      screenAction(p,`Add ${row.key} to comparisons`).onclick();
+    }
+    assert.equal(p.e.studyCandidates.children.length,2);
+    await screenAction(p,`Inspect ${selected[0].key} source`).onclick();const inspectSent=p.current().messages.at(-1);
+    assert.equal(inspectSent.selection,selected[0].selection_json);
+    const inspected=await worker.send(inspectSent);assert.equal(inspected.type,'result',inspected.message);p.current().emit(inspected);
+    assert.deepEqual(inspected.result,JSON.parse(ftx.material_inspect(selected[0].selection_json)));
+    assert.equal(inspected.result.selection_json,selected[0].selection_json);
+    assert.equal(inspected.result.capabilities.steady_conduction.ready,true);
+    assert.equal(inspected.result.capabilities.mechanical_coefficients.ready,false);
+    assert.equal(inspected.result.capabilities.transient_thermal.ready,false);
+    p.e.target.value='';p.e.assign.onclick();const bound=await dispatch('bind');
+    assert.ok(bound.sent.changes.includes(selected[0].selection_json));
+    assert.deepEqual(bound.output.result,JSON.parse(ftx.material_bind(pattern,bound.sent.changes)));
+    assert.equal(JSON.parse(bound.output.result.pattern_json).fabric.material.expected_sha256,selected[0].selection.expected_sha256);
+    p.e.guidedMass.checked=true;p.e.guidedMass.handlers.change();p.e.guidedInventoryComplete.checked=true;p.e.guidedMassGoal.checked=true;
+    p.e.guidedRequireMass.checked=true;p.e.guidedRequireCutting.checked=true;p.e.guidedAllowance.value='0';
+    for(const id of ['guidedGap','guidedEdge','guidedEnd'])p.e[id].value='0';
+    const studied=await dispatch('study');assert.equal(studied.sent.pattern,pattern,'Comparisons retain the original pattern, not its preview binding');
+    for(const row of selected)assert.ok(studied.sent.studyRequest.includes(row.selection_json));
+    assert.deepEqual(studied.output.result,JSON.parse(ftx.material_study(pattern,studied.sent.studyRequest)));
+    if(native)assert.deepEqual(studied.output.result,nativeReport('study',save('pattern.json',pattern),save('study.json',studied.sent.studyRequest)));
+    const close=(a,b)=>assert.ok(Math.abs(a-b)<=1e-10*Math.max(1,Math.abs(b)),`${a} != ${b}`);
+    for(const row of studied.output.result.alternatives) {
+      assert.equal(row.binding.status,'available',row.key);assert.equal(row.assembly_mass.status,'available',row.key);
+      if(row.key==='baseline') {
+        assert.equal(row.cutting.status,'refused');assert.match(row.cutting.refusal.message,/hides.*different stock geometry/);
+        assert.equal(studied.output.result.comparison.alternatives.find(candidate=>candidate.key===row.key).eligible,false);
+        assert.equal(row.metrics.stock_area_m2,null,'A refused hide-to-roll route has no invented stock area');
+      } else {
+        assert.equal(row.cutting.status,'available',JSON.stringify(row.cutting));
+        assert.equal(studied.output.result.comparison.alternatives.find(candidate=>candidate.key===row.key).eligible,true);
+      }
+      const mass=row.key==='baseline'?0.5:row.key===ids[0]?0.105:0.21;
+      close(row.metrics.assembly_mass_kg,0.0007*mass);
+    }
+    assert.equal(studied.output.result.hardware_execution_authorized,false);assert.equal(studied.output.result.physical_validation_claim,false);
+    for(const [i,row] of selected.entries()) {
+      const request='{"schema":"ftx-thermal-steady/1","layers":['+row.selection_json+'],"interface_resistance_m2_k_w":[],'+
+        '"area_m2":1.2,"inside_c":30,"outside_c":0,"inside_resistance_m2_k_w":0.05,"outside_resistance_m2_k_w":0.05}';
+      const heat=JSON.parse(ftx.thermal_steady(request));
+      if(native)assert.deepEqual(heat,nativeReport('thermal-steady',save(`heat-${i}.json`,request)));
+      close(heat.power_w,36/(0.1+[0.2,0.39][i]));assert.equal(heat.storage_required,false);
+      assert.equal(heat.comfort_claim,false);assert.equal(heat.empirical_validation_claim,false);
+      assert.equal(heat.request.layers[0].expected_sha256,row.selection.expected_sha256);
+    }
+    // A separately authored software-only observation tests signed-zero source transport. It is
+    // not an additional measurement of this product and cannot change the real thermal properties.
+    const exactSource=JSON.parse(selected[0].selection_json);delete exactSource.expected_sha256;exactSource.allow_estimates=true;
+    exactSource.record.sources.software_transport={reference:'test:screen-source-precision',accessed_on:'2026-11-03',note:'Synthetic serialization check only'};
+    exactSource.overrides={synthetic_zero:{value:0,unit:'1',evidence:'estimate',source:'software_transport',method:'Synthetic signed-zero transport check'}};
+    const authored=JSON.stringify(exactSource).replace('"synthetic_zero":{"value":0,','"synthetic_zero":{"value":-0.0,');
+    assert.ok(authored.includes('"value":-0.0'));
+    const precise='{"schema":"ftx-material-screen/1","basis":"nominal","candidates":[{"key":"exact-zero","selection":'+authored+'}],'+
+      '"objectives":[{"attribute":{"key":"synthetic_zero","unit":"1"},"direction":"minimize"}],"required_capabilities":["steady_conduction"]}';
+    p.select('screenRequest',precise);p.e.screenRequest.handlers.change();const exact=await executeScreen('signed-zero');
+    const row=exact.alternatives[0];assert.equal(row.eligible,true,JSON.stringify(row.exclusions));assert.match(row.selection_json,/"value":-0\.0/);
+    assert.notEqual(row.selection.expected_sha256,selected[0].selection.expected_sha256);
+    await screenAction(p,'Inspect exact-zero source').onclick();const precisionInspect=p.current().messages.at(-1);
+    assert.equal(precisionInspect.selection,row.selection_json);const precisionResult=await worker.send(precisionInspect);
+    assert.equal(precisionResult.type,'result',precisionResult.message);p.current().emit(precisionResult);
+    assert.equal(precisionResult.result.selection.expected_sha256,row.selection.expected_sha256);
+    p.e.target.value='';p.e.assign.onclick();const exactBound=await dispatch('bind');assert.ok(exactBound.sent.changes.includes(row.selection_json));
+    assert.equal(JSON.parse(exactBound.output.result.pattern_json).fabric.material.expected_sha256,row.selection.expected_sha256);
+    assert.match(exactBound.output.result.pattern_json,/"value":-0\.0/);
+    t.diagnostic(`Fresh compiled catalog screen → source inspection/binding → two retained material choices → complete cutting/mass and independent steady heat. `+
+      `C100/C200 sheet heat is 120 W / ${36/0.49} W for the declared fixed-area reservoirs; absent mechanics and storage stay unavailable. `+
+      `The original hide refuses roll cutting while retaining its independent mass. `+
+      `${native?'Native screen, study and heat reports match public WASM/worker.':'Public WASM and worker agree.'} Canonical signed zero survives source-locked adoption. No garment warmth or physical fit claim.`);
+  });
+
 test('manufacturing studies use original lossless source, not bound previews, and download exact alternative patterns', async () => {
   const p = await pageModule(), original = '{"pieces":[{"id":"front"}],"x":-0.0,"coefficient":1.0}';
   p.select('patternFile', original); await p.e.patternFile.onchange();
@@ -14312,9 +14558,10 @@ test('compiled WASM guided heat bounds, moving directional strain and contact lo
     alternative.record.properties.thermal_conductivity.value=0.02;
     alternative.record.properties.thermal_conductivity.bounds=[0.018,0.022];
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
-    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
-    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
-    const w=await workerModule({bindings:ftx}),{p}=await guidedScenarioSetup(true);
+    const loaded=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    const ftx=typeof loaded.initSync==='function'?loaded:loaded.default;
+    if(typeof ftx.initSync==='function')ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:{...ftx,default:async()=>{}}}),{p}=await guidedScenarioSetup(true);
     p.select('patternFile',pattern);await p.e.patternFile.onchange();
     p.e.selection.value=JSON.stringify(alternative);p.e.selection.handlers.input();await p.e.inspect.onclick();
     const inspection=await w.send(p.current().messages.at(-1));assert.equal(inspection.type,'result',inspection.message);
@@ -14431,6 +14678,137 @@ test('compiled WASM guided heat bounds, moving directional strain and contact lo
     }
     t.diagnostic('Synthetic sewing-only proof: signed source intervals, all twelve material-frame strain values, all four force readings and a genuinely moving model-bound trajectory; missing strain/contact scopes refuse independently. '+
       (native?'All four complete reports agree with native ftx-materials.':'Actual compiled WASM worker results retained.')+' No pressure, comfort, physical fit or gravity-settled garment claim.');
+  });
+
+test('compiled WASM guided contact loads preserve native force histories and independent consumer refusal',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_SCENARIO_BODY},async t=>{
+    const source=path.resolve(process.env.FTX_GUIDED_SCENARIO_BODY),load=name=>fs.readFileSync(path.join(source,name));
+    const guidedContactMetrics=[['guidedContactResultant','body_contact_resultant_n'],
+      ['guidedContactVertex','max_body_contact_vertex_force_n'],
+      ['guidedMotionContactResultant','motion_peak_body_contact_resultant_n'],
+      ['guidedMotionContactVertex','motion_max_body_contact_vertex_force_n']];
+    const sourcePattern=JSON.parse(load('pattern.json'));
+    // Reuse accepted_body_workflow's settled, slightly stretched band on the synthetic 100 mm cylinder.
+    // Its original barrier and convergence limits stay unchanged; these are not measured garment data.
+    const width=2*Math.PI*98;
+    sourcePattern.pieces[0].vertices.b[0]=width;sourcePattern.pieces[0].vertices.c[0]=width;
+    sourcePattern.pieces[0].placement.radius_mm=110;sourcePattern.pieces[0].placement.x0=width/2;
+    const pattern=JSON.stringify(sourcePattern),body=load('body-input.json').toString('utf8'),modelBytes=load('model.ftxbody');
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const loaded=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    const ftx=typeof loaded.initSync==='function'?loaded:loaded.default;
+    // The browser package initializes explicitly; the cached Node package initializes on import.
+    if(typeof ftx.initSync==='function')ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    assert.equal(typeof ftx.material_scenario_study,'function');
+    const alternate=structuredClone(JSON.parse(pattern).fabric.material);delete alternate.expected_sha256;
+    alternate.id=alternate.record.id='synthetic-guided-contact-thicker';alternate.record.properties.thickness.value*=2;
+    const worker=await workerModule({bindings:{...ftx,default:async()=>{}}}),{p}=await guidedScenarioSetup(true);
+    p.select('patternFile',pattern);await p.e.patternFile.onchange();
+    p.e.selection.value=JSON.stringify(alternate);p.e.selection.handlers.input();await p.e.inspect.onclick();
+    const inspection=await worker.send(p.current().messages.at(-1));assert.equal(inspection.type,'result',inspection.message);
+    p.current().emit(inspection);p.e.studyCandidateName.value='thicker';p.e.addStudyCandidate.onclick();
+    p.e.guidedScenarioFitSource.value='none';p.e.guidedScenarioFitSource.handlers.change();
+    for(const [id,value] of Object.entries({guidedScenarioSpacing:'30',guidedScenarioSewSteps:'12',
+      guidedScenarioDrapeSteps:'96',guidedScenarioStep:'0.005',guidedScenarioFrameBudget:'1000000'}))p.e[id].value=value;
+    p.select('scenarioBody',body);p.e.scenarioBody.handlers.change();p.e.body.files=[new Blob([modelBytes])];p.e.body.handlers.change();
+    p.e.guidedDrapeMassGoal.checked=false;p.e.guidedHeatPowerGoal.checked=false;
+    guidedContactControls(p,['band']);guidedMotionSourceControls(p);
+    p.e.guidedMotionStep.value='0.0005';p.e.guidedMotionVertices.value='100000';
+    await addGuidedMotion(p,'0.001','35');await addGuidedMotion(p,'0.002','35.1');
+    p.e.guidedRequireContactLoads.checked=true;p.e.guidedRequireMotion.checked=true;p.e.guidedRequireMotionContactLoads.checked=true;
+    for(const [prefix] of guidedContactMetrics)p.e[prefix+'Goal'].checked=true;
+    const native=process.env.FTX_GUIDED_SCENARIO_NATIVE?path.resolve(process.env.FTX_GUIDED_SCENARIO_NATIVE):null;
+    const replay=process.env.FTX_GUIDED_SCENARIO_REPLAY?path.join(path.resolve(process.env.FTX_GUIDED_SCENARIO_REPLAY),'contact-loads'):null;
+    const work=replay||(native?fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-guided-contact-')):null);
+    if(replay)fs.mkdirSync(replay,{recursive:true});
+    const retain=(name,raw)=>{if(work)fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});};
+    for(const [name,raw] of [['pattern.json',pattern],['body-input.json',body],['model.ftxbody',modelBytes]])retain(name,raw);
+    const evaluate=async label=>{
+      await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+      assert.equal(sent.type,'scenario',label+': '+p.e.error.textContent);
+      assert.equal(sent.pattern,pattern);assert.equal(sent.measurements,body);
+      assert.equal(JSON.parse(sent.studyRequest).comparison.allow_mixed_protocols,false);
+      assert.deepEqual(JSON.parse(sent.scenarioRequest).options,{spacing:30,sew_steps:12,drape_steps:96,step:0.005,max_settle_steps:0});
+      const output=await worker.send(sent);assert.equal(output.type,'result',label+': '+output.message);p.current().emit(output);
+      const previous=globalThis.ftxProgress,model=new ftx.WebBody(modelBytes);globalThis.ftxProgress=()=>{};
+      try {assert.deepEqual(output.result,JSON.parse(ftx.material_scenario_study(model,pattern,sent.studyRequest,sent.scenarioRequest,body)));}
+      finally {model.free();if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;}
+      for(const [name,raw] of [['study-request.json',sent.studyRequest],['scenario-request.json',sent.scenarioRequest],['body-input.json',body]]) {
+        assert.equal(output.files.find(file=>file.name===name).text,raw);
+        const link=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.download===name);
+        assert.equal(await p.blobs.get(link.href).text(),raw);
+      }
+      retain(label+'-study.json',sent.studyRequest);retain(label+'-scenario.json',sent.scenarioRequest);
+      if(native) {
+        const raw=require('node:child_process').execFileSync(native,['scenario-study',path.join(work,'pattern.json'),
+          path.join(work,label+'-study.json'),path.join(work,label+'-scenario.json'),path.join(work,'body-input.json'),path.join(work,'model.ftxbody')],
+          {encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:64*1024*1024});
+        assert.deepEqual(output.result,JSON.parse(raw),label+' complete native/WASM/worker equality');retain(label+'-native-report.json',raw);
+      }
+      return output.result;
+    };
+    const simulation=(report,key)=>report.simulations.find(row=>row.key===key).evaluation.result;
+    const moving=await evaluate('contact-motion');
+    const close=(actual,expected)=>assert.ok(Math.abs(actual-expected)<=1e-10*Math.max(1,Math.abs(expected)),`${actual} != ${expected}`);
+    for(const row of moving.comparison.alternatives) {
+      assert.equal(row.eligible,true,JSON.stringify(row.exclusions));
+      const initial=simulation(moving,row.key),motion=initial.motion.result;
+      assert.equal(initial.drape.numerical.settled,true);assert.equal(initial.metrics.simulation_gating_clear,true);
+      assert.equal(initial.contact_loads.status,'available');assert.equal(initial.motion.status,'available');
+      assert.equal(motion.contact_loads.status,'available');assert.ok(motion.samples.length>=2);
+      assert.notDeepEqual(motion.samples.at(-1).body_positions_m,motion.initial_sample.body_positions_m);
+      const first=initial.contact_loads.result,history=motion.contact_loads.result;
+      assert.ok(first.peak_body_resultant_n>0);assert.ok(first.max_body_vertex_force_n>0);
+      assert.ok(history.peak_body_resultant_n>0);assert.ok(history.max_body_vertex_force_n>0);
+      assert.deepEqual(history.request,{schema:'ftx-contact-loads/1',instances:['band'],max_vertex_samples:100000,max_pair_evaluations:1000000});
+      assert.equal(first.scope,'initial_state');assert.equal(history.scope,'accepted_motion_samples');
+      assert.deepEqual(history.source,first.source);assert.deepEqual(history.frames[0],first.frames[0]);
+      assert.equal(history.frames.length,motion.samples.length+1);assert.equal(history.vertex_samples,first.vertex_samples*history.frames.length);
+      for(const report of [first,history])for(const key of ['physical_validation_claim','pressure_claim','comfort_claim','continuous_time_bound'])assert.equal(report[key],false);
+      assert.equal(initial.drape.contact_diagnostics.final_reactions.result.pressure_pa,null);
+      assert.equal(history.source.material_report_sha256,initial.drape.contact_diagnostics.final_reactions.result.material_report_sha256);
+      assert.deepEqual(Object.keys(history.source.instances),['band']);
+      for(const frame of history.frames) {
+        const forces=frame.body_force_on_selected_vertices_n,sum=[0,0,0];
+        for(const force of forces)force.forEach((value,index)=>{sum[index]+=value;});
+        sum.forEach((value,index)=>close(frame.body.resultant_n[index],value));
+        close(frame.body.resultant_magnitude_n,Math.hypot(...sum));
+        close(frame.body.max_vertex_force_n,Math.max(...forces.map(force=>Math.hypot(...force))));
+      }
+      const expected=[first.peak_body_resultant_n,first.max_body_vertex_force_n,history.peak_body_resultant_n,history.max_body_vertex_force_n];
+      guidedContactMetrics.forEach(([,metric],index)=>{
+        const reading=row.readings[metric];assert.equal(reading.unit,'N');assert.equal(reading.value,expected[index]);
+        assert.equal(reading.consumer,metric.startsWith('motion_')?'motion_contact_loads':'contact_loads');
+        assert.equal(reading.reported_bounds,undefined);
+      });
+    }
+    assert.notEqual(simulation(moving,'baseline').contact_loads.result.source.instances.band,
+      simulation(moving,'thicker').contact_loads.result.source.instances.band,'The actual substituted source owns its contact calculation');
+    const baselineForce=simulation(moving,'baseline').contact_loads.result.max_body_vertex_force_n;
+    const thickerForce=simulation(moving,'thicker').contact_loads.result.max_body_vertex_force_n;
+    assert.ok(baselineForce<0.18&&thickerForce>0.18,'Material thickness changes the actual source-bound barrier force across the declared limit');
+    p.e.guidedContactVertexLimit.value='0.18';p.e.guidedContactVertexLimit.handlers.input();
+    const guarded=await evaluate('contact-force-guard');
+    assert.deepEqual(guarded.comparison.policy.constraints,[{metric:'max_body_contact_vertex_force_n',minimum:null,maximum:0.18}]);
+    assert.deepEqual(guarded.comparison.frontier,['baseline']);
+    assert.equal(guarded.comparison.alternatives.find(row=>row.key==='baseline').eligible,true);
+    const rejected=guarded.comparison.alternatives.find(row=>row.key==='thicker');
+    assert.equal(rejected.eligible,false);assert.ok(rejected.exclusions.some(reason=>/violates the inclusive comparison constraint/.test(reason.message)));
+    assert.deepEqual(guarded.simulations,moving.simulations,'The declared numerical force guard changes admission, not the material simulation');
+    p.e.guidedContactVertexLimit.value='';p.e.guidedContactVertexLimit.handlers.input();
+    p.e.guidedContactLoadsInstances.value='missing-retained-instance';p.e.guidedContactLoadsInstances.handlers.input();
+    const missing=await evaluate('missing-contact-instance');assert.deepEqual(missing.comparison.frontier,[]);
+    for(const key of ['baseline','thicker']) {
+      const before=simulation(moving,key),after=simulation(missing,key);
+      assert.equal(after.contact_loads.status,'refused');assert.match(after.contact_loads.refusal.message,/unknown|unplaced|collapsed/);
+      assert.equal(after.motion.status,'available');assert.equal(after.motion.result.contact_loads.status,'refused');
+      assert.deepEqual(after.motion.result.samples,before.motion.result.samples,'A contact-scope refusal leaves the actual mechanical trajectory intact');
+      assert.equal(after.metrics.independent_surface_power_w,before.metrics.independent_surface_power_w);
+    }
+    t.diagnostic('Guided nonzero initial and accepted-motion body forces, exact material scope, all four nominal readings, a 0.18 N nodal guard and independent scope refusal match '+
+      (native?'native ftx-materials, public WASM and the worker':'public WASM and the worker')+
+      '. Existing synthetic settled-band fixture: baseline '+baselineForce+' N, thicker '+thickerForce+
+      ' N. These are numerical nodal forces, not pressure, comfort or physical garment-fit validation. Replay: '+(work||'not requested'));
   });
 
 test('compiled WASM guided layered heat and vapor preserve seven source intervals, moving geometry and independent coverage refusals',

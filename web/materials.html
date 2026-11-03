@@ -410,7 +410,66 @@ Every alternative starts from the <strong>original pattern loaded in section 2</
 No binding step is required. Refused consumers remain visible; missing prices, mass or heat never become zero.</p>
 <div class="grid"><div>
 <h3>Screen and compare manufacturing</h3>
+<label>Discover suitable materials <select id="screenMode">
+<option value="guided">Choose construction, properties and physics support here</option>
+<option value="file">Load a complete screening request (advanced)</option></select></label>
+<div id="guidedScreen">
+<div class="study-fields">
+<label>Identity, fiber or construction <input id="guidedScreenQuery" type="search" placeholder="For example: linen, leather or insulation"></label>
+<label>Material form <select id="guidedScreenForm"><option value="">Any form</option>
+<option value="woven">Woven fabric</option><option value="knit">Knitted fabric</option>
+<option value="nonwoven">Nonwoven or felt</option><option value="hide">Leather or hide</option>
+<option value="fill">Loose or batt fill</option><option value="laminate">Laminate</option>
+<option value="sheet">Sheet with unspecified construction</option><option value="yarn">Yarn or thread</option>
+<option value="fiber">Constituent fiber</option></select></label>
+<label>Property comparison <select id="guidedScreenBasis"><option value="">Choose a basis</option>
+<option value="nominal">Published nominal values</option><option value="reported_bounds">Entire source-reported ranges</option></select></label>
+</div>
+<label><input id="guidedScreenEstimates" type="checkbox"> Explicitly admit estimated observations in catalog discovery</label>
+<label><input id="guidedScreenMixed" type="checkbox"> Explicitly compare observations with different reported methods or conditions</label>
+<fieldset><legend>Require actual physics support</legend>
+<label><input id="guidedScreenMechanics" type="checkbox"> Complete sheet mechanics</label>
+<label><input id="guidedScreenSteady" type="checkbox"> Steady through-thickness heat conduction</label>
+<label><input id="guidedScreenThermal" type="checkbox"> Transient thermal response, including heat storage</label>
+<p class="note">These checks compile the selected material laws under its evidence policy. A family name, property count or marketing
+stretch percentage cannot satisfy them. Leave unrelated physics unchecked; compiler readiness does not validate a physical garment.</p>
+</fieldset>
+<details><summary>Add property limits and independent objectives</summary>
+<div class="study-fields">
+<label>Observation <select id="guidedScreenProperty">
+<option value="areal_density">Areal mass (kg/m²)</option><option value="thickness">Thickness (m)</option>
+<option value="width">Available width (m)</option><option value="bulk_density">Bulk density (kg/m³)</option>
+<option value="thermal_resistance">Thermal resistance (m² K/W)</option><option value="thermal_conductivity">Thermal conductivity (W/(m K))</option>
+<option value="specific_heat">Specific heat (J/(kg K))</option><option value="vapor_resistance">Vapor resistance (m² Pa/W)</option>
+<option value="warp_stiffness">Warp stiffness (N/m)</option><option value="weft_stiffness">Weft stiffness (N/m)</option>
+<option value="shear_stiffness">Shear stiffness (N/m)</option><option value="bending_rigidity">Bending rigidity (N m)</option>
+<option value="friction_skin">Skin friction (dimensionless)</option><option value="friction_self">Self friction (dimensionless)</option>
+<option value="custom">Another exact observation key and unit</option></select></label>
+<label id="guidedScreenCustom" hidden>Exact observation key <input id="guidedScreenKey" type="text" placeholder="Use the key in the source record"></label>
+<label>Canonical unit <input id="guidedScreenUnit" type="text" value="kg/m2" disabled></label>
+<label>Inclusive minimum <input id="guidedScreenMinimum" type="number" step="any" placeholder="No minimum"></label>
+<label>Inclusive maximum <input id="guidedScreenMaximum" type="number" step="any" placeholder="No maximum"></label>
+<label>Independent objective <select id="guidedScreenDirection"><option value="">Only constrain this observation</option>
+<option value="minimize">Prefer lower values</option><option value="maximize">Prefer higher values</option></select></label>
+<label>Exact reported method, optional <input id="guidedScreenMethod" type="text" placeholder="No method restriction"></label>
+</div>
+<label>Required observation conditions, optional JSON string map <textarea id="guidedScreenConditions" rows="2"
+placeholder='For example: {"specimen":"the exact source specimen"}'></textarea></label>
+<p class="note">Limits use the displayed canonical units: 100 g/m² is 0.1 kg/m²; 1 mm is 0.001 m. Add at least one limit or
+objective for a property. Method and condition text must match the observations exactly. Missing data excludes a candidate from
+that rule. No durability, warmth or safe-use threshold is supplied automatically.</p>
+<button id="addScreenAttribute" type="button">Add property filter / objective</button>
+</details>
+<p id="guidedScreenAttributeCount" role="status">0 property rules added. Only added rules run.</p>
+<div id="guidedScreenAttributes"></div>
+<button id="clearScreenAttributes" type="button" disabled>Clear property rules</button>
+<p class="note">Search and physics requirements work without property rules. With multiple objectives, the engine reports the
+non-dominated alternatives without an invented weighted score. Reported-range mode requires complete source bounds for every
+requested observation. Inspect a result's exact source or add an eligible result directly to your garment comparison below.</p>
+</div>
+<div id="screenFileControls" hidden>
 <label>Screening request JSON (<code>ftx-material-screen/1</code>) <input id="screenRequest" type="file" accept=".json,application/json"></label>
+</div>
 <button id="screen" data-command="screen" disabled>Screen source-qualified materials</button>
 <p class="note">The request declares units, constraints, objectives, nominal or reported-bound comparison and estimate consent.
 Its scalar frontier is not a garment ranking. Original observations and protocols remain inspectable for excluded candidates too.</p>
@@ -419,7 +478,7 @@ Its scalar frontier is not a garment ranking. Original observations and protocol
 <option value="file">Load a complete study request (advanced)</option>
 </select></label>
 <div id="guidedStudy">
-<p><a href="#materialCatalog">Inspect each material in section 1</a> and add it to the shortlist. The original pattern is always included as
+<p>Add eligible discovery results above, or <a href="#materialCatalog">inspect each material in section 1</a> and add it to the shortlist. The original pattern is always included as
 <strong>baseline</strong>. Each material choice changes the assignment you choose below. Optional linked alterations also vary the geometry.</p>
 <p id="studyCandidateCount" role="status">No comparison materials added.</p>
 <div id="studyCandidates"></div>

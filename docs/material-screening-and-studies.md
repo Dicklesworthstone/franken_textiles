@@ -23,6 +23,20 @@ The browser bindings are `material_screen(request_json)` and
 `ftx_export::material_study::Request::evaluate`, and `ftx_wasm::materials::{screen,study}`.
 Section 4 of `materials.html` runs these same requests and displays source-qualified results.
 
+Resolved screening rows retain both the existing typed `selection` and `selection_json`, canonical
+Rust JSON text for that same frozen selection. Resolution or serialization refusal withholds both;
+a later filter, property or capability exclusion retains the resolved source for inspection. Browser
+adoption uses the exact string instead of serializing the display object, preserving source identity
+and signed zero. An eligible row can enter the ordinary material shortlist directly; inspection is
+available for any successfully resolved row. Neither action changes the evidence policy or the
+material's missing capabilities.
+
+The guided discovery controls author this same request without a complete JSON file: text/form
+filters, explicit basis and consents, up to 64 property constraints and 16 independent objectives,
+exact method/condition restrictions, and the three actual compiler-readiness checks. The complete
+request and each frozen selection remain downloadable. See
+[the browser discovery workflow](browser-material-workbench.md#discover-suitable-materials-and-use-their-exact-sources).
+
 ### Build a comparison in the browser
 
 Load the original pattern in section 2 of the material workbench. Inspect a catalog or custom

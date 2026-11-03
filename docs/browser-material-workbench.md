@@ -189,6 +189,41 @@ association. Report or pose changes withdraw drape, heat, vapor and coverage res
 pending work. The independent measurement/export readiness gate is unchanged. Numerical acceptance
 and a completed drape do not establish physical garment fit.
 
+### Discover suitable materials and use their exact sources
+
+In section 4, **Discover suitable materials** opens ordinary catalog filters. Choose a nominal or
+source-reported-range basis, search by identity, fiber or construction, and optionally restrict the
+material form. The mechanics, steady-conduction and transient-thermal checkboxes run the existing
+native compilers under each material's evidence policy. A record with many observations still fails
+a requested compiler when its required data is missing. Unrequested consumers do not exclude it.
+
+Add property rules with inclusive minimum/maximum values, an independent minimize/maximize objective,
+or both. The displayed units are canonical: for example, 0.3 kg/m² is 300 g/m² and 0.02 m is 20 mm.
+Choose another exact property key/unit for observations outside the common presets. Optional method
+and condition restrictions retain exact source strings. **Add property filter / objective** freezes
+that rule; subsequent draft edits do not change it. Remove a rule to replace it, or clear the list.
+The native limits remain 64 constraints and 16 objectives. Search and compiler requirements also
+work without property rules. Estimates and cross-protocol comparisons require separate explicit choices.
+
+For a source-qualified insulation shortlist, search `thinsulate`, require steady conduction, set
+areal mass at most 0.3 kg/m² and thickness at most 0.02 m, minimize areal mass and maximize thermal
+resistance in m² K/W. These are the policies in `tests/fixtures/materials/screen-insulation.json`;
+they compare reported observations and do not establish a garment temperature rating.
+
+Each successfully resolved result offers **Inspect … source** and an exact frozen-selection download,
+including excluded results whose evidence may still be useful for another purpose. Eligible results
+also offer **Add … to comparisons** when an original pattern is loaded. The shortlist retains up to
+seven exact materials plus its unchanged baseline, rejects duplicate frozen identities, and feeds the
+existing piece/default binding, manufacturing, thermal, motion and design-study paths. No source is
+reconstructed by copying values from the displayed table. The native `selection_json` string keeps
+negative zero, source numbers, evidence consent and digest intact through adoption and replay.
+
+Changing a discovery policy withdraws its old results and pending reads; already chosen shortlist
+entries remain independent frozen snapshots. Stale or busy result buttons cannot replace a source.
+Selecting a screening file switches to the original-file route, which retains its exact bytes.
+Scalar eligibility, compiler readiness and a computed frontier remain separate from measured textile
+behavior and physical garment qualification.
+
 ### Continue from an evaluated study candidate
 
 Each available final binding in a manufacturing, single-scenario or named-matrix study offers

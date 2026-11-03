@@ -1,6 +1,7 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest,
   buildGuidedDesignAfterOperations } from "./materials-study-builder.js";
+import { buildMaterialScreenRequest } from "./materials-screen-builder.js";
 
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
@@ -32,6 +33,13 @@ let selectedStockRequest = null;
 const pieceChanges = new Map(), urls = new Map();
 const combinationGroups = new Map();
 const studyCandidates = [];
+const guidedScreenAttributes = [];
+const screenProperties = {
+  areal_density: "kg/m2", thickness: "m", width: "m", bulk_density: "kg/m3",
+  thermal_resistance: "m2*K/W", thermal_conductivity: "W/(m*K)", specific_heat: "J/(kg*K)",
+  vapor_resistance: "m2*Pa/W", warp_stiffness: "N/m", weft_stiffness: "N/m", shear_stiffness: "N/m",
+  bending_rigidity: "N*m", friction_skin: "1", friction_self: "1",
+};
 const guidedDesignVariables = [];
 const guidedDesignButtons = [];
 const guidedDesignAfter = [], guidedDesignAfterButtons = [];
@@ -132,6 +140,7 @@ for (const op of operations) {
 const text = value => JSON.stringify(value, null, 2);
 const has = id => (id === "stockRequest" && selectedStockRequest !== null) || roundFiles.has(id) || !!$(id).files.length;
 const guidedStudyMode = () => $("studyMode").value === "guided";
+const guidedScreenMode = () => $("screenMode").value === "guided";
 const guidedScenarioMode = () => ["guided", "guided_matrix"].includes($("scenarioMode").value);
 const guidedMatrixMode = () => $("scenarioMode").value === "guided_matrix";
 const guidedMotionMode = () => $("guidedScenarioMotion").checked ? ($("guidedMotionSource").value || "form") : "none";
@@ -171,8 +180,16 @@ function controls() {
   const guided = guidedStudyMode();
   for (const el of commands) el.disabled = !ready || !!pending;
   for (const section of sections.values()) {
-    for (const button of section.adoptions) button.disabled = !ready || !!pending;
+    for (const button of section.adoptions) button.disabled = !ready || !!pending ||
+      (typeof button.screenSelection === "string" && (!source || studyCandidates.length >= 7 || hasStudySelection(button.screenSelection)));
   }
+  $("guidedScreen").hidden = !guidedScreenMode(); $("screenFileControls").hidden = guidedScreenMode();
+  const customScreenProperty = $("guidedScreenProperty").value === "custom";
+  $("guidedScreenCustom").hidden = !customScreenProperty;
+  $("guidedScreenUnit").disabled = !customScreenProperty;
+  if (!customScreenProperty) $("guidedScreenUnit").value = screenProperties[$("guidedScreenProperty").value] || "";
+  $("addScreenAttribute").disabled = guidedScreenAttributes.length >= 64;
+  $("clearScreenAttributes").disabled = !guidedScreenAttributes.length;
   $("bind").disabled ||= !source || !interfaceReady;
   $("openPatternWorkbench").disabled = !ready || !!pending || !bound;
   $("sew").textContent = $("sewOptimize").checked ? "Choose recipes & evaluate stitch paths" : "Evaluate sewing & stitch paths";
@@ -279,7 +296,7 @@ function controls() {
   $("studyOnBody").disabled = guided;
   $("clearInterfaces").disabled = interfaceChange === null && interfaceReady;
   for (const op of boundOperations) $(op).disabled ||= !bound;
-  $("screen").disabled ||= !has("screenRequest");
+  $("screen").disabled ||= guidedScreenMode() ? !$("guidedScreenBasis").value : !has("screenRequest");
   $("linearizeOrigin").disabled ||= !originSource?.allowEstimates || !$("originEstimates").checked ||
     [...originDomainFields.flat(), ...originRationaleFields].some(id => !$(id).value.trim());
   $("pressure").disabled ||= !has("compressionRequest");
@@ -631,6 +648,8 @@ function splitProcurementResult(parent, r, label = "Whole-marker supplier alloca
     search_nodes: r.search_nodes, quote_evaluations: r.quote_evaluations, limits: r.limits };
 }
 function screening(parent, r) {
+  const screen = parent === sections.get("screen").comparison ? sections.get("screen") : null;
+  if (screen) screen.study = r;
   const properties = [...new Set(r.alternatives.flatMap(row => Object.keys(row.readings)))].sort();
   const t = table(parent, "Scalar-property screening only — not garment-level ranking", ["Alternative", "Admission", "Dominated by", ...properties]);
   for (const row of r.alternatives) {
@@ -641,7 +660,43 @@ function screening(parent, r) {
       })]);
     detail(parent, `${row.key}: observations, protocols and frozen source (display only)`, {
       material_id: row.material_id, readings: row.readings, exclusions: row.exclusions, selection: row.selection });
+    const selection = screen ? screenedSelection(row) : null;
+    if (selection !== null) {
+      const actions = document.createElement("div"); actions.className = "study-choice";
+      const inspect = document.createElement("button"); inspect.type = "button";
+      inspect.textContent = `Inspect ${row.key} source`;
+      inspect.onclick = () => {
+        if (!ready || pending || screen.study !== r || !screen.adoptions.includes(inspect)) return;
+        invalidateThermalPoint(); resetOriginSource(); ++selectionRead; preparedBy = null; inspected = null;
+        $("detail").textContent = ""; $("capabilities").replaceChildren();
+        $("selectionFile").value = ""; $("selection").value = selection;
+        execute("inspect");
+      };
+      actions.append(inspect); screen.adoptions.push(inspect);
+      if (row.eligible === true) {
+        const add = document.createElement("button"); add.type = "button";
+        add.textContent = `Add ${row.key} to comparisons`; add.screenSelection = selection;
+        add.onclick = () => {
+          if (!ready || pending || screen.study !== r || !screen.adoptions.includes(add)) return;
+          try { addStudySelection(selection, row.key); } catch (e) { error(String(e.message || e)); }
+        };
+        actions.append(add); screen.adoptions.push(add);
+      }
+      link("screen", actions, { name: `screened-material-${r.alternatives.indexOf(row) + 1}.json`, text: selection, mime: "application/json" });
+      parent.append(actions);
+    }
   }
+}
+function screenedSelection(row) {
+  if (typeof row.selection_json !== "string" || !row.selection_json.trim()) return null;
+  try {
+    const selection = JSON.parse(row.selection_json);
+    if (selection.id !== row.material_id || selection.record?.id !== selection.id ||
+        !/^[0-9a-f]{64}$/.test(selection.expected_sha256) || typeof selection.allow_estimates !== "boolean" ||
+        row.selection?.expected_sha256 !== selection.expected_sha256 || row.selection?.id !== selection.id ||
+        row.selection?.allow_estimates !== selection.allow_estimates) return null;
+    return row.selection_json;
+  } catch { return null; }
 }
 function metricUsesBounds(policy, name) {
   return (policy?.basis === "reported_bounds" && policy.objectives.some(o => o.metric === name)) ||
@@ -3993,6 +4048,73 @@ function changes() {
   return `{"schema":"ftx-material-bindings/1","default":${defaultChange || "null"},"pieces":{${pieces}}${interfaces}}`;
 }
 function edits() { $("edits").textContent = text(JSON.parse(changes())); }
+function hasStudySelection(raw) {
+  const selection = JSON.parse(raw);
+  return studyCandidates.some(candidate => {
+    if (candidate.selection === raw) return true;
+    const current = JSON.parse(candidate.selection);
+    return typeof selection.expected_sha256 === "string" && selection.id === current.id &&
+      selection.expected_sha256 === current.expected_sha256;
+  });
+}
+function addStudySelection(selection, suggestedKey = "") {
+  if (!source) throw Error("Load the original pattern before adding comparison materials.");
+  if (studyCandidates.length >= 7) throw Error("Keep at most seven material choices plus the original baseline.");
+  if (hasStudySelection(selection)) throw Error("This exact frozen material is already in the shortlist.");
+  let key = suggestedKey;
+  if (typeof key !== "string" || !key.trim() || key === "baseline" || new Blob([key]).size > 128 || studyCandidates.some(candidate => candidate.key === key)) {
+    do { key = `material-${++studyCandidateSequence}`; } while (studyCandidates.some(candidate => candidate.key === key));
+  }
+  studyCandidates.push({ key, selection }); $("studyMode").value = "guided";
+  showStudyCandidates(); invalidate(["study", "scenario"], true);
+}
+function guidedScreenInput(attributes = guidedScreenAttributes) {
+  return { query: $("guidedScreenQuery").value, forms: $("guidedScreenForm").value ? [$("guidedScreenForm").value] : [],
+    basis: $("guidedScreenBasis").value, allowCatalogEstimates: $("guidedScreenEstimates").checked,
+    allowMixedProtocols: $("guidedScreenMixed").checked,
+    requiredCapabilities: [["guidedScreenMechanics", "mechanics"], ["guidedScreenSteady", "steady_conduction"],
+      ["guidedScreenThermal", "transient_thermal"]].filter(([id]) => $(id).checked).map(([, capability]) => capability),
+    attributes };
+}
+function showGuidedScreenAttributes() {
+  const parent = $("guidedScreenAttributes"); parent.replaceChildren();
+  for (const [index, attribute] of guidedScreenAttributes.entries()) {
+    const row = document.createElement("div"), label = document.createElement("span"), remove = document.createElement("button");
+    row.className = "study-choice";
+    label.textContent = `${attribute.key} (${attribute.unit}): ` +
+      `${attribute.minimum ?? "no minimum"} to ${attribute.maximum ?? "no maximum"}` +
+      (attribute.direction ? `; ${attribute.direction}` : "") +
+      (attribute.method ? `; exact method ${attribute.method}` : "") +
+      (attribute.conditions ? `; conditions ${attribute.conditions}` : "");
+    remove.type = "button"; remove.textContent = `Remove property ${index + 1}`;
+    remove.onclick = () => {
+      const current = guidedScreenAttributes.indexOf(attribute); if (current < 0) return;
+      guidedScreenAttributes.splice(current, 1); showGuidedScreenAttributes();
+      if (guidedScreenMode()) invalidate(["screen"], true); else controls();
+    };
+    row.append(label, remove); parent.append(row);
+  }
+  $("guidedScreenAttributeCount").textContent = `${guidedScreenAttributes.length} property rules added. Only added rules run.`;
+}
+function addGuidedScreenAttribute() {
+  try {
+    const property = $("guidedScreenProperty").value;
+    const row = { key: property === "custom" ? $("guidedScreenKey").value : property, unit: $("guidedScreenUnit").value };
+    for (const [id, key] of [["guidedScreenMinimum", "minimum"], ["guidedScreenMaximum", "maximum"]]) {
+      if ($(id).validity?.badInput) throw Error("Correct the incomplete property limit before adding this rule.");
+      const raw = $(id).value.trim();
+      if (raw) { if (!Number.isFinite(Number(raw))) throw Error("Property limits must be finite numbers."); row[key] = Number(raw); }
+    }
+    if ($("guidedScreenDirection").value) row.direction = $("guidedScreenDirection").value;
+    if ($("guidedScreenMethod").value !== "") row.method = $("guidedScreenMethod").value;
+    if ($("guidedScreenConditions").value !== "") row.conditions = $("guidedScreenConditions").value;
+    const attributes = [...guidedScreenAttributes, row];
+    // Validate the draft independently of the still-unselected run basis.
+    buildMaterialScreenRequest({ ...guidedScreenInput(attributes), basis: $("guidedScreenBasis").value || "nominal" });
+    guidedScreenAttributes.push(row); showGuidedScreenAttributes();
+    if (guidedScreenMode()) invalidate(["screen"], true); else controls();
+  } catch (e) { error(String(e.message || e)); }
+}
 function showStudyCandidates() {
   const parent = $("studyCandidates"); parent.replaceChildren();
   for (const candidate of studyCandidates) {
@@ -4587,7 +4709,8 @@ async function execute(op) {
       msg.calibrationRequest = await read("calibrationRequest");
     }
     else if (["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"].includes(op)) msg.stripRequest = await read(`${op}Request`);
-    else if (op === "screen") msg.screenRequest = await read("screenRequest");
+    else if (op === "screen") msg.screenRequest = guidedScreenMode() ?
+      buildMaterialScreenRequest(guidedScreenInput()) : await read("screenRequest");
     else if (op === "study" || op === "scenario") {
       if (!sourceText) throw Error("Load the original pattern first.");
       // Alternatives always start at the original, never the currently bound single-material preview.
@@ -4663,6 +4786,18 @@ async function execute(op) {
   }
 }
 for (const el of commands) el.onclick = () => execute(el.dataset.command);
+$("addScreenAttribute").onclick = addGuidedScreenAttribute;
+$("clearScreenAttributes").onclick = () => {
+  guidedScreenAttributes.length = 0; showGuidedScreenAttributes();
+  if (guidedScreenMode()) invalidate(["screen"], true); else controls();
+};
+for (const id of ["screenMode", "guidedScreenQuery", "guidedScreenForm", "guidedScreenBasis", "guidedScreenEstimates", "guidedScreenMixed",
+  "guidedScreenMechanics", "guidedScreenSteady", "guidedScreenThermal"]) {
+  const changed = () => { if (id === "screenMode" || guidedScreenMode()) invalidate(["screen"], true); else controls(); };
+  $(id).addEventListener("change", changed);
+  if (id === "guidedScreenQuery") $(id).addEventListener("input", changed);
+}
+$("guidedScreenProperty").addEventListener("change", controls);
 $("addStudyCandidate").onclick = () => {
   if (!source || !inspected || pending) return;
   try {
@@ -5327,6 +5462,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
       $("selectedStockFiles").replaceChildren(); $("selectedStockNote").hidden = true;
     }
     if (id === "studyRequest") $("studyMode").value = "file";
+    if (id === "screenRequest") $("screenMode").value = "file";
     if (id === "scenarioRequest") {
       $("scenarioMode").value = "file";
       scenarioCasesLoading = loadGuidedScenarioCases();

@@ -62,8 +62,8 @@ async function pageModule() {
     addEventListener: (name, fn) => { windowEvents[name] = fn; } } });
   const module = new vm.SourceTextModule(read('materials-page.js'), { context, initializeImportMeta: m => { m.url = 'https://unit.invalid/materials-page.js'; } });
   await module.link(specifier => {
-    assert.equal(specifier, './materials-study-builder.js', 'unexpected material page import');
-    return new vm.SourceTextModule(read('materials-study-builder.js'), { context });
+    assert.ok(['./materials-study-builder.js','./materials-screen-builder.js'].includes(specifier), 'unexpected material page import');
+    return new vm.SourceTextModule(read(specifier.slice(2)), { context });
   }); await module.evaluate();
   const current = () => workers.at(-1), ready = () => current().emit({ type: 'ready' }); ready();
   const select = (id, text = '{}') => {
