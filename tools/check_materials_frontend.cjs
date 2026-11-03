@@ -5996,6 +5996,26 @@ function guidedContactControls(p, instances = null) {
   p.e.guidedContactVertexBudget.value='100000';p.e.guidedContactPairBudget.value='1000000';
   p.e.guidedContactLoads.handlers.change();
 }
+// Original transport policies are retained byte-for-byte; Rust owns nested numerical admission.
+const guidedTransportOriginal = {
+  coverage:' {"body_triangle_ids":[2],"instance_layers":{"front.R":"shell <β>"},"settings":{"max_distance_m":18446744073709551615,"min_normal_cosine":0.1,"separation_tolerance_m":0.00001,"interfaces":[],"cells_per_layer":1},"conditions":{"boundaries":[{"inside_c":-0.0,"outside_c":35.0,"inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}]}}\r\n',
+  vapor_surface:' {"schema":"ftx-vapor-surface-conditions/1","boundaries":[{"inside_vapor_pressure_pa":2000.0,"outside_vapor_pressure_pa":1000.0,"inside_film_resistance_m2_pa_w":1.0,"outside_film_resistance_m2_pa_w":2.0,"latent_heat_j_kg":2500000.0}]}\r\n',
+  vapor_coverage:' {"body_triangle_ids":[2],"instance_layers":{"front.R":"shell <β>"},"settings":{"max_distance_m":0.2,"min_normal_cosine":0.1,"separation_tolerance_m":0.00001,"interfaces":[]},"conditions":{"boundaries":[{"inside_vapor_pressure_pa":2000.0,"outside_vapor_pressure_pa":1000.0,"inside_film_resistance_m2_pa_w":1.0,"outside_film_resistance_m2_pa_w":2.0,"latent_heat_j_kg":2500000.0}]}}\r\n',
+};
+const guidedTransportFields=[['Coverage','coverage'],['VaporSurface','vapor_surface'],['VaporCoverage','vapor_coverage']];
+const guidedTransportReadings=[['CoveragePower','body_coverage_power_w','W','coverage'],
+  ['VaporSurfaceHeat','independent_vapor_potential_heat_flow_w','W','vapor_surface'],
+  ['VaporSurfaceMass','independent_vapor_potential_mass_flow_kg_s','kg/s','vapor_surface'],
+  ['VaporCoverageHeat','covered_vapor_potential_heat_flow_w','W','vapor_coverage'],
+  ['VaporCoverageMass','covered_vapor_potential_mass_flow_kg_s','kg/s','vapor_coverage'],
+  ['MotionVaporEnergy','motion_covered_vapor_potential_energy_j','J','motion_vapor_coverage'],
+  ['MotionVaporMass','motion_covered_vapor_potential_mass_kg','kg','motion_vapor_coverage']];
+function guidedTransportSources(p, sources = guidedTransportOriginal) {
+  for(const [prefix,key] of guidedTransportFields) {
+    p.e['guided'+prefix].checked=true;p.e['guided'+prefix].handlers.change();
+    p.select('guided'+prefix+'File',sources[key]);p.e['guided'+prefix+'File'].handlers.change();
+  }
+}
 function guidedMotionSourceControls(p, mode = 'form') {
   for(const [id,value] of Object.entries({guidedMotionSource:mode==='none'?'form':mode,guidedScenarioMotionTrials:'96',guidedMotionStep:'0.001',
     guidedMotionTrials:'16',guidedMotionPairs:'100000',guidedMotionVertices:'10000'}))p.e[id].value=value;
@@ -7020,6 +7040,141 @@ test('guided contact source reads capture scopes and cancel obsolete single runs
   }
 });
 
+test('guided layered heat and vapor retain original policies, seven explicit interval criteria and native refusal replay',async()=>{
+  const {p,sources}=await guidedScenarioSetup(true);guidedTransportSources(p);guidedMotionSourceControls(p,'file');
+  p.select('guidedMotionFile',guidedMotionOriginal);p.e.guidedMotionFile.handlers.change();
+  p.e.guidedDrapeMassGoal.checked=false;p.e.guidedHeatPowerGoal.checked=false;p.e.guidedBasis.value='reported_bounds';
+  const goals=[],limits=[];
+  for(const [prefix,metric] of guidedTransportReadings) {
+    assert.equal(p.e['guided'+prefix+'Goal'].checked,false);assert.equal(p.e['guided'+prefix+'Direction'].value,'');
+    const heat=metric==='body_coverage_power_w',direction=heat?'minimize':'maximize',minimum=heat?-20:0,maximum=heat?-1:25;
+    p.e['guided'+prefix+'Goal'].checked=true;p.e['guided'+prefix+'Direction'].value=direction;
+    p.e['guided'+prefix+'MinimumLimit'].value=String(minimum);p.e['guided'+prefix+'Limit'].value=String(maximum);
+    goals.push({metric,direction});limits.push({metric,minimum,maximum});
+  }
+  for(const id of ['guidedRequireCoverage','guidedRequireVaporSurface','guidedRequireVaporCoverage','guidedRequireMotionVaporCoverage'])p.e[id].checked=true;
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  for(const raw of [...Object.values(guidedTransportOriginal),guidedMotionOriginal,sources.fit,sources.heatConditions])assert.ok(sent.scenarioRequest.includes(raw));
+  const request=JSON.parse(sent.scenarioRequest),comparison=JSON.parse(sent.studyRequest).comparison;
+  for(const [,key] of guidedTransportFields)assert.deepEqual(request[key],JSON.parse(guidedTransportOriginal[key]));
+  const byMetric=(a,b)=>a.metric.localeCompare(b.metric);
+  assert.deepEqual(comparison.objectives.sort(byMetric),goals.sort(byMetric));assert.deepEqual(comparison.constraints.sort(byMetric),limits.sort(byMetric));
+  assert.equal(comparison.basis,'reported_bounds');assert.deepEqual(comparison.required_consumers.sort(),
+    ['coverage','drape','motion_vapor_coverage','surface','vapor_coverage','vapor_surface']);
+  const report=scenarioReport();report.scenario.scenario=request;
+  const initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  initial.coverage=refused('Projection policy exceeds its native distance allowance');
+  initial.vapor_surface=outcome({area_m2:0.5,potential_heat_flow_w:25,potential_mass_flow_kg_s:0.00001});
+  initial.vapor_coverage=refused('Source layer assignment is not qualified');
+  initial.motion=outcome({samples:[{}],keyframes:[],vapor_coverage_history:refused('Motion geometry allowance exhausted')});
+  let calls=0,freed=0;
+  const w=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){freed++;}},
+    material_scenario_study:(_body,...args)=>{calls++;assert.deepEqual(args,[sent.pattern,sent.studyRequest,sent.scenarioRequest,sources.scenarioBody]);return JSON.stringify(report);}}});
+  const result=await w.send(sent);assert.equal(result.type,'result',result.message);assert.equal(calls,1);assert.equal(freed,1);p.current().emit(result);
+  assert.equal(result.result.simulations.find(row=>row.key==='A').evaluation.result.coverage.status,'refused');
+  const output=section(p,'Fresh drape and heat alternatives');assert.match(visibleText(output),/Motion geometry allowance exhausted/);
+  assert.match(visibleText(output),/-4.5/);assert.match(visibleText(output),/0.00001/);
+  for(const [name,raw] of [['scenario-request.json',sent.scenarioRequest],['study-request.json',sent.studyRequest]]) {
+    const link=descendants(output).find(node=>node.download===name);assert.ok(link,name);assert.equal(await p.blobs.get(link.href).text(),raw);
+  }
+});
+
+test('guided layered transport refuses missing or malformed sources, unchosen directions and absent motion histories before dispatch',async()=>{
+  for(const invalid of ['missing-coverage','missing-sheet','missing-layered','malformed-json','array-policy','bom','invalid-utf8','oversize',
+    'missing-direction','inverted-interval','negative-vapor','disabled-consumer','missing-history','missing-motion-coverage']) {
+    const {p}=await guidedScenarioSetup();guidedTransportSources(p);let reads=0;
+    if(invalid.startsWith('missing-')&&['coverage','sheet','layered'].includes(invalid.slice(8))) {
+      p.e[{coverage:'guidedCoverageFile',sheet:'guidedVaporSurfaceFile',layered:'guidedVaporCoverageFile'}[invalid.slice(8)]].files=[];
+    } else if(invalid==='malformed-json')p.select('guidedCoverageFile','{');
+    else if(invalid==='array-policy')p.select('guidedVaporCoverageFile','[]');
+    else if(invalid==='bom')p.select('guidedVaporSurfaceFile','\ufeff'+guidedTransportOriginal.vapor_surface);
+    else if(invalid==='invalid-utf8')p.e.guidedCoverageFile.files=[new Blob([new Uint8Array([0xff])])];
+    else if(invalid==='oversize')p.e.guidedVaporCoverageFile.files=[{size:16*1024*1024+1,arrayBuffer:async()=>{reads++;throw Error('Must not read oversized source');}}];
+    else if(invalid==='missing-direction')p.e.guidedCoveragePowerGoal.checked=true;
+    else if(invalid==='inverted-interval'){p.e.guidedCoveragePowerMinimumLimit.value='2';p.e.guidedCoveragePowerLimit.value='1';}
+    else if(invalid==='negative-vapor')p.e.guidedVaporCoverageMassMinimumLimit.value='-0.001';
+    else if(invalid==='disabled-consumer'){p.e.guidedVaporSurface.checked=false;p.e.guidedRequireVaporSurface.checked=true;}
+    else if(invalid==='missing-history') {
+      guidedMotionSourceControls(p);await addGuidedMotion(p,'0.002','35');p.e.guidedRequireMotionVaporCoverage.checked=true;
+    } else if(invalid==='missing-motion-coverage') {
+      guidedMotionSourceControls(p,'file');p.select('guidedMotionFile',guidedMotionOriginal);p.e.guidedVaporCoverage.checked=false;
+      p.e.guidedMotionVaporEnergyGoal.checked=true;p.e.guidedMotionVaporEnergyDirection.value='maximize';
+    }
+    const before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before,invalid);assert.equal(p.e.error.hidden,false,invalid);assert.ok(p.e.error.textContent,invalid);
+    assert.equal(reads,0,invalid);assert.equal(p.live.size,0,invalid);
+  }
+});
+
+test('guided named layered cases freeze exact environments and per-case vapor histories without reading later source drafts',async()=>{
+  const {p}=await guidedScenarioSetup();guidedTransportSources(p);p.e.guidedDrapeMassGoal.checked=false;
+  p.e.guidedCoveragePowerGoal.checked=true;p.e.guidedCoveragePowerDirection.value='minimize';p.e.guidedCoveragePowerMinimumLimit.value='-20';
+  p.e.guidedRequireCoverage.checked=true;p.e.guidedRequireVaporCoverage.checked=true;
+  guidedNamedCases(p);p.e.guidedScenarioPolicySource.value='snapshot';await saveGuidedCase(p,'warm original');
+  const other={...guidedTransportOriginal,coverage:guidedTransportOriginal.coverage.replace('35.0','5.0'),
+    vapor_surface:guidedTransportOriginal.vapor_surface.replace('2000.0','2500.0'),vapor_coverage:guidedTransportOriginal.vapor_coverage+'\n'};
+  guidedTransportSources(p,other);guidedMotionSourceControls(p,'file');p.select('guidedMotionFile',guidedMotionOriginal);
+  p.e.guidedCoveragePowerDirection.value='maximize';p.e.guidedCoveragePowerMinimumLimit.value='-10';
+  p.e.guidedMotionVaporMassGoal.checked=true;p.e.guidedMotionVaporMassDirection.value='maximize';p.e.guidedRequireMotionVaporCoverage.checked=true;
+  await saveGuidedCase(p,'moving original');await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  for(const raw of [...Object.values(guidedTransportOriginal),...Object.values(other),guidedMotionOriginal])assert.ok(sent.scenarioRequest.includes(raw));
+  const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases.map(item=>item.scenario.coverage.conditions.boundaries[0].outside_c),[35,5]);
+  assert.equal(Object.hasOwn(cases[0].scenario,'motion'),false);assert.ok(cases[1].scenario.motion.vapor_coverage_history);
+  assert.deepEqual(cases.map(item=>item.comparison.constraints),[
+    [{metric:'body_coverage_power_w',minimum:-20}],[{metric:'body_coverage_power_w',minimum:-10}]]);
+  assert.equal(cases[0].comparison.required_consumers.includes('motion_vapor_coverage'),false);
+  assert.equal(cases[1].comparison.required_consumers.includes('motion_vapor_coverage'),true);
+  assert.deepEqual(cases.map(item=>item.comparison.objectives[0].direction),['minimize','maximize']);
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const output=section(p,'Fresh drape and heat alternatives'),live=new Set(p.live);
+  for(const [prefix] of guidedTransportFields){p.select('guided'+prefix+'File','{');p.e['guided'+prefix+'File'].handlers.change();p.e['guided'+prefix].checked=false;p.e['guided'+prefix].handlers.change();}
+  p.select('guidedMotionFile','{');p.e.guidedMotionFile.handlers.change();
+  assert.equal(output.hidden,false);assert.deepEqual(p.live,live);await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
+test('guided layered source reads freeze every policy and cancel obsolete single runs or case saves after active edits',async()=>{
+  const {p}=await guidedScenarioSetup();guidedTransportSources(p);
+  const delay=deferred();p.e.guidedCoverageFile.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const running=p.e.scenario.onclick();for(const [prefix] of guidedTransportFields){p.select('guided'+prefix+'File','{}');p.e['guided'+prefix].checked=false;}
+  delay.resolve(guidedTransportOriginal.coverage);await running;
+  for(const raw of Object.values(guidedTransportOriginal))assert.ok(p.current().messages.at(-1).scenarioRequest.includes(raw));
+  const changes=[...guidedTransportFields.flatMap(([prefix])=>[['guided'+prefix,'change'],['guided'+prefix+'File','change']]),
+    ['guidedCoveragePowerGoal','change'],['guidedVaporSurfaceHeatDirection','change'],['guidedCoveragePowerMinimumLimit','input'],
+    ['guidedVaporCoverageMassLimit','input'],['guidedRequireVaporCoverage','change'],['guidedMotionVaporEnergyDirection','change']];
+  for(const mode of ['single','draft'])for(const [id,event] of changes) {
+    const {p}=await guidedScenarioSetup();guidedTransportSources(p);
+    if(mode==='draft'){guidedNamedCases(p);await saveGuidedCase(p,'retained');p.e.guidedScenarioPolicySource.value='snapshot';}
+    const delay=deferred();let reading=false;
+    p.e.guidedVaporCoverageFile.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+    const old=p.current(),before=old.messages.length,running=mode==='draft'?saveGuidedCase(p,'pending'):p.e.scenario.onclick();
+    assert.equal(reading,true,mode+':'+id);p.e[id].handlers[event]();assert.equal(old.dead,true,mode+':'+id);p.ready();
+    delay.resolve(guidedTransportOriginal.vapor_coverage);await running;
+    assert.equal(old.messages.length,before,mode+':'+id);assert.equal(p.current().messages.length,0,mode+':'+id);
+    assert.equal(p.e.guidedScenarioCases.children.length,mode==='draft'?1:0,mode+':'+id);assert.equal(p.live.size,0,mode+':'+id);
+  }
+});
+
+test('inactive layered policy files cannot cancel complete-file or unrequested guided scenarios and downloads',async()=>{
+  for(const mode of ['file','guided']) {
+    const {p}=await guidedScenarioSetup();
+    const original=' {"schema":"ftx-drape-scenario/1","fit_spec":{},"options":{"step":0.001},"source":-0.0}\r\n';
+    if(mode==='file'){guidedTransportSources(p);p.select('scenarioRequest',original);p.e.scenarioRequest.handlers.change();}
+    const delay=deferred();let reading=false;p.e.body.files=[{size:3,arrayBuffer:async()=>{reading=true;return delay.promise;}}];
+    const old=p.current(),running=p.e.scenario.onclick();await new Promise(setImmediate);assert.equal(reading,true,mode);
+    for(const [prefix] of guidedTransportFields){p.select('guided'+prefix+'File','{');p.e['guided'+prefix+'File'].handlers.change();}
+    assert.equal(old.dead,false,mode);delay.resolve(new Uint8Array([2,4,6]).buffer);await running;
+    const sent=old.messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+    if(mode==='file')assert.equal(sent.scenarioRequest,original);
+    else for(const [,key] of guidedTransportFields)assert.equal(Object.hasOwn(JSON.parse(sent.scenarioRequest),key),false,key);
+    p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);const live=new Set(p.live);
+    for(const [prefix] of guidedTransportFields)p.e['guided'+prefix+'File'].handlers.change();
+    assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false,mode);assert.deepEqual(p.live,live,mode);
+  }
+});
+
 test('guided motion endpoints start blank, require explicit poses and stay bounded after removal and clearing',async()=>{
   const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);
   assert.equal(p.e.guidedMotionKeyframes.children.length,0);assert.equal(p.e.scenario.disabled,true);
@@ -7159,7 +7314,8 @@ test('guided motion inactive files cannot cancel authored or static scenarios',a
 
 test('guided motion and instance drafts clear when the garment is removed, replaced or adopted',async()=>{
   for(const replacement of ['removed','file','malformed','candidate']) {
-    const {p}=await guidedScenarioSetup();guidedStrainControls(p,['front.R']);guidedContactControls(p,['front.R']);guidedMotionSourceControls(p);
+    const {p}=await guidedScenarioSetup();guidedStrainControls(p,['front.R']);guidedContactControls(p,['front.R']);guidedTransportSources(p);guidedMotionSourceControls(p);
+    const retainedPolicies=guidedTransportFields.map(([prefix])=>p.e['guided'+prefix+'File'].files[0]);
     await addGuidedMotion(p,'0.002','35','seated','0.25');guidedNamedCases(p);await saveGuidedCase(p,'old garment');
     const stale=descendants(p.e.guidedMotionKeyframes).find(node=>node.textContent==='Remove keyframe 1');
     if(replacement==='candidate') {
@@ -7177,6 +7333,10 @@ test('guided motion and instance drafts clear when the garment is removed, repla
     assert.equal(p.e.guidedMaterialStrainInstances.value,'',replacement);assert.equal(p.e.guidedScenarioCases.children.length,0,replacement);
     assert.equal(p.e.guidedContactLoads.checked,false,replacement);assert.equal(p.e.guidedContactLoadsScope.value,'all',replacement);
     assert.equal(p.e.guidedContactLoadsInstances.value,'',replacement);
+    for(const [index,[prefix]] of guidedTransportFields.entries()) {
+      assert.equal(p.e['guided'+prefix].checked,false,replacement+':'+prefix);
+      assert.equal(p.e['guided'+prefix+'File'].files[0],retainedPolicies[index],replacement+':'+prefix);
+    }
     stale.onclick();assert.equal(p.e.guidedMotionKeyframes.children.length,0,replacement);
   }
 });
@@ -7244,7 +7404,7 @@ test('guided heat limits reject inverted intervals and unsupported range objecti
     if(invalid==='nominal-only'){p.e.guidedHeatMinimumLimit.value='';p.e.guidedHeatPowerLimit.value='';p.e.guidedDrapeMassGoal.checked=true;}
     const before=p.current().messages.length;await p.e.scenario.onclick();
     assert.equal(p.current().messages.length,before,invalid);assert.equal(p.e.error.hidden,false,invalid);
-    assert.match(p.e.error.textContent,invalid==='inverted'?/minimum|maximum|bounds|interval/:invalid==='nonfinite'?/finite/:/reported-bound.*assembly mass and steady sheet heat only/);
+    assert.match(p.e.error.textContent,invalid==='inverted'?/minimum|maximum|bounds|interval/:invalid==='nonfinite'?/finite/:/reported-bound.*mass, steady heat and vapor potential only/);
   }
 });
 
@@ -14271,6 +14431,112 @@ test('compiled WASM guided heat bounds, moving directional strain and contact lo
     }
     t.diagnostic('Synthetic sewing-only proof: signed source intervals, all twelve material-frame strain values, all four force readings and a genuinely moving model-bound trajectory; missing strain/contact scopes refuse independently. '+
       (native?'All four complete reports agree with native ftx-materials.':'Actual compiled WASM worker results retained.')+' No pressure, comfort, physical fit or gravity-settled garment claim.');
+  });
+
+test('compiled WASM guided layered heat and vapor preserve seven source intervals, moving geometry and independent coverage refusals',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_VAPOR_BODY},async t=>{
+    const source=path.resolve(process.env.FTX_GUIDED_VAPOR_BODY),load=name=>fs.readFileSync(path.join(source,name),'utf8');
+    const pattern=load('pattern.json'),fixture=JSON.parse(pattern),scenario=JSON.parse(load('scenario.json'));
+    const body=load('body-input.json'),modelBytes=fs.readFileSync(path.join(source,'model.ftxbody')),motion=load('motion.json');
+    const sources={coverage:load('coverage.json'),vapor_surface:load('vapor-surface.json'),vapor_coverage:load('vapor-coverage.json')};
+    // Independently declared synthetic intervals exercise transport, not empirical warmth or evaporation.
+    const alternative=structuredClone(fixture.fabric.material);delete alternative.expected_sha256;
+    alternative.id=alternative.record.id='synthetic-guided-layered-resistance';
+    alternative.record.properties.thermal_conductivity.value=0.025;alternative.record.properties.thermal_conductivity.bounds=[0.02,0.03];
+    alternative.record.properties.vapor_resistance.value=14;alternative.record.properties.vapor_resistance.bounds=[12,16];
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx}),{p}=await guidedScenarioSetup(true);
+    p.select('patternFile',pattern);await p.e.patternFile.onchange();
+    p.e.selection.value=JSON.stringify(alternative);p.e.selection.handlers.input();await p.e.inspect.onclick();
+    const inspection=await w.send(p.current().messages.at(-1));assert.equal(inspection.type,'result',inspection.message);
+    p.current().emit(inspection);p.e.studyCandidateName.value='resistant';p.e.addStudyCandidate.onclick();
+    p.e.guidedScenarioFitSource.value='none';p.e.guidedScenarioFitSource.handlers.change();
+    for(const [id,value] of Object.entries({guidedScenarioSpacing:scenario.options.spacing,guidedScenarioSewSteps:scenario.options.sew_steps,
+      guidedScenarioDrapeSteps:scenario.options.drape_steps,guidedScenarioStep:scenario.options.step,guidedScenarioSettle:scenario.options.max_settle_steps,
+      guidedScenarioMeshBudget:scenario.max_mesh_points,guidedScenarioFrameBudget:scenario.max_vertex_frames}))p.e[id].value=String(value);
+    p.select('scenarioBody',body);p.e.scenarioBody.handlers.change();p.e.body.files=[new Blob([modelBytes])];p.e.body.handlers.change();
+    p.select('heatConditions',JSON.stringify(scenario.surface));p.e.heatConditions.handlers.change();
+    guidedTransportSources(p,sources);guidedMotionSourceControls(p,'file');p.select('guidedMotionFile',motion);p.e.guidedMotionFile.handlers.change();
+    p.e.guidedCutting.checked=true;p.e.guidedAreaGoal.checked=false;p.e.guidedRequireCutting.checked=true;
+    p.e.guidedDrapeMassGoal.checked=false;p.e.guidedHeatPowerGoal.checked=false;p.e.guidedBasis.value='reported_bounds';
+    for(const [prefix,metric] of guidedTransportReadings) {
+      p.e['guided'+prefix+'Goal'].checked=true;p.e['guided'+prefix+'Direction'].value=metric==='body_coverage_power_w'?'minimize':'maximize';
+    }
+    for(const id of ['guidedRequireCoverage','guidedRequireVaporSurface','guidedRequireVaporCoverage','guidedRequireMotionVaporCoverage'])p.e[id].checked=true;
+    const native=process.env.FTX_GUIDED_SCENARIO_NATIVE?path.resolve(process.env.FTX_GUIDED_SCENARIO_NATIVE):null;
+    const replay=process.env.FTX_GUIDED_SCENARIO_REPLAY?path.join(path.resolve(process.env.FTX_GUIDED_SCENARIO_REPLAY),'layered-transport'):null;
+    const work=replay||(native?fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-guided-vapor-')):null);
+    if(replay)fs.mkdirSync(replay,{recursive:true});
+    const retain=(name,raw)=>{if(work)fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});};
+    for(const [name,raw] of Object.entries({'pattern.json':pattern,'body-input.json':body,'model.ftxbody':modelBytes}))retain(name,raw);
+    const evaluate=async label=>{
+      await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',label+': '+p.e.error.textContent);
+      assert.equal(sent.pattern,pattern);assert.equal(sent.measurements,body);assert.ok(sent.scenarioRequest.includes(motion));
+      for(const [prefix] of guidedTransportFields)assert.ok(sent.scenarioRequest.includes(await p.e['guided'+prefix+'File'].files[0].text()));
+      const result=await w.send(sent);assert.equal(result.type,'result',label+': '+result.message);p.current().emit(result);
+      for(const [name,raw] of [['study-request.json',sent.studyRequest],['scenario-request.json',sent.scenarioRequest]]) {
+        assert.equal(result.files.find(file=>file.name===name).text,raw);
+        const link=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.download===name);assert.ok(link,name);
+        assert.equal(await p.blobs.get(link.href).text(),raw);
+      }
+      retain(label+'-study.json',sent.studyRequest);retain(label+'-scenario.json',sent.scenarioRequest);
+      if(native) {
+        const output=require('node:child_process').execFileSync(native,['scenario-study',path.join(work,'pattern.json'),path.join(work,label+'-study.json'),
+          path.join(work,label+'-scenario.json'),path.join(work,'body-input.json'),path.join(work,'model.ftxbody')],{encoding:'utf8',maxBuffer:64*1024*1024});
+        assert.deepEqual(result.result,JSON.parse(output),label+' native/WASM/worker equality');
+      }
+      return result.result;
+    };
+    const simulation=(report,key)=>report.simulations.find(row=>row.key===key).evaluation.result;
+    const complete=await evaluate('complete-layered-motion');
+    assert.equal(complete.comparison.alternatives.length,2);
+    for(const row of complete.comparison.alternatives) {
+      assert.equal(row.eligible,true,JSON.stringify(row.exclusions));
+      for(const [,metric,unit,consumer] of guidedTransportReadings) {
+        const reading=row.readings[metric];assert.ok(reading,metric);assert.equal(reading.unit,unit,metric);assert.equal(reading.consumer,consumer,metric);
+        assert.ok(Number.isFinite(reading.value)&&reading.value>0,metric);assert.ok(reading.reported_bounds[0]<reading.reported_bounds[1],metric);
+        assert.ok(reading.reported_bounds[0]<=reading.value&&reading.value<=reading.reported_bounds[1],metric);
+      }
+      const initial=simulation(complete,row.key);for(const consumer of ['surface','coverage','vapor_surface','vapor_coverage'])assert.equal(initial[consumer].status,'available',consumer);
+      const accepted=initial.motion;assert.equal(accepted.status,'available');assert.ok(accepted.result.samples.length>=2);
+      assert.notDeepEqual(accepted.result.samples.at(-1).body_positions_m,accepted.result.initial_sample.body_positions_m);
+      assert.equal(accepted.result.vapor_coverage_history.status,'available');const history=accepted.result.vapor_coverage_history.result;
+      assert.equal(history.integration,'composite_trapezoid');assert.equal(history.samples.length,accepted.result.samples.length);
+      assert.equal(row.readings.motion_covered_vapor_potential_energy_j.value,history.totals.potential_energy_j);
+      assert.equal(row.readings.motion_covered_vapor_potential_mass_kg.value,history.totals.potential_mass_kg);
+      assert.deepEqual(row.readings.motion_covered_vapor_potential_energy_j.reported_bounds,history.totals.reported_bounds.potential_energy_j);
+    }
+    for(const row of complete.manufacturing.alternatives)assert.equal(row.cutting.status,'available',row.key);
+    const readings=key=>complete.comparison.alternatives.find(row=>row.key===key).readings;
+    assert.ok(readings('resistant').body_coverage_power_w.value<readings('baseline').body_coverage_power_w.value);
+    assert.ok(readings('resistant').covered_vapor_potential_heat_flow_w.value<readings('baseline').covered_vapor_potential_heat_flow_w.value);
+    const reverse=JSON.parse(sources.coverage);for(const boundary of reverse.conditions.boundaries)[boundary.inside_c,boundary.outside_c]=[boundary.outside_c,boundary.inside_c];
+    p.select('guidedCoverageFile',' '+JSON.stringify(reverse)+'\r\n');p.e.guidedCoverageFile.handlers.change();
+    p.e.guidedCoveragePowerMinimumLimit.value='-100';p.e.guidedCoveragePowerLimit.value='0';
+    const signed=await evaluate('signed-covered-heat');
+    for(const row of signed.comparison.alternatives) {
+      assert.equal(row.eligible,true,JSON.stringify(row.exclusions));const heat=row.readings.body_coverage_power_w;
+      assert.ok(heat.value<0&&heat.reported_bounds[0]<heat.reported_bounds[1]&&heat.reported_bounds[1]<0);
+      for(const [,metric] of guidedTransportReadings.slice(1))assert.deepEqual(row.readings[metric],readings(row.key)[metric]);
+    }
+    const partial=JSON.parse(sources.vapor_coverage);partial.body_triangle_ids=[2,0];
+    p.select('guidedVaporCoverageFile',' '+JSON.stringify(partial)+'\r\n');p.e.guidedVaporCoverageFile.handlers.change();
+    const uncovered=await evaluate('uncovered-vapor-domain');assert.deepEqual(uncovered.comparison.frontier,[]);
+    assert.deepEqual(uncovered.manufacturing,signed.manufacturing,'An incomplete vapor domain cannot erase independent cutting');
+    for(const row of uncovered.comparison.alternatives) {
+      assert.equal(row.eligible,false);assert.ok(row.exclusions.some(item=>/cover/i.test(item.message)),JSON.stringify(row.exclusions));
+      for(const [,metric] of guidedTransportReadings.slice(3))assert.equal(Object.hasOwn(row.readings,metric),false,metric);
+      const before=simulation(signed,row.key),after=simulation(uncovered,row.key);
+      assert.equal(after.vapor_coverage.status,'available','The partial-domain report remains inspectable');
+      assert.ok(after.vapor_coverage.result.coverage.uncovered_area_m2>0);
+      for(const consumer of ['surface','coverage','vapor_surface'])assert.deepEqual(after[consumer],before[consumer],consumer);
+      assert.equal(after.motion.status,'available');assert.deepEqual(after.motion.result.samples,before.motion.result.samples);
+    }
+    t.diagnostic('Synthetic wrap proof: five static and two moving source-bound transport intervals, signed body heat and a genuinely moving model-bound path. '+
+      'An uncovered body patch excludes complete-domain vapor goals while retaining partial reports, heat, mechanics and cutting. '+
+      (native?'All three complete reports agree with native ftx-materials.':'Actual compiled WASM worker results retained.')+' No physical fit, actual evaporation or cooling claim.');
   });
 
 test('compiled WASM guided finite and mixed stock studies preserve shared inventory and independent refusals',

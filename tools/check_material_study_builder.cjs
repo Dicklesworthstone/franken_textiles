@@ -52,7 +52,7 @@ test('reported bounds require the explicit complete assembly inventory and prese
   assert.throws(()=>build({...input,assemblyMass:mass(false)}),/complete inventory/);
   const undeclared=mass();delete undeclared.inventory_complete;
   assert.throws(()=>build({...input,assemblyMass:undeclared}),/missing/);
-  assert.throws(()=>build({...state(),basis:'reported_bounds'}),/assembly mass and steady sheet heat only/);
+  assert.throws(()=>build({...state(),basis:'reported_bounds'}),/mass, steady heat and vapor potential only/);
   const raw=' {"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[{"id":"closure","seed":18446744073709551615,"value":1.0,"x":-0.0}]}\n';
   assert.ok(build({...input,assemblyMass:raw}).includes(raw));
   assert.throws(()=>build({...input,assemblyMass:JSON.parse(raw)}),/original inventory JSON/);
@@ -206,9 +206,9 @@ test('reported mass objectives compose with explicit nominal manufacturing guard
       {metric:'selected_observed_order_cost',minimum:0,maximum:50,basis:'nominal'}],requiredConsumers:['sewing','purchasing']};
   const result=JSON.parse(build(input));assert.deepEqual(result.comparison.constraints,input.constraints);
   assert.deepEqual(result.comparison.required_consumers,input.requiredConsumers);
-  assert.throws(()=>build({...input,constraints:[{metric:'sewing_modeled_production_seconds',maximum:3600}]}),/assembly mass and steady sheet heat only/);
-  assert.throws(()=>build({...input,constraints:[{metric:'selected_observed_order_cost',maximum:50,basis:'reported_bounds'}]}),/assembly mass and steady sheet heat only/);
-  assert.throws(()=>build({...input,objectives:[{metric:'cutting_modeled_path_seconds',direction:'minimize'}]}),/assembly mass and steady sheet heat only/);
+  assert.throws(()=>build({...input,constraints:[{metric:'sewing_modeled_production_seconds',maximum:3600}]}),/mass, steady heat and vapor potential only/);
+  assert.throws(()=>build({...input,constraints:[{metric:'selected_observed_order_cost',maximum:50,basis:'reported_bounds'}]}),/mass, steady heat and vapor potential only/);
+  assert.throws(()=>build({...input,objectives:[{metric:'cutting_modeled_path_seconds',direction:'minimize'}]}),/mass, steady heat and vapor potential only/);
   assert.equal(JSON.parse(build({...state(),constraints:[{metric:'stock_area_m2',minimum:null,maximum:2}]})).comparison.constraints[0].minimum,null);
 });
 
@@ -379,8 +379,8 @@ test('reported mass ranges compose with explicit nominal finite-stock and job li
     const input={...stockState(mode),assemblyMass:mass(),basis:'reported_bounds',
       objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],constraints:[{metric,maximum:20,basis:'nominal'}]};
     assert.deepEqual(JSON.parse(build(input)).comparison.constraints,input.constraints);
-    assert.throws(()=>build({...input,constraints:[{metric,maximum:20}]}),/assembly mass and steady sheet heat only/);
-    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]}),/assembly mass and steady sheet heat only/);
+    assert.throws(()=>build({...input,constraints:[{metric,maximum:20}]}),/mass, steady heat and vapor potential only/);
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]}),/mass, steady heat and vapor potential only/);
   }
 });
 
@@ -403,6 +403,17 @@ const motionPolicy = (changes={}) => ({schema:'ftx-drape-motion/1',keyframes:[
   {time_s:0.2,arm_abduction_deg:35}],max_step_s:0.01,max_trials:32,max_pairs:1000,...changes});
 const strainPolicy = (changes={}) => ({schema:'ftx-material-strain/1',max_triangle_samples:10000,...changes});
 const contactPolicy = (changes={}) => ({schema:'ftx-contact-loads/1',max_vertex_samples:100000,max_pair_evaluations:1000000,...changes});
+const coveragePolicy = (changes={}) => ({body_triangle_ids:[2],instance_layers:{band:'shell'},
+  settings:{max_distance_m:0.2,min_normal_cosine:0.1,separation_tolerance_m:0.00001,cells_per_layer:1,interfaces:[]},
+  conditions:{boundaries:[{inside_c:30,outside_c:10,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0.2}]},...changes});
+const vaporBoundary = () => ({inside_vapor_pressure_pa:2000,outside_vapor_pressure_pa:1000,
+  inside_film_resistance_m2_pa_w:1,outside_film_resistance_m2_pa_w:2,latent_heat_j_kg:2500000});
+const vaporSurfacePolicy = (changes={}) => ({schema:'ftx-vapor-surface-conditions/1',boundaries:[vaporBoundary()],...changes});
+const vaporCoveragePolicy = (changes={}) => {
+  const value=coveragePolicy();delete value.settings.cells_per_layer;
+  return {...value,conditions:{boundaries:[vaporBoundary()]},...changes};
+};
+const vaporHistoryPolicy = () => ({schema:'ftx-motion-vapor-coverage/1',integration:'composite_trapezoid',max_geometry_operations:1000000});
 const motionState = () => ({keyframes:[{time_s:0.25,arm_abduction_deg:30}],max_step_s:0.125,
   max_trials:128,max_pairs:100000,max_sample_vertices:500000});
 
@@ -683,6 +694,70 @@ test('guided contact loads validate exact native scopes, bounded allowances and 
   assert.throws(()=>build({...scenarioState(),contactLoads}),/16 MiB/,'Scenario framing shares the input limit with the exact contact source');
 });
 
+test('guided covered heat and vapor retain every original fragment without inventing optional policies', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  const coverage=' \r\n'+JSON.stringify(coveragePolicy()).replace('"band"','"\\u0062and"').replace('"inside_c":30','"inside_c":30.0')+'\r\n';
+  const vaporSurface=' \r\n'+JSON.stringify(vaporSurfacePolicy({required_method:'ISO 11092',required_conditions:{},allow_mixed_protocols:true}))
+    .replace('"latent_heat_j_kg":2500000','"latent_heat_j_kg":2.500000e6')+'\r\n';
+  const vaporCoverage=' \r\n'+JSON.stringify(vaporCoveragePolicy()).replace('"inside_film_resistance_m2_pa_w":1','"inside_film_resistance_m2_pa_w":-0.0')+'\r\n';
+  const motion=' \r\n'+JSON.stringify(motionPolicy({vapor_coverage_history:vaporHistoryPolicy()}))+'\r\n';
+  const input={...scenarioState(),coverage,vaporSurface,vaporCoverage,motion,maxMotionTrials:4096,
+    fitSpec:' {"source":{"sequence":18446744073709551615}}\r\n',surface:heatSource(),
+    materialStrain:JSON.stringify(strainPolicy()),contactLoads:JSON.stringify(contactPolicy())};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);
+  for(const original of [coverage,vaporSurface,vaporCoverage,motion,input.fitSpec,input.surface,input.materialStrain,input.contactLoads])assert.ok(raw.includes(original));
+  for(const [field,key] of [['coverage','coverage'],['vaporSurface','vapor_surface'],['vaporCoverage','vapor_coverage']]) {
+    assert.deepEqual(result[key],JSON.parse(input[field]));assert.equal(Object.hasOwn(JSON.parse(build(scenarioState())),key),false);
+  }
+  assert.match(raw,/"inside_c":30\.0/);assert.match(raw,/2\.500000e6/);assert.match(raw,/"inside_film_resistance_m2_pa_w":-0\.0/);
+  for(const key of ['vaporSurface','vaporCoverage','motionVaporHistory','max_thermal_operations'])assert.equal(Object.hasOwn(result,key),false);
+  assert.equal(Object.hasOwn(result.coverage,'thermal_bridges'),false);
+  assert.equal(Object.hasOwn(result.vapor_coverage.conditions,'required_method'),false,'Native optional defaults are not inserted into source files');
+});
+
+test('guided coverage envelopes refuse source coercion and wrappers while Rust retains physical admission', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  for(const [field,policy] of [['coverage',coveragePolicy],['vaporCoverage',vaporCoveragePolicy]]) {
+    const check=value=>build({...scenarioState(),[field]:JSON.stringify(value)});
+    for(const source of [policy(),undefined,null,'null','[]','{bad','\ufeff'+JSON.stringify(policy())]) {
+      assert.throws(()=>build({...scenarioState(),[field]:source}));
+    }
+    for(const key of ['body_triangle_ids','instance_layers','settings','conditions']) {
+      const missing=policy();delete missing[key];assert.throws(()=>check(missing),/missing/);
+    }
+    for(const extra of [{schema:'ftx-coverage/1'},{report:{}},{map:{}}])assert.throws(()=>check(policy(extra)),/unsupported/);
+    for(const body_triangle_ids of [null,{},['2'],[1.5],[-1]])assert.throws(()=>check(policy({body_triangle_ids})),/integer body-triangle/);
+    for(const key of ['instance_layers','settings','conditions'])for(const value of [null,[],1,'{}']) {
+      assert.throws(()=>check(policy({[key]:value})),/must be an object/);
+    }
+    assert.throws(()=>check(policy({instance_layers:{band:1}})),/string instance-to-layer/);
+    const unqualified=policy({body_triangle_ids:[99999,99999],instance_layers:{unknown:'absent-layer'},
+      settings:{...policy().settings,max_distance_m:-1}});
+    assert.deepEqual(JSON.parse(check(unqualified))[field==='coverage'?'coverage':'vapor_coverage'],unqualified,
+      'Exact body IDs, layer presence and physical projection domains remain independent native-consumer checks');
+    assert.ok(check(policy({body_triangle_ids:[],instance_layers:{}})));
+  }
+  for(const thermal_bridges of [null,{}])assert.ok(build({...scenarioState(),coverage:JSON.stringify(coveragePolicy({thermal_bridges}))}));
+  for(const thermal_bridges of [[],1,'{}'])assert.throws(()=>build({...scenarioState(),coverage:JSON.stringify(coveragePolicy({thermal_bridges}))}),/object or null/);
+  assert.throws(()=>build({...scenarioState(),vaporCoverage:JSON.stringify(vaporCoveragePolicy({thermal_bridges:null}))}),/unsupported/);
+  for(const vaporSurface of [vaporSurfacePolicy(),'null','[]','{bad','\ufeff'+JSON.stringify(vaporSurfacePolicy()),
+    ...[{},vaporSurfacePolicy({schema:'wrong'}),vaporSurfacePolicy({boundaries:[]}),vaporSurfacePolicy({boundaries:{}}),
+      vaporSurfacePolicy({body_mesh_sha256:'a'.repeat(64)}),vaporSurfacePolicy({boundaries:Array(65537).fill(vaporBoundary())})].map(JSON.stringify)]) {
+    assert.throws(()=>build({...scenarioState(),vaporSurface}));
+  }
+  const unqualified=JSON.stringify(vaporSurfacePolicy({boundaries:[{...vaporBoundary(),outside_vapor_pressure_pa:3000}],required_method:'unavailable-source-method'}));
+  assert.ok(build({...scenarioState(),vaporSurface:unqualified}).includes(unqualified),'Pressure direction and source qualification are not fabricated or preflighted by authoring');
+});
+
+test('covered heat and vapor fragments share the complete scenario UTF-8 byte allowance', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  for(const [field,policy] of [['coverage',coveragePolicy],['vaporSurface',vaporSurfacePolicy],['vaporCoverage',vaporCoveragePolicy]]) {
+    const source=JSON.stringify(policy()),raw=source+' '.repeat(16*1024*1024-source.length);
+    assert.throws(()=>build({...scenarioState(),[field]:raw}),/16 MiB/,'Scenario framing also consumes the original-source allowance');
+  }
+});
+
 test('scenario-only comparisons retain signed heat direction and cannot leak into manufacturing mode', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input=state();delete input.cutting;
@@ -742,8 +817,8 @@ test('directional strain and motion refuse reported ranges while retaining expli
   const context={drape:true,surface:true,motion:true,materialStrain:true},input={...state(),basis:'reported_bounds',
     objectives:[{metric:'independent_surface_power_w',direction:'minimize'}],constraints:[],requiredConsumers:['surface']};
   for(const metric of [...staticStrainMetrics,...motionStrainMetrics,'motion_max_absolute_edge_strain_pct']) {
-    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/steady sheet heat only/);
-    assert.throws(()=>build({...input,constraints:[{metric,minimum:-0.1,maximum:0.1}]},context),/steady sheet heat only/);
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/mass, steady heat and vapor potential only/);
+    assert.throws(()=>build({...input,constraints:[{metric,minimum:-0.1,maximum:0.1}]},context),/mass, steady heat and vapor potential only/);
     const guard={metric,basis:'nominal',minimum:-0.1,maximum:0.1};
     assert.deepEqual(JSON.parse(build({...input,constraints:[guard]},context)).comparison.constraints,[guard]);
   }
@@ -781,24 +856,75 @@ test('contact-load criteria remain nominal and compose with independently bounde
   const context={drape:true,surface:true,motion:true,contactLoads:true},input={...state(),basis:'reported_bounds',
     objectives:[{metric:'independent_surface_power_w',direction:'maximize'}],requiredConsumers:['contact_loads','motion_contact_loads']};
   for(const metric of [...initialContactMetrics,...movingContactMetrics]) {
-    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/steady sheet heat only/);
-    assert.throws(()=>build({...input,constraints:[{metric,maximum:2}]},context),/steady sheet heat only/);
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/mass, steady heat and vapor potential only/);
+    assert.throws(()=>build({...input,constraints:[{metric,maximum:2}]},context),/mass, steady heat and vapor potential only/);
     const constraint={metric,basis:'nominal',minimum:0,maximum:2};
     assert.deepEqual(JSON.parse(build({...input,constraints:[constraint]},context)).comparison.constraints,[constraint]);
   }
 });
 
-test('optional motion and strain availability preserves old contexts and rejects ambiguous flags', async () => {
+const coverageVaporMetrics=[
+  ['body_coverage_power_w','coverage','coverage'],
+  ['independent_vapor_potential_heat_flow_w','vapor_surface','vaporSurface'],
+  ['independent_vapor_potential_mass_flow_kg_s','vapor_surface','vaporSurface'],
+  ['covered_vapor_potential_heat_flow_w','vapor_coverage','vaporCoverage'],
+  ['covered_vapor_potential_mass_flow_kg_s','vapor_coverage','vaporCoverage'],
+  ['motion_covered_vapor_potential_energy_j','motion_vapor_coverage','motionVaporHistory'],
+  ['motion_covered_vapor_potential_mass_kg','motion_vapor_coverage','motionVaporHistory'],
+];
+
+test('covered heat and vapor comparisons retain signed directions and source-reported bounds independently', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={drape:true,surface:false,coverage:true,vaporSurface:true,vaporCoverage:true,motion:true,motionVaporHistory:true,
+    materialStrain:true,contactLoads:true};
+  for(const basis of ['nominal','reported_bounds']) {
+    const input={...state(),basis,objectives:coverageVaporMetrics.map(([metric],i)=>({metric,direction:i%2?'minimize':'maximize'})),
+      constraints:coverageVaporMetrics.map(([metric],i)=>({metric,minimum:i===0?-50:0,maximum:i===0?-1:2})),
+      requiredConsumers:['coverage','vapor_surface','vapor_coverage','motion_vapor_coverage']};
+    delete input.cutting;
+    input.constraints.push({metric:'min_warp_green_strain',basis:'nominal',minimum:-0.04},
+      {metric:'body_contact_resultant_n',basis:'nominal',maximum:2});
+    const before=JSON.stringify(input),result=JSON.parse(build(input,context));
+    assert.equal(JSON.stringify(input),before);assert.deepEqual(result.comparison,{basis,objectives:input.objectives,
+      constraints:input.constraints,required_consumers:input.requiredConsumers,allow_mixed_protocols:false});
+    for(const key of ['coverage','vapor_surface','vapor_coverage','motion_vapor_coverage','scenario','reported_bounds'])assert.equal(Object.hasOwn(result,key),false);
+  }
+  for(const [metric,consumer,flag] of coverageVaporMetrics.slice(0,5)) {
+    const input={...state(),basis:'reported_bounds',objectives:[{metric,direction:'maximize'}],requiredConsumers:[consumer]};
+    assert.ok(build(input,{drape:true,surface:false,[flag]:true}),'Each static consumer remains independently requestable');
+    assert.throws(()=>build(input,{drape:true,surface:true}),new RegExp(`requested ${consumer}`));
+    assert.throws(()=>build(input),new RegExp(`requested ${consumer}`));
+  }
+});
+
+test('motion vapor criteria require the actual history policy with motion and covered vapor', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={drape:true,surface:false,motion:true,vaporCoverage:true,motionVaporHistory:true};
+  for(const [metric,consumer] of coverageVaporMetrics.slice(5))for(const policy of [
+    {basis:'reported_bounds',objectives:[{metric,direction:'minimize'}]},
+    {constraints:[{metric,basis:'reported_bounds',minimum:0,maximum:1}]},{requiredConsumers:[consumer]}]) {
+    const input={...state(),...policy};assert.ok(build(input,context));
+    for(const key of ['motion','vaporCoverage','motionVaporHistory']) {
+      const absent={...context};delete absent[key];
+      for(const missing of [absent,{...context,[key]:false}])assert.throws(()=>build(input,missing),/requested motion_vapor_coverage/);
+    }
+    assert.throws(()=>build(input,{...context,vaporCoverage:false,vaporSurface:true}),/requested motion_vapor_coverage/);
+  }
+});
+
+test('optional scenario consumers preserve old contexts and reject ambiguous availability flags', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const old={drape:true,surface:false},raw=build(state(),old);
-  assert.equal(build(state(),{...old,motion:false,materialStrain:false,contactLoads:false}),raw);
-  for(const key of ['motion','materialStrain','contactLoads'])for(const value of [null,undefined,'true',1,{}]) {
+  const keys=['motion','materialStrain','contactLoads','coverage','vaporSurface','vaporCoverage','motionVaporHistory'];
+  const flags=Object.fromEntries(keys.map(key=>[key,false]));
+  assert.equal(build(state(),{...old,...flags}),raw);
+  for(const key of keys)for(const value of [null,undefined,'true',1,{}]) {
     assert.throws(()=>build(state(),{...old,[key]:value}),/availability must be a boolean/);
   }
-  const inherited=Object.assign(Object.create({materialStrain:true,motion:true,contactLoads:true}),old);
-  assert.throws(()=>build({...state(),requiredConsumers:['material_strain']},inherited),/requested material_strain/);
-  assert.throws(()=>build({...state(),requiredConsumers:['motion']},inherited),/requested motion/);
-  assert.throws(()=>build({...state(),requiredConsumers:['contact_loads']},inherited),/requested contact_loads/);
+  const inherited=Object.assign(Object.create(Object.fromEntries(keys.map(key=>[key,true]))),old);
+  for(const consumer of ['material_strain','motion','contact_loads','coverage','vapor_surface','vapor_coverage','motion_vapor_coverage']) {
+    assert.throws(()=>build({...state(),requiredConsumers:[consumer]},inherited),new RegExp(`requested ${consumer}`));
+  }
 });
 
 test('reported sheet heat retains signed objectives and inclusive guards without inventing source ranges', async () => {
@@ -849,8 +975,8 @@ test('bounded complete mass composes with steady heat ranges and separately nomi
   const objectives=[...input.objectives,{metric:'independent_surface_power_w',direction:'maximize'}];
   assert.deepEqual(JSON.parse(build({...input,objectives},context)).comparison.objectives,objectives);
   for(const metric of ['simulated_cloth_mass_kg','max_absolute_edge_strain_pct','stock_area_m2']) {
-    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/assembly mass and steady sheet heat only/);
-    assert.throws(()=>build({...input,constraints:[{metric,maximum:10}]},context),/assembly mass and steady sheet heat only/);
+    assert.throws(()=>build({...input,objectives:[{metric,direction:'minimize'}]},context),/mass, steady heat and vapor potential only/);
+    assert.throws(()=>build({...input,constraints:[{metric,maximum:10}]},context),/mass, steady heat and vapor potential only/);
   }
 });
 
@@ -869,8 +995,8 @@ test('motion objectives, guards and required results need actual motion and expl
   const bounded={...state(),assemblyMass:mass(),basis:'reported_bounds',objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
     constraints:[{metric,maximum:8,basis:'nominal'}],requiredConsumers:['motion']};
   assert.deepEqual(JSON.parse(build(bounded,context)).comparison.constraints,bounded.constraints);
-  assert.throws(()=>build({...bounded,objectives:objective.objectives},context),/assembly mass and steady sheet heat only/);
-  assert.throws(()=>build({...bounded,constraints:guard.constraints},context),/assembly mass and steady sheet heat only/);
+  assert.throws(()=>build({...bounded,objectives:objective.objectives},context),/mass, steady heat and vapor potential only/);
+  assert.throws(()=>build({...bounded,constraints:guard.constraints},context),/mass, steady heat and vapor potential only/);
   const heat={...bounded,objectives:[{metric:'independent_surface_power_w',direction:'maximize'}]};
   assert.deepEqual(JSON.parse(build(heat,{...context,surface:true})).comparison.constraints,bounded.constraints,
     'A source-bounded heat objective composes with a nominal motion-strain guard');
@@ -1311,14 +1437,17 @@ test('adaptive guidance composes with finite jobs, source-reported mass and sepa
     design:adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative'})};
   assert.equal(JSON.parse(build(input)).comparison.basis,'reported_bounds');
   assert.throws(()=>build({...input,assemblyMass:mass(false)}),/complete inventory/);
-  assert.throws(()=>build({...input,constraints:[{metric:'stock_area_m2',maximum:0.25}]}),/assembly mass and steady sheet heat only/);
+  assert.throws(()=>build({...input,constraints:[{metric:'stock_area_m2',maximum:0.25}]}),/mass, steady heat and vapor potential only/);
 });
 
 const casePolicy = (metric='stock_area_m2',direction='minimize',changes={}) =>
   ({basis:'nominal',objectives:[{metric,direction}],...changes});
 const namedContext = (cases=[{key:'cold',surface:false},{key:'warm',surface:false}],maxEvaluations=64) =>
   ({drape:true,surface:cases.some(item=>item.surface),motion:cases.some(item=>item.motion===true),
-    materialStrain:cases.some(item=>item.materialStrain===true),contactLoads:cases.some(item=>item.contactLoads===true),matrix:{maxEvaluations,cases}});
+    materialStrain:cases.some(item=>item.materialStrain===true),contactLoads:cases.some(item=>item.contactLoads===true),
+    coverage:cases.some(item=>item.coverage===true),vaporSurface:cases.some(item=>item.vaporSurface===true),
+    vaporCoverage:cases.some(item=>item.vaporCoverage===true),motionVaporHistory:cases.some(item=>item.motionVaporHistory===true),
+    matrix:{maxEvaluations,cases}});
 const namedDesign = changes => adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative',
   caseKey:'cold',maxEvaluations:2,maxDesigns:1,...changes});
 
@@ -1543,6 +1672,41 @@ test('named contact-load decisions preserve case policies and require motion and
   assert.ok(build(state(),original));assert.equal(JSON.stringify(original),before,'Native admission retains authority over original case policies');
 });
 
+test('named heat and vapor policies require each inherited consumer and a complete motion-history case', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const complete={key:'cold',surface:false,coverage:true,vaporSurface:true,vaporCoverage:true,motion:true,motionVaporHistory:true};
+  for(const [metric,consumer,flag] of coverageVaporMetrics)for(const policy of [
+    {basis:'reported_bounds',objectives:[{metric,direction:'maximize'}]},
+    {constraints:[{metric,basis:'reported_bounds',minimum:metric==='body_coverage_power_w'?-2:0,maximum:3}]},
+    {requiredConsumers:[consumer]}]) {
+    const input={...state(),...policy,design:namedDesign()},missing={...complete,key:'warm',[flag]:false};
+    assert.throws(()=>build(input,namedContext([complete,missing])),new RegExp(`warm inherits.*${consumer}`));
+    const override=namedContext([complete,{...missing,comparison:casePolicy()}]),before=JSON.stringify(override);
+    const result=JSON.parse(build(input,override));
+    assert.equal(result.design_adaptive.case_key,'cold');assert.equal(JSON.stringify(override),before);
+    if(policy.objectives)assert.deepEqual(result.comparison.objectives,policy.objectives);
+    if(policy.constraints)assert.deepEqual(result.comparison.constraints,policy.constraints);
+    if(policy.requiredConsumers)assert.deepEqual(result.comparison.required_consumers,policy.requiredConsumers);
+  }
+  const split=namedContext([{key:'moving',surface:false,motion:true,motionVaporHistory:true},
+    {key:'covered',surface:false,vaporCoverage:true}]);
+  assert.throws(()=>build({...state(),requiredConsumers:['motion_vapor_coverage']},split),/requested motion_vapor_coverage/);
+  const both=namedContext([complete,{...complete,key:'warm'}]);
+  for(const key of ['coverage','vaporSurface','vaporCoverage','motionVaporHistory']) {
+    const absent={...both};delete absent[key];
+    for(const context of [absent,{...both,[key]:false}])assert.throws(()=>build(state(),context),/availability.*actual cases/);
+    for(const value of [null,undefined,'true',1])assert.throws(()=>build(state(),namedContext([{...complete,[key]:value}])),/availability must be a boolean/);
+  }
+  const advanced=casePolicy('motion_covered_vapor_potential_energy_j','minimize',{
+    basis:'reported_bounds',required_consumers:['motion_vapor_coverage'],allow_mixed_protocols:true});
+  const original=namedContext([{key:'cold',surface:false,comparison:advanced}]),before=JSON.stringify(original);
+  assert.ok(build(state(),original));assert.equal(JSON.stringify(original),before,'Rust owns source and protocol admission of the complete original case policy');
+  const worst=namedDesign({objective:'consumer_worst_case'});delete worst.caseKey;
+  const bounded=casePolicy('body_coverage_power_w','maximize',{basis:'reported_bounds',required_consumers:['coverage']});
+  const input={...state(),basis:'reported_bounds',objectives:bounded.objectives,requiredConsumers:['coverage'],design:worst};
+  assert.equal(JSON.parse(build(input,namedContext([complete,{...complete,key:'warm',comparison:bounded}]))).design_adaptive.objective,'consumer_worst_case');
+});
+
 test('reported sheet heat respects effective named-case policies and adaptive guidance without changing sources', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input={...state(),basis:'reported_bounds',
@@ -1623,6 +1787,26 @@ test('named scenarios retain each contact scope and original allowance without r
   const independent=single({...scenarioState(),maxVertexFrames:32000000});
   const mixed=JSON.parse(build({maxEvaluations:4,cases:[{key:'loaded',scenario:moving},{key:'independent',scenario:independent}]}));
   assert.equal(Object.hasOwn(mixed.cases[1].scenario,'contact_loads'),false,'A case never inherits another case’s contact request');
+});
+
+test('named scenarios retain original coverage and motion-vapor policies without leaking them into other cases', async () => {
+  const {buildMaterialScenarioMatrixRequest:build,buildMaterialScenarioRequest:single}=await modulePromise;
+  const coverage=' \r\n'+JSON.stringify(coveragePolicy())+'\r\n',vaporSurface=' \r\n'+JSON.stringify(vaporSurfacePolicy())+'\r\n',
+    vaporCoverage=' \r\n'+JSON.stringify(vaporCoveragePolicy())+'\r\n';
+  const motion=' \r\n'+JSON.stringify(motionPolicy({vapor_coverage_history:vaporHistoryPolicy()}))+'\r\n';
+  const moving=single({...scenarioState(),coverage,vaporSurface,vaporCoverage,motion,maxMotionTrials:4096,maxVertexFrames:32000000}),
+    independent=single({...scenarioState(),maxVertexFrames:32000000});
+  const comparison=' {"basis":"reported_bounds","objectives":[{"metric":"motion_covered_vapor_potential_energy_j","direction":"maximize"}],'+
+    '"constraints":[{"metric":"body_coverage_power_w","minimum":-2.0,"maximum":-0.0}],'+
+    '"required_consumers":["motion_vapor_coverage","coverage"],"allow_mixed_protocols":true}\r\n';
+  const input={maxEvaluations:4,cases:[{key:'covered',scenario:moving,comparison},{key:'independent',scenario:independent}]},before=JSON.stringify(input);
+  const raw=build(input),result=JSON.parse(raw);assert.equal(JSON.stringify(input),before);
+  for(const original of [moving,independent,coverage,vaporSurface,vaporCoverage,motion,comparison])assert.ok(raw.includes(original));
+  assert.deepEqual(result.cases[0].comparison,JSON.parse(comparison));assert.equal(result.cases[0].scenario.max_motion_trials,4096);
+  for(const key of ['coverage','vapor_surface','vapor_coverage','motion','motionVaporHistory','max_motion_trials']) {
+    assert.equal(Object.hasOwn(result.cases[1].scenario,key),false);
+  }
+  assert.equal(Object.hasOwn(result.cases[1],'comparison'),false);
 });
 
 test('matrix snapshot resources use native active-motion defaults and complete aggregate limits', async () => {

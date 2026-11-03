@@ -80,6 +80,20 @@ const guidedDirectionalMetrics = [
   ["guidedMotionShearMin", "motion_min_engineering_shear_green_strain", "maximize", "minimum"],
   ["guidedMotionShearMax", "motion_max_engineering_shear_green_strain", "minimize", "maximum"],
 ];
+const guidedTransportMetrics = [
+  ["guidedCoveragePower", "body_coverage_power_w"],
+  ["guidedVaporSurfaceHeat", "independent_vapor_potential_heat_flow_w"],
+  ["guidedVaporSurfaceMass", "independent_vapor_potential_mass_flow_kg_s"],
+  ["guidedVaporCoverageHeat", "covered_vapor_potential_heat_flow_w"],
+  ["guidedVaporCoverageMass", "covered_vapor_potential_mass_flow_kg_s"],
+  ["guidedMotionVaporEnergy", "motion_covered_vapor_potential_energy_j"],
+  ["guidedMotionVaporMass", "motion_covered_vapor_potential_mass_kg"],
+];
+const guidedTransportSources = [
+  ["coverage", "guidedCoverage", "guidedCoverageFile", "the original scenario body/layer heat policy"],
+  ["vaporSurface", "guidedVaporSurface", "guidedVaporSurfaceFile", "the original independent-sheet vapor conditions"],
+  ["vaporCoverage", "guidedVaporCoverage", "guidedVaporCoverageFile", "the original scenario covered-body vapor policy"],
+];
 const guidedRequired = [
   ["guidedRequireCutting", "cutting", "roll"], ["guidedRequireCutProgram", "cutting_program", "roll"],
   ["guidedRequireSewing", "sewing"], ["guidedRequirePurchasing", "purchasing", "roll"],
@@ -92,6 +106,8 @@ const guidedRequired = [
   ["guidedRequireMaterialStrain", "material_strain"], ["guidedRequireMotion", "motion"],
   ["guidedRequireMotionMaterialStrain", "motion_material_strain"],
   ["guidedRequireContactLoads", "contact_loads"], ["guidedRequireMotionContactLoads", "motion_contact_loads"],
+  ["guidedRequireCoverage", "coverage"], ["guidedRequireVaporSurface", "vapor_surface"],
+  ["guidedRequireVaporCoverage", "vapor_coverage"], ["guidedRequireMotionVaporCoverage", "motion_vapor_coverage"],
 ];
 let studyCandidateSequence = 0;
 const outfitTargets = new Map();
@@ -188,6 +204,7 @@ function controls() {
   $("guidedMaterialStrainInstances").disabled = !$("guidedMaterialStrain").checked || $("guidedMaterialStrainScope").value !== "instances";
   $("guidedContactLoadsControls").hidden = !$("guidedContactLoads").checked;
   $("guidedContactLoadsInstances").disabled = !$("guidedContactLoads").checked || $("guidedContactLoadsScope").value !== "instances";
+  for (const [, id, file] of guidedTransportSources) $(file).disabled = !$(id).checked;
   $("guidedMotionForm").hidden = motionMode !== "form";
   $("guidedMotionFileField").hidden = motionMode !== "file";
   $("studyPieces").disabled = !source || $("studyTarget").value !== "pieces";
@@ -4073,11 +4090,21 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
       throw Error("Body contact force limits must be nonnegative newtons.");
     }
   }
+  for (const [id, metric] of guidedTransportMetrics) {
+    if (metric === "body_coverage_power_w") continue;
+    for (const suffix of ["MinimumLimit", "Limit"]) {
+      if ($(`${id}${suffix}`).value.trim() && number(`${id}${suffix}`, `limit for ${metric}`) < 0) {
+        throw Error("Vapor potential limits must be nonnegative in the displayed units.");
+      }
+    }
+  }
   const metrics = guidedMetrics.filter(([, , scope]) => guidedStockScope(scope, stockMode));
   const objectives = metrics.filter(([id]) => $(`${id}Goal`).checked).map(([id, metric]) => ({ metric,
     direction: id === "guidedHeatPower" ? $("guidedHeatDirection").value : "minimize" }));
   objectives.push(...guidedDirectionalMetrics.filter(([id]) => $(`${id}Goal`).checked)
     .map(([, metric, direction]) => ({ metric, direction })));
+  objectives.push(...guidedTransportMetrics.filter(([id]) => $(`${id}Goal`).checked)
+    .map(([id, metric]) => ({ metric, direction: $(`${id}Direction`).value })));
   const limitBasis = $("guidedLimitBasis").value || "inherit";
   if (!["inherit", "nominal", "reported_bounds"].includes(limitBasis)) throw Error("Choose the basis for comparison limits.");
   const constraints = metrics.filter(([id]) => $(`${id}Limit`).value.trim() ||
@@ -4089,6 +4116,11 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
   }));
   constraints.push(...guidedDirectionalMetrics.filter(([id]) => $(`${id}Limit`).value.trim())
     .map(([id, metric, , bound]) => ({ metric, [bound]: number(`${id}Limit`, `${bound} for ${metric}`),
+      ...(limitBasis === "inherit" ? {} : { basis: limitBasis }) })));
+  constraints.push(...guidedTransportMetrics.filter(([id]) => $(`${id}Limit`).value.trim() || $(`${id}MinimumLimit`).value.trim())
+    .map(([id, metric]) => ({ metric,
+      ...($(`${id}MinimumLimit`).value.trim() ? { minimum: number(`${id}MinimumLimit`, `minimum for ${metric}`) } : {}),
+      ...($(`${id}Limit`).value.trim() ? { maximum: number(`${id}Limit`, `maximum for ${metric}`) } : {}),
       ...(limitBasis === "inherit" ? {} : { basis: limitBasis }) })));
   const requiredConsumers = guidedRequired.filter(([id, , scope]) => guidedStockScope(scope, stockMode) && $(id).checked).map(([, consumer]) => consumer);
   return { objectives, constraints, requiredConsumers, basis: $("guidedBasis").value };
@@ -4189,11 +4221,17 @@ function describeScenarioInput(request, original) {
   return { request, original, context: { drape: true, surface: cases.some(item => item?.surface != null),
     motion: cases.some(item => item?.motion != null), materialStrain: cases.some(item => item?.material_strain != null),
     contactLoads: cases.some(item => item?.contact_loads != null),
+    coverage: cases.some(item => item?.coverage != null), vaporSurface: cases.some(item => item?.vapor_surface != null),
+    vaporCoverage: cases.some(item => item?.vapor_coverage != null),
+    motionVaporHistory: cases.some(item => item?.motion?.vapor_coverage_history != null),
     ...(matrix ? { matrix: { maxEvaluations: value.max_evaluations,
       cases: Array.isArray(value.cases) ? value.cases.map(item => ({ key: item?.key,
         surface: item?.scenario?.surface != null, motion: item?.scenario?.motion != null,
         materialStrain: item?.scenario?.material_strain != null,
         contactLoads: item?.scenario?.contact_loads != null,
+        coverage: item?.scenario?.coverage != null, vaporSurface: item?.scenario?.vapor_surface != null,
+        vaporCoverage: item?.scenario?.vapor_coverage != null,
+        motionVaporHistory: item?.scenario?.motion?.vapor_coverage_history != null,
         ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
 }
 function changedGuidedScenarioDraft() {
@@ -4291,6 +4329,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const surface = $("guidedScenarioHeat").checked;
   const motionMode = guidedMotionMode(), materialStrain = $("guidedMaterialStrain").checked;
   const contactLoads = $("guidedContactLoads").checked;
+  const transport = Object.fromEntries(guidedTransportSources.map(([key, id]) => [key, $(id).checked]));
   if (!["none", "form", "file"].includes(motionMode)) throw Error("Choose no motion, authored endpoints or an original motion request.");
   const input = { allowNoFit: fitSource === "none", options: {
     spacing: number("guidedScenarioSpacing", "mesh spacing in millimetres"),
@@ -4332,6 +4371,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const entries = [...(fitSource === "file" ? [["fitSpec", "fit", "the original section-3 fit contract"]] : []),
     ...(surface ? [["surface", "heatConditions", "the original section-3 sheet heat conditions"]] : []),
     ...(motionMode === "file" ? [["motion", "guidedMotionFile", "the original prescribed-motion request"]] : []),
+    ...guidedTransportSources.filter(([key]) => transport[key]).map(([key, , file, label]) => [key, file, label]),
     ...(includeCasePolicy && policy === "file" ? [["comparison", "guidedScenarioComparison", "the original case comparison policy"]] : [])];
   const budget = 16 * 1024 * 1024; let total = 0;
   const retained = entries.map(([key, id, label]) => {
@@ -4351,8 +4391,10 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     return [key, raw];
   }));
   const { comparison, ...fragments } = Object.fromEntries(sources);
-  return { request: buildMaterialScenarioRequest({ ...input, ...fragments }),
-    context: { drape: true, surface, motion: motionMode !== "none", materialStrain, contactLoads },
+  const request = buildMaterialScenarioRequest({ ...input, ...fragments });
+  const motionVaporHistory = motionMode === "file" && JSON.parse(fragments.motion).vapor_coverage_history != null;
+  return { request,
+    context: { drape: true, surface, motion: motionMode !== "none", materialStrain, contactLoads, ...transport, motionVaporHistory },
     ...((comparison ?? authoredComparison) === undefined ? {} : { comparison: comparison ?? authoredComparison }) };
 }
 function showGuidedScenarioDrafts() {
@@ -4367,6 +4409,10 @@ function showGuidedScenarioDrafts() {
       (value.motion ? `${value.motion.keyframes.length} motion endpoints, ${value.max_motion_trials} motion attempts; ` : "static pose; ") +
       `${value.material_strain ? `directional strain on ${value.material_strain.instances?.join(", ") || "all retained instances"}, ${value.material_strain.max_triangle_samples} triangle-samples` : "no directional strain request"}; ` +
       `${value.contact_loads ? `body contact loads on ${value.contact_loads.instances?.join(", ") || "all retained instances"}, ${value.contact_loads.max_vertex_samples} vertex-samples and ${value.contact_loads.max_pair_evaluations} pair evaluations` : "no body contact-load request"}; ` +
+      `${value.coverage ? "retained body/layer heat" : "no body/layer heat"}; ` +
+      `${value.vapor_surface ? "retained independent-sheet vapor" : "no sheet vapor"}; ` +
+      `${value.vapor_coverage ? "retained covered-body vapor" : "no covered-body vapor"}; ` +
+      `${value.motion?.vapor_coverage_history ? "requested complete-motion vapor history" : "no motion vapor history"}; ` +
       `${item.comparison && JSON.parse(item.comparison) !== null ? "retained case comparison" : "shared comparison at run time"}.`;
     row.append(label);
     const action = (title, handler, unavailable = false, replace = false) => {
@@ -4655,6 +4701,10 @@ for (const id of ["guidedContactLoads", "guidedContactLoadsScope", "guidedContac
   $(id).addEventListener("change", changedGuidedScenarioDraft);
   if (!["guidedContactLoads", "guidedContactLoadsScope"].includes(id)) $(id).addEventListener("input", changedGuidedScenarioDraft);
 }
+for (const [, id, file] of guidedTransportSources) {
+  $(id).addEventListener("change", changedGuidedScenarioDraft);
+  $(file).addEventListener("change", () => { if ($(id).checked) changedGuidedScenarioDraft(); else controls(); });
+}
 $("guidedMotionSource").addEventListener("change", () => {
   if ($("guidedScenarioMotion").checked) changedGuidedScenarioDraft(); else controls();
 });
@@ -4706,6 +4756,7 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
   "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis", "guidedHeatDirection", "guidedHeatMinimumLimit",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
   ...[...guidedMetrics, ...guidedDirectionalMetrics].flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]),
+  ...guidedTransportMetrics.flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Direction`, `${prefix}MinimumLimit`, `${prefix}Limit`]),
   ...guidedRequired.map(([id]) => id)]) {
   const changed = () => {
     if (id === "guidedDesignMaterial") {
@@ -5028,6 +5079,7 @@ function resetGuidedScenarios() {
   $("guidedMaterialStrainInstances").value = "";
   $("guidedContactLoads").checked = false; $("guidedContactLoadsScope").value = "all";
   $("guidedContactLoadsInstances").value = "";
+  for (const [, id] of guidedTransportSources) $(id).checked = false;
 }
 function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
   resetGuidedScenarios();

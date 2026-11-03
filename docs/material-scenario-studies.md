@@ -10,12 +10,12 @@ This is a software delivery, not closure of the empirical or optimization gates 
 ## Guided browser studies
 
 The material workbench can author the same scenario directly, or retain a complete original
-scenario/matrix file. Guided cases include the original fit contract, optional independent-sheet
-heat conditions, an optional material-direction strain scope and prescribed body motion. Save
+scenario/matrix file. Guided cases include the original fit contract, optional sheet/layered heat
+and vapor policies, material-direction strain and body-contact scopes, and prescribed body motion. Save
 1–8 named snapshots to compare the same body and material/design alternatives under different
 operating conditions. Each saved case keeps its original input fragments and numerical budgets;
 editing the next draft does not change saved cases. Replacing a pattern clears the garment-specific
-cases, motion endpoints and strain scope.
+cases, motion endpoints and strain/contact scopes, and disables the retained transport policies.
 
 Steady independent-sheet heat supports both nominal comparisons and complete source-reported
 bounds. Choose the signed objective direction explicitly, and optionally supply inclusive lower
@@ -24,6 +24,25 @@ limits; absent intervals retain the nominal result but cannot qualify that decis
 intervals are not a proved ordering. The selected comparison basis applies to objectives, while
 limits can explicitly choose a separate basis. Source bounds do not include unreported uncertainty
 in geometry, films or reservoir temperatures.
+
+The guided comparison also exposes signed `body_coverage_power_w`, independent-sheet and
+covered-body vapor heat/mass rates, and complete-motion covered-vapor energy/mass totals. All seven
+support nominal or source-reported bounds with explicit objective directions and inclusive
+lower/upper limits. Sheet and covered totals describe different domains; they are never summed.
+Covered-vapor metrics and required consumers need complete coverage of the declared body domain,
+even when a partial covered subtotal is available. Heat can retain its explicit bare-body paths.
+Potential transport does not establish available sweat, actual evaporation or comfort.
+
+Retain the original `coverage` and `vapor_coverage` fragments rather than a computed map; both
+declare `body_triangle_ids`, `instance_layers`, `settings` and `conditions`, and dry coverage may
+retain qualified `thermal_bridges`. Independent-sheet vapor uses original
+`ftx-vapor-surface-conditions/1` conditions. Moving totals additionally require
+`motion.vapor_coverage_history` in the original motion file, with explicit integration and geometry
+work limits, and `vapor_coverage` in the same case. The builder preserves source text and leaves
+physical/source admission to each native consumer. Missing intervals or a refused optional
+transport consumer leave independent numerical and manufacturing results inspectable. See
+[the guided workflow](browser-material-workbench.md#compare-layered-heat-and-potential-vapor-transfer)
+for source selection, units, work allowances and case snapshots.
 
 Enable material-direction strain to inspect all retained physical instances or exact named
 instances from a drape report. Six initial and six complete-motion extrema expose warp E11,

@@ -23,7 +23,17 @@ const METRIC_CONSUMERS = {
   motion_min_engineering_shear_green_strain: "motion_material_strain", motion_max_engineering_shear_green_strain: "motion_material_strain",
   body_contact_resultant_n: "contact_loads", max_body_contact_vertex_force_n: "contact_loads",
   motion_peak_body_contact_resultant_n: "motion_contact_loads", motion_max_body_contact_vertex_force_n: "motion_contact_loads",
+  body_coverage_power_w: "coverage",
+  independent_vapor_potential_heat_flow_w: "vapor_surface", independent_vapor_potential_mass_flow_kg_s: "vapor_surface",
+  covered_vapor_potential_heat_flow_w: "vapor_coverage", covered_vapor_potential_mass_flow_kg_s: "vapor_coverage",
+  motion_covered_vapor_potential_energy_j: "motion_vapor_coverage", motion_covered_vapor_potential_mass_kg: "motion_vapor_coverage",
 };
+const REPORTED_BOUND_METRICS = new Set([
+  "assembly_mass_kg", "independent_surface_power_w", "body_coverage_power_w",
+  "independent_vapor_potential_heat_flow_w", "independent_vapor_potential_mass_flow_kg_s",
+  "covered_vapor_potential_heat_flow_w", "covered_vapor_potential_mass_flow_kg_s",
+  "motion_covered_vapor_potential_energy_j", "motion_covered_vapor_potential_mass_kg",
+]);
 
 function object(value, allowed, required, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error(`${label} must be an object.`);
@@ -187,10 +197,29 @@ function contactLoadsPolicy(value) {
   }
 }
 
+function coveragePolicy(value, label, thermal = false) {
+  const fields = ["body_triangle_ids", "instance_layers", "settings", "conditions"];
+  object(value, [...fields, ...(thermal ? ["thermal_bridges"] : [])], fields, label);
+  if (!Array.isArray(value.body_triangle_ids) || value.body_triangle_ids.some(id => !Number.isSafeInteger(id) || id < 0)) {
+    throw Error(`${label} needs original integer body-triangle indices, without numeric coercion.`);
+  }
+  for (const key of ["instance_layers", "settings", "conditions"]) {
+    if (!value[key] || typeof value[key] !== "object" || Array.isArray(value[key])) throw Error(`${label} ${key} must be an object.`);
+  }
+  if (Object.values(value.instance_layers).some(layer => typeof layer !== "string")) {
+    throw Error(`${label} needs original string instance-to-layer identities.`);
+  }
+  if (value.thermal_bridges != null && (typeof value.thermal_bridges !== "object" || Array.isArray(value.thermal_bridges))) {
+    throw Error("Coverage thermal_bridges must retain its original object or null.");
+  }
+  // Rust admits actual body indices, complete layers, projection, boundaries and source protocols
+  // independently. An invalid physical domain must not erase unrelated drape/manufacturing output.
+}
+
 /** Author one fresh drape with authored or original motion; source files remain verbatim and Rust owns numerical admission. */
 export function buildMaterialScenarioRequest(state) {
   object(state, ["fitSpec", "allowNoFit", "options", "maxMeshPoints", "maxVertexFrames", "surface",
-    "motion", "maxMotionTrials", "materialStrain", "contactLoads"],
+    "motion", "maxMotionTrials", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage"],
     ["allowNoFit", "options", "maxMeshPoints", "maxVertexFrames"], "Guided scenario");
   if (typeof state.allowNoFit !== "boolean") throw Error("Declare the numerical-only study without a fit contract explicitly.");
   let fitSpec = "{}";
@@ -237,6 +266,17 @@ export function buildMaterialScenarioRequest(state) {
       throw Error("Supply original ftx-steady-surface-conditions/1 heat conditions with 1–65536 boundaries.");
     }
   }
+  if (own(state, "coverage")) coveragePolicy(sourceObject(state.coverage, "Body coverage"), "Body coverage", true);
+  if (own(state, "vaporCoverage")) coveragePolicy(sourceObject(state.vaporCoverage, "Vapor coverage"), "Vapor coverage");
+  if (own(state, "vaporSurface")) {
+    const vapor = sourceObject(state.vaporSurface, "Independent-sheet vapor conditions");
+    object(vapor, ["schema", "boundaries", "model_sha256", "required_conditions", "required_method", "allow_mixed_protocols"],
+      ["schema", "boundaries"], "Independent-sheet vapor conditions");
+    if (vapor.schema !== "ftx-vapor-surface-conditions/1" || !Array.isArray(vapor.boundaries) ||
+      !vapor.boundaries.length || vapor.boundaries.length > 65536) {
+      throw Error("Supply original ftx-vapor-surface-conditions/1 vapor conditions with 1–65536 boundaries.");
+    }
+  }
   let motion;
   if (own(state, "motion")) {
     if (typeof state.motion === "string") {
@@ -259,7 +299,10 @@ export function buildMaterialScenarioRequest(state) {
     ...(own(state, "surface") ? [',"surface":', state.surface] : []),
     ...(motion === undefined ? [] : [',"motion":', motion, ',"max_motion_trials":', String(state.maxMotionTrials)]),
     ...(own(state, "materialStrain") ? [',"material_strain":', state.materialStrain] : []),
-    ...(own(state, "contactLoads") ? [',"contact_loads":', state.contactLoads] : []), '}'];
+    ...(own(state, "contactLoads") ? [',"contact_loads":', state.contactLoads] : []),
+    ...(own(state, "coverage") ? [',"coverage":', state.coverage] : []),
+    ...(own(state, "vaporSurface") ? [',"vapor_surface":', state.vaporSurface] : []),
+    ...(own(state, "vaporCoverage") ? [',"vapor_coverage":', state.vaporCoverage] : []), '}'];
   let size = 0;
   for (const part of parts) {
     size += bytes(part);
@@ -306,6 +349,8 @@ export function buildMaterialScenarioMatrixRequest(state) {
     }
     context.cases.push({ key: item.key, surface: scenario.surface != null,
       motion: scenario.motion != null, materialStrain: scenario.material_strain != null, contactLoads: scenario.contact_loads != null,
+      coverage: scenario.coverage != null, vaporSurface: scenario.vapor_surface != null, vaporCoverage: scenario.vapor_coverage != null,
+      motionVaporHistory: scenario.motion?.vapor_coverage_history != null,
       ...(own(item, "comparison") ? { comparison: parse(item.comparison, "Original case comparison") } : {}) });
     append(`${index ? "," : ""}{"key":${JSON.stringify(item.key)},"scenario":`); append(item.scenario);
     if (own(item, "comparison")) { append(',"comparison":'); append(item.comparison); }
@@ -568,7 +613,9 @@ function scenarioConsumers(value) {
   const enabled = key => value != null && own(value, key) && value[key] === true;
   return { surface: enabled("surface"), motion: enabled("motion"), material_strain: enabled("materialStrain"),
     motion_material_strain: enabled("motion") && enabled("materialStrain"), contact_loads: enabled("contactLoads"),
-    motion_contact_loads: enabled("motion") && enabled("contactLoads") };
+    motion_contact_loads: enabled("motion") && enabled("contactLoads"), coverage: enabled("coverage"),
+    vapor_surface: enabled("vaporSurface"), vapor_coverage: enabled("vaporCoverage"),
+    motion_vapor_coverage: enabled("motion") && enabled("vaporCoverage") && enabled("motionVaporHistory") };
 }
 
 function matrixContext(value) {
@@ -579,13 +626,14 @@ function matrixContext(value) {
   }
   const keys = new Set();
   for (const item of matrix.cases) {
-    object(item, ["key", "surface", "motion", "materialStrain", "contactLoads", "comparison"], ["key", "surface"], "Named scenario case");
+    object(item, ["key", "surface", "motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage",
+      "motionVaporHistory", "comparison"], ["key", "surface"], "Named scenario case");
     name(item.key, "Scenario case key");
     bytes(item.key, 128, "Scenario case keys must not exceed 128 UTF-8 bytes.");
     if (keys.has(item.key)) throw Error("Scenario case keys must be unique.");
     keys.add(item.key);
     if (typeof item.surface !== "boolean") throw Error("Each named case needs an explicit surface-request boolean.");
-    for (const key of ["motion", "materialStrain", "contactLoads"]) {
+    for (const key of ["motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory"]) {
       if (own(item, key) && typeof item[key] !== "boolean") throw Error(`Named case ${key} availability must be a boolean when supplied.`);
     }
     if (item.comparison != null) {
@@ -615,9 +663,10 @@ function matrixContext(value) {
  * request (original JSON text for sourced extras, or an authored object with no extras).
  * Objectives, inclusive constraints and required consumers are explicit; no completeness or
  * protocol consent is inferred. Original source text is embedded verbatim, including locked numbers.
- * Optional scenario context describes the separately dispatched drape/heat/motion/strain/load request, is never
+ * Optional scenario context describes the separately dispatched drape/heat/vapor/motion/strain/load request, is never
  * serialized into the study, and does not enable scenario consumers in manufacturing-only calls.
- * Motion, materialStrain and contactLoads availability default to false. Its optional matrix retains ordered case
+ * Optional consumer flags default to false; motionVaporHistory describes an actual requested motion subpolicy.
+ * Its optional matrix retains ordered case
  * keys, consumer availability, original parsed comparison
  * policies and the callback allowance. Only guidance selection and capacity are read here; the
  * caller retains the original matrix JSON for native admission and exact replay.
@@ -630,16 +679,17 @@ function matrixContext(value) {
 export function buildMaterialStudyRequest(state, scenario) {
   let matrix;
   if (scenario !== undefined) {
-    object(scenario, ["drape", "surface", "motion", "materialStrain", "contactLoads", "matrix"], ["drape", "surface"], "Scenario comparison context");
+    object(scenario, ["drape", "surface", "motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage",
+      "motionVaporHistory", "matrix"], ["drape", "surface"], "Scenario comparison context");
     if (scenario.drape !== true || typeof scenario.surface !== "boolean") {
       throw Error("Scenario comparison needs explicit drape: true and a boolean surface request.");
     }
-    for (const key of ["motion", "materialStrain", "contactLoads"]) {
+    for (const key of ["motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory"]) {
       if (own(scenario, key) && typeof scenario[key] !== "boolean") throw Error(`Scenario ${key} availability must be a boolean when supplied.`);
     }
     if (own(scenario, "matrix")) {
       matrix = matrixContext(scenario.matrix);
-      for (const key of ["surface", "motion", "materialStrain", "contactLoads"]) {
+      for (const key of ["surface", "motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory"]) {
         if ((own(scenario, key) && scenario[key] === true) !== matrix.cases.some(item => own(item, key) && item[key] === true)) {
           throw Error(`Named scenario ${key} availability must describe its actual cases.`);
         }
@@ -745,7 +795,7 @@ export function buildMaterialStudyRequest(state, scenario) {
     drape: !!scenario, ...scenarioConsumers(scenario),
   };
   if (matrix) {
-    for (const consumer of ["motion_material_strain", "motion_contact_loads"]) {
+    for (const consumer of ["motion_material_strain", "motion_contact_loads", "motion_vapor_coverage"]) {
       consumers[consumer] = matrix.cases.some(item => scenarioConsumers(item)[consumer]);
     }
   }
@@ -759,10 +809,10 @@ export function buildMaterialStudyRequest(state, scenario) {
     if (key === "assembly_mass_kg" && !mass.inventory_complete) {
       throw Error("Assembly-mass comparison requires an explicit complete inventory declaration.");
     }
-    // Rust admits the actual source endpoints and selected steady law; authoring never supplies
-    // a range or changes signed heat into an absolute value.
-    if (basis === "reported_bounds" && !["assembly_mass_kg", "independent_surface_power_w"].includes(key)) {
-      throw Error("Guided reported-bound comparison supports assembly mass and steady sheet heat only; use an explicit nominal basis for other guided metrics and guards.");
+    // Rust admits the actual source endpoints, geometry and thermal/vapor law; authoring never
+    // supplies a range or changes signed heat into an absolute value.
+    if (basis === "reported_bounds" && !REPORTED_BOUND_METRICS.has(key)) {
+      throw Error("Guided reported-bound comparison supports complete assembly mass, steady heat and vapor potential only; use an explicit nominal basis for other guided metrics and guards.");
     }
   };
   if (!Array.isArray(state.objectives) || !state.objectives.length || state.objectives.length > 16) throw Error("Choose 1–16 comparison objectives.");

@@ -903,6 +903,27 @@ qualify a drape-based comparison. Zero gravity steps describe a sewing-only expe
 <label><input id="guidedScenarioHeat" type="checkbox"> Evaluate independent sheet heat using the original section-3 heat conditions</label>
 <p class="note">Uses each alternative's fresh geometry and qualified thermal observations with the declared reservoir temperatures
 and boundary films. Independent sheet power is not layered body coverage, whole-wearer heat loss or a comfort score.</p>
+<fieldset><legend>Layered heat and potential vapor transfer</legend>
+<label><input id="guidedCoverage" type="checkbox"> Evaluate body/layer heat with an original coverage policy</label>
+<label>Original scenario coverage policy JSON <input id="guidedCoverageFile" type="file" accept=".json,application/json" disabled></label>
+<label><input id="guidedVaporSurface" type="checkbox"> Evaluate independent-sheet vapor potential</label>
+<label>Original vapor conditions JSON (<code>ftx-vapor-surface-conditions/1</code>)
+<input id="guidedVaporSurfaceFile" type="file" accept=".json,application/json" disabled></label>
+<label><input id="guidedVaporCoverage" type="checkbox"> Evaluate covered-body vapor potential</label>
+<label>Original scenario vapor coverage policy JSON <input id="guidedVaporCoverageFile" type="file" accept=".json,application/json" disabled></label>
+<p class="note">Each coverage file is the original scenario fragment with <code>body_triangle_ids</code>,
+<code>instance_layers</code>, <code>settings</code> and <code>conditions</code>. The heat fragment may also include
+qualified <code>thermal_bridges</code>. The engine projects the declared layers onto each alternative's fresh body and cloth geometry;
+use scenario policies rather than a previously calculated coverage map. Exact source text is retained for replay.</p>
+<p class="note">Heat can include explicit bare-body paths. Covered vapor comparisons require complete coverage of the declared
+body domain; a partial covered subtotal remains visible but cannot qualify the comparison. Sheet and covered-body totals describe
+different domains and must not be added. Vapor results are potential transport under supplied pressures, films and material evidence;
+they do not establish available sweat, actual evaporation, cooling feedback or comfort.</p>
+<p class="note">To compare vapor energy or mass through movement, select an original motion request below containing
+<code>vapor_coverage_history</code> with schema <code>ftx-motion-vapor-coverage/1</code>, explicit
+<code>right_endpoint</code> or <code>composite_trapezoid</code> integration and a geometry work allowance.
+Enable covered-body vapor in the same case. Saved endpoints alone do not request a transport history.</p>
+</fieldset>
 <fieldset><legend>Material-direction strain</legend>
 <label><input id="guidedMaterialStrain" type="checkbox"> Track warp, weft and shear on the actual cloth triangles</label>
 <div id="guidedMaterialStrainControls" hidden>
@@ -1000,7 +1021,7 @@ An original policy file keeps its complete source. Shared comparison settings ap
 <p id="guidedScenarioCaseCount" class="note" role="status">No named cases saved.</p>
 <div id="guidedScenarioCases"></div>
 <button id="clearScenarioCases" type="button" disabled>Clear saved cases</button>
-<p class="note">Save 1–8 unique names. Every case retains its exact fit, heat and motion sources, strain and contact-load scopes and numerical settings.
+<p class="note">Save 1–8 unique names. Every case retains its exact fit, heat, vapor and motion sources, strain and contact-load scopes and numerical settings.
 Saved cases share the selected body source and current material/design choices. Their vertex-frame allowances must sum to
 at most 64000000; for example, explicitly allocate 32000000 each for two cases. The single-case default uses the full allowance.
 Active motion trial allowances must sum to at most 32768. No budget is divided automatically.</p>
@@ -1037,6 +1058,67 @@ Use the scenario action below; the manufacturing-only action cannot evaluate the
 <option value="minimize">Minimize signed outward power</option><option value="maximize">Maximize signed outward power</option></select></label>
 <label>Minimum signed sheet heat (W, optional) <input id="guidedHeatMinimumLimit" type="number" step="any"
 aria-label="Minimum signed independent sheet heat power in watts" placeholder="No minimum"></label>
+<fieldset><legend>Layered heat and vapor goals</legend>
+<p class="note">Choose each objective's direction explicitly. Optional inclusive limits apply even without that objective.
+Use the shared nominal or source-reported comparison basis and the separate limit basis selected at left.
+Source-bound decisions need complete admitted intervals; missing bounds preserve nominal results without qualifying the bounded decision.</p>
+<label><input id="guidedCoveragePowerGoal" type="checkbox"> Compare signed body/layer heat (W)</label>
+<div class="study-fields">
+<label>Body/layer heat direction <select id="guidedCoveragePowerDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize signed outward power</option><option value="maximize">Maximize signed outward power</option></select></label>
+<label>Minimum signed body/layer heat (W) <input id="guidedCoveragePowerMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Maximum signed body/layer heat (W) <input id="guidedCoveragePowerLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedVaporSurfaceHeatGoal" type="checkbox"> Compare independent-sheet vapor heat potential (W)</label>
+<div class="study-fields">
+<label>Sheet vapor heat direction <select id="guidedVaporSurfaceHeatDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize potential heat flow</option><option value="maximize">Maximize potential heat flow</option></select></label>
+<label>Minimum sheet vapor heat potential (W) <input id="guidedVaporSurfaceHeatMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum sheet vapor heat potential (W) <input id="guidedVaporSurfaceHeatLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedVaporSurfaceMassGoal" type="checkbox"> Compare independent-sheet vapor mass potential (kg/s)</label>
+<div class="study-fields">
+<label>Sheet vapor mass direction <select id="guidedVaporSurfaceMassDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize potential mass flow</option><option value="maximize">Maximize potential mass flow</option></select></label>
+<label>Minimum sheet vapor mass potential (kg/s) <input id="guidedVaporSurfaceMassMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum sheet vapor mass potential (kg/s) <input id="guidedVaporSurfaceMassLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedVaporCoverageHeatGoal" type="checkbox"> Compare covered-body vapor heat potential (W)</label>
+<div class="study-fields">
+<label>Covered vapor heat direction <select id="guidedVaporCoverageHeatDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize potential heat flow</option><option value="maximize">Maximize potential heat flow</option></select></label>
+<label>Minimum covered vapor heat potential (W) <input id="guidedVaporCoverageHeatMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum covered vapor heat potential (W) <input id="guidedVaporCoverageHeatLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedVaporCoverageMassGoal" type="checkbox"> Compare covered-body vapor mass potential (kg/s)</label>
+<div class="study-fields">
+<label>Covered vapor mass direction <select id="guidedVaporCoverageMassDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize potential mass flow</option><option value="maximize">Maximize potential mass flow</option></select></label>
+<label>Minimum covered vapor mass potential (kg/s) <input id="guidedVaporCoverageMassMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum covered vapor mass potential (kg/s) <input id="guidedVaporCoverageMassLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedMotionVaporEnergyGoal" type="checkbox"> Compare covered-body vapor energy potential through motion (J)</label>
+<div class="study-fields">
+<label>Motion vapor energy direction <select id="guidedMotionVaporEnergyDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize potential energy</option><option value="maximize">Maximize potential energy</option></select></label>
+<label>Minimum motion vapor energy potential (J) <input id="guidedMotionVaporEnergyMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum motion vapor energy potential (J) <input id="guidedMotionVaporEnergyLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedMotionVaporMassGoal" type="checkbox"> Compare covered-body vapor mass potential through motion (kg)</label>
+<div class="study-fields">
+<label>Motion vapor mass direction <select id="guidedMotionVaporMassDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize potential mass</option><option value="maximize">Maximize potential mass</option></select></label>
+<label>Minimum motion vapor mass potential (kg) <input id="guidedMotionVaporMassMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum motion vapor mass potential (kg) <input id="guidedMotionVaporMassLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<p class="note">Signed heat limits preserve negative values; minimizing signed power does not minimize its magnitude.
+Vapor limits use nonnegative potentials in the displayed units. Motion totals need complete admitted history,
+including its initial state and all accepted samples. The declared geometry allowance must fit the engine's shared work budget.</p>
+</fieldset>
+<label><input id="guidedRequireCoverage" type="checkbox"> Require body/layer heat</label>
+<label><input id="guidedRequireVaporSurface" type="checkbox"> Require independent-sheet vapor potential</label>
+<label><input id="guidedRequireVaporCoverage" type="checkbox"> Require vapor potential over the complete declared body domain</label>
+<label><input id="guidedRequireMotionVaporCoverage" type="checkbox"> Require complete covered-body vapor history</label>
 <label><input id="guidedRequireDrape" type="checkbox"> Require a numerically admissible drape, even without a drape objective</label>
 <label><input id="guidedRequireSurface" type="checkbox"> Require a complete independent sheet heat result</label>
 <label><input id="guidedRequireMotion" type="checkbox"> Require a complete numerically admissible movement</label>

@@ -520,8 +520,65 @@ The generated `study-request.json` and `scenario-request.json` retain the origin
 material source text, alongside the exact pattern and body input downloads. Active source, goal,
 mode and numerical-setting edits withdraw stale results and cancel pending reads or worker work.
 Unconsumed section-3 files do not replace an advanced scenario's own sources. Select **Load a
-complete scenario or named matrix (advanced)** for coverage, transient heat, coupled transport or
-other existing scenario policies; its exact request remains authoritative.
+complete scenario or named matrix (advanced)** for other transient, coupled-transport or
+existing scenario policies; its exact request remains authoritative.
+
+#### Compare layered heat and potential vapor transfer
+
+The **Layered heat and potential vapor transfer** controls retain three independent source files:
+
+- **Body/layer heat** takes the original `scenario.coverage` fragment: `body_triangle_ids`,
+  `instance_layers`, `settings`, `conditions` and optional qualified `thermal_bridges`.
+- **Independent-sheet vapor** takes original `ftx-vapor-surface-conditions/1` conditions.
+- **Covered-body vapor** takes the original `scenario.vapor_coverage` fragment with
+  `body_triangle_ids`, `instance_layers`, `settings` and `conditions`.
+
+Coverage fragments have no separate schema field. Supply scenario projection policies, not a
+previously computed coverage map: every material/design alternative projects its declared layers
+onto its own fresh body and cloth geometry. The source files preserve exact JSON text, including
+protocols, thermal bridges and source numbers. Rust admits their physical domains and material
+evidence; a refused optional consumer does not erase independent drape or manufacturing results.
+Malformed typed JSON can still reject the complete request before consumers run; this independence
+applies to admitted requests whose source or physical domain fails an individual consumer.
+
+The ordinary comparison exposes these quantities, each with an explicitly chosen minimizing or
+maximizing direction and optional inclusive lower/upper limits:
+
+| Quantity | Unit | Required input |
+|---|---|---|
+| Signed body/layer heat | W | Body/layer heat policy |
+| Independent-sheet vapor heat potential | W | Sheet vapor conditions |
+| Independent-sheet vapor mass potential | kg/s | Sheet vapor conditions |
+| Covered-body vapor heat potential | W | Covered-body vapor policy |
+| Covered-body vapor mass potential | kg/s | Covered-body vapor policy |
+| Covered-body vapor energy potential through motion | J | Covered-body vapor plus explicit motion history in the same case |
+| Covered-body vapor mass potential through motion | kg | Covered-body vapor plus explicit motion history in the same case |
+
+Limits remain active without an objective. Body/layer heat retains its sign; vapor potentials and
+their guided limits are nonnegative. All seven metrics support nominal and source-reported-bound
+decisions through the existing comparison and limit bases. Complete admitted intervals must
+satisfy bounded limits; missing ranges keep the nominal output but exclude the bounded decision.
+Nonlinear thermal laws, source-dependent gaps, exterior exchange and thermal bridges can retain
+nominal heat while preventing a source-bound comparison. No geometry or boundary uncertainty is
+invented. These goals and guards also enter existing grid and adaptive design discovery.
+
+Body/layer heat may include declared bare-body paths. Covered vapor comparisons require complete
+coverage of the declared body domain; a partial covered subtotal is inspectable but ineligible.
+Sheet and covered-body totals describe different domains and must not be added. Vapor quantities
+are transfer potentials under the supplied pressures, films and material evidence; they do not
+establish available sweat, actual evaporation, cooling feedback or physiological comfort.
+
+For moving totals, choose **Retain an original motion request** and supply
+`motion.vapor_coverage_history` with schema `ftx-motion-vapor-coverage/1`, explicit `right_endpoint`
+or `composite_trapezoid` integration and `max_geometry_operations`. The allowance is an integer
+from 1 to 20000000; each admitted history reserves it against the engine's shared 40000000-operation
+session limit. Enable covered-body vapor in the same case. Saved form endpoints alone request no
+transport history. Complete-history comparisons require coverage and admitted source data at the
+initial state and every accepted sample. A history refusal preserves independent static outcomes.
+
+Each input and comparison policy can be frozen in a named case. Active-source changes cancel an
+obsolete read or run; selecting an inactive source leaves it untouched. Draft changes leave saved
+cases intact. Loading or adopting another pattern disables these garment-specific policies.
 
 #### Track material-direction strain
 
@@ -602,9 +659,9 @@ sheet heat gives independent steady endpoint snapshots, not transient temperatur
 #### Save several named cases from the ordinary controls
 
 Choose **Save and compare several named cases here** to prepare 1–8 scenarios on the same selected
-body and initial pose. Configure a case using the fit, drape, optional sheet-heat, directional-strain and movement controls,
+body and initial pose. Configure a case using the fit, drape, heat, vapor, strain, contact-load and movement controls,
 give it a unique name, and choose **Save current settings as a named case**. Each saved case freezes
-the exact original fit and heat text, declared strain scope and numerical options, and saved motion endpoints
+the exact original fit, heat and vapor text, declared strain/contact scopes and numerical options, and saved motion endpoints
 or original motion file. You can change those
 source files and settings to prepare the next case without changing any saved case.
 
@@ -632,8 +689,9 @@ The scenario action runs only the saved cases in this mode. Its `scenario-reques
 the complete replayable matrix and the exact retained source fragments. Switching between saved,
 single-scenario and original-file modes preserves their separate requests. Loading or adopting a
 different pattern clears saved cases so another garment cannot silently inherit them. The guided
-forms author initial drape, prescribed movement and optional independent-sheet heat; coverage,
-transient heat and coupled transport requests retain their existing original-file route.
+forms author initial drape and prescribed movement, retain original sheet/layered heat and vapor
+policies, and compare explicit vapor histories from original motion requests. Other transient heat
+and coupled transport requests retain their complete original-file route.
 
 The focused compiled-engine proof uses a small synthetic sewing-only fixture with zero gravity
 steps. Five complete native/direct-WASM/worker comparisons cover signed heat direction, explicit
