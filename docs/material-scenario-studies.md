@@ -693,6 +693,19 @@ remains available for inspection, and exact retained histories replay the same n
 declaration and canonical balances through the ordinary coverage API. See
 [vapor-coverage.md](vapor-coverage.md) for the source and physical-domain contract.
 
+### Textile-owned water in guided design decisions
+
+The guided workbench exposes all seven existing textile-water quantities: evaporated, remaining,
+supplied, condensed and drained mass, plus separate evaporation and condensation latent energies.
+They remain nominal `transient_surface` criteria with explicit directions and inclusive guards.
+The same case must retain `motion.transient_surface.surface_water`; an ordinary dry transient
+history does not supply missing water evidence. No extra consumer name or result interval is added.
+Exact per-instance material qualification remains native authority, so the current shared policy
+supports same-material design changes and refuses incompatible material substitutions. Original
+sources, phase availability and complete-history admission remain unchanged. See the
+[guided controls](browser-material-workbench.md#compare-textile-owned-water-and-latent-heat) and
+[native water model](textile-surface-water.md).
+
 ### Vapor potential on the current sewn geometry
 
 With `scenario.vapor_surface` declared, comparisons can use the actual initial drape's independent

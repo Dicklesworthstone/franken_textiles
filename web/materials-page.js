@@ -101,6 +101,13 @@ const guidedTransportMetrics = [
   ["guidedBodyWaterUnmet", "motion_wet_film_unmet_demand_mass_kg"],
   ["guidedBodyWaterSupplied", "motion_wet_film_supplied_mass_kg"],
   ["guidedBodyWaterLatent", "motion_wet_film_body_reservoir_latent_energy_j"],
+  ["guidedTextileWaterEvaporated", "textile_water_evaporated_mass_kg"],
+  ["guidedTextileWaterRemaining", "textile_water_remaining_mass_kg"],
+  ["guidedTextileWaterSupplied", "textile_water_supplied_mass_kg"],
+  ["guidedTextileWaterCondensed", "textile_water_condensed_mass_kg"],
+  ["guidedTextileWaterDrained", "textile_water_drained_mass_kg"],
+  ["guidedTextileWaterLatent", "textile_water_latent_energy_j"],
+  ["guidedTextileWaterCondensationLatent", "textile_water_condensation_latent_energy_j"],
   ["guidedTransientSurfaceInsideEnergy", "transient_surface_inside_energy_j"],
   ["guidedTransientSurfaceNetEnergy", "transient_surface_net_boundary_energy_j"],
   ["guidedTransientSurfaceSampleMin", "transient_surface_min_sample_temperature_c"],
@@ -777,6 +784,7 @@ function objectiveComparison(parent, r) {
     textile_water_remaining_mass_kg: "Remaining textile liquid",
     textile_water_supplied_mass_kg: "Supplied textile liquid",
     textile_water_condensed_mass_kg: "Condensed textile water",
+    textile_water_drained_mass_kg: "Drained textile water",
     textile_water_latent_energy_j: "Textile evaporation latent energy",
     textile_water_condensation_latent_energy_j: "Textile condensation latent release"
   };
@@ -4372,6 +4380,7 @@ function describeScenarioInput(request, original) {
     motionVaporHistory: cases.some(item => item?.motion?.vapor_coverage_history != null),
     motionWetFilm: cases.some(item => item?.motion?.vapor_coverage_history?.wet_film != null),
     transientSurface: cases.some(item => item?.motion?.transient_surface != null),
+    textileWater: cases.some(item => item?.motion?.transient_surface?.surface_water != null),
     transientCoverage: cases.some(item => item?.motion?.transient_coverage != null),
     ...(matrix ? { matrix: { maxEvaluations: value.max_evaluations,
       cases: Array.isArray(value.cases) ? value.cases.map(item => ({ key: item?.key,
@@ -4383,6 +4392,7 @@ function describeScenarioInput(request, original) {
         motionVaporHistory: item?.scenario?.motion?.vapor_coverage_history != null,
         motionWetFilm: item?.scenario?.motion?.vapor_coverage_history?.wet_film != null,
         transientSurface: item?.scenario?.motion?.transient_surface != null,
+        textileWater: item?.scenario?.motion?.transient_surface?.surface_water != null,
         transientCoverage: item?.scenario?.motion?.transient_coverage != null,
         ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
 }
@@ -4548,10 +4558,11 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const motionVaporHistory = originalMotion?.vapor_coverage_history != null;
   const motionWetFilm = originalMotion?.vapor_coverage_history?.wet_film != null;
   const transientSurface = originalMotion?.transient_surface != null;
+  const textileWater = originalMotion?.transient_surface?.surface_water != null;
   const transientCoverage = originalMotion?.transient_coverage != null;
   return { request,
     context: { drape: true, surface, motion: motionMode !== "none", materialStrain, contactLoads, ...transport,
-      motionVaporHistory, motionWetFilm, transientSurface, transientCoverage },
+      motionVaporHistory, motionWetFilm, transientSurface, textileWater, transientCoverage },
     ...((comparison ?? authoredComparison) === undefined ? {} : { comparison: comparison ?? authoredComparison }) };
 }
 function showGuidedScenarioDrafts() {
@@ -4571,6 +4582,7 @@ function showGuidedScenarioDrafts() {
       `${value.vapor_coverage ? "retained covered-body vapor" : "no covered-body vapor"}; ` +
       `${value.motion?.vapor_coverage_history ? "requested complete-motion vapor history" : "no motion vapor history"}; ` +
       `${value.motion?.vapor_coverage_history?.wet_film != null ? "retained finite body-water policy" : "no body-water inventory"}; ` +
+      `${value.motion?.transient_surface?.surface_water != null ? "retained textile-water heat policy" : "no textile-water policy"}; ` +
       `${item.comparison && JSON.parse(item.comparison) !== null ? "retained case comparison" : "shared comparison at run time"}.`;
     row.append(label);
     const action = (title, handler, unavailable = false, replace = false) => {

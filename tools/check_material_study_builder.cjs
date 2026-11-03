@@ -916,7 +916,7 @@ test('optional scenario consumers preserve old contexts and reject ambiguous ava
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const old={drape:true,surface:false},raw=build(state(),old);
   const keys=['motion','materialStrain','contactLoads','coverage','vaporSurface','vaporCoverage','motionVaporHistory','motionWetFilm',
-    'transientSurface','transientCoverage'];
+    'transientSurface','transientCoverage','textileWater'];
   const flags=Object.fromEntries(keys.map(key=>[key,false]));
   assert.equal(build(state(),{...old,...flags}),raw);
   for(const key of keys)for(const value of [null,undefined,'true',1,{}]) {
@@ -1451,6 +1451,7 @@ const namedContext = (cases=[{key:'cold',surface:false},{key:'warm',surface:fals
     vaporCoverage:cases.some(item=>item.vaporCoverage===true),motionVaporHistory:cases.some(item=>item.motionVaporHistory===true),
     motionWetFilm:cases.some(item=>item.motionWetFilm===true),
     transientSurface:cases.some(item=>item.transientSurface===true),transientCoverage:cases.some(item=>item.transientCoverage===true),
+    textileWater:cases.some(item=>item.textileWater===true),
     matrix:{maxEvaluations,cases}});
 const namedDesign = changes => adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative',
   caseKey:'cold',maxEvaluations:2,maxDesigns:1,...changes});
@@ -2163,5 +2164,138 @@ test('finite body-water criteria guide linked grids and all four adaptive modes 
     const candidate={...input,design,objectives:objective==='consumer_pareto'?objectives:objectives.slice(0,1)},result=JSON.parse(build(candidate,cases));
     assert.equal(result.design_adaptive.objective,objective);assert.deepEqual(result.comparison.constraints,input.constraints);
     assert.deepEqual(result.comparison.required_consumers,['motion_wet_film']);assert.equal(JSON.stringify(cases),before);
+  }
+});
+
+const textileWaterMetrics=['textile_water_evaporated_mass_kg','textile_water_remaining_mass_kg','textile_water_supplied_mass_kg',
+  'textile_water_condensed_mass_kg','textile_water_drained_mass_kg','textile_water_latent_energy_j','textile_water_condensation_latent_energy_j'];
+const textileWaterContext=()=>({drape:true,surface:false,motion:true,transientSurface:true,textileWater:true});
+
+test('textile-water criteria retain all seven nominal decisions while sharing the existing transient surface consumer', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),objectives:textileWaterMetrics.map((metric,i)=>({metric,direction:i%2?'maximize':'minimize'})),
+    constraints:textileWaterMetrics.map(metric=>({metric,minimum:0,maximum:1})),requiredConsumers:['transient_surface']};
+  delete input.cutting;
+  input.constraints.push({metric:'transient_surface_final_min_temperature_c',minimum:-5});
+  const before=JSON.stringify(input),raw=build(input,textileWaterContext()),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.ok(raw.includes(input.candidates[0].selection));
+  assert.deepEqual(result.comparison,{basis:'nominal',objectives:input.objectives,constraints:input.constraints,
+    required_consumers:['transient_surface'],allow_mixed_protocols:false});
+  for(const key of ['motion','surface_water','textileWater','transient_surface','textile_water'])assert.equal(Object.hasOwn(result,key),false);
+  const dry={...state(),objectives:[{metric:'transient_surface_inside_energy_j',direction:'minimize'}],requiredConsumers:['transient_surface']};
+  for(const context of [{drape:true,surface:false,motion:true,transientSurface:true},{...textileWaterContext(),textileWater:false}]) {
+    assert.deepEqual(JSON.parse(build(dry,context)).comparison.required_consumers,['transient_surface'],
+      'A dry transient heat requirement does not invent or require a water policy');
+  }
+  assert.throws(()=>build({...input,requiredConsumers:['textile_water']},textileWaterContext()),/Unsupported guided consumer: textile_water/);
+});
+
+test('textile-water objectives and limits require actual water, motion and transient heat inputs together', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context=textileWaterContext();
+  for(const metric of textileWaterMetrics)for(const policy of [
+    {objectives:[{metric,direction:'maximize'}]},{constraints:[{metric,minimum:0,maximum:1}]}]) {
+    const input={...state(),...policy};assert.ok(build(input,context));
+    assert.throws(()=>build(input),/requested transient_surface/);
+    for(const key of ['motion','transientSurface','textileWater']) {
+      const absent={...context};delete absent[key];
+      for(const missing of [absent,{...context,[key]:false}]) {
+        assert.throws(()=>build(input,missing),key==='textileWater'?/Textile-water criteria/:/requested transient_surface/);
+      }
+    }
+    assert.throws(()=>build(input,{...wetFilmContext(),transientSurface:true}),/Textile-water criteria/,
+      'A finite body-water policy does not supply a textile-owned water policy');
+    const inherited=Object.assign(Object.create({textileWater:true}),{drape:true,surface:false,motion:true,transientSurface:true});
+    assert.throws(()=>build(input,inherited),/Textile-water criteria/);
+  }
+});
+
+test('textile-water decisions remain nominal while independent body-water bounds and signed thermal guards retain their bases', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={...wetFilmContext(),...textileWaterContext()};
+  const bounded={...state(),basis:'reported_bounds',objectives:[{metric:wetFilmMetrics[0],direction:'maximize'}]};
+  for(const metric of textileWaterMetrics) {
+    for(const input of [{...state(),basis:'reported_bounds',objectives:[{metric,direction:'minimize'}]},
+      {...state(),constraints:[{metric,basis:'reported_bounds',maximum:1}]},
+      {...bounded,constraints:[{metric,maximum:1}]}]) {
+      assert.throws(()=>build(input,context),/reported-bound comparison supports/);
+    }
+    const input={...bounded,constraints:[{metric,basis:'nominal',minimum:0,maximum:1},
+      {metric:'transient_surface_inside_energy_j',basis:'nominal',minimum:-20,maximum:-1}]};
+    const result=JSON.parse(build(input,context));assert.equal(result.comparison.basis,'reported_bounds');
+    assert.deepEqual(result.comparison.constraints,input.constraints);
+    assert.throws(()=>build({...input,constraints:[{metric,basis:'nominal',minimum:2,maximum:1}]},context),/finite ordered/);
+  }
+});
+
+test('named textile-water decisions require same-case water only for inherited water criteria and retain original overrides', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const complete={key:'cold',surface:false,motion:true,transientSurface:true,textileWater:true};
+  for(const metric of textileWaterMetrics)for(const policy of [
+    {objectives:[{metric,direction:'maximize'}]},{constraints:[{metric,maximum:1}]}]) {
+    const input={...state(),...policy,design:namedDesign()};
+    for(const flag of ['motion','transientSurface','textileWater']) {
+      const missing={...complete,key:'warm',[flag]:false};
+      assert.throws(()=>build(input,namedContext([complete,missing])),/warm inherits.*(transient_surface|textile-water)/);
+      const original=namedContext([complete,{...missing,comparison:casePolicy()}]),before=JSON.stringify(original);
+      assert.ok(build(input,original));assert.equal(JSON.stringify(original),before);
+    }
+  }
+  const split=namedContext([{key:'dry heat',surface:false,motion:true,transientSurface:true},
+    {key:'unrelated water',surface:false,textileWater:true,comparison:casePolicy()}]);
+  assert.throws(()=>build({...state(),objectives:[{metric:textileWaterMetrics[0],direction:'maximize'}]},split),/Textile-water criteria/);
+  const wetAndDry=namedContext([complete,{...complete,key:'warm',textileWater:false}]);
+  assert.ok(build({...state(),requiredConsumers:['transient_surface']},wetAndDry),
+    'Requiring complete heat results across cases does not make every case a wet case');
+  const both=namedContext([complete,{...complete,key:'warm'}]),absent={...both};delete absent.textileWater;
+  for(const context of [absent,{...both,textileWater:false}])assert.throws(()=>build(state(),context),/textileWater availability.*actual cases/);
+  for(const value of [null,undefined,'true',1])assert.throws(()=>build(state(),namedContext([{...complete,textileWater:value}])),/availability must be a boolean/);
+  const original=namedContext([{key:'cold',surface:false,comparison:casePolicy(textileWaterMetrics[0],'maximize',{
+    required_consumers:['transient_surface'],allow_mixed_protocols:true})}]),before=JSON.stringify(original);
+  assert.ok(build(state(),original));assert.equal(JSON.stringify(original),before,
+    'An original comparison delegates physical, phase and source admission to the native consumer');
+});
+
+test('original textile-water and mechanical-coupling sources survive snapshots without inferred source qualification or optional-budget gates', async () => {
+  const {buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,buildMaterialStudyRequest:build}=await modulePromise;
+  const water=' {\r\n"schema":"ftx-textile-surface-water/1","model":"inner_cell_equilibrium_free_film_frozen_properties/1",'+
+    '"bindings":{"band":{"material_sha256":"'+'a'.repeat(64)+'","initial_liquid_kg_m2":0.0000000000000001000000000000001}},'+
+    '"replenishment_kg_m2_s":-0.0,"source":{"reference":"synthetic original \\u03bc","accessed_on":"2026-01-01"}}\r\n';
+  const coupling=' {"schema":"ftx-evaporating-liquid-mechanics/1","qualification":"original source qualification \\u03bc"}\r\n';
+  const surface=' {"schema":"ftx-motion-surface-heat/1","max_cell_steps":64000000,"surface_water":'+water+',"mechanical_coupling":'+coupling+'}\r\n';
+  const motion=' \r\n'+JSON.stringify(motionPolicy()).slice(0,-1)+',"transient_surface":'+surface+'}\r\n';
+  const input={...scenarioState(),motion,maxMotionTrials:64,maxVertexFrames:32000000},before=JSON.stringify(input);
+  const snapshot=single(input),dry=single({...scenarioState(),motion:JSON.stringify(motionPolicy({transient_surface:{schema:'ftx-motion-surface-heat/1'}})),
+    maxMotionTrials:64,maxVertexFrames:32000000});
+  const comparison=' {"basis":"nominal","objectives":[{"metric":"'+textileWaterMetrics[0]+'","direction":"maximize"}],'+
+    '"constraints":[{"metric":"'+textileWaterMetrics[1]+'","minimum":-0.0}],"required_consumers":["transient_surface"]}\r\n';
+  const raw=matrix({maxEvaluations:64,cases:[{key:'wet',scenario:snapshot,comparison},{key:'dry',scenario:dry}]}),parsed=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);
+  for(const source of [water,coupling,surface,motion,snapshot,dry,comparison])assert.ok(raw.includes(source));
+  assert.equal(Object.hasOwn(parsed.cases[1].scenario.motion.transient_surface,'surface_water'),false);
+  for(const item of parsed.cases)for(const object of [item,item.scenario])assert.equal(Object.hasOwn(object,'textileWater'),false);
+  const unresolved=water.replace('a'.repeat(64),'stale-material').replace('0.0000000000000001000000000000001','-1');
+  assert.ok(single({...input,motion:motion.replace(water,unresolved)}).includes(unresolved),
+    'These opaque source-preservation inputs are not physical fixtures: complete policy and source qualification stay native');
+  assert.equal(JSON.parse(single({...input,motion:motion.replace(water,'null')})).motion.transient_surface.surface_water,null);
+  const available={surface:false,motion:true,transientSurface:true,textileWater:true};
+  const context=namedContext([{key:'cold',...available},{key:'warm',...available}]);
+  assert.equal(JSON.parse(build({...state(),objectives:[{metric:textileWaterMetrics[0],direction:'maximize'}],design:namedDesign()},context)).design_adaptive.max_evaluations,2,
+    'Optional cell-step reservations stay with the native consumer across probes and retained alternatives');
+});
+
+test('textile-water criteria guide linked grids and all four adaptive modes while retaining exact source inputs', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const objectives=[{metric:textileWaterMetrics[0],direction:'maximize'},{metric:textileWaterMetrics[1],direction:'minimize'}];
+  const input={...state(),objectives:objectives.slice(0,1),constraints:[{metric:textileWaterMetrics[4],maximum:1}],requiredConsumers:['transient_surface']};
+  const grid={...input,design:linkedDesignInput({values:[0,5],maxDesigns:1})},raw=build(grid,textileWaterContext());
+  assert.equal(JSON.parse(raw).schema,'ftx-design-study/1');assert.ok(raw.includes(grid.design.fitSpec));assert.ok(raw.includes(grid.candidates[0].selection));
+  const available={surface:false,motion:true,transientSurface:true,textileWater:true};
+  const cases=namedContext([{key:'cold',...available},{key:'warm',...available}]),before=JSON.stringify(cases);
+  for(const objective of ['consumer_comparison','consumer_pareto','consumer_worst_case','consumer_matrix_pareto']) {
+    const design=namedDesign({objective});if(['consumer_worst_case','consumer_matrix_pareto'].includes(objective))delete design.caseKey;
+    const candidate={...input,design,objectives:objective==='consumer_pareto'?objectives:objectives.slice(0,1)},result=JSON.parse(build(candidate,cases));
+    assert.equal(result.design_adaptive.objective,objective);assert.deepEqual(result.comparison.constraints,input.constraints);
+    assert.deepEqual(result.comparison.required_consumers,['transient_surface']);assert.equal(JSON.stringify(cases),before);
   }
 });

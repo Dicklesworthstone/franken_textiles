@@ -1229,6 +1229,76 @@ Missing bounds retain nominal readings without qualifying the other bounded wate
 it does not provide textile-temperature feedback, bare-body evaporation, physiological sweating or wearer cooling.
 Textile-owned water and its thermal/mechanical coupling are separate policies.</p>
 </fieldset>
+<fieldset><legend>Textile water and latent heat through motion</legend>
+<p class="note">Retain an original motion request with <code>transient_surface.surface_water</code> qualified for the
+material on each retained physical instance. These criteria require the complete motion and independent-sheet heat/water history
+in the same case. Steady heat, independent vapor and finite body-water requests are separate.</p>
+<p class="note">All seven quantities use <strong>nominal values only</strong>. Select each objective's direction explicitly;
+inclusive limits apply independently of its goal checkbox. Use an explicit nominal limit basis when other objectives use
+source-reported ranges. Every selected water criterion requires an admitted water history; the ordinary independent-sheet heat
+history can also be required below without choosing a water objective.</p>
+<details><summary>Choose textile-water goals and limits</summary>
+<label><input id="guidedTextileWaterEvaporatedGoal" type="checkbox"> Compare evaporated textile water (kg)</label>
+<div class="study-fields">
+<label>Evaporation direction <select id="guidedTextileWaterEvaporatedDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize evaporated water</option><option value="maximize">Maximize evaporated water</option></select></label>
+<label>Minimum evaporated textile water (kg) <input id="guidedTextileWaterEvaporatedMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum evaporated textile water (kg) <input id="guidedTextileWaterEvaporatedLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileWaterRemainingGoal" type="checkbox"> Compare remaining textile liquid (kg)</label>
+<div class="study-fields">
+<label>Remaining-liquid direction <select id="guidedTextileWaterRemainingDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize remaining liquid</option><option value="maximize">Maximize remaining liquid</option></select></label>
+<label>Minimum remaining textile liquid (kg) <input id="guidedTextileWaterRemainingMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum remaining textile liquid (kg) <input id="guidedTextileWaterRemainingLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileWaterSuppliedGoal" type="checkbox"> Compare supplied textile liquid (kg)</label>
+<div class="study-fields">
+<label>Supplied-liquid direction <select id="guidedTextileWaterSuppliedDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize supplied liquid</option><option value="maximize">Maximize supplied liquid</option></select></label>
+<label>Minimum supplied textile liquid (kg) <input id="guidedTextileWaterSuppliedMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum supplied textile liquid (kg) <input id="guidedTextileWaterSuppliedLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileWaterCondensedGoal" type="checkbox"> Compare condensed textile water (kg)</label>
+<div class="study-fields">
+<label>Condensation direction <select id="guidedTextileWaterCondensedDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize condensed water</option><option value="maximize">Maximize condensed water</option></select></label>
+<label>Minimum condensed textile water (kg) <input id="guidedTextileWaterCondensedMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum condensed textile water (kg) <input id="guidedTextileWaterCondensedLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileWaterDrainedGoal" type="checkbox"> Compare drained textile water (kg)</label>
+<div class="study-fields">
+<label>Drainage direction <select id="guidedTextileWaterDrainedDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize drained water</option><option value="maximize">Maximize drained water</option></select></label>
+<label>Minimum drained textile water (kg) <input id="guidedTextileWaterDrainedMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum drained textile water (kg) <input id="guidedTextileWaterDrainedLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileWaterLatentGoal" type="checkbox"> Compare textile evaporation latent-energy removal (J)</label>
+<div class="study-fields">
+<label>Evaporation-energy direction <select id="guidedTextileWaterLatentDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize latent removal</option><option value="maximize">Maximize latent removal</option></select></label>
+<label>Minimum evaporation latent-energy removal (J) <input id="guidedTextileWaterLatentMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum evaporation latent-energy removal (J) <input id="guidedTextileWaterLatentLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileWaterCondensationLatentGoal" type="checkbox"> Compare textile condensation latent-energy release (J)</label>
+<div class="study-fields">
+<label>Condensation-energy direction <select id="guidedTextileWaterCondensationLatentDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize latent release</option><option value="maximize">Maximize latent release</option></select></label>
+<label>Minimum condensation latent-energy release (J) <input id="guidedTextileWaterCondensationLatentMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum condensation latent-energy release (J) <input id="guidedTextileWaterCondensationLatentLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+</details>
+<p class="note">Initial liquid, supply, condensation and drainage need their own declared policies and qualification.
+Supply, condensation and drainage criteria remain unavailable when their supporting policy is absent. An admitted phase can
+legitimately report zero transfer. Evaporation removes latent energy, condensation releases it, and drainage
+exports sensible energy without a latent term. The native history reconciles these with retained liquid and textile temperature.</p>
+<p class="note">Each instance's water policy names one exact qualified material. Same-material design changes recompute water
+and heat on the new geometry; an incompatible material substitution refuses the wet result. The current shared scenario does not
+select a separate water qualification for each material alternative. No source hash is replaced automatically.</p>
+<p class="note">Textile water changes mechanical mass or momentum only when the original request explicitly supplies an admitted
+mechanical-coupling policy. This free-liquid model does not infer sorption, wicking, body-to-textile transfer, wet material laws,
+wearer cooling or empirical wet-garment performance.</p>
+</fieldset>
 <fieldset><legend>Heat and temperature through motion</legend>
 <p class="note">Retain an original motion request with the corresponding heat history. These criteria need complete motion
 and nominal values. Choose an explicit nominal limit basis when other objectives use source-reported bounds.

@@ -647,6 +647,52 @@ describes body-owned liquid under prescribed reservoirs, not textile-owned liqui
 sweating, actual wearer cooling or textile-temperature feedback. See the
 [native finite-water contract](material-scenario-studies.md#finite-body-water-through-complete-motion).
 
+#### Compare textile-owned water and latent heat
+
+The **Textile water and latent heat through motion** group uses the existing conservative
+independent-sheet heat/water history. Retain an original motion file containing
+`transient_surface.surface_water`; the same single or named case must request motion, that transient
+surface, and its actual water policy. Body-film, steady-heat and standalone vapor policies cannot
+substitute for it. The ordinary dry transient-surface workflow remains independent.
+
+| Guided quantity | Unit | Native metric |
+|---|---|---|
+| Evaporated textile water | kg | `textile_water_evaporated_mass_kg` |
+| Remaining textile liquid | kg | `textile_water_remaining_mass_kg` |
+| Supplied textile liquid | kg | `textile_water_supplied_mass_kg` |
+| Condensed textile water | kg | `textile_water_condensed_mass_kg` |
+| Drained textile water | kg | `textile_water_drained_mass_kg` |
+| Evaporation latent-energy removal | J | `textile_water_latent_energy_j` |
+| Condensation latent-energy release | J | `textile_water_condensation_latent_energy_j` |
+
+Choose each objective's direction explicitly and optional nonnegative inclusive lower/upper limits.
+Limits stay active without their objective. All seven criteria use **nominal values only**; choose
+an explicit nominal limit basis when other objectives use reported bounds. Each selected quantity
+requires the complete admitted water history through the existing `transient_surface` consumer.
+The ordinary **Require a complete independent-sheet heat history** control remains usable without
+selecting a water quantity. No separate `textile_water` consumer or uncertainty range is invented.
+
+Native qualification checks each material, instance, source, phase and operating domain. Supply,
+condensation and drainage quantities are unavailable when their supporting policy is absent; an
+admitted phase can legitimately report zero transfer. Evaporation removes latent energy and
+condensation releases it, while drainage exports sensible energy without a latent term. Retained
+liquid and temperature share the producer's complete mass and energy balance. Failed or partial
+histories cannot qualify a water decision or become zero-valued readings.
+
+The current shared scenario binds one exact qualified material hash per retained instance. These
+criteria support **same-material design searches**, recomputing geometry, reference-area water
+inventory and current-area transport for every admitted design. An incompatible material replacement
+refuses the wet result; the scenario does not yet select among separate material-qualified water
+records. Original source hashes are never rewritten to make a substitution pass.
+
+Saved cases retain the entire original motion source and comparison policy; active source/criterion
+edits cancel stale work. Water affects mechanical mass or momentum only through an explicitly
+requested, independently admitted mechanical-coupling policy. Without that coupling, a late thermal
+refusal preserves independent motion; a failed coupled solve follows the native whole-motion rollback.
+This free-liquid model does not infer sorption, wicking, body-to-textile transfer, wet constitutive
+properties, wearer cooling or empirical wet-garment performance. See
+[textile-surface-water.md](textile-surface-water.md) for the existing source and phase contracts.
+
 #### Compare heat storage and temperatures through motion
 
 Choose **Retain an original motion request** with an explicitly authored `transient_surface`
