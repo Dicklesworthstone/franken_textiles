@@ -4992,6 +4992,23 @@ growth and removes repeated catalog construction from per-piece substitutions. E
 snapshots, refusals and complete binding results remain unchanged. `ftx-wg1` and `ftx-fr1` track these
 deliveries; `ftx-wg2` tracks the bounded approximation and real native/portable consumer checks.
 
+### 25.156 Author named operating cases from retained ordinary scenario controls
+
+The workbench now builds a named matrix from one to eight explicitly saved static drape and
+optional sheet-heat scenarios. Each case retains its original fit and heat sources, numerical
+policy and either an inherited comparison, a snapshot of the current guided goals, or an original
+case comparison file. Opposing operating goals can therefore be authored through the existing
+controls without writing a matrix document. All cases reuse the selected body and current
+material/design choices through the existing production consumers.
+
+Saving, replacing and ordering cases are explicit actions. Draft edits leave saved snapshots
+intact; source edits during a pending save cancel it. Saved-case edits invalidate prior results
+and case nominations, while pattern replacement clears the garment-specific collection. The
+serializer preserves original fragments and applies the existing aggregate frame, motion-trial,
+evaluation and input-size limits without allocating unstated budgets. Exact matrix downloads
+replay through the same native and portable authority. This advances `ftx-ms2`; synthetic software
+and numerical evidence do not close measured material, garment-fit or process-qualification gates.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

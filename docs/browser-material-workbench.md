@@ -455,8 +455,43 @@ The generated `study-request.json` and `scenario-request.json` retain the origin
 material source text, alongside the exact pattern and body input downloads. Active source, goal,
 mode and numerical-setting edits withdraw stale results and cancel pending reads or worker work.
 Unconsumed section-3 files do not replace an advanced scenario's own sources. Select **Load a
-complete scenario or named matrix (advanced)** for authored motion, coverage, named cases or
+complete scenario or named matrix (advanced)** for authored motion, coverage or
 other existing scenario policies; its exact request remains authoritative.
+
+#### Save several named cases from the ordinary controls
+
+Choose **Save and compare several named cases here** to prepare 1–8 scenarios on the same selected
+body and pose. Configure a case using the existing fit, drape and optional sheet-heat controls,
+give it a unique name, and choose **Save current settings as a named case**. Each saved case freezes
+the exact original fit and heat text and the declared numerical options. You can change those
+source files and settings to prepare the next case without changing any saved case.
+
+For each case, choose one comparison policy:
+
+- Inherit the shared goals and limits as they stand when you run the comparison.
+- Save the current guided goals, limits, bases and required consumers with the case. This lets one
+  case keep a minimizing heat goal and another keep a maximizing goal without authoring JSON.
+- Retain an original case comparison-policy file, preserving its source text and full engine policy.
+
+The saved-case list shows which policy each case uses. **Replace … from current controls** explicitly
+updates that case's source snapshot while preserving its name. Remove and reorder actions change
+the matrix order; these changes withdraw obsolete reports and any nominated adaptive case must be
+chosen again. A refused or cancelled save leaves existing cases intact. Draft-only changes do not
+invalidate a finished matrix; the selected body, material/design choices and inherited shared
+comparison remain live dependencies.
+
+Set **Total case evaluations allowed** to cover the complete comparison, including adaptive probes
+when requested, with a maximum of 64. The cases' vertex-frame allowances must total at most
+64000000. The existing single-case default consumes that whole allowance; explicitly choose, for
+example, 32000000 each for two cases. Nothing divides or truncates budgets automatically. All
+cases share the current selected body, and each alternative still receives a fresh scenario state.
+
+The scenario action runs only the saved cases in this mode. Its `scenario-request.json` contains
+the complete replayable matrix and the exact retained source fragments. Switching between saved,
+single-scenario and original-file modes preserves their separate requests. Loading or adopting a
+different pattern clears saved cases so another garment cannot silently inherit them. The guided
+forms author static drape and optional independent-sheet heat; advanced motion, coverage and
+coupled transport requests retain their existing original-file route.
 
 The focused compiled-engine proof uses a small synthetic sewing-only fixture with zero gravity
 steps. Five complete native/direct-WASM/worker comparisons cover signed heat direction, explicit

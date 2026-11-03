@@ -816,11 +816,14 @@ and an exhausted search retains a complete incumbent without claiming the least 
 <h3>Fresh body, drape and heat studies</h3>
 <label>Set up the scenarios <select id="scenarioMode">
 <option value="guided">Configure one garment/body scenario here</option>
+<option value="guided_matrix">Save and compare several named cases here</option>
 <option value="file">Load a complete scenario or named matrix (advanced)</option>
 </select></label>
 <div id="guidedScenario">
 <p>Use the body source selected above. Every alternative receives a fresh drape on that same body and pose.
 These controls author a numerical experiment; material qualifications, convergence and result admission remain with the engine.</p>
+<p class="note">In named-case mode, these controls prepare the next case. Save a named case below or explicitly replace a saved case.
+Changing a draft or choosing another source file leaves saved cases unchanged.</p>
 <label>Garment fit contract <select id="guidedScenarioFitSource">
 <option value="file">Use the original fit contract selected in section 3</option>
 <option value="none">No fit contract — numerical comparison only</option>
@@ -846,6 +849,34 @@ qualify a drape-based comparison. Zero gravity steps describe a sewing-only expe
 <label><input id="guidedScenarioHeat" type="checkbox"> Evaluate independent sheet heat using the original section-3 heat conditions</label>
 <p class="note">Uses each alternative's fresh geometry and qualified thermal observations with the declared reservoir temperatures
 and boundary films. Independent sheet power is not layered body coverage, whole-wearer heat loss or a comfort score.</p>
+<fieldset id="guidedScenarioCasePolicy" hidden><legend>Comparison policy for this case</legend>
+<label>Use <select id="guidedScenarioPolicySource">
+<option value="inherit">The shared comparison goals and limits at run time</option>
+<option value="snapshot">Save the current guided goals and limits with this case</option>
+<option value="file">An original comparison policy for this case</option>
+</select></label>
+<label>Optional original case comparison JSON <input id="guidedScenarioComparison" type="file" accept=".json,application/json"></label>
+<p class="note">A retained case policy supplies its own basis, objectives, constraints, required results and protocol consent.
+Saving the current guided controls lets cases keep different goals or heat directions as those controls change.
+An original policy file keeps its complete source. Shared comparison settings apply only to cases without their own policy.</p>
+</fieldset>
+</div>
+<div id="guidedScenarioMatrix" hidden>
+<fieldset><legend>Saved named scenarios</legend>
+<label>Name for a new case <input id="guidedScenarioCaseName" type="text" placeholder="For example: cool room"></label>
+<button id="addScenarioCase" type="button" disabled>Save current settings as a named case</button>
+<label>Total case evaluations allowed <input id="guidedScenarioMatrixBudget" type="number" min="1" max="64" step="1" value="64"></label>
+<p id="guidedScenarioCaseCount" class="note" role="status">No named cases saved.</p>
+<div id="guidedScenarioCases"></div>
+<button id="clearScenarioCases" type="button" disabled>Clear saved cases</button>
+<p class="note">Save 1–8 unique names. Every case retains its exact fit and heat sources and numerical settings.
+Saved cases share the selected body source and current material/design choices. Their vertex-frame allowances must sum to
+at most 64000000; for example, explicitly allocate 32000000 each for two cases. The single-case default uses the full allowance.
+No budget is divided automatically.</p>
+<p class="note">Only saved cases run in this mode. Replace uses the current draft controls and source files while retaining that case's name.
+Removing, replacing or reordering cases withdraws old results and requires any nominated guidance case to be chosen again.
+Loading or adopting another pattern clears saved cases. Switching to a single scenario or a loaded request preserves them for return.</p>
+</fieldset>
 </div>
 <div id="scenarioFileControls" hidden>
 <label>Scenario or named matrix JSON (<code>ftx-drape-scenario/1</code> or <code>ftx-drape-scenario-matrix/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>

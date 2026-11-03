@@ -992,3 +992,99 @@ test('each inherited matrix heat policy needs its own surface while raw override
     required_consumers:['coverage']})},{key:'warm',surface:false,comparison:casePolicy('stock_area_m2')}]);
   assert.equal(JSON.parse(build(input,raw)).design_adaptive.case_key,'cold','Original policy consumers go to Rust instead of being silently omitted');
 });
+
+const scenarioSnapshot = (changes={}) => ' \r\n'+JSON.stringify({schema:'ftx-drape-scenario/1',
+  options:scenarioState().options,fit_spec:{},max_mesh_points:32768,max_vertex_frames:8000000,...changes})+'\r\n';
+
+test('named scenario authoring preserves every original scenario and case policy fragment in declared order', async () => {
+  const {buildMaterialScenarioMatrixRequest:build,buildMaterialScenarioRequest:single}=await modulePromise;
+  const fit=' {"schema":"fabric-fit/1","points":[],"source":{"seed":18446744073709551615,"zero":-0.0,"label":"é 🧵"}}\r\n';
+  const first=single({...scenarioState(),allowNoFit:false,fitSpec:fit,surface:heatSource(),maxVertexFrames:32000000});
+  const second=single({...scenarioState(),maxVertexFrames:32000000});
+  const policy=' {"basis":"nominal","objectives":[{"metric":"independent_surface_power_w","direction":"maximize"}],'+
+    '"constraints":[{"metric":"max_absolute_edge_strain_pct","minimum":-0.0,"maximum":8.0}],'+
+    '"required_consumers":["drape","surface"],"allow_mixed_protocols":true}\r\n';
+  const input={maxEvaluations:8,cases:[{key:'warm "outside"',scenario:first,comparison:policy},{key:'cold 🧵',scenario:second}]};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.equal(result.schema,'ftx-drape-scenario-matrix/1');assert.equal(result.max_evaluations,8);
+  assert.deepEqual(result.cases.map(item=>item.key),['warm "outside"','cold 🧵']);
+  for(const original of [first,second,policy,fit,heatSource()])assert.ok(raw.includes(original));
+  assert.match(raw,/18446744073709551615/);assert.match(raw,/"minimum":-0\.0/);assert.match(raw,/"maximum":8\.0/);
+  assert.deepEqual(result.cases[0].comparison,JSON.parse(policy));assert.equal(Object.hasOwn(result.cases[1],'comparison'),false);
+  assert.equal(Object.hasOwn(result.cases[1].scenario,'surface'),false,'A case never inherits another case’s heat input');
+  const explicit=build({maxEvaluations:1,cases:[{key:'null policy',scenario:second,comparison:' \nnull\r\n'}]});
+  assert.ok(explicit.includes(' \nnull\r\n'));assert.equal(JSON.parse(explicit).cases[0].comparison,null);
+});
+
+test('matrix snapshot resources use native active-motion defaults and complete aggregate limits', async () => {
+  const {buildMaterialScenarioMatrixRequest:build}=await modulePromise;
+  const motion={schema:'ftx-drape-motion/1',keyframes:[{time_s:0.1,arm_abduction_deg:35}],
+    max_step_s:0.01,max_trials:10,max_pairs:100,max_sample_vertices:1000};
+  const cases=Array.from({length:8},(_,i)=>({key:'case-'+i,scenario:scenarioSnapshot({motion})}));
+  const raw=build({maxEvaluations:8,cases}),result=JSON.parse(raw);
+  assert.equal(result.cases.length,8);
+  assert.ok(result.cases.every(item=>!Object.hasOwn(item.scenario,'max_motion_trials')),'The4096 default is counted, never inserted into retained source');
+  const replace=(changes)=>[{...cases[0],scenario:scenarioSnapshot({motion,...changes})},...cases.slice(1)];
+  assert.throws(()=>build({maxEvaluations:8,cases:replace({max_motion_trials:4097})}),/32768 active motion trials/);
+  assert.throws(()=>build({maxEvaluations:8,cases:replace({max_vertex_frames:8000001})}),/64000000 aggregate vertex frames/);
+  assert.equal(JSON.parse(build({maxEvaluations:8,cases:replace({motion:null,max_motion_trials:32768})})).cases[0].scenario.max_motion_trials,32768,
+    'An inactive case’s declared trial budget does not consume the active-motion sum');
+  const inactive={schema:'ftx-drape-scenario/1',options:scenarioState().options,fit_spec:{},max_mesh_points:32768,
+    max_vertex_frames:32000000,max_motion_trials:32768};
+  assert.equal(JSON.parse(build({maxEvaluations:2,cases:[{key:'one',scenario:JSON.stringify(inactive)},
+    {key:'two',scenario:JSON.stringify(inactive)}]})).cases.length,2);
+  for(const max_motion_trials of [0,-1,1.5,32769,null,'4096']) {
+    assert.throws(()=>build({maxEvaluations:1,cases:[{key:'invalid',scenario:scenarioSnapshot({max_motion_trials})}]}),/motion-trial budgets/);
+  }
+  for(const max_vertex_frames of [undefined,0,-1,1.5,64000001,null,'8000000']) {
+    assert.throws(()=>build({maxEvaluations:1,cases:[{key:'invalid',scenario:scenarioSnapshot({max_vertex_frames})}]}),/explicit integer vertex-frame/);
+  }
+});
+
+test('named snapshot authoring rejects ambiguous envelopes, duplicate keys and invalid source encodings', async () => {
+  const {buildMaterialScenarioMatrixRequest:build}=await modulePromise;
+  const sample={key:'case',scenario:scenarioSnapshot()},input={maxEvaluations:1,cases:[sample]};
+  for(const value of [null,[],{}, {...input,unknown:1}, {...input,cases:[]},
+    {...input,cases:Array.from({length:9},(_,i)=>({...sample,key:String(i)}))}])assert.throws(()=>build(value));
+  for(const maxEvaluations of [0,65,1.5,NaN,Infinity,'1',null])assert.throws(()=>build({...input,maxEvaluations}),/allowance/);
+  assert.throws(()=>build({maxEvaluations:1,cases:[sample,{...sample,key:'second'}]}),/covering every case/);
+  assert.throws(()=>build({maxEvaluations:2,cases:[sample,sample]}),/unique/);
+  for(const key of ['',null,42,'é'.repeat(65)])assert.throws(()=>build({...input,cases:[{...sample,key}]}));
+  assert.equal(JSON.parse(build({...input,cases:[{...sample,key:'é'.repeat(64)}]})).cases[0].key,'é'.repeat(64));
+  for(const item of [null,{}, {...sample,unknown:true}, {...sample,scenario:JSON.parse(sample.scenario)},
+    {...sample,scenario:'\ufeff'+sample.scenario}, {...sample,scenario:'null'}, {...sample,scenario:'['},
+    {...sample,scenario:'{"schema":"ftx-drape-scenario-matrix/1"}'}])assert.throws(()=>build({...input,cases:[item]}));
+  for(const comparison of [{},undefined,'[]','false','{}','{bad','\ufeffnull',
+    JSON.stringify(casePolicy('stock_area_m2','automatic'))]) {
+    assert.throws(()=>build({...input,cases:[{...sample,comparison}]}));
+  }
+});
+
+test('matrix envelopes retain advanced original scenarios and policies without recreating numerical admission', async () => {
+  const {buildMaterialScenarioMatrixRequest:build}=await modulePromise;
+  const original=scenarioSnapshot({max_motion_trials:5000,
+    motion:{schema:'ftx-drape-motion/1',keyframes:[{time_s:0.2,arm_abduction_deg:50,leg_pose:{posture:'seated',fraction:0.5}}],
+      max_step_s:0.01,max_trials:40,max_pairs:50000,max_sample_vertices:40000},
+    material_strain:{schema:'ftx-material-strain/1',max_triangle_samples:100000}});
+  const comparison=' \n'+JSON.stringify(casePolicy('motion_min_warp_green_strain','maximize',{
+    constraints:[{metric:'motion_max_body_contact_vertex_force_n',basis:'nominal',maximum:5}],
+    required_consumers:['motion','motion_material_strain','motion_contact_loads'],allow_mixed_protocols:true}))+'\r\n';
+  const raw=build({maxEvaluations:1,cases:[{key:'prescribed motion',scenario:original,comparison}]});
+  assert.ok(raw.includes(original));assert.ok(raw.includes(comparison));
+  assert.deepEqual(JSON.parse(raw).cases[0].scenario,JSON.parse(original));
+  assert.deepEqual(JSON.parse(raw).cases[0].comparison,JSON.parse(comparison));
+});
+
+test('complete named scenario snapshots share an exact UTF-8 request limit including framing bytes', async () => {
+  const {buildMaterialScenarioMatrixRequest:build}=await modulePromise;
+  const base=scenarioSnapshot({max_vertex_frames:1});
+  const source=padding=>base.replace('"fit_spec":{}','"fit_spec":{"note":"'+padding+'"}');
+  const input=padding=>({maxEvaluations:2,cases:[{key:'first 🧵',scenario:source(padding)},
+    {key:'second',scenario:base,comparison:'null'}]});
+  const overhead=Buffer.byteLength(build(input(''))),remaining=16*1024*1024-overhead;
+  const padding='é'.repeat(Math.floor(remaining/2))+'x'.repeat(remaining%2);
+  const raw=build(input(padding));assert.equal(Buffer.byteLength(raw),16*1024*1024);
+  assert.throws(()=>build(input(padding+'x')),/16 MiB/);
+  const shared='é'.repeat(3*1024*1024);
+  assert.throws(()=>build({maxEvaluations:3,cases:Array.from({length:3},(_,i)=>({key:String(i),scenario:source(shared)}))}),/16 MiB/);
+});

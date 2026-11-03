@@ -130,6 +130,53 @@ export function buildMaterialScenarioRequest(state) {
   return parts.join("");
 }
 
+/** Assemble exact scenario snapshots; Rust still owns every case's physical and policy admission. */
+export function buildMaterialScenarioMatrixRequest(state) {
+  object(state, ["maxEvaluations", "cases"], ["maxEvaluations", "cases"], "Guided named scenarios");
+  if (!Array.isArray(state.cases) || !state.cases.length || state.cases.length > 8) {
+    throw Error("A named scenario matrix needs 1–8 cases.");
+  }
+  const context = { maxEvaluations: state.maxEvaluations, cases: [] };
+  const parts = []; let size = 0, frames = 0, trials = 0;
+  const append = value => {
+    size += bytes(value);
+    if (size > MAX_REQUEST_BYTES) throw Error("Guided named scenario request exceeds 16 MiB.");
+    parts.push(value);
+  };
+  append('{"schema":"ftx-drape-scenario-matrix/1","max_evaluations":');
+  if (!Number.isSafeInteger(state.maxEvaluations) || state.maxEvaluations < state.cases.length || state.maxEvaluations > 64) {
+    throw Error("Named scenarios need an integer evaluation allowance covering every case, at most 64.");
+  }
+  append(String(state.maxEvaluations)); append(',"cases":[');
+  for (const [index, item] of state.cases.entries()) {
+    object(item, ["key", "scenario", "comparison"], ["key", "scenario"], "Named scenario snapshot");
+    name(item.key, "Scenario case key");
+    bytes(item.key, 128, "Scenario case keys must not exceed 128 UTF-8 bytes.");
+    const scenario = sourceObject(item.scenario, "Original scenario snapshot");
+    if (scenario.schema !== "ftx-drape-scenario/1") throw Error("Each named case needs an original ftx-drape-scenario/1 snapshot.");
+    if (!Number.isSafeInteger(scenario.max_vertex_frames) || scenario.max_vertex_frames < 1 || scenario.max_vertex_frames > 64000000) {
+      throw Error("Each scenario needs an explicit integer vertex-frame budget from 1 to 64000000.");
+    }
+    const motionTrials = own(scenario, "max_motion_trials") ? scenario.max_motion_trials : 4096;
+    if (!Number.isSafeInteger(motionTrials) || motionTrials < 1 || motionTrials > 32768) {
+      throw Error("Scenario motion-trial budgets must be integers from 1 to 32768; omission uses 4096.");
+    }
+    frames += scenario.max_vertex_frames;
+    if (scenario.motion != null) trials += motionTrials;
+    if (frames > 64000000 || trials > 32768) {
+      throw Error("Named scenarios exceed 64000000 aggregate vertex frames or 32768 active motion trials.");
+    }
+    context.cases.push({ key: item.key, surface: scenario.surface != null,
+      ...(own(item, "comparison") ? { comparison: parse(item.comparison, "Original case comparison") } : {}) });
+    append(`${index ? "," : ""}{"key":${JSON.stringify(item.key)},"scenario":`); append(item.scenario);
+    if (own(item, "comparison")) { append(',"comparison":'); append(item.comparison); }
+    append("}");
+  }
+  matrixContext(context);
+  append("]}");
+  return parts.join("");
+}
+
 function stockOptions(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error(`${label} must be an options object.`);
   allowance(value, `${label} seam allowance`);

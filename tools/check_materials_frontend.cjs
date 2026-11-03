@@ -5800,6 +5800,193 @@ async function guidedScenarioSetup(heat = false) {
   p.e.body.files=[new Blob([new Uint8Array([2,4,6])])];p.e.body.handlers.change();
   p.e.scenarioMode.handlers.change();return {p,sources};
 }
+function guidedNamedCases(p) {
+  p.e.scenarioMode.value='guided_matrix';p.e.guidedScenarioPolicySource.value='inherit';
+  p.e.guidedScenarioMatrixBudget.value='64';p.e.scenarioMode.handlers.change();
+}
+async function saveGuidedCase(p,name) {
+  p.e.guidedScenarioCaseName.value=name;p.e.guidedScenarioCaseName.handlers.input();
+  await p.e.addScenarioCase.onclick();
+}
+function guidedCaseAction(p,label) {
+  const button=descendants(p.e.guidedScenarioCases).find(n=>n.tag==='button'&&n.textContent===label);
+  assert.ok(button,label);assert.equal(button.disabled,false,label);return button.onclick();
+}
+
+test('guided named scenarios freeze independent exact sources and replay without a matrix file',async()=>{
+  const {p,sources}=await guidedScenarioSetup(true);guidedNamedCases(p);
+  assert.equal(p.e.scenario.disabled,true);assert.equal(p.e.scenarioFileControls.hidden,true);
+  await saveGuidedCase(p,'warm <room>');assert.match(p.e.guidedScenarioCaseCount.textContent,/1 of 8/);
+  const otherHeat=sources.heatConditions.replace('35.0','5.0');
+  p.select('heatConditions',otherHeat);p.e.heatConditions.handlers.change();
+  p.e.guidedScenarioFitSource.value='none';p.e.guidedScenarioFitSource.handlers.change();
+  p.e.guidedScenarioSpacing.value='80';p.e.guidedScenarioSpacing.handlers.input();
+  const policy=' {"basis":"nominal","objectives":[{"metric":"independent_surface_power_w","direction":"minimize"}],"constraints":[{"metric":"simulated_cloth_mass_kg","maximum":1.0000000000000002}],"required_consumers":["drape"],"allow_mixed_protocols":false}\r\n';
+  p.select('guidedScenarioComparison',policy);p.e.guidedScenarioPolicySource.value='file';p.e.guidedScenarioPolicySource.handlers.change();
+  await saveGuidedCase(p,'cool β');assert.match(p.e.guidedScenarioCaseCount.textContent,/2 of 8/);
+  assert.equal(p.e.scenario.disabled,false);await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.equal(p.e.scenarioRequest.files.length,0);
+  const request=JSON.parse(sent.scenarioRequest);assert.equal(request.schema,'ftx-drape-scenario-matrix/1');
+  assert.equal(request.max_evaluations,64);assert.deepEqual(request.cases.map(item=>item.key),['warm <room>','cool β']);
+  assert.ok(sent.scenarioRequest.includes(sources.fit));assert.ok(sent.scenarioRequest.includes(sources.heatConditions));
+  assert.ok(sent.scenarioRequest.includes(otherHeat));assert.ok(sent.scenarioRequest.includes(policy));
+  assert.equal(Object.hasOwn(request.cases[0],'comparison'),false);assert.deepEqual(request.cases[1].scenario.fit_spec,{});
+  assert.deepEqual(request.cases.map(item=>item.scenario.options.spacing),[100,80]);
+  assert.equal(sent.measurements,sources.scenarioBody);
+  const w=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){}},material_scenario_study:(_model,...args)=>{
+    assert.deepEqual(args,[sent.pattern,sent.studyRequest,sent.scenarioRequest,sent.measurements]);return JSON.stringify(scenarioReport());
+  }}});
+  const response=await w.send(sent);assert.equal(response.type,'result',response.message);p.current().emit(response);
+  const result=section(p,'Fresh drape and heat alternatives'),link=descendants(result).find(n=>n.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(link.href).text(),sent.scenarioRequest);
+  // Draft inputs are no longer dependencies of the saved matrix.
+  p.select('fit','{}');p.e.fit.handlers.change();p.select('heatConditions','{}');p.e.heatConditions.handlers.change();
+  p.e.guidedScenarioSpacing.value='invalid';p.e.guidedScenarioSpacing.handlers.input();
+  p.select('guidedScenarioComparison','{}');p.e.guidedScenarioComparison.handlers.change();
+  assert.equal(result.hidden,false);assert.ok(p.live.has(link.href));
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
+test('guided named scenario replacement and ordering update exact cases and withdraw stale guidance',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);
+  await saveGuidedCase(p,'first');await saveGuidedCase(p,'second');
+  await p.e.scenario.onclick();const original=p.current().messages.at(-1).scenarioRequest;
+  p.emit(scenarioReport(),[{name:'old.json',text:'{}'}]);assert.ok(p.live.size);
+  guidedDesignField(p,'guidedDesignCase','second','change');
+  p.e.guidedScenarioSpacing.value='40';p.e.guidedScenarioSpacing.handlers.input();
+  await guidedCaseAction(p,'Replace second from current controls');
+  assert.equal(p.e.guidedDesignCase.value,'');assert.match(p.e.guidedDesignCaseStatus.textContent,/source changed/);
+  assert.equal(p.live.size,0);await p.e.scenario.onclick();let sent=p.current().messages.at(-1);
+  let request=JSON.parse(sent.scenarioRequest);assert.deepEqual(request.cases.map(item=>item.scenario.options.spacing),[100,40]);
+  assert.equal(JSON.parse(original).cases[1].scenario.options.spacing,100);p.emit(scenarioReport());
+  await guidedCaseAction(p,'Move second earlier');await p.e.scenario.onclick();sent=p.current().messages.at(-1);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).cases.map(item=>item.key),['second','first']);p.emit(scenarioReport());
+  await guidedCaseAction(p,'Remove case first');await p.e.scenario.onclick();sent=p.current().messages.at(-1);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).cases.map(item=>item.key),['second']);p.emit(scenarioReport());
+  p.e.clearScenarioCases.onclick();assert.equal(p.e.scenario.disabled,true);assert.equal(p.e.guidedScenarioCases.children.length,0);
+  assert.equal(p.live.size,0);assert.deepEqual(p.e.guidedDesignCase.children.map(item=>item.value),['']);
+});
+
+test('guided named scenarios reject overflowing work and malformed additions without changing saved cases',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);p.e.guidedScenarioFrameBudget.value='64000000';
+  await saveGuidedCase(p,'whole');assert.match(p.e.guidedScenarioCaseCount.textContent,/1 of 8/);
+  await saveGuidedCase(p,'overflow');assert.match(p.e.error.textContent,/64000000.*aggregate/);
+  assert.match(p.e.guidedScenarioCaseCount.textContent,/1 of 8/);assert.equal(p.e.guidedScenarioCaseName.value,'overflow');
+  let reads=0;const originalRead=p.e.fit.files[0].arrayBuffer;
+  p.e.fit.files[0].arrayBuffer=async()=>{reads++;return originalRead();};
+  await saveGuidedCase(p,'whole');assert.equal(reads,0);assert.match(p.e.error.textContent,/unique|Replace/);
+  await saveGuidedCase(p,'β'.repeat(65));assert.equal(reads,0);assert.match(p.e.error.textContent,/128 UTF-8/);
+  p.e.guidedScenarioFrameBudget.value='8000000';await guidedCaseAction(p,'Replace whole from current controls');
+  p.e.guidedScenarioPolicySource.value='file';p.select('guidedScenarioComparison','{"objectives":[]}');
+  await saveGuidedCase(p,'bad policy');assert.match(p.e.error.textContent,/comparison|basis|objectives/);
+  assert.match(p.e.guidedScenarioCaseCount.textContent,/1 of 8/);
+  p.e.guidedScenarioPolicySource.value='inherit';
+  for(let i=1;i<8;i++)await saveGuidedCase(p,'case-'+i);
+  assert.match(p.e.guidedScenarioCaseCount.textContent,/8 of 8.*64000000/);assert.equal(p.e.addScenarioCase.disabled,true);
+  await saveGuidedCase(p,'ninth');assert.match(p.e.error.textContent,/eight/);assert.equal(p.e.guidedScenarioCases.children.length,8);
+  p.e.guidedScenarioMatrixBudget.value='15';p.e.guidedScenarioMatrixBudget.handlers.input();
+  const before=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/16 reserved case evaluations/);
+  p.e.guidedScenarioMatrixBudget.value='16';await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).type,'scenario',p.e.error.textContent);
+});
+
+test('saving a named scenario snapshots before reads and cancellation never installs stale cases',async()=>{
+  for(const change of ['fit','heat','policy','draft','name','allowance','mode','cancel','pattern']) {
+    const {p,sources}=await guidedScenarioSetup(true);guidedNamedCases(p);await saveGuidedCase(p,'retained');
+    const slow=deferred();let reading=false;p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await slow.promise);};
+    const old=p.current(),before=old.messages.length,running=saveGuidedCase(p,'pending');assert.equal(reading,true,change);
+    if(change==='fit')p.e.fit.handlers.change();
+    else if(change==='heat')p.e.heatConditions.handlers.change();
+    else if(change==='policy')p.e.guidedScenarioPolicySource.handlers.change();
+    else if(change==='draft')p.e.guidedScenarioSpacing.handlers.input();
+    else if(change==='name')p.e.guidedScenarioCaseName.handlers.input();
+    else if(change==='allowance')p.e.guidedScenarioMatrixBudget.handlers.input();
+    else if(change==='mode'){p.e.scenarioMode.value='guided';p.e.scenarioMode.handlers.change();}
+    else if(change==='pattern')await p.load();else p.e.cancel.onclick();
+    assert.equal(old.dead,true,change);p.ready();slow.resolve(sources.fit);await running;
+    assert.equal(old.messages.length,before,change);assert.equal(p.current().messages.length,0,change);
+    assert.equal(p.e.guidedScenarioCases.children.length,change==='pattern'?0:1,change);
+  }
+  const {p,sources}=await guidedScenarioSetup(true);guidedNamedCases(p);const slow=deferred();
+  p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await slow.promise);
+  const running=saveGuidedCase(p,'frozen');p.e.guidedScenarioSpacing.value='1';p.e.guidedScenarioCaseName.value='different';
+  p.select('heatConditions','{}');slow.resolve(sources.fit);await running;
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const item=JSON.parse(sent.scenarioRequest).cases[0];assert.equal(item.key,'frozen');assert.equal(item.scenario.options.spacing,100);
+  assert.ok(sent.scenarioRequest.includes(sources.heatConditions));assert.ok(sent.scenarioRequest.includes(sources.fit));
+});
+
+test('saved named scenarios remain separate across single and original-file modes and clear on another pattern',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);await saveGuidedCase(p,'saved');
+  await p.e.scenario.onclick();const matrix=p.current().messages.at(-1).scenarioRequest;p.emit(scenarioReport());
+  p.e.scenarioMode.value='guided';p.e.scenarioMode.handlers.change();p.e.guidedScenarioSpacing.value='30';
+  await p.e.scenario.onclick();let sent=p.current().messages.at(-1);assert.equal(JSON.parse(sent.scenarioRequest).schema,'ftx-drape-scenario/1');
+  assert.equal(JSON.parse(sent.scenarioRequest).options.spacing,30);p.emit(scenarioReport());
+  // Use an independently authored valid original source; switching never rewrites it from saved cases.
+  const raw=matrix.replace('"key":"saved"','"key":"imported"')+'\r\n';
+  p.select('scenarioRequest',raw);await p.e.scenarioRequest.handlers.change();await p.e.scenario.onclick();sent=p.current().messages.at(-1);
+  assert.equal(sent.scenarioRequest,raw);p.emit(scenarioReport());
+  p.e.scenarioMode.value='guided_matrix';p.e.scenarioMode.handlers.change();await p.e.scenario.onclick();sent=p.current().messages.at(-1);
+  assert.equal(sent.scenarioRequest,matrix);p.emit(scenarioReport());
+  await p.load();assert.equal(p.e.guidedScenarioCases.children.length,0);assert.equal(p.e.scenario.disabled,true);
+});
+
+test('saved named cases drive adaptive discovery and saved-case edits cancel dispatched comparisons',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);await saveGuidedCase(p,'standing');await saveGuidedCase(p,'alternate');
+  configureGuidedDesign(p);guidedDesignField(p,'guidedDesignMode','adaptive','change');
+  guidedAdaptiveDomain(p,[0,40,10,10,0.5]);guidedDesignField(p,'guidedDesignEvaluations','4');
+  guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');guidedDesignField(p,'guidedDesignMaterial','baseline','change');
+  assert.equal(p.e.guidedDesignCaseField.hidden,false);assert.equal(p.e.guidedDesignCase.disabled,false);
+  guidedDesignField(p,'guidedDesignCase','standing','change');await p.e.scenario.onclick();
+  let sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.equal(JSON.parse(sent.studyRequest).design_adaptive.case_key,'standing');
+  const old=p.current(),id=sent.request;await guidedCaseAction(p,'Remove case alternate');assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request:id,result:scenarioReport(),files:[{name:'old.json',text:'{}'}]});assert.equal(p.live.size,0);
+  assert.equal(p.e.guidedDesignCase.value,'');const before=p.current().messages.length;await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/caseKey/);
+  guidedDesignField(p,'guidedDesignCase','standing','change');await p.e.scenario.onclick();sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.equal(JSON.parse(sent.scenarioRequest).cases.length,1);p.emit(scenarioReport());
+  await saveGuidedCase(p,'new alternate');guidedDesignField(p,'guidedDesignObjective','consumer_matrix_pareto','change');
+  await p.e.scenario.onclick();sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.equal(JSON.parse(sent.studyRequest).design_adaptive.objective,'consumer_matrix_pareto');
+  assert.equal(Object.hasOwn(JSON.parse(sent.studyRequest).design_adaptive,'case_key'),false);
+});
+
+test('named cases can freeze opposing guided goals and saving them cancels on comparison edits',async()=>{
+  const {p}=await guidedScenarioSetup(true);guidedNamedCases(p);
+  p.e.guidedScenarioPolicySource.value='snapshot';p.e.guidedScenarioPolicySource.handlers.change();
+  p.e.guidedDrapeMassGoal.checked=false;p.e.guidedDrapeMassGoal.handlers.change();
+  p.e.guidedHeatPowerLimit.value='20';p.e.guidedHeatPowerLimit.handlers.input();
+  await saveGuidedCase(p,'outward');
+  p.e.guidedHeatDirection.value='minimize';p.e.guidedHeatDirection.handlers.change();
+  p.e.guidedHeatPowerLimit.value='-2';p.e.guidedHeatPowerLimit.handlers.input();
+  p.e.guidedLimitBasis.value='nominal';p.e.guidedLimitBasis.handlers.change();
+  await saveGuidedCase(p,'inward');await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases.map(item=>item.comparison.objectives),[
+    [{metric:'independent_surface_power_w',direction:'maximize'}],[{metric:'independent_surface_power_w',direction:'minimize'}]]);
+  assert.deepEqual(cases.map(item=>item.comparison.constraints),[
+    [{metric:'independent_surface_power_w',maximum:20}],[{metric:'independent_surface_power_w',maximum:-2,basis:'nominal'}]]);
+  assert.ok(cases.every(item=>item.comparison.allow_mixed_protocols===false));
+  assert.deepEqual(cases.map(item=>item.comparison.required_consumers),[['drape','surface'],['drape','surface']]);
+  p.emit(scenarioReport());p.e.studyMode.value='file';p.e.studyMode.handlers.change();
+  await saveGuidedCase(p,'hidden controls');assert.match(p.e.error.textContent,/guided material comparisons/);
+  assert.equal(p.e.guidedScenarioCases.children.length,2);
+  for(const change of ['goal','limit','basis','required','stock','studyMode']) {
+    const {p,sources}=await guidedScenarioSetup(true);guidedNamedCases(p);p.e.guidedScenarioPolicySource.value='snapshot';
+    const slow=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await slow.promise);
+    const old=p.current(),before=old.messages.length,running=saveGuidedCase(p,'pending goals');
+    if(change==='goal')p.e.guidedHeatDirection.handlers.change();
+    else if(change==='limit')p.e.guidedHeatPowerLimit.handlers.input();
+    else if(change==='basis')p.e.guidedBasis.handlers.change();
+    else if(change==='required')p.e.guidedRequireSurface.handlers.change();
+    else if(change==='stock')p.e.guidedStockMode.handlers.change();
+    else {p.e.studyMode.value='file';p.e.studyMode.handlers.change();}
+    assert.equal(old.dead,true,change);p.ready();slow.resolve(sources.fit);await running;
+    assert.equal(p.e.guidedScenarioCases.children.length,0,change);assert.equal(old.messages.length,before,change);
+  }
+});
 
 test('guided studies retain immutable inspected sources, an explicit baseline and exact downloadable requests', async () => {
   const p=await pageModule(),original=' {"pieces":[{"id":"front"},{"id":"lining"}],"coefficient":1.0,"signed":-0.0,"sample":18446744073709551615}\r\n';
@@ -13557,6 +13744,7 @@ test('compiled WASM guided named-case discovery preserves native guards and all 
         path.join(work,label+'-study.json'),path.join(work,label+'-scenario.json'),path.join(work,'body-input.json'),
         path.join(work,'model.ftxbody')],{encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:64*1024*1024});
       assert.deepEqual(output.result,JSON.parse(nativeReport),label+' complete native/direct-WASM/worker equality');
+      save(label+'-report.json',nativeReport);
       return output.result;
     };
     let scalarStudy,scalarMatrix;
@@ -13569,9 +13757,17 @@ test('compiled WASM guided named-case discovery preserves native guards and all 
       guard.constraints=[{metric:'assembly_mass_kg',minimum:0.017}];
       const guide=mode==='consumer_pareto'?policy([mass,signedHeat]):null;
       const maxEvaluations=(4+(state.design.maxDesigns+1)*2)*2;
-      const raw=' \r\n{"schema":"ftx-drape-scenario-matrix/1","max_evaluations":'+maxEvaluations+',"cases":['+
+      const authoredCases=[{key:'guard',scenario,comparison:JSON.stringify(guard)},
+        {key:'guide',scenario,...(guide?{comparison:JSON.stringify(guide)}:{})}];
+      const raw=' \r\n'+builder.namespace.buildMaterialScenarioMatrixRequest({maxEvaluations,cases:authoredCases})+'\r\n';
+      const expectedRaw=' \r\n{"schema":"ftx-drape-scenario-matrix/1","max_evaluations":'+maxEvaluations+',"cases":['+
         '{"key":"guard","scenario":'+scenario+',"comparison":'+JSON.stringify(guard)+'},'+
         '{"key":"guide","scenario":'+scenario+(guide?',"comparison":'+JSON.stringify(guide):'')+'}]}\r\n';
+      assert.deepEqual(JSON.parse(raw),JSON.parse(expectedRaw));
+      for(const item of authoredCases) {
+        assert.ok(raw.includes(item.scenario));
+        if(item.comparison)assert.ok(raw.includes(item.comparison));
+      }
       const context={drape:true,surface:true,matrix:{maxEvaluations,cases:[
         {key:'guard',surface:true,comparison:guard},{key:'guide',surface:true,...(guide?{comparison:guide}:{})}]}};
       const study=build(state,context),parsed=JSON.parse(study);
