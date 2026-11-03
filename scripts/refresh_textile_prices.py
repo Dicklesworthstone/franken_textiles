@@ -922,17 +922,17 @@ def valid_period(node: dict, observed: dt.datetime, *, intraday=False) -> tuple[
         else:
             if not before and not intraday:
                 raise ValueError("intraday expiry cannot be represented by the calendar-date quote schema")
-            if intraday and (not re.fullmatch(
+            if (not re.fullmatch(
                     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})", value)
                     or value.endswith("-00:00")):
-                raise ValueError("intraday source validity needs explicit ISO timezone and at most six fractional digits")
+                raise ValueError("source validity needs explicit ISO timezone and at most six fractional digits")
             # Python 3.14+ accepts 24:00:00 as the next midnight; the source schema does not.
-            if intraday and (int(value[11:13]) > 23 or int(value[14:16]) > 59 or int(value[17:19]) > 59):
-                raise ValueError("intraday source clock hours/minutes/seconds are out of range")
+            if int(value[11:13]) > 23 or int(value[14:16]) > 59 or int(value[17:19]) > 59:
+                raise ValueError("source clock hours/minutes/seconds are out of range")
             # datetime.fromisoformat normalizes offset minutes such as +01:60. Reject those
             # spellings before conversion; a supplier's malformed clock is not a new instant.
-            if intraday and not value.endswith("Z") and (int(value[-5:-3]) > 23 or int(value[-2:]) > 59):
-                raise ValueError("intraday source timezone hours/minutes are out of range")
+            if not value.endswith("Z") and (int(value[-5:-3]) > 23 or int(value[-2:]) > 59):
+                raise ValueError("source timezone hours/minutes are out of range")
             instant = dt.datetime.fromisoformat(value)
             if instant.tzinfo is None or instant.utcoffset() is None:
                 raise ValueError("JSON-LD validity datetime needs an explicit timezone")

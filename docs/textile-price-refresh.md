@@ -425,6 +425,12 @@ field. It rejects already-expired or not-yet-valid observations. Intraday end ti
 in version 1; version 2 retains them as precise instants rather than rounding them into longer-lived
 offers. A compatible build is required to consume the declared schema with its expiry semantics.
 
+Source start timestamps in both quote versions use the same strict DateTime admission: seconds,
+a known `Z` or numeric `+/-HH:MM` offset, and at most six fractional digits. Unknown `-00:00`,
+`24:00:00`, overflowing clock or offset components, and precision that Python would truncate refuse
+before conversion. A valid source start is inclusive at the exact instant; calendar-date starts
+remain inclusive by UTC date. Version 1 still refuses timed source end boundaries.
+
 The Rust evaluator first chooses the latest observation per exact offer/scope and **then** filters
 expiry and staleness. Consequently an expired or unavailable latest offer cannot resurrect an older,
 cheaper/unbounded quote. Empty samples retain unknown cost rather than zero. This is shared by

@@ -164,6 +164,39 @@ class JsonLdTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 r.extract_jsonld(manifest_entry(), html(p), NOW, intraday=True)
 
+    def test_source_starts_refuse_normalized_clocks_in_both_quote_modes(self):
+        # Keep these starts in the past (or within a truncated microsecond of NOW), so
+        # an unrelated future-start refusal cannot conceal a permissive clock parser.
+        for key in ("validFrom", "availabilityStarts"):
+            for intraday in (False, True):
+                for value in ("2026-10-12T24:00:00Z", "2026-10-12T24:00:00.000000-04:00",
+                              "2026-10-13T01:00:00+00:60", "2026-10-13T01:00:00-01:60",
+                              "2026-10-13T00:00:00-00:00", "2026-10-13T12:00:00.0000001Z",
+                              "2026-10-13 00:00:00Z", "2026-10-13T00:00Z",
+                              "2026-10-13T00:60:00Z", "2026-10-13T00:00:60Z"):
+                    p = product(); p["offers"][key] = value
+                    with self.subTest(key=key, intraday=intraday, value=value), self.assertRaises(ValueError):
+                        r.extract_jsonld(manifest_entry(), html(p), NOW, intraday=intraday)
+
+    def test_source_starts_preserve_offsets_precision_and_inclusive_boundaries(self):
+        for key in ("validFrom", "availabilityStarts"):
+            for intraday in (False, True):
+                for value in ("2026-10-13", "2026-10-13T12:00:00Z",
+                              "2026-10-13T08:00:00.000000-04:00", "2026-10-13T17:30:00+05:30",
+                              "2026-10-13T12:00:00.123456Z"):
+                    p = product(); p["offers"][key] = value
+                    source = html(p)
+                    observed = NOW.replace(microsecond=123456) if ".123456" in value else NOW
+                    with self.subTest(key=key, intraday=intraday, value=value):
+                        quote, receipt = r.extract_jsonld(manifest_entry(), source, observed, intraday=intraday)
+                        self.assertEqual(quote["price"], 12.99)
+                        self.assertEqual(quote["source_sha256"], hashlib.sha256(source).hexdigest())
+                        self.assertEqual(receipt["manifest_entry"], manifest_entry())
+                        if "T" in value:
+                            with self.assertRaisesRegex(ValueError, "not currently valid"):
+                                r.extract_jsonld(manifest_entry(), source, observed - dt.timedelta(microseconds=1),
+                                                 intraday=intraday)
+
     def test_stock_is_explicit_not_inferred_from_the_page(self):
         for stock, expected in [("InStock", True), ("LimitedAvailability", True), ("OutOfStock", False),
                                 ("SoldOut", False), ("Discontinued", False)]:
@@ -352,6 +385,16 @@ class JsonLdTests(unittest.TestCase):
                 with self.assertRaises(SystemExit): r.main()
                 self.assertEqual(out.read_bytes(), saved)
                 self.assertEqual(get.call_count, 1)
+                retained = {path.name: path.read_bytes() for path in (root / "evidence").iterdir()}
+                p["offers"]["validFrom"] = "2026-10-13T01:00:00+00:60"
+                get.return_value = html(p)
+                argv[3] = str(root / "refused.json")
+                with self.assertRaises(SystemExit) as refused:
+                    r.main()
+                self.assertEqual(refused.exception.code, 1)
+                self.assertFalse((root / "refused.json").exists())
+                self.assertEqual(out.read_bytes(), saved)
+                self.assertEqual({path.name: path.read_bytes() for path in (root / "evidence").iterdir()}, retained)
 
 
 if __name__ == "__main__":
