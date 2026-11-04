@@ -1033,12 +1033,34 @@ Choose numerical force limits explicitly; no safe-fit threshold is supplied.</p>
 <div id="guidedMotionForm">
 <p>Save 1–16 endpoints on the selected body shape. Times are cumulative seconds after the initial drape.
 Each endpoint gives an absolute arm and leg pose; selecting standing explicitly returns the legs to standing.</p>
+<label><input id="guidedMotionHeat" type="checkbox"> Track dry independent-sheet heat through this movement</label>
+<fieldset id="guidedMotionHeatSettings" hidden><legend>Dry sheet heat initial state and work limits</legend>
+<div class="study-fields">
+<label>Initial textile temperature (°C) <input id="guidedMotionHeatInitial" type="number" min="-273.15" step="any" placeholder="Explicit initial condition"></label>
+<label>Cells through each sheet <input id="guidedMotionHeatCells" type="number" min="1" max="64" step="1" value="4"></label>
+<label>Maximum thermal substep (s) <input id="guidedMotionHeatStep" type="number" min="0.000000001" max="1" step="any" value="0.01"></label>
+<label>Temperature-cell advances per history <input id="guidedMotionHeatBudget" type="number" min="1" max="10000000" step="1" value="100000"></label>
+</div>
+<p class="note">Each retained material must supply admitted conductivity, thickness and heat capacity. The initial temperature
+is an authored condition after the initial drape. Work limits bound computation; an unavailable heat result leaves independent results visible.</p>
+</fieldset>
 <div class="study-fields">
 <label>Endpoint time (s) <input id="guidedMotionTime" type="number" min="0.000000001" max="60" step="any" placeholder="Cumulative time"></label>
 <label>Arm angle from vertical (°) <input id="guidedMotionArm" type="number" min="0" max="180" step="any" placeholder="0–180"></label>
 <label>Leg posture <select id="guidedMotionLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
 <label>Fraction of seated or squat pose <input id="guidedMotionLegFraction" type="number" min="0" max="1" step="any" value="1" disabled></label>
 </div>
+<fieldset id="guidedMotionHeatBoundary" hidden><legend>Heat conditions for the interval ending at this endpoint</legend>
+<div class="study-fields">
+<label>Inside reservoir temperature (°C) <input id="guidedMotionHeatInside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
+<label>Outside reservoir temperature (°C) <input id="guidedMotionHeatOutside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
+<label>Inside film resistance (m² K/W) <input id="guidedMotionHeatInsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
+<label>Outside film resistance (m² K/W) <input id="guidedMotionHeatOutsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
+</div>
+<p class="note">These spatially uniform conditions apply after the preceding endpoint through this endpoint; the first interval
+starts at time zero. Zero film resistance prescribes the face temperature. Add or replace an endpoint to save its four conditions.
+Every endpoint needs its own saved conditions before heat can run, including endpoints saved before heat was enabled.</p>
+</fieldset>
 <button id="addMotionKeyframe" type="button" disabled>Add motion keyframe</button>
 <p id="guidedMotionSummary" class="note" role="status">No motion keyframes saved.</p>
 <div id="guidedMotionKeyframes"></div>
@@ -1061,7 +1083,8 @@ active named cases share at most 32768 attempts. Budgets bound work without guar
 <p class="note">The same sewn cloth continues with its velocities and material history. Use short pose increments: the solver follows checked
 body-vertex chords between endpoints, with a fixed root and no chair or floor support. These prescribed model poses do not establish
 anatomical movement accuracy or physical garment fit. A failed movement publishes no partial trajectory. Optional sheet heat is recomputed
-at endpoints as independent steady snapshots. The original motion request option retains complete transient thermal and water
+at endpoints as independent steady snapshots. The dry heat option above separately carries textile temperature through the saved
+interval conditions, without a steady-sheet request. The original motion request option retains complete transient thermal and water
 requests verbatim, including their source values and work policies; native admission still checks their compatibility.</p>
 </fieldset>
 <fieldset id="guidedScenarioCasePolicy" hidden><legend>Comparison policy for this case</legend>
@@ -1302,14 +1325,14 @@ mechanical-coupling policy. This free-liquid model does not infer sorption, wick
 wearer cooling or empirical wet-garment performance.</p>
 </fieldset>
 <fieldset><legend>Heat and temperature through motion</legend>
-<p class="note">Retain an original motion request with the corresponding heat history. These criteria need complete motion
+<p class="note">Enable dry sheet heat in the motion editor, or retain an original motion request with the corresponding heat history. These criteria need complete motion
 and nominal values. Choose an explicit nominal limit basis when other objectives use source-reported bounds.
 Energy and temperature limits preserve their signs; minimizing signed energy does not minimize its magnitude.
 Limits and required histories apply independently of goal checkboxes.</p>
 <p class="note">Sampled extrema include the initial state and retained motion samples. Final extrema use only the final
 sample. These values do not establish continuous-time temperature bounds or wearer comfort.</p>
 <details><summary>Independent sheet heat history</summary>
-<p class="note">Use the independent-sheet heat policy in the original motion request. No steady-sheet request is needed.</p>
+<p class="note">Use the saved dry sheet-heat schedule or the independent-sheet heat policy in an original motion request. No steady-sheet request is needed.</p>
 <label><input id="guidedTransientSurfaceInsideEnergyGoal" type="checkbox"> Compare inside-side energy (J)</label>
 <div class="study-fields">
 <label>Direction <select id="guidedTransientSurfaceInsideEnergyDirection"><option value="">Choose a direction</option><option value="minimize">Minimize signed energy</option><option value="maximize">Maximize signed energy</option></select></label>

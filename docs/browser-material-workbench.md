@@ -700,8 +700,9 @@ properties, wearer cooling or empirical wet-garment performance. See
 
 #### Compare heat storage and temperatures through motion
 
-Choose **Retain an original motion request** with an explicitly authored `transient_surface`
-or `transient_coverage` policy. The two heat-history groups expose the existing native results as
+Enable **Track dry independent-sheet heat through this movement** in the endpoint editor, or choose
+**Retain an original motion request** with an explicitly authored `transient_surface` or
+`transient_coverage` policy. The two heat-history groups expose the existing native results as
 objectives and inclusive lower/upper limits. Each domain has six independent quantities:
 
 | Quantity | Unit | Interpretation |
@@ -722,9 +723,35 @@ limit basis. No transient uncertainty interval is inferred.
 The same case must request motion and its corresponding transient policy. A transient sheet does
 not need an unrelated steady-sheet request, and transient coverage carries its own declared layer
 topology without requiring steady coverage. The original motion text retains initial temperatures,
-boundary schedules, source numbers and numerical allowances exactly. Saved cases freeze that text;
-the endpoint form alone does not invent a heat history. These criteria also enter existing linked
+boundary schedules, source numbers and numerical allowances exactly. Saved cases freeze that text.
+The endpoint form emits a dry sheet history only when explicitly enabled with a complete saved
+schedule. These criteria also enter existing linked
 grid and adaptive design comparisons under each case's own admission policy.
+
+For a guided dry schedule, enter the initial textile temperature after the initial drape and the
+inside/outside reservoir temperatures and film resistances for each endpoint, then **Add motion
+keyframe** or **Replace keyframe … from current controls**. The first boundary applies from time
+zero to the first endpoint; later boundaries apply after the preceding endpoint through the saved
+endpoint. Conditions are constant over each interval. They are not interpolated temperatures,
+inferred weather, skin conditions or an equilibrium result. Negative Celsius values are allowed
+down to absolute zero. Zero film resistance explicitly prescribes the corresponding face temperature.
+
+Every saved endpoint owns its four boundary values. Editing the current endpoint or film fields
+prepares a draft; only adding or replacing an endpoint changes the saved schedule. Removing an
+endpoint also removes its boundary, and the next endpoint retains its own conditions over its new
+interval. If heat is enabled after poses have already been saved, explicitly replace each endpoint
+that lacks conditions; no earlier endpoint is silently filled from the current fields. Disabling
+heat preserves the saved conditions for reactivation. Initial temperature, cell count and thermal
+work limits apply to the active draft immediately; each saved named case retains its own snapshot.
+
+Use 1–64 cells through each sheet, a maximum thermal step from 1e-9 to 1 second and a history
+allowance of 1–10000000 temperature-cell advances. The native engine qualifies every retained
+sheet's source-bound heat storage and transport, enforces its temperature domain and reserves each
+history allowance against its case's shared thermal budget. Larger allocations can leave fewer
+optional histories available across material alternatives; the authoring form does not reject the
+whole comparison when an optional heat consumer may exhaust its budget. Heat refusals preserve
+independent manufacturing and mechanical outcomes. This form authors dry independent sheets;
+coverage topology, water, exterior exchange and dissipation heating use the original-motion route.
 
 Native comparison requires a complete, source-bound history. Missing heat capacity, failed motion
 or refused thermal work cannot become zero energy or a qualifying temperature. Independent available
@@ -785,8 +812,9 @@ retained for native admission and replay. This mode does not need saved form end
 motion-attempt allowance remains explicit; the form's inactive trajectory limits do not change it.
 Switching sources retains both drafts and withdraws obsolete work.
 
-The list supports explicit replacement from the endpoint controls and removal. Editing those
-controls prepares another endpoint without changing the saved path. Disabling motion retains the
+The list supports explicit replacement from the endpoint controls and removal. When dry sheet heat
+is enabled, each endpoint also saves its own reservoir and film conditions described above. Editing
+those controls prepares another endpoint without changing the saved path. Disabling motion retains the
 draft. Removing, replacing or adopting a pattern clears its saved endpoints, cases and strain scope. A single scenario uses the added endpoints; a named case
 freezes its own path and work limits when saved. Later draft edits do not change that saved case.
 

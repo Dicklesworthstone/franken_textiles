@@ -253,6 +253,10 @@ function controls() {
   for (const [, id, file] of guidedTransportSources) $(file).disabled = !$(id).checked;
   $("guidedMotionForm").hidden = motionMode !== "form";
   $("guidedMotionFileField").hidden = motionMode !== "file";
+  const motionHeat = motionMode === "form" && $("guidedMotionHeat").checked;
+  $("guidedMotionHeatSettings").hidden = !motionHeat; $("guidedMotionHeatBoundary").hidden = !motionHeat;
+  for (const id of ["guidedMotionHeatInitial", "guidedMotionHeatCells", "guidedMotionHeatStep", "guidedMotionHeatBudget",
+    "guidedMotionHeatInside", "guidedMotionHeatOutside", "guidedMotionHeatInsideFilm", "guidedMotionHeatOutsideFilm"]) $(id).disabled = !motionHeat;
   $("studyPieces").disabled = !source || $("studyTarget").value !== "pieces";
   $("guidedDesign").disabled = !source;
   $("guidedDesignControls").hidden = !$("guidedDesign").checked;
@@ -4425,19 +4429,32 @@ async function scenarioInput() {
   }
   return guidedScenarioInput();
 }
-function guidedMotionInput(keyframes = guidedMotionKeyframes) {
+function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true) {
   const number = (id, label) => {
     const raw = $(id).value.trim();
     if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
     return Number(raw);
   };
-  return { motion: {
-    keyframes: keyframes.map(frame => ({ ...frame, ...(frame.leg_pose ? { leg_pose: { ...frame.leg_pose } } : {}) })),
+  const motion = {
+    keyframes: keyframes.map(({ heat_boundary, ...frame }) => ({ ...frame, ...(frame.leg_pose ? { leg_pose: { ...frame.leg_pose } } : {}) })),
     max_step_s: number("guidedMotionStep", "maximum motion substep in seconds"),
     max_trials: number("guidedMotionTrials", "trajectory substep allowance"),
     max_pairs: number("guidedMotionPairs", "collision candidate allowance"),
     max_sample_vertices: number("guidedMotionVertices", "retained motion vertex allowance"),
-  }, maxMotionTrials: number("guidedScenarioMotionTrials", "case motion-attempt allowance") };
+  };
+  if (includeHeat && $("guidedMotionHeat").checked) {
+    motion.transient_surface = { schema: "ftx-motion-surface-heat/1",
+      initial_temperature_c: number("guidedMotionHeatInitial", "initial textile temperature"),
+      cells_per_layer: number("guidedMotionHeatCells", "through-sheet cell count"),
+      boundaries: keyframes.map((frame, index) => {
+        if (!frame.heat_boundary) throw Error(`Keyframe ${index + 1} has no saved heat conditions. Enter its four conditions and replace that endpoint.`);
+        return { ...frame.heat_boundary };
+      }),
+      max_step_s: number("guidedMotionHeatStep", "maximum thermal substep in seconds"),
+      max_cell_steps: number("guidedMotionHeatBudget", "temperature-cell advance allowance"),
+    };
+  }
+  return { motion, maxMotionTrials: number("guidedScenarioMotionTrials", "case motion-attempt allowance") };
 }
 function showGuidedMotionKeyframes() {
   const parent = $("guidedMotionKeyframes"); parent.replaceChildren(); guidedMotionButtons.length = 0;
@@ -4445,6 +4462,11 @@ function showGuidedMotionKeyframes() {
     const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
     label.textContent = `${index + 1}: ${frame.time_s} s; arms ${frame.arm_abduction_deg}°; ` +
       (frame.leg_pose ? `${frame.leg_pose.posture} at fraction ${frame.leg_pose.fraction}.` : "standing legs.");
+    if (frame.heat_boundary) {
+      const film = frame.heat_boundary, start = index ? guidedMotionKeyframes[index - 1].time_s : 0;
+      label.textContent += ` Saved heat for ${start}–${frame.time_s} s: inside ${film.inside_c} °C / ${film.inside_resistance_m2_k_w} m² K/W; ` +
+        `outside ${film.outside_c} °C / ${film.outside_resistance_m2_k_w} m² K/W.`;
+    } else if ($("guidedMotionHeat").checked) label.textContent += " Heat conditions not saved; replace this endpoint to add them.";
     row.append(label);
     const replace = document.createElement("button"); replace.type = "button";
     replace.textContent = `Replace keyframe ${index + 1} from current controls`;
@@ -4479,10 +4501,18 @@ function saveGuidedMotionKeyframe(replacing = null) {
     const frame = { time_s: number("guidedMotionTime", "endpoint time in seconds"),
       arm_abduction_deg: number("guidedMotionArm", "arm angle in degrees"),
       ...(legs === "standing" ? {} : { leg_pose: { posture: legs, fraction: number("guidedMotionLegFraction", "leg-pose fraction") } }) };
+    if ($("guidedMotionHeat").checked) {
+      frame.heat_boundary = { inside_c: number("guidedMotionHeatInside", "inside reservoir temperature"),
+        outside_c: number("guidedMotionHeatOutside", "outside reservoir temperature"),
+        inside_resistance_m2_k_w: number("guidedMotionHeatInsideFilm", "inside film resistance"),
+        outside_resistance_m2_k_w: number("guidedMotionHeatOutsideFilm", "outside film resistance") };
+    } else if (replacing?.heat_boundary) frame.heat_boundary = { ...replacing.heat_boundary };
     const keyframes = guidedMotionKeyframes.slice(), index = replacing ? keyframes.indexOf(replacing) : -1;
     if (replacing && index < 0) throw Error("Choose a current keyframe to replace.");
     if (replacing) keyframes[index] = frame; else keyframes.push(frame);
-    buildMaterialMotionRequest(guidedMotionInput(keyframes).motion);
+    buildMaterialMotionRequest(guidedMotionInput(keyframes, false).motion);
+    // Validate the new boundary independently so older endpoints can be filled explicitly one at a time.
+    if ($("guidedMotionHeat").checked) buildMaterialMotionRequest(guidedMotionInput([frame]).motion);
     guidedMotionKeyframes.splice(0, guidedMotionKeyframes.length, ...keyframes);
     changedGuidedMotionDraft();
   } catch (e) { error(String(e.message || e)); }
@@ -4562,12 +4592,12 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   }));
   const { comparison, ...fragments } = Object.fromEntries(sources);
   const request = buildMaterialScenarioRequest({ ...input, ...fragments });
-  const originalMotion = motionMode === "file" ? JSON.parse(fragments.motion) : null;
-  const motionVaporHistory = originalMotion?.vapor_coverage_history != null;
-  const motionWetFilm = originalMotion?.vapor_coverage_history?.wet_film != null;
-  const transientSurface = originalMotion?.transient_surface != null;
-  const textileWater = hasTextileWaterPolicy(originalMotion?.transient_surface);
-  const transientCoverage = originalMotion?.transient_coverage != null;
+  const retainedMotion = motionMode === "file" ? JSON.parse(fragments.motion) : input.motion;
+  const motionVaporHistory = retainedMotion?.vapor_coverage_history != null;
+  const motionWetFilm = retainedMotion?.vapor_coverage_history?.wet_film != null;
+  const transientSurface = retainedMotion?.transient_surface != null;
+  const textileWater = hasTextileWaterPolicy(retainedMotion?.transient_surface);
+  const transientCoverage = retainedMotion?.transient_coverage != null;
   return { request,
     context: { drape: true, surface, motion: motionMode !== "none", materialStrain, contactLoads, ...transport,
       motionVaporHistory, motionWetFilm, transientSurface, textileWater, transientCoverage },
@@ -4590,6 +4620,7 @@ function showGuidedScenarioDrafts() {
       `${value.vapor_coverage ? "retained covered-body vapor" : "no covered-body vapor"}; ` +
       `${value.motion?.vapor_coverage_history ? "requested complete-motion vapor history" : "no motion vapor history"}; ` +
       `${value.motion?.vapor_coverage_history?.wet_film != null ? "retained finite body-water policy" : "no body-water inventory"}; ` +
+      `${value.motion?.transient_surface ? "retained independent-sheet heat history" : "no sheet heat history"}; ` +
       `${hasTextileWaterPolicy(value.motion?.transient_surface) ? "retained textile-water heat policy" : "no textile-water policy"}; ` +
       `${item.comparison && JSON.parse(item.comparison) !== null ? "retained case comparison" : "shared comparison at run time"}.`;
     row.append(label);
@@ -4912,6 +4943,14 @@ $("clearMotionKeyframes").onclick = () => {
   guidedMotionKeyframes.length = 0; changedGuidedMotionDraft();
 };
 $("guidedScenarioMotion").addEventListener("change", changedGuidedMotionDraft);
+for (const id of ["guidedMotionHeat", "guidedMotionHeatInitial", "guidedMotionHeatCells", "guidedMotionHeatStep", "guidedMotionHeatBudget"]) {
+  const changed = () => {
+    if (guidedMotionMode() === "form" && (id === "guidedMotionHeat" || $("guidedMotionHeat").checked)) changedGuidedMotionDraft();
+    else controls();
+  };
+  $(id).addEventListener("change", changed);
+  if (id !== "guidedMotionHeat") $(id).addEventListener("input", changed);
+}
 for (const id of ["guidedMotionStep", "guidedMotionTrials", "guidedMotionPairs", "guidedMotionVertices", "guidedScenarioMotionTrials"]) {
   const changed = () => {
     if (guidedMotionMode() === "form" || (guidedMotionMode() === "file" && id === "guidedScenarioMotionTrials")) changedGuidedMotionDraft();
@@ -4919,7 +4958,8 @@ for (const id of ["guidedMotionStep", "guidedMotionTrials", "guidedMotionPairs",
   };
   $(id).addEventListener("change", changed); $(id).addEventListener("input", changed);
 }
-for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "guidedMotionLegFraction"]) {
+for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "guidedMotionLegFraction",
+  "guidedMotionHeatInside", "guidedMotionHeatOutside", "guidedMotionHeatInsideFilm", "guidedMotionHeatOutsideFilm"]) {
   $(id).addEventListener("change", controls);
   if (id !== "guidedMotionLegs") $(id).addEventListener("input", controls);
 }
@@ -5268,6 +5308,8 @@ function resetGuidedScenarios() {
   guidedScenarioDrafts.length = 0; guidedScenarioDraftSource = {};
   $("guidedScenarioCaseName").value = ""; showGuidedScenarioDrafts();
   guidedMotionKeyframes.length = 0; $("guidedScenarioMotion").checked = false; $("guidedMotionSource").value = "form";
+  $("guidedMotionHeat").checked = false;
+  for (const id of ["guidedMotionHeatInitial", "guidedMotionHeatInside", "guidedMotionHeatOutside", "guidedMotionHeatInsideFilm", "guidedMotionHeatOutsideFilm"]) $(id).value = "";
   $("guidedMotionTime").value = ""; $("guidedMotionArm").value = "";
   $("guidedMotionLegs").value = "standing"; $("guidedMotionLegFraction").value = "1"; showGuidedMotionKeyframes();
   $("guidedMaterialStrain").checked = false; $("guidedMaterialStrainScope").value = "all";

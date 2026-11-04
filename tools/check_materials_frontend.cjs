@@ -15759,6 +15759,118 @@ async function guidedMotionAction(p,label) {
   assert.ok(button,label);assert.equal(button.disabled,false,label);await button.onclick();
 }
 
+function guidedDryHeatControls(p) {
+  for(const [id,value] of Object.entries({guidedMotionHeatInitial:'18',guidedMotionHeatCells:'4',
+    guidedMotionHeatStep:'0.0005',guidedMotionHeatBudget:'100000'}))p.e[id].value=value;
+  p.e.guidedMotionHeat.checked=true;p.e.guidedMotionHeat.handlers.change();
+}
+function guidedDryHeatFilm(p,inside=35,outside=-5,insideFilm=0.1,outsideFilm=0) {
+  for(const [id,value] of Object.entries({guidedMotionHeatInside:inside,guidedMotionHeatOutside:outside,
+    guidedMotionHeatInsideFilm:insideFilm,guidedMotionHeatOutsideFilm:outsideFilm}))p.e[id].value=String(value);
+}
+
+test('guided dry heat saves each interval explicitly and retains boundary alignment through endpoint edits and toggles',async()=>{
+  const {p,sources}=await guidedScenarioSetup();guidedMotionSourceControls(p);
+  assert.equal(p.e.guidedMotionHeat.checked,false);
+  for(const id of ['guidedMotionHeatInitial','guidedMotionHeatInside','guidedMotionHeatOutside','guidedMotionHeatInsideFilm','guidedMotionHeatOutsideFilm']) {
+    assert.equal(p.e[id].value,'',id+' must not invent a physical condition');
+  }
+  await addGuidedMotion(p,0.002,35);await addGuidedMotion(p,0.004,35.2);
+  guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  const before=p.current().messages.length;await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/Keyframe 1.*no saved heat/i);
+  guidedMotionDraft(p,0.002,35);await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  assert.equal(p.e.guidedMotionKeyframes.children.length,2,'An older missing boundary must not prevent filling another endpoint');
+  await p.e.scenario.onclick();assert.match(p.e.error.textContent,/Keyframe 2.*no saved heat/i);
+  guidedDryHeatFilm(p,-5,35,0,0.2);guidedMotionDraft(p,0.004,35.2);
+  await guidedMotionAction(p,'Replace keyframe 2 from current controls');
+  p.e.guidedTransientSurfaceNetEnergyGoal.checked=true;p.e.guidedTransientSurfaceNetEnergyDirection.value='maximize';
+  p.e.guidedTransientSurfaceFinalMinMinimumLimit.value='-10';p.e.guidedRequireTransientSurface.checked=true;
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1),request=JSON.parse(sent.scenarioRequest);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(sources.fit));
+  assert.equal(Object.hasOwn(request,'surface'),false);assert.equal(Object.hasOwn(request.motion,'transient_coverage'),false);
+  assert.deepEqual(request.motion.transient_surface,{schema:'ftx-motion-surface-heat/1',initial_temperature_c:18,cells_per_layer:4,
+    boundaries:[{inside_c:35,outside_c:-5,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0},
+      {inside_c:-5,outside_c:35,inside_resistance_m2_k_w:0,outside_resistance_m2_k_w:0.2}],max_step_s:0.0005,max_cell_steps:100000});
+  assert.ok(request.motion.keyframes.every(frame=>!Object.hasOwn(frame,'heat_boundary')));
+  assert.ok(JSON.parse(sent.studyRequest).comparison.required_consumers.includes('transient_surface'));
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const link=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(link.href).text(),sent.scenarioRequest);
+  guidedDryHeatFilm(p,99,88,0.9,0.8);p.e.guidedMotionHeatInside.handlers.input();
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false,'Editing only a boundary draft retains the completed result');
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest,'Unsaved films never change the retained schedule');p.emit(scenarioReport());
+  await guidedMotionAction(p,'Remove keyframe 1');await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.transient_surface.boundaries,[request.motion.transient_surface.boundaries[1]]);
+  p.emit(scenarioReport());p.e.guidedMotionHeat.checked=false;p.e.guidedMotionHeat.handlers.change();
+  p.e.guidedTransientSurfaceNetEnergyGoal.checked=false;p.e.guidedTransientSurfaceFinalMinMinimumLimit.value='';p.e.guidedRequireTransientSurface.checked=false;
+  guidedMotionDraft(p,0.005,36);await guidedMotionAction(p,'Replace keyframe 1 from current controls');await p.e.scenario.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion,'transient_surface'),false);p.emit(scenarioReport());
+  p.e.guidedMotionHeat.checked=true;p.e.guidedMotionHeat.handlers.change();await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.transient_surface.boundaries,[request.motion.transient_surface.boundaries[1]],
+    'Disabling heat and replacing a pose retains its saved film for reactivation');p.emit(scenarioReport());
+  await p.load();assert.equal(p.e.guidedMotionHeat.checked,false);assert.equal(p.e.guidedMotionHeatInitial.value,'');
+  assert.equal(p.e.guidedMotionKeyframes.children.length,0);
+});
+
+test('guided dry heat freezes named cases independently and does not borrow thermal readiness from another case',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  await addGuidedMotion(p,0.002,35);await saveGuidedCase(p,'cold');
+  guidedDryHeatFilm(p,5,40);guidedMotionDraft(p,0.002,35);p.e.guidedMotionHeatInitial.value='22';
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');await saveGuidedCase(p,'warm');
+  p.e.guidedRequireTransientSurface.checked=true;await p.e.scenario.onclick();const original=p.current().messages.at(-1).scenarioRequest;
+  const cases=JSON.parse(original).cases;assert.equal(cases[0].scenario.motion.transient_surface.initial_temperature_c,18);
+  assert.equal(cases[1].scenario.motion.transient_surface.initial_temperature_c,22);p.emit(scenarioReport());
+  p.e.guidedMotionHeat.checked=false;p.e.guidedMotionHeat.handlers.change();p.e.guidedMotionHeatInitial.value='invalid';p.e.clearMotionKeyframes.onclick();
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false);await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,original);p.emit(scenarioReport());
+  await addGuidedMotion(p,0.002,35);await saveGuidedCase(p,'unheated');
+  const before=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/unheated|transient_surface|heat/i,'A saved dry case cannot inherit a required heat consumer from its neighbors');
+});
+
+test('guided dry heat snapshots authored context before source reads and cancels obsolete active work',async()=>{
+  for(const saving of [false,true]) {
+    const {p,sources}=await guidedScenarioSetup();if(saving)guidedNamedCases(p);
+    guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);await addGuidedMotion(p,0.002,35);
+    const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),before=old.messages.length,running=saving?saveGuidedCase(p,'obsolete'):p.e.scenario.onclick();
+    p.e.guidedMotionHeatInitial.value='19';p.e.guidedMotionHeatInitial.handlers.input();
+    assert.equal(old.dead,true);p.ready();delay.resolve(sources.fit);await running;
+    assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+    if(saving)assert.equal(p.e.guidedScenarioCases.children.length,0);
+  }
+  const {p,sources}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);await addGuidedMotion(p,0.002,35);
+  p.e.guidedRequireTransientSurface.checked=true;
+  const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const running=p.e.scenario.onclick();p.e.guidedMotionHeat.checked=false; // No event: verify the captured request, not later live controls.
+  delay.resolve(sources.fit);await running;const old=p.current(),sent=old.messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(JSON.parse(sent.scenarioRequest).motion.transient_surface);
+  p.e.guidedMotionHeat.checked=true;p.e.guidedMotionHeatInside.value='36';p.e.guidedMotionHeatInside.handlers.input();
+  assert.equal(old.dead,false,'Editing only a boundary draft cannot cancel its frozen running request');
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  assert.equal(old.dead,true);p.ready();old.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete-heat.json',text:'{}'}]});
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);assert.equal(p.live.size,0);
+  guidedTransientSource(p);await p.e.scenario.onclick();const original=p.current(),fileRequest=original.messages.at(-1);
+  p.e.guidedMotionHeatInitial.value='bad';p.e.guidedMotionHeatInitial.handlers.input();
+  assert.equal(original.dead,false,'Inactive form heat controls cannot cancel original-source work');
+  assert.ok(fileRequest.scenarioRequest.includes(guidedTransientOriginal));p.emit(scenarioReport());
+});
+
+test('guided dry heat rejects incomplete and nonphysical endpoint conditions before saving or dispatch',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);await addGuidedMotion(p,0.002,35);
+  for(const [id,value] of [['guidedMotionHeatInitial',''],['guidedMotionHeatInitial','-273.1501'],['guidedMotionHeatCells','65'],
+    ['guidedMotionHeatCells','1.5'],['guidedMotionHeatStep','0'],['guidedMotionHeatBudget','10000001']]) {
+    const prior=p.e[id].value;p.e[id].value=value;p.e[id].handlers.input();const before=p.current().messages.length;
+    await p.e.scenario.onclick();assert.equal(p.current().messages.length,before,id);assert.equal(p.e.error.hidden,false,id);p.e[id].value=prior;
+  }
+  for(const [id,value] of [['guidedMotionHeatInside',''],['guidedMotionHeatOutside','-274'],['guidedMotionHeatInsideFilm','-0.01']]) {
+    const prior=p.e[id].value;p.e[id].value=value;await addGuidedMotion(p,0.004,35);
+    assert.equal(p.e.guidedMotionKeyframes.children.length,1,id);assert.equal(p.e.error.hidden,false,id);p.e[id].value=prior;
+  }
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).type,'scenario',p.e.error.textContent);
+});
+
 test('guided motion forwards explicit endpoint poses and independent work limits to the existing worker and result view',async()=>{
   const {p,sources}=await guidedScenarioSetup(true);guidedMotionControls(p);
   await addGuidedMotion(p,0.002,35.1);await addGuidedMotion(p,0.004,35.2,'seated',0.125);
@@ -16401,7 +16513,8 @@ test('compiled WASM guided transient heat criteria retain complete native histor
         path.join(work,label+'-study.json'),path.join(work,label+'-scenario.json'),path.join(work,'body-input.json'),path.join(work,'model.ftxbody')],
         {encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:64*1024*1024});
       assert.deepEqual(result.result,JSON.parse(output),label+' native/WASM/worker equality');
-      if(label==='complete') {
+      if(label==='authored-dry')assert.equal(Object.hasOwn(JSON.parse(sent.scenarioRequest),'surface'),false);
+      if(label==='complete'||label==='authored-dry') {
         const previous=globalThis.ftxProgress,model=new ftx.WebBody(modelBytes);globalThis.ftxProgress=()=>{};
         try{assert.deepEqual(result.result,JSON.parse(ftx.material_scenario_study(model,pattern,sent.studyRequest,sent.scenarioRequest,body)));}
         finally{model.free();if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;}
@@ -16466,8 +16579,31 @@ test('compiled WASM guided transient heat criteria retain complete native histor
       }
     }
     assert.match(visibleText(section(p,'Fresh drape and heat alternatives')),/no partial history published/);
+    // Author the same dry sheet schedule through the page, independently of steady heat or a source file.
+    guidedMotionSourceControls(p);p.e.guidedMotionHeat.checked=true;p.e.guidedMotionHeat.handlers.change();
+    for(const [id,value] of Object.entries({guidedMotionHeatInitial:15,guidedMotionHeatCells:2,
+      guidedMotionHeatStep:0.0005,guidedMotionHeatBudget:100000}))p.e[id].value=String(value);
+    for(const [index,frame] of original.keyframes.entries()) {
+      for(const [suffix,key] of [['Inside','inside_c'],['Outside','outside_c'],
+        ['InsideFilm','inside_resistance_m2_k_w'],['OutsideFilm','outside_resistance_m2_k_w']])
+        p.e['guidedMotionHeat'+suffix].value=String(films[index][key]);
+      await addGuidedMotion(p,frame.time_s,frame.arm_abduction_deg);
+    }
+    p.e.guidedScenarioHeat.checked=false;p.e.guidedRequireSurface.checked=false;
+    p.e.guidedRequireTransientCoverage.checked=false;p.e.guidedScenarioHeat.handlers.change();
+    for(const [prefix,,,consumer] of guidedTransientReadings)if(consumer==='transient_coverage')p.e[prefix+'Goal'].checked=false;
+    p.e.guidedTransientSurfaceInsideEnergyLimit.value='';p.e.guidedTransientSurfaceInsideEnergyLimit.handlers.input();
+    const authored=structuredClone(original);delete authored.transient_coverage;motionRaw=JSON.stringify(authored);
+    const dry=await evaluate('authored-dry');
+    for(const row of dry.comparison.alternatives) {
+      assert.equal(row.eligible,true,JSON.stringify(row.exclusions));
+      const heat=simulation(dry,row.key).motion.result.transient_surface,prior=simulation(complete,row.key).motion.result.transient_surface.result;
+      assert.equal(heat.status,'available');assert.deepEqual(heat.result.request,original.transient_surface);
+      assert.deepEqual(heat.result.trace,prior.trace);assert.deepEqual(heat.result.final,prior.final);
+    }
     t.diagnostic('Existing settled synthetic band: all twelve complete-history energy/temperature readings match native, public WASM and worker; '+
       JSON.stringify(values)+' J, maximum '+ceiling+' J admits '+admitted+'. A late sheet-heat refusal preserves coverage, mechanics and steady heat. '+
+      'Authored dry sheet heat reproduces the original sheet history without a steady-sheet policy. '+
       'No empirical garment warmth, comfort, thermal feedback or uncertainty-propagation claim. Replay inputs: '+work);
   });
 

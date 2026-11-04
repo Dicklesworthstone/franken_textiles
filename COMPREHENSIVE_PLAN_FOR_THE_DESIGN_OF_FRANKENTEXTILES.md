@@ -5216,6 +5216,25 @@ constitutive cards and executable consumers, with explicit selection and ambigui
 discovery facets remain separate from admitted physical capability. Reuse the existing authorities
 rather than introduce another database, approximate fiber-to-fabric defaults or browser physics.
 
+### 25.167 Author transient sheet-heat schedules alongside prescribed movement
+
+The ordinary motion editor can declare a dry independent-sheet thermal history using the existing
+native request. An explicit initial textile temperature, through-thickness cell count and thermal
+work allowances accompany one saved reservoir/film boundary per movement interval. Adding or
+replacing an endpoint saves its boundary; missing conditions refuse instead of inheriting a
+steady-heat request or inventing an environment. Native material qualification, temperature domains,
+thermal integration and optional-consumer failures remain authoritative.
+
+Single scenarios, immutable named cases and linked grid/adaptive comparisons retain the authored
+schedule and use the existing complete-history energy and temperature criteria. Changing the active
+schedule withdraws obsolete work; saved cases change only through explicit replacement. Original motion JSON
+continues to carry more advanced coverage, water, exterior-exchange and coupled policies unchanged.
+
+`ftx-ms2.15` tracks this operator-facing continuation of `ftx-ms2.12`. It removes the need to hand-author
+motion JSON for ordinary dry thermal schedules without introducing another solver or material defaults.
+The initial condition is authored, reported extrema cover retained samples, and software execution
+does not establish measured garment warmth, physical fit or physiological comfort.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
