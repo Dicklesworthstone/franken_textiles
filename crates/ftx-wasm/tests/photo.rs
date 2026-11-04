@@ -12,12 +12,131 @@ use ftx_trace::raster::{
     image::{encode_png_gray, load_photo_with_limit, load_png},
 };
 use ftx_wasm::photo::{
-    CameraCalibration, Photo, bundle_adjust, camera_calibration, photo_section, triangulate,
+    CameraCalibration, Photo, bundle_adjust, camera_calibration, photo_section, still_window,
+    triangulate,
 };
 use serde_json::{Value, json};
 
 const SHEET: &str = include_str!("../../../web/calibration/calib-sheet-letter.json");
 const SHEET_PNG: &[u8] = include_bytes!("../../../web/calibration/calib-sheet-letter.png");
+
+fn still_input(fit_motion_m: f64, held_motion_m: f64) -> Value {
+    use ftx_measure::camera::{Camera, Distortion, Intrinsics};
+    let frames: Vec<_> = [-0.45, -0.15, 0.15, 0.45]
+        .into_iter()
+        .enumerate()
+        .map(|(i, x)| {
+            let camera = Camera {
+                intrinsics: Intrinsics {
+                    focal_px: Vec2::new(900.0, 900.0),
+                    principal_px: Vec2::new(640.0, 480.0),
+                    distortion: Distortion::default(),
+                },
+                world_to_camera: Mat3::from_rows([
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, -1.0],
+                    [0.0, 1.0, 0.0],
+                ]),
+                center_m: Vec3::new(x, -2.0, 0.7),
+            };
+            let landmarks: Vec<_> = [
+                ("left", Vec3::new(-0.2, 0.0, 0.9), "fit"),
+                ("right", Vec3::new(0.2, 0.0, 0.9), "fit"),
+                ("waist", Vec3::new(0.0, 0.0, 0.6), "fit"),
+                ("held", Vec3::new(0.0, 0.0, 1.1), "held_out"),
+            ]
+            .into_iter()
+            .map(|(name, point, partition)| {
+                let dx = if i < 2 {
+                    0.0
+                } else if partition == "fit" {
+                    fit_motion_m
+                } else {
+                    held_motion_m
+                };
+                json!({"name":name,"partition":partition,
+                    "pixel_px":camera.project(point + Vec3::new(dx,0.0,0.0)).unwrap()})
+            })
+            .collect();
+            json!({"frame":{"stream":"synthetic λ","timestamp_us":u64::MAX-150_000+i as u64*50_000},
+                "camera":camera,"landmarks":landmarks})
+        })
+        .collect();
+    json!({"schema":"ftx-still-window-input/1","metric_scale_source":"synthetic fixed metric world",
+        "observation_evidence":"analytic sparse tracks","max_motion_mm":5.0,"frames":frames})
+}
+
+#[test]
+fn portable_still_window_retains_native_candidate_motion_and_full_width_frames() {
+    for (fit, held, expected) in [
+        (0.0, 0.0, "STILL_CANDIDATE"),
+        (0.01, 0.0, "REJECTED"),
+        (0.0, 0.01, "REJECTED"),
+    ] {
+        let mut input = still_input(fit, held);
+        input["frames"].as_array_mut().unwrap().reverse();
+        let source = format!(" \r\n{input}\r\n");
+        let typed = serde_json::from_value(input).unwrap();
+        let report = still_window(&source, "original λ.json").unwrap();
+        let mut native =
+            serde_json::to_value(ftx_measure::still::assess_still_window(&typed).unwrap()).unwrap();
+        native["source"] = json!("original λ.json");
+        native["input_sha256"] = json!(sha256_hex(source.as_bytes()));
+        assert_eq!(report, native);
+        assert_eq!(report["status"], expected);
+        assert_eq!(report["end_us"].as_u64(), Some(u64::MAX));
+        assert_eq!(report["fit_landmarks"], 3);
+        assert_eq!(report["held_out_landmarks"], 1);
+        assert!(
+            report["no_claim"]
+                .as_str()
+                .unwrap()
+                .contains("Human review")
+        );
+        if expected == "REJECTED" {
+            let partition = if fit > 0.0 { "fit" } else { "held_out" };
+            assert!(
+                report["checks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|check| check["partition"] == partition
+                        && check["motion_mm"].as_f64().unwrap() > 9.9
+                        && check["passed"] == false)
+            );
+        }
+    }
+}
+
+#[test]
+fn portable_still_window_keeps_unobservable_and_input_refusals() {
+    let mut input = still_input(0.0, 0.0);
+    let camera = input["frames"][0]["camera"].clone();
+    for frame in input["frames"].as_array_mut().unwrap() {
+        frame["camera"] = camera.clone();
+    }
+    let report = still_window(&input.to_string(), "input.json").unwrap();
+    assert_eq!(report["status"], "UNOBSERVABLE");
+    assert!(
+        report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|check| check["motion_mm"].is_null() && check["early"]["point_m"].is_null())
+    );
+    let input = still_input(0.0, 0.0);
+    for value in [json!(0), json!(-1), json!(100.1)] {
+        let mut invalid = input.clone();
+        invalid["max_motion_mm"] = value;
+        assert!(still_window(&invalid.to_string(), "input.json").is_err());
+    }
+    let mut invalid = input.clone();
+    invalid["frames"][1]["frame"] = invalid["frames"][0]["frame"].clone();
+    assert!(still_window(&invalid.to_string(), "input.json").is_err());
+    assert!(still_window("{}", "input.json").is_err());
+    assert!(still_window(&format!("\u{feff}{input}"), "input.json").is_err());
+    assert!(still_window(&" ".repeat(256 * 1024 + 1), "input.json").is_err());
+}
 
 #[test]
 fn portable_bundle_refinement_matches_native_solution_budget_and_full_width_frames() {

@@ -44,14 +44,15 @@ function checkedOptions(text) {
   }
 }
 function controls() {
-  const bundle=$("geometryOperation").value==="bundle-adjust";
-  $("geometryNoiseControls").hidden=bundle; $("geometryBundleControls").hidden=!bundle;
-  $("triangulationNoise").disabled=bundle; $("bundleIterations").disabled=!bundle;
-  $("geometryInputKind").textContent=bundle?"ftx-bundle-input/1":"ftx-triangulation-input/1";
-  $("triangulationRun").textContent=bundle?"Refine cameras and landmarks":"Triangulate landmark";
+  const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", triangulate=operation==="triangulate";
+  $("geometryNoiseControls").hidden=!triangulate; $("geometryBundleControls").hidden=!bundle;
+  $("geometryStillControls").hidden=!still;
+  $("triangulationNoise").disabled=!triangulate; $("bundleIterations").disabled=!bundle;
+  $("geometryInputKind").textContent=still?"ftx-still-window-input/1":bundle?"ftx-bundle-input/1":"ftx-triangulation-input/1";
+  $("triangulationRun").textContent=still?"Assess still-window candidate":bundle?"Refine cameras and landmarks":"Triangulate landmark";
   $("triangulationRun").disabled=triangulationBusy || !$("triangulationInput").files.length;
   $("triangulationCancel").disabled=!triangulationBusy;
-  $("triangulationClearNoise").disabled=bundle || !$("triangulationNoise").files.length;
+  $("triangulationClearNoise").disabled=!triangulate || !$("triangulationNoise").files.length;
   const charuco=$("referenceMode").value==="charuco", calibrated=charuco && ($("calibration").files.length>0 || generatedCalibration!==null);
   $("plainControls").hidden=charuco; $("charucoControls").hidden=!charuco; $("lensControls").hidden=!calibrated;
   $("paper").disabled=charuco; $("sheet").disabled=!charuco; $("calibration").disabled=!charuco;
@@ -159,13 +160,18 @@ function withdrawTriangulation() {
 function publishTriangulation(text, input, noise, operation, iterations) {
   // Parsed values are display-only. Original input and complete native report text are downloaded
   // unchanged, so full-width frame timestamps never pass through JavaScript serialization.
-  const report=JSON.parse(text), bundle=operation==="bundle-adjust", uncertainty=report.conditional_click_uncertainty;
-  if(report.schema!==(bundle?"ftx-bundle/1":"ftx-triangulation/1") || !Array.isArray(report.flags) ||
-    !Array.isArray(bundle?report.checks:report.reprojection)) {
+  const report=JSON.parse(text), bundle=operation==="bundle-adjust", still=operation==="still-window", uncertainty=report.conditional_click_uncertainty;
+  if(report.schema!==(still?"ftx-still-window/1":bundle?"ftx-bundle/1":"ftx-triangulation/1") || !Array.isArray(report.flags) ||
+    !Array.isArray(bundle || still?report.checks:report.reprojection)) {
     throw Error("The engine did not return the requested geometry report.");
   }
   $("triangulationReport").textContent=text;
-  if(bundle) {
+  if(still) {
+    $("triangulationSummary").textContent=`${report.status}: ${report.input.frames.length} frames, ${report.fit_landmarks} FIT landmarks, ${report.held_out_landmarks} held-out landmarks; supplied motion limit ${report.input.max_motion_mm} mm.`;
+    $("triangulationPoint").textContent=report.checks.map(check=>
+      `${check.name} (${check.partition}): early/late displacement ${check.motion_mm===null?"unavailable":check.motion_mm+" mm"}; ${check.passed?"passes candidate checks":check.flags.join("; ")}`).join("\n");
+    $("triangulationPrecision").textContent="Candidate only: human review must establish stillness of the relevant body region. Sparse tracks do not prove untracked anatomy stayed still; the supplied threshold is not a measurement accuracy bound.";
+  } else if(bundle) {
     $("triangulationSummary").textContent=`${report.status}: ${report.input.views.length} cameras, ${report.input.landmarks.length} landmarks, ${report.iterations} accepted steps; requested limit ${iterations}.`;
     if(report.objective_history.length) $("triangulationSummary").textContent+=
       ` FIT normalized residual sum of squares: ${report.objective_history[0]} → ${report.objective_history.at(-1)}.`;
@@ -181,13 +187,15 @@ function publishTriangulation(text, input, noise, operation, iterations) {
     "No click uncertainty was requested; a small pixel residual is not a measurement sigma.";
   }
   $("triangulationFlags").textContent=[...report.flags,...(report.advisories || []),...(uncertainty?.flags || []),report.no_claim,uncertainty?.no_claim].filter(Boolean).join(" ");
-  const name=bundle?"bundle":"triangulation";
+  const name=still?"still-window":bundle?"bundle":"triangulation";
   link($("triangulationDownloads"),text,name+".json","application/json",triangulationUrls);
   link($("triangulationDownloads"),input,name+"-input.json","application/json",triangulationUrls);
   if(noise) link($("triangulationDownloads"),noise,"triangulation-click-noise.json","application/json",triangulationUrls);
   if(bundle) link($("triangulationDownloads"),iterations,"bundle-iterations.txt","text/plain",triangulationUrls);
   $("triangulationResult").hidden=false;
-  $("triangulationStatus").textContent=bundle?
+  $("triangulationStatus").textContent=still?
+    (report.status==="STILL_CANDIDATE"?"Still-window candidate only; human review is required before declaring capture evidence.":"Still-window checks did not pass. Review motion and geometry diagnostics; no stillness assertion was created."):
+    bundle?
     (report.solution?"Anchored geometry accepted; review every held-out check and the local-solve assumptions.":"Refinement was not accepted. Diagnostics are available; no optimized geometry was published."):
     report.point_m?
     (uncertainty && uncertainty.status!=="AVAILABLE"?"Geometry accepted; requested click uncertainty is unavailable. Review diagnostics.":
@@ -196,11 +204,11 @@ function publishTriangulation(text, input, noise, operation, iterations) {
 }
 async function runTriangulation() {
   if(triangulationBusy) return;
-  const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", iterations=bundle?$("bundleIterations").value:"";
-  const inputFile=$("triangulationInput").files[0], noiseFile=bundle?null:$("triangulationNoise").files[0];
+  const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", iterations=bundle?$("bundleIterations").value:"";
+  const inputFile=$("triangulationInput").files[0], noiseFile=operation==="triangulate"?$("triangulationNoise").files[0]:null;
   withdrawTriangulation(); const id=triangulationTicket;
   try {
-    if(operation!=="triangulate" && !bundle) throw Error("Choose a supported geometry operation.");
+    if(operation!=="triangulate" && !bundle && !still) throw Error("Choose a supported geometry operation.");
     if(!inputFile) throw Error("Choose calibrated landmark observations.");
     if(inputFile.size>256*1024 || noiseFile?.size>256*1024) throw Error("Each geometry file must be at most 256 KiB; no source was read.");
     triangulationBusy=true; controls(); $("triangulationStatus").textContent="Reading the local calibrated observations…";
@@ -223,7 +231,7 @@ async function runTriangulation() {
       withdrawTriangulation(); $("triangulationError").textContent=error.message;
       $("triangulationStatus").textContent="Geometry worker stopped; run the current observations again.";
     };
-    current.postMessage({request:id,op:operation,input,noise,iterations});
+    current.postMessage({request:id,op:operation,input,noise,iterations,source:inputFile.name});
   } catch(error) {
     if(id!==triangulationTicket) return;
     stopTriangulation(); $("triangulationError").textContent=String(error.message || error);
@@ -576,7 +584,7 @@ $("clearCalibration").onclick=()=>{generatedCalibration=null; $("calibration").v
 $("cameraRun").onclick=runCamera;
 $("triangulationRun").onclick=runTriangulation;
 $("geometryOperation").addEventListener("change",()=>{
-  if($("geometryOperation").value==="bundle-adjust") $("triangulationNoise").value="";
+  if($("geometryOperation").value!=="triangulate") $("triangulationNoise").value="";
   withdrawTriangulation(); $("triangulationStatus").textContent="Geometry operation changed; select the matching input and run again.";
 });
 $("bundleIterations").addEventListener("input",()=>{

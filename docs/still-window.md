@@ -21,6 +21,23 @@ A `STILL_CANDIDATE` result (exit 0) means every checked landmark passed three ge
 Malformed inputs return exit 3; the JSON input is capped at 16 MiB and budget overflow returns 4.
 Output is create-only and cannot replace the source or an earlier report.
 
+## Local browser route
+
+Build and serve the ordinary browser bundle, open `web/photo.html`, and choose **Assess a sparse
+still-window candidate** under **Reconstruct landmarks from calibrated views**. Select the same
+prepared `ftx-still-window-input/1` document, limited to 256 KiB in this browser route. The existing
+native assessor runs in the local disposable worker. No media decoder, tracker or camera fit is
+inferred from the selected document.
+
+Review each FIT/held-out landmark's early/late displacement, failed geometric checks and the complete
+native report, including the selected filename and exact input-byte hash. Download `still-window.json`
+and the exact `still-window-input.json` for the native command above; the replay filename is reported
+as supplied, so renaming the source changes that field alone. Mode/source changes or cancellation
+withdraw the old result and downloads. Separate triangulation click-noise input is cleared, and the refinement iteration limit is inactive; the
+stationarity threshold comes only from the original input. Other photo evidence stays independent.
+All processing stays local; no source is uploaded or stored by the page. Even `STILL_CANDIDATE`
+requires human review before constructing any explicit triangulation capture assertion.
+
 ## Input
 
 The schema is `ftx-still-window-input/1`:

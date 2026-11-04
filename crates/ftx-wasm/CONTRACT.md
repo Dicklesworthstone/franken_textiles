@@ -1,5 +1,12 @@
 # ftx-wasm
 
+**Still-window candidates.** `photo::still_window(input, source)` and the matching wasm32 export delegate to
+`ftx-measure::still::assess_still_window`, with the existing 256 KiB browser JSON limit. The shared
+photo geometry worker preserves exact source/report text, the original filename and source-byte hash,
+early/late displacement and native FIT, held-out, reprojection and parallax checks. A passing
+`STILL_CANDIDATE` is only a filter for human
+review; it creates no triangulation capture assertion, measurement record, READY or fit claim.
+
 **Anchored joint refinement.** `photo::bundle_adjust(input, iterations)` and the matching wasm32
 export call the existing `ftx-measure::bundle::adjust`. Input JSON is bounded to 256 KiB; the step
 limit is text parsed in Rust and must be an integer in 1..=100, avoiding JavaScript ABI truncation.

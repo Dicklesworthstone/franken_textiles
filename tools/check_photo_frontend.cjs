@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,calibrationReport=cameraReport()}={}) {
   const sent=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -35,13 +35,15 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function photo_section(width,depth,options){calls.push({kind:'section',width,depth,options});if(failSection)throw Error('section evidence refused');return JSON.stringify(sectionReport());}
   function triangulate(input,noise){calls.push({kind:'triangulate',input,noise});if(failTriangulation)throw Error('capture evidence refused');return JSON.stringify(triangulationReport());}
   function bundle_adjust(input,iterations){calls.push({kind:'bundle-adjust',input,iterations});if(failBundle)throw Error('metric controls refused');return JSON.stringify(bundleReport());}
+  function still_window(input,source){calls.push({kind:'still-window',input,source});if(failStill)throw Error('track evidence refused');return JSON.stringify(stillReport());}
   const context=vm.createContext({Uint8Array,JSON,Error,URL,self:{postMessage:m=>sent.push(m)}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','camera_calibration','photo_section','triangulate','bundle_adjust'],function(){
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','camera_calibration','photo_section','triangulate','bundle_adjust','still_window'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
     this.setExport('photo_section',photo_section);
     this.setExport('triangulate',triangulate);
     this.setExport('bundle_adjust',bundle_adjust);
+    this.setExport('still_window',still_window);
   },{context});
   await imports.link(()=>{}); await imports.evaluate();
   const module=new vm.SourceTextModule(read('photo-worker.js'),{
@@ -869,6 +871,76 @@ async function compiledPhotoBindings(){
   const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
   ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});return ftx;
 }
+
+function stillReport(overrides={}) {
+  return {schema:'ftx-still-window/1',status:'STILL_CANDIDATE',input:{frames:[{},{},{},{}],max_motion_mm:5},
+    fit_landmarks:3,held_out_landmarks:1,checks:[{name:'held',partition:'held_out',motion_mm:0,passed:true,flags:[]}],
+    flags:[],advisories:[],no_claim:'Human review required',...overrides};
+}
+
+test('still-window worker calls only the original assessor with exact source text',async()=>{
+  const input=' \r\n{"timestamp_us":18446744073709551615,"evidence":"λ"}\r\n';
+  const source='original λ.json';
+  const w=await photoWorker();assert.equal((await w.send({request:22,op:'still-window',input,source,noise:'inactive',iterations:'1.5'})).type,'result');
+  assert.deepEqual(w.calls,[{kind:'still-window',input,source}]);assert.equal(w.instances.length,0);
+  const failed=await photoWorker({failStill:true});assert.equal((await failed.send({request:22,op:'still-window',input,source})).type,'error');
+  assert.deepEqual(failed.calls,[{kind:'still-window',input,source}]);
+});
+
+test('still-window mode preserves raw reports and source, reports motion and never promotes a candidate',async()=>{
+  const p=await photoPage(),input=' \r\n{"evidence":"λ","timestamp_us":18446744073709551615}\r\n';
+  p.e.triangulationInput.files=[file(input,'original λ.json')];p.e.triangulationNoise.files=[file('old noise')];p.e.bundleIterations.value='1.5';
+  p.e.geometryOperation.value='still-window';p.e.geometryOperation.handlers.change();
+  assert.equal(p.e.triangulationNoise.files.length,0);assert.equal(p.e.triangulationNoise.disabled,true);
+  assert.equal(p.e.geometryNoiseControls.hidden,true);assert.equal(p.e.geometryBundleControls.hidden,true);
+  assert.equal(p.e.geometryStillControls.hidden,false);assert.equal(p.e.bundleIterations.disabled,true);
+  assert.equal(p.e.geometryInputKind.textContent,'ftx-still-window-input/1');
+  for(const report of [stillReport(),stillReport({status:'REJECTED',checks:[{name:'moving',partition:'fit',motion_mm:10,passed:false,flags:['exceeds 5 mm']}]}),
+    stillReport({status:'UNOBSERVABLE',checks:[{name:'weak',partition:'held_out',motion_mm:null,passed:false,flags:['below 3 deg']}]})]) {
+    await p.e.triangulationRun.onclick();const w=p.current(),message=w.messages[0];
+    assert.deepEqual({op:message.op,input:message.input,noise:message.noise,iterations:message.iterations},{op:'still-window',input,noise:'',iterations:''});
+    assert.equal(message.source,'original λ.json');
+    const raw=JSON.stringify(report);await w.emit({type:'result',request:message.request,report:raw});
+    const links=p.e.triangulationDownloads.children;
+    assert.deepEqual(links.map(a=>a.download),['still-window.json','still-window-input.json']);
+    assert.deepEqual(await Promise.all(links.map(a=>p.urls.get(a.href).text())),[raw,input]);
+    assert.match(p.e.triangulationSummary.textContent,/3 FIT landmarks, 1 held-out.*5 mm/);
+    assert.match(p.e.triangulationPrecision.textContent,/Candidate only: human review/);
+    assert.match(p.e.triangulationPoint.textContent,new RegExp(report.checks[0].name));
+    if(report.status==='UNOBSERVABLE')assert.match(p.e.triangulationPoint.textContent,/unavailable.*below 3 deg/);
+    if(report.status==='REJECTED')assert.match(p.e.triangulationPoint.textContent,/10 mm.*exceeds 5 mm/);
+    assert.equal(p.e.openWorkbench.disabled,true);assert.equal(p.e.returnMaterials.disabled,true);
+    assert.equal(p.e.downloads.children.length,0);
+  }
+});
+
+test('still-window cancellation and mode/source edits discard late workers, reads and old downloads',async()=>{
+  const p=await photoPage();p.e.geometryOperation.value='still-window';p.e.geometryOperation.handlers.change();p.e.triangulationInput.files=[file('{}')];
+  for(const cancel of [()=>p.e.triangulationCancel.onclick(),()=>p.e.triangulationInput.handlers.change(),()=>{
+    p.e.geometryOperation.value='bundle-adjust';p.e.geometryOperation.handlers.change();}]) {
+    p.e.geometryOperation.value='still-window';p.e.geometryOperation.handlers.change();
+    await p.e.triangulationRun.onclick();const old=p.current();cancel();assert.equal(old.dead,true);
+    await old.emit({type:'result',request:old.messages[0].request,report:JSON.stringify(stillReport())});
+    assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.urls.size,0);
+  }
+  p.e.geometryOperation.value='still-window';p.e.geometryOperation.handlers.change();
+  let finish;const count=p.workers.length;p.e.triangulationInput.files=[{size:2,arrayBuffer:()=>new Promise(resolve=>{finish=resolve;})}];
+  const pending=p.e.triangulationRun.onclick();p.e.geometryOperation.value='triangulate';p.e.geometryOperation.handlers.change();
+  finish(new TextEncoder().encode('{}').buffer);await pending;assert.equal(p.workers.length,count);
+});
+
+test('compiled still-window assessment matches complete original native reports and input refusals',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_STILL_FIXTURES},async()=>{
+    const ftx=await compiledPhotoBindings(),dir=process.env.FTX_STILL_FIXTURES;
+    const parse=text=>JSON.parse(text,(key,value,meta)=>['timestamp_us','start_us','end_us'].includes(key)?meta.source:value);
+    for(const name of ['stationary','fit-motion','held-out-motion','weak','full-width']) {
+      const actual=ftx.still_window(fs.readFileSync(path.join(dir,name+'-input.json'),'utf8'),name+'-input.json');
+      assert.deepEqual(parse(actual),parse(fs.readFileSync(path.join(dir,name+'-native.json'),'utf8')),name+' complete original native still report');
+      if(name==='full-width')assert.ok(actual.includes('"end_us":18446744073709551615'));
+    }
+    const input=fs.readFileSync(path.join(dir,'stationary-input.json'),'utf8');
+    for(const source of ['{}','\ufeff'+input,' '.repeat(256*1024+1)])assert.throws(()=>ftx.still_window(source,'input.json'));
+  });
 
 test('compiled bundle adjustment matches native solutions, failures and exact iteration parsing',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_BUNDLE_FIXTURES},async()=>{

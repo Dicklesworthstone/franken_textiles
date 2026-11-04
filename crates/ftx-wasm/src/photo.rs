@@ -16,6 +16,21 @@ use serde_json::{Value, json};
 
 const MAX_JSON: usize = 256 * 1024;
 
+/// Assess sparse calibrated tracks with the native motion and geometry gates.
+/// A passing candidate still requires human review; no capture assertion is created.
+///
+/// # Errors
+/// Invalid/oversized JSON or the shared camera, track and acquisition refusals.
+pub fn still_window(input: &str, source: &str) -> Result<Value, Refusal> {
+    let typed = parse(input)?;
+    let mut report = serde_json::to_value(ftx_measure::still::assess_still_window(&typed)?)
+        .map_err(|e| invalid(e.to_string()))?;
+    // Match the native command's provenance; source is the supplied filename, not an I/O request.
+    report["input_sha256"] = json!(sha256_hex(input.as_bytes()));
+    report["source"] = json!(source);
+    Ok(report)
+}
+
 /// Refine cameras and landmarks with the native fixed-control gauge and acceptance gates.
 /// The textual iteration limit is parsed in Rust, never truncated at the JavaScript boundary.
 ///

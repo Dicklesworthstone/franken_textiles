@@ -90,6 +90,17 @@ pub fn bundle_adjust(input: &str, iterations: &str) -> Result<String, JsError> {
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Assess a sparse still-window candidate without creating reviewed capture evidence.
+///
+/// # Errors
+/// The portable source-size, camera and track guards refuse.
+#[wasm_bindgen]
+pub fn still_window(input: &str, source: &str) -> Result<String, JsError> {
+    crate::photo::still_window(input, source)
+        .map(|value| value.to_string())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Derive PHOTO_ESTIMATED girths or calibrate a section coefficient from original local evidence.
 ///
 /// # Errors

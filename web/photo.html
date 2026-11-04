@@ -220,6 +220,7 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
   <label>Geometry operation <select id="geometryOperation">
     <option value="triangulate">One landmark with fixed cameras</option>
     <option value="bundle-adjust">Refine cameras and landmarks from metric controls</option>
+    <option value="still-window">Assess a sparse still-window candidate</option>
   </select></label>
   <label>Calibrated observations (<code id="geometryInputKind">ftx-triangulation-input/1</code>)
     <input id="triangulationInput" type="file" accept=".json,application/json"></label>
@@ -237,6 +238,13 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <p><small>Each observation supplies its own pixel sigma. Switching to joint refinement clears the separate click-noise selection.
       Intrinsics stay fixed; no camera covariance or global optimum is established. Failed or budget-stopped solves publish no optimized geometry.</small></p>
   </div>
+  <div id="geometryStillControls" hidden>
+    <p>Supply 4–64 calibrated frames from one stream with at least three FIT landmarks tracked in every frame.
+      Include independent held-out landmarks. Cameras must share a stationary metric reference.</p>
+    <p><small>The input declares its own motion threshold. Early/late triangulation and complete-interval
+      reprojection checks can reject motion or weak geometry. A passing candidate still requires human review:
+      it does not create reviewed capture evidence, verify untracked anatomy or establish measurement accuracy.</small></p>
+  </div>
   <p><small>Each input file is limited to 256 KiB. Review the complete native report before using any geometry.</small></p>
   <p><button id="triangulationRun" disabled>Triangulate landmark</button>
     <button id="triangulationCancel" disabled>Cancel geometry calculation</button></p>
@@ -244,7 +252,7 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
   <pre id="triangulationError" role="alert"></pre>
   <div id="triangulationResult" hidden>
     <h3>Conditional geometry</h3>
-    <p id="triangulationSummary"></p><p id="triangulationPoint"></p><p id="triangulationPrecision"></p>
+    <p id="triangulationSummary"></p><p id="triangulationPoint" style="white-space:pre-line"></p><p id="triangulationPrecision"></p>
     <p id="triangulationFlags"></p>
     <p>This is geometry evidence, not a tape or photo measurement record, body fit or READY status.
       Review every FIT and held-out residual and the capture assumptions in the complete report.</p>
