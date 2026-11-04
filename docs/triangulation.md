@@ -40,6 +40,14 @@ Changing either source, removing noise, cancelling or leaving the page withdraws
 and downloads. Other photo evidence is independent. Frame timestamps and original numeric text are
 preserved in downloads; display summaries do not rewrite the report.
 
+For `docs/examples/triangulation.json`, this optional noise file uses a synthetic one-pixel
+assumption. A real acquisition needs its own supported click evidence; the held-out view is not
+included among the noise inputs:
+
+```json
+{"schema":"ftx-click-noise/1","evidence":"Synthetic one-pixel assumption; not camera accuracy","observations":[{"frame":{"stream":"synthetic-left","timestamp_us":1000000},"sigma_px":1},{"frame":{"stream":"synthetic-right","timestamp_us":1000000},"sigma_px":1}]}
+```
+
 ## Input contract
 
 `ftx-triangulation-input/1` describes one landmark with 1–128 observations. At least two

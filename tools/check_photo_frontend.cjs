@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,calibrationReport=cameraReport()}={}) {
   const sent=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -33,11 +33,13 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   }
   function camera_calibration(input,noise){calls.push({kind:'coordinates',input,noise});return JSON.stringify(calibrationReport);}
   function photo_section(width,depth,options){calls.push({kind:'section',width,depth,options});if(failSection)throw Error('section evidence refused');return JSON.stringify(sectionReport());}
+  function triangulate(input,noise){calls.push({kind:'triangulate',input,noise});if(failTriangulation)throw Error('capture evidence refused');return JSON.stringify(triangulationReport());}
   const context=vm.createContext({Uint8Array,JSON,Error,URL,self:{postMessage:m=>sent.push(m)}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','camera_calibration','photo_section'],function(){
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','camera_calibration','photo_section','triangulate'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
     this.setExport('photo_section',photo_section);
+    this.setExport('triangulate',triangulate);
   },{context});
   await imports.link(()=>{}); await imports.evaluate();
   const module=new vm.SourceTextModule(read('photo-worker.js'),{
@@ -82,7 +84,7 @@ const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text
 async function photoPage({decode,materialsToken=null}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
-  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile'])if(e[id])e[id].type='file';e.points.type='textarea';
+  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise'])if(e[id])e[id].type='file';e.points.type='textarea';
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images'}))e[id].value=value;
   for(const [id,value] of Object.entries({sectionLevel:'waist',sectionMode:'girth',sectionClothing:'0',sectionRatio:'1',sectionRatioSigma:'0',sectionTapeSigma:'10'}))e[id].value=value;
   const workers=[],urls=new Map(),closed=[],windowEvents={},popups=[]; let serial=0;
@@ -728,11 +730,105 @@ test('section evidence can return to its material session and page exit withdraw
   assert.equal(popup.messages[0].data.type,'ftx-photo-records-cancelled');assert.equal(p.e.sectionResult.hidden,true);
 });
 
+function triangulationReport(overrides={}) {
+  return {schema:'ftx-triangulation/1',status:'ACCEPTED',point_m:[0,0,1.3],fit_views:2,held_out_views:1,
+    flags:[],advisories:[],reprojection:[],no_claim:'Synthetic conditional geometry only',...overrides};
+}
+
+test('triangulation worker uses exact source strings and never falls back to photo analysis',async()=>{
+  const source={request:17,op:'triangulate',input:' \r\n{"timestamp_us":18446744073709551615}\r\n',noise:' {"noise":"declared λ"}\r\n'};
+  const w=await photoWorker();assert.equal((await w.send(source)).type,'result');
+  assert.deepEqual(w.calls,[{kind:'triangulate',input:source.input,noise:source.noise}]);assert.equal(w.instances.length,0);
+  const failed=await photoWorker({failTriangulation:true});const result=await failed.send(source);
+  assert.equal(result.type,'error');assert.match(result.message,/capture evidence refused/);assert.equal(failed.calls.length,1);
+});
+
+test('triangulation page retains exact reports and sources, including full-width timestamps, without creating photo records',async()=>{
+  const p=await photoPage();assert.equal(p.e.triangulationRun.disabled,true);
+  const input=' \r\n{"timestamp_us":18446744073709551615}\r\n',noise=' {"sigma":"original λ"}\r\n';
+  p.e.triangulationInput.files=[file(input)];p.e.triangulationNoise.files=[file(noise)];p.e.triangulationInput.handlers.change();
+  assert.equal(p.e.triangulationRun.disabled,false);await p.e.triangulationRun.onclick();const w=p.current(),message=w.messages[0];
+  assert.equal(message.input,input);assert.equal(message.noise,noise);assert.equal(message.op,'triangulate');
+  assert.equal(p.e.triangulationRun.disabled,true);assert.equal(p.e.triangulationCancel.disabled,false);
+  const raw=JSON.stringify(triangulationReport()).replace('"reprojection":[]','"reprojection":[{"frame":{"timestamp_us":18446744073709551615}}]');
+  await w.emit({type:'result',request:message.request,report:raw});
+  assert.equal(p.e.triangulationReport.textContent,raw);assert.equal(p.e.triangulationResult.hidden,false);
+  assert.equal(p.e.triangulationRun.disabled,false);assert.equal(p.e.triangulationCancel.disabled,true);
+  assert.match(p.e.triangulationPrecision.textContent,/No click uncertainty/);
+  const downloads=p.e.triangulationDownloads.children;
+  assert.deepEqual(await Promise.all(downloads.map(a=>p.urls.get(a.href).text())),[raw,input,noise]);
+  assert.equal(p.e.openWorkbench.disabled,true);assert.equal(p.e.report.textContent,'');
+  p.e.triangulationNoise.handlers.change();assert.equal(p.urls.size,0);assert.equal(p.e.triangulationResult.hidden,true);
+  await w.emit({type:'result',request:message.request,report:raw});assert.equal(p.e.triangulationResult.hidden,true);
+});
+
+test('triangulation page shows unavailable precision separately and retains rejected diagnostics',async()=>{
+  const p=await photoPage();p.e.triangulationInput.files=[file('{}')];p.e.triangulationInput.handlers.change();
+  for(const report of [triangulationReport({conditional_click_uncertainty:{status:'UNAVAILABLE',sigma_m:null,flags:['lens boundary'],no_claim:'click only'}}),
+    triangulationReport({status:'UNOBSERVABLE',point_m:null,flags:['weak parallax']})]) {
+    await p.e.triangulationRun.onclick();const w=p.current();
+    await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(report)});
+    assert.equal(p.e.triangulationResult.hidden,false);assert.equal(p.e.triangulationDownloads.children.length,2);
+    if(report.point_m) {assert.match(p.e.triangulationStatus.textContent,/requested click uncertainty is unavailable/);assert.match(p.e.triangulationPrecision.textContent,/No covariance estimate/);}
+    else {assert.match(p.e.triangulationStatus.textContent,/not accepted/);assert.match(p.e.triangulationPoint.textContent,/No usable point/);}
+    assert.equal(p.e.openWorkbench.disabled,true);
+  }
+});
+
+test('triangulation cancels late reads and stale worker events without withdrawing independent photo evidence',async()=>{
+  const p=await photoPage();p.select();await p.analyze();await p.measure();const photo=p.e.report.textContent;
+  p.e.triangulationInput.files=[file('{}')];p.e.triangulationInput.handlers.change();await p.e.triangulationRun.onclick();
+  const old=p.current(),request=old.messages[0].request;
+  await old.emit({type:'result',request:request+1,report:JSON.stringify(triangulationReport())});assert.equal(p.e.triangulationResult.hidden,true);
+  p.e.triangulationCancel.onclick();assert.equal(old.dead,true);
+  await old.emit({type:'result',request,report:JSON.stringify(triangulationReport())});assert.equal(p.e.triangulationResult.hidden,true);
+  assert.equal(p.e.report.textContent,photo);assert.equal(p.e.openWorkbench.disabled,false);
+  let finish;const count=p.workers.length;
+  p.e.triangulationInput.files=[{size:2,arrayBuffer:()=>new Promise(resolve=>{finish=resolve;})}];
+  const pending=p.e.triangulationRun.onclick();p.e.triangulationInput.handlers.change();finish(new TextEncoder().encode('{}').buffer);await pending;
+  assert.equal(p.workers.length,count);assert.equal(p.e.triangulationResult.hidden,true);
+  p.e.triangulationInput.files=[file('{}')];await p.e.triangulationRun.onclick();const live=p.current();
+  p.windowEvents.pagehide();await live.emit({type:'result',request:live.messages[0].request,report:JSON.stringify(triangulationReport())});
+  assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.urls.size,0);
+});
+
+test('triangulation preflights both byte budgets, rejects empty/invalid noise files and clears failed outputs',async()=>{
+  for(const oversized of ['triangulationInput','triangulationNoise']) {
+    const p=await photoPage();let reads=0;p.e.triangulationInput.files=[{size:2,arrayBuffer:async()=>{reads++;return new TextEncoder().encode('{}').buffer;}}];
+    p.e[oversized].files=[{size:256*1024+1,arrayBuffer:async()=>{reads++;throw Error('must not read');}}];
+    await p.e.triangulationRun.onclick();assert.equal(reads,0);assert.equal(p.workers.length,0);assert.match(p.e.triangulationError.textContent,/256 KiB/);
+  }
+  const p=await photoPage();p.e.triangulationInput.files=[file('{}')];p.e.triangulationNoise.files=[file('')];
+  await p.e.triangulationRun.onclick();assert.equal(p.workers.length,0);assert.match(p.e.triangulationError.textContent,/file is empty/);
+  p.e.triangulationClearNoise.onclick();assert.equal(p.e.triangulationNoise.files.length,0);
+  p.e.triangulationNoise.files=[{size:1,arrayBuffer:async()=>new Uint8Array([255]).buffer}];await p.e.triangulationRun.onclick();assert.equal(p.workers.length,0);
+  p.e.triangulationClearNoise.onclick();await p.e.triangulationRun.onclick();const w=p.current();
+  await w.emit({type:'error',request:w.messages[0].request,message:'native capture refusal'});
+  assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.urls.size,0);assert.match(p.e.triangulationError.textContent,/native capture refusal/);
+  await p.e.triangulationRun.onclick();p.current().onerror({message:'worker crash'});assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.urls.size,0);
+});
+
 async function compiledPhotoBindings(){
   const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(root,'web/pkg');
   const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
   ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});return ftx;
 }
+
+test('compiled triangulation reproduces complete native reports and exact full-width frame identities',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_TRIANGULATION_FIXTURES},async()=>{
+    const ftx=await compiledPhotoBindings(),dir=process.env.FTX_TRIANGULATION_FIXTURES;
+    const parse=text=>JSON.parse(text,(key,value,meta)=>key==='timestamp_us'?meta.source:value);
+    for(const [name,hasNoise] of [['plain',false],['noise',true],['unavailable',true],['weak',false],['held-out',false],['full-width',true]]) {
+      const read=name=>fs.readFileSync(path.join(dir,name),'utf8'),input=read(name+'-input.json'),noise=hasNoise?read(name+'-noise.json'):'';
+      const actual=ftx.triangulate(input,noise),expected=read(name+'-native.json');
+      assert.deepEqual(parse(actual),parse(expected),name+' full original native report');
+      if(name==='full-width')assert.ok(actual.includes('"timestamp_us":18446744073709551615'));
+    }
+    const input=fs.readFileSync(path.join(dir,'plain-input.json'),'utf8');
+    assert.throws(()=>ftx.triangulate(input,'{}'));
+    assert.throws(()=>ftx.triangulate(input,' '.repeat(256*1024+1)),/256 KiB/);
+    assert.throws(()=>ftx.triangulate('\ufeff'+input,''));
+  });
 
 test('compiled WASM identifies an independently projected pinhole camera and rejects unsupported noise or altered held-out evidence',
   {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
