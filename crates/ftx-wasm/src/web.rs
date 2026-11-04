@@ -68,6 +68,17 @@ pub fn camera_calibration(input: &str, corner_noise: &str) -> Result<String, JsE
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Triangulate a calibrated landmark with optional declared click-only uncertainty.
+///
+/// # Errors
+/// The portable input-size, camera, capture, geometry and noise guards refuse.
+#[wasm_bindgen]
+pub fn triangulate(input: &str, click_noise: &str) -> Result<String, JsError> {
+    crate::photo::triangulate(input, click_noise)
+        .map(|value| value.to_string())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Derive PHOTO_ESTIMATED girths or calibrate a section coefficient from original local evidence.
 ///
 /// # Errors

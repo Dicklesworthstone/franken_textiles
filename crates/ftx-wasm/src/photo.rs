@@ -16,6 +16,24 @@ use serde_json::{Value, json};
 
 const MAX_JSON: usize = 256 * 1024;
 
+/// Calibrated multi-view geometry and optional click-only precision, using the existing native
+/// estimators and gates. An empty noise text requests geometry alone; no measurement is created.
+///
+/// # Errors
+/// Invalid/oversized JSON or the shared camera, capture, geometry and noise-input refusals.
+pub fn triangulate(input: &str, click_noise: &str) -> Result<Value, Refusal> {
+    let input = parse(input)?;
+    let report = if click_noise.is_empty() {
+        serde_json::to_value(ftx_measure::triangulate::triangulate(&input)?)
+    } else {
+        let noise = parse(click_noise)?;
+        serde_json::to_value(
+            ftx_measure::triangulate::uncertainty::triangulate_with_click_noise(&input, &noise)?,
+        )
+    };
+    report.map_err(|e| invalid(e.to_string()))
+}
+
 /// Source-qualified section girth or tape-based coefficient calibration using the shared native
 /// measurement engine. An empty depth source reuses a combined width/depth document.
 ///

@@ -1,5 +1,12 @@
 # ftx-wasm
 
+**Calibrated landmarks.** `photo::triangulate` and the wasm32 `triangulate(input, click_noise)`
+export call the existing `ftx-measure` geometry and conditional click-noise estimators. Each source
+is bounded to 256 KiB; empty noise requests geometry alone. Native parallax, lens, capture and
+held-out gates remain authoritative. A valid point with unavailable requested covariance retains
+both statuses. Exact input, optional noise and report text are downloaded without JavaScript
+rewriting frame timestamps. Results create no measurement record, READY state or body-fit claim.
+
 **Photo section estimates.** `photo::photo_section` and the wasm32 `photo_section(width_source,
 depth_source, options)` export delegate to the shared `ftx-measure` source-qualified section
 engine. Exact original measurement and option texts survive in `section_sources`; native fusion,

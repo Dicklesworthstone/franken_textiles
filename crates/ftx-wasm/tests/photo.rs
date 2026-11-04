@@ -11,11 +11,108 @@ use ftx_trace::raster::{
     Gray,
     image::{encode_png_gray, load_photo_with_limit, load_png},
 };
-use ftx_wasm::photo::{CameraCalibration, Photo, camera_calibration, photo_section};
+use ftx_wasm::photo::{CameraCalibration, Photo, camera_calibration, photo_section, triangulate};
 use serde_json::{Value, json};
 
 const SHEET: &str = include_str!("../../../web/calibration/calib-sheet-letter.json");
 const SHEET_PNG: &[u8] = include_bytes!("../../../web/calibration/calib-sheet-letter.png");
+
+#[test]
+fn portable_triangulation_matches_native_geometry_noise_and_full_width_frames() {
+    use ftx_measure::triangulate::{TriangulationInput, uncertainty::ClickNoiseInput};
+    let mut input: Value =
+        serde_json::from_str(include_str!("../../../docs/examples/triangulation.json")).unwrap();
+    for view in input["observations"].as_array_mut().unwrap() {
+        view["frame"]["timestamp_us"] = json!(u64::MAX);
+    }
+    let noise = json!({"schema":"ftx-click-noise/1","evidence":"synthetic one-pixel clicks",
+        "observations":input["observations"].as_array().unwrap().iter()
+            .filter(|view|view["partition"]=="fit")
+            .map(|view|json!({"frame":view["frame"],"sigma_px":1.0})).collect::<Vec<_>>()});
+    let source = format!(" \r\n{input}\r\n");
+    let typed: TriangulationInput = serde_json::from_value(input.clone()).unwrap();
+    let plain = triangulate(&source, "").unwrap();
+    assert_eq!(
+        plain,
+        serde_json::to_value(ftx_measure::triangulate::triangulate(&typed).unwrap()).unwrap()
+    );
+    assert_eq!(plain["status"], "ACCEPTED");
+    assert!((plain["point_m"][2].as_f64().unwrap() - 1.3).abs() < 1e-12);
+    assert_eq!(
+        plain["input"]["observations"][0]["frame"]["timestamp_us"].as_u64(),
+        Some(u64::MAX)
+    );
+    let augmented = triangulate(&source, &noise.to_string()).unwrap();
+    let typed_noise: ClickNoiseInput = serde_json::from_value(noise.clone()).unwrap();
+    assert_eq!(
+        augmented,
+        serde_json::to_value(
+            ftx_measure::triangulate::uncertainty::triangulate_with_click_noise(
+                &typed,
+                &typed_noise
+            )
+            .unwrap()
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        augmented["conditional_click_uncertainty"]["status"],
+        "AVAILABLE"
+    );
+    let mut geometry = augmented;
+    geometry
+        .as_object_mut()
+        .unwrap()
+        .remove("conditional_click_uncertainty");
+    assert_eq!(geometry, plain);
+
+    // The existing lens margin may admit the point while refusing a complete derivative stencil.
+    for view in input["observations"].as_array_mut().unwrap() {
+        let x = (view["pixel_px"][0].as_f64().unwrap() - 500.0) / 900.0;
+        let y = (view["pixel_px"][1].as_f64().unwrap() - 400.0) / 900.0;
+        view["camera"]["intrinsics"]["distortion"] = json!({"max_radius":x.hypot(y)+1e-7});
+    }
+    let uncertain = triangulate(&input.to_string(), &noise.to_string()).unwrap();
+    assert_eq!(uncertain["status"], "ACCEPTED");
+    assert!(uncertain["point_m"].is_array());
+    assert_eq!(
+        uncertain["conditional_click_uncertainty"]["status"],
+        "UNAVAILABLE"
+    );
+    assert!(uncertain["conditional_click_uncertainty"]["covariance_m2"].is_null());
+}
+
+#[test]
+fn portable_triangulation_keeps_weak_and_held_out_gates_and_refuses_invalid_noise() {
+    let input: Value =
+        serde_json::from_str(include_str!("../../../docs/examples/triangulation.json")).unwrap();
+    let mut held_out = input.clone();
+    held_out["observations"][2]["pixel_px"][0] = json!(540.0);
+    let rejected = triangulate(&held_out.to_string(), "").unwrap();
+    assert_eq!(rejected["status"], "REJECTED");
+    assert!(rejected["point_m"].is_null());
+    let mut weak = input.clone();
+    weak["observations"][1]["camera"] = weak["observations"][0]["camera"].clone();
+    weak["observations"][1]["pixel_px"] = weak["observations"][0]["pixel_px"].clone();
+    let weak = triangulate(&weak.to_string(), "").unwrap();
+    assert_eq!(weak["status"], "UNOBSERVABLE");
+    assert!(weak["point_m"].is_null());
+    for noise in [
+        " ",
+        "{}",
+        r#"{"schema":"ftx-click-noise/1","evidence":"test","observations":[]}"#,
+    ] {
+        assert!(triangulate(&input.to_string(), noise).is_err());
+    }
+    for text in [
+        "{}".into(),
+        format!("\u{feff}{input}"),
+        " ".repeat(256 * 1024 + 1),
+    ] {
+        assert!(triangulate(&text, "").is_err());
+    }
+    assert!(triangulate(&input.to_string(), &" ".repeat(256 * 1024 + 1)).is_err());
+}
 
 #[test]
 fn portable_photo_sections_preserve_shared_results_sources_and_refusals() {
