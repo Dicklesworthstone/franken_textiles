@@ -1649,6 +1649,123 @@ impl Policy {
         Some(strictly)
     }
 
+    fn optical_protocols(
+        &self,
+        row: &Alternative,
+        descriptor: &Value,
+        admitted: &Numerical<'_>,
+    ) -> Result<BTreeMap<String, BTreeSet<String>>, Refusal> {
+        let consumers = self.consumers();
+        let scenario = &descriptor["scenario"];
+        let heat = &scenario["motion"]["transient_surface"];
+        let coupled_motion = self.needs_motion()
+            && (!heat["mechanical_coupling"].is_null()
+                || !heat["coupled_water_alternatives"].is_null());
+        let mut protocols = BTreeMap::<String, BTreeSet<String>>::new();
+        let pattern = ftx_pattern::Pattern::new(
+            row.binding
+                .value()
+                .ok_or_else(|| invalid("optical source binding unavailable"))?["pattern"]
+                .clone(),
+        );
+        let frozen = row
+            .frozen_changes
+            .as_ref()
+            .ok_or_else(|| invalid("frozen optical sources unavailable"))?;
+        let mut add = |piece: &str, radiation: &Value, coverage: bool| -> Result<(), Refusal> {
+            let material = frozen
+                .pieces
+                .get(piece)
+                .or(frozen.default.as_ref())
+                .and_then(|selection| selection.record.as_ref())
+                .ok_or_else(|| invalid("frozen optical material unavailable"))?;
+            if let Some(protocol) = optical_property_protocol(material, radiation, coverage)? {
+                protocols
+                    .entry(piece.to_owned())
+                    .or_default()
+                    .insert(hash(&(radiation, protocol))?);
+            }
+            Ok(())
+        };
+        for (active, environments, frame, scheduled) in [
+            (
+                consumers.contains(&Consumer::Surface),
+                &scenario["surface"]["exterior_exchange"],
+                "steady_thermal_surface",
+                false,
+            ),
+            (
+                coupled_motion || consumers.contains(&Consumer::TransientSurface),
+                &heat["exterior_exchange"],
+                "thermal_surface",
+                true,
+            ),
+        ] {
+            let Some(environments) = environments.as_array().filter(|_| active) else {
+                continue;
+            };
+            if !environments.iter().any(|e| !e["radiation"].is_null()) {
+                continue;
+            }
+            let pieces = optical_piece_columns(&pattern, &admitted.drape["drape"][frame])?;
+            for (piece, columns) in pieces {
+                if scheduled {
+                    // Every independent sheet uses the interval's uniform exterior environment.
+                    for environment in environments {
+                        if !environment["radiation"].is_null() {
+                            add(&piece, &environment["radiation"], false)?;
+                        }
+                    }
+                } else {
+                    for column in columns {
+                        let environment = environments
+                            .get(if environments.len() == 1 { 0 } else { column })
+                            .ok_or_else(|| invalid("optical environment column unavailable"))?;
+                        if !environment["radiation"].is_null() {
+                            add(&piece, &environment["radiation"], false)?;
+                        }
+                    }
+                }
+            }
+        }
+        // Moving coverage retains aggregate exchange rather than every past exposed-face choice.
+        // Only an active radiative coverage consumer conservatively includes both mapped sides;
+        // independent sheets above use exactly their positive face, never the unused reverse side.
+        for (active, policy, frame) in [
+            (
+                consumers.contains(&Consumer::Coverage),
+                &scenario["coverage"]["conditions"],
+                "steady_thermal_surface",
+            ),
+            (
+                consumers.contains(&Consumer::TransientCoverage),
+                &scenario["motion"]["transient_coverage"],
+                "thermal_surface",
+            ),
+        ] {
+            if !active {
+                continue;
+            }
+            for field in ["exterior_exchange", "exposed_exterior_exchange"] {
+                let Some(environments) = policy[field].as_array() else {
+                    continue;
+                };
+                if !environments.iter().any(|e| !e["radiation"].is_null()) {
+                    continue;
+                }
+                let pieces = optical_piece_columns(&pattern, &admitted.drape["drape"][frame])?;
+                for environment in environments {
+                    if !environment["radiation"].is_null() {
+                        for piece in pieces.keys() {
+                            add(piece, &environment["radiation"], true)?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(protocols)
+    }
+
     fn protocol(
         &self,
         row: &Alternative,
@@ -1706,7 +1823,7 @@ impl Policy {
             );
         }
         if thermal {
-            keys.extend(["thermal_conductivity", "thermal_resistance", "emissivity"]);
+            keys.extend(["thermal_conductivity", "thermal_resistance"]);
         }
         if transient {
             keys.extend(["areal_density", "specific_heat", "thickness"]);
@@ -1835,6 +1952,10 @@ impl Policy {
                 Value::Null
             },
         ))?;
+        let optics = self.optical_protocols(row, descriptor, admitted)?;
+        if !optics.is_empty() {
+            base = hash(&(base, optics))?;
+        }
         for (consumer, receipt) in [
             (Consumer::CuttingProgram, admitted.cutting_program),
             (Consumer::FiniteStockProgram, admitted.finite_stock_program),
@@ -2269,6 +2390,82 @@ impl Policy {
             base = hash(&(base, owners))?;
         }
         Ok(base)
+    }
+}
+
+fn optical_piece_columns(
+    pattern: &ftx_pattern::Pattern,
+    frame: &Value,
+) -> Result<BTreeMap<String, BTreeSet<usize>>, Refusal> {
+    let fail = || invalid("radiation protocol needs retained instance/column ownership");
+    let instances = frame["instances"].as_array().ok_or_else(fail)?;
+    let owners = frame["triangle_instance"].as_array().ok_or_else(fail)?;
+    let patches = frame["model"]["patches"].as_array().ok_or_else(fail)?;
+    if owners.len() != patches.len() {
+        return Err(fail());
+    }
+    let mut pieces = BTreeMap::<String, BTreeSet<usize>>::new();
+    for (owner, patch) in owners.iter().zip(patches) {
+        let name = instances
+            .get(vapor_index(owner)?)
+            .and_then(Value::as_str)
+            .ok_or_else(fail)?;
+        let instance = pattern.instance(name).ok_or_else(fail)?;
+        pieces
+            .entry(instance.piece.clone())
+            .or_default()
+            .insert(vapor_index(&patch["column"])?);
+    }
+    Ok(pieces)
+}
+
+fn optical_property_protocol(
+    material: &ftx_pattern::materials::Material,
+    radiation: &Value,
+    coverage: bool,
+) -> Result<Option<Value>, Refusal> {
+    let observation = |property: &str| {
+        material.properties.get(property).map(|q| {
+            json!({"unit":q.unit,"method":q.method,
+                "conditions":q.conditions,"evidence":q.evidence})
+        })
+    };
+    if radiation["automatic_material_face"] == true {
+        let Some(mapping) = &material.optical_faces else {
+            return if coverage {
+                Ok(None)
+            } else {
+                Err(invalid("independent radiation needs its positive optical face"))
+            };
+        };
+        let mut faces = BTreeMap::new();
+        for (side, face) in [("positive", &mapping.positive), ("negative", &mapping.negative)] {
+            if side == "negative" && !coverage {
+                continue;
+            }
+            if let Some(face) = face {
+                faces.insert(
+                    side,
+                    observation(&face.emissivity_property)
+                        .ok_or_else(|| invalid("mapped radiation observation unavailable"))?,
+                );
+            } else if !coverage {
+                return Err(invalid("independent radiation needs its positive optical face"));
+            }
+        }
+        Ok(Some(json!({"faces":faces,"mapping":{"method":mapping.method,
+            "evidence":mapping.evidence,"specimen":mapping.specimen,
+            "conditioning":mapping.conditioning}})))
+    } else {
+        let property = radiation["emissivity_property"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| invalid("radiation observation identity unavailable"))?;
+        match observation(property) {
+            Some(protocol) => Ok(Some(json!({"observation":protocol}))),
+            None if coverage => Ok(None),
+            None => Err(invalid("requested radiation observation unavailable")),
+        }
     }
 }
 

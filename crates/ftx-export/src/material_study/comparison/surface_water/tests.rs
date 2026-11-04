@@ -791,6 +791,280 @@ fn paired_motion_protocol_includes_thermal_and_vapor_methods_without_changing_st
     }
 }
 
+fn optical_sources(alternative: &mut Alternative) -> Value {
+    let mut raw = serde_json::to_value(
+        alternative
+            .frozen_changes
+            .as_ref()
+            .unwrap()
+            .default
+            .as_ref()
+            .unwrap(),
+    )
+    .unwrap();
+    for (property, face) in [
+        ("emissivity_public", "public"),
+        ("emissivity_reverse", "reverse"),
+        ("emissivity", "unused"),
+    ] {
+        raw["record"]["properties"][property] = json!({"value":0.8,"unit":"1",
+            "source":"test","evidence":"estimate","method":"Synthetic optical protocol",
+            "conditions":{"face":face,"specimen":"synthetic-optical-sheet",
+                "conditioning":"synthetic dry state","spectral_basis":"total_hemispherical",
+                "temperature_min_c":"-20","temperature_max_c":"80"}});
+    }
+    raw["record"]["optical_faces"] = json!({
+        "positive":{"face":"public","emissivity_property":"emissivity_public"},
+        "negative":{"face":"reverse","emissivity_property":"emissivity_reverse"},
+        "source":"test","evidence":"estimate","method":"Synthetic source-normal mapping",
+        "specimen":"synthetic-optical-sheet","conditioning":"synthetic dry state"});
+    alternative.frozen_changes.as_mut().unwrap().default =
+        Some(serde_json::from_value(raw.clone()).unwrap());
+    raw
+}
+
+fn optical_protocol(
+    alternative: &Alternative,
+    descriptor: &Value,
+    simulation: &Value,
+    motion: &Value,
+    metric: &str,
+) -> String {
+    // Exercise the real comparison projection only. These source mutations are not admitted
+    // numerical receipts; native exterior solvers independently test optical admission/replay.
+    let admitted = Numerical {
+        cutting_program: None,
+        finite_stock_program: None,
+        cutting_job_program: None,
+        drape: simulation,
+        material_strain: None,
+        contact_loads: None,
+        vapor_surface: &Value::Null,
+        vapor_coverage: None,
+        motion,
+        motion_material_strain: None,
+        motion_contact_loads: None,
+        motion_vapor_coverage: None,
+        motion_wet_film: None,
+        transient_surface: None,
+        transient_coverage: None,
+    };
+    let policy: Policy = serde_json::from_value(json!({"basis":"nominal",
+        "objectives":[{"metric":metric,"direction":"minimize"}]}))
+    .unwrap();
+    policy.protocol(alternative, descriptor, &admitted).unwrap()
+}
+
+#[test]
+fn optical_protocols_follow_used_observations_and_positive_independent_faces() {
+    let (mut a, mut d, mut s, mut m) = coupled_case();
+    with_paired_qualifications(&mut d, &mut m);
+    let raw = optical_sources(&mut a);
+    s["drape"]["steady_thermal_surface"] = s["drape"]["thermal_surface"].clone();
+    for automatic in [false, true] {
+        let radiation = if automatic {
+            json!({"ambient_c":10.,"automatic_material_face":true,
+                "allow_opaque_gray_approximation":true})
+        } else {
+            json!({"ambient_c":10.,"emissivity_property":"emissivity_public",
+                "exposed_face":"public","allow_opaque_gray_approximation":true})
+        };
+        d["scenario"]["surface"] = json!({"exterior_exchange":[{"radiation":radiation}]});
+        d["scenario"]["motion"]["transient_surface"]["exterior_exchange"] =
+            json!([{"radiation":radiation}]);
+        for (metric, uses_optics) in [
+            ("independent_surface_power_w", true),
+            ("transient_surface_inside_energy_j", true),
+            ("motion_max_absolute_edge_strain_pct", true),
+            ("max_absolute_edge_strain_pct", false),
+            ("assembly_mass_kg", false),
+        ] {
+            let original = optical_protocol(&a, &d, &s, &m, metric);
+            for (fault, changes_protocol) in [
+                ("used-method", true),
+                ("used-evidence", true),
+                ("used-conditions", true),
+                ("used-value", false),
+                ("unused-generic", false),
+                ("unused-reverse", false),
+                ("mapping-method", automatic),
+                ("mapping-evidence", automatic),
+            ] {
+                let mut changed = raw.clone();
+                match fault {
+                    "used-method" => {
+                        changed["record"]["properties"]["emissivity_public"]["method"] =
+                            json!("Different optical method");
+                    }
+                    "used-evidence" => {
+                        changed["record"]["properties"]["emissivity_public"]["evidence"] =
+                            json!("published");
+                    }
+                    "used-conditions" => {
+                        changed["record"]["properties"]["emissivity_public"]["conditions"]
+                            ["temperature_max_c"] = json!("70");
+                    }
+                    "used-value" => {
+                        changed["record"]["properties"]["emissivity_public"]["value"] = json!(0.7);
+                    }
+                    "unused-generic" => {
+                        changed["record"]["properties"]["emissivity"]["method"] =
+                            json!("Unconsumed generic method");
+                    }
+                    "unused-reverse" => {
+                        changed["record"]["properties"]["emissivity_reverse"]["method"] =
+                            json!("Unconsumed reverse-side method");
+                    }
+                    "mapping-method" => {
+                        changed["record"]["optical_faces"]["method"] =
+                            json!("Different orientation method");
+                    }
+                    "mapping-evidence" => {
+                        changed["record"]["optical_faces"]["evidence"] = json!("published");
+                    }
+                    _ => unreachable!(),
+                }
+                a.frozen_changes.as_mut().unwrap().default =
+                    Some(serde_json::from_value(changed).unwrap());
+                assert_eq!(
+                    original != optical_protocol(&a, &d, &s, &m, metric),
+                    uses_optics && changes_protocol,
+                    "{metric}, automatic={automatic}, {fault}"
+                );
+                a.frozen_changes.as_mut().unwrap().default =
+                    Some(serde_json::from_value(raw.clone()).unwrap());
+            }
+        }
+    }
+    // Prescribed convection consumes no emissivity, even when paired liquid mechanics needs heat.
+    d["scenario"]["surface"]["exterior_exchange"] = json!([{}]);
+    d["scenario"]["motion"]["transient_surface"]["exterior_exchange"] = json!([{}]);
+    for metric in [
+        "independent_surface_power_w",
+        "motion_max_absolute_edge_strain_pct",
+    ] {
+        let original = optical_protocol(&a, &d, &s, &m, metric);
+        let mut changed = raw.clone();
+        changed["record"]["properties"]["emissivity"]["method"] = json!("Unused generic method");
+        changed["record"]["properties"]["emissivity_public"]["method"] = json!("Unused face method");
+        changed["record"]["optical_faces"]["method"] = json!("Unused mapping method");
+        a.frozen_changes.as_mut().unwrap().default =
+            Some(serde_json::from_value(changed).unwrap());
+        assert_eq!(original, optical_protocol(&a, &d, &s, &m, metric));
+        a.frozen_changes.as_mut().unwrap().default =
+            Some(serde_json::from_value(raw.clone()).unwrap());
+    }
+}
+
+#[test]
+fn optical_schedule_protocol_keeps_observations_bound_to_their_selectors() {
+    let (mut a, mut d, s, m) = case();
+    let mut raw = optical_sources(&mut a);
+    raw["record"]["properties"]["emissivity_public"]["method"] = json!("Optical method A");
+    raw["record"]["properties"]["emissivity_reverse"]["method"] = json!("Optical method B");
+    // Match the face qualification here so a swap tests selector ownership, not a distinct face.
+    raw["record"]["properties"]["emissivity_reverse"]["conditions"] =
+        raw["record"]["properties"]["emissivity_public"]["conditions"].clone();
+    raw["record"]["optical_faces"] = Value::Null;
+    a.frozen_changes.as_mut().unwrap().default =
+        Some(serde_json::from_value(raw.clone()).unwrap());
+    d["scenario"]["motion"]["transient_surface"]["exterior_exchange"] = json!([
+        {"radiation":{"emissivity_property":"emissivity_public","exposed_face":"public"}},
+        {"radiation":{"emissivity_property":"emissivity_reverse","exposed_face":"public"}}]);
+    let metric = "transient_surface_inside_energy_j";
+    let original = optical_protocol(&a, &d, &s, &m, metric);
+    raw["record"]["properties"]["emissivity_public"]["method"] = json!("Optical method B");
+    raw["record"]["properties"]["emissivity_reverse"]["method"] = json!("Optical method A");
+    a.frozen_changes.as_mut().unwrap().default = Some(serde_json::from_value(raw).unwrap());
+    assert_ne!(original, optical_protocol(&a, &d, &s, &m, metric));
+}
+
+#[test]
+fn steady_optical_protocols_follow_each_pieces_own_column_environment() {
+    let (mut a, mut d, mut s, m) = case();
+    let raw = optical_sources(&mut a);
+    a.frozen_changes
+        .as_mut()
+        .unwrap()
+        .pieces
+        .insert("back".into(), serde_json::from_value(raw.clone()).unwrap());
+    s["drape"]["steady_thermal_surface"] = s["drape"]["thermal_surface"].clone();
+    s["drape"]["steady_thermal_surface"]["model"]["patches"][1]["column"] = json!(1);
+    d["scenario"]["surface"] = json!({"exterior_exchange":[
+        {"radiation":{"emissivity_property":"emissivity_public"}},
+        {"radiation":{"emissivity_property":"emissivity_reverse"}}]});
+    let metric = "independent_surface_power_w";
+    let original = optical_protocol(&a, &d, &s, &m, metric);
+    for (piece, used) in [
+        ("front", "emissivity_public"),
+        ("back", "emissivity_reverse"),
+    ] {
+        for property in ["emissivity_public", "emissivity_reverse"] {
+            let mut changed = raw.clone();
+            changed["record"]["properties"][property]["method"] = json!("Different optical method");
+            a.frozen_changes
+                .as_mut()
+                .unwrap()
+                .pieces
+                .insert(piece.into(), serde_json::from_value(changed).unwrap());
+            assert_eq!(
+                original != optical_protocol(&a, &d, &s, &m, metric),
+                property == used,
+                "{piece}: {property}"
+            );
+            a.frozen_changes
+                .as_mut()
+                .unwrap()
+                .pieces
+                .insert(piece.into(), serde_json::from_value(raw.clone()).unwrap());
+        }
+    }
+}
+
+#[test]
+fn radiative_coverage_conservatively_retains_both_mapped_side_protocols() {
+    let (mut a, mut d, mut s, m) = case();
+    let raw = optical_sources(&mut a);
+    s["drape"]["steady_thermal_surface"] = s["drape"]["thermal_surface"].clone();
+    for (metric, field, nested) in [
+        ("body_coverage_power_w", "exterior_exchange", true),
+        (
+            "transient_coverage_inside_energy_j",
+            "exterior_exchange",
+            false,
+        ),
+        (
+            "transient_coverage_inside_energy_j",
+            "exposed_exterior_exchange",
+            false,
+        ),
+    ] {
+        d["scenario"]["coverage"] = json!({"conditions":{}});
+        d["scenario"]["motion"]["transient_coverage"] = json!({});
+        let policy = if nested {
+            &mut d["scenario"]["coverage"]["conditions"]
+        } else {
+            &mut d["scenario"]["motion"]["transient_coverage"]
+        };
+        policy[field] = json!([{"radiation":{"automatic_material_face":true}}]);
+        let original = optical_protocol(&a, &d, &s, &m, metric);
+        for property in ["emissivity_public", "emissivity_reverse"] {
+            let mut changed = raw.clone();
+            changed["record"]["properties"][property]["method"] =
+                json!("Different exposed-side method");
+            a.frozen_changes.as_mut().unwrap().default =
+                Some(serde_json::from_value(changed).unwrap());
+            assert_ne!(
+                original,
+                optical_protocol(&a, &d, &s, &m, metric),
+                "{metric}: {field}: {property}"
+            );
+            a.frozen_changes.as_mut().unwrap().default =
+                Some(serde_json::from_value(raw.clone()).unwrap());
+        }
+    }
+}
+
 #[test]
 fn coupled_mass_admission_preserves_the_independent_thermal_energy_objective() {
     let (a, d, s, m) = coupled_case();
@@ -1931,7 +2205,18 @@ fn scheduled_phase_mechanics_need_exact_intervals_phases_sources_and_exclusive_f
             .unwrap()
             .push(json!({"time_s":2.}));
         let h = &wrong_intervals["transient_surface"]["result"];
-        assert!(admit_mechanics(&s, &wrong_intervals, h, &h["request"], false).is_err());
+        assert!(
+            admit_mechanics(
+                &s,
+                &wrong_intervals,
+                h,
+                &h["request"],
+                false,
+                &h["request"]["surface_water"],
+                &h["request"]["mechanical_coupling"],
+            )
+            .is_err()
+        );
     }
 }
 
@@ -2034,7 +2319,16 @@ fn recoil_work_requires_complete_monotone_accounting_and_actual_outgoing_mass() 
         h["trace"].as_array_mut().unwrap().insert(0, earlier);
         let h = &changed["transient_surface"]["result"];
         assert!(
-            admit_mechanics(&s, &changed, h, &h["request"], false).is_err(),
+            admit_mechanics(
+                &s,
+                &changed,
+                h,
+                &h["request"],
+                false,
+                &h["request"]["surface_water"],
+                &h["request"]["mechanical_coupling"],
+            )
+            .is_err(),
             "{first} -> {last}"
         );
     }

@@ -660,6 +660,16 @@ extrema. `motion_required` exposes whether the comparison policy requires moveme
 for transient comparisons. Required motion/history failures never borrow initial static outputs;
 existing static metric names and default consumer requirements keep their original meaning.
 See `docs/material-scenario-studies.md`; geometric settledness is not stress equilibrium or fit.
+Radiative comparisons retain the methods, conditions, units and evidence of the actual requested
+emissivity observations by source piece, including arbitrary property names and source-bearing
+automatic optical mappings. Independent sheets use only their positive mapped face; steady
+per-column environments retain their own source ownership. Numeric emissivity differences remain
+material alternatives, and unused generic/reverse-face observations or convection-only optics do
+not split protocols. Coupled liquid mechanics also retains these qualifiers when heat changes the
+trajectory. Active body-coverage radiation conservatively retains both mapped sides of potentially
+exposed materials, because complete moving histories do not retain every past face selection;
+this can require mixed-protocol consent even when one changed side was not exposed in a given run.
+Regressions: `comparison::surface_water::tests` optical protocol cases.
 Opted-in plastic work is admitted separately for independent-sheet and covered/exposed histories.
 Each requires the exact bound material conversion observation, accepted per-triangle cumulative
 work, excluded initial dissipation and complete source-energy accounting at every sample. Coverage
