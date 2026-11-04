@@ -111,6 +111,44 @@ function sourceObject(raw, label) {
   return value;
 }
 
+function frozenStudySelection(value) {
+  const selection = object(value,
+    ["id", "record", "overrides", "sources", "allow_estimates", "expected_sha256"],
+    ["id", "record", "expected_sha256"], "Frozen material selection");
+  name(selection.id, "Material ID");
+  if (!selection.record || typeof selection.record !== "object" || Array.isArray(selection.record)
+    || !own(selection.record, "id") || selection.record.id !== selection.id
+    || typeof selection.expected_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(selection.expected_sha256)
+    || (own(selection, "allow_estimates") && typeof selection.allow_estimates !== "boolean")) {
+    throw Error("Inspect the material first to retain its matching record, source lock and estimate policy.");
+  }
+  return selection;
+}
+function configurationChanges(raw, pieces) {
+  const changes = object(parse(raw, "Saved material assignments"), ["schema", "default", "pieces", "interfaces"],
+    ["schema"], "Saved material assignments");
+  if (changes.schema !== "ftx-material-bindings/1") throw Error("Saved material assignments need ftx-material-bindings/1.");
+  if (changes.default != null) frozenStudySelection(changes.default);
+  let count = 0;
+  if (own(changes, "pieces")) {
+    if (!changes.pieces || typeof changes.pieces !== "object" || Array.isArray(changes.pieces)) {
+      throw Error("Saved piece assignments must be an object of exact source-piece IDs.");
+    }
+    for (const [id, selection] of Object.entries(changes.pieces)) {
+      if (!pieces.has(id)) throw Error("Saved material assignments name a missing source piece.");
+      frozenStudySelection(selection); count++;
+    }
+  }
+  if (changes.interfaces != null && (!Array.isArray(changes.interfaces) || changes.interfaces.length > 2016)) {
+    throw Error("Saved material interfaces must retain a complete table of at most 2016 pairs.");
+  }
+  if (changes.default == null && !count && changes.interfaces == null) {
+    throw Error("Save at least one material assignment or an explicit interface replacement; the unchanged baseline is already included.");
+  }
+  // Rust checks every supplied interface against the effective material hashes and its source law.
+  // Validation never reserializes this fragment: omitted/null interfaces and [] remain distinct.
+}
+
 /** One explicit boundary broadcasts over the current native material columns; no old model lock is inferred. */
 export function buildMaterialSurfaceConditions(boundary) {
   const fields = ["inside_c", "outside_c", "inside_resistance_m2_k_w", "outside_resistance_m2_k_w"];
@@ -794,17 +832,20 @@ export function buildMaterialStudyRequest(state, scenario) {
   }
   object(state, ["candidates", "target", "pieceIds", "seamIds", "cutting", "finiteStock", "cuttingJob", "assemblyMass", "objectives", "basis",
     "sewing", "sewingSelection", "purchasing", "cutAndSewPurchasing", "constraints", "requiredConsumers", "design"],
-    ["candidates", "target", "pieceIds", "objectives", "basis"], "Guided study");
+    ["candidates", "pieceIds", "objectives", "basis"], "Guided study");
   const pieces = uniqueNames(state.pieceIds, "Pattern source pieces", 4096);
-  const target = object(state.target, ["scope", "ids"], ["scope"], "Material target");
-  if (target.scope === "pieces") {
-    if (!own(target, "ids")) throw Error("Choose source pieces for the material target.");
-    const selected = uniqueNames(target.ids, "Selected source pieces", 4096);
-    if ([...selected].some(id => !pieces.has(id))) throw Error("Material target names a missing source piece.");
-  } else if (target.scope !== "default" || own(target, "ids")) throw Error("Choose a default or explicit piece target.");
   if (!Array.isArray(state.candidates) || !state.candidates.length || state.candidates.length > MAX_GUIDED_STUDY_CANDIDATES) {
     throw Error("Add 1–7 material choices; the unchanged baseline is included separately.");
   }
+  // A complete saved configuration carries its own assignments; only individual selections use
+  // the shared target. An unused target must not block configuration-only comparisons.
+  const needsTarget = state.candidates.some(candidate => candidate && own(candidate, "selection"));
+  const target = needsTarget ? object(state.target, ["scope", "ids"], ["scope"], "Material target") : null;
+  if (target?.scope === "pieces") {
+    if (!own(target, "ids")) throw Error("Choose source pieces for the material target.");
+    const selected = uniqueNames(target.ids, "Selected source pieces", 4096);
+    if ([...selected].some(id => !pieces.has(id))) throw Error("Material target names a missing source piece.");
+  } else if (target && (target.scope !== "default" || own(target, "ids"))) throw Error("Choose a default or explicit piece target.");
   if (!["nominal", "reported_bounds"].includes(state.basis)) throw Error("Choose nominal or reported-bound comparison.");
   const design = own(state, "design") ? linkedDesign(state.design, pieces, state.candidates,
     { basis: state.basis, objectives: state.objectives }, matrix, state.seamIds) : null;
@@ -967,22 +1008,23 @@ export function buildMaterialStudyRequest(state, scenario) {
     parts.push(value);
   };
   append(`{"schema":"${design ? "ftx-design-study/1" : "ftx-material-study/1"}","variants":[{"key":"baseline","changes":{"schema":"ftx-material-bindings/1"}}`);
-  const keys = new Set(["baseline"]), identities = new Set();
+  const keys = new Set(["baseline"]), identities = new Set(), configurations = new Set();
   for (const candidate of state.candidates) {
-    object(candidate, ["key", "selection"], ["key", "selection"], "Material choice");
+    object(candidate, ["key", "selection", "changes"], ["key"], "Material choice");
+    if (own(candidate, "selection") === own(candidate, "changes")) {
+      throw Error("Each material choice needs one frozen selection or one saved configuration.");
+    }
     name(candidate.key, "Material choice name");
     if (keys.has(candidate.key)) throw Error("Material choice names must be unique; baseline is reserved.");
     keys.add(candidate.key);
-    const selection = object(parse(candidate.selection, "Frozen material selection"),
-      ["id", "record", "overrides", "sources", "allow_estimates", "expected_sha256"],
-      ["id", "record", "expected_sha256"], "Frozen material selection");
-    name(selection.id, "Material ID");
-    if (!selection.record || typeof selection.record !== "object" || Array.isArray(selection.record)
-      || !own(selection.record, "id") || selection.record.id !== selection.id
-      || typeof selection.expected_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(selection.expected_sha256)
-      || (own(selection, "allow_estimates") && typeof selection.allow_estimates !== "boolean")) {
-      throw Error("Inspect the material first to retain its matching record, source lock and estimate policy.");
+    if (own(candidate, "changes")) {
+      configurationChanges(candidate.changes, pieces);
+      if (configurations.has(candidate.changes)) throw Error("This exact saved configuration is already included.");
+      configurations.add(candidate.changes);
+      append(`,{"key":${JSON.stringify(candidate.key)},"changes":`); append(candidate.changes); append("}");
+      continue;
     }
+    const selection = frozenStudySelection(parse(candidate.selection, "Frozen material selection"));
     const identity = `${selection.expected_sha256}:${selection.allow_estimates === true}`;
     if (identities.has(identity)) throw Error("This frozen material and estimate policy is already included.");
     identities.add(identity);

@@ -44,6 +44,87 @@ test('piece targets preserve exact source IDs and every inserted source snapshot
   assert.throws(()=>build({...state(),pieceIds:['front','front']}),/unique/);
 });
 
+
+test('saved configurations retain heterogeneous assignments and exact interface evidence beside a single selection', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const shell=selection('shell','b'),lining=selection('lining','c',true);
+  const pairs=' [{"materials":["'+ 'b'.repeat(64)+'","'+'c'.repeat(64)+'"],"source":{"seed":18446744073709551615,"x":-0.0,"value":1.0,"label":"é 🧵"}}]\r\n';
+  const changes=' {"schema":"ftx-material-bindings/1","default":'+shell+',"pieces":{"lining":'+lining+'},"interfaces":'+pairs+'}\r\n';
+  const input={...state(),target:{scope:'pieces',ids:['front']},
+    candidates:[...state().candidates,{key:'shell-and-lining',changes}]};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(result.variants[0],{key:'baseline',changes:{schema:'ftx-material-bindings/1'}});
+  assert.deepEqual(Object.keys(result.variants[1].changes.pieces),['front']);
+  assert.deepEqual(result.variants[2],{key:'shell-and-lining',changes:JSON.parse(changes)});
+  for(const source of [changes,shell,lining,pairs,input.candidates[0].selection])assert.ok(raw.includes(source));
+  assert.match(raw,/18446744073709551615/);assert.match(raw,/"x":-0\.0/);assert.match(raw,/"value":1\.0/);
+});
+
+test('saved configurations own their targets and preserve omitted, null and empty interface replacements', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const base='{"schema":"ftx-material-bindings/1","default":null,"pieces":{"__proto__":'+selection()+'}';
+  const candidates=[
+    {key:'preserve',changes:base+'}'},
+    {key:'explicit-null',changes:base+',"interfaces":null}'},
+    {key:'clear',changes:base+',"interfaces":[]}'},
+    {key:'interfaces-only',changes:'{"schema":"ftx-material-bindings/1","interfaces":[]}'},
+  ];
+  const input={...state(),pieceIds:['__proto__','lining'],candidates};delete input.target;
+  const raw=build(input),variants=JSON.parse(raw).variants;
+  assert.equal(Object.hasOwn(variants[1].changes,'interfaces'),false);
+  assert.equal(variants[2].changes.interfaces,null);assert.deepEqual(variants[3].changes.interfaces,[]);
+  assert.deepEqual(variants[4].changes,{schema:'ftx-material-bindings/1',interfaces:[]});
+  for(const candidate of candidates)assert.ok(raw.includes(candidate.changes));
+  assert.equal(build({...input,target:{scope:'pieces',ids:[]}}),raw,'An unused shared target cannot block saved configurations');
+  assert.throws(()=>build({...input,candidates:[...candidates,...state().candidates]}),/Material target/);
+  assert.throws(()=>build({...input,target:{scope:'pieces',ids:[]},candidates:[...candidates,...state().candidates]}),/Selected source pieces/);
+});
+
+test('saved configurations refuse ambiguous entries, stale piece names, unfrozen sources and incomplete replacements', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const valid='{"schema":"ftx-material-bindings/1","default":'+selection()+'}';
+  const check=changes=>build({...state(),candidates:[{key:'configuration',changes}]});
+  for(const changes of [null,{},'null','[]','{bad','{}','{"schema":"other","interfaces":[]}',
+    '{"schema":"ftx-material-bindings/1"}','{"schema":"ftx-material-bindings/1","default":null,"pieces":{},"interfaces":null}',
+    '{"schema":"ftx-material-bindings/1","default":{"id":"cloth"}}',
+    valid.replace('a'.repeat(64),'stale'),valid.replace('"allow_estimates":false','"allow_estimates":"false"'),
+    '{"schema":"ftx-material-bindings/1","pieces":null}',
+    '{"schema":"ftx-material-bindings/1","pieces":[]}',
+    '{"schema":"ftx-material-bindings/1","pieces":{"front":null}}',
+    '{"schema":"ftx-material-bindings/1","pieces":{"missing":'+selection()+'}}',
+    '{"schema":"ftx-material-bindings/1","interfaces":{}}',
+    JSON.stringify({schema:'ftx-material-bindings/1',interfaces:Array(2017).fill({})}),
+    '{"schema":"ftx-material-bindings/1","interfaces":[],"elastic_casings":{}}'])assert.throws(()=>check(changes));
+  for(const candidate of [{key:'neither'},{key:'both',selection:selection(),changes:valid}]) {
+    assert.throws(()=>build({...state(),candidates:[candidate]}),/one frozen selection or one saved configuration/);
+  }
+  assert.throws(()=>build({...state(),candidates:[{key:'one',changes:valid},{key:'two',changes:valid}]}),/already included/);
+  assert.throws(()=>build({...state(),candidates:[{key:'same',selection:selection()},{key:'same',changes:valid}]}),/names.*unique/);
+  const candidates=Array.from({length:7},(_,i)=>({key:'configuration-'+i,
+    changes:'{"schema":"ftx-material-bindings/1","default":'+selection('cloth-'+i,String(i))+'}'}));
+  assert.equal(JSON.parse(build({...state(),candidates})).variants.length,8);
+  assert.throws(()=>build({...state(),candidates:[...candidates,{key:'eighth',changes:valid}]}),/1–7/);
+});
+
+test('saved configurations remain whole variants through linked grids and named-case adaptive nomination', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const changes=' {"schema":"ftx-material-bindings/1","pieces":{"front":'+selection('shell','b')+
+    ',"lining":'+selection('lining','c')+'},"interfaces":[]}\r\n';
+  for(const design of [linkedDesignInput({values:[0,10]}),namedDesign({materialKey:'shell-and-lining'})]) {
+    const input={...state(),candidates:[{key:'shell-and-lining',changes}],design};delete input.target;
+    const context=namedContext(undefined,12),before=JSON.stringify(input),raw=build(input,context),result=JSON.parse(raw);
+    assert.equal(result.schema,'ftx-design-study/1');assert.ok(raw.includes(changes));assert.ok(raw.includes(design.fitSpec));
+    assert.deepEqual(result.variants[1],{key:'shell-and-lining',changes:JSON.parse(changes)});
+    assert.equal(JSON.stringify(input),before);
+    if(design.mode==='adaptive') {
+      assert.equal(result.design_adaptive.material_key,'shell-and-lining');
+      assert.equal(result.design_adaptive.case_key,'cold');
+      assert.throws(()=>build(input,namedContext(undefined,11)),/12 reserved case evaluations/);
+    }
+  }
+});
+
 test('reported bounds require the explicit complete assembly inventory and preserve raw extra evidence', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input=state();delete input.cutting;
