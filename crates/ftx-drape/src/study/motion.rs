@@ -301,7 +301,7 @@ fn evaluate_path(
     let coupled = request
         .transient_surface
         .as_ref()
-        .is_some_and(|policy| policy.mechanical_coupling.is_some());
+        .is_some_and(heat::SurfaceRequest::has_mechanical_coupling);
     let mut surface_heat = request
         .transient_surface
         .as_ref()

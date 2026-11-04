@@ -253,7 +253,7 @@ fn alternative_water_sources_admit_the_exact_selected_policy_through_every_indep
         );
         let heat = &m["transient_surface"]["result"];
         assert_eq!(
-            selected_policy(&heat["request"], heat, &s).unwrap(),
+            selected_policy(&heat["request"], heat, &s).unwrap().0,
             &original_water["request"]
         );
     }
@@ -520,6 +520,275 @@ fn coupled_case() -> (Alternative, Value, Value, Value) {
     m["initial_sample"]["liquid_mechanics"] = initial_report;
     m["liquid_mechanics"] = final_report;
     (a, d, s, m)
+}
+
+fn with_paired_qualifications(descriptor: &mut Value, motion: &mut Value) {
+    let heat = &mut motion["transient_surface"]["result"];
+    let request = heat["request"].as_object_mut().unwrap();
+    let water = request.remove("surface_water").unwrap();
+    let mechanics = request.remove("mechanical_coupling").unwrap();
+    let selected = json!({"surface_water":water,"mechanical_coupling":mechanics});
+    let mut other = selected.clone();
+    other["surface_water"]["maximum_liquid_loading_kg_m2"] =
+        json!(2. * selected["surface_water"]["maximum_liquid_loading_kg_m2"].as_f64().unwrap());
+    other["surface_water"]["source"]["reference"] = json!("test:other-paired-water");
+    for binding in other["surface_water"]["bindings"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        binding["material_sha256"] = json!("a".repeat(64));
+    }
+    other["mechanical_coupling"]["material_report_sha256"] = json!("b".repeat(64));
+    other["mechanical_coupling"]["source"]["reference"] = json!("test:other-paired-mechanics");
+    for binding in other["mechanical_coupling"]["bindings"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        binding["material_sha256"] = json!("a".repeat(64));
+        binding["maximum_liquid_loading_kg_m2"] =
+            json!(3. * selected["surface_water"]["maximum_liquid_loading_kg_m2"].as_f64().unwrap());
+        binding["temperature_range_c"] = json!([-30., 90.]);
+    }
+    heat["coupled_water_selection"] = json!({"index":1,"pair_sha256":hash(&selected).unwrap()});
+    heat["request"]["coupled_water_alternatives"] = json!([other, selected]);
+    descriptor["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+}
+
+#[test]
+fn paired_water_sources_preserve_every_existing_phase_and_mechanical_ledger() {
+    let mut cases = vec![
+        coupled_case(),
+        exchanging_case(false),
+        exchanging_case(true),
+        draining_case(false),
+        draining_case(true),
+        finite_reservoir_case(false, true),
+        finite_reservoir_case(true, true),
+    ];
+    for model in 2..=6 {
+        let (a, mut d, s, mut m) = draining_case(true);
+        match model {
+            2 => prescribe_incoming_velocity(&mut d, &mut m),
+            3 => schedule_incoming_velocity(&mut d, &mut m),
+            4 => qualify_incoming_velocities(&mut d, &mut m, true),
+            5 => schedule_phase_velocities(&mut d, &mut m, false),
+            _ => schedule_phase_velocities(&mut d, &mut m, true),
+        }
+        cases.push((a, d, s, m));
+    }
+    for (a, mut d, s, mut m) in cases {
+        assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+        let original_water = m["transient_surface"]["result"]["surface_water"].clone();
+        let original_mechanics = m["liquid_mechanics"].clone();
+        let original_trace = m["transient_surface"]["result"]["trace"].clone();
+        with_paired_qualifications(&mut d, &mut m);
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok(),
+            "water {}, mechanics {}",
+            original_water["request"]["schema"],
+            original_mechanics["qualification"]["schema"]
+        );
+        let heat = &m["transient_surface"]["result"];
+        assert_eq!(heat["surface_water"], original_water);
+        assert_eq!(heat["mechanical_coupling"], original_mechanics);
+        assert_eq!(heat["trace"], original_trace);
+        assert_eq!(
+            selected_policy(&heat["request"], heat, &s).unwrap(),
+            (
+                &original_water["request"],
+                &original_mechanics["qualification"]
+            )
+        );
+    }
+}
+
+#[test]
+fn paired_water_sources_refuse_mixed_domains_operating_inputs_and_forged_receipts() {
+    let (a, mut d, s, mut m) = draining_case(true);
+    schedule_phase_velocities(&mut d, &mut m, true);
+    with_paired_qualifications(&mut d, &mut m);
+    for fault in [
+        "index",
+        "digest",
+        "missing-receipt",
+        "wrong-receipt-kind",
+        "duplicate",
+        "empty",
+        "too-many",
+        "extra-pair-field",
+        "partial-map",
+        "mixed-materials",
+        "loading-domain",
+        "temperature-domain",
+        "water-loading",
+        "incoming-velocity",
+        "outgoing-velocity",
+        "mechanical-model",
+        "selected-report",
+        "unselected-report",
+        "estimate-consent",
+        "consent-type",
+        "extra-source-field",
+        "water-source",
+        "mechanical-source",
+        "single-water",
+        "single-mechanics",
+        "uncoupled-alternatives",
+    ] {
+        let mut changed = m.clone();
+        let heat = &mut changed["transient_surface"]["result"];
+        match fault {
+            "index" => heat["coupled_water_selection"]["index"] = json!(0),
+            "digest" => heat["coupled_water_selection"]["pair_sha256"] = json!("c".repeat(64)),
+            "missing-receipt" => {
+                heat.as_object_mut().unwrap().remove("coupled_water_selection");
+            }
+            "wrong-receipt-kind" => heat["surface_water_selection"] = Value::Null,
+            "empty" => heat["request"]["coupled_water_alternatives"] = json!([]),
+            "too-many" => {
+                heat["request"]["coupled_water_alternatives"] =
+                    json!(vec![heat["request"]["coupled_water_alternatives"][1].clone(); 65]);
+            }
+            "single-water" => {
+                heat["request"]["surface_water"] = heat["surface_water"]["request"].clone();
+            }
+            "single-mechanics" => {
+                heat["request"]["mechanical_coupling"] =
+                    heat["mechanical_coupling"]["qualification"].clone();
+            }
+            "uncoupled-alternatives" => {
+                heat["request"]["surface_water_alternatives"] =
+                    json!([heat["surface_water"]["request"]]);
+            }
+            _ => {
+                let pairs = &mut heat["request"]["coupled_water_alternatives"];
+                match fault {
+                    "duplicate" => pairs[0] = pairs[1].clone(),
+                    "extra-pair-field" => pairs[0]["unknown"] = json!(true),
+                    "partial-map" => {
+                        pairs[0]["mechanical_coupling"]["bindings"]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("back");
+                    }
+                    "mixed-materials" => {
+                        pairs[0]["mechanical_coupling"]["bindings"]["front"]["material_sha256"] =
+                            json!("e".repeat(64));
+                    }
+                    "loading-domain" => {
+                        let binding = &mut pairs[0]["mechanical_coupling"]["bindings"]["front"];
+                        binding["maximum_liquid_loading_kg_m2"] = json!(1e-99);
+                    }
+                    "temperature-domain" => {
+                        let binding = &mut pairs[0]["mechanical_coupling"]["bindings"]["front"];
+                        binding["temperature_range_c"] = json!([0., 80.]);
+                    }
+                    "water-loading" => {
+                        let binding = &mut pairs[0]["surface_water"]["bindings"]["front"];
+                        binding["initial_liquid_kg_m2"] = json!(0.);
+                    }
+                    "incoming-velocity" => {
+                        let binding = &mut pairs[0]["mechanical_coupling"]["bindings"]["front"];
+                        binding["incoming_stream_velocities_world_m_s_by_interval"][0]["supply"] =
+                            json!([0., 1., 0.]);
+                    }
+                    "outgoing-velocity" => {
+                        let binding = &mut pairs[0]["mechanical_coupling"]["bindings"]["front"];
+                        let schedule =
+                            &mut binding["outgoing_stream_velocities_relative_to_cloth_m_s_by_interval"];
+                        schedule[0]["drainage"] = json!([0., 0., 1.]);
+                    }
+                    "mechanical-model" => {
+                        pairs[0]["mechanical_coupling"]["model"] = json!("unsupported");
+                    }
+                    "selected-report" => {
+                        pairs[1]["mechanical_coupling"]["material_report_sha256"] =
+                            json!("e".repeat(64));
+                    }
+                    "unselected-report" => {
+                        pairs[0]["mechanical_coupling"]["material_report_sha256"] =
+                            json!("invalid");
+                    }
+                    "estimate-consent" => {
+                        pairs[0]["mechanical_coupling"]["allow_estimates"] = json!(false);
+                    }
+                    "consent-type" => {
+                        pairs[0]["mechanical_coupling"]["evidence"] = json!("published");
+                        pairs[0]["mechanical_coupling"]["allow_estimates"] = json!("invalid");
+                    }
+                    "extra-source-field" => {
+                        pairs[0]["mechanical_coupling"]["source"]["unknown"] = json!(true);
+                    }
+                    "water-source" => {
+                        pairs[1]["surface_water"]["source"]["reference"] =
+                            json!("test:changed-water");
+                    }
+                    "mechanical-source" => {
+                        pairs[1]["mechanical_coupling"]["source"]["reference"] =
+                            json!("test:changed-mechanics");
+                    }
+                    _ => unreachable!(),
+                }
+                heat["coupled_water_selection"]["pair_sha256"] = json!(hash(&pairs[1]).unwrap());
+            }
+        }
+        let mut descriptor = d.clone();
+        descriptor["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+        assert!(
+            admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
+#[test]
+fn paired_motion_protocol_includes_thermal_and_vapor_methods_without_changing_static_protocols() {
+    let (mut a, mut d, s, mut m) = coupled_case();
+    with_paired_qualifications(&mut d, &mut m);
+    let admitted = Numerical {
+        cutting_program: None,
+        finite_stock_program: None,
+        cutting_job_program: None,
+        drape: &s,
+        material_strain: None,
+        contact_loads: None,
+        vapor_surface: &Value::Null,
+        vapor_coverage: None,
+        motion: &m,
+        motion_material_strain: None,
+        motion_contact_loads: None,
+        motion_vapor_coverage: None,
+        motion_wet_film: None,
+        transient_surface: None,
+        transient_coverage: None,
+    };
+    let selection = a.frozen_changes.as_ref().unwrap().default.clone().unwrap();
+    for (metric, moving) in [
+        ("motion_max_absolute_edge_strain_pct", true),
+        ("max_absolute_edge_strain_pct", false),
+        ("assembly_mass_kg", false),
+    ] {
+        let policy: Policy = serde_json::from_value(json!({"basis":"nominal",
+            "objectives":[{"metric":metric,"direction":"minimize"}]}))
+        .unwrap();
+        let original = policy.protocol(&a, &d, &admitted).unwrap();
+        for property in [
+            "vapor_resistance",
+            "specific_heat",
+            "thermal_resistance",
+            "membrane_relaxation_heat_fraction",
+        ] {
+            // Exercise the protocol projection only; no altered selection is admitted as a receipt.
+            let mut raw = serde_json::to_value(&selection).unwrap();
+            raw["record"]["properties"][property]["method"] = json!("Different test method");
+            a.frozen_changes.as_mut().unwrap().default = Some(serde_json::from_value(raw).unwrap());
+            let changed = policy.protocol(&a, &d, &admitted).unwrap();
+            assert_eq!(original != changed, moving, "{metric}: {property}");
+            a.frozen_changes.as_mut().unwrap().default = Some(selection.clone());
+        }
+    }
 }
 
 #[test]

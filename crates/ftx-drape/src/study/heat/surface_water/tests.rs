@@ -56,6 +56,239 @@ fn fixture(loading: f64, step: f64) -> SurfaceHistory {
     history
 }
 
+fn coupled_alternatives_fixture(mut surface: SurfaceRequest) -> SurfaceRequest {
+    let water = surface.surface_water.take().unwrap();
+    let qualification = json!({
+        "schema":"ftx-evaporating-liquid-mechanics/1",
+        "model":"co_moving_evaporation_frozen_mechanics/1",
+        "material_report_sha256":"b".repeat(64),
+        "bindings":{"sheet":{"material_sha256":water.bindings["sheet"].material_sha256,
+            "maximum_liquid_loading_kg_m2":0.1,"temperature_range_c":[-20.,80.]}},
+        "source":water.source,"evidence":"estimate","allow_estimates":true,
+        "method":"Synthetic paired-domain regression",
+        "qualification":"Artificial invariant mechanics; no measured wet-material claim"
+    });
+    let pair: crate::study::heat::CoupledWaterAlternative =
+        serde_json::from_value(json!({"surface_water":water,
+            "mechanical_coupling":qualification}))
+        .unwrap();
+    let mut replacement = pair.clone();
+    replacement
+        .surface_water
+        .bindings
+        .get_mut("sheet")
+        .unwrap()
+        .material_sha256 = "a".repeat(64);
+    replacement.surface_water.source.reference = "test:separate-thermal-permission".into();
+    replacement.surface_water.maximum_liquid_loading_kg_m2 = 0.2;
+    let mechanical = &mut replacement.mechanical_coupling;
+    mechanical.material_report_sha256 = "c".repeat(64);
+    mechanical.source.reference = "test:separate-mechanical-permission".into();
+    let domain = mechanical.bindings.get_mut("sheet").unwrap();
+    domain.material_sha256 = "a".repeat(64);
+    domain.maximum_liquid_loading_kg_m2 = 0.3;
+    domain.temperature_range_c = [-30., 90.];
+    surface.coupled_water_alternatives = Some(vec![replacement, pair]);
+    surface
+}
+
+#[test]
+fn coupled_water_alternatives_require_complete_independent_source_domains() {
+    let surface = coupled_alternatives_fixture(fixture(0.01, 0.1).request);
+    surface.validate(1).unwrap();
+    assert!(surface.has_mechanical_coupling());
+    let original = serde_json::to_value(&surface).unwrap();
+    assert!(original.get("surface_water").is_none());
+    assert!(original.get("mechanical_coupling").is_none());
+    for field in [
+        "material_sha256",
+        "material_report_sha256",
+        "maximum_liquid_loading_kg_m2",
+        "temperature_range_c",
+        "source",
+        "allow_estimates",
+        "extra_instance",
+        "missing_instance",
+        "phase_model",
+    ] {
+        let mut invalid = surface.clone();
+        let choices = invalid.coupled_water_alternatives.as_mut().unwrap();
+        let qualification = &mut choices[0].mechanical_coupling;
+        match field {
+            "material_sha256" => {
+                qualification
+                    .bindings
+                    .get_mut("sheet")
+                    .unwrap()
+                    .material_sha256 = "d".repeat(64);
+            }
+            "material_report_sha256" => qualification.material_report_sha256 = "old".into(),
+            "maximum_liquid_loading_kg_m2" => {
+                qualification
+                    .bindings
+                    .get_mut("sheet")
+                    .unwrap()
+                    .maximum_liquid_loading_kg_m2 = 0.1;
+            }
+            "temperature_range_c" => {
+                qualification
+                    .bindings
+                    .get_mut("sheet")
+                    .unwrap()
+                    .temperature_range_c = [-19., 80.];
+            }
+            "source" => qualification.source.reference.clear(),
+            "allow_estimates" => qualification.allow_estimates = false,
+            "extra_instance" => {
+                qualification
+                    .bindings
+                    .insert("other".into(), qualification.bindings["sheet"].clone());
+            }
+            "missing_instance" => {
+                qualification.bindings.remove("sheet");
+            }
+            "phase_model" => {
+                qualification.schema = "ftx-coupled-liquid-mechanics/1".into();
+                qualification.model = "co_moving_mass_exchange_frozen_mechanics/1".into();
+            }
+            _ => unreachable!(),
+        }
+        assert!(invalid.validate(1).is_err(), "{field}");
+    }
+    let pairs = surface.coupled_water_alternatives.as_ref().unwrap();
+    for conflict in [
+        "surface_water",
+        "mechanical_coupling",
+        "surface_water_alternatives",
+    ] {
+        let mut invalid = original.clone();
+        invalid[conflict] = match conflict {
+            "surface_water" => serde_json::to_value(&pairs[1].surface_water).unwrap(),
+            "mechanical_coupling" => serde_json::to_value(&pairs[1].mechanical_coupling).unwrap(),
+            _ => json!([pairs[1].surface_water]),
+        };
+        let invalid: SurfaceRequest = serde_json::from_value(invalid).unwrap();
+        assert!(invalid.validate(1).is_err());
+    }
+    let mut duplicate = surface.clone();
+    duplicate.coupled_water_alternatives = Some(vec![pairs[1].clone(), pairs[1].clone()]);
+    duplicate.coupled_water_alternatives.as_mut().unwrap()[0]
+        .mechanical_coupling
+        .material_report_sha256 = "d".repeat(64);
+    assert!(duplicate.validate(1).is_err());
+    for choices in [vec![], vec![pairs[1].clone(); 65]] {
+        let mut invalid = surface.clone();
+        invalid.coupled_water_alternatives = Some(choices);
+        assert!(invalid.has_mechanical_coupling());
+        assert!(invalid.validate(1).is_err());
+    }
+    for malformed in [
+        json!({"surface_water":pairs[1].surface_water}),
+        json!({"mechanical_coupling":pairs[1].mechanical_coupling}),
+        json!({"surface_water":pairs[1].surface_water,
+            "mechanical_coupling":pairs[1].mechanical_coupling,"inferred":true}),
+    ] {
+        let mut invalid = original.clone();
+        invalid["coupled_water_alternatives"] = json!([malformed]);
+        assert!(serde_json::from_value::<SurfaceRequest>(invalid).is_err());
+    }
+    let legacy = fixture(0.01, 0.1).request;
+    assert!(!legacy.has_mechanical_coupling());
+    assert!(
+        serde_json::to_value(&legacy)
+            .unwrap()
+            .get("coupled_water_alternatives")
+            .is_none()
+    );
+}
+
+#[test]
+fn coupled_water_alternatives_preserve_every_prescribed_velocity_model() {
+    let base = serde_json::to_value(coupled_alternatives_fixture(fixture(0.01, 0.1).request))
+        .unwrap();
+    for (version, model, velocities) in [
+        (1, "co_moving_mass_exchange_frozen_mechanics/1", json!({})),
+        (2, "prescribed_incoming_velocity_mass_exchange_frozen_mechanics/1",
+            json!({"incoming_velocity_world_m_s":[0.1,-0.2,0.3]})),
+        (3, "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1",
+            json!({"incoming_velocity_world_m_s_by_interval":[[0.1,-0.2,0.3]]})),
+        (4, "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1",
+            json!({"incoming_stream_velocities_world_m_s":
+                {"supply":[0.1,-0.2,0.3],"condensation":[-0.3,0.2,0.1]}})),
+        (5, "scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1",
+            json!({"incoming_stream_velocities_world_m_s_by_interval":[
+                {"supply":[0.1,-0.2,0.3],"condensation":[-0.3,0.2,0.1]}]})),
+        (6, "scheduled_phase_specific_incoming_and_outgoing_velocity_mass_exchange_frozen_mechanics/1",
+            json!({"incoming_stream_velocities_world_m_s_by_interval":[
+                {"supply":[0.1,-0.2,0.3],"condensation":[-0.3,0.2,0.1]}],
+                "outgoing_stream_velocities_relative_to_cloth_m_s_by_interval":[
+                    {"evaporation":[0.1,0.2,0.3],"drainage":[-0.1,0.2,-0.3]}]})),
+    ] {
+        let mut valid = base.clone();
+        for pair in valid["coupled_water_alternatives"].as_array_mut().unwrap() {
+            let qualification = &mut pair["mechanical_coupling"];
+            qualification["schema"] = json!(format!("ftx-coupled-liquid-mechanics/{version}"));
+            qualification["model"] = json!(model);
+            qualification["bindings"]["sheet"]
+                .as_object_mut()
+                .unwrap()
+                .extend(velocities.as_object().unwrap().clone());
+        }
+        serde_json::from_value::<SurfaceRequest>(valid.clone())
+            .unwrap()
+            .validate(1)
+            .unwrap();
+        // Both candidates remain individually valid when a schedule changes. Their common
+        // operating case must still refuse: changing material cannot change imposed momentum.
+        for field in velocities.as_object().unwrap().keys() {
+            let mut changed = valid.clone();
+            let domain = &mut changed["coupled_water_alternatives"][0]["mechanical_coupling"]
+                ["bindings"]["sheet"];
+            match field.as_str() {
+                "incoming_velocity_world_m_s" => domain[field][0] = json!(0.15),
+                "incoming_velocity_world_m_s_by_interval" => domain[field][0][0] = json!(0.15),
+                "incoming_stream_velocities_world_m_s" => {
+                    domain[field]["condensation"][0] = json!(0.15);
+                }
+                "incoming_stream_velocities_world_m_s_by_interval" => {
+                    domain[field][0]["supply"][0] = json!(0.15);
+                }
+                "outgoing_stream_velocities_relative_to_cloth_m_s_by_interval" => {
+                    domain[field][0]["evaporation"][0] = json!(0.15);
+                }
+                _ => unreachable!(),
+            }
+            let changed: SurfaceRequest = serde_json::from_value(changed).unwrap();
+            let qualification =
+                &changed.coupled_water_alternatives.as_ref().unwrap()[0].mechanical_coupling;
+            qualification.validate_exchange_intervals(1).unwrap();
+            assert!(changed.validate(1).is_err(), "{version}: {field}");
+        }
+    }
+}
+
+#[test]
+fn coupled_water_alternatives_admit_existing_supply_condensation_drainage_and_reservoirs() {
+    for history in [
+        supplied_fixture(0.01, 0.1, vec![0.01], vec![25.]),
+        condensing_fixture(0.01, 0.1, vec![3000.], vec![25.]),
+        with_drainage(
+            supplied_fixture(0.01, 0.1, vec![0.01], vec![25.]),
+            vec![0.02],
+        ),
+        finite_fixture(0.01, 0.1, 1e-5, 1000.),
+    ] {
+        let mut request = coupled_alternatives_fixture(history.request);
+        // The original evaporation-only qualification cannot silently admit new phases.
+        assert!(request.validate(1).is_err());
+        for pair in request.coupled_water_alternatives.as_mut().unwrap() {
+            pair.mechanical_coupling.schema = "ftx-coupled-liquid-mechanics/1".into();
+            pair.mechanical_coupling.model = "co_moving_mass_exchange_frozen_mechanics/1".into();
+        }
+        request.validate(1).unwrap();
+    }
+}
+
 #[test]
 fn alternative_water_qualifications_match_complete_instance_assignments() {
     let mut original = fixture(0.01, 0.1).request.surface_water.unwrap();

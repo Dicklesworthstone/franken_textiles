@@ -5205,11 +5205,11 @@ available when an uncoupled water history is unavailable.
 
 The workbench's retained-motion inputs, named cases and seven water criteria use the same native
 selection and show the selected source. `ftx-ms2.13` tracks this integrated delivery. Existing
-single-policy mechanical liquid coupling retains its behavior, while collections explicitly reject
-mechanical coupling until independently paired qualifications are selected and verified together.
-That continuation is `ftx-ms2.14`; it must preserve mass/momentum/work and complete rollback through
-all supported incoming/outgoing phase models. Neither slice supplies missing measured wet laws,
-humidity-dependent constitutive behavior, physical garment agreement or wearer comfort.
+single-policy mechanical liquid coupling retains its behavior. Uncoupled collections remain separate
+from the independently paired water/mechanical form in §25.168. That continuation is `ftx-ms2.14`;
+it must preserve mass/momentum/work and complete rollback through all supported incoming/outgoing
+phase models. Neither slice supplies missing measured wet laws, humidity-dependent constitutive
+behavior, physical garment agreement or wearer comfort.
 
 The sibling design reference remains FrankenSim's separation of source-qualified material states,
 constitutive cards and executable consumers, with explicit selection and ambiguity refusal; MTDT's
@@ -5234,6 +5234,32 @@ continues to carry more advanced coverage, water, exterior-exchange and coupled 
 motion JSON for ordinary dry thermal schedules without introducing another solver or material defaults.
 The initial condition is authored, reported extrema cover retained samples, and software execution
 does not establish measured garment warmth, physical fit or physiological comfort.
+
+### 25.168 Select paired wet-material thermal and mechanical qualifications
+
+A `coupled_water_alternatives` collection binds each complete thermal water policy to an
+independently sourced mechanical qualification. The retained instance-to-material assignment
+selects one complete pair, and its full mechanical material-report hash must match before liquid
+changes inertia. The original scenario remains immutable; the selected pair and its digest remain
+inspectable. Duplicate, incomplete, stale or incompatible qualifications refuse coupled motion.
+
+All alternatives retain the same thermal operating inputs, mechanical transfer model and imposed
+incoming/outgoing phase-velocity schedules. Source metadata and containing qualification domains
+may differ. Existing evaporation, mass exchange, incoming mixing and outgoing recoil consumers
+remain the numerical authorities, including their separate energy ledgers and whole-motion
+rollback. No selected source can turn a late coupled failure into an uncoupled trajectory.
+
+Comparisons independently admit the selected pair and complete coupled history even when only
+motion, strain or contact is scored. Their protocol includes the relevant thermal, vapor and
+heat-conversion methods and conditions, because those inputs now affect the trajectory. Static
+and manufacturing-only decisions retain their independent dependencies.
+
+The workbench must retain original pair collections through single and named scenarios and expose
+both selected source qualifications. `ftx-ms2.14` records delivery and executable validation status.
+The regression target is a fixed pattern/body with identical dry mechanics and different Ret,
+showing changed evaporation, cooling and motion through existing phase exchange and recoil, with
+native/portable replay, conservation, refusal and rollback. Synthetic software checks do not close
+the matched-specimen or physical-garment gates in `ftx-tm2` and `ftx-tm8`.
 
 ## Appendix A. Sources
 

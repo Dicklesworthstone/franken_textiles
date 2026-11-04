@@ -299,6 +299,239 @@ fn source_selected_water_replays_native_portable_and_named_material_comparisons(
     );
 }
 
+#[test]
+fn source_selected_coupled_water_replays_native_portable_and_named_material_comparisons() {
+    use ftx_wasm::materials::scenario::on_model;
+
+    let (pattern, mut study, mut single) = inputs();
+    single["motion"]["keyframes"] = json!([
+        {"time_s":0.0005,"arm_abduction_deg":35.},
+        {"time_s":0.001,"arm_abduction_deg":35.}]);
+    let heat = &mut single["motion"]["transient_surface"];
+    heat["boundaries"] = json!([heat["boundaries"][0], heat["boundaries"][0]]);
+    let mut water = heat
+        .as_object_mut()
+        .unwrap()
+        .remove("surface_water")
+        .unwrap();
+    // Keep the existing outgoing-recoil fixture's physical histories and velocity schedules.
+    // Only the material's Ret changes; this introduces no new large-impulse numerical regime.
+    water["schema"] = json!("ftx-textile-surface-water/4");
+    water
+        .as_object_mut()
+        .unwrap()
+        .remove("replenishment_kg_m2_s");
+    water["bindings"]["band"]["initial_liquid_kg_m2"] = json!(0.);
+    water["maximum_liquid_loading_kg_m2"] = json!(0.2);
+    water["outside_vapor_pressure_pa"] = json!([1000., 1000.]);
+    water["qualification"] =
+        json!("Synthetic invariant thermal/vapor laws over [-20,80] C and [0,0.2] kg/m2");
+    water["supply"] = json!({"schema":"ftx-textile-liquid-supply/1",
+        "bindings":{"band":{"rate_kg_m2_s":[100.,100.],"temperature_c":[20.,20.]}},
+        "source":{"reference":"test:paired-native-supply","accessed_on":"2026-11-04",
+            "note":"Artificial delivery shared by every material, no empirical claim"},
+        "evidence":"estimate","allow_estimates":true,"method":"Synthetic prescribed supply"});
+    water["drainage"] = json!({"schema":"ftx-textile-liquid-drainage/1",
+        "bindings":{"band":{"rate_kg_m2_s":[1.,2.]}},
+        "source":{"reference":"test:paired-native-drainage","accessed_on":"2026-11-04",
+            "note":"Artificial removal shared by every material, no inferred runoff"},
+        "evidence":"estimate","allow_estimates":true,"method":"Synthetic prescribed drainage",
+        "qualification":"Stock-limited removal at the retained liquid temperature"});
+    let template = study["variants"][0].clone();
+    let mut variants = Vec::new();
+    let mut waters = Vec::new();
+    for (key, resistance) in [("qualified", 8.), ("slower", 32.), ("stale", 16.)] {
+        let mut variant = template.clone();
+        variant["key"] = json!(key);
+        let material = &mut variant["changes"]["default"];
+        let id = format!(
+            "synthetic-native-paired-{}",
+            if key == "stale" { "qualified" } else { key }
+        );
+        material["id"] = json!(id);
+        material["record"]["id"] = json!(id);
+        material["record"]["properties"]["vapor_resistance"]["value"] = json!(resistance);
+        if key != "stale" {
+            let selected: Selection = serde_json::from_value(material.clone()).unwrap();
+            let selected = Catalog::builtin().unwrap().resolve(&selected).unwrap();
+            let mut water = water.clone();
+            water["bindings"]["band"]["material_sha256"] = json!(selected.sha256());
+            water["source"]["reference"] = json!(format!("test:paired-native-thermal/{key}"));
+            waters.push(water);
+        }
+        variants.push(variant);
+    }
+    study["variants"] = json!(variants);
+    study["comparison"]["required_consumers"] = json!(["motion", "transient_surface"]);
+    study["comparison"]["objectives"] = json!([
+        {"metric":"textile_water_evaporated_mass_kg","direction":"maximize"},
+        {"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}]);
+    study["comparison"]["constraints"][0] =
+        json!({"metric":"textile_water_remaining_mass_kg","minimum":0.});
+
+    let bytes = model_bytes_with_rig(true);
+    let digest = sha256_hex(&bytes);
+    let model =
+        ftx_body::AnnyModel::from_data(ftx_body::AnnyData::from_bytes(&bytes, true).unwrap())
+            .unwrap();
+    let body = json!({"schema":"ftx-scenario-body/1","accepted_body_fit":receipt(&digest),
+        "arm_abduction_deg":35.});
+    let mut dry_study = study.clone();
+    dry_study.as_object_mut().unwrap().remove("comparison");
+    let baseline: Value = serde_json::from_str(
+        &on_model(
+            &model,
+            &digest,
+            &pattern,
+            &dry_study.to_string(),
+            &single.to_string(),
+            &body.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let dry_motion =
+        &keyed(&baseline["simulations"], "qualified")["evaluation"]["result"]["motion"]["result"];
+    let mut pairs = Vec::new();
+    for (index, key) in ["qualified", "slower"].into_iter().enumerate() {
+        let dry = &keyed(&baseline["simulations"], key)["evaluation"]["result"];
+        assert_eq!(dry["motion"]["status"], "available");
+        assert_eq!(
+            dry["motion"]["result"]["final_positions_sha256"],
+            dry_motion["final_positions_sha256"]
+        );
+        let mechanics = json!({"schema":"ftx-coupled-liquid-mechanics/6",
+            "model":"scheduled_phase_specific_incoming_and_outgoing_velocity_mass_exchange_frozen_mechanics/1",
+            "material_report_sha256":sha256_hex(&serde_json::to_vec(&dry["drape"]["material"]).unwrap()),
+            "bindings":{"band":{"material_sha256":waters[index]["bindings"]["band"]["material_sha256"],
+                "maximum_liquid_loading_kg_m2":0.2,"temperature_range_c":[-20.,80.],
+                "incoming_stream_velocities_world_m_s_by_interval":[
+                    {"supply":[0.2,0.1,-0.5],"condensation":[-0.1,0.3,0.4]},
+                    {"supply":[-0.3,0.4,0.2],"condensation":[0.5,-0.2,0.1]}],
+                "outgoing_stream_velocities_relative_to_cloth_m_s_by_interval":[
+                    {"evaporation":[0.,0.,0.4],"drainage":[0.2,0.,-0.1]},
+                    {"evaporation":[0.,0.,0.2],"drainage":[-0.1,0.1,-0.2]}]}},
+            "source":{"reference":format!("test:paired-native-mechanics/{key}"),"accessed_on":"2026-11-04",
+                "note":"Independent artificial mechanical qualification, no measured wet laws"},
+            "evidence":"estimate","allow_estimates":true,"method":"Synthetic scheduled phase recoil",
+            "qualification":"Exact artificial material and interface laws over the complete thermal domain; prescribed phase velocities and separate mechanical boundary work"});
+        pairs.push(json!({"surface_water":waters[index],"mechanical_coupling":mechanics}));
+    }
+    single["motion"]["transient_surface"]["coupled_water_alternatives"] = json!(pairs);
+    replay(
+        &pattern,
+        &study,
+        single,
+        "FTX_COUPLED_WATER_ALTERNATIVES_REPLAY",
+        |report| {
+            assert_eq!(
+                report["scenario"]["scenario"]["motion"]["transient_surface"]["coupled_water_alternatives"],
+                json!(pairs)
+            );
+            let shared_simulated =
+                &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
+            let shared_motion = &shared_simulated["motion"]["result"];
+            let mut evaporation = Vec::new();
+            let mut temperature = Vec::new();
+            let mut trajectories = Vec::new();
+            let mut outgoing_momenta = Vec::new();
+            for (index, key) in ["qualified", "slower"].into_iter().enumerate() {
+                let simulated = &keyed(&report["simulations"], key)["evaluation"]["result"];
+                assert_eq!(
+                    simulated["motion"]["status"],
+                    "available",
+                    "{}",
+                    simulated["motion"]
+                );
+                let motion = &simulated["motion"]["result"];
+                let outcome = &motion["transient_surface"];
+                assert_eq!(outcome["status"], "available", "{outcome}");
+                let heat = &outcome["result"];
+                let water = &heat["surface_water"];
+                let mechanics = &motion["liquid_mechanics"];
+                assert_eq!(mechanics, &heat["mechanical_coupling"]);
+                assert_eq!(mechanics["schema"], "ftx-coupled-liquid-mechanics-result/6");
+                assert_eq!(
+                    mechanics["qualification"],
+                    pairs[index]["mechanical_coupling"]
+                );
+                assert_eq!(water["request"], pairs[index]["surface_water"]);
+                assert_eq!(heat["request"]["coupled_water_alternatives"], json!(pairs));
+                assert_eq!(heat["coupled_water_selection"]["index"], index);
+                assert_eq!(
+                    heat["coupled_water_selection"]["pair_sha256"],
+                    sha256_hex(&serde_json::to_vec(&pairs[index]).unwrap())
+                );
+                assert_eq!(
+                    mechanics["qualification"]["material_report_sha256"],
+                    sha256_hex(&serde_json::to_vec(&simulated["drape"]["material"]).unwrap())
+                );
+                assert_eq!(
+                    simulated["drape"]["material"]["record_sha256"],
+                    water["request"]["bindings"]["band"]["material_sha256"]
+                );
+                for (mechanical, thermal) in [
+                    ("remaining_liquid_mass_kg", "remaining_liquid_kg"),
+                    ("evaporated_liquid_mass_kg", "evaporated_liquid_kg"),
+                    ("drained_liquid_mass_kg", "drained_liquid_kg"),
+                ] {
+                    let mass = water[thermal].as_f64().unwrap();
+                    assert!(mass > 0.);
+                    assert!((mechanics[mechanical].as_f64().unwrap() - mass).abs() < 1e-14);
+                }
+                assert!(
+                    (mechanics["exchange"]["incoming_mass_kg"].as_f64().unwrap()
+                        - water["supplied_liquid_kg"].as_f64().unwrap())
+                    .abs()
+                        < 1e-14
+                );
+                assert!(
+                    mechanics["exchange"]["outgoing_separation_work_j"]
+                        .as_f64()
+                        .unwrap()
+                        > 0.
+                );
+                assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+                for field in [
+                    "initial_positions_sha256",
+                    "initial_body_collision_sha256",
+                    "final_body_collision_sha256",
+                ] {
+                    assert_eq!(motion[field], dry_motion[field]);
+                }
+                assert_eq!(motion["path_sha256"], shared_motion["path_sha256"]);
+                assert_ne!(
+                    motion["final_positions_sha256"],
+                    dry_motion["final_positions_sha256"]
+                );
+                evaporation.push(water["evaporated_liquid_kg"].as_f64().unwrap());
+                temperature.push(heat["final"]["temperature_c"][0][0].as_f64().unwrap());
+                trajectories.push(&motion["final_positions_sha256"]);
+                outgoing_momenta.push(&mechanics["exported_momentum_kg_m_s"]);
+                let decision = keyed(&report["comparison"]["alternatives"], key);
+                assert_eq!(decision["eligible"], true, "{decision}");
+                assert_eq!(
+                    decision["readings"]["textile_water_evaporated_mass_kg"]["value"],
+                    water["evaporated_liquid_kg"]
+                );
+            }
+            assert!(evaporation[0] > evaporation[1]);
+            assert!(temperature[0] < temperature[1]);
+            assert_ne!(trajectories[0], trajectories[1]);
+            assert_ne!(outgoing_momenta[0], outgoing_momenta[1]);
+            let stale = &keyed(&report["simulations"], "stale")["evaluation"]["result"];
+            assert_eq!(stale["surface"]["status"], "available");
+            assert_eq!(stale["motion"]["status"], "refused");
+            assert!(stale["motion"]["result"].is_null());
+            assert_eq!(
+                keyed(&report["comparison"]["alternatives"], "stale")["eligible"],
+                false
+            );
+        },
+    );
+}
+
 fn qualify_mechanics(pattern: &str, study: &Value, single: &mut Value, exchange: bool) {
     use ftx_wasm::materials::scenario::on_model;
     let bytes = model_bytes_with_rig(true);

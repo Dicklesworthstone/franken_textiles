@@ -412,9 +412,14 @@ fn case_inputs(request: &Request) -> Result<Value, Refusal> {
     Ok(value)
 }
 
-pub(super) fn validate_alternatives(requests: &[Request], intervals: usize) -> Result<(), Refusal> {
+pub(super) fn validate_alternatives<'a, I>(requests: I, intervals: usize) -> Result<(), Refusal>
+where
+    I: IntoIterator<Item = &'a Request>,
+    I::IntoIter: ExactSizeIterator + Clone,
+{
+    let requests = requests.into_iter();
     if !(1..=64).contains(&requests.len())
-        || requests.iter().fold(0_usize, |sum, request| {
+        || requests.clone().fold(0_usize, |sum, request| {
             sum.saturating_add(request.bindings.len())
         }) > 65_536
     {
@@ -450,11 +455,11 @@ pub(super) fn validate_alternatives(requests: &[Request], intervals: usize) -> R
     Ok(())
 }
 
-fn select_alternative(
-    requests: &[Request],
+fn select_alternative<'a>(
+    requests: impl IntoIterator<Item = &'a Request>,
     assigned: &BTreeMap<String, String>,
 ) -> Result<usize, Refusal> {
-    let mut matches = requests.iter().enumerate().filter(|(_, request)| {
+    let mut matches = requests.into_iter().enumerate().filter(|(_, request)| {
         request.bindings.len() == assigned.len()
             && request
                 .bindings
@@ -571,16 +576,25 @@ fn split_outflow(total: f64, evaporation: f64, drainage: f64) -> Result<(f64, f6
 }
 
 impl Water {
+    pub(super) fn policy(&self) -> &Request {
+        &self.request
+    }
+
     pub(super) fn has_drainage(&self) -> bool {
         self.request.drainage.is_some()
     }
 
-    pub(super) fn from_alternatives(
-        requests: &[Request],
+    pub(super) fn from_alternatives<'a, I>(
+        requests: I,
         model: &Surface,
         run: &DrapeRun,
         initial_c: f64,
-    ) -> Result<(Self, usize), Refusal> {
+    ) -> Result<(Self, usize), Refusal>
+    where
+        I: IntoIterator<Item = &'a Request>,
+        I::IntoIter: Clone,
+    {
+        let mut requests = requests.into_iter();
         let instances = &run.scene.mesh.instances;
         let owners = &run.scene.triangle_owner;
         let (records, columns) = retained_materials(&run.report["material"], instances, owners)?;
@@ -606,10 +620,10 @@ impl Water {
                 "water qualification selection needs every retained instance's actual material",
             ));
         }
-        let index = select_alternative(requests, &assigned)?;
+        let index = select_alternative(requests.clone(), &assigned)?;
         Ok((
             Self::from_materials(
-                requests[index].clone(),
+                requests.nth(index).expect("matched water request").clone(),
                 model,
                 &records,
                 instances,

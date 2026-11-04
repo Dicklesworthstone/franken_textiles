@@ -31,6 +31,16 @@ pub enum DissipationHeatDistribution {
 /// Compatibility name for the original permanent-membrane heat option.
 pub type PlasticHeatDistribution = DissipationHeatDistribution;
 
+/// Independently sourced thermal and mechanical permissions for one complete material assignment.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoupledWaterAlternative {
+    /// Complete source-qualified free-liquid thermal policy.
+    pub surface_water: surface_water::Request,
+    /// Complete source-qualified mechanical and interface domain for the same material instances.
+    pub mechanical_coupling: crate::liquid_mass::Qualification,
+}
+
 /// Explicit transient policy for independent cloth sheets during prescribed motion.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +81,12 @@ pub struct SurfaceRequest {
     /// Mutually exclusive with `surface_water` and with mechanical liquid coupling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_water_alternatives: Option<Vec<surface_water::Request>>,
+    /// Alternative independently qualified water/mechanics pairs for the same operating case.
+    /// Exactly one complete material assignment must match; its full mechanical material report
+    /// is verified before initializing liquid mass. Physical phase and velocity schedules remain
+    /// common. Mutually exclusive with direct water/coupling and uncoupled water alternatives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coupled_water_alternatives: Option<Vec<CoupledWaterAlternative>>,
     /// Optional source-qualified mass feedback into the next mechanical step. The original
     /// evaporation qualification requires water /1; independently qualified bidirectional exchange
     /// also admits supplied/condensed water. Initial liquid is added after the dry drape.
@@ -152,6 +168,10 @@ fn boundary(film: Film) -> Result<Boundary, Refusal> {
 }
 
 impl SurfaceRequest {
+    pub(super) fn has_mechanical_coupling(&self) -> bool {
+        self.mechanical_coupling.is_some() || self.coupled_water_alternatives.is_some()
+    }
+
     pub(super) fn start(
         &self,
         run: &DrapeRun,
@@ -202,6 +222,15 @@ impl SurfaceRequest {
             history.water_selection = Some(json!({"index":index,
                 "request_sha256":hash(&selected)?}));
             history.water = Some(water);
+        } else if let Some(alternatives) = &self.coupled_water_alternatives {
+            let (water, index) = surface_water::Water::from_alternatives(
+                alternatives.iter().map(|pair| &pair.surface_water),
+                &history.model,
+                run,
+                self.initial_temperature_c,
+            )?;
+            history.coupled_water_index = Some(index);
+            history.water = Some(water);
         }
         Ok(history)
     }
@@ -238,36 +267,134 @@ impl SurfaceRequest {
             }
         }
         if let Some(alternatives) = &self.surface_water_alternatives {
-            if self.surface_water.is_some() || self.mechanical_coupling.is_some() {
+            if self.surface_water.is_some() || self.has_mechanical_coupling() {
                 return Err(invalid(
                     "alternative water qualifications cannot accompany a single water policy or mechanical liquid coupling",
                 ));
             }
             surface_water::validate_alternatives(alternatives, intervals)?;
         }
+        if let Some(alternatives) = &self.coupled_water_alternatives {
+            if self.surface_water.is_some()
+                || self.surface_water_alternatives.is_some()
+                || self.mechanical_coupling.is_some()
+            {
+                return Err(invalid(
+                    "coupled water alternatives cannot accompany direct or uncoupled water policies",
+                ));
+            }
+            surface_water::validate_alternatives(
+                alternatives.iter().map(|pair| &pair.surface_water),
+                intervals,
+            )?;
+            let mut common = None;
+            for pair in alternatives {
+                validate_coupling(&pair.surface_water, &pair.mechanical_coupling, intervals)?;
+                validate_coupled_domain(&pair.surface_water, &pair.mechanical_coupling)?;
+                let physical = hash(&coupling_inputs(&pair.mechanical_coupling)?)?;
+                if common.as_ref().is_some_and(|expected| expected != &physical) {
+                    return Err(invalid(
+                        "coupled water alternatives must retain the same mechanical phase model and imposed velocity schedules",
+                    ));
+                }
+                common = Some(physical);
+            }
+        }
         if let Some(water) = &self.surface_water {
             water.validate(intervals)?;
         }
         if let Some(coupling) = &self.mechanical_coupling {
-            let exchange = coupling.is_exchange();
-            if exchange {
-                coupling.validate_exchange_intervals(intervals)?;
-            } else {
-                coupling.validate()?;
-            }
             let water = self.surface_water.as_ref().ok_or_else(|| {
                 invalid(
                     "mechanical liquid coupling requires an explicit textile-owned water policy",
                 )
             })?;
-            if !exchange && water.schema != "ftx-textile-surface-water/1" {
-                return Err(invalid(
-                    "the evaporation-only mechanical qualification requires water /1; supply and condensation need an independent incoming/outgoing momentum qualification",
-                ));
-            }
+            validate_coupling(water, coupling, intervals)?;
         }
         Ok(())
     }
+}
+
+fn validate_coupling(
+    water: &surface_water::Request,
+    coupling: &crate::liquid_mass::Qualification,
+    intervals: usize,
+) -> Result<(), Refusal> {
+    if coupling.is_exchange() {
+        coupling.validate_exchange_intervals(intervals)?;
+    } else {
+        coupling.validate()?;
+        if water.schema != "ftx-textile-surface-water/1" {
+            return Err(invalid(
+                "the evaporation-only mechanical qualification requires water /1; supply and condensation need an independent incoming/outgoing momentum qualification",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_coupled_domain(
+    water: &surface_water::Request,
+    qualification: &crate::liquid_mass::Qualification,
+) -> Result<(), Refusal> {
+    // Water checks this complete domain at every thermal substep, including event splits.
+    // An endpoint returning inside the mechanical domain cannot excuse an intermediate escape.
+    let temperatures = [
+        water.wet_vapor_pressure_pa[0][0],
+        water.wet_vapor_pressure_pa[water.wet_vapor_pressure_pa.len() - 1][0],
+    ];
+    if water.bindings.len() != qualification.bindings.len()
+        || water.bindings.iter().any(|(instance, binding)| {
+            qualification.bindings.get(instance).is_none_or(|bound| {
+                bound.material_sha256 != binding.material_sha256
+                    || bound.maximum_liquid_loading_kg_m2 < water.maximum_liquid_loading_kg_m2
+                    || bound.temperature_range_c[0] > temperatures[0]
+                    || bound.temperature_range_c[1] < temperatures[1]
+            })
+        })
+    {
+        return Err(invalid(
+            "liquid mechanics must qualify the exact complete thermal material assignment, loading and temperature domain",
+        ));
+    }
+    Ok(())
+}
+
+// Source identity and independently qualified domains can differ; imposed kinematics cannot.
+// Qualification validation precedes this projection, so no rejected source fields are hidden.
+fn coupling_inputs(qualification: &crate::liquid_mass::Qualification) -> Result<Value, Refusal> {
+    let mut value =
+        serde_json::to_value(qualification).map_err(|error| invalid(error.to_string()))?;
+    for field in [
+        "source",
+        "evidence",
+        "allow_estimates",
+        "method",
+        "qualification",
+        "material_report_sha256",
+    ] {
+        value
+            .as_object_mut()
+            .expect("serialized qualification")
+            .remove(field);
+    }
+    for binding in value["bindings"]
+        .as_object_mut()
+        .expect("serialized bindings")
+        .values_mut()
+    {
+        for field in [
+            "material_sha256",
+            "maximum_liquid_loading_kg_m2",
+            "temperature_range_c",
+        ] {
+            binding
+                .as_object_mut()
+                .expect("serialized domain")
+                .remove(field);
+        }
+    }
+    Ok(value)
 }
 
 #[derive(Clone)]
@@ -295,6 +422,7 @@ pub(super) struct SurfaceHistory {
     bending: Option<plastic::Heating>,
     water: Option<surface_water::Water>,
     water_selection: Option<Value>,
+    coupled_water_index: Option<usize>,
     mechanical_coupling: Option<Value>,
 }
 
@@ -339,6 +467,7 @@ impl SurfaceHistory {
             bending: None,
             water: None,
             water_selection: None,
+            coupled_water_index: None,
             mechanical_coupling: None,
         })
     }
@@ -353,36 +482,13 @@ impl SurfaceHistory {
 
     pub(super) fn bind_mechanics(&mut self, run: &mut DrapeRun) -> Result<Value, Refusal> {
         let qualification = self
-            .request
-            .mechanical_coupling
-            .as_ref()
+            .mechanical_policy()
             .ok_or_else(|| invalid("missing evaporation mechanics qualification"))?;
-        let policy = self
-            .request
-            .surface_water
+        let water = self
+            .water
             .as_ref()
             .ok_or_else(|| invalid("evaporation mechanics requires textile-owned water"))?;
-        // Water checks this complete domain at every thermal substep, including event splits.
-        // Requiring containment avoids admitting an out-of-domain intermediate temperature that
-        // happens to return inside the mechanical domain by the next sampled endpoint.
-        let temperatures = [
-            policy.wet_vapor_pressure_pa[0][0],
-            policy.wet_vapor_pressure_pa[policy.wet_vapor_pressure_pa.len() - 1][0],
-        ];
-        for (instance, water) in &policy.bindings {
-            let bound = qualification.bindings.get(instance).ok_or_else(|| {
-                invalid("evaporation mechanics must qualify every thermal material instance")
-            })?;
-            if bound.material_sha256 != water.material_sha256
-                || bound.maximum_liquid_loading_kg_m2 < policy.maximum_liquid_loading_kg_m2
-                || bound.temperature_range_c[0] > temperatures[0]
-                || bound.temperature_range_c[1] < temperatures[1]
-            {
-                return Err(invalid(
-                    "evaporation mechanics must qualify the complete thermal material, loading and temperature domain",
-                ));
-            }
-        }
+        validate_coupled_domain(water.policy(), qualification)?;
         if self.model.patches().len() != run.scene.solver.model.membranes.len()
             || self
                 .model
@@ -397,20 +503,13 @@ impl SurfaceHistory {
                 "evaporating mechanical and thermal histories must share the exact retained triangles",
             ));
         }
-        let water = self
-            .water
-            .as_ref()
-            .ok_or_else(|| invalid("missing admitted textile-water history"))?;
         let report = if qualification.is_exchange() {
             crate::liquid_mass::bind_exchange(
                 run,
                 qualification,
                 water.remaining_liquid_kg(),
                 self.state.temperature_c(),
-                self.request
-                    .surface_water
-                    .as_ref()
-                    .is_some_and(|request| request.drainage.is_some()),
+                water.has_drainage(),
             )?
         } else {
             crate::liquid_mass::bind(
@@ -425,6 +524,18 @@ impl SurfaceHistory {
         Ok(value)
     }
 
+    fn mechanical_policy(&self) -> Option<&crate::liquid_mass::Qualification> {
+        if let Some(index) = self.coupled_water_index {
+            self.request
+                .coupled_water_alternatives
+                .as_ref()?
+                .get(index)
+                .map(|pair| &pair.mechanical_coupling)
+        } else {
+            self.request.mechanical_coupling.as_ref()
+        }
+    }
+
     pub(super) fn advance_coupled(
         &mut self,
         solver: &mut crate::Solver,
@@ -434,9 +545,7 @@ impl SurfaceHistory {
         sample_index: usize,
     ) -> Result<(), Refusal> {
         let exchange = self
-            .request
-            .mechanical_coupling
-            .as_ref()
+            .mechanical_policy()
             .is_some_and(crate::liquid_mass::Qualification::is_exchange);
         if exchange {
             self.water
@@ -956,6 +1065,15 @@ impl SurfaceHistory {
         }
         if let Some(selection) = self.water_selection {
             result["surface_water_selection"] = selection;
+        }
+        if let Some(index) = self.coupled_water_index {
+            let pair = &self
+                .request
+                .coupled_water_alternatives
+                .as_ref()
+                .expect("selected coupled water collection")[index];
+            let value = serde_json::to_value(pair).map_err(|error| invalid(error.to_string()))?;
+            result["coupled_water_selection"] = json!({"index":index,"pair_sha256":hash(&value)?});
         }
         if let Some(coupling) = self.mechanical_coupling {
             let exchange = !coupling["exchange"].is_null();

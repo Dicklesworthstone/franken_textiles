@@ -1385,6 +1385,26 @@ impl Policy {
                 Err(e) => result.exclusions.push(e),
             }
         }
+        if !admitted.motion.is_null()
+            && !descriptor["scenario"]["motion"]["transient_surface"]["coupled_water_alternatives"]
+                .is_null()
+        {
+            // This selected pair changes inertia and momentum. Its complete coupled receipt is
+            // mandatory even when the decision requests only a motion/strain/contact metric.
+            match admit_heat(
+                row,
+                descriptor,
+                simulation,
+                admitted.motion,
+                Consumer::TransientSurface,
+            ) {
+                Ok(heat) => admitted.transient_surface = Some(heat),
+                Err(e) => {
+                    admitted.motion = &Value::Null;
+                    result.exclusions.push(e);
+                }
+            }
+        }
         if !admitted.motion.is_null() {
             if self.consumers().contains(&Consumer::MotionContactLoads) {
                 match contact_loads::admit(row, descriptor, simulation, Some(admitted.motion)) {
@@ -1424,7 +1444,7 @@ impl Policy {
                     &mut admitted.transient_coverage,
                 ),
             ] {
-                if self.consumers().contains(&consumer) {
+                if self.consumers().contains(&consumer) && target.is_none() {
                     match admit_heat(row, descriptor, simulation, admitted.motion, consumer) {
                         Ok(heat) => *target = Some(heat),
                         Err(e) => result.exclusions.push(e),
@@ -1669,7 +1689,11 @@ impl Policy {
             keys.insert("areal_density");
         }
         let mechanics = self.needs_simulation();
-        let transient = consumers.contains(&Consumer::TransientSurface)
+        let surface_policy = &descriptor["scenario"]["motion"]["transient_surface"];
+        let paired_motion = self.needs_motion()
+            && !surface_policy["coupled_water_alternatives"].is_null();
+        let transient = paired_motion
+            || consumers.contains(&Consumer::TransientSurface)
             || consumers.contains(&Consumer::TransientCoverage);
         let thermal = transient
             || consumers.contains(&Consumer::Surface)
@@ -1688,10 +1712,11 @@ impl Policy {
             keys.extend(["areal_density", "specific_heat", "thickness"]);
         }
         let mass = keys.contains("areal_density");
-        let surface_policy = &descriptor["scenario"]["motion"]["transient_surface"];
-        let textile_water = consumers.contains(&Consumer::TransientSurface)
-            && (!surface_policy["surface_water"].is_null()
-                || !surface_policy["surface_water_alternatives"].is_null());
+        let textile_water = paired_motion
+            || consumers.contains(&Consumer::TransientSurface)
+                && (!surface_policy["surface_water"].is_null()
+                    || !surface_policy["surface_water_alternatives"].is_null()
+                    || !surface_policy["coupled_water_alternatives"].is_null());
         if textile_water {
             keys.insert("vapor_resistance");
         }
@@ -1701,7 +1726,7 @@ impl Policy {
         ]
         .into_iter()
         .any(|(consumer, name)| {
-            consumers.contains(&consumer)
+            (consumers.contains(&consumer) || paired_motion && consumer == Consumer::TransientSurface)
                 && descriptor["scenario"]["motion"][name]["plastic_dissipation_heat"]
                     == "uniform_reference_thickness"
         }) {
@@ -1713,7 +1738,7 @@ impl Policy {
         ]
         .into_iter()
         .any(|(consumer, name)| {
-            consumers.contains(&consumer)
+            (consumers.contains(&consumer) || paired_motion && consumer == Consumer::TransientSurface)
                 && descriptor["scenario"]["motion"][name]["relaxation_dissipation_heat"]
                     == "uniform_reference_thickness"
         }) {
@@ -1725,7 +1750,7 @@ impl Policy {
         ]
         .into_iter()
         .any(|(consumer, name)| {
-            consumers.contains(&consumer)
+            (consumers.contains(&consumer) || paired_motion && consumer == Consumer::TransientSurface)
                 && descriptor["scenario"]["motion"][name]["bending_plastic_dissipation_heat"]
                     == "uniform_reference_thickness"
         }) {
@@ -1876,7 +1901,9 @@ impl Policy {
         if textile_water {
             // A collection is one immutable operating case with independently qualified material
             // choices. Hash the original collection, not the chosen material's source record.
-            let policy = if surface_policy["surface_water_alternatives"].is_null() {
+            let policy = if !surface_policy["coupled_water_alternatives"].is_null() {
+                &surface_policy["coupled_water_alternatives"]
+            } else if surface_policy["surface_water_alternatives"].is_null() {
                 &surface_policy["surface_water"]
             } else {
                 &surface_policy["surface_water_alternatives"]
@@ -1884,9 +1911,13 @@ impl Policy {
             base = hash(&(&base, policy))?;
         }
         if self.needs_motion() {
-            let coupling =
-                &descriptor["scenario"]["motion"]["transient_surface"]["mechanical_coupling"];
-            if !coupling.is_null() {
+            let paired = !surface_policy["coupled_water_alternatives"].is_null();
+            let coupling = if paired {
+                &surface_policy["coupled_water_alternatives"]
+            } else {
+                &surface_policy["mechanical_coupling"]
+            };
+            if !coupling.is_null() && !(paired && textile_water) {
                 // Source velocity changes the actual trajectory even when water inventory matches.
                 // Static and manufacturing-only consumers retain their independent protocols.
                 base = hash(&(&base, coupling))?;

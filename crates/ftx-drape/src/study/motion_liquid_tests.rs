@@ -24,37 +24,47 @@ impl PartFrames for Form {
 
 #[test]
 fn late_evaporation_budget_failure_restores_whole_solver_and_replays_identically() {
-    rollback_after_liquid_transfer(false, false, false, false, false);
+    rollback_after_liquid_transfer(false, false, false, false, false, false);
 }
 
 #[test]
 fn late_supply_budget_failure_rolls_back_liquid_and_attached_mass_together() {
-    rollback_after_liquid_transfer(true, false, false, false, false);
+    rollback_after_liquid_transfer(true, false, false, false, false, false);
 }
 
 #[test]
 fn prescribed_supply_impulse_and_mixing_roll_back_and_replay_with_attached_mass() {
-    rollback_after_liquid_transfer(true, true, false, false, false);
+    rollback_after_liquid_transfer(true, true, false, false, false, false);
 }
 
 #[test]
 fn phase_specific_supply_impulse_rolls_back_and_replays_with_attached_mass() {
-    rollback_after_liquid_transfer(true, true, true, false, false);
+    rollback_after_liquid_transfer(true, true, true, false, false, false);
 }
 
 #[test]
 fn scheduled_supply_follows_keyframes_and_rolls_back_with_attached_mass() {
-    rollback_after_liquid_transfer(true, true, false, true, false);
+    rollback_after_liquid_transfer(true, true, false, true, false, false);
 }
 
 #[test]
 fn scheduled_incoming_water_and_drainage_roll_back_and_replay_together() {
-    rollback_after_liquid_transfer(true, true, false, true, true);
+    rollback_after_liquid_transfer(true, true, false, true, true, false);
 }
 
 #[test]
 fn phase_specific_incoming_water_and_drainage_roll_back_and_replay_together() {
-    rollback_after_liquid_transfer(true, true, true, false, true);
+    rollback_after_liquid_transfer(true, true, true, false, true, false);
+}
+
+#[test]
+fn paired_water_scheduled_phase_velocities_roll_back_and_replay() {
+    rollback_after_liquid_transfer(true, true, true, true, true, false);
+}
+
+#[test]
+fn paired_water_outgoing_recoil_rolls_back_and_replays() {
+    rollback_after_liquid_transfer(true, true, true, true, true, true);
 }
 
 fn rollback_after_liquid_transfer(
@@ -63,6 +73,7 @@ fn rollback_after_liquid_transfer(
     phase_specific: bool,
     scheduled: bool,
     drainage: bool,
+    recoil: bool,
 ) {
     let mut raw: Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
@@ -191,12 +202,45 @@ fn rollback_after_liquid_transfer(
                     });
             }
             if scheduled {
-                q.schema = "ftx-coupled-liquid-mechanics/3".into();
-                q.model = "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1".into();
                 let domain = q.bindings.get_mut("band").unwrap();
                 domain.incoming_velocity_world_m_s = None;
-                domain.incoming_velocity_world_m_s_by_interval =
-                    Some(vec![Vec3::new(0.1, -0.2, 0.05), Vec3::new(-0.3, 0.4, -0.1)]);
+                if phase_specific {
+                    q.schema = "ftx-coupled-liquid-mechanics/5".into();
+                    q.model =
+                        "scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1".into();
+                    domain.incoming_stream_velocities_world_m_s = None;
+                    domain.incoming_stream_velocities_world_m_s_by_interval = Some(vec![
+                        crate::liquid_mass::IncomingVelocities {
+                            supply: Vec3::new(0.1, -0.2, 0.05),
+                            condensation: Vec3::new(-0.3, 0.2, 0.1),
+                        },
+                        crate::liquid_mass::IncomingVelocities {
+                            supply: Vec3::new(-0.3, 0.4, -0.1),
+                            condensation: Vec3::new(0.2, -0.1, 0.3),
+                        },
+                    ]);
+                    if recoil {
+                        q.schema = "ftx-coupled-liquid-mechanics/6".into();
+                        q.model =
+                            "scheduled_phase_specific_incoming_and_outgoing_velocity_mass_exchange_frozen_mechanics/1".into();
+                        domain.outgoing_stream_velocities_relative_to_cloth_m_s_by_interval =
+                            Some(vec![
+                                crate::liquid_mass::OutgoingVelocities {
+                                    evaporation: Vec3::new(0.02, -0.01, 0.005),
+                                    drainage: Vec3::new(-0.01, 0.02, -0.005),
+                                },
+                                crate::liquid_mass::OutgoingVelocities {
+                                    evaporation: Vec3::new(-0.01, 0.02, -0.005),
+                                    drainage: Vec3::new(0.02, -0.01, 0.005),
+                                },
+                            ]);
+                    }
+                } else {
+                    q.schema = "ftx-coupled-liquid-mechanics/3".into();
+                    q.model = "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1".into();
+                    domain.incoming_velocity_world_m_s_by_interval =
+                        Some(vec![Vec3::new(0.1, -0.2, 0.05), Vec3::new(-0.3, 0.4, -0.1)]);
+                }
             }
         }
         let mut water = serde_json::to_value(heat.surface_water.as_ref().unwrap()).unwrap();
@@ -267,7 +311,11 @@ fn rollback_after_liquid_transfer(
             let report = &complete["liquid_mechanics"];
             assert_eq!(
                 report["schema"],
-                if phase_specific && !scheduled {
+                if recoil {
+                    "ftx-coupled-liquid-mechanics-result/6"
+                } else if phase_specific && scheduled {
+                    "ftx-coupled-liquid-mechanics-result/5"
+                } else if phase_specific {
                     "ftx-coupled-liquid-mechanics-result/4"
                 } else if scheduled {
                     "ftx-coupled-liquid-mechanics-result/3"
@@ -284,6 +332,28 @@ fn rollback_after_liquid_transfer(
                 assert!((momentum - Vec3::new(0.1, -0.2, 0.05) * incoming).norm() < 1e-15);
             }
         }
+    }
+    let liquid = &complete["liquid_mechanics"];
+    for field in [
+        "mass_balance_residual_kg",
+        "transfer_kinetic_residual_j",
+        "transfer_gravitational_residual_j",
+    ] {
+        assert!(
+            liquid[field].as_f64().unwrap().abs() < 1e-12,
+            "{field}: {liquid}"
+        );
+    }
+    let momentum_residual: Vec3 =
+        serde_json::from_value(liquid["transfer_momentum_residual_kg_m_s"].clone()).unwrap();
+    assert!(momentum_residual.norm() < 1e-12);
+    if recoil {
+        assert!(
+            liquid["exchange"]["outgoing_separation_work_j"]
+                .as_f64()
+                .unwrap()
+                > 0.
+        );
     }
     let thermal = &complete["transient_surface"]["result"];
     if drainage {
@@ -321,7 +391,7 @@ fn rollback_after_liquid_transfer(
             + Vec3::new(-0.3, 0.4, -0.1) * second_incoming;
         assert!((momentum - expected).norm() < 1e-15);
         let mut short = request.clone();
-        short
+        let domain = short
             .transient_surface
             .as_mut()
             .unwrap()
@@ -330,11 +400,20 @@ fn rollback_after_liquid_transfer(
             .unwrap()
             .bindings
             .get_mut("band")
-            .unwrap()
-            .incoming_velocity_world_m_s_by_interval
-            .as_mut()
-            .unwrap()
-            .pop();
+            .unwrap();
+        if phase_specific {
+            domain
+                .incoming_stream_velocities_world_m_s_by_interval
+                .as_mut()
+                .unwrap()
+                .pop();
+        } else {
+            domain
+                .incoming_velocity_world_m_s_by_interval
+                .as_mut()
+                .unwrap()
+                .pop();
+        }
         assert!(
             short
                 .transient_surface
@@ -363,8 +442,8 @@ fn rollback_after_liquid_transfer(
     let first_cost = (first_substeps * (all_cost / all_substeps)) as usize;
     let mut limited = request.clone();
     limited.transient_surface.as_mut().unwrap().max_cell_steps = first_cost;
-    let limited_path = Path::new(&limited, body.collision, endpoints).unwrap();
-    run.scene.solver = original;
+    let limited_path = Path::new(&limited, body.collision, endpoints.clone()).unwrap();
+    run.scene.solver = original.clone();
     let mut reached = Vec::new();
     let refusal = evaluate(
         &limited,
@@ -405,6 +484,171 @@ fn rollback_after_liquid_transfer(
     assert_eq!(
         serde_json::to_vec(&replay).unwrap(),
         serde_json::to_vec(&complete).unwrap()
+    );
+    assert_eq!(format!("{:?}", run.scene.solver), complete_debug);
+
+    // Reuse the exact independently qualified laws through a material-source collection.
+    // The decoy is complete and valid, but its hashes belong to a different material/report.
+    let mut paired_request = request.clone();
+    let heat = paired_request.transient_surface.as_mut().unwrap();
+    let pair = heat::CoupledWaterAlternative {
+        surface_water: heat.surface_water.take().unwrap(),
+        mechanical_coupling: heat.mechanical_coupling.take().unwrap(),
+    };
+    let mut decoy = pair.clone();
+    decoy
+        .surface_water
+        .bindings
+        .get_mut("band")
+        .unwrap()
+        .material_sha256 = "a".repeat(64);
+    decoy.surface_water.source.reference = "test:other-thermal-material-source".into();
+    decoy
+        .mechanical_coupling
+        .bindings
+        .get_mut("band")
+        .unwrap()
+        .material_sha256 = "a".repeat(64);
+    decoy.mechanical_coupling.material_report_sha256 = "b".repeat(64);
+    decoy.mechanical_coupling.source.reference = "test:other-mechanical-material-source".into();
+    heat.coupled_water_alternatives = Some(vec![decoy, pair.clone()]);
+    let authored = serde_json::to_value(&paired_request).unwrap();
+    let paired_path = Path::new(&paired_request, body.collision, endpoints.clone()).unwrap();
+    run.scene.solver = original.clone();
+    let paired = evaluate(
+        &paired_request,
+        &paired_path,
+        &scenario,
+        &body,
+        &mut run,
+        &mut heat::Budget::default(),
+        None,
+        None,
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(format!("{:?}", run.scene.solver), complete_debug);
+    assert_eq!(paired["liquid_mechanics"], complete["liquid_mechanics"]);
+    assert_eq!(paired["samples"], complete["samples"]);
+    let paired_heat = &paired["transient_surface"]["result"];
+    assert_eq!(paired_heat["request"], authored["transient_surface"]);
+    assert_eq!(paired_heat["surface_water"], thermal["surface_water"]);
+    assert_eq!(paired_heat["trace"], thermal["trace"]);
+    assert_eq!(paired_heat["final"], thermal["final"]);
+    assert_eq!(
+        paired_heat["coupled_water_selection"],
+        json!({"index":1,"pair_sha256":hash(&serde_json::to_value(&pair).unwrap()).unwrap()})
+    );
+    assert!(paired_heat.get("surface_water_selection").is_none());
+    assert_eq!(serde_json::to_value(&paired_request).unwrap(), authored);
+
+    // A source collection must stay coupled even when its selection or independent mechanical
+    // qualification fails. These failures occur before any motion endpoint or mass mutation.
+    for failure in [
+        "no_source_match",
+        "stale_full_material_report",
+        "unpaired_instance",
+    ] {
+        let mut bad = paired_request.clone();
+        let choices = bad
+            .transient_surface
+            .as_mut()
+            .unwrap()
+            .coupled_water_alternatives
+            .as_mut()
+            .unwrap();
+        match failure {
+            "no_source_match" => {
+                choices.pop();
+            }
+            "stale_full_material_report" => {
+                choices[1].mechanical_coupling.material_report_sha256 = "c".repeat(64);
+            }
+            "unpaired_instance" => {
+                choices[0].mechanical_coupling.bindings.remove("band");
+            }
+            _ => unreachable!(),
+        }
+        let bad_path = Path::new(&bad, body.collision, endpoints.clone()).unwrap();
+        run.scene.solver = original.clone();
+        let mut attempted = Vec::new();
+        let refusal = evaluate(
+            &bad,
+            &bad_path,
+            &scenario,
+            &body,
+            &mut run,
+            &mut heat::Budget::default(),
+            None,
+            None,
+            |message| attempted.push(message.to_owned()),
+        )
+        .unwrap_err();
+        if failure == "no_source_match" {
+            assert!(
+                refusal.message.contains("no water qualification"),
+                "{refusal:?}"
+            );
+        } else if failure == "stale_full_material_report" {
+            assert!(
+                refusal.message.contains("complete material/interface/instance"),
+                "{refusal:?}"
+            );
+        }
+        assert!(
+            attempted
+                .iter()
+                .all(|message| !message.starts_with("motion endpoint"))
+        );
+        assert_eq!(format!("{:?}", run.scene.solver), original_debug, "{failure}");
+        assert!(run.scene.solver.liquid_mass_report().unwrap().is_none());
+    }
+
+    // After the first accepted paired transfer, exhausting the later thermal budget must
+    // restore all liquid, momentum, work and attached-mass state before an identical replay.
+    let mut paired_limited = paired_request.clone();
+    paired_limited.transient_surface.as_mut().unwrap().max_cell_steps = first_cost;
+    let limited_path = Path::new(&paired_limited, body.collision, endpoints).unwrap();
+    run.scene.solver = original;
+    let mut reached = Vec::new();
+    let refusal = evaluate(
+        &paired_limited,
+        &limited_path,
+        &scenario,
+        &body,
+        &mut run,
+        &mut heat::Budget::default(),
+        None,
+        None,
+        |message| reached.push(message.to_owned()),
+    )
+    .unwrap_err();
+    assert!(
+        reached
+            .iter()
+            .any(|message| message == "motion endpoint 2/2")
+    );
+    assert!(
+        refusal.message.contains("motion heat cell-step budget exhausted"),
+        "{refusal:?}"
+    );
+    assert_eq!(format!("{:?}", run.scene.solver), original_debug);
+    assert!(run.scene.solver.liquid_mass_report().unwrap().is_none());
+    let replay = evaluate(
+        &paired_request,
+        &paired_path,
+        &scenario,
+        &body,
+        &mut run,
+        &mut heat::Budget::default(),
+        None,
+        None,
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_vec(&replay).unwrap(),
+        serde_json::to_vec(&paired).unwrap()
     );
     assert_eq!(format!("{:?}", run.scene.solver), complete_debug);
 }

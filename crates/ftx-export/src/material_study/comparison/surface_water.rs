@@ -185,15 +185,92 @@ fn alternative_case_inputs(policy: &Value) -> Result<Value, Refusal> {
     Ok(value)
 }
 
+// A material may change its qualified mechanical domain, but cannot secretly change the imposed
+// incoming/outgoing velocities or the coupling model inside one material comparison.
+fn mechanical_case_inputs(qualification: &Value, water: &Value) -> Result<Value, Refusal> {
+    source(qualification)?;
+    let identity = qualification["material_report_sha256"]
+        .as_str()
+        .ok_or_else(fail)?;
+    if identity.len() != 64
+        || !identity
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        || qualification["source"]
+            .as_object()
+            .is_none_or(|source| source.len() != 3)
+        || qualification
+            .get("allow_estimates")
+            .is_some_and(|value| !value.is_boolean())
+        || !qualification["qualification"]
+            .as_str()
+            .is_some_and(|text| !text.trim().is_empty() && text.len() <= 4096)
+    {
+        return Err(fail());
+    }
+    let water_bindings = water["bindings"].as_object().ok_or_else(fail)?;
+    let pressure = array(water, "wet_vapor_pressure_pa")?;
+    let low = finite(&pressure.first().ok_or_else(fail)?[0]).ok_or_else(fail)?;
+    let high = finite(&pressure.last().ok_or_else(fail)?[0]).ok_or_else(fail)?;
+    let mut value = qualification.clone();
+    let bindings = value["bindings"].as_object_mut().ok_or_else(fail)?;
+    if bindings.is_empty() || bindings.keys().ne(water_bindings.keys()) {
+        return Err(fail());
+    }
+    for (instance, binding) in bindings {
+        let range = array(binding, "temperature_range_c")?;
+        let maximum = number(binding, "maximum_liquid_loading_kg_m2")?;
+        if binding["material_sha256"] != water_bindings[instance]["material_sha256"]
+            || maximum <= 0.
+            || maximum < number(water, "maximum_liquid_loading_kg_m2")?
+            || range.len() != 2
+            || finite(&range[0]).is_none_or(|t| t < -273.15 || t > low)
+            || finite(&range[1]).is_none_or(|t| t < high)
+        {
+            return Err(fail());
+        }
+        let binding = binding.as_object_mut().ok_or_else(fail)?;
+        for key in [
+            "material_sha256",
+            "maximum_liquid_loading_kg_m2",
+            "temperature_range_c",
+        ] {
+            binding.remove(key);
+        }
+    }
+    let object = value.as_object_mut().ok_or_else(fail)?;
+    for key in [
+        "source",
+        "evidence",
+        "allow_estimates",
+        "method",
+        "qualification",
+        "material_report_sha256",
+    ] {
+        object.remove(key);
+    }
+    Ok(value)
+}
+
 fn selected_policy<'a>(
     request: &'a Value,
     heat: &Value,
     simulation: &Value,
-) -> Result<&'a Value, Refusal> {
-    let choices = &request["surface_water_alternatives"];
+) -> Result<(&'a Value, &'a Value), Refusal> {
+    let coupled = !request["coupled_water_alternatives"].is_null();
+    if (coupled && heat.get("surface_water_selection").is_some())
+        || (!coupled && heat.get("coupled_water_selection").is_some())
+    {
+        return Err(fail());
+    }
+    let choices = if coupled {
+        &request["coupled_water_alternatives"]
+    } else {
+        &request["surface_water_alternatives"]
+    };
     if choices.is_null() {
         return if heat.get("surface_water_selection").is_none() {
-            Ok(&request["surface_water"])
+            Ok((&request["surface_water"], &request["mechanical_coupling"]))
         } else {
             Err(fail())
         };
@@ -202,6 +279,7 @@ fn selected_policy<'a>(
     if !(1..=64).contains(&choices.len())
         || !request["surface_water"].is_null()
         || !request["mechanical_coupling"].is_null()
+        || (coupled && !request["surface_water_alternatives"].is_null())
     {
         return Err(fail());
     }
@@ -250,13 +328,28 @@ fn selected_policy<'a>(
     let mut common = None;
     let mut seen = BTreeSet::new();
     let mut selected = None;
-    for (index, policy) in choices.iter().enumerate() {
+    for (index, choice) in choices.iter().enumerate() {
+        let policy = if coupled {
+            if choice.as_object().is_none_or(|pair| pair.len() != 2) {
+                return Err(fail());
+            }
+            &choice["surface_water"]
+        } else {
+            choice
+        };
         let bindings = policy["bindings"].as_object().ok_or_else(fail)?;
         count = count.saturating_add(bindings.len());
         if bindings.is_empty() || count > 65_536 {
             return Err(fail());
         }
-        let physical = hash(&alternative_case_inputs(policy)?)?;
+        let physical = if coupled {
+            hash(&(
+                alternative_case_inputs(policy)?,
+                mechanical_case_inputs(&choice["mechanical_coupling"], policy)?,
+            ))?
+        } else {
+            hash(&alternative_case_inputs(policy)?)?
+        };
         if common
             .as_ref()
             .is_some_and(|expected| expected != &physical)
@@ -281,12 +374,23 @@ fn selected_policy<'a>(
         }
     }
     let index = selected.ok_or_else(fail)?;
-    if heat["surface_water_selection"]
+    if coupled {
+        let pair = &choices[index];
+        if heat["coupled_water_selection"]
+            != json!({"index":index,"pair_sha256":hash(pair)?})
+            || pair["mechanical_coupling"]["material_report_sha256"]
+                != hash(&simulation["drape"]["material"])?
+        {
+            return Err(fail());
+        }
+        Ok((&pair["surface_water"], &pair["mechanical_coupling"]))
+    } else if heat["surface_water_selection"]
         != json!({"index":index,"request_sha256":hash(&choices[index])?})
     {
-        return Err(fail());
+        Err(fail())
+    } else {
+        Ok((&choices[index], &request["mechanical_coupling"]))
     }
-    Ok(&choices[index])
 }
 
 // This checks the coupled producer's retained accounting, not its equations of motion. The
@@ -297,8 +401,9 @@ fn admit_mechanics(
     heat: &Value,
     request: &Value,
     coverage: bool,
+    water_policy: &Value,
+    qualification: &Value,
 ) -> Result<(), Refusal> {
-    let qualification = &request["mechanical_coupling"];
     let trace = array(heat, "trace")?;
     let initial = &motion["initial_sample"]["liquid_mechanics"];
     let final_report = &motion["liquid_mechanics"];
@@ -312,7 +417,7 @@ fn admit_mechanics(
             Err(fail())
         };
     }
-    let water = &request["surface_water"];
+    let water = water_policy;
     let draining = water["schema"] == "ftx-textile-surface-water/4"
         || water["schema"] == "ftx-textile-surface-water/5" && !water["drainage"].is_null();
     let bindings = qualification["bindings"].as_object().ok_or_else(fail)?;
@@ -582,13 +687,13 @@ fn admit_mechanics(
             let thermal_incoming = if index == 0 {
                 0.
             } else {
-                let supply = if request["surface_water"]["schema"] == "ftx-textile-surface-water/1"
+                let supply = if water_policy["schema"] == "ftx-textile-surface-water/1"
                 {
                     0.
                 } else {
                     nonnegative(water, "supplied_liquid_kg")?
                 };
-                let condensation = if !request["surface_water"]["condensation"].is_null() {
+                let condensation = if !water_policy["condensation"].is_null() {
                     nonnegative(water, "condensed_liquid_kg")?
                 } else {
                     0.
@@ -1089,8 +1194,16 @@ pub(super) fn admit(
     coverage: bool,
     mechanical_heat: &[f64],
 ) -> Result<Option<Vec<f64>>, Refusal> {
-    admit_mechanics(simulation, motion, heat, heat_request, coverage)?;
-    let policy = selected_policy(heat_request, heat, simulation)?;
+    let (policy, qualification) = selected_policy(heat_request, heat, simulation)?;
+    admit_mechanics(
+        simulation,
+        motion,
+        heat,
+        heat_request,
+        coverage,
+        policy,
+        qualification,
+    )?;
     let water = &heat["surface_water"];
     let trace = array(heat, "trace")?;
     if policy.is_null() {
