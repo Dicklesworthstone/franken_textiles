@@ -390,7 +390,13 @@ fn automatic_faces_resolve_each_region_and_bind_accepted_depth_orientation() {
     // Positive convection can qualify column ranges, but coverage still defers range admission.
     // Its two copies of each conduction result must retain the same unavailable-range receipt.
     let bounded = transport
-        .solve_exterior(&cloth, &body, &boundaries, &[environment(3., 5., None)], &[])
+        .solve_exterior(
+            &cloth,
+            &body,
+            &boundaries,
+            &[environment(3., 5., None)],
+            &[],
+        )
         .unwrap();
     assert!(bounded.steady.ranges.reported_bounds.is_none());
     for (exterior, region) in bounded.regions.iter().zip(&bounded.steady.regions) {

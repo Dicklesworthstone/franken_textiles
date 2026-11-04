@@ -242,6 +242,35 @@ impl Surface {
         })
     }
 
+    /// Initialize each retained patch to its own explicit temperature, uniform through thickness.
+    /// Patches sharing a material column may start at different temperatures. The returned state
+    /// remains bound to this exact source model and reference topology.
+    ///
+    /// # Errors
+    /// Missing or extra patch temperatures, nonphysical values, or a temperature outside that
+    /// patch's characterized material domain. No other column's domain is substituted.
+    pub fn initial_patches(&self, temperature_c: &[f64]) -> Result<SurfaceState, Refusal> {
+        if temperature_c.len() != self.patches.len() {
+            return Err(invalid(
+                "initial temperatures must cover every retained thermal patch",
+            ));
+        }
+        let temperature_c = self
+            .patches
+            .iter()
+            .zip(temperature_c)
+            .map(|(patch, &value)| {
+                let column = &self.columns[patch.column];
+                column.check_temperature(value)?;
+                Ok(vec![value; column.cells()])
+            })
+            .collect::<Result<_, Refusal>>()?;
+        Ok(SurfaceState {
+            temperature_c,
+            sha256: self.sha256.clone(),
+        })
+    }
+
     /// Steady heat flow and per-triangle cell temperatures at explicit column-specific boundaries.
     ///
     /// # Errors

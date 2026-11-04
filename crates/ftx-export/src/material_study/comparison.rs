@@ -3911,6 +3911,178 @@ fn finite(value: &Value) -> Option<f64> {
     value.as_f64().filter(|x| x.is_finite())
 }
 
+// Reconstruct authored initial temperatures from the retained physical owners. Material columns
+// can be shared by differently conditioned pieces; neither their order nor an unused fallback
+// temperature defines the initial extrema. The production thermal solver still owns evolution.
+fn initial_heat_range(
+    alternative: &Alternative,
+    simulation: &Value,
+    motion: &Value,
+    heat: &Value,
+    request: &Value,
+    coverage: bool,
+) -> Result<[f64; 2], Refusal> {
+    let fail = || {
+        invalid(
+            "initial sheet temperatures need the exact dry source, retained physical owners and complete authored-state receipt",
+        )
+    };
+    let initial = finite(&request["initial_temperature_c"])
+        .filter(|t| *t >= -273.15)
+        .ok_or_else(fail)?;
+    let Some(overrides) = request
+        .get("initial_instance_temperatures_c")
+        .filter(|v| !v.is_null())
+    else {
+        if !heat["initial_condition"].is_null() {
+            return Err(fail());
+        }
+        return Ok([initial, initial]);
+    };
+    let overrides = overrides.as_object().ok_or_else(fail)?;
+    if coverage
+        || overrides.is_empty()
+        || overrides.len() > 65_536
+        || [
+            "surface_water",
+            "surface_water_alternatives",
+            "coupled_water_alternatives",
+            "mechanical_coupling",
+            "plastic_dissipation_heat",
+            "relaxation_dissipation_heat",
+            "bending_plastic_dissipation_heat",
+        ]
+        .iter()
+        .any(|key| !request[key].is_null())
+        || heat["initial_temperature_c"] != request["initial_temperature_c"]
+    {
+        return Err(fail());
+    }
+    let frame = &simulation["drape"]["thermal_surface"];
+    let model = &heat["model"];
+    let patches = vapor_array(model, "patches")?;
+    let columns = vapor_array(model, "columns")?;
+    let source_columns = vapor_array(&frame["model"], "columns")?;
+    let owners = vapor_array(frame, "triangle_instance")?;
+    let instances = vapor_array(frame, "instances")?;
+    let triangles = vapor_array(simulation, "triangles")?;
+    let positions = vapor_array(simulation, "positions_m")?;
+    let cells = vapor_index(&request["cells_per_layer"])?;
+    if frame["available"] != true
+        || frame["schema"] != "ftx-drape-thermal-surface/1"
+        || model["schema"] != "ftx-thermal-surface/1"
+        || frame["model"]["schema"] != model["schema"]
+        || frame["material_report_sha256"] != json!(hash(&simulation["drape"]["material"])?)
+        || frame["positions_m"] != simulation["positions_m"]
+        || !same_identity(
+            &simulation["positions_sha256"],
+            &json!(hash(&frame["positions_m"])?),
+        )
+        || frame["model"]["patches"] != model["patches"]
+        || frame["model"]["vertex_count"] != model["vertex_count"]
+        || motion["triangles"] != simulation["triangles"]
+        || patches.is_empty()
+        || patches.len() > 65_536
+        || owners.len() != patches.len()
+        || triangles.len() != patches.len()
+        || columns.is_empty()
+        || columns.len() > patches.len()
+        || columns.len() != source_columns.len()
+        || instances.is_empty()
+        || instances.len() > 196_608
+        || positions.is_empty()
+        || positions.len() > 196_608
+        || vapor_index(&model["vertex_count"])? != positions.len()
+        || !(1..=64).contains(&cells)
+        || patches.len().saturating_mul(cells) > 1_000_000
+    {
+        return Err(fail());
+    }
+    for value in [frame, &frame["model"], model] {
+        let mut input = value.clone();
+        input.as_object_mut().ok_or_else(fail)?.remove("sha256");
+        if !same_identity(&value["sha256"], &json!(hash(&input)?)) {
+            return Err(fail());
+        }
+    }
+    let catalog = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    };
+    let mut selections = Vec::with_capacity(columns.len());
+    let mut laws = Vec::with_capacity(columns.len());
+    for (column, source) in columns.iter().zip(source_columns) {
+        let layers = vapor_array(column, "layers")?;
+        if layers.len() != 1
+            || column["layers"] != source["layers"]
+            || column["cells_per_layer"] != request["cells_per_layer"]
+            || !vapor_array(column, "interface_resistance_m2_k_w")?.is_empty()
+        {
+            return Err(fail());
+        }
+        let retained = &layers[0];
+        let material = catalog.resolve(&Selection {
+            id: retained["authored"]["id"].as_str().ok_or_else(fail)?.into(),
+            record: Some(serde_json::from_value(retained["authored"].clone()).map_err(|_| fail())?),
+            allow_estimates: retained["allow_estimates"].as_bool().ok_or_else(fail)?,
+            expected_sha256: Some(retained["sha256"].as_str().ok_or_else(fail)?.into()),
+            ..Selection::default()
+        })?;
+        if serde_json::to_value(&material).map_err(|_| fail())? != *retained {
+            return Err(fail());
+        }
+        laws.push(ftx_pattern::material_thermal::ThermalLaw::from_material(
+            material.material(),
+            material.allows_estimates(),
+        )?);
+        selections.push(json!(material.frozen_selection()));
+    }
+    admit_vapor_assignments(alternative, instances, owners, patches, &selections)?;
+    let mut ids = BTreeSet::new();
+    let temperatures = instances
+        .iter()
+        .map(|value| {
+            let id = value
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(fail)?;
+            if !ids.insert(id) {
+                return Err(fail());
+            }
+            overrides.get(id).map_or(Ok(initial), |value| {
+                finite(value).filter(|t| *t >= -273.15).ok_or_else(fail)
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut used = BTreeSet::new();
+    let mut range = [f64::INFINITY, f64::NEG_INFINITY];
+    for ((owner, patch), triangle) in owners.iter().zip(patches).zip(triangles) {
+        let owner = vapor_index(owner)?;
+        let t = *temperatures.get(owner).ok_or_else(fail)?;
+        if patch["vertices"] != *triangle
+            || finite(&patch["reference_area_m2"]).is_none_or(|a| a <= 0.)
+        {
+            return Err(fail());
+        }
+        laws.get(vapor_index(&patch["column"])?)
+            .ok_or_else(fail)?
+            .check_temperature(t)?;
+        used.insert(instances[owner].as_str().ok_or_else(fail)?);
+        range[0] = range[0].min(t);
+        range[1] = range[1].max(t);
+    }
+    if overrides.keys().any(|id| !used.contains(id.as_str()))
+        || heat["initial_condition"]
+            != json!({
+            "schema":"ftx-motion-surface-initial-condition/1", "model_sha256":model["sha256"],
+            "instances":instances, "triangle_instance":owners,
+            "instance_temperature_c":temperatures, "temperature_range_c":range})
+    {
+        return Err(fail());
+    }
+    Ok(range)
+}
+
 fn admit_heat<'a>(
     alternative: &Alternative,
     descriptor: &Value,
@@ -3973,10 +4145,7 @@ fn admit_heat<'a>(
     {
         return Err(fail("missing explicit interval boundary policy"));
     }
-    let initial = finite(&request["initial_temperature_c"])
-        .filter(|t| *t >= -273.15)
-        .ok_or_else(|| fail("initial temperature must be finite and above absolute zero"))?;
-    let mut range = [initial, initial];
+    let mut range = initial_heat_range(alternative, simulation, motion, h, request, coverage)?;
     let mut final_range = None;
     let mut steps = 0_u64;
     let mut interval = 0;

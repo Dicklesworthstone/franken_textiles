@@ -135,8 +135,11 @@ fn thermal(pattern: &Pattern, descriptor: &Value, covered: f64) -> Value {
         let surface = air + column["flux_w_m2"].as_f64().unwrap() / h;
         let flux = h * (surface - air);
         column["flux_w_m2"] = json!(flux);
-        column["layer_faces_c"] = json!([[effective["inside_c"].as_f64().unwrap()
-            - flux * effective["inside_resistance_m2_k_w"].as_f64().unwrap(), surface]]);
+        column["layer_faces_c"] = json!([[
+            effective["inside_c"].as_f64().unwrap()
+                - flux * effective["inside_resistance_m2_k_w"].as_f64().unwrap(),
+            surface
+        ]]);
         json!({"conduction":column,"surface_c":surface,"convective_flux_w_m2":flux,
             "radiative_flux_w_m2":0.,"radiation_enabled":false,
             "outer_area_per_model_area":1.,"balance_residual_w_m2":0.})
@@ -282,8 +285,7 @@ fn prescribed_convection_ranges_drive_signed_dominance_and_explicit_bounded_guar
             json!([if reverse { "a" } else { "b" }])
         };
         assert_eq!(
-            report["comparison"]["frontier"],
-            frontier,
+            report["comparison"]["frontier"], frontier,
             "{}",
             report["comparison"]
         );
@@ -312,8 +314,8 @@ fn convection_ranges_refuse_changed_receipts_and_unqualified_endpoints_without_e
             let result = &mut simulation["surface"]["result"];
             match fault {
                 "source" => {
-                    result["request"]["conditions"]["exterior_exchange"][0]
-                        ["convection_source"]["reference"] = json!("test:changed-convection-source");
+                    result["request"]["conditions"]["exterior_exchange"][0]["convection_source"]
+                        ["reference"] = json!("test:changed-convection-source");
                 }
                 "bounds" => {
                     result["steady"]["columns"][0]["reported_bounds"]["flux_w_m2"][0] = json!(0.);
@@ -322,12 +324,13 @@ fn convection_ranges_refuse_changed_receipts_and_unqualified_endpoints_without_e
                     result["exterior_exchange"]["columns"][0]["convective_flux_w_m2"] = json!(0.);
                 }
                 "ratio" => {
-                    result["exterior_exchange"]["columns"][0]["outer_area_per_model_area"] = json!(2.);
+                    result["exterior_exchange"]["columns"][0]["outer_area_per_model_area"] =
+                        json!(2.);
                 }
                 "power" => result["exterior_exchange"]["convective_power_w"] = json!(0.),
                 "outside-film" => {
-                    result["request"]["conditions"]["boundaries"][0]
-                        ["outside_resistance_m2_k_w"] = json!(0.2);
+                    result["request"]["conditions"]["boundaries"][0]["outside_resistance_m2_k_w"] =
+                        json!(0.2);
                 }
                 _ => unreachable!(),
             }

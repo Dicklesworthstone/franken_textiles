@@ -2,6 +2,8 @@
 //! The default is one-way. Explicit evaporation coupling updates mechanical liquid mass only
 //! after a complete heat/water interval succeeds; temperature does not invent material laws.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use ftx_core::{Refusal, Vec3};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -50,6 +52,11 @@ pub struct SurfaceRequest {
     /// Uniform material temperature at the end of the initial mechanical drape (degrees Celsius).
     /// This is an authored initial condition, not a measured or equilibrated garment temperature.
     pub initial_temperature_c: f64,
+    /// Optional dry initial temperatures for exact retained physical instance IDs. Unlisted
+    /// instances use the explicit scalar above; each patch starts uniform through thickness.
+    /// A present map must be nonempty. Water, liquid mechanics and dissipation heat are excluded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_instance_temperatures_c: Option<BTreeMap<String, f64>>,
     /// Through-thickness cells per retained material sheet, in 1..=64.
     pub cells_per_layer: usize,
     /// One spatially uniform reservoir/film pair per mechanical keyframe interval. Values apply
@@ -180,8 +187,12 @@ impl SurfaceRequest {
     ) -> Result<SurfaceHistory, Refusal> {
         self.validate(keyframes.len())?;
         work.reserve(self.max_cell_steps)?;
-        let mut history =
-            SurfaceHistory::new(self.clone(), run.thermal_surface(self.cells_per_layer)?)?;
+        let mut history = SurfaceHistory::with_instances(
+            self.clone(),
+            run.thermal_surface(self.cells_per_layer)?,
+            &run.scene.mesh.instances,
+            &run.scene.triangle_owner,
+        )?;
         if self.plastic_dissipation_heat.is_some() {
             history.plastic = Some(plastic::Heating::new_kind(
                 run,
@@ -253,6 +264,29 @@ impl SurfaceRequest {
             return Err(invalid(
                 "invalid motion surface heat schema, interval count, initial state or work policy",
             ));
+        }
+        if let Some(temperatures) = &self.initial_instance_temperatures_c {
+            if temperatures.is_empty()
+                || temperatures.len() > 65_536
+                || temperatures
+                    .iter()
+                    .any(|(id, value)| id.is_empty() || !value.is_finite() || *value < -273.15)
+            {
+                return Err(invalid(
+                    "initial instance temperatures need 1..=65536 exact names and finite physical values",
+                ));
+            }
+            if self.surface_water.is_some()
+                || self.surface_water_alternatives.is_some()
+                || self.has_mechanical_coupling()
+                || self.plastic_dissipation_heat.is_some()
+                || self.relaxation_dissipation_heat.is_some()
+                || self.bending_plastic_dissipation_heat.is_some()
+            {
+                return Err(invalid(
+                    "initial instance temperatures support dry sheet heat without liquid coupling or dissipation heating",
+                ));
+            }
         }
         for &film in &self.boundaries {
             boundary(film)?;
@@ -405,6 +439,7 @@ pub(super) struct SurfaceHistory {
     request: SurfaceRequest,
     model: Surface,
     state: SurfaceState,
+    initial_condition: Option<Value>,
     time_s: f64,
     cell_steps: usize,
     // Nonphysical pressure-search work survives a refused direct advance. The session already
@@ -441,17 +476,78 @@ struct SurfaceField {
 }
 
 impl SurfaceHistory {
+    #[cfg(test)]
     fn new(request: SurfaceRequest, model: Surface) -> Result<Self, Refusal> {
+        Self::with_instances(request, model, &[], &[])
+    }
+
+    fn with_instances(
+        request: SurfaceRequest,
+        model: Surface,
+        instances: &[String],
+        owners: &[usize],
+    ) -> Result<Self, Refusal> {
         if model.cells() > request.max_cell_steps {
             return Err(budget(
                 "motion heat initial cells exceed the whole-history budget",
             ));
         }
-        let state = model.initial(request.initial_temperature_c)?;
+        let (state, initial_condition) =
+            if let Some(overrides) = &request.initial_instance_temperatures_c {
+                let retained = owners.iter().copied().collect::<BTreeSet<_>>();
+                if instances.is_empty()
+                    || instances.len() > 196_608
+                    || owners.len() != model.patches().len()
+                    || instances.iter().any(String::is_empty)
+                    || instances.iter().collect::<BTreeSet<_>>().len() != instances.len()
+                    || retained.iter().any(|&owner| owner >= instances.len())
+                {
+                    return Err(invalid(
+                        "initial temperatures need exact retained instance ownership",
+                    ));
+                }
+                let retained_names = retained
+                    .iter()
+                    .map(|&owner| instances[owner].as_str())
+                    .collect::<BTreeSet<_>>();
+                if overrides
+                    .keys()
+                    .any(|id| !retained_names.contains(id.as_str()))
+                {
+                    return Err(invalid(
+                        "initial temperature names an unknown or unretained physical instance",
+                    ));
+                }
+                let temperatures: Vec<_> = instances
+                    .iter()
+                    .map(|id| {
+                        overrides
+                            .get(id)
+                            .copied()
+                            .unwrap_or(request.initial_temperature_c)
+                    })
+                    .collect();
+                let patch_temperatures: Vec<_> =
+                    owners.iter().map(|&owner| temperatures[owner]).collect();
+                let state = model.initial_patches(&patch_temperatures)?;
+                let range = patch_temperatures
+                    .iter()
+                    .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], &value| {
+                        [lo.min(value), hi.max(value)]
+                    });
+                let receipt = json!({"schema":"ftx-motion-surface-initial-condition/1",
+                "model_sha256":model.snapshot()["sha256"],"instances":instances,
+                "triangle_instance":owners,"instance_temperature_c":temperatures,
+                "temperature_range_c":range});
+                (state, Some(receipt))
+            } else {
+                (model.initial(request.initial_temperature_c)?, None)
+            };
         Ok(Self {
             request,
             model,
             state,
+            initial_condition,
             time_s: 0.,
             cell_steps: 0,
             pressure_cell_steps: 0,
@@ -1032,6 +1128,9 @@ impl SurfaceHistory {
             "trace":self.trace,"final":final_field,
             "uncertainty_propagated":false,"physical_validation_claim":false,"comfort_claim":false,
             "scope":"One-way independent-sheet backward Euler on every accepted mechanical sample's current geometry. Storage follows reference mass. Boundary conditions are uniform in space and piecewise constant by keyframe interval; thermal substeps do not interpolate geometry. No inferred layer overlap, body heat loss, thermomechanical feedback, mechanical heating, moisture, comfort or empirical garment claim."});
+        if let Some(initial_condition) = self.initial_condition {
+            result["initial_condition"] = initial_condition;
+        }
         if self.request.exterior_exchange.is_some() {
             result["exterior_exchange"] = json!({"convective_energy_j":self.convective_j,
                 "radiative_energy_j":self.radiative_j});
@@ -1200,6 +1299,156 @@ mod tests {
         request
     }
 
+    fn two_patch_model() -> Surface {
+        let mut snapshot = model().snapshot();
+        snapshot["vertex_count"] = json!(4);
+        snapshot["patches"].as_array_mut().unwrap().push(json!({
+            "vertices":[1,3,2],"reference_area_m2":0.5,"column":0}));
+        snapshot.as_object_mut().unwrap().remove("sha256");
+        snapshot["sha256"] = json!(hash(&snapshot).unwrap());
+        Surface::from_snapshot(&snapshot).unwrap()
+    }
+
+    #[test]
+    fn instance_initial_conditions_follow_owners_and_reference_mass_through_motion() {
+        let mut request = policy();
+        request.initial_temperature_c = 999.; // Explicit fallback is unused, not a range extremum.
+        request.initial_instance_temperatures_c = Some(BTreeMap::from([
+            ("cold:0".into(), 5.),
+            ("hot:0".into(), 35.),
+        ]));
+        request.validate(1).unwrap();
+        let mut history = SurfaceHistory::with_instances(
+            request.clone(),
+            two_patch_model(),
+            &["hot:0".into(), "cold:0".into()],
+            &[1, 0],
+        )
+        .unwrap();
+        assert_eq!(history.state.temperature_c(), &[vec![5.], vec![35.]]);
+        let mut temperatures = [5., 35.];
+        for (i, stretch) in [1., 2.].into_iter().enumerate() {
+            let area = 0.5 * stretch;
+            for value in &mut temperatures {
+                for _ in 0..2 {
+                    *value =
+                        (200. * *value + area * 30. / 0.3) / (200. + area * (1. / 0.3 + 1. / 0.4));
+                }
+            }
+            let positions = [
+                Vec3::ZERO,
+                Vec3::new(stretch, 0., 0.),
+                Vec3::new(0., 1., 0.),
+                Vec3::new(stretch, 1., 0.),
+            ];
+            history
+                .advance(&positions, (i + 1) as f64, 0, i, None, None, None)
+                .unwrap();
+            for (field, expected) in history.state.temperature_c().iter().zip(temperatures) {
+                assert!((field[0] - expected).abs() < 1e-12);
+            }
+        }
+        let result = history.finish("path", "initial", 2.).unwrap();
+        let initial = &result["initial_condition"];
+        assert_eq!(initial["schema"], "ftx-motion-surface-initial-condition/1");
+        assert_eq!(initial["model_sha256"], result["model"]["sha256"]);
+        assert_eq!(initial["instances"], json!(["hot:0", "cold:0"]));
+        assert_eq!(initial["triangle_instance"], json!([1, 0]));
+        assert_eq!(initial["instance_temperature_c"], json!([35., 5.]));
+        assert_eq!(initial["temperature_range_c"], json!([5., 35.]));
+        assert_eq!(result["request"], json!(request));
+        let stored = 100. * (temperatures[0] - 5. + temperatures[1] - 35.);
+        assert!((result["stored_change_j"].as_f64().unwrap() - stored).abs() < 1e-9);
+        assert!(result["balance_error_j"].as_f64().unwrap().abs() < 1e-9);
+    }
+
+    #[test]
+    fn instance_initial_conditions_require_exact_retained_names_and_supported_heat() {
+        let mut request = policy();
+        request.initial_instance_temperatures_c = Some(BTreeMap::from([("hot:0".into(), 35.)]));
+        let instances = ["hot:0".into(), "cold:0".into(), "unused:0".into()];
+        let history =
+            SurfaceHistory::with_instances(request.clone(), two_patch_model(), &instances, &[1, 0])
+                .unwrap();
+        assert_eq!(history.state.temperature_c(), &[vec![10.], vec![35.]]);
+        for name in ["missing:0", "unused:0"] {
+            let mut bad = request.clone();
+            bad.initial_instance_temperatures_c = Some(BTreeMap::from([(name.into(), 20.)]));
+            assert!(
+                SurfaceHistory::with_instances(bad, two_patch_model(), &instances, &[1, 0])
+                    .is_err()
+            );
+        }
+        for values in [
+            BTreeMap::new(),
+            BTreeMap::from([("".into(), 20.)]),
+            BTreeMap::from([("hot:0".into(), -274.)]),
+            BTreeMap::from([("hot:0".into(), f64::NAN)]),
+        ] {
+            let mut bad = request.clone();
+            bad.initial_instance_temperatures_c = Some(values);
+            assert!(bad.validate(1).is_err());
+        }
+        for channel in [
+            "plastic_dissipation_heat",
+            "relaxation_dissipation_heat",
+            "bending_plastic_dissipation_heat",
+        ] {
+            let mut bad = json!(request);
+            bad[channel] = json!("uniform_reference_thickness");
+            assert!(
+                serde_json::from_value::<SurfaceRequest>(bad)
+                    .unwrap()
+                    .validate(1)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn fully_overridden_fallback_is_not_checked_against_unused_material_domain() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-variable-thermal.json"
+        ))
+        .unwrap();
+        let selection: Selection = serde_json::from_value(fixture["layers"][0].clone()).unwrap();
+        let model = Surface::new(
+            vec![
+                DryThermalModel::new(
+                    vec![Catalog::builtin().unwrap().resolve(&selection).unwrap()],
+                    vec![],
+                    1,
+                )
+                .unwrap(),
+            ],
+            3,
+            vec![Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            }],
+        )
+        .unwrap();
+        let mut request = policy();
+        request.initial_temperature_c = -20.; // Physical, but outside this source's [0, 60] domain.
+        request.initial_instance_temperatures_c = Some(BTreeMap::from([("panel:0".into(), 20.)]));
+        request.validate(1).unwrap();
+        let history = SurfaceHistory::with_instances(
+            request.clone(),
+            model.clone(),
+            &["panel:0".into()],
+            &[0],
+        )
+        .unwrap();
+        assert_eq!(history.state.temperature_c(), &[vec![20.]]);
+        assert_eq!(
+            history.initial_condition.unwrap()["temperature_range_c"],
+            json!([20., 20.])
+        );
+        request.initial_instance_temperatures_c = None;
+        assert!(SurfaceHistory::new(request, model).is_err());
+    }
+
     #[test]
     fn moving_area_history_matches_independent_backward_euler_recurrence() {
         let mut history = SurfaceHistory::new(policy(), model()).unwrap();
@@ -1228,6 +1477,12 @@ mod tests {
         assert!(h["balance_error_j"].as_f64().unwrap().abs() < 1e-10);
         assert_eq!(h["cell_steps"], 8);
         assert!(h["request"].get("exterior_exchange").is_none());
+        assert!(
+            h["request"]
+                .get("initial_instance_temperatures_c")
+                .is_none()
+        );
+        assert!(h.get("initial_condition").is_none());
         assert!(h.get("exterior_exchange").is_none());
         assert!(h["trace"][0].get("exterior_exchange").is_none());
     }

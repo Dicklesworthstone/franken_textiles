@@ -649,6 +649,53 @@ test('guided dry heat rejects missing conditions and invalid physical or work li
     .transient_surface.initial_temperature_c,-273.15);
 });
 
+test('guided dry instance temperatures retain exact physical names, explicit fallback and immutable single and named requests', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const temperatures=JSON.parse('{"front.R":-15,"lining.R":30,"__proto__":12," side β ":0}');
+  const heat={...dryMotionHeat(),initial_instance_temperatures_c:temperatures},input={...motionState(),transient_surface:heat};
+  const before=JSON.stringify(input),raw=motion(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(result.transient_surface,heat);
+  assert.deepEqual(Object.keys(result.transient_surface.initial_instance_temperatures_c),Object.keys(temperatures));
+  assert.equal(result.transient_surface.initial_temperature_c,18,'Unlisted instances retain the authored scalar fallback');
+  const legacy={...motionState(),transient_surface:dryMotionHeat()};
+  assert.equal(motion(legacy),JSON.stringify({schema:'ftx-drape-motion/1',...legacy}),'Omission leaves existing uniform requests unchanged');
+  const scenario=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:16000000});
+  assert.ok(scenario.includes(raw));assert.equal(Object.hasOwn(JSON.parse(scenario),'surface'),false);
+  const named=matrix({maxEvaluations:2,cases:[{key:'warm lining',scenario}]});
+  assert.deepEqual(JSON.parse(named).cases[0].scenario.motion.transient_surface,heat);
+  const original=' '+raw.replace('"front.R":-15','"front.R":-15.0')+'\r\n';
+  assert.ok(single({...scenarioState(),motion:original,maxMotionTrials:1024,maxVertexFrames:16000000}).includes(original),
+    'The original-motion route retains its exact native source without rewriting the override map');
+});
+
+test('guided dry instance temperatures reject ambiguous maps and nonphysical values while requiring the explicit fallback', async () => {
+  const {buildMaterialMotionRequest:build}=await modulePromise;
+  const run=initial_instance_temperatures_c=>build({...motionState(),transient_surface:{...dryMotionHeat(),initial_instance_temperatures_c}});
+  for(const map of [null,undefined,[],{},'{}',new Map([['front.R',20]]),Object.create({'front.R':20}),
+    {'':20},{' \t':20},...[-273.150001,NaN,Infinity,-Infinity,'20',null,undefined].map(value=>({'front.R':value}))]) {
+    assert.throws(()=>run(map));
+  }
+  const heat={...dryMotionHeat(),initial_instance_temperatures_c:{'front.R':20}};delete heat.initial_temperature_c;
+  assert.throws(()=>build({...motionState(),transient_surface:heat}),/missing/);
+  assert.equal(JSON.parse(run({'front.R':-273.15})).transient_surface.initial_instance_temperatures_c['front.R'],-273.15);
+  const long='unaliased physical instance '+ 'β'.repeat(2000);
+  assert.equal(JSON.parse(run({[long]:0})).transient_surface.initial_instance_temperatures_c[long],0,
+    'The builder neither invents a key-length restriction nor substitutes a source-piece or material alias');
+  for(const extra of [{surface_water:{}},{mechanical_coupling:{}},{plastic_dissipation_heat:'uniform_reference_thickness'}]) {
+    assert.throws(()=>build({...motionState(),transient_surface:{...dryMotionHeat(),initial_instance_temperatures_c:{'front.R':20},...extra}}),/unsupported/);
+  }
+});
+
+test('guided dry instance temperatures obey the native entry count and complete UTF-8 request allowance', async () => {
+  const {buildMaterialMotionRequest:build}=await modulePromise;
+  const run=initial_instance_temperatures_c=>build({...motionState(),transient_surface:{...dryMotionHeat(),initial_instance_temperatures_c}});
+  const largest=Object.fromEntries(Array.from({length:65536},(_,i)=>['instance-'+i,i%2?20:-10]));
+  assert.equal(Object.keys(JSON.parse(run(largest)).transient_surface.initial_instance_temperatures_c).length,65536);
+  assert.throws(()=>run({...largest,extra:0}),/1–65536/);
+  const oversized=Object.fromEntries(Array.from({length:1024},(_,i)=>['é'.repeat(8192)+i,0]));
+  assert.throws(()=>run(oversized),/16 MiB/);
+});
+
 test('motion work limits and nominal substeps match canonical bounds without inventing convergence', async () => {
   const {buildMaterialMotionRequest:build,buildMaterialScenarioRequest:scenario}=await modulePromise;
   for(const max_step_s of [0,5e-10,1.001,NaN,Infinity,'0.1']) assert.throws(()=>build({...motionState(),max_step_s}));

@@ -199,6 +199,41 @@ at each sample's right-endpoint geometry. It does not create additional cloth or
 body poses. The example's thermal resolution and work budget are numerical policy;
 choose a sufficient budget for the actual mesh, trajectory and material alternatives.
 
+### Start dry pieces at different temperatures
+
+For independent dry sheets, an optional `initial_instance_temperatures_c` object assigns a Celsius
+temperature to each named physical instance that needs a different initial state. Keep the required
+`initial_temperature_c` as the explicit fallback for unlisted instances. For example, in a scenario
+whose retained source instances are exactly `shell:0` and `lining:0`:
+
+```json
+{
+  "initial_temperature_c": 20.0,
+  "initial_instance_temperatures_c": {"shell:0": 5.0, "lining:0": 30.0}
+}
+```
+
+These are illustrative authored preparation conditions, not measured textile data. Copy the exact
+instance names from the initial drape's `thermal_surface.instances`; a material ID or an unretained
+pattern piece is not an alias. A present object must contain 1–65,536 nonempty known names, and
+every temperature must be finite and at least −273.15 °C. Unknown names refuse the thermal consumer
+while independent motion remains available.
+
+Every triangle follows its retained instance, even when two instances share one material. Each
+patch starts at the assigned temperature throughout its depth and must stay within its own
+source-characterized temperature domain. Fully overridden fallback temperatures do not affect the
+initial extrema or undergo unused source-domain checks. The normal accepted-sample integration then
+preserves distinct states without resetting at keyframes; storage changes remain referenced to the
+actual initial temperature of each material patch.
+
+Mapped initial temperatures work with the existing film and qualified exterior boundary schedules.
+They currently refuse textile water, mechanical liquid coupling and dissipation-heat options;
+body-coverage histories retain their existing separate initialization. A mapped result adds
+`initial_condition`, containing its schema, exact model digest, canonical `instances` and
+`triangle_instance` arrays, resolved `instance_temperature_c`, and `temperature_range_c` over
+retained patches. The original request and scalar fallback remain visible. Omitting the optional
+map preserves the existing uniform request and result format.
+
 The complete heat outcome is at
 `simulations[i].evaluation.result.motion.result.transient_surface`. Check its
 `status` before reading `result`. A thermal failure publishes a refusal instead

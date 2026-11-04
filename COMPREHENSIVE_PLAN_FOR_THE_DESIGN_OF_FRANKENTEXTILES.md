@@ -5316,6 +5316,22 @@ inputs. They do not propagate weather or coefficient uncertainty, establish stat
 or qualify a real garment. Radiation and zero-coefficient extensions remain outside this bounded
 increment. `ftx-ms2.18` records the supported consumer paths and executable validation status.
 
+### 25.172 Start dry garment pieces at independently authored temperatures
+
+Ordinary moving-sheet heat can start each retained physical instance at its own explicit
+temperature, with an authored scalar fallback for unlisted pieces. Shared material columns do not
+merge these initial states. Each applied value must lie in that piece's source-qualified thermal
+domain; the existing reference-mass storage and accepted-geometry integrator evolve it unchanged.
+Exact ownership, resolved temperatures and the thermal model remain in the retained initial-state
+receipt. Material/design comparisons independently reconcile that receipt and include only actually
+applied initial temperatures in their sampled extrema.
+
+This advances `ftx-ms2` through `ftx-ms2.19`. It supports different dry starting conditions for
+shells, linings and other physical pieces without new material laws or inferred conditioning.
+Liquid, dissipation heating, through-thickness initial profiles and body-coverage overrides remain
+outside this slice. Authored initial states and numerical conservation do not establish measured
+garment temperature, thermal comfort or physical fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -305,6 +305,17 @@ thermoregulation or empirical warmth claim. Schemas, accounting and
 limits are in `docs/material-scenario-studies.md`; production regressions in `material_scenario.rs`
 compare every sample against direct solvers and independent reference-mass heat accounting.
 
+Dry independent-sheet motion may additionally author `initial_instance_temperatures_c`: a nonempty
+map of exact retained physical-instance IDs to finite temperatures at or above absolute zero.
+The required scalar initial temperature remains the explicit fallback for unlisted instances.
+Overrides follow retained triangle ownership, including pieces sharing the same material column;
+each patch starts uniform through thickness and must fit its own material temperature domain.
+The `initial_condition` receipt binds the model, canonical instances, triangle owners, resolved
+instance temperatures and actual initial extrema. An unused fallback does not enlarge those extrema
+or require admission against an unused material domain. Water, mechanical-liquid coupling and
+dissipation heating are explicitly unsupported with overrides. Omission preserves the uniform
+request and result shape; no depth profile, measured preparation state or thermal restart is inferred.
+
 **Garment mesh** (`build_garment`, spec 04 §2). Simulated instances (`sim` not false, a placement),
 matched seam samples at `spacing` (12 mm), boundary samples, the hex interior, constrained Delaunay inside
 the outline, sewing pairs, seam records, corner and edge-index maps, then `sim_scale`. Triangulation is

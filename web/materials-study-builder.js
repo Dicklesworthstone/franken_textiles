@@ -220,7 +220,7 @@ export function buildMaterialMotionRequest(state) {
   if (minimumTrials > state.max_trials) throw Error("Motion requires more nominal substeps than max_trials.");
   if (own(state, "transient_surface")) {
     const fields = ["schema", "initial_temperature_c", "cells_per_layer", "boundaries", "max_step_s", "max_cell_steps"];
-    const heat = object(state.transient_surface, fields, fields, "Guided dry sheet heat");
+    const heat = object(state.transient_surface, [...fields, "initial_instance_temperatures_c"], fields, "Guided dry sheet heat");
     if (heat.schema !== "ftx-motion-surface-heat/1") throw Error("Guided dry sheet heat needs ftx-motion-surface-heat/1.");
     const temperature = (value, label) => {
       if (typeof value !== "number" || !Number.isFinite(value) || value < -273.15) {
@@ -228,6 +228,22 @@ export function buildMaterialMotionRequest(state) {
       }
     };
     temperature(heat.initial_temperature_c, "Initial sheet temperature");
+    if (own(heat, "initial_instance_temperatures_c")) {
+      const values = heat.initial_instance_temperatures_c;
+      if (!values || typeof values !== "object" || Array.isArray(values)) {
+        throw Error("Initial instance temperatures must be an object of exact physical instance names and temperatures.");
+      }
+      const entries = Object.entries(values);
+      if (!entries.length || entries.length > 65536) throw Error("Initial instance temperatures need 1–65536 explicit entries.");
+      let size = 2;
+      for (const [instance, value] of entries) {
+        name(instance, "Initial-temperature instance"); temperature(value, `Initial temperature for ${instance}`);
+        size += bytes(JSON.stringify(instance)) + bytes(JSON.stringify(value)) + 2;
+        if (size > MAX_REQUEST_BYTES) throw Error("Guided motion request exceeds 16 MiB.");
+      }
+      // Native retained-instance ownership and each material's temperature domain decide admission.
+      // The scalar remains an explicit fallback; neither source-piece IDs nor material IDs are expanded.
+    }
     for (const [key, maximum] of [["cells_per_layer", 64], ["max_cell_steps", 10000000]]) {
       if (!Number.isSafeInteger(heat[key]) || heat[key] < 1 || heat[key] > maximum) {
         throw Error(`Guided dry sheet heat ${key} must be an integer from 1 to ${maximum}.`);
@@ -247,7 +263,9 @@ export function buildMaterialMotionRequest(state) {
       nonnegative(film.outside_resistance_m2_k_w, "Outside film resistance");
     }
   }
-  return JSON.stringify({ schema: "ftx-drape-motion/1", ...state });
+  const request = JSON.stringify({ schema: "ftx-drape-motion/1", ...state });
+  bytes(request, MAX_REQUEST_BYTES, "Guided motion request exceeds 16 MiB.");
+  return request;
 }
 
 function motionPolicy(value) {

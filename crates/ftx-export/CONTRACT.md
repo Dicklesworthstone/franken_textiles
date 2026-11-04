@@ -665,6 +665,15 @@ extrema. `motion_required` exposes whether the comparison policy requires moveme
 for transient comparisons. Required motion/history failures never borrow initial static outputs;
 existing static metric names and default consumer requirements keep their original meaning.
 See `docs/material-scenario-studies.md`; geometric settledness is not stress equilibrium or fit.
+Dry independent-sheet histories may start with explicit `initial_instance_temperatures_c`
+overrides. Admission reconstructs their complete `initial_condition` from the source-bound initial
+drape frame, exact physical-instance ownership and the alternative's frozen material assignments.
+Each applied temperature must lie in its own material domain. Shared material columns do not
+merge initial temperatures, and an unused scalar fallback does not enter sampled extrema. The
+full original request, actual model digest, owner order and resolved temperatures must agree;
+missing/stale receipts and unknown or unretained overrides refuse independently of coverage and
+manufacturing. Water, dissipation heating and body coverage do not support these overrides.
+Regressions: `scenario_comparison` initial-sheet extrema and source/receipt refusal groups.
 Radiative comparisons retain the methods, conditions, units and evidence of the actual requested
 emissivity observations by source piece, including arbitrary property names and source-bearing
 automatic optical mappings. Independent sheets use only their positive mapped face; steady

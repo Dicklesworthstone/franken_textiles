@@ -82,6 +82,60 @@ fn deformed_one_cell_matches_reference_mass_backward_euler() {
 }
 
 #[test]
+fn patch_initial_temperatures_use_only_their_own_material_domain() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-variable-thermal.json"
+    ))
+    .unwrap();
+    let selection: Selection = serde_json::from_value(fixture["layers"][0].clone()).unwrap();
+    let variable = DryThermalModel::new(
+        vec![Catalog::builtin().unwrap().resolve(&selection).unwrap()],
+        vec![],
+        3,
+    )
+    .unwrap();
+    let surface = Surface::new(
+        vec![column("constant", 0.4, 200.), variable],
+        4,
+        vec![
+            patch(),
+            Patch {
+                vertices: [1, 3, 2],
+                reference_area_m2: 0.5,
+                column: 1,
+            },
+        ],
+    )
+    .unwrap();
+    assert!(surface.initial(-20.).is_err());
+    let initial = surface.initial_patches(&[-20., 40.]).unwrap();
+    assert_eq!(initial.temperature_c(), &[vec![-20.], vec![40.; 3]]);
+    for values in [
+        vec![],
+        vec![20.],
+        vec![20., 20., 20.],
+        vec![20., -20.],
+        vec![20., 61.],
+        vec![-274., 20.],
+        vec![f64::INFINITY, 20.],
+        vec![20., f64::NAN],
+    ] {
+        assert!(surface.initial_patches(&values).is_err());
+    }
+    let positions = [
+        Vec3::ZERO,
+        Vec3::new(1., 0., 0.),
+        Vec3::new(0., 1., 0.),
+        Vec3::new(1., 1., 0.),
+    ];
+    let advanced = surface
+        .advance(&initial, &positions, 1., &[boundary(); 2])
+        .unwrap();
+    near(advanced.balance_error_j, 0., 1e-6);
+    assert_eq!(initial.temperature_c(), &[vec![-20.], vec![40.; 3]]);
+}
+
+#[test]
 fn internal_patch_energy_stays_in_joules_while_current_exchange_area_changes() {
     let s = surface("heated", 0.4, 200.0);
     let receipt = s.snapshot();
