@@ -5,15 +5,20 @@ The domain types and physics contracts remain `ftx-pattern::materials` and
 bundled data, dimensional normalization and immutable selection receipts; it does
 not introduce a competing material or constitutive model.
 
-`Catalog::builtin()` loads the canonical source tranches (432 records after the
-2026-11-03 Wang2011 addition); `textile_import::catalog()` also imports 11 legacy
-observations into that same authority, for 443 discoverable records. The initial
+`Catalog::builtin()` loads the canonical source tranches (438 records after the
+2026-11-03 construction-specific flax/hemp addition); `textile_import::catalog()` also imports 11 legacy
+observations into that same authority, for 449 discoverable records. The initial
 seed contains six product/composition references and 24 family identities. The family
 records deliberately contain no guessed mechanics. The seed includes linen,
 cotton muslin, silk charmeuse, garment cowhide, DreamKnit composition and APEX
 insulation, plus wool, silk, nylon, polyester, blends, bamboo-derived viscose,
 lyocell, felt, nonwovens, down and other family IDs. It is a starter corpus, not
 complete coverage or laboratory validation.
+
+The six [flax/hemp weave variants](flax-hemp-materials.md) retain 36 published or measured
+mass, gauge, density, yarn-count and abrasion observations under explicit test conditions.
+Their mass and qualified screening inputs reach the ordinary consumers; reported gauge
+thickness and standard deviation do not become unloaded clearance or guaranteed bounds.
 
 A `Selection` names an exact ID, optional frozen `record`, source-bearing
 `overrides`, additional `sources`, and `allow_estimates` (false by default).

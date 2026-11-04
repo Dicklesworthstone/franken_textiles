@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 mod airlaid_insulation;
 mod fabric101;
+mod flax_hemp;
 pub mod knit_strips;
 pub mod laundered_denim;
 mod leather;
@@ -244,6 +245,7 @@ impl Catalog {
         catalog.materials.extend(wet_denim::records());
         catalog.materials.extend(laundered_denim::records());
         catalog.materials.extend(fabric101::records());
+        catalog.materials.extend(flax_hemp::records());
         catalog.materials.extend(thermal_apparel::records());
         catalog.materials.extend(wang2011::records());
         catalog.materials.extend(knit_strips::records()?);

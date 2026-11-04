@@ -5171,6 +5171,22 @@ manufacturing, mechanical and other thermal results remain inspectable. Retained
 not establish continuous-time bounds, physiological comfort or measured garment warmth. Matched
 material characterization and independent garment validation remain open.
 
+### 25.165 Compare sourced linen constructions through the shared material authority
+
+Six Vasile2024 woven specimen groups add 36 source-backed observations spanning flax-warp
+fabrics with flax or hemp weft, each in plain, panama and twill constructions. Original areal
+mass, pressure-qualified gauge thickness, source-calculated bulk density, construction counts
+and Martindale abrasion results retain specimen, method and conditioning. Reported standard
+deviation remains distinct from bounds. The hybrid fabrics' assumed equal fractions in the
+paper's porosity model do not become measured composition, and loom width is not sale width.
+
+Ordinary catalog discovery, source-qualified screening, frozen pattern binding and sheet-mass
+accounting consume these observations without another database or simulation adapter. Gauge
+thickness does not qualify unloaded manufacturing clearance; absent membrane, bending, friction
+and thermal observations stay absent. `ftx-tm2.6` tracks this source/consumer increment. The
+matched linen/leather/performance-knit characterization and unchanged-jacket physical gates
+remain open in `ftx-tm2` and `ftx-tm8`; this construction matrix does not close them.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
