@@ -105,6 +105,117 @@ fn study(raw: &Value, request: &Request, pattern: &Pattern) -> Value {
 }
 
 #[test]
+fn portable_dry_instance_temperatures_preserve_owners_fallback_replay_and_independent_motion() {
+    let (pattern, mut input, mut raw) = inputs();
+    let mut pattern = pattern.raw().clone();
+    let mut upper = pattern["pieces"][0].clone();
+    upper["id"] = json!("upper");
+    upper["placement"]["y0"] = json!(-50.);
+    pattern["pieces"].as_array_mut().unwrap().push(upper);
+    pattern["seams"].as_array_mut().unwrap().push(json!({
+        "id":"join-upper","a":"upper/right","b":"upper/left"}));
+    let pattern = Pattern::new(pattern);
+    input.variants.truncate(1);
+    input.comparison = Some(
+        serde_json::from_value(json!({"basis":"nominal",
+        "required_consumers":["transient_surface"],"objectives":[
+            {"metric":"transient_surface_min_sample_temperature_c","direction":"maximize"},
+            {"metric":"transient_surface_max_sample_temperature_c","direction":"minimize"}]}))
+        .unwrap(),
+    );
+    raw.as_object_mut().unwrap().remove("coverage");
+    let policy = &mut raw["motion"]["transient_surface"];
+    policy.as_object_mut().unwrap().remove("surface_water");
+    policy["cells_per_layer"] = json!(2);
+    policy["initial_instance_temperatures_c"] = json!({"band":5.});
+    let result = study(&raw, &input, &pattern);
+    let simulation = &keyed(&result["simulations"], "qualified")["evaluation"]["result"];
+    let motion = &simulation["motion"]["result"];
+    let outcome = &motion["transient_surface"];
+    assert_eq!(outcome["status"], "available", "{outcome}");
+    let heat = &outcome["result"];
+    let initial = &heat["initial_condition"];
+    let frame = &simulation["drape"]["thermal_surface"];
+    assert_eq!(heat["request"], raw["motion"]["transient_surface"]);
+    assert_eq!(initial["model_sha256"], heat["model"]["sha256"]);
+    assert_ne!(initial["model_sha256"], frame["model"]["sha256"]);
+    assert_eq!(heat["model"]["columns"].as_array().unwrap().len(), 1);
+    assert_eq!(initial["instances"], frame["instances"]);
+    assert_eq!(initial["triangle_instance"], frame["triangle_instance"]);
+    assert_eq!(initial["temperature_range_c"], json!([5., 20.]));
+    let instances = initial["instances"].as_array().unwrap();
+    let band = instances.iter().position(|id| id == "band").unwrap();
+    let upper = instances.iter().position(|id| id == "upper").unwrap();
+    assert_eq!(initial["instance_temperature_c"][band], 5.);
+    assert_eq!(initial["instance_temperature_c"][upper], 20.);
+    for (temperatures, owner) in heat["final"]["temperature_c"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(initial["triangle_instance"].as_array().unwrap())
+    {
+        let temperatures = temperatures.as_array().unwrap();
+        assert_eq!(temperatures.len(), 2);
+        for temperature in temperatures {
+            let t = temperature.as_f64().unwrap();
+            if owner.as_u64().unwrap() as usize == band {
+                assert!(t > 5. && t < 20.);
+            } else {
+                assert!((t - 20.).abs() < 1e-10);
+            }
+        }
+    }
+    assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+    assert_eq!(
+        result["comparison"]["frontier"],
+        json!(["qualified"]),
+        "{}",
+        result["comparison"]
+    );
+    let readings = &keyed(&result["comparison"]["alternatives"], "qualified")["readings"];
+    assert_eq!(
+        readings["transient_surface_min_sample_temperature_c"]["value"],
+        5.
+    );
+    assert!(
+        (readings["transient_surface_max_sample_temperature_c"]["value"]
+            .as_f64()
+            .unwrap()
+            - 20.)
+            .abs()
+            < 1e-10
+    );
+    let mut replay = input.clone();
+    replay.variants[0].changes = serde_json::from_value(
+        keyed(&result["manufacturing"]["alternatives"], "qualified")["frozen_changes"].clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        study(&raw, &replay, &pattern)["simulations"],
+        result["simulations"]
+    );
+    let mut unknown = raw.clone();
+    unknown["motion"]["transient_surface"]["initial_instance_temperatures_c"] =
+        json!({"unretained":5.});
+    let refused = study(&unknown, &input, &pattern);
+    let independent = &keyed(&refused["simulations"], "qualified")["evaluation"]["result"];
+    assert_eq!(independent["motion"]["status"], "available");
+    assert_eq!(
+        independent["motion"]["result"]["transient_surface"]["status"],
+        "refused"
+    );
+    assert_eq!(independent["drape"], simulation["drape"]);
+    assert_eq!(
+        independent["motion"]["result"]["samples"],
+        motion["samples"]
+    );
+    assert_eq!(
+        keyed(&refused["manufacturing"]["alternatives"], "qualified")["cutting"]["status"],
+        "available"
+    );
+}
+
+#[test]
 fn source_selected_water_cools_two_materials_under_one_unchanged_scenario() {
     let (pattern, input, mut raw) = inputs();
     let original_pattern = pattern.raw().clone();
@@ -375,8 +486,7 @@ fn source_selected_coupled_water_changes_cooling_and_motion_from_ret_alone() {
     for (index, key) in ["qualified", "slower"].into_iter().enumerate() {
         let simulated = &keyed(&result["simulations"], key)["evaluation"]["result"];
         assert_eq!(
-            simulated["motion"]["status"],
-            "available",
+            simulated["motion"]["status"], "available",
             "{}",
             simulated["motion"]
         );
@@ -388,7 +498,10 @@ fn source_selected_coupled_water_changes_cooling_and_motion_from_ret_alone() {
         let mechanics = &motion["liquid_mechanics"];
         assert_eq!(mechanics, &heat["mechanical_coupling"]);
         assert_eq!(mechanics["schema"], "ftx-coupled-liquid-mechanics-result/6");
-        assert_eq!(mechanics["qualification"], pairs[index]["mechanical_coupling"]);
+        assert_eq!(
+            mechanics["qualification"],
+            pairs[index]["mechanical_coupling"]
+        );
         assert_eq!(water["request"], pairs[index]["surface_water"]);
         assert_eq!(heat["request"]["coupled_water_alternatives"], json!(pairs));
         assert_eq!(heat["coupled_water_selection"]["index"], index);
@@ -421,7 +534,13 @@ fn source_selected_coupled_water_changes_cooling_and_motion_from_ret_alone() {
                 .unwrap()
                 > 0.
         );
-        assert!(mechanics["mass_balance_residual_kg"].as_f64().unwrap().abs() < 1e-14);
+        assert!(
+            mechanics["mass_balance_residual_kg"]
+                .as_f64()
+                .unwrap()
+                .abs()
+                < 1e-14
+        );
         assert!(
             mechanics["transfer_kinetic_residual_j"]
                 .as_f64()
