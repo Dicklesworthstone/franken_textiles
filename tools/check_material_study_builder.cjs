@@ -416,6 +416,9 @@ const vaporCoveragePolicy = (changes={}) => {
 const vaporHistoryPolicy = () => ({schema:'ftx-motion-vapor-coverage/1',integration:'composite_trapezoid',max_geometry_operations:1000000});
 const motionState = () => ({keyframes:[{time_s:0.25,arm_abduction_deg:30}],max_step_s:0.125,
   max_trials:128,max_pairs:100000,max_sample_vertices:500000});
+const dryMotionHeat = () => ({schema:'ftx-motion-surface-heat/1',initial_temperature_c:18,cells_per_layer:4,
+  boundaries:[{inside_c:35,outside_c:-5,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0}],
+  max_step_s:0.01,max_cell_steps:100000});
 
 test('guided scenarios preserve exact fit and heat sources and only author declared numerical controls', async () => {
   const {buildMaterialScenarioRequest:build}=await modulePromise;
@@ -470,6 +473,55 @@ test('guided motion rejects ambiguous endpoints, invalid poses and unordered phy
   }
   const endpoints=Array.from({length:16},(_,i)=>({time_s:(i+1)/16,arm_abduction_deg:i*12}));
   assert.equal(JSON.parse(build({...motionState(),keyframes:endpoints})).keyframes.length,16);
+});
+
+test('guided dry heat authors one explicit film per endpoint and enables same-case transient decisions', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,
+    buildMaterialStudyRequest:study}=await modulePromise;
+  const heat=dryMotionHeat();heat.boundaries.push({...heat.boundaries[0],inside_c:-5,outside_c:35});
+  const input={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:30},{time_s:0.5,arm_abduction_deg:30}],transient_surface:heat};
+  const before=JSON.stringify(input),raw=motion(input),request=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(request.transient_surface,heat);
+  assert.equal(request.transient_surface.boundaries[0].outside_resistance_m2_k_w,0,'A prescribed face temperature remains explicit zero');
+  assert.equal(Object.hasOwn(JSON.parse(motion(motionState())),'transient_surface'),false,'Ordinary dry motion stays unchanged');
+  const scenario=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:16000000});
+  assert.ok(scenario.includes(raw));assert.equal(Object.hasOwn(JSON.parse(scenario),'surface'),false,'No steady heat is invented');
+  const comparison={basis:'nominal',objectives:[{metric:'transient_surface_net_boundary_energy_j',direction:'minimize'}],
+    constraints:[{metric:'transient_surface_final_min_temperature_c',minimum:-15}],required_consumers:['transient_surface']};
+  const named=matrix({maxEvaluations:2,cases:[{key:'warm-cold',scenario,comparison:JSON.stringify(comparison)}]});
+  assert.deepEqual(JSON.parse(named).cases[0].scenario.motion.transient_surface,heat);
+  const result=JSON.parse(study({...state(),objectives:comparison.objectives,constraints:comparison.constraints,
+    requiredConsumers:comparison.required_consumers},{drape:true,surface:false,motion:true,transientSurface:true}));
+  assert.deepEqual(result.comparison.objectives,comparison.objectives);
+  assert.throws(()=>study({...state(),objectives:comparison.objectives},{drape:true,surface:false,motion:true}),/transient/i);
+  heat.max_cell_steps=10000000;
+  const expensive=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:16000000});
+  assert.equal(JSON.parse(matrix({maxEvaluations:3,cases:['one','two','three'].map(key=>({key,scenario:expensive}))})).cases.length,3,
+    'Native optional consumer reservations may refuse individual histories without blocking independent study outcomes');
+});
+
+test('guided dry heat rejects missing conditions and invalid physical or work limits without admitting advanced policies', async () => {
+  const {buildMaterialMotionRequest:build}=await modulePromise;
+  const run=transient_surface=>build({...motionState(),transient_surface});
+  for(const changes of [{schema:'wrong'},{boundaries:[]},{boundaries:[dryMotionHeat().boundaries[0],dryMotionHeat().boundaries[0]]},
+    {boundaries:[null]},{surface_water:{}},{mechanical_coupling:{}},{exterior_exchange:[]},{plastic_dissipation_heat:'uniform_reference_thickness'}]) {
+    assert.throws(()=>run({...dryMotionHeat(),...changes}));
+  }
+  for(const key of Object.keys(dryMotionHeat())) {const heat=dryMotionHeat();delete heat[key];assert.throws(()=>run(heat),key);}
+  for(const value of [-273.150001,NaN,Infinity,'18',null]) {
+    assert.throws(()=>run({...dryMotionHeat(),initial_temperature_c:value}));
+    for(const key of ['inside_c','outside_c']) {const heat=dryMotionHeat();heat.boundaries[0][key]=value;assert.throws(()=>run(heat),key);}
+  }
+  for(const key of ['inside_resistance_m2_k_w','outside_resistance_m2_k_w']) {
+    for(const value of [-0.001,NaN,Infinity,'0',null]) {const heat=dryMotionHeat();heat.boundaries[0][key]=value;assert.throws(()=>run(heat),key);}
+    const missing=dryMotionHeat();delete missing.boundaries[0][key];assert.throws(()=>run(missing),key);
+  }
+  for(const [key,maximum] of [['cells_per_layer',64],['max_cell_steps',10000000]]) {
+    for(const value of [0,-1,1.5,maximum+1,NaN,Infinity,'1'])assert.throws(()=>run({...dryMotionHeat(),[key]:value}),key);
+  }
+  for(const max_step_s of [0,5e-10,1.001,NaN,Infinity,'0.01'])assert.throws(()=>run({...dryMotionHeat(),max_step_s}));
+  assert.equal(JSON.parse(run({...dryMotionHeat(),initial_temperature_c:-273.15,cells_per_layer:64,max_step_s:1,max_cell_steps:10000000}))
+    .transient_surface.initial_temperature_c,-273.15);
 });
 
 test('motion work limits and nominal substeps match canonical bounds without inventing convergence', async () => {

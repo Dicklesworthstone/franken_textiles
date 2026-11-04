@@ -112,7 +112,7 @@ function sourceObject(raw, label) {
 
 /** Author prescribed source-model endpoints; Rust owns their geometry and numerical continuation. */
 export function buildMaterialMotionRequest(state) {
-  object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices"],
+  object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "transient_surface"],
     ["keyframes", "max_step_s", "max_trials", "max_pairs"], "Guided motion");
   if (!Array.isArray(state.keyframes) || !state.keyframes.length || state.keyframes.length > 16) {
     throw Error("Motion needs 1–16 explicitly authored endpoints.");
@@ -149,6 +149,35 @@ export function buildMaterialMotionRequest(state) {
     previous = frame.time_s;
   }
   if (minimumTrials > state.max_trials) throw Error("Motion requires more nominal substeps than max_trials.");
+  if (own(state, "transient_surface")) {
+    const fields = ["schema", "initial_temperature_c", "cells_per_layer", "boundaries", "max_step_s", "max_cell_steps"];
+    const heat = object(state.transient_surface, fields, fields, "Guided dry sheet heat");
+    if (heat.schema !== "ftx-motion-surface-heat/1") throw Error("Guided dry sheet heat needs ftx-motion-surface-heat/1.");
+    const temperature = (value, label) => {
+      if (typeof value !== "number" || !Number.isFinite(value) || value < -273.15) {
+        throw Error(`${label} must be finite and at least -273.15 °C.`);
+      }
+    };
+    temperature(heat.initial_temperature_c, "Initial sheet temperature");
+    for (const [key, maximum] of [["cells_per_layer", 64], ["max_cell_steps", 10000000]]) {
+      if (!Number.isSafeInteger(heat[key]) || heat[key] < 1 || heat[key] > maximum) {
+        throw Error(`Guided dry sheet heat ${key} must be an integer from 1 to ${maximum}.`);
+      }
+    }
+    if (typeof heat.max_step_s !== "number" || !Number.isFinite(heat.max_step_s) || heat.max_step_s < 1e-9 || heat.max_step_s > 1) {
+      throw Error("Maximum thermal substep must be finite and from 1e-9 to 1 second.");
+    }
+    if (!Array.isArray(heat.boundaries) || heat.boundaries.length !== state.keyframes.length) {
+      throw Error("Save one complete sheet-heat boundary for each motion endpoint interval.");
+    }
+    const filmFields = ["inside_c", "outside_c", "inside_resistance_m2_k_w", "outside_resistance_m2_k_w"];
+    for (const film of heat.boundaries) {
+      object(film, filmFields, filmFields, "Saved sheet-heat boundary");
+      temperature(film.inside_c, "Inside reservoir temperature"); temperature(film.outside_c, "Outside reservoir temperature");
+      nonnegative(film.inside_resistance_m2_k_w, "Inside film resistance");
+      nonnegative(film.outside_resistance_m2_k_w, "Outside film resistance");
+    }
+  }
   return JSON.stringify({ schema: "ftx-drape-motion/1", ...state });
 }
 
