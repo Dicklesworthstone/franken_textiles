@@ -3,12 +3,13 @@
 // Use --section for the standalone synthetic front/side section and Workbench handoff workflow.
 // Use --charuco NATIVE_DIR for a printed dictionary's real photo controls and native report replay.
 // Use --triangulate NATIVE_DIR for exact prepared inputs and original native geometry reports.
+// Use --bundle NATIVE_DIR for anchored refinement and transitions through the shared geometry tool.
 const {chromium}=require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
 const assert=require("node:assert/strict"), fs=require("node:fs"), path=require("node:path"), http=require("node:http"), os=require("node:os");
 const sha256=bytes=>require("node:crypto").createHash("sha256").update(bytes).digest("hex");
-const root=path.resolve(__dirname,".."), web=path.join(root,"web"), sectionOnly=process.argv[2]==="--section", charucoOnly=process.argv[2]==="--charuco", triangulationOnly=process.argv[2]==="--triangulate", native=sectionOnly?null:process.argv[charucoOnly||triangulationOnly?3:2];
+const root=path.resolve(__dirname,".."), web=path.join(root,"web"), sectionOnly=process.argv[2]==="--section", charucoOnly=process.argv[2]==="--charuco", triangulationOnly=process.argv[2]==="--triangulate", bundleOnly=process.argv[2]==="--bundle", native=sectionOnly?null:process.argv[charucoOnly||triangulationOnly||bundleOnly?3:2];
 const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(web,"pkg");
-if(!native && !sectionOnly) throw Error("Supply native captures, --charuco NATIVE_DIR, --triangulate NATIVE_DIR, or --section");
+if(!native && !sectionOnly) throw Error("Supply native captures, --charuco NATIVE_DIR, --triangulate NATIVE_DIR, --bundle NATIVE_DIR, or --section");
 const work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-photo-browser-"));
 async function photoHandoff(browser,origin) {
   const context=await browser.newContext({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"}),errors=[],requests=[];
@@ -195,8 +196,11 @@ async function triangulationWorkflow(browser,origin) {
   context.on("page",page=>page.on("pageerror",error=>errors.push(String(error))));
   context.on("request",request=>requests.push({url:request.url(),method:request.method()}));
   const page=await context.newPage(),source=name=>path.join(native,name);
-  const parse=text=>JSON.parse(text,(key,value,meta)=>key==="timestamp_us"?meta.source:value);
+  const parse=text=>JSON.parse(text,(key,value,meta)=>["timestamp_us","start_us","end_us","max_skew_us"].includes(key)?meta.source:value);
   const download=async name=>{
+    // Chromium LocalFrame::ShouldThrottleDownload limits a burst to ten files per second.
+    // Pace the real clicks; every download and its exact bytes must still be observed.
+    await page.waitForTimeout(125);
     const event=page.waitForEvent("download");await page.click(`#triangulationDownloads a[download="${name}"]`);
     const file=await event;assert.equal(await file.failure(),null);return fs.readFileSync(await file.path(),"utf8");
   };
@@ -210,6 +214,59 @@ async function triangulationWorkflow(browser,origin) {
   };
   try {
     await page.goto(origin+"/photo.html");
+    if(bundleOnly) {
+      await page.setInputFiles("#triangulationNoise",{name:"old-noise.json",mimeType:"application/json",buffer:Buffer.from("{}")});
+      await page.selectOption("#geometryOperation","bundle-adjust");
+      assert.equal(await page.isVisible("#geometryNoiseControls"),false);
+      assert.equal(await page.inputValue("#triangulationNoise"),"");
+      for(const [name,iterations] of [["accepted","50"],["budget","1"],["held-out","50"],["degenerate","50"],["full-width","50"]]) {
+        console.log("Bundle case:",name,iterations);
+        await page.setInputFiles("#triangulationInput",source(name+"-input.json"));await page.fill("#bundleIterations",iterations);await run();
+        assert.equal(await page.isVisible("#triangulationResult"),true,await page.textContent("#triangulationError"));
+        const report=await download("bundle.json");assert.deepEqual(parse(report),parse(fs.readFileSync(source(name+"-native.json"),"utf8")),name+" complete native bundle equality");
+        assert.equal(await download("bundle-input.json"),fs.readFileSync(source(name+"-input.json"),"utf8"));
+        assert.equal(await download("bundle-iterations.txt"),iterations);
+        assert.equal(await page.textContent("#triangulationReport"),report);
+        if(name==="full-width") {
+          assert.ok(report.includes('"timestamp_us":18446744073709551615'));
+          assert.ok(report.includes('"end_us":18446744073709551615'));
+        }
+        if(parse(report).solution===null)assert.match(await page.textContent("#triangulationPoint"),/No optimized geometry.*initial guesses/);
+        else assert.match(await page.textContent("#triangulationPoint"),/Refined landmarks/);
+        assert.equal(await page.isDisabled("#openWorkbench"),true);
+      }
+      await page.setViewportSize({width:390,height:844});
+      await page.setInputFiles("#triangulationInput",source("accepted-input.json"));await page.fill("#bundleIterations","50");
+      let release,arrived;const reached=new Promise(resolve=>{arrived=resolve;});
+      const hold=route=>{release=route;arrived();};await context.route("**/ftx_wasm_bg.wasm",hold);
+      const requested=page.waitForRequest(request=>request.url().endsWith("/ftx_wasm_bg.wasm"),{timeout:30000});
+      await page.click("#triangulationRun");await requested;await reached;
+      await page.fill("#bundleIterations","1");assert.equal(await page.locator("#triangulationDownloads a").count(),0);
+      await release.continue().catch(()=>{});await context.unroute("**/ftx_wasm_bg.wasm",hold);
+      await run();assert.deepEqual(parse(await download("bundle.json")),parse(fs.readFileSync(source("budget-native.json"),"utf8")));
+      for(const iterations of ["1.5","-1","0","101",""]) {
+        await page.fill("#bundleIterations",iterations);await run();
+        assert.equal(await page.isVisible("#triangulationResult"),false);assert.equal(await page.locator("#triangulationDownloads a").count(),0);
+        assert.match(await page.textContent("#triangulationError"),/iterations/);
+      }
+      await page.fill("#bundleIterations","50");
+      for(const buffer of [Buffer.from([255]),Buffer.from('\ufeff{}'),Buffer.alloc(256*1024+1,32)]) {
+        await page.setInputFiles("#triangulationInput",{name:"bad-bundle.json",mimeType:"application/json",buffer});await run();
+        assert.equal(await page.isVisible("#triangulationResult"),false);assert.equal(await page.locator("#triangulationDownloads a").count(),0);
+        assert.notEqual(await page.textContent("#triangulationError"),"");
+      }
+      await page.fill("#bundleIterations","1.5");await page.selectOption("#geometryOperation","triangulate");
+      assert.equal(await page.isDisabled("#bundleIterations"),true);
+      await page.setInputFiles("#triangulationInput",source("triangulation-input.json"));await run();
+      assert.deepEqual(parse(await download("triangulation.json")),parse(fs.readFileSync(source("triangulation-native.json"),"utf8")));
+      await page.selectOption("#geometryOperation","bundle-adjust");assert.equal(await page.locator("#triangulationDownloads a").count(),0);
+      await page.fill("#bundleIterations","50");await page.setInputFiles("#triangulationInput",source("accepted-input.json"));await run();
+      assert.deepEqual(parse(await download("bundle.json")),parse(fs.readFileSync(source("accepted-native.json"),"utf8")));
+      assert.deepEqual(errors,[]);assert.ok(requests.every(request=>request.url.startsWith(origin+"/")&&request.method==="GET"));
+      assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
+      console.log("PASS bundle: five complete native/WASM reports, exact source/report/limit downloads, full-u64 frames, rank/held-out/budget/invalid-limit/input failures, cancellation on budget edits, mobile controls, triangulation round trip, no uploads/storage/page errors or measurement promotion.");
+      return;
+    }
     for(const [name,noise] of [["plain",false],["noise",true],["unavailable",true],["weak",false],["held-out",false],["full-width",true]]) {
       await select(name,noise);await run();
       assert.equal(await page.isVisible("#triangulationResult"),true,await page.textContent("#triangulationError"));
@@ -291,7 +348,7 @@ const server=http.createServer((req,res)=>{
   };
   try {
     if(sectionOnly) {await sectionWorkflow(browser,origin);return;}
-    if(triangulationOnly) {await triangulationWorkflow(browser,origin);return;}
+    if(triangulationOnly||bundleOnly) {await triangulationWorkflow(browser,origin);return;}
     await page.goto(origin+"/photo.html");
     if(charucoOnly) {
       const sheetName=fs.existsSync(path.join(native,'calib-sheet-letter.json'))?'calib-sheet-letter':'calib-sheet-a4';

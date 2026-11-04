@@ -22,8 +22,8 @@ replace evidence or an earlier report, including through symlink/hard-link alias
 
 ## Local browser route
 
-Open `web/photo.html` after building and serving the browser bundle. Under **Reconstruct a landmark
-from calibrated views**, select the same prepared input and, optionally, an `ftx-click-noise/1`
+Open `web/photo.html` after building and serving the browser bundle. Under **Reconstruct landmarks
+from calibrated views**, choose **One landmark with fixed cameras**, select the same prepared input and, optionally, an `ftx-click-noise/1`
 document declaring an independent positive pixel sigma for every FIT frame. Each file is limited to
 256 KiB. The existing Rust engines run in a disposable local worker; no source is uploaded.
 Download the complete report and exact original input/noise files for native replay:

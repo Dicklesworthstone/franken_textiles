@@ -1,5 +1,15 @@
 # ftx-wasm
 
+**Anchored joint refinement.** `photo::bundle_adjust(input, iterations)` and the matching wasm32
+export call the existing `ftx-measure::bundle::adjust`. Input JSON is bounded to 256 KiB; the step
+limit is text parsed in Rust and must be an integer in 1..=100, avoiding JavaScript ABI truncation.
+Fixed metric controls, lens/capture/rank/parallax/held-out/convergence guards and failure reports
+remain native. The existing photo geometry section shares source/report/download cancellation
+between this mode and fixed-camera triangulation. Joint mode clears separate click-noise input;
+its original observation sigmas supply fit weights. Exact input/report and submitted limit text
+remain downloadable. Failed/budget-stopped initial guesses never become a solution. No covariance,
+global optimum, measurement record, READY status, body-fit or empirical accuracy claim follows.
+
 **Calibrated landmarks.** `photo::triangulate` and the wasm32 `triangulate(input, click_noise)`
 export call the existing `ftx-measure` geometry and conditional click-noise estimators. Each source
 is bounded to 256 KiB; empty noise requests geometry alone. Native parallax, lens, capture and

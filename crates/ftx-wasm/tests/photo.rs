@@ -11,11 +11,93 @@ use ftx_trace::raster::{
     Gray,
     image::{encode_png_gray, load_photo_with_limit, load_png},
 };
-use ftx_wasm::photo::{CameraCalibration, Photo, camera_calibration, photo_section, triangulate};
+use ftx_wasm::photo::{
+    CameraCalibration, Photo, bundle_adjust, camera_calibration, photo_section, triangulate,
+};
 use serde_json::{Value, json};
 
 const SHEET: &str = include_str!("../../../web/calibration/calib-sheet-letter.json");
 const SHEET_PNG: &[u8] = include_bytes!("../../../web/calibration/calib-sheet-letter.png");
+
+#[test]
+fn portable_bundle_refinement_matches_native_solution_budget_and_full_width_frames() {
+    let mut input: Value =
+        serde_json::from_str(include_str!("../../../docs/examples/bundle.json")).unwrap();
+    let origin = u64::MAX - 100_000;
+    input["capture"]["start_us"] = json!(origin);
+    input["capture"]["end_us"] = json!(u64::MAX);
+    for key in ["views", "observations"] {
+        for entry in input[key].as_array_mut().unwrap() {
+            entry["frame"]["timestamp_us"] =
+                json!(origin + entry["frame"]["timestamp_us"].as_u64().unwrap());
+        }
+    }
+    let source = format!(" \r\n{input}\r\n");
+    let typed = serde_json::from_value(input).unwrap();
+    let actual = bundle_adjust(&source, "050").unwrap();
+    assert_eq!(
+        actual,
+        serde_json::to_value(ftx_measure::bundle::adjust(&typed, 50).unwrap()).unwrap()
+    );
+    assert_eq!(actual["status"], "ACCEPTED");
+    let point = &actual["solution"]["landmarks"][0]["position_m"];
+    for (i, expected) in [0.0, -0.4, 1.2].into_iter().enumerate() {
+        assert!((point[i].as_f64().unwrap() - expected).abs() < 1e-8);
+    }
+    assert_eq!(
+        actual["solution"]["views"][2]["frame"]["timestamp_us"].as_u64(),
+        Some(u64::MAX)
+    );
+    let budget = bundle_adjust(&source, "1").unwrap();
+    assert_eq!(
+        budget,
+        serde_json::to_value(ftx_measure::bundle::adjust(&typed, 1).unwrap()).unwrap()
+    );
+    assert_eq!(budget["status"], "BUDGET_STOP");
+    assert!(budget["solution"].is_null());
+}
+
+#[test]
+fn portable_bundle_refuses_truncated_limits_and_keeps_held_out_and_rank_failures() {
+    let source = include_str!("../../../docs/examples/bundle.json");
+    for iterations in [
+        "",
+        "-1",
+        "0",
+        "101",
+        "1.5",
+        "50.0",
+        "NaN",
+        "4294967296",
+        "18446744073709551616",
+    ] {
+        assert!(bundle_adjust(source, iterations).is_err(), "{iterations}");
+    }
+    let mut input: Value = serde_json::from_str(source).unwrap();
+    input["observations"]
+        .as_array_mut()
+        .unwrap()
+        .last_mut()
+        .unwrap()["pixel_px"][0] = json!(400.0);
+    let rejected = bundle_adjust(&input.to_string(), "50").unwrap();
+    assert_eq!(rejected["status"], "REJECTED");
+    assert!(rejected["solution"].is_null());
+    let mut input: Value = serde_json::from_str(source).unwrap();
+    for (i, control) in input["controls"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        control["position_m"] = json!([i as f64 * 0.2 - 0.4, 0.0, 1.0]);
+    }
+    let unobservable = bundle_adjust(&input.to_string(), "50").unwrap();
+    assert_eq!(unobservable["status"], "UNOBSERVABLE");
+    assert!(unobservable["solution"].is_null());
+    assert!(bundle_adjust("{}", "50").is_err());
+    assert!(bundle_adjust(&format!("\u{feff}{source}"), "50").is_err());
+    assert!(bundle_adjust(&" ".repeat(256 * 1024 + 1), "50").is_err());
+}
 
 #[test]
 fn portable_triangulation_matches_native_geometry_noise_and_full_width_frames() {

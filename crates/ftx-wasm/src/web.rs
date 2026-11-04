@@ -79,6 +79,17 @@ pub fn triangulate(input: &str, click_noise: &str) -> Result<String, JsError> {
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Refine anchored camera/landmark geometry with a text-parsed native iteration limit.
+///
+/// # Errors
+/// The portable source, budget, gauge and camera guards refuse.
+#[wasm_bindgen]
+pub fn bundle_adjust(input: &str, iterations: &str) -> Result<String, JsError> {
+    crate::photo::bundle_adjust(input, iterations)
+        .map(|value| value.to_string())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Derive PHOTO_ESTIMATED girths or calibrate a section coefficient from original local evidence.
 ///
 /// # Errors

@@ -213,19 +213,33 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
   </div>
 </section>
 <section>
-  <h2>5. Reconstruct a landmark from calibrated views</h2>
-  <p>Load prepared observations of one stationary landmark from at least two calibrated views.
+  <h2>5. Reconstruct landmarks from calibrated views</h2>
+  <p>Load prepared observations of stationary landmarks from at least two calibrated views.
     Cameras must share a metric, z-up world and the original oriented-pixel coordinates.
     Declare a reviewed still window or synchronized capture; unrelated frames of a moving person do not qualify.</p>
-  <label>Calibrated observations (<code>ftx-triangulation-input/1</code>)
+  <label>Geometry operation <select id="geometryOperation">
+    <option value="triangulate">One landmark with fixed cameras</option>
+    <option value="bundle-adjust">Refine cameras and landmarks from metric controls</option>
+  </select></label>
+  <label>Calibrated observations (<code id="geometryInputKind">ftx-triangulation-input/1</code>)
     <input id="triangulationInput" type="file" accept=".json,application/json"></label>
-  <label>Optional click-noise evidence (<code>ftx-click-noise/1</code>)
-    <input id="triangulationNoise" type="file" accept=".json,application/json"></label>
-  <button id="triangulationClearNoise" disabled>Remove click-noise evidence</button>
-  <p><small>Each file is limited to 256 KiB. Click uncertainty is conditional on fixed cameras, scale and capture;
-    it excludes calibration error, motion and systematic error. Missing uncertainty remains unavailable.</small></p>
+  <div id="geometryNoiseControls">
+    <label>Optional click-noise evidence (<code>ftx-click-noise/1</code>)
+      <input id="triangulationNoise" type="file" accept=".json,application/json"></label>
+    <button id="triangulationClearNoise" disabled>Remove click-noise evidence</button>
+    <p><small>Click uncertainty is conditional on fixed cameras, scale and capture;
+      it excludes calibration error, motion and systematic error. Missing uncertainty remains unavailable.</small></p>
+  </div>
+  <div id="geometryBundleControls" hidden>
+    <label>Maximum accepted refinement steps <input id="bundleIterations" type="number" min="1" max="100" step="1" value="50"></label>
+    <p>Joint refinement requires at least four well-spread fixed metric controls in every camera.
+      Use the same stationary reference and world frame throughout. Initial camera and landmark guesses are not observations.</p>
+    <p><small>Each observation supplies its own pixel sigma. Switching to joint refinement clears the separate click-noise selection.
+      Intrinsics stay fixed; no camera covariance or global optimum is established. Failed or budget-stopped solves publish no optimized geometry.</small></p>
+  </div>
+  <p><small>Each input file is limited to 256 KiB. Review the complete native report before using any geometry.</small></p>
   <p><button id="triangulationRun" disabled>Triangulate landmark</button>
-    <button id="triangulationCancel" disabled>Cancel triangulation</button></p>
+    <button id="triangulationCancel" disabled>Cancel geometry calculation</button></p>
   <p id="triangulationStatus" role="status" aria-live="polite">Choose calibrated observations.</p>
   <pre id="triangulationError" role="alert"></pre>
   <div id="triangulationResult" hidden>

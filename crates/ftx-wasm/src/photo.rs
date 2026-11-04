@@ -16,6 +16,21 @@ use serde_json::{Value, json};
 
 const MAX_JSON: usize = 256 * 1024;
 
+/// Refine cameras and landmarks with the native fixed-control gauge and acceptance gates.
+/// The textual iteration limit is parsed in Rust, never truncated at the JavaScript boundary.
+///
+/// # Errors
+/// Invalid/oversized input, an iteration limit outside 1..=100, or shared bundle refusals.
+pub fn bundle_adjust(input: &str, iterations: &str) -> Result<Value, Refusal> {
+    let input = parse(input)?;
+    let iterations = iterations
+        .parse::<u32>()
+        .map_err(|_| invalid("bundle iterations must be an integer in 1..=100"))?;
+    // Both supported pointer widths represent u32; the solver enforces 1..=100.
+    serde_json::to_value(ftx_measure::bundle::adjust(&input, iterations as usize)?)
+        .map_err(|e| invalid(e.to_string()))
+}
+
 /// Calibrated multi-view geometry and optional click-only precision, using the existing native
 /// estimators and gates. An empty noise text requests geometry alone; no measurement is created.
 ///

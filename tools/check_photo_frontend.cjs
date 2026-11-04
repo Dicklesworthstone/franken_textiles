@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,calibrationReport=cameraReport()}={}) {
   const sent=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -34,12 +34,14 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function camera_calibration(input,noise){calls.push({kind:'coordinates',input,noise});return JSON.stringify(calibrationReport);}
   function photo_section(width,depth,options){calls.push({kind:'section',width,depth,options});if(failSection)throw Error('section evidence refused');return JSON.stringify(sectionReport());}
   function triangulate(input,noise){calls.push({kind:'triangulate',input,noise});if(failTriangulation)throw Error('capture evidence refused');return JSON.stringify(triangulationReport());}
+  function bundle_adjust(input,iterations){calls.push({kind:'bundle-adjust',input,iterations});if(failBundle)throw Error('metric controls refused');return JSON.stringify(bundleReport());}
   const context=vm.createContext({Uint8Array,JSON,Error,URL,self:{postMessage:m=>sent.push(m)}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','camera_calibration','photo_section','triangulate'],function(){
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','camera_calibration','photo_section','triangulate','bundle_adjust'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
     this.setExport('photo_section',photo_section);
     this.setExport('triangulate',triangulate);
+    this.setExport('bundle_adjust',bundle_adjust);
   },{context});
   await imports.link(()=>{}); await imports.evaluate();
   const module=new vm.SourceTextModule(read('photo-worker.js'),{
@@ -85,7 +87,7 @@ async function photoPage({decode,materialsToken=null}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
   for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise'])if(e[id])e[id].type='file';e.points.type='textarea';
-  for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images'}))e[id].value=value;
+  for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images',geometryOperation:'triangulate',bundleIterations:'50'}))e[id].value=value;
   for(const [id,value] of Object.entries({sectionLevel:'waist',sectionMode:'girth',sectionClothing:'0',sectionRatio:'1',sectionRatioSigma:'0',sectionTapeSigma:'10'}))e[id].value=value;
   const workers=[],urls=new Map(),closed=[],windowEvents={},popups=[]; let serial=0;
   class Worker {
@@ -808,11 +810,81 @@ test('triangulation preflights both byte budgets, rejects empty/invalid noise fi
   await p.e.triangulationRun.onclick();p.current().onerror({message:'worker crash'});assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.urls.size,0);
 });
 
+function bundleReport(overrides={}) {
+  return {schema:'ftx-bundle/1',status:'ACCEPTED',solution:{views:[],landmarks:[{id:'p',position_m:[0,-0.4,1.2]}]},
+    input:{views:[{},{},{}],landmarks:[{id:'p'}]},iterations:7,objective_history:[100,0],checks:[],flags:[],advisories:[],no_claim:'Synthetic local anchored geometry only',...overrides};
+}
+
+test('bundle worker forwards exact raw sources and textual limits without invoking another estimator',async()=>{
+  const source={request:21,op:'bundle-adjust',input:' \r\n{"timestamp_us":18446744073709551615}\r\n',iterations:'50.5',noise:'must not use'};
+  const w=await photoWorker();assert.equal((await w.send(source)).type,'result');
+  assert.deepEqual(w.calls,[{kind:'bundle-adjust',input:source.input,iterations:'50.5'}]);assert.equal(w.instances.length,0);
+  const failed=await photoWorker({failBundle:true});assert.equal((await failed.send(source)).type,'error');
+  assert.deepEqual(failed.calls.map(call=>call.kind),['bundle-adjust']);
+});
+
+test('bundle mode clears separate noise and retains exact input, limit and native report downloads',async()=>{
+  const p=await photoPage(),input=' \r\n{"bundle":"original λ","timestamp_us":18446744073709551615}\r\n';
+  p.e.triangulationInput.files=[file(input)];p.e.triangulationNoise.files=[file('old triangulation noise')];
+  p.e.geometryOperation.value='bundle-adjust';p.e.geometryOperation.handlers.change();
+  assert.equal(p.e.triangulationNoise.files.length,0);assert.equal(p.e.triangulationNoise.disabled,true);
+  assert.equal(p.e.geometryNoiseControls.hidden,true);assert.equal(p.e.geometryBundleControls.hidden,false);
+  assert.equal(p.e.geometryInputKind.textContent,'ftx-bundle-input/1');p.e.bundleIterations.value='050';
+  await p.e.triangulationRun.onclick();const w=p.current(),message=w.messages[0];
+  assert.equal(message.op,'bundle-adjust');assert.equal(message.input,input);assert.equal(message.iterations,'050');assert.equal(message.noise,'');
+  const raw=JSON.stringify(bundleReport());await w.emit({type:'result',request:message.request,report:raw});
+  assert.match(p.e.triangulationPoint.textContent,/Refined landmarks/);assert.match(p.e.triangulationSummary.textContent,/limit 050/);
+  assert.match(p.e.triangulationSummary.textContent,/normalized residual sum of squares: 100 → 0/);
+  const links=p.e.triangulationDownloads.children;
+  assert.deepEqual(links.map(a=>a.download),['bundle.json','bundle-input.json','bundle-iterations.txt']);
+  assert.deepEqual(await Promise.all(links.map(a=>p.urls.get(a.href).text())),[raw,input,'050']);
+  assert.equal(p.e.openWorkbench.disabled,true);assert.match(p.e.triangulationPrecision.textContent,/no camera.*covariance/);
+  p.e.geometryOperation.value='triangulate';p.e.geometryOperation.handlers.change();
+  assert.equal(p.urls.size,0);assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.e.bundleIterations.disabled,true);
+  assert.equal(p.e.geometryInputKind.textContent,'ftx-triangulation-input/1');
+  await w.emit({type:'result',request:message.request,report:raw});assert.equal(p.e.triangulationResult.hidden,true);
+});
+
+test('bundle budget edits cancel reads/workers and failed solves expose diagnostics without initial guesses as results',async()=>{
+  const p=await photoPage();p.e.geometryOperation.value='bundle-adjust';p.e.geometryOperation.handlers.change();p.e.triangulationInput.files=[file('{}')];
+  for(const status of ['BUDGET_STOP','UNOBSERVABLE','REJECTED']) {
+    await p.e.triangulationRun.onclick();const w=p.current();
+    await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(bundleReport({status,solution:null}))});
+    assert.equal(p.e.triangulationResult.hidden,false);assert.match(p.e.triangulationPoint.textContent,/No optimized geometry/);
+    assert.match(p.e.triangulationPoint.textContent,/initial guesses/);assert.equal(p.e.triangulationDownloads.children.length,3);
+    assert.equal(p.e.openWorkbench.disabled,true);
+  }
+  await p.e.triangulationRun.onclick();const old=p.current();p.e.bundleIterations.value='1';p.e.bundleIterations.handlers.input();
+  assert.equal(old.dead,true);await old.emit({type:'result',request:old.messages[0].request,report:JSON.stringify(bundleReport())});
+  assert.equal(p.urls.size,0);assert.equal(p.e.triangulationResult.hidden,true);
+  let finish;const count=p.workers.length;p.e.triangulationInput.files=[{size:2,arrayBuffer:()=>new Promise(resolve=>{finish=resolve;})}];
+  const pending=p.e.triangulationRun.onclick();p.e.geometryOperation.value='triangulate';p.e.geometryOperation.handlers.change();
+  finish(new TextEncoder().encode('{}').buffer);await pending;assert.equal(p.workers.length,count);
+  p.e.geometryOperation.value='unsupported';await p.e.triangulationRun.onclick();assert.equal(p.workers.length,count);
+  assert.match(p.e.triangulationError.textContent,/supported geometry operation/);
+});
+
 async function compiledPhotoBindings(){
   const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(root,'web/pkg');
   const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
   ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});return ftx;
 }
+
+test('compiled bundle adjustment matches native solutions, failures and exact iteration parsing',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_BUNDLE_FIXTURES},async()=>{
+    const ftx=await compiledPhotoBindings(),dir=process.env.FTX_BUNDLE_FIXTURES;
+    const parse=text=>JSON.parse(text,(key,value,meta)=>['timestamp_us','start_us','end_us','max_skew_us'].includes(key)?meta.source:value);
+    for(const [name,iterations] of [['accepted','050'],['budget','1'],['held-out','50'],['degenerate','50'],['full-width','50']]) {
+      const input=fs.readFileSync(path.join(dir,name+'-input.json'),'utf8');
+      const actual=ftx.bundle_adjust(input,iterations),expected=fs.readFileSync(path.join(dir,name+'-native.json'),'utf8');
+      assert.deepEqual(parse(actual),parse(expected),name+' complete original native bundle report');
+      if(name==='full-width')assert.ok(actual.includes('"timestamp_us":18446744073709551615'));
+    }
+    const source=fs.readFileSync(path.join(dir,'accepted-input.json'),'utf8');
+    for(const value of ['', '-1','0','101','1.5','50.0','NaN','4294967296','18446744073709551616'])assert.throws(()=>ftx.bundle_adjust(source,value),/iterations/);
+    assert.throws(()=>ftx.bundle_adjust(' '.repeat(256*1024+1),'50'),/256 KiB/);
+    assert.throws(()=>ftx.bundle_adjust('\ufeff'+source,'50'));
+  });
 
 test('compiled triangulation reproduces complete native reports and exact full-width frame identities',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_TRIANGULATION_FIXTURES},async()=>{

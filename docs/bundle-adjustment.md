@@ -18,6 +18,27 @@ in metres. Four sheet controls per camera and the first two landmark observation
 the center control in all three images and the landmark in the third image are held out.
 The real-binary regression executes this exact example, including failure and overwrite cases.
 
+## Local browser route
+
+Build and serve the ordinary browser bundle, then open `web/photo.html`. In **Reconstruct landmarks
+from calibrated views**, choose **Refine cameras and landmarks from metric controls**, select the
+same prepared `ftx-bundle-input/1` document (at most 256 KiB), and set the accepted-step limit
+(1–100, initially 50). Rust parses the submitted limit as an integer; fractional or invalid limits
+refuse rather than truncate. The existing native solver runs in a disposable local worker.
+
+Download `bundle.json`, the exact `bundle-input.json` and `bundle-iterations.txt`. Use the saved
+limit in the native replay, for example:
+
+```sh
+ftx measure bundle-adjust bundle-input.json --iterations 50 --json
+```
+
+Separate triangulation click-noise evidence is cleared when selecting joint refinement; each bundle
+observation already supplies its own pixel sigma. Geometry, mode, input and limit changes or
+cancellation withdraw old results/downloads, while other photo evidence remains independent.
+Failure diagnostics retain `solution: null`; initial cameras and landmark guesses in the input
+are never displayed as an optimized result. No source is uploaded or stored by the page.
+
 ## Inputs and gauge
 
 `ftx-bundle-input/1` has `metric_scale_source`, `capture`, `views`, `controls`, `landmarks` and
@@ -83,8 +104,8 @@ observations. Requests exceeding those limits are refused, not truncated.
 This is an anchored, calibrated stationary-scene slice of FTX-20. It does not estimate lens
 parameters, reference scale/uncertainty, camera covariance or the global minimum. It is not
 the FTX-21 shared-shape/per-frame-pose body fit and emits no fused tape/photo measurement,
-measurement sigma, READY status or real-wearer fit claim. Actual stillness detection and
-multi-frame body fitting remain separate work.
+measurement sigma, READY status or real-wearer fit claim. Existing stillness detection and
+multi-frame body fitting remain separate native workflows, not automatic stages of this tool.
 
 The objective follows the standard bundle-adjustment formulation described in the
 [Ceres nonlinear least-squares tutorial](https://ceres-solver.org/nnls_tutorial.html#bundle-adjustment);
