@@ -420,6 +420,50 @@ const dryMotionHeat = () => ({schema:'ftx-motion-surface-heat/1',initial_tempera
   boundaries:[{inside_c:35,outside_c:-5,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0}],
   max_step_s:0.01,max_cell_steps:100000});
 
+test('uniform sheet heat and vapor builders author independent explicit boundaries without material or model defaults', async () => {
+  const {buildMaterialSurfaceConditions:heat,buildMaterialVaporSurfaceConditions:vapor,buildMaterialScenarioRequest:scenario}=await modulePromise;
+  const boundary={inside_c:-5,outside_c:30,inside_resistance_m2_k_w:0,outside_resistance_m2_k_w:0.2};
+  const vaporInput=vaporBoundary(),before=JSON.stringify({boundary,vaporInput});
+  const surface=heat(boundary),vaporSurface=vapor(vaporInput);
+  assert.deepEqual(JSON.parse(surface),{schema:'ftx-steady-surface-conditions/1',boundaries:[boundary]});
+  assert.deepEqual(JSON.parse(vaporSurface),{schema:'ftx-vapor-surface-conditions/1',boundaries:[vaporInput]});
+  assert.equal(JSON.stringify({boundary,vaporInput}),before);
+  for(const raw of [surface,vaporSurface]) for(const key of ['model_sha256','allow_mixed_protocols','required_method','required_conditions','exterior_exchange']) {
+    assert.equal(Object.hasOwn(JSON.parse(raw),key),false,key+' stays native-defaulted or on the original-file route');
+  }
+  const raw=scenario({...scenarioState(),surface,vaporSurface}),both=JSON.parse(raw);
+  assert.ok(raw.includes(surface));assert.ok(raw.includes(vaporSurface));assert.deepEqual(both.surface.boundaries,[boundary]);
+  assert.deepEqual(both.vapor_surface.boundaries,[vaporInput]);assert.equal(Object.hasOwn(both,'motion'),false);
+  assert.equal(Object.hasOwn(JSON.parse(scenario({...scenarioState(),vaporSurface})),'surface'),false,'Vapor needs no dry heat request');
+  for(const inside_c of [-273.15,30,35]) assert.equal(JSON.parse(heat({...boundary,inside_c})).boundaries[0].inside_c,inside_c);
+  for(const pressure of [0,1000]) {
+    assert.equal(JSON.parse(vapor({...vaporInput,inside_vapor_pressure_pa:pressure,outside_vapor_pressure_pa:pressure}))
+      .boundaries[0].inside_vapor_pressure_pa,pressure,'Equal reservoirs are an explicit valid zero-potential case');
+  }
+});
+
+test('uniform sheet boundary builders refuse missing values, coercion and unsupported or nonphysical conditions', async () => {
+  const {buildMaterialSurfaceConditions:heat,buildMaterialVaporSurfaceConditions:vapor}=await modulePromise;
+  const heatInput={inside_c:30,outside_c:10,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0.2},vaporInput=vaporBoundary();
+  for(const [build,input] of [[heat,heatInput],[vapor,vaporInput]]) {
+    for(const value of [null,[],{},true,'{}'])assert.throws(()=>build(value));
+    for(const key of Object.keys(input)) {
+      const missing={...input};delete missing[key];assert.throws(()=>build(missing),key);
+      for(const value of [NaN,Infinity,-Infinity,null,undefined,'1',true])assert.throws(()=>build({...input,[key]:value}),key);
+    }
+    for(const extra of [{model_sha256:'a'.repeat(64)},{allow_mixed_protocols:true},{required_method:'test'},{exterior_exchange:[]}]) {
+      assert.throws(()=>build({...input,...extra}),/unsupported/,'Advanced policies retain their original source file');
+    }
+  }
+  for(const key of ['inside_c','outside_c'])assert.throws(()=>heat({...heatInput,[key]:-273.15001}));
+  for(const key of ['inside_resistance_m2_k_w','outside_resistance_m2_k_w'])assert.throws(()=>heat({...heatInput,[key]:-0.001}));
+  for(const key of ['inside_vapor_pressure_pa','outside_vapor_pressure_pa'])assert.throws(()=>vapor({...vaporInput,[key]:-1}));
+  assert.throws(()=>vapor({...vaporInput,inside_vapor_pressure_pa:999}),/outside pressure/);
+  for(const key of ['inside_film_resistance_m2_pa_w','outside_film_resistance_m2_pa_w','latent_heat_j_kg']) {
+    for(const value of [0,-1])assert.throws(()=>vapor({...vaporInput,[key]:value}),/positive/);
+  }
+});
+
 test('guided scenarios preserve exact fit and heat sources and only author declared numerical controls', async () => {
   const {buildMaterialScenarioRequest:build}=await modulePromise;
   const fit=' {\r\n"schema":"fabric-fit/1","points":[],"source":{"seed":18446744073709551615,"x":-0.0,"value":1.0,"label":"é 🧵"}}\r\n';

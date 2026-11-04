@@ -111,6 +111,36 @@ function sourceObject(raw, label) {
   return value;
 }
 
+/** One explicit boundary broadcasts over the current native material columns; no old model lock is inferred. */
+export function buildMaterialSurfaceConditions(boundary) {
+  const fields = ["inside_c", "outside_c", "inside_resistance_m2_k_w", "outside_resistance_m2_k_w"];
+  object(boundary, fields, fields, "Uniform sheet heat conditions");
+  for (const key of ["inside_c", "outside_c"]) {
+    if (typeof boundary[key] !== "number" || !Number.isFinite(boundary[key]) || boundary[key] < -273.15) {
+      throw Error(`Sheet heat ${key} must be finite and at least -273.15 °C.`);
+    }
+  }
+  for (const key of ["inside_resistance_m2_k_w", "outside_resistance_m2_k_w"]) nonnegative(boundary[key], `Sheet heat ${key}`);
+  return JSON.stringify({ schema: "ftx-steady-surface-conditions/1", boundaries: [boundary] });
+}
+
+/** Author the existing forward vapor-potential boundary, independently of dry heat or available water. */
+export function buildMaterialVaporSurfaceConditions(boundary) {
+  const fields = ["inside_vapor_pressure_pa", "outside_vapor_pressure_pa", "inside_film_resistance_m2_pa_w",
+    "outside_film_resistance_m2_pa_w", "latent_heat_j_kg"];
+  object(boundary, fields, fields, "Uniform sheet vapor conditions");
+  for (const key of ["inside_vapor_pressure_pa", "outside_vapor_pressure_pa"]) nonnegative(boundary[key], `Sheet vapor ${key}`);
+  if (boundary.outside_vapor_pressure_pa > boundary.inside_vapor_pressure_pa) {
+    throw Error("Sheet vapor outside pressure must not exceed inside pressure; this potential request does not qualify reverse transport.");
+  }
+  for (const key of ["inside_film_resistance_m2_pa_w", "outside_film_resistance_m2_pa_w", "latent_heat_j_kg"]) {
+    if (typeof boundary[key] !== "number" || !Number.isFinite(boundary[key]) || boundary[key] <= 0) {
+      throw Error(`Sheet vapor ${key} must be finite and positive.`);
+    }
+  }
+  return JSON.stringify({ schema: "ftx-vapor-surface-conditions/1", boundaries: [boundary] });
+}
+
 /** Author prescribed source-model endpoints; Rust owns their geometry and numerical continuation. */
 export function buildMaterialMotionRequest(state) {
   object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "transient_surface"],
