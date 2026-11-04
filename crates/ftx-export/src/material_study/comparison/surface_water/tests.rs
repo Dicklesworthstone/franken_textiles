@@ -529,8 +529,11 @@ fn with_paired_qualifications(descriptor: &mut Value, motion: &mut Value) {
     let mechanics = request.remove("mechanical_coupling").unwrap();
     let selected = json!({"surface_water":water,"mechanical_coupling":mechanics});
     let mut other = selected.clone();
-    other["surface_water"]["maximum_liquid_loading_kg_m2"] =
-        json!(2. * selected["surface_water"]["maximum_liquid_loading_kg_m2"].as_f64().unwrap());
+    other["surface_water"]["maximum_liquid_loading_kg_m2"] = json!(
+        2. * selected["surface_water"]["maximum_liquid_loading_kg_m2"]
+            .as_f64()
+            .unwrap()
+    );
     other["surface_water"]["source"]["reference"] = json!("test:other-paired-water");
     for binding in other["surface_water"]["bindings"]
         .as_object_mut()
@@ -547,8 +550,11 @@ fn with_paired_qualifications(descriptor: &mut Value, motion: &mut Value) {
         .values_mut()
     {
         binding["material_sha256"] = json!("a".repeat(64));
-        binding["maximum_liquid_loading_kg_m2"] =
-            json!(3. * selected["surface_water"]["maximum_liquid_loading_kg_m2"].as_f64().unwrap());
+        binding["maximum_liquid_loading_kg_m2"] = json!(
+            3. * selected["surface_water"]["maximum_liquid_loading_kg_m2"]
+                .as_f64()
+                .unwrap()
+        );
         binding["temperature_range_c"] = json!([-30., 90.]);
     }
     heat["coupled_water_selection"] = json!({"index":1,"pair_sha256":hash(&selected).unwrap()});
@@ -643,13 +649,17 @@ fn paired_water_sources_refuse_mixed_domains_operating_inputs_and_forged_receipt
             "index" => heat["coupled_water_selection"]["index"] = json!(0),
             "digest" => heat["coupled_water_selection"]["pair_sha256"] = json!("c".repeat(64)),
             "missing-receipt" => {
-                heat.as_object_mut().unwrap().remove("coupled_water_selection");
+                heat.as_object_mut()
+                    .unwrap()
+                    .remove("coupled_water_selection");
             }
             "wrong-receipt-kind" => heat["surface_water_selection"] = Value::Null,
             "empty" => heat["request"]["coupled_water_alternatives"] = json!([]),
             "too-many" => {
-                heat["request"]["coupled_water_alternatives"] =
-                    json!(vec![heat["request"]["coupled_water_alternatives"][1].clone(); 65]);
+                heat["request"]["coupled_water_alternatives"] = json!(vec![
+                        heat["request"]["coupled_water_alternatives"][1].clone();
+                        65
+                    ]);
             }
             "single-water" => {
                 heat["request"]["surface_water"] = heat["surface_water"]["request"].clone();
@@ -696,8 +706,7 @@ fn paired_water_sources_refuse_mixed_domains_operating_inputs_and_forged_receipt
                     }
                     "outgoing-velocity" => {
                         let binding = &mut pairs[0]["mechanical_coupling"]["bindings"]["front"];
-                        let schedule =
-                            &mut binding["outgoing_stream_velocities_relative_to_cloth_m_s_by_interval"];
+                        let schedule = &mut binding["outgoing_stream_velocities_relative_to_cloth_m_s_by_interval"];
                         schedule[0]["drainage"] = json!([0., 0., 1.]);
                     }
                     "mechanical-model" => {
@@ -894,33 +903,33 @@ fn optical_protocols_follow_used_observations_and_positive_independent_faces() {
                 match fault {
                     "used-method" => {
                         changed["record"]["properties"]["emissivity_public"]["method"] =
-                            json!("Different optical method");
+                            json!("Different optical method")
                     }
                     "used-evidence" => {
                         changed["record"]["properties"]["emissivity_public"]["evidence"] =
-                            json!("published");
+                            json!("published")
                     }
                     "used-conditions" => {
-                        changed["record"]["properties"]["emissivity_public"]["conditions"]
-                            ["temperature_max_c"] = json!("70");
+                        changed["record"]["properties"]["emissivity_public"]["conditions"]["temperature_max_c"] =
+                            json!("70")
                     }
                     "used-value" => {
-                        changed["record"]["properties"]["emissivity_public"]["value"] = json!(0.7);
+                        changed["record"]["properties"]["emissivity_public"]["value"] = json!(0.7)
                     }
                     "unused-generic" => {
                         changed["record"]["properties"]["emissivity"]["method"] =
-                            json!("Unconsumed generic method");
+                            json!("Unconsumed generic method")
                     }
                     "unused-reverse" => {
                         changed["record"]["properties"]["emissivity_reverse"]["method"] =
-                            json!("Unconsumed reverse-side method");
+                            json!("Unconsumed reverse-side method")
                     }
                     "mapping-method" => {
                         changed["record"]["optical_faces"]["method"] =
-                            json!("Different orientation method");
+                            json!("Different orientation method")
                     }
                     "mapping-evidence" => {
-                        changed["record"]["optical_faces"]["evidence"] = json!("published");
+                        changed["record"]["optical_faces"]["evidence"] = json!("published")
                     }
                     _ => unreachable!(),
                 }
@@ -946,10 +955,10 @@ fn optical_protocols_follow_used_observations_and_positive_independent_faces() {
         let original = optical_protocol(&a, &d, &s, &m, metric);
         let mut changed = raw.clone();
         changed["record"]["properties"]["emissivity"]["method"] = json!("Unused generic method");
-        changed["record"]["properties"]["emissivity_public"]["method"] = json!("Unused face method");
+        changed["record"]["properties"]["emissivity_public"]["method"] =
+            json!("Unused face method");
         changed["record"]["optical_faces"]["method"] = json!("Unused mapping method");
-        a.frozen_changes.as_mut().unwrap().default =
-            Some(serde_json::from_value(changed).unwrap());
+        a.frozen_changes.as_mut().unwrap().default = Some(serde_json::from_value(changed).unwrap());
         assert_eq!(original, optical_protocol(&a, &d, &s, &m, metric));
         a.frozen_changes.as_mut().unwrap().default =
             Some(serde_json::from_value(raw.clone()).unwrap());
@@ -966,8 +975,7 @@ fn optical_schedule_protocol_keeps_observations_bound_to_their_selectors() {
     raw["record"]["properties"]["emissivity_reverse"]["conditions"] =
         raw["record"]["properties"]["emissivity_public"]["conditions"].clone();
     raw["record"]["optical_faces"] = Value::Null;
-    a.frozen_changes.as_mut().unwrap().default =
-        Some(serde_json::from_value(raw.clone()).unwrap());
+    a.frozen_changes.as_mut().unwrap().default = Some(serde_json::from_value(raw.clone()).unwrap());
     d["scenario"]["motion"]["transient_surface"]["exterior_exchange"] = json!([
         {"radiation":{"emissivity_property":"emissivity_public","exposed_face":"public"}},
         {"radiation":{"emissivity_property":"emissivity_reverse","exposed_face":"public"}}]);

@@ -1807,8 +1807,8 @@ impl Policy {
         }
         let mechanics = self.needs_simulation();
         let surface_policy = &descriptor["scenario"]["motion"]["transient_surface"];
-        let paired_motion = self.needs_motion()
-            && !surface_policy["coupled_water_alternatives"].is_null();
+        let paired_motion =
+            self.needs_motion() && !surface_policy["coupled_water_alternatives"].is_null();
         let transient = paired_motion
             || consumers.contains(&Consumer::TransientSurface)
             || consumers.contains(&Consumer::TransientCoverage);
@@ -1843,7 +1843,8 @@ impl Policy {
         ]
         .into_iter()
         .any(|(consumer, name)| {
-            (consumers.contains(&consumer) || paired_motion && consumer == Consumer::TransientSurface)
+            (consumers.contains(&consumer)
+                || paired_motion && consumer == Consumer::TransientSurface)
                 && descriptor["scenario"]["motion"][name]["plastic_dissipation_heat"]
                     == "uniform_reference_thickness"
         }) {
@@ -1855,7 +1856,8 @@ impl Policy {
         ]
         .into_iter()
         .any(|(consumer, name)| {
-            (consumers.contains(&consumer) || paired_motion && consumer == Consumer::TransientSurface)
+            (consumers.contains(&consumer)
+                || paired_motion && consumer == Consumer::TransientSurface)
                 && descriptor["scenario"]["motion"][name]["relaxation_dissipation_heat"]
                     == "uniform_reference_thickness"
         }) {
@@ -1867,7 +1869,8 @@ impl Policy {
         ]
         .into_iter()
         .any(|(consumer, name)| {
-            (consumers.contains(&consumer) || paired_motion && consumer == Consumer::TransientSurface)
+            (consumers.contains(&consumer)
+                || paired_motion && consumer == Consumer::TransientSurface)
                 && descriptor["scenario"]["motion"][name]["bending_plastic_dissipation_heat"]
                     == "uniform_reference_thickness"
         }) {
@@ -2435,11 +2438,16 @@ fn optical_property_protocol(
             return if coverage {
                 Ok(None)
             } else {
-                Err(invalid("independent radiation needs its positive optical face"))
+                Err(invalid(
+                    "independent radiation needs its positive optical face",
+                ))
             };
         };
         let mut faces = BTreeMap::new();
-        for (side, face) in [("positive", &mapping.positive), ("negative", &mapping.negative)] {
+        for (side, face) in [
+            ("positive", &mapping.positive),
+            ("negative", &mapping.negative),
+        ] {
             if side == "negative" && !coverage {
                 continue;
             }
@@ -2450,12 +2458,16 @@ fn optical_property_protocol(
                         .ok_or_else(|| invalid("mapped radiation observation unavailable"))?,
                 );
             } else if !coverage {
-                return Err(invalid("independent radiation needs its positive optical face"));
+                return Err(invalid(
+                    "independent radiation needs its positive optical face",
+                ));
             }
         }
-        Ok(Some(json!({"faces":faces,"mapping":{"method":mapping.method,
+        Ok(Some(
+            json!({"faces":faces,"mapping":{"method":mapping.method,
             "evidence":mapping.evidence,"specimen":mapping.specimen,
-            "conditioning":mapping.conditioning}})))
+            "conditioning":mapping.conditioning}}),
+        ))
     } else {
         let property = radiation["emissivity_property"]
             .as_str()

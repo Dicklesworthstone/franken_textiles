@@ -79,6 +79,77 @@ fn convection_reproduces_existing_films_and_missing_storage_stays_missing() {
 }
 
 #[test]
+fn convection_ranges_match_fixed_films_for_both_directions_and_equal_reservoirs() {
+    let mut selection = record(0.4, 0.8);
+    selection
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("thermal_resistance")
+        .unwrap()
+        .bounds = Some([0.3, 0.5]);
+    let model = build(&[selection], vec![]);
+    for (inside, air) in [(30., 0.), (0., 30.), (20., 20.)] {
+        let boundary = boundary(inside, air, 0.1);
+        let old = model
+            .solve(Boundary {
+                outside_resistance: 0.2,
+                ..boundary
+            })
+            .unwrap();
+        let new = model
+            .solve_exterior(boundary, &environment(5., air, None))
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(new.conduction.reported_bounds).unwrap(),
+            serde_json::to_value(old.reported_bounds).unwrap()
+        );
+        assert!(new.conduction.bounds_unavailable.is_empty());
+        let bounds = new.conduction.reported_bounds.unwrap();
+        assert!(
+            bounds.flux_w_m2[0] <= new.conduction.flux_w_m2
+                && new.conduction.flux_w_m2 <= bounds.flux_w_m2[1]
+        );
+    }
+}
+
+#[test]
+fn unsupported_convection_ranges_preserve_the_qualified_nominal_solution() {
+    let mut selection = record(0.4, 0.8);
+    let missing = build(&[selection.clone()], vec![])
+        .solve_exterior(boundary(30., 0., 0.1), &environment(5., 0., None))
+        .unwrap();
+    assert!(missing.conduction.reported_bounds.is_none());
+    assert!(missing.conduction.bounds_unavailable[0].contains("thermal_resistance"));
+    selection
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("thermal_resistance")
+        .unwrap()
+        .bounds = Some([0.3, 0.5]);
+    let model = build(&[selection], vec![]);
+    let mut narrow = environment(5., 0., None);
+    narrow.surface_temperature_range_c = [8., 9.];
+    let retained = model
+        .solve_exterior(boundary(30., 0., 0.1), &narrow)
+        .unwrap();
+    near(retained.conduction.flux_w_m2, missing.conduction.flux_w_m2);
+    assert!(retained.conduction.reported_bounds.is_none());
+    assert!(retained.conduction.bounds_unavailable[0].contains("endpoints"));
+    for unsupported in [environment(0., 0., None), environment(5., 0., Some(0.))] {
+        let result = model
+            .solve_exterior(boundary(30., 0., 0.1), &unsupported)
+            .unwrap();
+        assert!(result.conduction.flux_w_m2.is_finite());
+        assert!(result.conduction.reported_bounds.is_none());
+        assert!(result.conduction.bounds_unavailable[0].contains("without radiation"));
+    }
+}
+
+#[test]
 fn manufactured_radiation_and_mixed_reversed_flows_satisfy_original_equations() {
     for (ts, air, radiant, h, eps) in [
         (26.85, 6.85, 6.85, 0., 1.),

@@ -591,7 +591,9 @@ fn rollback_after_liquid_transfer(
             );
         } else if failure == "stale_full_material_report" {
             assert!(
-                refusal.message.contains("complete material/interface/instance"),
+                refusal
+                    .message
+                    .contains("complete material/interface/instance"),
                 "{refusal:?}"
             );
         }
@@ -600,14 +602,22 @@ fn rollback_after_liquid_transfer(
                 .iter()
                 .all(|message| !message.starts_with("motion endpoint"))
         );
-        assert_eq!(format!("{:?}", run.scene.solver), original_debug, "{failure}");
+        assert_eq!(
+            format!("{:?}", run.scene.solver),
+            original_debug,
+            "{failure}"
+        );
         assert!(run.scene.solver.liquid_mass_report().unwrap().is_none());
     }
 
     // After the first accepted paired transfer, exhausting the later thermal budget must
     // restore all liquid, momentum, work and attached-mass state before an identical replay.
     let mut paired_limited = paired_request.clone();
-    paired_limited.transient_surface.as_mut().unwrap().max_cell_steps = first_cost;
+    paired_limited
+        .transient_surface
+        .as_mut()
+        .unwrap()
+        .max_cell_steps = first_cost;
     let limited_path = Path::new(&paired_limited, body.collision, endpoints).unwrap();
     run.scene.solver = original;
     let mut reached = Vec::new();
@@ -629,7 +639,9 @@ fn rollback_after_liquid_transfer(
             .any(|message| message == "motion endpoint 2/2")
     );
     assert!(
-        refusal.message.contains("motion heat cell-step budget exhausted"),
+        refusal
+            .message
+            .contains("motion heat cell-step budget exhausted"),
         "{refusal:?}"
     );
     assert_eq!(format!("{:?}", run.scene.solver), original_debug);

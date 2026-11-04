@@ -204,25 +204,40 @@ fn coupled_water_alternatives_require_complete_independent_source_domains() {
 
 #[test]
 fn coupled_water_alternatives_preserve_every_prescribed_velocity_model() {
-    let base = serde_json::to_value(coupled_alternatives_fixture(fixture(0.01, 0.1).request))
-        .unwrap();
+    let base =
+        serde_json::to_value(coupled_alternatives_fixture(fixture(0.01, 0.1).request)).unwrap();
     for (version, model, velocities) in [
         (1, "co_moving_mass_exchange_frozen_mechanics/1", json!({})),
-        (2, "prescribed_incoming_velocity_mass_exchange_frozen_mechanics/1",
-            json!({"incoming_velocity_world_m_s":[0.1,-0.2,0.3]})),
-        (3, "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1",
-            json!({"incoming_velocity_world_m_s_by_interval":[[0.1,-0.2,0.3]]})),
-        (4, "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1",
+        (
+            2,
+            "prescribed_incoming_velocity_mass_exchange_frozen_mechanics/1",
+            json!({"incoming_velocity_world_m_s":[0.1,-0.2,0.3]}),
+        ),
+        (
+            3,
+            "scheduled_incoming_velocity_mass_exchange_frozen_mechanics/1",
+            json!({"incoming_velocity_world_m_s_by_interval":[[0.1,-0.2,0.3]]}),
+        ),
+        (
+            4,
+            "phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1",
             json!({"incoming_stream_velocities_world_m_s":
-                {"supply":[0.1,-0.2,0.3],"condensation":[-0.3,0.2,0.1]}})),
-        (5, "scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1",
+                {"supply":[0.1,-0.2,0.3],"condensation":[-0.3,0.2,0.1]}}),
+        ),
+        (
+            5,
+            "scheduled_phase_specific_incoming_velocity_mass_exchange_frozen_mechanics/1",
             json!({"incoming_stream_velocities_world_m_s_by_interval":[
-                {"supply":[0.1,-0.2,0.3],"condensation":[-0.3,0.2,0.1]}]})),
-        (6, "scheduled_phase_specific_incoming_and_outgoing_velocity_mass_exchange_frozen_mechanics/1",
+                {"supply":[0.1,-0.2,0.3],"condensation":[-0.3,0.2,0.1]}]}),
+        ),
+        (
+            6,
+            "scheduled_phase_specific_incoming_and_outgoing_velocity_mass_exchange_frozen_mechanics/1",
             json!({"incoming_stream_velocities_world_m_s_by_interval":[
                 {"supply":[0.1,-0.2,0.3],"condensation":[-0.3,0.2,0.1]}],
                 "outgoing_stream_velocities_relative_to_cloth_m_s_by_interval":[
-                    {"evaporation":[0.1,0.2,0.3],"drainage":[-0.1,0.2,-0.3]}]})),
+                    {"evaporation":[0.1,0.2,0.3],"drainage":[-0.1,0.2,-0.3]}]}),
+        ),
     ] {
         let mut valid = base.clone();
         for pair in valid["coupled_water_alternatives"].as_array_mut().unwrap() {
@@ -242,8 +257,8 @@ fn coupled_water_alternatives_preserve_every_prescribed_velocity_model() {
         // operating case must still refuse: changing material cannot change imposed momentum.
         for field in velocities.as_object().unwrap().keys() {
             let mut changed = valid.clone();
-            let domain = &mut changed["coupled_water_alternatives"][0]["mechanical_coupling"]
-                ["bindings"]["sheet"];
+            let domain = &mut changed["coupled_water_alternatives"][0]["mechanical_coupling"]["bindings"]
+                ["sheet"];
             match field.as_str() {
                 "incoming_velocity_world_m_s" => domain[field][0] = json!(0.15),
                 "incoming_velocity_world_m_s_by_interval" => domain[field][0][0] = json!(0.15),

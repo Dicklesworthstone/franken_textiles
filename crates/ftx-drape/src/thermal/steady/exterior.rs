@@ -10,6 +10,7 @@ use ftx_core::Refusal;
 use ftx_pattern::{
     material_catalog::ResolvedMaterial,
     material_optics::Side,
+    material_thermal::{ConductionLaw, ReportedConductionBounds},
     materials::{Evidence, Source},
 };
 use serde::{Deserialize, Serialize};
@@ -351,9 +352,18 @@ impl SteadyConductionModel {
                     if residual.abs() <= super::temperature_tolerance(b)
                         && let Ok(mut conduction) = self.finish(faces, q, b)
                     {
-                        conduction.exclude_reported_bounds(
-                            "source-reported conduction ranges do not cover coupled exterior exchange",
-                        );
+                        match self.reported_convection_bounds(boundary, exterior, factor) {
+                            Ok(bounds)
+                                if q >= bounds.flux_w_m2[0] && q <= bounds.flux_w_m2[1] =>
+                            {
+                                conduction.reported_bounds = Some(bounds);
+                                conduction.bounds_unavailable.clear();
+                            }
+                            Ok(_) => conduction.exclude_reported_bounds(
+                                "nominal solver precision does not resolve the source-reported convection interval",
+                            ),
+                            Err(refusal) => conduction.exclude_reported_bounds(&refusal.message),
+                        }
                         return Ok(ExteriorState {
                             balance_residual_w_m2: conduction.flux_w_m2 - q,
                             conduction,
@@ -378,6 +388,45 @@ impl SteadyConductionModel {
         Err(invalid(
             "no residual-qualified exterior solution within material and boundary domains",
         ))
+    }
+
+    fn reported_convection_bounds(
+        &self,
+        boundary: Boundary,
+        exterior: &Exterior,
+        factor: f64,
+    ) -> Result<ReportedConductionBounds, Refusal> {
+        if exterior.radiation.is_some() || exterior.convection_w_m2_k <= 0. {
+            return Err(invalid(
+                "source-reported exterior ranges require positive prescribed convection without radiation",
+            ));
+        }
+        // h is prescribed per outer cloth area; source resistances refer to model area.
+        let film = positive(
+            "reported convection film resistance",
+            factor / exterior.convection_w_m2_k,
+        )?;
+        let bounds = ConductionLaw::reported_stack_bounds(
+            &self.laws,
+            &self.area_factors,
+            &self.interfaces,
+            [boundary.inside_c, exterior.air_c],
+            [boundary.inside_resistance, film],
+        )?;
+        for q in bounds.flux_w_m2 {
+            let drop = q * film;
+            let surface = exterior.air_c + drop;
+            if !surface.is_finite()
+                || (q != 0. && drop == 0.)
+                || surface < exterior.surface_temperature_range_c[0]
+                || surface > exterior.surface_temperature_range_c[1]
+            {
+                return Err(invalid(
+                    "source-reported surface-temperature endpoints leave the qualified convection domain",
+                ));
+            }
+        }
+        Ok(bounds)
     }
 
     fn exterior_shot(

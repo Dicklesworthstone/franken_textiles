@@ -824,6 +824,17 @@ this prescribed numerical capability. Gravity runoff, capillarity, wet constitut
 empirical whole-garment fit remain outside it. Water `/1`–`/3` reject drainage fields and retain
 their published behavior.
 
+**Conditional convection ranges** (`thermal::steady::exterior`, `ftx-ms2.18`). Positive
+prescribed convection without radiation propagates complete constant material-resistance endpoints
+through the existing series-network authority, using the fixed outside film `(model area / outer
+cloth area) / h`. Both endpoint surface temperatures must remain in the coefficient's qualified
+domain. Missing intervals, unsupported laws, endpoint escape, radiation or zero convection retain
+the nominal exterior solution with an explicit unavailable-range reason. Current-area sheet powers
+reuse ordinary range accumulation; coverage continues to withhold exterior ranges. Boundary values,
+coefficient and geometry stay fixed: these are material-source intervals, not weather uncertainty,
+confidence intervals or measured garment performance. `tests/thermal_exterior.rs` checks fixed-film
+equivalence in both heat-flow directions and at equal reservoirs, plus independent range refusal.
+
 **Qualified centerline thermal bridges** (`thermal::steady::coverage::bridges`).
 
 The existing steady coverage request additionally accepts `thermal_bridges`, a qualified centerline

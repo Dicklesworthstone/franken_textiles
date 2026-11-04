@@ -292,7 +292,10 @@ impl SurfaceRequest {
                 validate_coupling(&pair.surface_water, &pair.mechanical_coupling, intervals)?;
                 validate_coupled_domain(&pair.surface_water, &pair.mechanical_coupling)?;
                 let physical = hash(&coupling_inputs(&pair.mechanical_coupling)?)?;
-                if common.as_ref().is_some_and(|expected| expected != &physical) {
+                if common
+                    .as_ref()
+                    .is_some_and(|expected| expected != &physical)
+                {
                     return Err(invalid(
                         "coupled water alternatives must retain the same mechanical phase model and imposed velocity schedules",
                     ));
