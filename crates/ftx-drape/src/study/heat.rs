@@ -65,6 +65,12 @@ pub struct SurfaceRequest {
     /// and latent temperature feedback. Independent of the prescribed body's wet-film consumer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_water: Option<surface_water::Request>,
+    /// Alternative complete water qualifications for the same operating case. Exactly one must
+    /// match every retained instance's actual material hash. Physical boundary inputs and initial
+    /// loadings stay common; each source independently qualifies its material/loading domain.
+    /// Mutually exclusive with `surface_water` and with mechanical liquid coupling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_water_alternatives: Option<Vec<surface_water::Request>>,
     /// Optional source-qualified mass feedback into the next mechanical step. The original
     /// evaporation qualification requires water /1; independently qualified bidirectional exchange
     /// also admits supplied/condensed water. Initial liquid is added after the dry drape.
@@ -184,6 +190,18 @@ impl SurfaceRequest {
                 run,
                 self.initial_temperature_c,
             )?);
+        } else if let Some(alternatives) = &self.surface_water_alternatives {
+            let (water, index) = surface_water::Water::from_alternatives(
+                alternatives,
+                &history.model,
+                run,
+                self.initial_temperature_c,
+            )?;
+            let selected = serde_json::to_value(&alternatives[index])
+                .map_err(|error| invalid(error.to_string()))?;
+            history.water_selection = Some(json!({"index":index,
+                "request_sha256":hash(&selected)?}));
+            history.water = Some(water);
         }
         Ok(history)
     }
@@ -218,6 +236,14 @@ impl SurfaceRequest {
                     ));
                 }
             }
+        }
+        if let Some(alternatives) = &self.surface_water_alternatives {
+            if self.surface_water.is_some() || self.mechanical_coupling.is_some() {
+                return Err(invalid(
+                    "alternative water qualifications cannot accompany a single water policy or mechanical liquid coupling",
+                ));
+            }
+            surface_water::validate_alternatives(alternatives, intervals)?;
         }
         if let Some(water) = &self.surface_water {
             water.validate(intervals)?;
@@ -268,6 +294,7 @@ pub(super) struct SurfaceHistory {
     relaxation: Option<plastic::Heating>,
     bending: Option<plastic::Heating>,
     water: Option<surface_water::Water>,
+    water_selection: Option<Value>,
     mechanical_coupling: Option<Value>,
 }
 
@@ -311,6 +338,7 @@ impl SurfaceHistory {
             relaxation: None,
             bending: None,
             water: None,
+            water_selection: None,
             mechanical_coupling: None,
         })
     }
@@ -864,6 +892,10 @@ impl SurfaceHistory {
             .as_ref()
             .map(|water| water.snapshot(self.state.temperature_c(), true, balance_error_j))
             .transpose()?;
+        let has_drainage = self
+            .water
+            .as_ref()
+            .is_some_and(surface_water::Water::has_drainage);
         let f = self
             .final_field
             .ok_or_else(|| invalid("missing final heat field"))?;
@@ -922,6 +954,9 @@ impl SurfaceHistory {
                 );
             }
         }
+        if let Some(selection) = self.water_selection {
+            result["surface_water_selection"] = selection;
+        }
         if let Some(coupling) = self.mechanical_coupling {
             let exchange = !coupling["exchange"].is_null();
             let prescribed = matches!(
@@ -966,11 +1001,7 @@ impl SurfaceHistory {
                 );
             }
         }
-        if self
-            .request
-            .surface_water
-            .as_ref()
-            .is_some_and(|water| water.drainage.is_some())
+        if has_drainage
             && result["mechanical_coupling"]["schema"] != "ftx-coupled-liquid-mechanics-result/6"
         {
             result["scope"] = json!(

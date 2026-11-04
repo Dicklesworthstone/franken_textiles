@@ -56,6 +56,170 @@ fn fixture(loading: f64, step: f64) -> SurfaceHistory {
     history
 }
 
+#[test]
+fn alternative_water_qualifications_match_complete_instance_assignments() {
+    let mut original = fixture(0.01, 0.1).request.surface_water.unwrap();
+    let mut lining = original.bindings["sheet"].clone();
+    lining.material_sha256 = "c".repeat(64);
+    original.bindings.insert("lining".into(), lining);
+    let mut replacement = original.clone();
+    replacement
+        .bindings
+        .get_mut("sheet")
+        .unwrap()
+        .material_sha256 = "a".repeat(64);
+    replacement
+        .bindings
+        .get_mut("lining")
+        .unwrap()
+        .material_sha256 = "b".repeat(64);
+    replacement.source.reference = "test:independently-qualified-replacement".into();
+    replacement.qualification =
+        "Synthetic separate qualification of the replacement sources".into();
+    replacement.maximum_liquid_loading_kg_m2 = 0.2;
+    let choices = vec![replacement, original];
+    validate_alternatives(&choices, 1).unwrap();
+    let assigned: BTreeMap<_, _> = choices[1]
+        .bindings
+        .iter()
+        .map(|(instance, binding)| (instance.clone(), binding.material_sha256.clone()))
+        .collect();
+    assert_eq!(select_alternative(&choices, &assigned).unwrap(), 1);
+    let mut partial = assigned.clone();
+    partial.remove("lining");
+    assert!(select_alternative(&choices, &partial).is_err());
+    // Every material appears somewhere in the collection, but no complete source qualifies
+    // this mixed assignment. Selecting one binding from each source would fabricate evidence.
+    partial.insert("lining".into(), "b".repeat(64));
+    assert!(select_alternative(&choices, &partial).is_err());
+    assert!(select_alternative(&[choices[1].clone(), choices[1].clone()], &assigned).is_err());
+}
+
+#[test]
+fn alternative_water_qualifications_keep_one_case_and_admit_each_source() {
+    let mut surface = fixture(0.01, 0.1).request;
+    let original = surface.surface_water.take().unwrap();
+    let mut replacement = original.clone();
+    replacement
+        .bindings
+        .get_mut("sheet")
+        .unwrap()
+        .material_sha256 = "a".repeat(64);
+    let choices = vec![original.clone(), replacement];
+    surface.surface_water_alternatives = Some(choices.clone());
+    surface.validate(1).unwrap();
+    for field in [
+        "outside_vapor_pressure_pa",
+        "liquid_specific_heat_j_kg_k",
+        "initial_liquid_kg_m2",
+        "allow_estimates",
+        "source",
+    ] {
+        let mut changed = choices.clone();
+        match field {
+            "outside_vapor_pressure_pa" => changed[1].outside_vapor_pressure_pa[0] += 1.,
+            "liquid_specific_heat_j_kg_k" => changed[1].liquid_specific_heat_j_kg_k += 1.,
+            "initial_liquid_kg_m2" => {
+                changed[1]
+                    .bindings
+                    .get_mut("sheet")
+                    .unwrap()
+                    .initial_liquid_kg_m2 *= 2.
+            }
+            "allow_estimates" => changed[1].allow_estimates = false,
+            "source" => changed[1].source.reference.clear(),
+            _ => unreachable!(),
+        }
+        assert!(validate_alternatives(&changed, 1).is_err(), "{field}");
+    }
+    let mut duplicate = original.clone();
+    duplicate.source.reference = "test:another-source-for-the-same-assignment".into();
+    assert!(validate_alternatives(&[original.clone(), duplicate], 1).is_err());
+    surface.surface_water = Some(original.clone());
+    assert!(surface.validate(1).is_err());
+    surface.surface_water = None;
+    let mut raw = serde_json::to_value(&surface).unwrap();
+    raw["mechanical_coupling"] = json!({"schema":"ftx-evaporating-liquid-mechanics/1",
+        "model":"co_moving_evaporation_frozen_mechanics/1","material_report_sha256":"a".repeat(64),
+        "bindings":{},"source":original.source,"evidence":"estimate","allow_estimates":true,
+        "method":"Synthetic coupling","qualification":"Independent coupling remains outside this collection"});
+    let coupled: SurfaceRequest = serde_json::from_value(raw).unwrap();
+    assert!(
+        coupled
+            .validate(1)
+            .unwrap_err()
+            .message
+            .contains("mechanical liquid coupling")
+    );
+    assert!(validate_alternatives(&[], 1).is_err());
+    assert!(validate_alternatives(&vec![original; 65], 1).is_err());
+}
+
+#[test]
+fn alternative_water_qualifications_bound_the_total_binding_inventory() {
+    let mut original = fixture(0.01, 0.1).request.surface_water.unwrap();
+    let binding = original.bindings["sheet"].clone();
+    original.bindings = (0..1025)
+        .map(|i| (format!("sheet-{i}"), binding.clone()))
+        .collect();
+    assert!(
+        validate_alternatives(&vec![original; 64], 1)
+            .unwrap_err()
+            .message
+            .contains("65536")
+    );
+}
+
+#[test]
+fn alternative_phase_qualifications_preserve_supply_condensation_drainage_and_reservoir_inputs() {
+    let fixtures = [
+        supplied_fixture(0.01, 0.1, vec![0.01], vec![25.]),
+        condensing_fixture(0.01, 0.1, vec![3000.], vec![25.]),
+        with_drainage(
+            supplied_fixture(0.01, 0.1, vec![0.01], vec![25.]),
+            vec![0.02],
+        ),
+        finite_fixture(0.01, 0.1, 1e-5, 1000.),
+    ];
+    for fixture in fixtures {
+        let original = fixture.request.surface_water.unwrap();
+        let mut replacement = original.clone();
+        replacement
+            .bindings
+            .get_mut("sheet")
+            .unwrap()
+            .material_sha256 = "a".repeat(64);
+        replacement.source.reference = "test:separate-material-domain".into();
+        replacement.maximum_liquid_loading_kg_m2 *= 2.;
+        replacement.supply.as_mut().unwrap().source.reference =
+            "test:separate-supply-observation".into();
+        if let Some(phase) = &mut replacement.condensation {
+            phase.qualification =
+                "Synthetic reverse transfer on the separately locked textile".into();
+        }
+        let choices = [original, replacement];
+        validate_alternatives(&choices, 1).unwrap();
+        let mut changed = choices.clone();
+        changed[1]
+            .supply
+            .as_mut()
+            .unwrap()
+            .bindings
+            .get_mut("sheet")
+            .unwrap()
+            .rate_kg_m2_s[0] += 0.01;
+        assert!(validate_alternatives(&changed, 1).is_err());
+        let mut changed = choices.clone();
+        changed[1].supply.as_mut().unwrap().allow_estimates = false;
+        assert!(validate_alternatives(&changed, 1).is_err());
+        let mut changed = choices.clone();
+        if let Some(phase) = &mut changed[1].vapor_reservoir {
+            phase.temperature_c += 1.;
+            assert!(validate_alternatives(&changed, 1).is_err());
+        }
+    }
+}
+
 fn variable_fixture(
     history: SurfaceHistory,
     cells: usize,

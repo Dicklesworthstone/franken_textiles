@@ -1,6 +1,6 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest,
-  buildGuidedDesignAfterOperations } from "./materials-study-builder.js";
+  buildGuidedDesignAfterOperations, hasTextileWaterPolicy } from "./materials-study-builder.js";
 import { buildMaterialScreenRequest } from "./materials-screen-builder.js";
 
 const $ = id => document.getElementById(id);
@@ -1008,6 +1008,14 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
     }
     if (h?.surface_water) {
       const water = h.surface_water;
+      if (h.surface_water_selection) {
+        const selection = h.surface_water_selection;
+        const source = table(parent, `${key}: selected water qualification`,
+          ["Qualification", "Source", "Evidence", "Selected request SHA-256"]);
+        cells(source, [Number.isSafeInteger(selection.index) ? selection.index + 1 : "Unknown",
+          water.request?.source?.reference ?? "Unknown", water.request?.evidence ?? "Unknown",
+          selection.request_sha256 ?? "Unknown"]);
+      }
       const finiteVapor = water.schema === "ftx-textile-surface-water-result/5";
       const draining = water.schema === "ftx-textile-surface-water-result/4" ||
         finiteVapor && typeof water.drained_liquid_kg === "number";
@@ -4380,7 +4388,7 @@ function describeScenarioInput(request, original) {
     motionVaporHistory: cases.some(item => item?.motion?.vapor_coverage_history != null),
     motionWetFilm: cases.some(item => item?.motion?.vapor_coverage_history?.wet_film != null),
     transientSurface: cases.some(item => item?.motion?.transient_surface != null),
-    textileWater: cases.some(item => item?.motion?.transient_surface?.surface_water != null),
+    textileWater: cases.some(item => hasTextileWaterPolicy(item?.motion?.transient_surface)),
     transientCoverage: cases.some(item => item?.motion?.transient_coverage != null),
     ...(matrix ? { matrix: { maxEvaluations: value.max_evaluations,
       cases: Array.isArray(value.cases) ? value.cases.map(item => ({ key: item?.key,
@@ -4392,7 +4400,7 @@ function describeScenarioInput(request, original) {
         motionVaporHistory: item?.scenario?.motion?.vapor_coverage_history != null,
         motionWetFilm: item?.scenario?.motion?.vapor_coverage_history?.wet_film != null,
         transientSurface: item?.scenario?.motion?.transient_surface != null,
-        textileWater: item?.scenario?.motion?.transient_surface?.surface_water != null,
+        textileWater: hasTextileWaterPolicy(item?.scenario?.motion?.transient_surface),
         transientCoverage: item?.scenario?.motion?.transient_coverage != null,
         ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
 }
@@ -4558,7 +4566,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const motionVaporHistory = originalMotion?.vapor_coverage_history != null;
   const motionWetFilm = originalMotion?.vapor_coverage_history?.wet_film != null;
   const transientSurface = originalMotion?.transient_surface != null;
-  const textileWater = originalMotion?.transient_surface?.surface_water != null;
+  const textileWater = hasTextileWaterPolicy(originalMotion?.transient_surface);
   const transientCoverage = originalMotion?.transient_coverage != null;
   return { request,
     context: { drape: true, surface, motion: motionMode !== "none", materialStrain, contactLoads, ...transport,
@@ -4582,7 +4590,7 @@ function showGuidedScenarioDrafts() {
       `${value.vapor_coverage ? "retained covered-body vapor" : "no covered-body vapor"}; ` +
       `${value.motion?.vapor_coverage_history ? "requested complete-motion vapor history" : "no motion vapor history"}; ` +
       `${value.motion?.vapor_coverage_history?.wet_film != null ? "retained finite body-water policy" : "no body-water inventory"}; ` +
-      `${value.motion?.transient_surface?.surface_water != null ? "retained textile-water heat policy" : "no textile-water policy"}; ` +
+      `${hasTextileWaterPolicy(value.motion?.transient_surface) ? "retained textile-water heat policy" : "no textile-water policy"}; ` +
       `${item.comparison && JSON.parse(item.comparison) !== null ? "retained case comparison" : "shared comparison at run time"}.`;
     row.append(label);
     const action = (title, handler, unavailable = false, replace = false) => {

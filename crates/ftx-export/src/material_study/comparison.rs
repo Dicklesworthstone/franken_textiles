@@ -1688,8 +1688,10 @@ impl Policy {
             keys.extend(["areal_density", "specific_heat", "thickness"]);
         }
         let mass = keys.contains("areal_density");
+        let surface_policy = &descriptor["scenario"]["motion"]["transient_surface"];
         let textile_water = consumers.contains(&Consumer::TransientSurface)
-            && !descriptor["scenario"]["motion"]["transient_surface"]["surface_water"].is_null();
+            && (!surface_policy["surface_water"].is_null()
+                || !surface_policy["surface_water_alternatives"].is_null());
         if textile_water {
             keys.insert("vapor_resistance");
         }
@@ -1872,10 +1874,14 @@ impl Policy {
             }
         }
         if textile_water {
-            base = hash(&(
-                &base,
-                &descriptor["scenario"]["motion"]["transient_surface"]["surface_water"],
-            ))?;
+            // A collection is one immutable operating case with independently qualified material
+            // choices. Hash the original collection, not the chosen material's source record.
+            let policy = if surface_policy["surface_water_alternatives"].is_null() {
+                &surface_policy["surface_water"]
+            } else {
+                &surface_policy["surface_water_alternatives"]
+            };
+            base = hash(&(&base, policy))?;
         }
         if self.needs_motion() {
             let coupling =

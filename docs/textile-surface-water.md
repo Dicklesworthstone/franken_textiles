@@ -320,6 +320,42 @@ integrated enthalpy; a temperature-dependent material cannot fall back to a scal
 A material substitution changes its hash and requires new coupling qualification; the old binding
 cannot silently authorize a new specimen.
 
+### Select independently qualified materials in one scenario
+
+Instead of `surface_water`, a surface-heat request may contain `surface_water_alternatives`:
+an array of 1–64 complete water requests in the formats above. The collection may contain at most
+65,536 total instance bindings. It is retained unchanged in the shared scenario and its motion
+identity; each evaluated garment selects exactly one entry by its **complete retained
+instance-to-material-hash assignment**. Material names, fiber families and study candidate keys do
+not participate in selection. No matching assignment or multiple matching assignments refuses the
+water/heat history while preserving independent consumers.
+
+Every entry supplies its own source, evidence, estimate consent, method, qualification and exact
+material hashes. Its qualified maximum liquid loading may differ. All other physical inputs must
+agree, including initial loading on every instance, phase schema, liquid properties, pressure and
+temperature histories, vapor films, supply/drainage schedules and finite-reservoir conditions.
+Changing these operating inputs belongs in a separately declared scenario, rather than being hidden
+inside a material comparison. Every entry is checked even if it is not selected.
+
+The collection is mutually exclusive with the single `surface_water` field and with
+`mechanical_coupling`. This initial collection consumer supplies heat and free-liquid feedback;
+material-specific mechanical liquid qualifications remain a separate extension. Existing single
+water requests retain their supported mechanical coupling and original numerical behavior.
+
+Successful heat reports retain the complete original `request` and add
+`surface_water_selection: {index, request_sha256}`. The index is zero based; the digest identifies
+the selected, ordinarily serialized water request. `surface_water.request` retains that exact
+selected qualification. Comparison admission independently reconstructs the match from the
+evaluated garment's material assignments, checks the chosen request and digest, and applies the
+existing complete-history mass/energy checks. The collection remains the common comparison
+protocol, so each fabric can select its own qualified request without rewriting source identities.
+
+The browser's existing retained-motion controls, seven textile-water criteria and named cases
+accept this form. Results show which source qualification was selected. Saved requests replay
+through the native and portable APIs without a browser-specific solver. Missing thermal/vapor
+properties, invalid sources and out-of-domain histories still refuse; the selector supplies no
+missing measurements or wet constitutive law.
+
 ### Temperature-dependent textile storage and transport
 
 All three water versions use the existing nonlinear dry thermal authority when the selected material

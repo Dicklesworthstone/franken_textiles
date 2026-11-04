@@ -105,6 +105,190 @@ fn source(value: &Value) -> Result<(), Refusal> {
     Ok(())
 }
 
+// The producer selects a complete original qualification, never a rewritten material hash.
+// Independently check every allowed difference before treating its collection as one case.
+fn alternative_case_inputs(policy: &Value) -> Result<Value, Refusal> {
+    let mut value = policy.clone();
+    for name in [
+        None,
+        Some("supply"),
+        Some("condensation"),
+        Some("drainage"),
+        Some("vapor_reservoir"),
+    ] {
+        let item = match name {
+            None => &mut value,
+            Some(name) => match value.get_mut(name) {
+                None | Some(Value::Null) => continue,
+                Some(item) => item,
+            },
+        };
+        source(item)?;
+        // These fields are removed from the common-case comparison, so their complete native
+        // metadata shape must be checked even on an unselected qualification. Source has three
+        // required fields; a non-estimated record still cannot carry a non-boolean consent.
+        if item["source"]
+            .as_object()
+            .is_none_or(|source| source.len() != 3)
+            || item
+                .get("allow_estimates")
+                .is_some_and(|value| !value.is_boolean())
+            || (name == Some("supply") && item.get("qualification").is_some())
+        {
+            return Err(fail());
+        }
+        if name != Some("supply")
+            && !item["qualification"]
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty() && text.len() <= 4096)
+        {
+            return Err(fail());
+        }
+        let object = item.as_object_mut().ok_or_else(fail)?;
+        for key in [
+            "source",
+            "evidence",
+            "allow_estimates",
+            "method",
+            "qualification",
+        ] {
+            object.remove(key);
+        }
+    }
+    let maximum = number(policy, "maximum_liquid_loading_kg_m2")?;
+    if maximum <= 0. {
+        return Err(fail());
+    }
+    value
+        .as_object_mut()
+        .ok_or_else(fail)?
+        .remove("maximum_liquid_loading_kg_m2");
+    let bindings = value["bindings"].as_object_mut().ok_or_else(fail)?;
+    for (instance, binding) in bindings {
+        let identity = binding["material_sha256"].as_str().ok_or_else(fail)?;
+        let loading = nonnegative(binding, "initial_liquid_kg_m2")?;
+        if instance.trim().is_empty()
+            || instance.len() > 4096
+            || identity.len() != 64
+            || !identity
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            || loading > maximum
+        {
+            return Err(fail());
+        }
+        binding
+            .as_object_mut()
+            .ok_or_else(fail)?
+            .remove("material_sha256");
+    }
+    Ok(value)
+}
+
+fn selected_policy<'a>(
+    request: &'a Value,
+    heat: &Value,
+    simulation: &Value,
+) -> Result<&'a Value, Refusal> {
+    let choices = &request["surface_water_alternatives"];
+    if choices.is_null() {
+        return if heat.get("surface_water_selection").is_none() {
+            Ok(&request["surface_water"])
+        } else {
+            Err(fail())
+        };
+    }
+    let choices = choices.as_array().ok_or_else(fail)?;
+    if !(1..=64).contains(&choices.len())
+        || !request["surface_water"].is_null()
+        || !request["mechanical_coupling"].is_null()
+    {
+        return Err(fail());
+    }
+    let frame = &simulation["drape"]["thermal_surface"];
+    let instances = array(frame, "instances")?;
+    let owners = array(frame, "triangle_instance")?;
+    let patches = array(&frame["model"], "patches")?;
+    let columns = array(&frame["model"], "columns")?;
+    if instances.is_empty()
+        || instances.len() > 65_536
+        || patches.is_empty()
+        || patches.len() > 65_536
+        || owners.len() != patches.len()
+        || columns.is_empty()
+        || columns.len() > patches.len()
+    {
+        return Err(fail());
+    }
+    let mut assigned = BTreeMap::new();
+    for (patch, owner) in patches.iter().zip(owners) {
+        let instance = instances
+            .get(vapor_index(owner)?)
+            .and_then(Value::as_str)
+            .ok_or_else(fail)?;
+        let layers = array(
+            columns
+                .get(vapor_index(&patch["column"])?)
+                .ok_or_else(fail)?,
+            "layers",
+        )?;
+        if layers.len() != 1 {
+            return Err(fail());
+        }
+        let identity = layers[0]["sha256"].as_str().ok_or_else(fail)?;
+        if assigned
+            .insert(instance, identity)
+            .is_some_and(|previous| previous != identity)
+        {
+            return Err(fail());
+        }
+    }
+    if assigned.len() != instances.len() {
+        return Err(fail());
+    }
+    let mut count = 0_usize;
+    let mut common = None;
+    let mut seen = BTreeSet::new();
+    let mut selected = None;
+    for (index, policy) in choices.iter().enumerate() {
+        let bindings = policy["bindings"].as_object().ok_or_else(fail)?;
+        count = count.saturating_add(bindings.len());
+        if bindings.is_empty() || count > 65_536 {
+            return Err(fail());
+        }
+        let physical = hash(&alternative_case_inputs(policy)?)?;
+        if common
+            .as_ref()
+            .is_some_and(|expected| expected != &physical)
+        {
+            return Err(fail());
+        }
+        common = Some(physical);
+        let identity = bindings
+            .iter()
+            .map(|(instance, binding)| {
+                Ok((
+                    instance.as_str(),
+                    binding["material_sha256"].as_str().ok_or_else(fail)?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, Refusal>>()?;
+        if !seen.insert(identity.clone()) {
+            return Err(fail());
+        }
+        if identity == assigned && selected.replace(index).is_some() {
+            return Err(fail());
+        }
+    }
+    let index = selected.ok_or_else(fail)?;
+    if heat["surface_water_selection"]
+        != json!({"index":index,"request_sha256":hash(&choices[index])?})
+    {
+        return Err(fail());
+    }
+    Ok(&choices[index])
+}
+
 // This checks the coupled producer's retained accounting, not its equations of motion. The
 // thermal inventory remains authoritative; bulk transfer energy is never added to latent heat.
 fn admit_mechanics(
@@ -906,7 +1090,7 @@ pub(super) fn admit(
     mechanical_heat: &[f64],
 ) -> Result<Option<Vec<f64>>, Refusal> {
     admit_mechanics(simulation, motion, heat, heat_request, coverage)?;
-    let policy = &heat_request["surface_water"];
+    let policy = selected_policy(heat_request, heat, simulation)?;
     let water = &heat["surface_water"];
     let trace = array(heat, "trace")?;
     if policy.is_null() {

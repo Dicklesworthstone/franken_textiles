@@ -2,7 +2,7 @@
 //! This is an inner-cell equilibrium film, not sorption, sweat, capillary transport or wet cloth
 //! mechanics. A separate source must qualify fixed dry thermal/Ret properties over the full domain.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, Vec3};
 use ftx_pattern::{
@@ -13,7 +13,7 @@ use ftx_pattern::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::invalid;
+use super::{hash, invalid};
 use crate::{
     run::DrapeRun,
     thermal::surface::{Surface, SurfaceState, SurfaceStep, io::retained_materials},
@@ -371,6 +371,109 @@ impl Request {
     }
 }
 
+// Only material qualification may vary inside one operating case. In particular, changing the
+// source cannot change initial inventory, phase models, liquid constants or imposed schedules.
+// Phase-specific evidence can differ because reverse transfer must qualify each exact textile.
+fn case_inputs(request: &Request) -> Result<Value, Refusal> {
+    fn remove_evidence(value: &mut Value) {
+        if let Some(object) = value.as_object_mut() {
+            for key in [
+                "source",
+                "evidence",
+                "allow_estimates",
+                "method",
+                "qualification",
+            ] {
+                object.remove(key);
+            }
+        }
+    }
+    let mut value = serde_json::to_value(request).map_err(|error| invalid(error.to_string()))?;
+    remove_evidence(&mut value);
+    for key in ["supply", "condensation", "drainage", "vapor_reservoir"] {
+        if let Some(phase) = value.get_mut(key) {
+            remove_evidence(phase);
+        }
+    }
+    value
+        .as_object_mut()
+        .expect("serialized water request")
+        .remove("maximum_liquid_loading_kg_m2");
+    for binding in value["bindings"]
+        .as_object_mut()
+        .expect("serialized water bindings")
+        .values_mut()
+    {
+        binding
+            .as_object_mut()
+            .expect("serialized water binding")
+            .remove("material_sha256");
+    }
+    Ok(value)
+}
+
+pub(super) fn validate_alternatives(requests: &[Request], intervals: usize) -> Result<(), Refusal> {
+    if !(1..=64).contains(&requests.len())
+        || requests.iter().fold(0_usize, |sum, request| {
+            sum.saturating_add(request.bindings.len())
+        }) > 65_536
+    {
+        return Err(invalid(
+            "water alternatives require 1..=64 qualifications and at most 65536 total instance bindings",
+        ));
+    }
+    let mut common = None;
+    let mut assignments = BTreeSet::new();
+    for request in requests {
+        request.validate(intervals)?;
+        let physical = hash(&case_inputs(request)?)?;
+        if common
+            .as_ref()
+            .is_some_and(|expected| expected != &physical)
+        {
+            return Err(invalid(
+                "water alternatives must retain the same initial liquid, phase models and physical operating conditions",
+            ));
+        }
+        common = Some(physical);
+        let assignment: Vec<_> = request
+            .bindings
+            .iter()
+            .map(|(instance, binding)| (instance.as_str(), binding.material_sha256.as_str()))
+            .collect();
+        if !assignments.insert(assignment) {
+            return Err(invalid(
+                "water alternatives contain ambiguous duplicate material assignments",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn select_alternative(
+    requests: &[Request],
+    assigned: &BTreeMap<String, String>,
+) -> Result<usize, Refusal> {
+    let mut matches = requests.iter().enumerate().filter(|(_, request)| {
+        request.bindings.len() == assigned.len()
+            && request
+                .bindings
+                .iter()
+                .all(|(instance, binding)| assigned.get(instance) == Some(&binding.material_sha256))
+    });
+    let index = matches.next().map(|(index, _)| index).ok_or_else(|| {
+        invalid(
+            "no water qualification matches every retained instance and its exact material source",
+        )
+    })?;
+    if matches.next().is_some() {
+        return Err(invalid(
+            "more than one water qualification matches the retained material assignments",
+        ));
+    }
+    Ok(index)
+}
+
 #[derive(Clone)]
 pub(super) struct Water {
     request: Request,
@@ -468,6 +571,55 @@ fn split_outflow(total: f64, evaporation: f64, drainage: f64) -> Result<(f64, f6
 }
 
 impl Water {
+    pub(super) fn has_drainage(&self) -> bool {
+        self.request.drainage.is_some()
+    }
+
+    pub(super) fn from_alternatives(
+        requests: &[Request],
+        model: &Surface,
+        run: &DrapeRun,
+        initial_c: f64,
+    ) -> Result<(Self, usize), Refusal> {
+        let instances = &run.scene.mesh.instances;
+        let owners = &run.scene.triangle_owner;
+        let (records, columns) = retained_materials(&run.report["material"], instances, owners)?;
+        let mut assigned = BTreeMap::new();
+        for (&owner, &column) in owners.iter().zip(&columns) {
+            let instance = instances
+                .get(owner)
+                .ok_or_else(|| invalid("invalid water instance owner"))?;
+            let record = records
+                .get(column)
+                .ok_or_else(|| invalid("invalid water material column"))?;
+            if assigned
+                .insert(instance.clone(), record.sha256().to_owned())
+                .is_some_and(|previous| previous != record.sha256())
+            {
+                return Err(invalid(
+                    "one retained water instance has conflicting material sources",
+                ));
+            }
+        }
+        if columns.len() != owners.len() || assigned.len() != instances.len() {
+            return Err(invalid(
+                "water qualification selection needs every retained instance's actual material",
+            ));
+        }
+        let index = select_alternative(requests, &assigned)?;
+        Ok((
+            Self::from_materials(
+                requests[index].clone(),
+                model,
+                &records,
+                instances,
+                owners,
+                initial_c,
+            )?,
+            index,
+        ))
+    }
+
     pub(super) fn retain_failed_pressure_trials(&mut self, trials: usize) -> Result<(), Refusal> {
         if let Some(reservoir) = &mut self.vapor_reservoir {
             reservoir.retain_failed_trials(trials)?;

@@ -1230,8 +1230,10 @@ it does not provide textile-temperature feedback, bare-body evaporation, physiol
 Textile-owned water and its thermal/mechanical coupling are separate policies.</p>
 </fieldset>
 <fieldset><legend>Textile water and latent heat through motion</legend>
-<p class="note">Retain an original motion request with <code>transient_surface.surface_water</code> qualified for the
-material on each retained physical instance. These criteria require the complete motion and independent-sheet heat/water history
+<p class="note">Retain an original motion request with <code>transient_surface.surface_water</code>, or a
+<code>surface_water_alternatives</code> collection of independently qualified material assignments.
+The collection selects the qualification matching every retained physical instance while keeping the same water loading and operating conditions.
+These criteria require the complete motion and independent-sheet heat/water history
 in the same case. Steady heat, independent vapor and finite body-water requests are separate.</p>
 <p class="note">All seven quantities use <strong>nominal values only</strong>. Select each objective's direction explicitly;
 inclusive limits apply independently of its goal checkbox. Use an explicit nominal limit basis when other objectives use

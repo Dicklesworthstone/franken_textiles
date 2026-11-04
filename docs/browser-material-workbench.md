@@ -679,11 +679,16 @@ condensation releases it, while drainage exports sensible energy without a laten
 liquid and temperature share the producer's complete mass and energy balance. Failed or partial
 histories cannot qualify a water decision or become zero-valued readings.
 
-The current shared scenario binds one exact qualified material hash per retained instance. These
-criteria support **same-material design searches**, recomputing geometry, reference-area water
-inventory and current-area transport for every admitted design. An incompatible material replacement
-refuses the wet result; the scenario does not yet select among separate material-qualified water
-records. Original source hashes are never rewritten to make a substitution pass.
+The shared scenario can retain a single `surface_water` qualification or a
+`surface_water_alternatives` collection of independently qualified material assignments. The latter
+matches every retained instance to its exact selected material hash, enabling material comparisons
+under the same initial water loading and operating conditions. Each alternative retains its own
+source qualification and loading domain; a missing or ambiguous match refuses the wet result.
+The heat report identifies the chosen qualification and source. Original source hashes and the
+complete shared scenario remain unchanged. Both forms also support **same-material design
+searches**, recomputing geometry, reference-area water inventory and current-area transport for
+every admitted design. Collections cannot be combined with mechanical liquid coupling in this
+increment; the single-policy form retains its existing coupling support.
 
 Saved cases retain the entire original motion source and comparison policy; active source/criterion
 edits cancel stale work. Water affects mechanical mass or momentum only through an explicitly

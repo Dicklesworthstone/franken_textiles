@@ -2284,6 +2284,25 @@ test('original textile-water and mechanical-coupling sources survive snapshots w
     'Optional cell-step reservations stay with the native consumer across probes and retained alternatives');
 });
 
+test('named scenario authoring retains water qualification collections without replacing material sources', async () => {
+  const {buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const alternatives=' [ {"schema":"ftx-textile-surface-water/1","bindings":{"panel":'+
+    '{"material_sha256":"'+'a'.repeat(64)+'","initial_liquid_kg_m2":-0.0}},"source":{"n":18446744073709551615}},'+
+    '{"schema":"ftx-textile-surface-water/1","bindings":{"panel":{"material_sha256":"'+'b'.repeat(64)+'",'+
+    '"initial_liquid_kg_m2":-0.0}},"source":{"n":18446744073709551615}} ]\r\n';
+  const motion=JSON.stringify(motionPolicy()).slice(0,-1)+',"transient_surface":'+
+    '{"schema":"ftx-motion-surface-heat/1","surface_water_alternatives":'+alternatives+'}}';
+  const scenario=single({...scenarioState(),motion,maxMotionTrials:64,maxVertexFrames:32000000});
+  const comparison=JSON.stringify({basis:'nominal',objectives:[{metric:textileWaterMetrics[0],direction:'maximize'}],
+    constraints:[],required_consumers:['transient_surface']});
+  const raw=matrix({maxEvaluations:2,cases:[{key:'first',scenario,comparison},{key:'second',scenario,comparison}]});
+  assert.ok(raw.includes(alternatives));assert.ok(raw.includes(motion));assert.ok(raw.includes(scenario));
+  for(const item of JSON.parse(raw).cases) {
+    assert.equal(item.scenario.motion.transient_surface.surface_water_alternatives.length,2);
+    assert.equal(Object.hasOwn(item.scenario.motion.transient_surface,'surface_water'),false);
+  }
+});
+
 test('textile-water criteria guide linked grids and all four adaptive modes while retaining exact source inputs', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const objectives=[{metric:textileWaterMetrics[0],direction:'maximize'},{metric:textileWaterMetrics[1],direction:'minimize'}];

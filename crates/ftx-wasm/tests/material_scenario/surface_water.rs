@@ -105,6 +105,154 @@ fn study(raw: &Value, request: &Request, pattern: &Pattern) -> Value {
 }
 
 #[test]
+fn source_selected_water_cools_two_materials_under_one_unchanged_scenario() {
+    let (pattern, input, mut raw) = inputs();
+    let original_pattern = pattern.raw().clone();
+    let mut input = serde_json::to_value(input).unwrap();
+    let template = input["variants"][0].clone();
+    let mut variants = Vec::new();
+    let mut qualifications = Vec::new();
+    for (key, resistance) in [("qualified", 8.), ("slower", 32.), ("unqualified", 16.)] {
+        let mut variant = template.clone();
+        variant["key"] = json!(key);
+        let material = &mut variant["changes"]["default"];
+        // The unmatched revision deliberately keeps the first material's public ID; only its
+        // changed source hash can prevent silently reusing that revision's qualification.
+        let id = format!(
+            "synthetic-water-{}",
+            if key == "unqualified" {
+                "qualified"
+            } else {
+                key
+            }
+        );
+        material["id"] = json!(id);
+        material["record"]["id"] = json!(id);
+        material["record"]["properties"]["vapor_resistance"]["value"] = json!(resistance);
+        let selection: Selection = serde_json::from_value(material.clone()).unwrap();
+        let selected = Catalog::builtin().unwrap().resolve(&selection).unwrap();
+        if key != "unqualified" {
+            let mut water = raw["motion"]["transient_surface"]["surface_water"].clone();
+            water["bindings"]["band"]["material_sha256"] = json!(selected.sha256());
+            // Both films stay wet: evaporation remains sensitive to the selected Ret instead
+            // of tying because an identical finite inventory has completely dried out.
+            water["bindings"]["band"]["initial_liquid_kg_m2"] = json!(1e-6);
+            water["source"]["reference"] = json!(format!("test:water-qualification/{key}"));
+            qualifications.push(water);
+        }
+        variants.push(variant);
+    }
+    input["variants"] = json!(variants);
+    input["comparison"]["objectives"] = json!([
+        {"metric":"textile_water_evaporated_mass_kg","direction":"maximize"},
+        {"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}]);
+    input["comparison"]["constraints"][0] =
+        json!({"metric":"textile_water_remaining_mass_kg","minimum":0.});
+    let input: Request = serde_json::from_value(input).unwrap();
+    let heat_policy = &mut raw["motion"]["transient_surface"];
+    heat_policy.as_object_mut().unwrap().remove("surface_water");
+    heat_policy["surface_water_alternatives"] = json!(qualifications);
+    let original_scenario = raw.clone();
+    let result = study(&raw, &input, &pattern);
+    assert_eq!(pattern.raw(), &original_pattern);
+    assert_eq!(raw, original_scenario);
+    assert_eq!(
+        result["scenario"]["scenario"]["motion"]["transient_surface"]["surface_water_alternatives"],
+        json!(qualifications)
+    );
+    let heat = |key| {
+        &keyed(&result["simulations"], key)["evaluation"]["result"]["motion"]["result"]["transient_surface"]
+            ["result"]
+    };
+    for (index, key) in ["qualified", "slower"].into_iter().enumerate() {
+        let simulation = &keyed(&result["simulations"], key)["evaluation"]["result"];
+        assert_eq!(simulation["motion"]["status"], "available");
+        let outcome = &simulation["motion"]["result"]["transient_surface"];
+        assert_eq!(outcome["status"], "available", "{outcome}");
+        let heat = heat(key);
+        assert_eq!(
+            heat["request"]["surface_water_alternatives"],
+            json!(qualifications)
+        );
+        assert_eq!(heat["surface_water"]["request"], qualifications[index]);
+        assert_eq!(heat["surface_water_selection"]["index"], index);
+        assert_eq!(
+            heat["surface_water_selection"]["request_sha256"],
+            ftx_core::receipt::sha256_hex(&serde_json::to_vec(&qualifications[index]).unwrap())
+        );
+        let water = &heat["surface_water"];
+        assert!(water["evaporated_liquid_kg"].as_f64().unwrap() > 0.);
+        assert!(water["remaining_liquid_kg"].as_f64().unwrap() > 0.);
+        let reading = keyed(&result["comparison"]["alternatives"], key);
+        assert_eq!(reading["eligible"], true, "{reading}");
+        assert_eq!(
+            reading["readings"]["textile_water_evaporated_mass_kg"]["value"],
+            water["evaporated_liquid_kg"]
+        );
+        let balance = heat["stored_change_j"].as_f64().unwrap()
+            + water["liquid_stored_change_j"].as_f64().unwrap()
+            + water["exported_vapor_sensible_energy_j"].as_f64().unwrap()
+            + water["latent_energy_j"].as_f64().unwrap()
+            - heat["net_boundary_energy_j"].as_f64().unwrap();
+        assert!(balance.abs() < 1e-10);
+    }
+    assert!(
+        heat("qualified")["surface_water"]["evaporated_liquid_kg"]
+            .as_f64()
+            .unwrap()
+            > heat("slower")["surface_water"]["evaporated_liquid_kg"]
+                .as_f64()
+                .unwrap()
+    );
+    assert!(
+        heat("qualified")["final"]["temperature_c"][0][0]
+            .as_f64()
+            .unwrap()
+            < heat("slower")["final"]["temperature_c"][0][0]
+                .as_f64()
+                .unwrap()
+    );
+    assert_eq!(result["comparison"]["frontier"], json!(["qualified"]));
+    let unmatched = &keyed(&result["simulations"], "unqualified")["evaluation"]["result"];
+    assert_eq!(unmatched["motion"]["status"], "available");
+    assert_eq!(unmatched["surface"]["status"], "available");
+    assert_eq!(
+        unmatched["motion"]["result"]["transient_surface"]["status"],
+        "refused"
+    );
+    assert_eq!(
+        keyed(&result["comparison"]["alternatives"], "unqualified")["eligible"],
+        false
+    );
+    let expected_motion =
+        &keyed(&result["simulations"], "qualified")["evaluation"]["result"]["motion"]["result"];
+    for key in ["slower", "unqualified"] {
+        let motion =
+            &keyed(&result["simulations"], key)["evaluation"]["result"]["motion"]["result"];
+        for field in [
+            "initial_positions_sha256",
+            "final_positions_sha256",
+            "initial_body_collision_sha256",
+            "path_sha256",
+        ] {
+            assert_eq!(motion[field], expected_motion[field]);
+        }
+    }
+    let mut replay = input.clone();
+    for variant in &mut replay.variants {
+        let row = keyed(&result["manufacturing"]["alternatives"], &variant.key);
+        assert_eq!(row["cutting"]["status"], "available");
+        variant.changes = serde_json::from_value(row["frozen_changes"].clone()).unwrap();
+    }
+    let replayed = study(&raw, &replay, &pattern);
+    assert_eq!(replayed["simulations"], result["simulations"]);
+    assert_eq!(
+        replayed["comparison"]["alternatives"],
+        result["comparison"]["alternatives"]
+    );
+}
+
+#[test]
 fn portable_surface_water_scenario_preserves_actual_cooling_replay_and_independent_readiness() {
     let (pattern, input, raw) = inputs();
     let evaluate = |scenario: &Value, request: &Request| study(scenario, request, &pattern);

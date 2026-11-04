@@ -5187,6 +5187,35 @@ and thermal observations stay absent. `ftx-tm2.6` tracks this source/consumer in
 matched linen/leather/performance-knit characterization and unchanged-jacket physical gates
 remain open in `ftx-tm2` and `ftx-tm8`; this construction matrix does not close them.
 
+### 25.166 Select independent wet-material qualifications without changing the operating case
+
+The ordinary motion surface-heat request accepts a bounded collection of complete source-qualified
+water policies. Each evaluated garment selects exactly one policy by the full retained
+instance-to-material-hash assignment. The shared scenario and motion identity stay unchanged;
+the selected request and its digest remain inspectable. Comparison admission independently
+reconstructs the match before consuming the complete heat, liquid and latent-energy history.
+
+This closes a concrete material-substitution gap in `ftx-ms2`: two separately qualified fabrics
+can now be compared under identical initial loading, liquid properties, pressure/temperature
+schedules and phase boundary conditions. Only material/source qualification and its permitted
+maximum loading vary. Missing or ambiguous assignments and incompatible operating cases refuse;
+no old hash is rewritten, no partial qualification is stitched across specimens, and a same-name
+source revision cannot inherit the old evidence. Independent mechanics and manufacturing remain
+available when an uncoupled water history is unavailable.
+
+The workbench's retained-motion inputs, named cases and seven water criteria use the same native
+selection and show the selected source. `ftx-ms2.13` tracks this integrated delivery. Existing
+single-policy mechanical liquid coupling retains its behavior, while collections explicitly reject
+mechanical coupling until independently paired qualifications are selected and verified together.
+That continuation is `ftx-ms2.14`; it must preserve mass/momentum/work and complete rollback through
+all supported incoming/outgoing phase models. Neither slice supplies missing measured wet laws,
+humidity-dependent constitutive behavior, physical garment agreement or wearer comfort.
+
+The sibling design reference remains FrankenSim's separation of source-qualified material states,
+constitutive cards and executable consumers, with explicit selection and ambiguity refusal; MTDT's
+discovery facets remain separate from admitted physical capability. Reuse the existing authorities
+rather than introduce another database, approximate fiber-to-fabric defaults or browser physics.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

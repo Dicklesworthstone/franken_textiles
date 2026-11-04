@@ -95,7 +95,7 @@ fn replay(
         "arm_abduction_deg":35.0});
     let mut warm = single.clone();
     warm["motion"]["transient_surface"]["boundaries"][0]["outside_c"] = json!(25.);
-    let matrix = json!({"schema":"ftx-drape-scenario-matrix/1", "max_evaluations":4,
+    let matrix = json!({"schema":"ftx-drape-scenario-matrix/1", "max_evaluations":2 * study["variants"].as_array().unwrap().len(),
         "cases":[{"key":"equal-reservoirs","scenario":single},{"key":"warm-outside","scenario":warm}]});
     let dir = setup();
     std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
@@ -188,6 +188,115 @@ fn replay(
             save(&capture.join(format!("{name}-report.json")), &report);
         }
     }
+}
+
+#[test]
+fn source_selected_water_replays_native_portable_and_named_material_comparisons() {
+    let (pattern, mut study, mut single) = inputs();
+    let template = study["variants"][0].clone();
+    let mut variants = Vec::new();
+    let mut qualifications = Vec::new();
+    for (key, resistance) in [("qualified", 8.), ("slower", 32.), ("unqualified", 16.)] {
+        let mut variant = template.clone();
+        variant["key"] = json!(key);
+        let material = &mut variant["changes"]["default"];
+        let id = format!(
+            "synthetic-native-water-{}",
+            if key == "unqualified" {
+                "qualified"
+            } else {
+                key
+            }
+        );
+        material["id"] = json!(id);
+        material["record"]["id"] = json!(id);
+        material["record"]["properties"]["vapor_resistance"]["value"] = json!(resistance);
+        let selection: Selection = serde_json::from_value(material.clone()).unwrap();
+        let selected = Catalog::builtin().unwrap().resolve(&selection).unwrap();
+        if key != "unqualified" {
+            let mut water = single["motion"]["transient_surface"]["surface_water"].clone();
+            water["bindings"]["band"]["material_sha256"] = json!(selected.sha256());
+            water["bindings"]["band"]["initial_liquid_kg_m2"] = json!(1e-6);
+            water["source"]["reference"] = json!(format!("test:native-water-qualification/{key}"));
+            qualifications.push(water);
+        }
+        variants.push(variant);
+    }
+    study["variants"] = json!(variants);
+    study["comparison"]["objectives"] = json!([
+        {"metric":"textile_water_evaporated_mass_kg","direction":"maximize"},
+        {"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}]);
+    study["comparison"]["constraints"][0] =
+        json!({"metric":"textile_water_remaining_mass_kg","minimum":0.});
+    let heat = &mut single["motion"]["transient_surface"];
+    heat.as_object_mut().unwrap().remove("surface_water");
+    heat["surface_water_alternatives"] = json!(qualifications);
+    replay(
+        &pattern,
+        &study,
+        single,
+        "FTX_WATER_ALTERNATIVES_REPLAY",
+        |report| {
+            assert_eq!(
+                report["scenario"]["scenario"]["motion"]["transient_surface"]["surface_water_alternatives"],
+                json!(qualifications)
+            );
+            let mut evaporation = Vec::new();
+            let mut temperature = Vec::new();
+            let mut trajectory = Vec::new();
+            for (index, key) in ["qualified", "slower"].into_iter().enumerate() {
+                let simulated = &keyed(&report["simulations"], key)["evaluation"]["result"];
+                assert_eq!(simulated["motion"]["status"], "available");
+                let motion = &simulated["motion"]["result"];
+                let outcome = &motion["transient_surface"];
+                assert_eq!(outcome["status"], "available", "{outcome}");
+                let heat = &outcome["result"];
+                let water = &heat["surface_water"];
+                assert_eq!(water["request"], qualifications[index]);
+                assert_eq!(
+                    heat["request"]["surface_water_alternatives"],
+                    json!(qualifications)
+                );
+                assert_eq!(heat["surface_water_selection"]["index"], index);
+                assert_eq!(
+                    heat["surface_water_selection"]["request_sha256"],
+                    sha256_hex(&serde_json::to_vec(&qualifications[index]).unwrap())
+                );
+                assert_eq!(
+                    simulated["drape"]["material"]["record_sha256"],
+                    qualifications[index]["bindings"]["band"]["material_sha256"]
+                );
+                assert!(water["remaining_liquid_kg"].as_f64().unwrap() > 0.);
+                evaporation.push(water["evaporated_liquid_kg"].as_f64().unwrap());
+                temperature.push(heat["final"]["temperature_c"][0][0].as_f64().unwrap());
+                trajectory.push(&motion["final_positions_sha256"]);
+                let decision = keyed(&report["comparison"]["alternatives"], key);
+                assert_eq!(decision["eligible"], true, "{decision}");
+                assert_eq!(
+                    decision["readings"]["textile_water_evaporated_mass_kg"]["value"],
+                    water["evaporated_liquid_kg"]
+                );
+            }
+            assert!(evaporation[0] > evaporation[1] && evaporation[1] > 0.);
+            assert!(temperature[0] < temperature[1] && temperature[1] < 20.);
+            assert_eq!(trajectory[0], trajectory[1]);
+            let unmatched = &keyed(&report["simulations"], "unqualified")["evaluation"]["result"];
+            assert_eq!(unmatched["surface"]["status"], "available");
+            assert_eq!(unmatched["motion"]["status"], "available");
+            assert_eq!(
+                unmatched["motion"]["result"]["transient_surface"]["status"],
+                "refused"
+            );
+            assert_eq!(
+                &unmatched["motion"]["result"]["final_positions_sha256"],
+                trajectory[0]
+            );
+            assert_eq!(
+                keyed(&report["comparison"]["alternatives"], "unqualified")["eligible"],
+                false
+            );
+        },
+    );
 }
 
 fn qualify_mechanics(pattern: &str, study: &Value, single: &mut Value, exchange: bool) {

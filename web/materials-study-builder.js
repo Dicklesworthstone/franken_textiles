@@ -2,6 +2,12 @@
 export const MAX_GUIDED_STUDY_CANDIDATES = 7;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const own = (value, key) => Object.hasOwn(value, key);
+
+// Presence enables guided criteria; the native consumer admits the complete source policy.
+export function hasTextileWaterPolicy(surface) {
+  return surface?.surface_water != null || surface?.surface_water_alternatives != null;
+}
+
 const METRIC_CONSUMERS = {
   stock_area_m2: "cutting", stock_mass_kg: "cutting", assembly_mass_kg: "assembly_mass",
   cutting_modeled_path_seconds: "cutting_program",
@@ -368,7 +374,7 @@ export function buildMaterialScenarioMatrixRequest(state) {
       motionVaporHistory: scenario.motion?.vapor_coverage_history != null,
       motionWetFilm: scenario.motion?.vapor_coverage_history?.wet_film != null,
       transientSurface: scenario.motion?.transient_surface != null, transientCoverage: scenario.motion?.transient_coverage != null,
-      textileWater: scenario.motion?.transient_surface?.surface_water != null,
+      textileWater: hasTextileWaterPolicy(scenario.motion?.transient_surface),
       ...(own(item, "comparison") ? { comparison: parse(item.comparison, "Original case comparison") } : {}) });
     append(`${index ? "," : ""}{"key":${JSON.stringify(item.key)},"scenario":`); append(item.scenario);
     if (own(item, "comparison")) { append(',"comparison":'); append(item.comparison); }

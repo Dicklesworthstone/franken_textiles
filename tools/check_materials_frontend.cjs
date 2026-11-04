@@ -7375,6 +7375,32 @@ test('guided textile-water controls retain seven nominal phase criteria and sour
   assert.deepEqual(guarded.constraints.sort(byMetric),limits.map(item=>({...item,basis:'nominal'})));
 });
 
+test('guided textile-water qualification collections remain source-exact in single and named scenarios',async()=>{
+  const alternatives=' [\r\n'+guidedTextileWaterPolicyOriginal+',\r\n'+
+    guidedTextileWaterPolicyOriginal.replace('b'.repeat(64),'c'.repeat(64))+' ]\r\n';
+  const motion=guidedTextileWaterMotionOriginal.replace('"surface_water":'+guidedTextileWaterPolicyOriginal,
+    '"surface_water_alternatives":'+alternatives);
+  const {p}=await guidedScenarioSetup();guidedTextileWaterSource(p,motion);
+  p.e.guidedDrapeMassGoal.checked=false;p.e.guidedTextileWaterEvaporatedGoal.checked=true;
+  p.e.guidedTextileWaterEvaporatedDirection.value='maximize';p.e.guidedRequireTransientSurface.checked=true;
+  await p.e.scenario.onclick();const single=p.current().messages.at(-1);
+  assert.equal(single.type,'scenario',p.e.error.textContent);assert.ok(single.scenarioRequest.includes(motion));
+  assert.ok(single.scenarioRequest.includes(alternatives));
+  const surface=JSON.parse(single.scenarioRequest).motion.transient_surface;
+  assert.equal(Object.hasOwn(surface,'surface_water'),false);assert.equal(surface.surface_water_alternatives.length,2);
+  assert.deepEqual(JSON.parse(single.studyRequest).comparison.objectives,
+    [{metric:'textile_water_evaporated_mass_kg',direction:'maximize'}]);
+  p.emit(scenarioReport());guidedNamedCases(p);await saveGuidedCase(p,'qualified materials');
+  assert.match(visibleText(p.e.guidedScenarioCases),/retained textile-water heat policy/);
+  await p.e.scenario.onclick();const named=p.current().messages.at(-1);
+  assert.equal(named.type,'scenario',p.e.error.textContent);assert.ok(named.scenarioRequest.includes(motion));
+  assert.ok(named.scenarioRequest.includes(alternatives));assert.equal(JSON.parse(named.scenarioRequest).cases.length,1);
+  p.emit(scenarioMatrixReport());
+  p.select('guidedMotionFile','{}');p.e.guidedMotionFile.handlers.change();
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,named.scenarioRequest,
+    'Saved qualification collections remain immutable when a later source draft changes');
+});
+
 test('guided textile-water decisions need actual same-case liquid policy while dry transient heat remains independently usable',async()=>{
   for(const invalid of ['no-water','null-water','no-surface','null-surface','no-motion','form-motion','body-film-only',
     'direction','negative-minimum','negative-maximum','nonfinite','inverted','bad-input-minimum','bad-input-maximum']) {

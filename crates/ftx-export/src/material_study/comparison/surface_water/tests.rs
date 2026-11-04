@@ -188,6 +188,204 @@ fn case_with_variable_heat(variable: bool) -> (Alternative, Value, Value, Value)
     (alternative, descriptor, simulation, motion)
 }
 
+fn with_alternative_qualifications(descriptor: &mut Value, motion: &mut Value) {
+    let heat = &mut motion["transient_surface"]["result"];
+    let selected = heat["request"]
+        .as_object_mut()
+        .unwrap()
+        .remove("surface_water")
+        .unwrap();
+    let mut other = selected.clone();
+    for binding in other["bindings"].as_object_mut().unwrap().values_mut() {
+        binding["material_sha256"] = json!("a".repeat(64));
+    }
+    other["source"]["reference"] = json!("test:separate-material-qualification");
+    other["qualification"] = json!("Synthetic independent applicability to replacement textiles");
+    other["maximum_liquid_loading_kg_m2"] =
+        json!(2. * selected["maximum_liquid_loading_kg_m2"].as_f64().unwrap());
+    for phase in ["supply", "condensation", "drainage", "vapor_reservoir"] {
+        if !other[phase].is_null() {
+            other[phase]["source"]["reference"] = json!(format!("test:other-material-{phase}"));
+        }
+    }
+    heat["surface_water_selection"] = json!({"index":1,"request_sha256":hash(&selected).unwrap()});
+    heat["request"]["surface_water_alternatives"] = json!([other, selected]);
+    descriptor["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+}
+
+#[test]
+fn alternative_water_sources_admit_the_exact_selected_policy_through_every_independent_phase() {
+    let (drain_a, mut drain_d, drain_s, mut drain_m) = draining_case(true);
+    drain_m.as_object_mut().unwrap().remove("liquid_mechanics");
+    drain_m["initial_sample"]
+        .as_object_mut()
+        .unwrap()
+        .remove("liquid_mechanics");
+    let drain_heat = &mut drain_m["transient_surface"]["result"];
+    drain_heat["request"]
+        .as_object_mut()
+        .unwrap()
+        .remove("mechanical_coupling");
+    drain_heat
+        .as_object_mut()
+        .unwrap()
+        .remove("mechanical_coupling");
+    for sample in drain_heat["trace"].as_array_mut().unwrap() {
+        sample
+            .as_object_mut()
+            .unwrap()
+            .remove("mechanical_coupling");
+    }
+    drain_d["scenario"]["motion"]["transient_surface"] = drain_heat["request"].clone();
+    for (a, mut d, s, mut m) in [
+        case(),
+        supplied_case(),
+        condensing_case(),
+        (drain_a, drain_d, drain_s, drain_m),
+        finite_reservoir_case(false, false),
+    ] {
+        let original_water = m["transient_surface"]["result"]["surface_water"].clone();
+        with_alternative_qualifications(&mut d, &mut m);
+        assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
+        assert_eq!(
+            m["transient_surface"]["result"]["surface_water"],
+            original_water
+        );
+        let heat = &m["transient_surface"]["result"];
+        assert_eq!(
+            selected_policy(&heat["request"], heat, &s).unwrap(),
+            &original_water["request"]
+        );
+    }
+}
+
+#[test]
+fn alternative_water_source_selection_rejects_changed_sources_and_invented_receipts() {
+    let (a, mut d, s, mut m) = case();
+    with_alternative_qualifications(&mut d, &mut m);
+    for change in [
+        "index",
+        "digest",
+        "missing",
+        "duplicate",
+        "unqualified",
+        "case",
+        "source",
+        "partial",
+        "single",
+        "empty",
+        "budget",
+    ] {
+        let mut changed = m.clone();
+        let mut descriptor = d.clone();
+        let heat = &mut changed["transient_surface"]["result"];
+        match change {
+            "index" => heat["surface_water_selection"]["index"] = json!(0),
+            "digest" => heat["surface_water_selection"]["request_sha256"] = json!("b".repeat(64)),
+            "missing" => {
+                heat.as_object_mut()
+                    .unwrap()
+                    .remove("surface_water_selection");
+            }
+            "duplicate" => {
+                heat["request"]["surface_water_alternatives"][0]["bindings"] =
+                    heat["request"]["surface_water_alternatives"][1]["bindings"].clone()
+            }
+            "unqualified" => {
+                heat["request"]["surface_water_alternatives"][0]["allow_estimates"] = json!(false)
+            }
+            "case" => {
+                heat["request"]["surface_water_alternatives"][0]["outside_vapor_pressure_pa"] =
+                    json!([999.])
+            }
+            "source" => {
+                // Updating the selection digest cannot silently replace the qualified source
+                // in the water receipt: both must still name the exact original policy.
+                heat["request"]["surface_water_alternatives"][1]["source"]["reference"] =
+                    json!("test:changed-source");
+                heat["surface_water_selection"]["request_sha256"] =
+                    json!(hash(&heat["request"]["surface_water_alternatives"][1]).unwrap());
+            }
+            "partial" => {
+                heat["request"]["surface_water_alternatives"][1]["bindings"]["back"]["material_sha256"] =
+                    json!("a".repeat(64))
+            }
+            "single" => heat["request"]["surface_water"] = heat["surface_water"]["request"].clone(),
+            "empty" => heat["request"]["surface_water_alternatives"] = json!([]),
+            "budget" => {
+                heat["request"]["surface_water_alternatives"] =
+                    json!(vec![heat["surface_water"]["request"].clone(); 65])
+            }
+            _ => unreachable!(),
+        }
+        descriptor["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+        assert!(
+            admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err(),
+            "{change}"
+        );
+    }
+    let (a, d, s, mut legacy) = case();
+    legacy["transient_surface"]["result"]["surface_water_selection"] =
+        json!({"index":0,"request_sha256":"a".repeat(64)});
+    assert!(admit_heat(&a, &d, &s, &legacy, Consumer::TransientSurface).is_err());
+}
+
+#[test]
+fn alternative_water_sources_cannot_change_phase_boundaries_or_borrow_mechanical_qualification() {
+    let (a, mut d, s, mut m) = supplied_case();
+    with_alternative_qualifications(&mut d, &mut m);
+    for field in ["rate_kg_m2_s", "temperature_c"] {
+        let mut changed = m.clone();
+        let mut descriptor = d.clone();
+        let heat = &mut changed["transient_surface"]["result"];
+        heat["request"]["surface_water_alternatives"][0]["supply"]["bindings"]["front"][field] =
+            json!([1.]);
+        descriptor["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+        assert!(admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err());
+    }
+    let (a, mut d, s, mut m) = coupled_case();
+    with_alternative_qualifications(&mut d, &mut m);
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err());
+}
+
+#[test]
+fn unselected_water_qualifications_cannot_hide_invalid_metadata_during_case_comparison() {
+    let (a, mut d, s, mut m) = supplied_case();
+    with_alternative_qualifications(&mut d, &mut m);
+    for path in ["", "/supply"] {
+        for value in [Value::Null, json!("true"), json!(1)] {
+            let mut changed = m.clone();
+            let mut descriptor = d.clone();
+            let heat = &mut changed["transient_surface"]["result"];
+            let policy = &mut heat["request"]["surface_water_alternatives"][0];
+            let metadata = policy.pointer_mut(path).unwrap();
+            metadata["evidence"] = json!("published");
+            metadata["allow_estimates"] = value;
+            descriptor["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+            assert!(admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err());
+        }
+        let mut changed = m.clone();
+        let mut descriptor = d.clone();
+        let heat = &mut changed["transient_surface"]["result"];
+        heat["request"]["surface_water_alternatives"][0]
+            .pointer_mut(path)
+            .unwrap()["source"]["unrecognized"] = json!("not a Source field");
+        descriptor["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+        assert!(admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err());
+    }
+    for extra in [
+        Value::Null,
+        json!("supply has no qualification field in its schema"),
+    ] {
+        let mut changed = m.clone();
+        let mut descriptor = d.clone();
+        let heat = &mut changed["transient_surface"]["result"];
+        heat["request"]["surface_water_alternatives"][0]["supply"]["qualification"] = extra;
+        descriptor["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
+        assert!(admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err());
+    }
+}
+
 #[test]
 fn variable_water_histories_admit_integrated_dry_storage_not_endpoint_capacity() {
     let (a, d, s, m) = case_with_variable_heat(true);
