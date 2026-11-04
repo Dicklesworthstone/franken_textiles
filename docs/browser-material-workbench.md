@@ -141,7 +141,8 @@ The garment operations consume this same bound pattern:
 | Purchasing | Cut options, dated `QuoteBook`, comparable `Market` scope | Existing marker procurement evaluates gross stock including layout waste and order terms. Missing offers remain unknown, not zero-cost purchases. No checkout or live refresh runs in the page. |
 | Finite-stock identities / pricing | Finite-stock request, plus `ftx-finite-stock-pricing/1` for prices | Shared `stock_identities` / `stock_price`; exact offer-binding identities, dated whole-item prices and exclusions, unknown required totals and original replay inputs. The separate price file does not re-optimize stock allocation. |
 | Sewing | Complete `SewOptions` recipes and machine envelope | Existing `SewProgram`; every declared stitch interval and process refusals. Execution remains unauthorized. |
-| Independent sheet heat | A fresh workbench drape and `SurfaceConditions` JSON | Existing `thermal_steady_surface`; material-following fields, optional declared exterior exchange and source-locked replay. |
+| Independent sheet heat | A fresh workbench drape and authored uniform conditions or original `SurfaceConditions` JSON | Existing `thermal_steady_surface`; material-following fields, optional declared exterior exchange and source-locked replay. |
+| Independent sheet vapor | A fresh workbench drape and authored uniform conditions or original `ftx-vapor-surface-conditions/1` JSON | Existing `thermal_vapor_surface`; current sheet areas and source-qualified Ret, independent of dry heat readiness or available water. |
 | Layered body coverage | A fresh workbench drape, body/instance-layer map and coverage conditions | Existing `thermal_steady_coverage`; recomputed overlaps, covered/bare accounting and exposed-face exchange. No guessed layer map or environmental data. |
 
 The GarmentCode review offers **Also select the supplied fit specification** when annotations
@@ -515,6 +516,37 @@ local, and each body-dependent result downloads its exact `body-input.json` alon
 and scenario inputs for native replay. The Rust body/fit authority and all ordinary qualification gates
 remain authoritative; selecting an accepted numerical shape does not establish physical garment fit.
 
+### Declare uniform sheet heat and vapor conditions
+
+In section 3, each sheet consumer offers **Retain original JSON** or **Author uniform conditions**.
+Original files remain the default. The uniform forms start with every physical value blank and
+require explicit input; switching modes preserves the inactive file and form without consuming them.
+
+For heat, enter inside/outside reservoir temperatures in Celsius and both film resistances in
+m² K/W. Temperatures must be finite and at least −273.15 °C; films must be finite and nonnegative.
+Zero film resistance prescribes the corresponding material face temperature. Equal or reversed
+reservoirs are valid, and the native result preserves signed heat flow. The boundary applies to
+every retained sheet using its own qualified thermal transport and current draped area; no heat
+capacity or transient policy is required.
+
+For vapor, enter inside/outside partial pressures in Pa, both film resistances in m² Pa/W and
+latent heat in J/kg. Inside pressure must be at least outside pressure and both must be nonnegative.
+Equal pressures, including zero, are valid. Both vapor films and latent heat must be strictly
+positive. The form does not convert relative humidity or infer latent heat, sweat, liquid inventory
+or evaporation. Native Ret evidence and protocol admission remain independent of dry heat.
+
+The forms generate one uniform boundary without binding a previous preview's model hash. Use
+original JSON for nonuniform model-bound conditions, qualified exterior exchange, exact Ret source
+filters or explicit vapor protocol consent. Original text is retained unchanged. The native result
+owns material qualification, physical domains, numerical residuals and any supported reported bounds.
+
+After a fresh drape, the ordinary sheet heat and vapor actions consume these selected conditions.
+Guided heat scenarios use the same section-3 selection. Guided vapor scenarios can either retain
+their separate original case file or explicitly **Use the selected section-3 sheet vapor conditions**.
+Saving a named case freezes the selected requests. Later form/source changes affect the active
+draft, while saved cases change only through explicit replacement. Active changes cancel obsolete
+reads and results; inactive files/forms and unconsumed section-3 sources leave independent work intact.
+
 ### Configure fresh garment/body comparisons without a scenario file
 
 Under **Fresh body, drape and heat studies**, choose **Configure one garment/body scenario here**.
@@ -561,11 +593,12 @@ policies; its exact request remains authoritative.
 
 #### Compare layered heat and potential vapor transfer
 
-The **Layered heat and potential vapor transfer** controls retain three independent source files:
+The **Layered heat and potential vapor transfer** controls keep three independent consumers:
 
 - **Body/layer heat** takes the original `scenario.coverage` fragment: `body_triangle_ids`,
   `instance_layers`, `settings`, `conditions` and optional qualified `thermal_bridges`.
-- **Independent-sheet vapor** takes original `ftx-vapor-surface-conditions/1` conditions.
+- **Independent-sheet vapor** takes original `ftx-vapor-surface-conditions/1` conditions or the
+  explicitly selected section-3 uniform/form or original-file conditions.
 - **Covered-body vapor** takes the original `scenario.vapor_coverage` fragment with
   `body_triangle_ids`, `instance_layers`, `settings` and `conditions`.
 
@@ -879,9 +912,9 @@ The scenario action runs only the saved cases in this mode. Its `scenario-reques
 the complete replayable matrix and the exact retained source fragments. Switching between saved,
 single-scenario and original-file modes preserves their separate requests. Loading or adopting a
 different pattern clears saved cases so another garment cannot silently inherit them. The guided
-forms author initial drape and prescribed movement, retain original sheet/layered heat and vapor
-policies, and compare explicit vapor and transient heat histories from original motion requests.
-Thermal schedules and coupled transport remain authored in their original request files.
+forms author initial drape, prescribed movement, uniform sheet heat/vapor conditions and dry
+sheet-heat schedules. Original source files retain layered, exterior and coupled policies, and
+advanced motion requests carry the remaining explicit vapor and transient histories unchanged.
 
 The focused compiled-engine proof uses a small synthetic sewing-only fixture with zero gravity
 steps. Five complete native/direct-WASM/worker comparisons cover signed heat direction, explicit

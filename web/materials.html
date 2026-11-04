@@ -388,10 +388,37 @@ Optional <code>consumables.purchasing</code> supplies its own dated quote book a
 Missing channels or eligible offers keep complete quantities or prices unknown; partial diagnostic rows are retained.</p>
 </div></div>
 <h3>Thermal exchange on this drape</h3>
-<p class="note">Run a fresh drape above first. These conditions use the existing native JSON schemas; no air-gap, body-layer or environmental data is inferred by the page.</p>
-<div class="grid"><div><label>Steady surface conditions JSON <input id="heatConditions" type="file" accept=".json,application/json"></label>
+<p class="note">Run a fresh drape above first. Author explicit uniform conditions or retain an original request.
+The same section-3 conditions can also be used in material comparisons below. No environmental or material values are inferred.</p>
+<div class="grid"><div>
+<label>Sheet heat conditions <select id="heatConditionsSource"><option value="file">Retain original JSON</option><option value="form">Author uniform conditions</option></select></label>
+<label id="heatConditionsFileField">Steady surface conditions JSON <input id="heatConditions" type="file" accept=".json,application/json"></label>
+<fieldset id="heatConditionsForm" hidden><legend>Uniform independent-sheet heat</legend>
+<div class="study-fields">
+<label>Inside reservoir temperature (°C) <input id="heatInside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
+<label>Outside reservoir temperature (°C) <input id="heatOutside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
+<label>Inside film resistance (m² K/W) <input id="heatInsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
+<label>Outside film resistance (m² K/W) <input id="heatOutsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
+</div>
+<p class="note">All four values are required. Zero film resistance prescribes the corresponding face temperature.
+Reservoirs may be equal or reversed; heat power keeps its sign. One boundary applies uniformly to every retained sheet.
+Original JSON supports nonuniform model-bound conditions and qualified exterior exchange.</p>
+</fieldset>
 <button id="heat" data-command="heat" disabled>Evaluate independent sheet heat</button>
-<label>Vapor conditions JSON (<code>ftx-vapor-surface-conditions/1</code>) <input id="vaporSurfaceConditions" type="file" accept=".json,application/json"></label>
+<label>Sheet vapor conditions <select id="vaporSurfaceConditionsSource"><option value="file">Retain original JSON</option><option value="form">Author uniform conditions</option></select></label>
+<label id="vaporSurfaceConditionsFileField">Vapor conditions JSON (<code>ftx-vapor-surface-conditions/1</code>) <input id="vaporSurfaceConditions" type="file" accept=".json,application/json"></label>
+<fieldset id="vaporSurfaceConditionsForm" hidden><legend>Uniform independent-sheet vapor potential</legend>
+<div class="study-fields">
+<label>Inside vapor partial pressure (Pa) <input id="vaporInside" type="number" min="0" step="any" placeholder="Explicit pressure"></label>
+<label>Outside vapor partial pressure (Pa) <input id="vaporOutside" type="number" min="0" step="any" placeholder="No greater than inside"></label>
+<label>Inside vapor film resistance (m² Pa/W) <input id="vaporInsideFilm" type="number" min="0" step="any" placeholder="Strictly positive"></label>
+<label>Outside vapor film resistance (m² Pa/W) <input id="vaporOutsideFilm" type="number" min="0" step="any" placeholder="Strictly positive"></label>
+<label>Latent heat (J/kg) <input id="vaporLatentHeat" type="number" min="0" step="any" placeholder="Explicit positive value"></label>
+</div>
+<p class="note">All five values are required. Inside pressure must be at least outside pressure; both may be zero.
+Both vapor films and latent heat must be positive. No relative-humidity conversion, temperature-dependent latent heat or water supply is inferred.
+Original JSON retains exact observation filters, protocol consent and nonuniform model-bound conditions.</p>
+</fieldset>
 <button id="vaporSurface" data-command="vaporSurface" disabled>Evaluate vapor transfer on this drape</button>
 <p class="note">Uses each piece's retained vapor resistance and current draped area with the supplied vapor
 pressures and boundary films. Results are independent sheet potentials; they do not establish sweat
@@ -959,14 +986,15 @@ it does not measure a fabric's thickness or friction. Source material resolution
 <p class="note">The initial sewing and gravity phases need at least 6 steps, with at most 256 including the optional settling tail.
 The default time step is 1/24 s. Budgets bound work, not runtime or convergence. An unsettled or gating-flagged drape cannot
 qualify a drape-based comparison. Zero gravity steps describe a sewing-only experiment.</p></fieldset>
-<label><input id="guidedScenarioHeat" type="checkbox"> Evaluate independent sheet heat using the original section-3 heat conditions</label>
+<label><input id="guidedScenarioHeat" type="checkbox"> Evaluate independent sheet heat using the selected section-3 heat conditions</label>
 <p class="note">Uses each alternative's fresh geometry and qualified thermal observations with the declared reservoir temperatures
 and boundary films. Independent sheet power is not layered body coverage, whole-wearer heat loss or a comfort score.</p>
 <fieldset><legend>Layered heat and potential vapor transfer</legend>
 <label><input id="guidedCoverage" type="checkbox"> Evaluate body/layer heat with an original coverage policy</label>
 <label>Original scenario coverage policy JSON <input id="guidedCoverageFile" type="file" accept=".json,application/json" disabled></label>
 <label><input id="guidedVaporSurface" type="checkbox"> Evaluate independent-sheet vapor potential</label>
-<label>Original vapor conditions JSON (<code>ftx-vapor-surface-conditions/1</code>)
+<label>Sheet vapor source for this case <select id="guidedVaporSurfaceSource"><option value="file">Retain original case JSON</option><option value="workbench">Use the selected section-3 sheet vapor conditions</option></select></label>
+<label id="guidedVaporSurfaceFileField">Original vapor conditions JSON (<code>ftx-vapor-surface-conditions/1</code>)
 <input id="guidedVaporSurfaceFile" type="file" accept=".json,application/json" disabled></label>
 <label><input id="guidedVaporCoverage" type="checkbox"> Evaluate covered-body vapor potential</label>
 <label>Original scenario vapor coverage policy JSON <input id="guidedVaporCoverageFile" type="file" accept=".json,application/json" disabled></label>

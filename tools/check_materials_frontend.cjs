@@ -6072,6 +6072,114 @@ function guidedCaseAction(p,label) {
   assert.ok(button,label);assert.equal(button.disabled,false,label);return button.onclick();
 }
 
+function authorUniformSheetConditions(p,kind,values) {
+  const heat=kind==='heat',id=heat?'heatConditions':'vaporSurfaceConditions';
+  const names=heat?['heatInside','heatOutside','heatInsideFilm','heatOutsideFilm']:
+    ['vaporInside','vaporOutside','vaporInsideFilm','vaporOutsideFilm','vaporLatentHeat'];
+  const keys=heat?['inside_c','outside_c','inside_resistance_m2_k_w','outside_resistance_m2_k_w']:
+    ['inside_vapor_pressure_pa','outside_vapor_pressure_pa','inside_film_resistance_m2_pa_w','outside_film_resistance_m2_pa_w','latent_heat_j_kg'];
+  const numbers=values||(heat?[-5,30,0,0.2]:[2000,1000,1,2,2500000]);
+  for(const [index,name] of names.entries())p.e[name].value=String(numbers[index]);
+  p.e[id+'Source'].value='form';p.e[id+'Source'].handlers.change();
+  return JSON.stringify({schema:heat?'ftx-steady-surface-conditions/1':'ftx-vapor-surface-conditions/1',
+    boundaries:[Object.fromEntries(keys.map((key,index)=>[key,numbers[index]]))]});
+}
+function useWorkbenchVapor(p) {
+  p.e.guidedVaporSurface.checked=true;p.e.guidedVaporSurface.handlers.change();
+  p.e.guidedVaporSurfaceSource.value='workbench';p.e.guidedVaporSurfaceSource.handlers.change();
+}
+
+test('uniform sheet conditions start blank and share exact standalone and guided requests',async()=>{
+  const {p,sources}=await guidedScenarioSetup(true);
+  for(const id of ['heatConditionsSource','vaporSurfaceConditionsSource','guidedVaporSurfaceSource'])assert.equal(p.e[id].value||'file','file');
+  for(const id of ['heatInside','heatOutside','heatInsideFilm','heatOutsideFilm','vaporInside','vaporOutside','vaporInsideFilm','vaporOutsideFilm','vaporLatentHeat']) {
+    assert.equal(p.e[id].value,'',id+' must not invent a physical value');
+  }
+  const heat=authorUniformSheetConditions(p,'heat'),vapor=authorUniformSheetConditions(p,'vapor');useWorkbenchVapor(p);
+  for(const id of ['heatConditions','vaporSurfaceConditions','guidedVaporSurfaceFile']) {
+    p.select(id,'{inactive');p.e[id].files[0].arrayBuffer=async()=>{throw Error('Inactive file must not be read: '+id);};
+  }
+  p.e.guidedVaporSurfaceHeatGoal.checked=true;p.e.guidedVaporSurfaceHeatDirection.value='minimize';p.e.guidedRequireVaporSurface.checked=true;
+  await p.e.scenario.onclick();const scenario=p.current().messages.at(-1);assert.equal(scenario.type,'scenario',p.e.error.textContent);
+  assert.ok(scenario.scenarioRequest.includes(heat));assert.ok(scenario.scenarioRequest.includes(vapor));assert.ok(scenario.scenarioRequest.includes(sources.fit));
+  assert.deepEqual(JSON.parse(scenario.scenarioRequest).vapor_surface,JSON.parse(vapor));
+  assert.equal(Object.hasOwn(JSON.parse(scenario.scenarioRequest),'motion'),false);
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:scenario.scenarioRequest}]);
+  const download=descendants(section(p,'Fresh drape and heat alternatives')).find(n=>n.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(download.href).text(),scenario.scenarioRequest);
+  await p.bind();p.select('measurements');await p.e.fold.onclick();
+  const drape='{"material":{"basis":"test"},"coordinate":-0.0}';p.emit(JSON.parse(drape),[],drape);
+  for(const [op,conditions] of [['heat',heat],['vaporSurface',vapor]]) {
+    assert.equal(p.e[op].disabled,false);await p.e[op].onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,op,p.e.error.textContent);assert.equal(sent.report,drape);assert.equal(sent.conditions,conditions);
+    p.emit(op==='heat'?{steady:{}}:{schema:'ftx-vapor-surface-result/1',pieces:[],columns:[]});
+  }
+  p.e.vaporInsideFilm.value='0';p.e.vaporInsideFilm.handlers.input();const before=p.current().messages.length;
+  await p.e.vaporSurface.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/positive/);
+});
+
+test('uniform sheet conditions freeze named cases and retain advanced original file modes without rewriting sources',async()=>{
+  const {p,sources}=await guidedScenarioSetup(true);guidedNamedCases(p);useWorkbenchVapor(p);
+  const firstHeat=authorUniformSheetConditions(p,'heat'),firstVapor=authorUniformSheetConditions(p,'vapor');await saveGuidedCase(p,'cold');
+  const secondHeat=authorUniformSheetConditions(p,'heat',[35,5,0.1,0.2]),secondVapor=authorUniformSheetConditions(p,'vapor',[1500,1500,2,3,2400000]);
+  await saveGuidedCase(p,'warm');await p.e.scenario.onclick();const frozen=p.current().messages.at(-1).scenarioRequest;
+  for(const raw of [firstHeat,firstVapor,secondHeat,secondVapor])assert.ok(frozen.includes(raw));p.emit(scenarioReport());
+  p.e.heatInside.value='invalid';p.e.heatInside.handlers.input();p.e.vaporLatentHeat.value='';p.e.vaporLatentHeat.handlers.input();
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false);await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,frozen);p.emit(scenarioReport());
+  p.e.scenarioMode.value='guided';p.e.scenarioMode.handlers.change();
+  p.e.heatConditionsSource.value='file';p.e.heatConditionsSource.handlers.change();p.select('heatConditions',sources.heatConditions);
+  const original=' \r\n'+guidedTransportOriginal.vapor_surface.replace('2500000.0','18446744073709551615')
+    .replace(']}','],"required_method":"café 🧵","required_conditions":{"specimen":"exact source"},"allow_mixed_protocols":false}')+'\r\n';
+  p.e.vaporSurfaceConditionsSource.value='file';p.e.vaporSurfaceConditionsSource.handlers.change();p.select('vaporSurfaceConditions',original);
+  await p.e.scenario.onclick();let sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(original));assert.ok(sent.scenarioRequest.includes(sources.heatConditions));p.emit(scenarioReport());
+  p.e.guidedVaporSurfaceSource.value='file';p.e.guidedVaporSurfaceSource.handlers.change();p.select('guidedVaporSurfaceFile',original);
+  p.select('vaporSurfaceConditions','{unused');await p.e.scenario.onclick();sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(original));
+});
+
+test('uniform sheet conditions refuse incomplete or unsupported physical inputs before reading scenario sources',async()=>{
+  const {p}=await guidedScenarioSetup(true);authorUniformSheetConditions(p,'heat');authorUniformSheetConditions(p,'vapor');useWorkbenchVapor(p);
+  let reads=0;p.e.fit.files[0].arrayBuffer=async()=>{reads++;return utf8Buffer('{}');};
+  for(const [id,value] of [['heatInside',''],['heatOutside','-273.151'],['heatInsideFilm','-0.1'],['heatOutsideFilm','NaN'],
+    ['vaporInside','999'],['vaporOutside','-1'],['vaporInsideFilm','0'],['vaporOutsideFilm','0'],['vaporLatentHeat','0'],
+    ['heatConditionsSource','unknown'],['vaporSurfaceConditionsSource','unknown'],['guidedVaporSurfaceSource','unknown']]) {
+    const old=p.e[id].value;p.e[id].value=value;const before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before,id);assert.equal(p.e.error.hidden,false,id);assert.equal(reads,0,id);p.e[id].value=old;
+  }
+  p.e.guidedScenarioHeat.checked=false;p.e.guidedScenarioHeat.handlers.change();p.e.guidedHeatPowerGoal.checked=false;p.e.guidedRequireSurface.checked=false;
+  p.e.heatInside.value='invalid';await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.equal(Object.hasOwn(JSON.parse(sent.scenarioRequest),'surface'),false);
+  assert.ok(JSON.parse(sent.scenarioRequest).vapor_surface,'Vapor authoring remains independent of an inactive invalid heat form');
+});
+
+test('uniform sheet conditions snapshot active inputs and cancel stale work while inactive sources remain independent',async()=>{
+  for(const saving of [false,true])for(const kind of ['heat','vapor']) {
+    const {p,sources}=await guidedScenarioSetup(true);if(saving)guidedNamedCases(p);
+    authorUniformSheetConditions(p,'heat');authorUniformSheetConditions(p,'vapor');useWorkbenchVapor(p);
+    const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),before=old.messages.length,running=saving?saveGuidedCase(p,'obsolete'):p.e.scenario.onclick();
+    const id=kind==='heat'?'heatInside':'vaporInside';p.e[id].value='123';p.e[id].handlers.input();
+    assert.equal(old.dead,true,`${saving}/${kind}`);p.ready();delay.resolve(sources.fit);await running;
+    assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);if(saving)assert.equal(p.e.guidedScenarioCases.children.length,0);
+  }
+  const {p,sources}=await guidedScenarioSetup(true),heat=authorUniformSheetConditions(p,'heat'),vapor=authorUniformSheetConditions(p,'vapor');useWorkbenchVapor(p);
+  const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const running=p.e.scenario.onclick(),old=p.current();p.e.heatInside.value='99';p.e.vaporInside.value='9999'; // Snapshot, without source-change events.
+  for(const id of ['heatConditions','vaporSurfaceConditions','guidedVaporSurfaceFile'])p.e[id].handlers.change();
+  assert.equal(old.dead,false,'Inactive files cannot cancel form-owned source reads');delay.resolve(sources.fit);await running;
+  const sent=old.messages.at(-1);assert.ok(sent.scenarioRequest.includes(heat));assert.ok(sent.scenarioRequest.includes(vapor));
+  p.e.heatConditionsSource.value='file';p.e.heatConditionsSource.handlers.change();assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete-uniform.json',text:'{}'}]});
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);assert.equal(p.live.size,0);
+  p.e.guidedVaporSurfaceSource.value='file';p.e.guidedVaporSurfaceSource.handlers.change();p.select('guidedVaporSurfaceFile',guidedTransportOriginal.vapor_surface);
+  await p.e.scenario.onclick();const current=p.current();
+  p.e.heatInside.value='bad';p.e.heatInside.handlers.input();p.e.vaporInside.handlers.input();
+  p.e.vaporSurfaceConditionsSource.value='file';p.e.vaporSurfaceConditionsSource.handlers.change();p.e.vaporSurfaceConditions.handlers.change();
+  assert.equal(current.dead,false,'Inactive form fields and unused section-3 vapor sources cannot cancel original case inputs');
+});
+
 test('guided named scenarios freeze independent exact sources and replay without a matrix file',async()=>{
   const {p,sources}=await guidedScenarioSetup(true);guidedNamedCases(p);
   assert.equal(p.e.scenario.disabled,true);assert.equal(p.e.scenarioFileControls.hidden,true);

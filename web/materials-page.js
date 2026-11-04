@@ -1,6 +1,7 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest,
-  buildGuidedDesignAfterOperations, hasTextileWaterPolicy } from "./materials-study-builder.js";
+  buildGuidedDesignAfterOperations, hasTextileWaterPolicy, buildMaterialSurfaceConditions,
+  buildMaterialVaporSurfaceConditions } from "./materials-study-builder.js";
 import { buildMaterialScreenRequest } from "./materials-screen-builder.js";
 
 const $ = id => document.getElementById(id);
@@ -126,6 +127,17 @@ const guidedTransportSources = [
   ["vaporSurface", "guidedVaporSurface", "guidedVaporSurfaceFile", "the original independent-sheet vapor conditions"],
   ["vaporCoverage", "guidedVaporCoverage", "guidedVaporCoverageFile", "the original scenario covered-body vapor policy"],
 ];
+const sheetConditionForms = {
+  heatConditions: { operation: "heat", build: buildMaterialSurfaceConditions, fields: [
+    ["heatInside", "inside_c", "inside reservoir temperature"], ["heatOutside", "outside_c", "outside reservoir temperature"],
+    ["heatInsideFilm", "inside_resistance_m2_k_w", "inside heat film resistance"], ["heatOutsideFilm", "outside_resistance_m2_k_w", "outside heat film resistance"],
+  ] },
+  vaporSurfaceConditions: { operation: "vaporSurface", build: buildMaterialVaporSurfaceConditions, fields: [
+    ["vaporInside", "inside_vapor_pressure_pa", "inside vapor pressure"], ["vaporOutside", "outside_vapor_pressure_pa", "outside vapor pressure"],
+    ["vaporInsideFilm", "inside_film_resistance_m2_pa_w", "inside vapor film resistance"], ["vaporOutsideFilm", "outside_film_resistance_m2_pa_w", "outside vapor film resistance"],
+    ["vaporLatentHeat", "latent_heat_j_kg", "latent heat"],
+  ] },
+};
 const guidedRequired = [
   ["guidedRequireCutting", "cutting", "roll"], ["guidedRequireCutProgram", "cutting_program", "roll"],
   ["guidedRequireSewing", "sewing"], ["guidedRequirePurchasing", "purchasing", "roll"],
@@ -171,6 +183,8 @@ const guidedScreenMode = () => $("screenMode").value === "guided";
 const guidedScenarioMode = () => ["guided", "guided_matrix"].includes($("scenarioMode").value);
 const guidedMatrixMode = () => $("scenarioMode").value === "guided_matrix";
 const guidedMotionMode = () => $("guidedScenarioMotion").checked ? ($("guidedMotionSource").value || "form") : "none";
+const sheetConditionsMode = id => $(id + "Source").value || "file";
+const guidedVaporSurfaceMode = () => $("guidedVaporSurfaceSource").value || "file";
 const guidedStockMode = () => $("guidedStockMode").value || "roll";
 const guidedStockScope = (scope, mode) => !scope || scope === mode || (scope === "priced" && ["roll", "job"].includes(mode));
 const studyUsesBody = () => guidedStudyMode() ? $("guidedDesign").checked : $("studyOnBody").checked;
@@ -192,7 +206,8 @@ function bodyDependentStudies(id) {
 function guidedSourceStudies(id) {
   const scenarioSource = guidedScenarioMode() &&
     ((id === "fit" && $("guidedScenarioFitSource").value === "file") ||
-      (id === "heatConditions" && $("guidedScenarioHeat").checked));
+      (id === "heatConditions" && $("guidedScenarioHeat").checked) ||
+      (id === "vaporSurfaceConditions" && $("guidedVaporSurface").checked && guidedVaporSurfaceMode() === "workbench"));
   const scenarioKeys = scenarioSource ? [guidedMatrixMode() ? "scenarioDraft" : "scenario"] : [];
   if (!guidedStudyMode()) return scenarioKeys;
   const mode = guidedStockMode(), cutting = $("guidedCutting").checked;
@@ -251,6 +266,9 @@ function controls() {
   for (const id of ["guidedContactLoadsScope", "guidedContactVertexBudget", "guidedContactPairBudget"]) $(id).disabled = !contactLoads;
   $("guidedContactLoadsInstances").disabled = !contactLoads || $("guidedContactLoadsScope").value !== "instances";
   for (const [, id, file] of guidedTransportSources) $(file).disabled = !$(id).checked;
+  $("guidedVaporSurfaceSource").disabled = !$("guidedVaporSurface").checked;
+  $("guidedVaporSurfaceFileField").hidden = guidedVaporSurfaceMode() !== "file";
+  $("guidedVaporSurfaceFile").disabled ||= guidedVaporSurfaceMode() !== "file";
   $("guidedMotionForm").hidden = motionMode !== "form";
   $("guidedMotionFileField").hidden = motionMode !== "file";
   const motionHeat = motionMode === "form" && $("guidedMotionHeat").checked;
@@ -377,8 +395,12 @@ function controls() {
   const previewBlocked = !!pending && pending.op !== "sewPreview";
   $("sewPreviewCell").disabled = !sewingPreviewSource?.requiresCell || previewBlocked;
   $("sewPreviewOperation").disabled = !currentSewingPreviewCell() || previewBlocked;
-  $("heat").disabled ||= !drape || !has("heatConditions");
-  $("vaporSurface").disabled ||= !drape || !has("vaporSurfaceConditions");
+  for (const [id, form] of Object.entries(sheetConditionForms)) {
+    const authored = sheetConditionsMode(id) === "form";
+    $(id + "Form").hidden = !authored; $(id + "FileField").hidden = authored; $(id).disabled = authored;
+    for (const [field] of form.fields) $(field).disabled = !authored;
+    $(form.operation).disabled ||= !drape || (!authored && !has(id));
+  }
   $("coverage").disabled ||= !drape || !has("map") || !has("coverageConditions");
   $("clearCoverageBridges").disabled = !has("coverageBridges");
   $("cancel").disabled = !pending;
@@ -4009,6 +4031,17 @@ async function read(id, binary = false) {
   JSON.parse(raw);
   return raw;
 }
+function sheetConditionsSource(id) {
+  const mode = sheetConditionsMode(id);
+  if (mode === "file") return roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
+  if (mode !== "form") throw Error("Choose authored uniform conditions or an original conditions file.");
+  const form = sheetConditionForms[id];
+  return form.build(Object.fromEntries(form.fields.map(([field, key, label]) => {
+    const raw = $(field).value.trim();
+    if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
+    return [key, Number(raw)];
+  })));
+}
 function drapeArmAngle() {
   const angle = $("bodyArmDeg").value.trim();
   if (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180) {
@@ -4539,6 +4572,8 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const motionMode = guidedMotionMode(), materialStrain = $("guidedMaterialStrain").checked;
   const contactLoads = $("guidedContactLoads").checked;
   const transport = Object.fromEntries(guidedTransportSources.map(([key, id]) => [key, $(id).checked]));
+  const vaporSource = guidedVaporSurfaceMode();
+  if (transport.vaporSurface && !["file", "workbench"].includes(vaporSource)) throw Error("Choose original case vapor JSON or the selected section-3 vapor conditions.");
   if (!["none", "form", "file"].includes(motionMode)) throw Error("Choose no motion, authored endpoints or an original motion request.");
   const input = { allowNoFit: fitSource === "none", options: {
     spacing: number("guidedScenarioSpacing", "mesh spacing in millimetres"),
@@ -4578,13 +4613,14 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     authoredComparison = JSON.stringify({ ...comparison, required_consumers: requiredConsumers, allow_mixed_protocols: false });
   }
   const entries = [...(fitSource === "file" ? [["fitSpec", "fit", "the original section-3 fit contract"]] : []),
-    ...(surface ? [["surface", "heatConditions", "the original section-3 sheet heat conditions"]] : []),
+    ...(surface ? [["surface", "heatConditions", "the selected section-3 sheet heat conditions"]] : []),
     ...(motionMode === "file" ? [["motion", "guidedMotionFile", "the original prescribed-motion request"]] : []),
-    ...guidedTransportSources.filter(([key]) => transport[key]).map(([key, , file, label]) => [key, file, label]),
+    ...guidedTransportSources.filter(([key]) => transport[key]).map(([key, , file, label]) =>
+      [key, key === "vaporSurface" && vaporSource === "workbench" ? "vaporSurfaceConditions" : file, label]),
     ...(includeCasePolicy && policy === "file" ? [["comparison", "guidedScenarioComparison", "the original case comparison policy"]] : [])];
   const budget = 16 * 1024 * 1024; let total = 0;
   const retained = entries.map(([key, id, label]) => {
-    const original = roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
+    const original = Object.hasOwn(sheetConditionForms, id) ? sheetConditionsSource(id) : roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
     if (!original) throw Error(`Choose ${label} first.`);
     const size = typeof original === "string" ? new Blob([original]).size : original.size;
     if (key === "fitSpec" && designFit && size > 256 * 1024) throw Error("Guided alteration fit contract exceeds 256 KiB; no source was read.");
@@ -4845,7 +4881,9 @@ async function execute(op) {
         msg.created = `${msg.today}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
       if (op === "heat" || op === "vaporSurface" || op === "coverage") {
         if (!drape) throw Error("Re-drape the current material first."); msg.report = drape;
-        msg.conditions = await read(op === "heat" ? "heatConditions" : op === "vaporSurface" ? "vaporSurfaceConditions" : "coverageConditions");
+        const conditionId = op === "heat" ? "heatConditions" : op === "vaporSurface" ? "vaporSurfaceConditions" : "coverageConditions";
+        const authored = op === "coverage" ? null : sheetConditionsSource(conditionId);
+        msg.conditions = typeof authored === "string" ? authored : await read(conditionId);
         if (op === "coverage") {
           msg.map = await read("map");
           if (has("coverageBridges")) msg.thermalBridges = await read("coverageBridges");
@@ -4938,7 +4976,23 @@ for (const id of ["guidedContactLoads", "guidedContactLoadsScope", "guidedContac
 }
 for (const [, id, file] of guidedTransportSources) {
   $(id).addEventListener("change", changedGuidedScenarioDraft);
-  $(file).addEventListener("change", () => { if ($(id).checked) changedGuidedScenarioDraft(); else controls(); });
+  $(file).addEventListener("change", () => {
+    if ($(id).checked && (id !== "guidedVaporSurface" || guidedVaporSurfaceMode() === "file")) changedGuidedScenarioDraft();
+    else controls();
+  });
+}
+$("guidedVaporSurfaceSource").addEventListener("change", () => {
+  if ($("guidedVaporSurface").checked) changedGuidedScenarioDraft(); else controls();
+});
+for (const [id, form] of Object.entries(sheetConditionForms)) {
+  $(id + "Source").addEventListener("change", () => invalidate([form.operation, ...guidedSourceStudies(id)], true));
+  for (const [field] of form.fields) {
+    const changed = () => {
+      if (sheetConditionsMode(id) === "form") invalidate([form.operation, ...guidedSourceStudies(id)], true);
+      else controls();
+    };
+    $(field).addEventListener("change", changed); $(field).addEventListener("input", changed);
+  }
 }
 $("guidedMotionSource").addEventListener("change", () => {
   if ($("guidedScenarioMotion").checked) changedGuidedScenarioDraft(); else controls();
@@ -5561,6 +5615,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
+    if (Object.hasOwn(sheetConditionForms, id) && sheetConditionsMode(id) !== "file") { controls(); return; }
     let scenarioCasesLoading;
     if (id === "stockRequest") {
       selectedStockRequest = null; clear(["selectedStock"]);
@@ -5585,7 +5640,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
       "sewOptions", "sewOptimize", "quotes", "market"].includes(id);
     invalidate([...keys, ...bodyDependentStudies(id), ...guidedKeys], guidedProcessSource || guidedKeys.length > 0 ||
       (studyBodyMode() === "preview" && ["drapeLegs", "drapeLegFraction"].includes(id)) ||
-      ["measurements", "fit", "body", "selfContact", "scenarioBody", "heatConditions"].includes(id));
+      ["measurements", "fit", "body", "selfContact", "scenarioBody", "heatConditions", "vaporSurfaceConditions"].includes(id));
     return scenarioCasesLoading;
   });
 }

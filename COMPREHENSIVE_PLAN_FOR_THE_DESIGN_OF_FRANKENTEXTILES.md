@@ -5261,6 +5261,24 @@ showing changed evaporation, cooling and motion through existing phase exchange 
 native/portable replay, conservation, refusal and rollback. Synthetic software checks do not close
 the matched-specimen or physical-garment gates in `ftx-tm2` and `ftx-tm8`.
 
+### 25.169 Author uniform steady heat and vapor operating cases
+
+The ordinary workbench can author the existing independent-sheet steady heat and vapor conditions
+without preparing a JSON file. Explicit reservoir temperatures and thermal films, or vapor pressures,
+vapor films and latent heat, produce one uniform boundary over the current native material columns.
+No stale model identity, material coefficient, weather, skin condition or liquid supply is inferred.
+
+The same active conditions serve standalone drape evaluation and guided single/named material and
+design scenarios. Saved cases retain immutable snapshots; changing active inputs cancels obsolete
+work, while edits to an inactive source leave the selected workflow intact. Original-file mode
+preserves advanced policy bytes, observation filters, evidence consent and model-bound assignments.
+
+`ftx-ms2.16` tracks this practical continuation of `ftx-ms2`. Steady heat remains independent of heat
+capacity, and vapor potential remains independent of dry heat and actual liquid availability. Signed
+thermal exchange, explicitly bounded forward vapor potential, native source qualification, supported
+reported ranges and independent consumer refusals retain their existing authorities. This operator
+workflow does not establish measured garment warmth, evaporation, wearer comfort or physical fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
