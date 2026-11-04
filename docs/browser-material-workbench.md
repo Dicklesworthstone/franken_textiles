@@ -802,7 +802,7 @@ The endpoint form emits a dry sheet history only when explicitly enabled with a 
 schedule. These criteria also enter existing linked
 grid and adaptive design comparisons under each case's own admission policy.
 
-For a guided dry schedule, enter the initial textile temperature after the initial drape and the
+For a guided dry schedule, enter the default initial textile temperature after the initial drape and the
 inside/outside reservoir temperatures and film resistances for each endpoint, then **Add motion
 keyframe** or **Replace keyframe … from current controls**. The first boundary applies from time
 zero to the first endpoint; later boundaries apply after the preceding endpoint through the saved
@@ -810,12 +810,34 @@ endpoint. Conditions are constant over each interval. They are not interpolated 
 inferred weather, skin conditions or an equilibrium result. Negative Celsius values are allowed
 down to absolute zero. Zero film resistance explicitly prescribes the corresponding face temperature.
 
+Open **Different initial temperatures for individual garment instances** when, for example, a cold
+outer garment starts separately from a warm inner sheet. Enter an exact retained physical instance
+name and its temperature, then **Add or replace initial instance temperature**. Each saved override
+initializes that sheet uniformly through its thickness. Two instances can start at different
+temperatures while sharing the same material. Unlisted instances use the explicit default; the
+default remains required even when every retained instance has an override. Nothing is inferred
+from a material name, source-piece shortcut, current reservoir, body temperature or equilibrium.
+
+Override name/temperature fields are drafts until saved. Remove an individual override or choose
+**Use default for every instance** to remove the map. Saved overrides survive heat off/on, remain
+separate from each immutable named case and clear when the original pattern changes. Editing a saved
+override cancels obsolete single-case work or a pending case save; later draft edits cannot alter a
+captured request. The engine verifies the actual retained instance and its material's temperature
+domain. Unknown or unretained names refuse the heat consumer without erasing independent results.
+
+The native request retains the optional `initial_instance_temperatures_c` map, its explicit scalar
+fallback and the complete original policy. A successful mapped result shows the resolved temperature
+of every retained instance and its source-bound triangle ownership. Initial extrema use the actual
+retained temperatures, excluding an unused fallback. This bounded extension supports dry independent
+sheets, including the original-file exterior policies; water, mechanical liquid coupling and
+dissipation heating require a separate supported contract and refuse when combined with this map.
+
 Every saved endpoint owns its four boundary values. Editing the current endpoint or film fields
 prepares a draft; only adding or replacing an endpoint changes the saved schedule. Removing an
 endpoint also removes its boundary, and the next endpoint retains its own conditions over its new
 interval. If heat is enabled after poses have already been saved, explicitly replace each endpoint
 that lacks conditions; no earlier endpoint is silently filled from the current fields. Disabling
-heat preserves the saved conditions for reactivation. Initial temperature, cell count and thermal
+heat preserves the saved conditions for reactivation. Default initial temperature, cell count and thermal
 work limits apply to the active draft immediately; each saved named case retains its own snapshot.
 
 Use 1–64 cells through each sheet, a maximum thermal step from 1e-9 to 1 second and a history

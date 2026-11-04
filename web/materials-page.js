@@ -52,6 +52,7 @@ let guidedScenarioCases = null, guidedScenarioCasesRead = 0;
 let guidedDesignCaseNomination = null;
 const guidedScenarioDrafts = [], guidedScenarioButtons = [];
 const guidedMotionKeyframes = [], guidedMotionButtons = [];
+const guidedMotionHeatInitials = new Map(), guidedMotionHeatInitialButtons = [];
 let guidedScenarioDraftSource = {};
 const guidedDesignFields = { key: "guidedDesignKey", kind: "guidedDesignKind", axis: "guidedDesignAxis",
   at: "guidedDesignAt", multiplier: "guidedDesignMultiplier", values: "guidedDesignValues", dx: "guidedDesignDx", dy: "guidedDesignDy",
@@ -277,6 +278,10 @@ function controls() {
   $("guidedMotionHeatSettings").hidden = !motionHeat; $("guidedMotionHeatBoundary").hidden = !motionHeat;
   for (const id of ["guidedMotionHeatInitial", "guidedMotionHeatCells", "guidedMotionHeatStep", "guidedMotionHeatBudget",
     "guidedMotionHeatInside", "guidedMotionHeatOutside", "guidedMotionHeatInsideFilm", "guidedMotionHeatOutsideFilm"]) $(id).disabled = !motionHeat;
+  const editHeatInstances = !!source && guidedScenarioMode() && motionHeat;
+  for (const id of ["guidedMotionHeatInstance", "guidedMotionHeatInstanceInitial", "addMotionHeatInstance"]) $(id).disabled = !editHeatInstances;
+  $("clearMotionHeatInstances").disabled = !editHeatInstances || !guidedMotionHeatInitials.size;
+  for (const button of guidedMotionHeatInitialButtons) button.disabled = !editHeatInstances;
   $("studyTarget").disabled = !source || (studyCandidates.length > 0 && !studyNeedsTarget());
   $("studyPieces").disabled = $("studyTarget").disabled || $("studyTarget").value !== "pieces";
   $("guidedDesign").disabled = !source;
@@ -1019,6 +1024,20 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       metric(h?.physical_stored_change_j ?? h?.stored_change_j), metric(h?.balance_error_j),
       name === "transient_surface" ? "Not applicable" : metric(h?.signed_remap_residual_j)]);
     detail(parent, `${key}: ${label} temperature history, source and energy accounting (display only)`, h || { refusal: output?.refusal || dependency?.refusal });
+    if (h?.initial_condition) {
+      const initial = h.initial_condition;
+      const retained = new Set(initial.triangle_instance || []);
+      const temperatures = table(parent, `${key}: resolved initial dry sheet temperatures`, ["Retained instance", "Initial temperature (°C)"]);
+      for (const [index, instance] of (initial.instances || []).entries()) {
+        if (!retained.has(index)) continue;
+        cells(temperatures, [instance, metric(initial.instance_temperature_c?.[index])]);
+      }
+      const range = document.createElement("p");
+      range.textContent = `Resolved initial range over retained sheets: ${initial.temperature_range_c ?
+        `[${initial.temperature_range_c.map(metric).join(", ")}] °C` : "Unknown"}.`;
+      parent.append(range);
+      detail(parent, `${key}: initial temperature source and retained triangle ownership (display only)`, initial);
+    }
     if (h?.thermal_bridges) {
       const bridges = h.thermal_bridges;
       const energy = table(parent, `${key}: seam and closure heat during motion`,
@@ -4507,6 +4526,8 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
   if (includeHeat && $("guidedMotionHeat").checked) {
     motion.transient_surface = { schema: "ftx-motion-surface-heat/1",
       initial_temperature_c: number("guidedMotionHeatInitial", "initial textile temperature"),
+      ...(guidedMotionHeatInitials.size ? { initial_instance_temperatures_c:
+        Object.fromEntries([...guidedMotionHeatInitials].map(([instance, entry]) => [instance, entry.temperature_c])) } : {}),
       cells_per_layer: number("guidedMotionHeatCells", "through-sheet cell count"),
       boundaries: keyframes.map((frame, index) => {
         if (!frame.heat_boundary) throw Error(`Keyframe ${index + 1} has no saved heat conditions. Enter its four conditions and replace that endpoint.`);
@@ -4517,6 +4538,40 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
     };
   }
   return { motion, maxMotionTrials: number("guidedScenarioMotionTrials", "case motion-attempt allowance") };
+}
+function showGuidedMotionHeatInitials() {
+  const parent = $("guidedMotionHeatInstances"); parent.replaceChildren(); guidedMotionHeatInitialButtons.length = 0;
+  for (const [instance, entry] of guidedMotionHeatInitials) {
+    const row = document.createElement("div"), label = document.createElement("span"), remove = document.createElement("button");
+    row.className = "study-choice"; label.textContent = `${instance}: ${entry.temperature_c} °C initially`;
+    remove.type = "button"; remove.textContent = `Remove initial temperature for ${instance}`;
+    remove.onclick = () => {
+      if (!source || !guidedScenarioMode() || guidedMotionMode() !== "form" || !$("guidedMotionHeat").checked ||
+        guidedMotionHeatInitials.get(instance) !== entry) return;
+      guidedMotionHeatInitials.delete(instance); showGuidedMotionHeatInitials(); changedGuidedMotionDraft();
+    };
+    row.append(label, remove); parent.append(row); guidedMotionHeatInitialButtons.push(remove);
+  }
+  $("guidedMotionHeatInstancesSummary").textContent = guidedMotionHeatInitials.size ?
+    `${guidedMotionHeatInitials.size} saved initial-temperature override(s). Unlisted retained instances use the explicit default above.` :
+    "No instance overrides saved. Every retained instance uses the explicit default above.";
+}
+function saveGuidedMotionHeatInitial() {
+  if (!source || !guidedScenarioMode() || guidedMotionMode() !== "form" || !$("guidedMotionHeat").checked) return;
+  try {
+    const instance = $("guidedMotionHeatInstance").value, raw = $("guidedMotionHeatInstanceInitial").value.trim();
+    const temperature = Number(raw);
+    if (!instance.trim()) throw Error("Supply the exact physical instance name for this initial temperature.");
+    if (!raw || !Number.isFinite(temperature) || temperature < -273.15) {
+      throw Error("The instance's initial temperature must be finite and at least -273.15 °C.");
+    }
+    if (!guidedMotionHeatInitials.has(instance) && guidedMotionHeatInitials.size >= 65536) {
+      throw Error("Save at most 65536 initial instance temperatures.");
+    }
+    // Replace the immutable entry, so an obsolete row cannot remove a later saved temperature.
+    guidedMotionHeatInitials.set(instance, { temperature_c: temperature });
+    showGuidedMotionHeatInitials(); changedGuidedMotionDraft();
+  } catch (e) { error(String(e.message || e)); }
 }
 function showGuidedMotionKeyframes() {
   const parent = $("guidedMotionKeyframes"); parent.replaceChildren(); guidedMotionButtons.length = 0;
@@ -5047,6 +5102,11 @@ $("clearMotionKeyframes").onclick = () => {
   if (guidedMotionMode() !== "form") return;
   guidedMotionKeyframes.length = 0; changedGuidedMotionDraft();
 };
+$("addMotionHeatInstance").onclick = saveGuidedMotionHeatInitial;
+$("clearMotionHeatInstances").onclick = () => {
+  if (!source || !guidedScenarioMode() || guidedMotionMode() !== "form" || !$("guidedMotionHeat").checked) return;
+  guidedMotionHeatInitials.clear(); showGuidedMotionHeatInitials(); changedGuidedMotionDraft();
+};
 $("guidedScenarioMotion").addEventListener("change", changedGuidedMotionDraft);
 for (const id of ["guidedMotionHeat", "guidedMotionHeatInitial", "guidedMotionHeatCells", "guidedMotionHeatStep", "guidedMotionHeatBudget"]) {
   const changed = () => {
@@ -5064,7 +5124,8 @@ for (const id of ["guidedMotionStep", "guidedMotionTrials", "guidedMotionPairs",
   $(id).addEventListener("change", changed); $(id).addEventListener("input", changed);
 }
 for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "guidedMotionLegFraction",
-  "guidedMotionHeatInside", "guidedMotionHeatOutside", "guidedMotionHeatInsideFilm", "guidedMotionHeatOutsideFilm"]) {
+  "guidedMotionHeatInside", "guidedMotionHeatOutside", "guidedMotionHeatInsideFilm", "guidedMotionHeatOutsideFilm",
+  "guidedMotionHeatInstance", "guidedMotionHeatInstanceInitial"]) {
   $(id).addEventListener("change", controls);
   if (id !== "guidedMotionLegs") $(id).addEventListener("input", controls);
 }
@@ -5415,6 +5476,8 @@ function resetGuidedScenarios() {
   $("guidedScenarioCaseName").value = ""; showGuidedScenarioDrafts();
   guidedMotionKeyframes.length = 0; $("guidedScenarioMotion").checked = false; $("guidedMotionSource").value = "form";
   $("guidedMotionHeat").checked = false;
+  guidedMotionHeatInitials.clear(); showGuidedMotionHeatInitials();
+  $("guidedMotionHeatInstance").value = ""; $("guidedMotionHeatInstanceInitial").value = "";
   for (const id of ["guidedMotionHeatInitial", "guidedMotionHeatInside", "guidedMotionHeatOutside", "guidedMotionHeatInsideFilm", "guidedMotionHeatOutsideFilm"]) $(id).value = "";
   $("guidedMotionTime").value = ""; $("guidedMotionArm").value = "";
   $("guidedMotionLegs").value = "standing"; $("guidedMotionLegFraction").value = "1"; showGuidedMotionKeyframes();

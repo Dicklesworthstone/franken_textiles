@@ -16052,6 +16052,113 @@ function guidedDryHeatFilm(p,inside=35,outside=-5,insideFilm=0.1,outsideFilm=0) 
   for(const [id,value] of Object.entries({guidedMotionHeatInside:inside,guidedMotionHeatOutside:outside,
     guidedMotionHeatInsideFilm:insideFilm,guidedMotionHeatOutsideFilm:outsideFilm}))p.e[id].value=String(value);
 }
+function guidedDryHeatInstance(p,instance,temperature) {
+  p.e.guidedMotionHeatInstance.value=instance;p.e.guidedMotionHeatInstanceInitial.value=String(temperature);
+  p.e.addMotionHeatInstance.onclick();
+}
+function removeGuidedDryHeatInstance(p,instance) {
+  const button=descendants(p.e.guidedMotionHeatInstances).find(node=>node.tag==='button'&&node.textContent==='Remove initial temperature for '+instance);
+  assert.ok(button,instance);assert.equal(button.disabled,false);button.onclick();
+}
+
+test('guided dry instance temperatures retain explicit overrides, uniform fallback and actual resolved source receipts',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  for(const id of ['guidedMotionHeatInstance','guidedMotionHeatInstanceInitial'])assert.equal(p.e[id].value,'');
+  p.e.guidedMotionHeatInitial.value='999';guidedDryHeatInstance(p,'front.R',-12.5);guidedDryHeatInstance(p,'lining.R',33.25);
+  await addGuidedMotion(p,0.002,35);await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const request=JSON.parse(sent.scenarioRequest),heat=request.motion.transient_surface;
+  assert.equal(heat.initial_temperature_c,999);
+  assert.deepEqual(heat.initial_instance_temperatures_c,{'front.R':-12.5,'lining.R':33.25});
+  assert.equal(Object.hasOwn(request,'surface'),false);
+  // Retained native-result double: display the supplied ownership/order and actual extrema, not the unused fallback.
+  const initial={schema:'ftx-motion-surface-initial-condition/1',model_sha256:'retained-model',
+    instances:['lining.R','unused','front.R'],triangle_instance:[2,0],instance_temperature_c:[33.25,999,-12.5],temperature_range_c:[-12.5,33.25]};
+  const history={request:heat,initial_condition:initial,duration_s:0.002,thermal_steps:1,
+    trace:[{temperature_range_c:[0,20]}],net_boundary_energy_j:1,stored_change_j:1,balance_error_j:0};
+  const report=scenarioReport();report.scenario.scenario=request;
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome({samples:[{}],keyframes:[],transient_surface:outcome(history)});
+  p.emit(report,[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const output=section(p,'Fresh drape and heat alternatives'),table=descendants(output)
+    .find(node=>node.tag==='table'&&node.children[0].textContent==='A: resolved initial dry sheet temperatures');
+  assert.ok(table);assert.deepEqual(plain(table.children.slice(2).map(row=>row.children.map(node=>node.textContent))),
+    [['lining.R','33.25'],['front.R','-12.5']]);assert.doesNotMatch(visibleText(table),/unused|999/);
+  assert.match(visibleText(output),/Resolved initial range over retained sheets: \[-12.5, 33.25\]/);
+  const source=descendants(output).find(node=>node.tag==='details'&&node.children[0].textContent==='A: initial temperature source and retained triangle ownership (display only)');
+  source.open=true;source.handlers.toggle();assert.match(visibleText(source),/retained-model/);
+  const download=descendants(output).find(node=>node.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(download.href).text(),sent.scenarioRequest);
+  p.e.guidedMotionHeat.checked=false;p.e.guidedMotionHeat.handlers.change();await p.e.scenario.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion,'transient_surface'),false);p.emit(scenarioReport());
+  p.e.guidedMotionHeat.checked=true;p.e.guidedMotionHeat.handlers.change();await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);p.emit(scenarioReport());
+  p.e.clearMotionHeatInstances.onclick();await p.e.scenario.onclick();
+  const uniform=JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.transient_surface;
+  assert.equal(uniform.initial_temperature_c,999);assert.equal(Object.hasOwn(uniform,'initial_instance_temperatures_c'),false);p.emit(scenarioReport());
+  await p.load();assert.equal(p.e.guidedMotionHeatInstances.children.length,0);
+  assert.equal(p.e.guidedMotionHeatInstance.value,'');assert.equal(p.e.guidedMotionHeatInstanceInitial.value,'');
+});
+
+test('guided dry instance temperatures freeze independent named cases and reject stale row actions',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  guidedDryHeatInstance(p,'front.R',-10);guidedDryHeatInstance(p,'lining.R',25);await addGuidedMotion(p,0.002,35);
+  const obsolete=descendants(p.e.guidedMotionHeatInstances).find(node=>node.tag==='button'&&node.textContent==='Remove initial temperature for lining.R');
+  guidedDryHeatInstance(p,'lining.R',30);obsolete.onclick();assert.equal(p.e.guidedMotionHeatInstances.children.length,2);
+  await saveGuidedCase(p,'cold shell');guidedDryHeatInstance(p,'front.R',10);await saveGuidedCase(p,'warmer shell');
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const maps=JSON.parse(sent.scenarioRequest).cases.map(item=>item.scenario.motion.transient_surface.initial_instance_temperatures_c);
+  assert.deepEqual(maps,[{'front.R':-10,'lining.R':30},{'front.R':10,'lining.R':30}]);p.emit(scenarioReport());
+  p.e.clearMotionHeatInstances.onclick();p.e.guidedMotionHeatInitial.value='invalid';p.e.guidedMotionHeatInitial.handlers.input();
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false);await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);p.emit(scenarioReport());
+  await p.load();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatInstance(p,'lining.R',25);
+  obsolete.onclick();assert.equal(p.e.guidedMotionHeatInstances.children.length,1,'Old pattern rows cannot remove new source-owned entries');
+});
+
+test('guided dry instance temperatures distinguish unsaved drafts from mutations that cancel pending case and motion work',async()=>{
+  for(const saving of [false,true])for(const change of ['save','remove','clear']) {
+    const {p,sources}=await guidedScenarioSetup();if(saving)guidedNamedCases(p);
+    guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);guidedDryHeatInstance(p,'front.R',-10);
+    await addGuidedMotion(p,0.002,35);
+    const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),count=old.messages.length,running=saving?saveGuidedCase(p,'obsolete'):p.e.scenario.onclick();
+    p.e.guidedMotionHeatInstanceInitial.value='25';p.e.guidedMotionHeatInstanceInitial.handlers.input();
+    p.e.guidedMotionHeatInstance.handlers.input();assert.equal(old.dead,false,'Unsaved override fields are drafts');
+    if(change==='save')p.e.addMotionHeatInstance.onclick();
+    else if(change==='remove')removeGuidedDryHeatInstance(p,'front.R');else p.e.clearMotionHeatInstances.onclick();
+    assert.equal(old.dead,true,change);p.ready();delay.resolve(sources.fit);await running;
+    assert.equal(old.messages.length,count);assert.equal(p.current().messages.length,0);
+    if(saving)assert.equal(p.e.guidedScenarioCases.children.length,0);
+  }
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  guidedDryHeatInstance(p,'front.R',-10);await addGuidedMotion(p,0.002,35);await p.e.scenario.onclick();
+  const old=p.current(),sent=old.messages.at(-1);
+  p.e.guidedMotionHeatInstanceInitial.value='99';p.e.guidedMotionHeatInstanceInitial.handlers.input();assert.equal(old.dead,false);
+  assert.equal(JSON.parse(sent.scenarioRequest).motion.transient_surface.initial_instance_temperatures_c['front.R'],-10);
+  p.e.addMotionHeatInstance.onclick();assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete.json',text:'{}'}]});assert.equal(p.live.size,0);
+  guidedTransientSource(p);await p.e.scenario.onclick();const fileWorker=p.current(),fileRequest=fileWorker.messages.at(-1);
+  p.e.guidedMotionHeatInstanceInitial.value='invalid';p.e.guidedMotionHeatInstanceInitial.handlers.input();
+  p.e.addMotionHeatInstance.onclick();p.e.clearMotionHeatInstances.onclick();assert.equal(fileWorker.dead,false);
+  assert.ok(fileRequest.scenarioRequest.includes(guidedTransientOriginal),'Inactive controls leave the original advanced route unchanged');
+});
+
+test('guided dry instance temperatures require complete physical values and keep exact names without inferred fallback',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  for(const [instance,temperature] of [['',20],[' \t',20],['front.R',''],['front.R','unfinished'],['front.R','Infinity'],['front.R',-273.1501]]) {
+    guidedDryHeatInstance(p,instance,temperature);assert.equal(p.e.guidedMotionHeatInstances.children.length,0);
+    assert.equal(p.e.error.hidden,false);
+  }
+  guidedDryHeatInstance(p,' front β.R ',-273.15);guidedDryHeatInstance(p,'__proto__',0);
+  await addGuidedMotion(p,0.002,35);p.e.guidedMotionHeatInitial.value='';p.e.guidedMotionHeatInitial.handlers.input();
+  const before=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/initial textile temperature/);
+  p.e.guidedMotionHeatInitial.value='18';await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const values=JSON.parse(sent.scenarioRequest).motion.transient_surface.initial_instance_temperatures_c;
+  assert.deepEqual(Object.keys(values),[' front β.R ','__proto__']);assert.equal(values[' front β.R '],-273.15);
+  assert.equal(Object.hasOwn(values,'__proto__'),true);assert.equal(values.__proto__,0);
+});
 
 test('guided dry heat saves each interval explicitly and retains boundary alignment through endpoint edits and toggles',async()=>{
   const {p,sources}=await guidedScenarioSetup();guidedMotionSourceControls(p);

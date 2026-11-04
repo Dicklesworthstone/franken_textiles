@@ -5326,6 +5326,11 @@ Exact ownership, resolved temperatures and the thermal model remain in the retai
 receipt. Material/design comparisons independently reconcile that receipt and include only actually
 applied initial temperatures in their sampled extrema.
 
+The workbench saves, replaces and removes exact instance overrides through the existing dry motion
+editor. Draft fields and immutable named cases remain separate, while saved changes cancel obsolete
+work. Results display actual retained initial temperatures with the complete source receipt, and
+exact request downloads preserve the same native input for replay.
+
 This advances `ftx-ms2` through `ftx-ms2.19`. It supports different dry starting conditions for
 shells, linings and other physical pieces without new material laws or inferred conditioning.
 Liquid, dissipation heating, through-thickness initial profiles and body-coverage overrides remain
