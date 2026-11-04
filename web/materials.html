@@ -1255,7 +1255,8 @@ Textile-owned water and its thermal/mechanical coupling are separate policies.</
 <fieldset><legend>Textile water and latent heat through motion</legend>
 <p class="note">Retain an original motion request with <code>transient_surface.surface_water</code>, or a
 <code>surface_water_alternatives</code> collection of independently qualified material assignments.
-The collection selects the qualification matching every retained physical instance while keeping the same water loading and operating conditions.
+For liquid-dependent motion, retain <code>coupled_water_alternatives</code> with complete water and mechanical qualifications for each assignment.
+The collection selects the qualification matching every retained physical instance while keeping the same water loading, operating conditions and imposed phase velocities.
 These criteria require the complete motion and independent-sheet heat/water history
 in the same case. Steady heat, independent vapor and finite body-water requests are separate.</p>
 <p class="note">All seven quantities use <strong>nominal values only</strong>. Select each objective's direction explicitly;

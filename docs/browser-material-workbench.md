@@ -679,16 +679,22 @@ condensation releases it, while drainage exports sensible energy without a laten
 liquid and temperature share the producer's complete mass and energy balance. Failed or partial
 histories cannot qualify a water decision or become zero-valued readings.
 
-The shared scenario can retain a single `surface_water` qualification or a
-`surface_water_alternatives` collection of independently qualified material assignments. The latter
+The shared scenario can retain a single `surface_water` qualification,
+`surface_water_alternatives` for independently qualified thermal assignments, or
+`coupled_water_alternatives` for complete water/mechanical qualification pairs. Each collection
 matches every retained instance to its exact selected material hash, enabling material comparisons
-under the same initial water loading and operating conditions. Each alternative retains its own
-source qualification and loading domain; a missing or ambiguous match refuses the wet result.
-The heat report identifies the chosen qualification and source. Original source hashes and the
-complete shared scenario remain unchanged. Both forms also support **same-material design
-searches**, recomputing geometry, reference-area water inventory and current-area transport for
-every admitted design. Collections cannot be combined with mechanical liquid coupling in this
-increment; the single-policy form retains its existing coupling support.
+under the same initial loading and operating conditions. Paired sources also preserve the mechanical
+transfer model and incoming/outgoing phase velocities, and bind the complete actual mechanical
+material report before liquid changes inertia.
+
+Each alternative retains its own source qualification and loading domain. A missing or ambiguous
+uncoupled match refuses the wet result; a failed paired qualification refuses coupled motion.
+Heat results display the selected qualification, and paired results display both water and
+mechanical sources plus their shared pair digest. Original source hashes and the complete shared
+scenario remain unchanged. These forms also support **same-material design searches**, recomputing
+geometry, reference-area water inventory and current-area transport for every admitted design.
+The native paired comparison also validates its complete coupled history and thermal/vapor source
+protocols when only a motion, strain or contact objective is requested.
 
 Saved cases retain the entire original motion source and comparison policy; active source/criterion
 edits cancel stale work. Water affects mechanical mass or momentum only through an explicitly

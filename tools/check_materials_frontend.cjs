@@ -7375,6 +7375,35 @@ test('guided textile-water controls retain seven nominal phase criteria and sour
   assert.deepEqual(guarded.constraints.sort(byMetric),limits.map(item=>({...item,basis:'nominal'})));
 });
 
+test('guided paired textile-water qualifications remain source-exact across saved cases',async()=>{
+  const mechanics=' {"schema":"ftx-coupled-liquid-mechanics/6","material_report_sha256":"'+'d'.repeat(64)+
+    '","source":{"reference":"test:mechanical source café 🧵","source_count":18446744073709551615}}\r\n';
+  const pair='{"surface_water":'+guidedTextileWaterPolicyOriginal+',"mechanical_coupling":'+mechanics+'}';
+  const alternatives=' [\r\n'+pair+' ]\r\n';
+  const motion=guidedTextileWaterMotionOriginal.replace('"surface_water":'+guidedTextileWaterPolicyOriginal,
+    '"coupled_water_alternatives":'+alternatives);
+  const {p}=await guidedScenarioSetup();guidedTextileWaterSource(p,motion);
+  p.e.guidedDrapeMassGoal.checked=false;p.e.guidedTextileWaterEvaporatedGoal.checked=true;
+  p.e.guidedTextileWaterEvaporatedDirection.value='maximize';p.e.guidedRequireTransientSurface.checked=true;
+  await p.e.scenario.onclick();const single=p.current().messages.at(-1);
+  assert.equal(single.type,'scenario',p.e.error.textContent);
+  for(const source of [motion,alternatives,pair,mechanics])assert.ok(single.scenarioRequest.includes(source));
+  const surface=JSON.parse(single.scenarioRequest).motion.transient_surface;
+  assert.equal(surface.coupled_water_alternatives.length,1);
+  for(const field of ['surface_water','surface_water_alternatives','mechanical_coupling'])
+    assert.equal(Object.hasOwn(surface,field),false,field);
+  assert.deepEqual(JSON.parse(single.studyRequest).comparison.objectives,
+    [{metric:'textile_water_evaporated_mass_kg',direction:'maximize'}]);
+  p.emit(scenarioReport());guidedNamedCases(p);await saveGuidedCase(p,'paired materials');
+  assert.match(visibleText(p.e.guidedScenarioCases),/retained textile-water heat policy/);
+  await p.e.scenario.onclick();const named=p.current().messages.at(-1);
+  assert.equal(named.type,'scenario',p.e.error.textContent);
+  for(const source of [motion,alternatives,pair,mechanics])assert.ok(named.scenarioRequest.includes(source));
+  p.emit(scenarioMatrixReport());
+  p.select('guidedMotionFile','{}');p.e.guidedMotionFile.handlers.change();
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,named.scenarioRequest);
+});
+
 test('guided textile-water qualification collections remain source-exact in single and named scenarios',async()=>{
   const alternatives=' [\r\n'+guidedTextileWaterPolicyOriginal+',\r\n'+
     guidedTextileWaterPolicyOriginal.replace('b'.repeat(64),'c'.repeat(64))+' ]\r\n';

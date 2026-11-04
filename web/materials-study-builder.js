@@ -5,7 +5,8 @@ const own = (value, key) => Object.hasOwn(value, key);
 
 // Presence enables guided criteria; the native consumer admits the complete source policy.
 export function hasTextileWaterPolicy(surface) {
-  return surface?.surface_water != null || surface?.surface_water_alternatives != null;
+  return surface?.surface_water != null || surface?.surface_water_alternatives != null ||
+    surface?.coupled_water_alternatives != null;
 }
 
 const METRIC_CONSUMERS = {

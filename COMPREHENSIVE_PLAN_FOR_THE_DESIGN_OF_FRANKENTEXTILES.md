@@ -5254,7 +5254,7 @@ motion, strain or contact is scored. Their protocol includes the relevant therma
 heat-conversion methods and conditions, because those inputs now affect the trajectory. Static
 and manufacturing-only decisions retain their independent dependencies.
 
-The workbench must retain original pair collections through single and named scenarios and expose
+The workbench retains original pair collections through single and named scenarios and exposes
 both selected source qualifications. `ftx-ms2.14` records delivery and executable validation status.
 The regression target is a fixed pattern/body with identical dry mechanics and different Ret,
 showing changed evaporation, cooling and motion through existing phase exchange and recoil, with

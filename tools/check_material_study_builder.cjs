@@ -2355,6 +2355,30 @@ test('named scenario authoring retains water qualification collections without r
   }
 });
 
+test('named scenario authoring preserves paired water and mechanical qualifications exactly', async () => {
+  const {buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,hasTextileWaterPolicy}=await modulePromise;
+  // Source transport only: native consumers validate each complete physical qualification.
+  const pair=' {"surface_water":{"bindings":{"panel":{"material_sha256":"'+'a'.repeat(64)+
+    '","initial_liquid_kg_m2":-0.0}}},"mechanical_coupling":{"material_report_sha256":"'+'b'.repeat(64)+
+    '","source":{"reference":"test:paired café 🧵","n":18446744073709551615}}}\r\n';
+  const alternatives=' [\r\n'+pair+' ]\r\n';
+  const motion=JSON.stringify(motionPolicy()).slice(0,-1)+',"transient_surface":'+
+    '{"schema":"ftx-motion-surface-heat/1","coupled_water_alternatives":'+alternatives+'}}';
+  const scenario=single({...scenarioState(),motion,maxMotionTrials:64,maxVertexFrames:32000000});
+  const comparison=JSON.stringify({basis:'nominal',objectives:[{metric:textileWaterMetrics[0],direction:'maximize'}],
+    constraints:[],required_consumers:['motion','transient_surface']});
+  const raw=matrix({maxEvaluations:2,cases:[{key:'first',scenario,comparison},{key:'second',scenario,comparison}]});
+  assert.ok(raw.includes(pair));assert.ok(raw.includes(alternatives));assert.ok(raw.includes(motion));
+  for(const item of JSON.parse(raw).cases) {
+    const surface=item.scenario.motion.transient_surface;
+    assert.equal(hasTextileWaterPolicy(surface),true);
+    assert.equal(surface.coupled_water_alternatives.length,1);
+    for(const name of ['surface_water','surface_water_alternatives','mechanical_coupling'])
+      assert.equal(Object.hasOwn(surface,name),false,name);
+  }
+  assert.equal(hasTextileWaterPolicy({coupled_water_alternatives:null}),false);
+});
+
 test('textile-water criteria guide linked grids and all four adaptive modes while retaining exact source inputs', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const objectives=[{metric:textileWaterMetrics[0],direction:'maximize'},{metric:textileWaterMetrics[1],direction:'minimize'}];

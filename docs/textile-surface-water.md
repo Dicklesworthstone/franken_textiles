@@ -337,10 +337,10 @@ temperature histories, vapor films, supply/drainage schedules and finite-reservo
 Changing these operating inputs belongs in a separately declared scenario, rather than being hidden
 inside a material comparison. Every entry is checked even if it is not selected.
 
-The collection is mutually exclusive with the single `surface_water` field and with
-`mechanical_coupling`. This initial collection consumer supplies heat and free-liquid feedback;
-material-specific mechanical liquid qualifications remain a separate extension. Existing single
-water requests retain their supported mechanical coupling and original numerical behavior.
+The collection is mutually exclusive with the single `surface_water` field, `mechanical_coupling`
+and `coupled_water_alternatives`. It supplies heat and free-liquid feedback. Select the paired form
+below when liquid must also change mechanical mass and momentum. Existing single water requests
+retain their supported mechanical coupling and original numerical behavior.
 
 Successful heat reports retain the complete original `request` and add
 `surface_water_selection: {index, request_sha256}`. The index is zero based; the digest identifies
@@ -355,6 +355,47 @@ accept this form. Results show which source qualification was selected. Saved re
 through the native and portable APIs without a browser-specific solver. Missing thermal/vapor
 properties, invalid sources and out-of-domain histories still refuse; the selector supplies no
 missing measurements or wet constitutive law.
+
+### Select paired thermal and mechanical qualifications
+
+A surface-heat request can instead contain `coupled_water_alternatives`: an array of 1–64 pairs.
+Each pair has exactly two fields, `surface_water` and `mechanical_coupling`, containing the complete
+existing water request and independent mechanical qualification. Across the collection there may
+be at most 65,536 instance assignments, counting each paired assignment once. The paired form is
+mutually exclusive with the top-level single water/coupling fields and uncoupled alternatives.
+
+Each pair must qualify the same complete instance-to-material map in both sources. Its mechanical
+loading and temperature domains must contain the complete water domain. Every pair is validated,
+including unused alternatives. Source metadata and containing qualification domains may differ;
+thermal operating inputs, mechanical transfer schema/model and every imposed incoming/outgoing
+phase-velocity schedule must agree. Repeated complete water assignments are rejected even if their
+mechanical material-report hashes differ.
+
+The actual retained material assignment selects one pair. Before initializing mechanical liquid
+mass, the existing binder independently verifies its `material_report_sha256` against the complete
+ordinary material/interface report. The original request remains unchanged. Successful heat results
+add `coupled_water_selection: {index, pair_sha256}`, with a zero-based index and the canonical digest
+of the complete selected pair. The selected water request remains in `surface_water.request`;
+the selected mechanical qualification remains in `mechanical_coupling.qualification`.
+The uncoupled `surface_water_selection` receipt is absent.
+
+Paired requests opt into mandatory coupling before heat initialization. A missing or stale pair,
+incompatible domain, failed transfer or late thermal refusal cannot continue as dry motion. The
+existing whole-motion rollback applies, while independent initial/static and manufacturing outcomes
+remain available under their ordinary contracts. Existing water /1–/5 and evaporation-only plus
+coupled mechanical /1–/6 consumers retain their conservative transfer and recoil behavior.
+
+Comparison admission checks the complete selected pair, actual material report and thermal/mechanical
+accounting. This also applies when only motion, strain or contact is scored. Relevant thermal,
+vapor and requested heat-conversion methods and conditions then contribute to the comparison
+protocol because they affect the trajectory; static and manufacturing-only decisions retain their
+independent protocols.
+
+The browser retains paired collections through original-motion inputs, saved cases and water
+criteria, and displays both selected source references and the pair digest. These qualifications
+authorize the existing mechanical/interface laws over a declared liquid/temperature domain;
+they do not supply missing measurements, infer wet constitutive changes, or establish physical
+garment agreement.
 
 ### Temperature-dependent textile storage and transport
 

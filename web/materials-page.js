@@ -1020,6 +1020,15 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
           water.request?.source?.reference ?? "Unknown", water.request?.evidence ?? "Unknown",
           selection.request_sha256 ?? "Unknown"]);
       }
+      if (h.coupled_water_selection) {
+        const selection = h.coupled_water_selection;
+        const source = table(parent, `${key}: selected water and mechanics qualification`,
+          ["Qualification", "Water source", "Mechanical source", "Selected pair SHA-256"]);
+        cells(source, [Number.isSafeInteger(selection.index) ? selection.index + 1 : "Unknown",
+          water.request?.source?.reference ?? "Unknown",
+          h.mechanical_coupling?.qualification?.source?.reference ?? "Unknown",
+          selection.pair_sha256 ?? "Unknown"]);
+      }
       const finiteVapor = water.schema === "ftx-textile-surface-water-result/5";
       const draining = water.schema === "ftx-textile-surface-water-result/4" ||
         finiteVapor && typeof water.drained_liquid_kg === "number";
