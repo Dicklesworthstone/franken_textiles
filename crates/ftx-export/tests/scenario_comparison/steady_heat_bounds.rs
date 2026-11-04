@@ -121,7 +121,26 @@ fn thermal(pattern: &Pattern, descriptor: &Value, covered: f64) -> Value {
     let report = json!({"material":simulation["drape"]["material"],"steady_thermal_surface":frame});
     let mut conditions = descriptor["scenario"]["surface"].clone();
     conditions["model_sha256"] = model["sha256"].clone();
-    let (column, ranges) = state(&law, &conditions["boundaries"][0], 1.);
+    let environment = &conditions["exterior_exchange"][0];
+    let coefficient = environment["convection_w_m2_k"]
+        .as_f64()
+        .filter(|h| *h > 0.);
+    let mut effective = conditions["boundaries"][0].clone();
+    if let Some(h) = coefficient {
+        effective["outside_resistance_m2_k_w"] = json!(1. / h);
+    }
+    let (mut column, ranges) = state(&law, &effective, 1.);
+    let exchange = coefficient.map(|h| {
+        let air = environment["air_c"].as_f64().unwrap();
+        let surface = air + column["flux_w_m2"].as_f64().unwrap() / h;
+        let flux = h * (surface - air);
+        column["flux_w_m2"] = json!(flux);
+        column["layer_faces_c"] = json!([[effective["inside_c"].as_f64().unwrap()
+            - flux * effective["inside_resistance_m2_k_w"].as_f64().unwrap(), surface]]);
+        json!({"conduction":column,"surface_c":surface,"convective_flux_w_m2":flux,
+            "radiative_flux_w_m2":0.,"radiation_enabled":false,
+            "outer_area_per_model_area":1.,"balance_residual_w_m2":0.})
+    });
     let mut patch =
         json!({"column":0,"area_m2":area,"power_w":area * column["flux_w_m2"].as_f64().unwrap()});
     let range = ranges.map(|bounds| bounds.power_bounds(area).unwrap());
@@ -134,6 +153,10 @@ fn thermal(pattern: &Pattern, descriptor: &Value, covered: f64) -> Value {
         "request":request,"request_sha256":digest(&request),"drape_steady_frame_sha256":frame["sha256"],
         "model_sha256":model["sha256"],"positions_m":simulation["positions_m"],"patch_topology":model["patches"],
         "instances":frame["instances"],"triangle_instance":frame["triangle_instance"],"steady":steady}});
+    if let Some(exchange) = exchange {
+        simulation["surface"]["result"]["exterior_exchange"] = json!({"columns":[exchange],
+            "convective_power_w":steady["power_w"],"radiative_power_w":0.});
+    }
 
     let policy = &descriptor["scenario"]["coverage"];
     let mut conditions = policy["conditions"].clone();
@@ -233,6 +256,127 @@ fn reported_steady_heat_uses_signed_source_endpoints_and_current_geometry() {
     }
 }
 
+fn prescribe_convection(descriptor: &mut Value) {
+    let surface = &mut descriptor["scenario"]["surface"];
+    surface["boundaries"][0]["outside_resistance_m2_k_w"] = json!(0.);
+    surface["exterior_exchange"] = json!([{"air_c":surface["boundaries"][0]["outside_c"],
+        "convection_w_m2_k":5.,"surface_temperature_range_c":[-20.,80.],
+        "convection_source":{"reference":"test:convection-ranges","accessed_on":"2026-11-04",
+            "note":"Synthetic prescribed boundary; no empirical claim"},
+        "convection_evidence":"estimate","convection_conditions":"Synthetic fixed coefficient",
+        "allow_estimates":true}]);
+}
+
+#[test]
+fn prescribed_convection_ranges_drive_signed_dominance_and_explicit_bounded_guards() {
+    for (reverse, equal) in [(false, false), (true, false), (false, true)] {
+        let (mut request, mut descriptor) = inputs(false, reverse);
+        if equal {
+            descriptor["scenario"]["surface"]["boundaries"][0]["inside_c"] = json!(10.);
+        }
+        prescribe_convection(&mut descriptor);
+        let report = evaluate(&request, &descriptor, |_, _| {});
+        let frontier = if equal {
+            json!(["a", "b"])
+        } else {
+            json!([if reverse { "a" } else { "b" }])
+        };
+        assert_eq!(
+            report["comparison"]["frontier"],
+            frontier,
+            "{}",
+            report["comparison"]
+        );
+        assert!(report["comparison"]["alternatives"][0]["readings"]
+            ["independent_surface_power_w"]["reported_bounds"].is_array());
+        if !reverse && !equal {
+            request.comparison = Some(serde_json::from_value(json!({"basis":"nominal",
+                "objectives":[{"metric":"simulated_cloth_mass_kg","direction":"minimize"}],
+                "constraints":[{"metric":"independent_surface_power_w","basis":"reported_bounds","maximum":32.}]})).unwrap());
+            let guarded = evaluate(&request, &descriptor, |_, _| {});
+            assert_eq!(guarded["comparison"]["frontier"], json!(["b"]));
+            assert_eq!(guarded["comparison"]["alternatives"][0]["eligible"], false);
+        }
+    }
+}
+
+#[test]
+fn convection_ranges_refuse_changed_receipts_and_unqualified_endpoints_without_erasing_nominal() {
+    let (request, mut descriptor) = inputs(false, false);
+    prescribe_convection(&mut descriptor);
+    for fault in ["source", "bounds", "flux", "ratio", "power", "outside-film"] {
+        let report = evaluate(&request, &descriptor, |key, simulation| {
+            if key != "a" {
+                return;
+            }
+            let result = &mut simulation["surface"]["result"];
+            match fault {
+                "source" => {
+                    result["request"]["conditions"]["exterior_exchange"][0]
+                        ["convection_source"]["reference"] = json!("test:changed-convection-source");
+                }
+                "bounds" => {
+                    result["steady"]["columns"][0]["reported_bounds"]["flux_w_m2"][0] = json!(0.);
+                }
+                "flux" => {
+                    result["exterior_exchange"]["columns"][0]["convective_flux_w_m2"] = json!(0.);
+                }
+                "ratio" => {
+                    result["exterior_exchange"]["columns"][0]["outer_area_per_model_area"] = json!(2.);
+                }
+                "power" => result["exterior_exchange"]["convective_power_w"] = json!(0.),
+                "outside-film" => {
+                    result["request"]["conditions"]["boundaries"][0]
+                        ["outside_resistance_m2_k_w"] = json!(0.2);
+                }
+                _ => unreachable!(),
+            }
+            result["request_sha256"] = json!(digest(&result["request"]));
+        });
+        assert_eq!(
+            report["comparison"]["frontier"],
+            json!(["b"]),
+            "{fault}: {}",
+            report["comparison"]
+        );
+        assert!(report["comparison"]["alternatives"][0]["readings"]
+            ["independent_surface_power_w"]["value"].is_number());
+    }
+    for fault in ["missing", "domain", "radiation", "zero-h", "qualification"] {
+        let (mut request, mut descriptor) = inputs(false, false);
+        prescribe_convection(&mut descriptor);
+        let environment = &mut descriptor["scenario"]["surface"]["exterior_exchange"][0];
+        match fault {
+            "missing" => {
+                request.variants[0]
+                    .changes
+                    .default
+                    .as_mut()
+                    .unwrap()
+                    .record
+                    .as_mut()
+                    .unwrap()
+                    .properties
+                    .get_mut("thermal_resistance")
+                    .unwrap()
+                    .bounds = None;
+            }
+            "domain" => environment["surface_temperature_range_c"] = json!([19.9, 20.1]),
+            "radiation" => environment["radiation"] = json!({"ambient_c":10.}),
+            "zero-h" => environment["convection_w_m2_k"] = json!(0.),
+            "qualification" => environment["convection_source"]["reference"] = json!(""),
+            _ => unreachable!(),
+        }
+        let report = evaluate(&request, &descriptor, |_, _| {});
+        let row = &report["comparison"]["alternatives"][0];
+        assert_eq!(row["eligible"], false, "{fault}: {}", report["comparison"]);
+        assert!(row["readings"]["independent_surface_power_w"]["value"].is_number());
+        if fault == "domain" {
+            assert!(row["exclusions"].to_string().contains("endpoints"));
+        }
+    }
+}
+
 #[test]
 fn steady_heat_missing_sources_and_unsupported_coupling_keep_nominal_visible() {
     for coverage in [false, true] {
@@ -288,7 +432,11 @@ fn steady_heat_missing_sources_and_unsupported_coupling_keep_nominal_visible() {
         assert!(
             unsupported["comparison"]["alternatives"][1]["exclusions"]
                 .to_string()
-                .contains("coupled exterior exchange")
+                .contains(if coverage {
+                    "exterior exchange"
+                } else {
+                    "steady heat bounds"
+                })
         );
         assert!(
             unsupported["comparison"]["alternatives"][1]["readings"][metric]["value"].is_number()

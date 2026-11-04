@@ -64,6 +64,28 @@ Omit `radiation` for explicitly convection-only exchange. A radiative request
 without qualified emissivity refuses. Missing heat capacity still does not
 prevent this steady calculation and is not fabricated to enable transients.
 
+## Source-reported material ranges with prescribed convection
+
+Positive convection without radiation now retains complete source-reported material resistance
+ranges in steady columns and independent draped sheets. The coefficient, its source/conditions,
+reservoirs, films and geometry remain fixed. The existing conduction authority uses the equivalent
+outside resistance 1/h for an independent sheet; this changes the mathematical representation,
+not the prescribed boundary or its evidence. No heat capacity is required.
+
+Both endpoint outer-face temperatures must remain inside the coefficient's qualified
+`surface_temperature_range_c`. Missing material intervals, endpoint escape or unsupported
+temperature-dependent laws leave nominal flux and power available with an explicit unavailable-range
+reason. Radiation, zero convection and body-coverage exterior ranges remain unsupported; an omitted
+source interval is never replaced with the nominal number.
+
+Material and design studies can use these independent-sheet ranges in existing
+`independent_surface_power_w` objectives and guards with `basis: "reported_bounds"`.
+Admission preserves the exact exterior source and per-column model identity, recomputes complete
+source/area endpoints, and checks duplicated conduction and convection receipts. Reversed exchange
+keeps signed endpoints; equal reservoirs give zero exchange. These conditional material ranges
+do not propagate uncertainty in wind, convection, boundary temperatures or garment geometry, and
+do not establish statistical confidence, wearer comfort or measured fabric performance.
+
 ## Retained drape geometry
 
 For `thermal-steady-surface REPORT CONDITIONS`, add an `exterior_exchange` **array**

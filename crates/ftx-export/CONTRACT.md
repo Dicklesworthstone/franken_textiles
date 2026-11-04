@@ -161,7 +161,12 @@ alternative's frozen selections, retained solver triangle geometry, exact surfac
 prescribed coverage-body identity, explicit interface policy, local area factors, all canonical
 component ranges and complete power accumulation. Coverage includes explicit film-only bare paths
 and retained unassigned-cloth accounting; material ranges do not require complete textile coverage.
-Missing bounds, unsupported nonlinear/exterior/bridge/consumed stagnant-gap coupling, stale inputs,
+Independent-sheet positive prescribed convection without radiation uses the same source intervals
+with the fixed outside resistance 1/h. The exact source-qualified exterior request, endpoint surface
+temperature domains, source-column assignment and complete convection receipts must agree; signed
+power bounds participate in ordinary objectives and mixed-basis guards. Radiation, zero convection
+and covered exterior ranges remain unsupported.
+Missing bounds, unsupported nonlinear/bridge/consumed stagnant-gap coupling, stale inputs,
 changed component ranges or unrepresentable arithmetic exclude bounded decisions while the ordinary
 nominal reading remains visible. Source-dependent gap thickness cannot vary while its derived gap
 resistance is treated as fixed. Geometry, fixed authored interfaces, films and reservoir temperatures

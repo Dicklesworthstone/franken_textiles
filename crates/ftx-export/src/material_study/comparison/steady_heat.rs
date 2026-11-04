@@ -202,6 +202,98 @@ fn network(
     Ok(bounds)
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Convection {
+    air_c: f64,
+    convection_w_m2_k: f64,
+    surface_temperature_range_c: [f64; 2],
+    convection_source: ftx_pattern::materials::Source,
+    convection_evidence: ftx_pattern::materials::Evidence,
+    convection_conditions: String,
+    #[serde(default)]
+    allow_estimates: bool,
+    #[serde(default)]
+    radiation: Option<Value>,
+}
+
+fn convection_network(
+    law: &ConductionLaw,
+    boundary: &Value,
+    environment: &Value,
+    state: &Value,
+    exterior: &Value,
+) -> Result<ReportedConductionBounds, Refusal> {
+    let input: Convection = serde_json::from_value(environment.clone()).map_err(|_| fail())?;
+    let source = &input.convection_source;
+    let [lo, hi] = input.surface_temperature_range_c;
+    let h = input.convection_w_m2_k;
+    if input.radiation.is_some() || h <= 0. {
+        return Err(invalid(
+            "steady heat source ranges require positive prescribed convection without radiation",
+        ));
+    }
+    if !input.air_c.is_finite()
+        || input.air_c < -273.15
+        || !h.is_finite()
+        || !lo.is_finite()
+        || !hi.is_finite()
+        || lo < -273.15
+        || hi < lo
+        || !(hi - lo).is_finite()
+        || source.reference.trim().is_empty()
+        || source.note.trim().is_empty()
+        || source.accessed_on.len() != 10
+        || input.convection_conditions.trim().is_empty()
+        || (input.convection_evidence == ftx_pattern::materials::Evidence::Estimate
+            && !input.allow_estimates)
+        || number(&boundary["outside_c"])? != input.air_c
+        || number(&boundary["outside_resistance_m2_k_w"])? != 0.
+    {
+        return Err(fail());
+    }
+    let film = positive(&json!(1. / h))?;
+    let mut effective = boundary.clone();
+    effective["outside_resistance_m2_k_w"] = json!(film);
+    let bounds = network(
+        std::slice::from_ref(law),
+        &[1.],
+        &json!([]),
+        &effective,
+        state,
+    )?;
+    for q in bounds.flux_w_m2 {
+        let drop = q * film;
+        let temperature = input.air_c + drop;
+        if !temperature.is_finite()
+            || (q != 0. && drop == 0.)
+            || temperature < lo
+            || temperature > hi
+        {
+            return Err(invalid(
+                "source-reported surface-temperature endpoints leave the qualified convection domain",
+            ));
+        }
+    }
+    let surface = number(&exterior["surface_c"])?;
+    let q = number(&state["flux_w_m2"])?;
+    if surface < lo
+        || surface > hi
+        || q != h * (surface - input.air_c)
+        || exterior["conduction"] != *state
+        || state["layer_faces_c"][0][1] != exterior["surface_c"]
+        || exterior["radiation_enabled"] != false
+        || !exterior["material_face"].is_null()
+        || number(&exterior["convective_flux_w_m2"])? != q
+        || number(&exterior["radiative_flux_w_m2"])? != 0.
+        || number(&exterior["outer_area_per_model_area"])? != 1.
+        || number(&exterior["balance_residual_w_m2"])? != 0.
+    {
+        return Err(fail());
+    }
+    Ok(bounds)
+}
+
 fn match_power(value: &Value, expected: [f64; 2]) -> Result<(), Refusal> {
     let nominal = number(&value["power_w"])?;
     if value["reported_bounds"] != json!({"power_w":expected})
@@ -235,9 +327,11 @@ pub(super) fn bounds(
     if !policy.is_object() || simulation[name]["status"] != "available" {
         return Err(fail());
     }
-    if !conditions["exterior_exchange"].is_null() || !result["exterior_exchange"].is_null() {
+    if consumer == Consumer::Coverage
+        && (!conditions["exterior_exchange"].is_null() || !result["exterior_exchange"].is_null())
+    {
         return Err(invalid(
-            "steady heat source ranges do not cover coupled exterior exchange; nominal heat remains available",
+            "steady coverage source ranges do not cover exterior exchange; nominal heat remains available",
         ));
     }
     if consumer == Consumer::Coverage
@@ -294,15 +388,44 @@ fn surface(policy: &Value, result: &Value, source: &Source<'_>) -> Result<[f64; 
     if columns.len() != source.laws.len() || patches.len() != source.patches.len() {
         return Err(fail());
     }
+    let exterior = if policy["exterior_exchange"].is_null() {
+        if !result["exterior_exchange"].is_null() {
+            return Err(fail());
+        }
+        None
+    } else {
+        let environments = array(policy, "exterior_exchange")?;
+        let exchanges = array(&result["exterior_exchange"], "columns")?;
+        if (environments.len() != 1 && environments.len() != columns.len())
+            || (environments.len() != 1 && policy["model_sha256"].is_null())
+            || exchanges.len() != columns.len()
+            || result["exterior_exchange"]["convective_power_w"] != steady["power_w"]
+            || number(&result["exterior_exchange"]["radiative_power_w"])? != 0.
+        {
+            return Err(fail());
+        }
+        Some((environments, exchanges))
+    };
     let mut column_bounds = Vec::new();
     for (i, law) in source.laws.iter().enumerate() {
-        column_bounds.push(network(
-            std::slice::from_ref(law),
-            &[1.],
-            &json!([]),
-            boundary(policy, columns.len(), i)?,
-            &columns[i],
-        )?);
+        let boundary = boundary(policy, columns.len(), i)?;
+        column_bounds.push(if let Some((environments, exchanges)) = exterior {
+            convection_network(
+                law,
+                boundary,
+                &environments[if environments.len() == 1 { 0 } else { i }],
+                &columns[i],
+                &exchanges[i],
+            )?
+        } else {
+            network(
+                std::slice::from_ref(law),
+                &[1.],
+                &json!([]),
+                boundary,
+                &columns[i],
+            )?
+        });
     }
     let mut total = [0.; 2];
     let mut nominal = 0.;
