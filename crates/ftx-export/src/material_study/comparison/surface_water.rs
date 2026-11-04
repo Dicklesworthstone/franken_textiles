@@ -376,8 +376,7 @@ fn selected_policy<'a>(
     let index = selected.ok_or_else(fail)?;
     if coupled {
         let pair = &choices[index];
-        if heat["coupled_water_selection"]
-            != json!({"index":index,"pair_sha256":hash(pair)?})
+        if heat["coupled_water_selection"] != json!({"index":index,"pair_sha256":hash(pair)?})
             || pair["mechanical_coupling"]["material_report_sha256"]
                 != hash(&simulation["drape"]["material"])?
         {
@@ -687,8 +686,7 @@ fn admit_mechanics(
             let thermal_incoming = if index == 0 {
                 0.
             } else {
-                let supply = if water_policy["schema"] == "ftx-textile-surface-water/1"
-                {
+                let supply = if water_policy["schema"] == "ftx-textile-surface-water/1" {
                     0.
                 } else {
                     nonnegative(water, "supplied_liquid_kg")?

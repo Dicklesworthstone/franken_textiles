@@ -439,8 +439,7 @@ fn source_selected_coupled_water_replays_native_portable_and_named_material_comp
             for (index, key) in ["qualified", "slower"].into_iter().enumerate() {
                 let simulated = &keyed(&report["simulations"], key)["evaluation"]["result"];
                 assert_eq!(
-                    simulated["motion"]["status"],
-                    "available",
+                    simulated["motion"]["status"], "available",
                     "{}",
                     simulated["motion"]
                 );
