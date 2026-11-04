@@ -440,9 +440,11 @@ impl SteadyCoverage {
             return Err(invalid("steady coverage accumulation overflow"));
         }
         if exterior.is_some() {
-            result.exclude_reported_bounds(
-                "source-reported conduction ranges do not cover coupled exterior exchange",
-            );
+            let reason = "source-reported conduction ranges do not cover coupled exterior exchange";
+            result.exclude_reported_bounds(reason);
+            for state in &mut exterior_states {
+                state.conduction.exclude_reported_bounds(reason);
+            }
         }
         Ok((result, exterior_states))
     }

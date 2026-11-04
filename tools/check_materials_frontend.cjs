@@ -6421,6 +6421,153 @@ test('guided comparison targets preserve the distinction between defaults, all p
   assert.match(p.e.error.textContent,/piece/i);
 });
 
+
+async function assignGuidedMaterial(p,raw,target='') {
+  p.e.selection.value=raw;p.e.selection.handlers.input();await p.e.inspect.onclick();
+  const selection=JSON.parse(raw);
+  p.emit({selection,selection_json:raw,snapshot:selection.record,capabilities:{}});
+  p.e.target.value=target;assert.equal(p.e.assign.disabled,false);p.e.assign.onclick();
+}
+function saveGuidedConfiguration(p,key) {
+  p.e.studyConfigurationName.value=key;p.e.addStudyConfiguration.onclick();
+}
+const guidedConfigurationPairs = ' [{"materials":["'+'a'.repeat(64)+'","'+'b'.repeat(64)+'"],'+
+  '"friction":{"value":0.3,"bounds":[-0.0,1.0],"unit":"1","evidence":"estimate","source":"pair"},'+
+  '"sources":{"pair":{"reference":"local:synthetic-pair","note":"é 🧵","sequence":18446744073709551615}},"allow_estimates":true}]\r\n';
+
+test('guided configurations preserve exact heterogeneous assignments beside individual choices and original baseline downloads',async()=>{
+  const p=await pageModule();await p.load();guidedControls(p);
+  const original=JSON.stringify({pieces:[{id:'front'},{id:'lining'}]}),shell=guidedSelection('a','shell'),lining=guidedSelection('b','lining');
+  assert.equal(p.e.addStudyConfiguration.disabled,true);
+  await assignGuidedMaterial(p,shell);await assignGuidedMaterial(p,lining,'lining');
+  p.select('interfacesFile',guidedConfigurationPairs);await p.e.interfacesFile.onchange();
+  saveGuidedConfiguration(p,'<shell & lining>');
+  assert.equal(p.e.studyRequest.files.length,0);assert.equal(p.e.studyTarget.disabled,true);
+  p.e.studyTarget.value='pieces';for(const option of p.e.studyPieces.children)option.selected=false;
+  p.e.studyTarget.handlers.change();
+  const saved='{"schema":"ftx-material-bindings/1","default":'+shell+',"pieces":{"lining":'+lining+'},"interfaces":'+guidedConfigurationPairs+'}';
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);assert.equal(sent.pattern,original);assert.ok(sent.studyRequest.includes(saved));
+  const variants=JSON.parse(sent.studyRequest).variants;
+  assert.deepEqual(variants[0],{key:'baseline',changes:{schema:'ftx-material-bindings/1'}});
+  assert.deepEqual(variants[1],{key:'<shell & lining>',changes:JSON.parse(saved)});
+  assert.match(visibleText(p.e.studyCandidates),/saved configuration/);assert.match(visibleText(p.e.studyCandidates),/lining/);
+  const w=await workerModule({bindings:{default:async()=>{},material_study:(pattern,request)=>{
+    assert.equal(pattern,original);assert.equal(request,sent.studyRequest);
+    return JSON.stringify(studyReport([studyRow('baseline'),studyRow('<shell & lining>')]));
+  }}});
+  const response=await w.send(sent);assert.equal(response.type,'result',response.message);p.current().emit(response);
+  const output=section(p,'Fixed-pattern manufacturing alternatives');
+  for(const [name,raw] of [['original-pattern.json',original],['study-request.json',sent.studyRequest]]) {
+    const download=descendants(output).find(n=>n.download===name);assert.ok(download,name);
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+  }
+  p.e.reset.onclick();
+  assert.match(visibleText(p.e.studyCandidates),/<shell & lining>/,'Clearing preview assignments must retain saved alternatives');
+  const individual=guidedSelection('c','another lining');await addGuidedSelection(p,individual,'single');
+  assert.equal(p.e.studyTarget.disabled,false);
+  for(const option of p.e.studyPieces.children)option.selected=option.value==='lining';
+  p.e.studyPieces.handlers.change();await p.e.study.onclick();
+  const mixed=p.current().messages.at(-1);assert.equal(mixed.type,'study',p.e.error.textContent);
+  const choices=JSON.parse(mixed.studyRequest).variants;
+  assert.deepEqual(choices[1].changes,JSON.parse(saved));assert.ok(mixed.studyRequest.includes(saved));
+  assert.deepEqual(choices[2].changes.pieces,{lining:JSON.parse(individual)});p.emit(studyReport());
+  assert.equal(descendants(p.e.studyCandidates).some(node=>'innerHTML' in node),false);
+  await p.load();assert.equal(p.e.studyCandidates.children.length,0);assert.equal(p.e.study.disabled,true);
+  assert.equal(p.live.size,0);
+});
+
+test('guided configurations refuse pending evidence, duplicate names and overflow while retaining explicit empty interfaces',async()=>{
+  const p=await pageModule();await p.load();guidedControls(p);
+  p.e.addStudyConfiguration.onclick();assert.match(p.e.error.textContent,/Assign a material/);
+  await assignGuidedMaterial(p,guidedSelection());
+  const delay=deferred();p.select('interfacesFile','[]');
+  p.e.interfacesFile.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const reading=p.e.interfacesFile.onchange();
+  assert.equal(p.e.addStudyConfiguration.disabled,true);saveGuidedConfiguration(p,'pending');
+  assert.match(p.e.error.textContent,/complete interface|unavailable/);assert.equal(p.e.studyCandidates.children.length,0);
+  delay.resolve(' []\r\n');await reading;
+  assert.equal(p.e.addStudyConfiguration.disabled,false);saveGuidedConfiguration(p,'clear pairs');
+  saveGuidedConfiguration(p,'duplicate');assert.match(p.e.error.textContent,/already/);
+  p.select('interfacesFile','{invalid');await p.e.interfacesFile.onchange();
+  assert.equal(p.e.addStudyConfiguration.disabled,true);saveGuidedConfiguration(p,'unavailable');
+  assert.match(p.e.error.textContent,/unavailable/);
+  p.e.clearInterfaces.onclick();assert.equal(p.e.addStudyConfiguration.disabled,false);
+  for(const name of ['baseline','clear pairs','🧵'.repeat(33)]) {
+    saveGuidedConfiguration(p,name);assert.match(p.e.error.textContent,/name|baseline|unique/);
+  }
+  saveGuidedConfiguration(p,'original pairs');
+  for(let i=2;i<7;i++) {
+    await assignGuidedMaterial(p,guidedSelection(String(i),'configuration-'+i));
+    saveGuidedConfiguration(p,'configuration-'+i);
+  }
+  assert.equal(p.e.addStudyConfiguration.disabled,true);assert.equal(p.e.addStudyCandidate.disabled,true);
+  saveGuidedConfiguration(p,'eighth');assert.match(p.e.error.textContent,/seven/);
+  await p.e.study.onclick();const request=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.equal(request.variants.length,8);assert.deepEqual(request.variants[1].changes.interfaces,[]);
+  assert.equal(Object.hasOwn(request.variants[2].changes,'interfaces'),false);p.emit(studyReport());
+  const late=deferred();p.select('interfacesFile','[]');
+  p.e.interfacesFile.files[0].arrayBuffer=async()=>utf8Buffer(await late.promise);
+  const obsolete=p.e.interfacesFile.onchange();await p.load();late.resolve(guidedConfigurationPairs);await obsolete;
+  assert.equal(p.e.studyCandidates.children.length,0);assert.equal(p.e.addStudyConfiguration.disabled,true);
+  await assignGuidedMaterial(p,guidedSelection());saveGuidedConfiguration(p,'new pattern');
+  await p.e.study.onclick();const fresh=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.equal(fresh.variants.length,2);assert.equal(Object.hasOwn(fresh.variants[1].changes,'interfaces'),false);
+});
+
+test('guided configurations carry complete assignments through single and immutable named scenarios and linked designs',async()=>{
+  const {p}=await guidedScenarioSetup();p.e.clearStudyCandidates.onclick();
+  const shell=guidedSelection('a','shell'),lining=guidedSelection('b','lining');
+  await assignGuidedMaterial(p,shell);await assignGuidedMaterial(p,lining,'lining');saveGuidedConfiguration(p,'garment');
+  const saved='{"schema":"ftx-material-bindings/1","default":'+shell+',"pieces":{"lining":'+lining+'}}';
+  await p.e.scenario.onclick();const single=p.current().messages.at(-1);
+  assert.equal(single.type,'scenario',p.e.error.textContent);assert.ok(single.studyRequest.includes(saved));
+  p.emit(scenarioReport());
+  guidedNamedCases(p);await saveGuidedCase(p,'first');await saveGuidedCase(p,'second');
+  await p.e.scenario.onclick();const matrix=p.current().messages.at(-1);
+  assert.equal(matrix.type,'scenario',p.e.error.textContent);assert.ok(matrix.studyRequest.includes(saved));
+  assert.deepEqual(JSON.parse(matrix.scenarioRequest).cases.map(row=>row.key),['first','second']);p.emit(scenarioReport());
+  p.e.guidedScenarioSpacing.value='invalid';p.e.guidedScenarioSpacing.handlers.input();
+  p.e.reset.onclick();await assignGuidedMaterial(p,guidedSelection('d','unsaved replacement'));
+  configureGuidedDesign(p);await p.e.scenario.onclick();const design=p.current().messages.at(-1);
+  assert.equal(design.type,'scenario',p.e.error.textContent);assert.equal(design.scenarioRequest,matrix.scenarioRequest);
+  const request=JSON.parse(design.studyRequest);assert.equal(request.schema,'ftx-design-study/1');
+  assert.ok(request.design_grid);assert.deepEqual(request.variants[1].changes,JSON.parse(saved));assert.ok(design.studyRequest.includes(saved));
+  assert.equal(p.e.studyRequest.files.length,0);assert.equal(p.e.scenarioRequest.files.length,0);
+});
+
+test('guided configurations nominate the complete immutable source and cancel stale reads after remove and re-save',async()=>{
+  const {p,fit}=await adaptiveDesignSetup(false);p.e.clearStudyCandidates.onclick();
+  const shell=guidedSelection('a','shell'),lining=guidedSelection('b','lining'),replacement=guidedSelection('c','lining');
+  await assignGuidedMaterial(p,shell);await assignGuidedMaterial(p,lining,'lining');saveGuidedConfiguration(p,'garment');
+  guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');
+  guidedDesignField(p,'guidedDesignMaterial','garment','change');await p.e.study.onclick();
+  const first=p.current().messages.at(-1);assert.equal(first.type,'study',p.e.error.textContent);
+  assert.equal(JSON.parse(first.studyRequest).design_adaptive.material_key,'garment');p.emit(studyReport());
+  await assignGuidedMaterial(p,replacement,'lining');
+  saveGuidedConfiguration(p,'garment');assert.match(p.e.error.textContent,/unique/);
+  assert.equal(p.e.guidedDesignMaterial.value,'garment');await p.e.study.onclick();
+  const retained=p.current().messages.at(-1);assert.equal(retained.type,'study',p.e.error.textContent);
+  assert.equal(retained.studyRequest,first.studyRequest,'Draft edits cannot mutate a saved nominated configuration');p.emit(studyReport());
+  descendants(p.e.studyCandidates).find(node=>node.tag==='button'&&node.textContent==='Remove garment').onclick();
+  saveGuidedConfiguration(p,'garment');assert.equal(p.e.guidedDesignMaterial.value,'');
+  assert.match(p.e.guidedDesignMaterialStatus.textContent,/garment/);
+  const before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/material|nomina/i);
+  guidedDesignField(p,'guidedDesignMaterial','garment','change');await p.e.study.onclick();
+  const updated=p.current().messages.at(-1);assert.equal(updated.type,'study',p.e.error.textContent);
+  const changes=JSON.parse(updated.studyRequest).variants[1].changes;
+  assert.deepEqual(changes.default,JSON.parse(shell));assert.deepEqual(changes.pieces.lining,JSON.parse(replacement));
+  assert.ok(updated.studyRequest.includes(replacement));p.emit(studyReport());
+  const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const old=p.current(),count=old.messages.length,running=p.e.study.onclick();
+  descendants(p.e.studyCandidates).find(node=>node.tag==='button'&&node.textContent==='Remove garment').onclick();
+  assert.equal(old.dead,true);p.ready();saveGuidedConfiguration(p,'garment');
+  delay.resolve(fit);await running;assert.equal(old.messages.length,count);assert.equal(p.current().messages.length,0);
+  old.emit({type:'result',request:999,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});
+  assert.equal(p.live.size,0);assert.equal(p.e.guidedDesignMaterial.value,'');
+});
+
 test('guided shortlists reject duplicate names and snapshots while retaining distinct revisions of one material', async () => {
   const p=await pageModule();await p.load();guidedControls(p);
   await addGuidedSelection(p,guidedSelection('a'),'first');

@@ -5279,6 +5279,43 @@ thermal exchange, explicitly bounded forward vapor potential, native source qual
 reported ranges and independent consumer refusals retain their existing authorities. This operator
 workflow does not establish measured garment warmth, evaporation, wearer comfort or physical fit.
 
+### 25.170 Compare complete garment material configurations in guided studies
+
+The ordinary assignment workflow can retain a complete set of default, source-piece and optional
+material-pair interface replacements as one guided alternative. A shell, lining and cuff change
+therefore travels with its own exact interface evidence through the existing native material-binding
+and study authorities. The original pattern remains the common baseline; no geometry or material
+coefficient is inferred by the browser.
+
+Saved configurations coexist with the existing single-material shortlist. Only single-material
+choices use the shared replacement target. Complete configurations retain their own immutable
+targets and original source text, including the distinction between preserving the original
+interface table and explicitly replacing it with an empty list. Current assignment edits do not
+rewrite a saved alternative; replacing the original pattern withdraws its alternatives.
+
+Manufacturing, single and named scenarios, linked design grids and adaptive material nomination
+consume the same unchanged native variant representation. The whole retained configuration identifies
+an adaptive nomination, so changing a lining or interface cannot silently keep an older nomination.
+`ftx-ms2.17` records implementation and verification. Native source/capability refusals and the
+matched-specimen and physical-garment gates remain independent.
+
+### 25.171 Preserve conditional steady heat ranges under qualified convection
+
+Explicitly prescribed positive convection without radiation is a fixed boundary resistance in the
+existing steady network. Its resistance per model area is the outer layer's model/cloth area factor
+divided by the qualified coefficient. The canonical material resistance-range authority supplies
+the signed heat-flow endpoints; both endpoint surface temperatures must remain inside the declared
+convection qualification. Missing source ranges or an unqualified endpoint leave nominal heat
+available with an explicit range refusal.
+
+Independent-sheet material/design comparisons retain the original exterior request and reconcile
+its source, area and endpoint accounting through the existing comparison consumer. Layered/body
+coverage continues to withhold exterior ranges consistently in both copies of its conduction result.
+These are conditional material-source ranges with fixed geometry, interface films and convection
+inputs. They do not propagate weather or coefficient uncertainty, establish statistical confidence,
+or qualify a real garment. Radiation and zero-coefficient extensions remain outside this bounded
+increment. `ftx-ms2.18` records the supported consumer paths and executable validation status.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

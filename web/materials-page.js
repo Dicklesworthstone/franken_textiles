@@ -240,6 +240,8 @@ function controls() {
   $("addCombination").disabled = !!pending || !source || !inspected;
   $("clearCombinations").disabled = !!pending || !combinationGroups.size;
   $("addStudyCandidate").disabled = !ready || !!pending || !source || !inspected || studyCandidates.length >= 7;
+  $("addStudyConfiguration").disabled = !ready || !!pending || !source || !interfaceReady || studyCandidates.length >= 7 ||
+    (defaultChange === null && !pieceChanges.size && interfaceChange === null);
   $("clearStudyCandidates").disabled = !studyCandidates.length;
   $("guidedStudy").hidden = !guided;
   $("studyFileControls").hidden = guided;
@@ -275,7 +277,8 @@ function controls() {
   $("guidedMotionHeatSettings").hidden = !motionHeat; $("guidedMotionHeatBoundary").hidden = !motionHeat;
   for (const id of ["guidedMotionHeatInitial", "guidedMotionHeatCells", "guidedMotionHeatStep", "guidedMotionHeatBudget",
     "guidedMotionHeatInside", "guidedMotionHeatOutside", "guidedMotionHeatInsideFilm", "guidedMotionHeatOutsideFilm"]) $(id).disabled = !motionHeat;
-  $("studyPieces").disabled = !source || $("studyTarget").value !== "pieces";
+  $("studyTarget").disabled = !source || (studyCandidates.length > 0 && !studyNeedsTarget());
+  $("studyPieces").disabled = $("studyTarget").disabled || $("studyTarget").value !== "pieces";
   $("guidedDesign").disabled = !source;
   $("guidedDesignControls").hidden = !$("guidedDesign").checked;
   for (const id of ["guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
@@ -4130,9 +4133,11 @@ function changes() {
   return `{"schema":"ftx-material-bindings/1","default":${defaultChange || "null"},"pieces":{${pieces}}${interfaces}}`;
 }
 function edits() { $("edits").textContent = text(JSON.parse(changes())); }
+function studyNeedsTarget() { return studyCandidates.some(candidate => Object.hasOwn(candidate, "selection")); }
 function hasStudySelection(raw) {
   const selection = JSON.parse(raw);
   return studyCandidates.some(candidate => {
+    if (!Object.hasOwn(candidate, "selection")) return false;
     if (candidate.selection === raw) return true;
     const current = JSON.parse(candidate.selection);
     return typeof selection.expected_sha256 === "string" && selection.id === current.id &&
@@ -4202,8 +4207,18 @@ function showStudyCandidates() {
   for (const candidate of studyCandidates) {
     const row = document.createElement("div"), label = document.createElement("span"), remove = document.createElement("button");
     row.className = "study-choice";
-    const selection = JSON.parse(candidate.selection); // Display only; the retained string is the input authority.
-    label.textContent = `${candidate.key}: ${selection.id} (${selection.allow_estimates ? "estimates explicitly admitted" : "estimates disabled"})`;
+    const configuration = Object.hasOwn(candidate, "changes") ? JSON.parse(candidate.changes) : null;
+    if (configuration) {
+      const assignments = [configuration.default ? `default: ${configuration.default.id}` : "original default",
+        ...Object.entries(configuration.pieces || {}).map(([id, selection]) => `${id}: ${selection.id}`)];
+      const interfaces = configuration.interfaces == null ? "original interfaces" :
+        configuration.interfaces.length ? `${configuration.interfaces.length} supplied contact pairs` : "all original interfaces removed";
+      label.textContent = `${candidate.key}: saved configuration; ${assignments.slice(0,6).join("; ")}` +
+        (assignments.length > 6 ? `; ${assignments.length - 6} more assignments` : "") + `; ${interfaces}`;
+    } else {
+      const selection = JSON.parse(candidate.selection); // Display only; retained strings remain the input authority.
+      label.textContent = `${candidate.key}: ${selection.id} (${selection.allow_estimates ? "estimates explicitly admitted" : "estimates disabled"})`;
+    }
     remove.type = "button"; remove.textContent = `Remove ${candidate.key}`;
     remove.onclick = () => {
       const index = studyCandidates.indexOf(candidate);
@@ -4212,14 +4227,17 @@ function showStudyCandidates() {
       if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
     };
     row.append(label, remove); parent.append(row);
+    if (configuration) detail(parent, `Saved assignments and interface evidence: ${candidate.key}`, configuration);
   }
   $("studyCandidateCount").textContent = studyCandidates.length ?
-    `${studyCandidates.length} frozen material choice${studyCandidates.length === 1 ? "" : "s"} plus the original baseline; limit seven choices.` :
-    "No comparison materials added. Load a pattern, then inspect and add materials in section 1.";
+    `${studyCandidates.length} saved alternative${studyCandidates.length === 1 ? "" : "s"} plus the original baseline; limit seven. Single materials use the shared target; configurations retain their own assignments.` :
+    "No comparison alternatives added. Inspect a material in section 1, or save a configuration from section 2.";
   refreshGuidedDesignMaterials();
 }
 function guidedDesignMaterialSource(key) {
-  return key === "baseline" ? sourceText : studyCandidates.find(candidate => candidate.key === key)?.selection ?? null;
+  if (key === "baseline") return sourceText;
+  const candidate = studyCandidates.find(candidate => candidate.key === key);
+  return candidate?.changes ?? candidate?.selection ?? null;
 }
 function refreshGuidedDesignMaterials() {
   const select = $("guidedDesignMaterial"), retained = select.value;
@@ -4340,11 +4358,13 @@ async function guidedStudyInput(scenarioRead) {
     if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
     return Number(raw);
   };
+  const candidates = studyCandidates.map(candidate => ({ ...candidate }));
+  const needsTarget = candidates.some(candidate => Object.hasOwn(candidate, "selection"));
   const scope = $("studyTarget").value;
-  const target = scope === "default" ? { scope: "default" } : scope === "all" ?
+  const target = !needsTarget ? null : scope === "default" ? { scope: "default" } : scope === "all" ?
     { scope: "pieces", ids: source.pieces.map(p => p.id) } : scope === "pieces" ?
       { scope: "pieces", ids: Array.from($("studyPieces").selectedOptions, option => option.value) } : null;
-  if (!target) throw Error("Choose the pattern assignment to compare.");
+  if (needsTarget && !target) throw Error("Choose the pattern assignment to compare.");
   const allowance = $("guidedAllowance").value.trim() ?
     { seam_allowance_mm: number("guidedAllowance", "seam allowance in millimetres") } : {};
   const stockMode = guidedStockMode();
@@ -4358,7 +4378,7 @@ async function guidedStudyInput(scenarioRead) {
   } : undefined;
   // Freeze controls AND files before any read. execute() rejects an obsolete request after edits;
   // original UTF-8 fragments reach Rust without JS number reserialization or BOM replacement.
-  const input = { candidates: studyCandidates.map(candidate => ({ ...candidate })), target,
+  const input = { candidates, ...(target ? { target } : {}),
     pieceIds: source.pieces.map(p => p.id), ...(cutting ? { cutting } : {}), ...guidedComparisonInput(number, stockMode) };
   if ($("guidedDesign").checked) {
     input.design = guidedDesignInput(number, !!scenarioRead);
@@ -4949,6 +4969,28 @@ $("addStudyCandidate").onclick = () => {
     showStudyCandidates(); invalidate(["study", "scenario"], true);
   } catch (e) { error(String(e.message || e)); }
 };
+$("addStudyConfiguration").onclick = () => {
+  if (!source || pending) return;
+  try {
+    if (!interfaceReady) throw Error("Wait for the complete interface replacement, or clear unavailable evidence before saving.");
+    if (defaultChange === null && !pieceChanges.size && interfaceChange === null) {
+      throw Error("Assign a material or supply an explicit interface replacement before saving a configuration.");
+    }
+    if (studyCandidates.length >= 7) throw Error("Keep at most seven alternatives plus the original baseline.");
+    let key = $("studyConfigurationName").value.trim();
+    if (!key) {
+      do { key = `configuration-${++studyCandidateSequence}`; } while (studyCandidates.some(candidate => candidate.key === key));
+    }
+    if (key === "baseline" || new Blob([key]).size > 128 || studyCandidates.some(candidate => candidate.key === key)) {
+      throw Error("Choose a unique configuration name of at most 128 UTF-8 bytes, other than baseline.");
+    }
+    const saved = changes();
+    if (studyCandidates.some(candidate => candidate.changes === saved)) throw Error("This exact configuration is already in the shortlist.");
+    studyCandidates.push({ key, changes: saved });
+    $("studyConfigurationName").value = ""; $("studyMode").value = "guided";
+    showStudyCandidates(); invalidate(["study", "scenario"], true);
+  } catch (e) { error(String(e.message || e)); }
+};
 $("clearStudyCandidates").onclick = () => {
   studyCandidates.length = 0; showStudyCandidates();
   if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
@@ -5057,6 +5099,7 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
   ...guidedTransportMetrics.flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Direction`, `${prefix}MinimumLimit`, `${prefix}Limit`]),
   ...guidedRequired.map(([id]) => id)]) {
   const changed = () => {
+    if (["studyTarget", "studyPieces"].includes(id) && !studyNeedsTarget()) { controls(); return; }
     if (id === "guidedDesignMaterial") {
       const key = $(id).value, original = guidedDesignMaterialSource(key);
       guidedDesignNomination = key && original !== null ? { key, source: original, invalidated: false } : null;
@@ -5535,7 +5578,7 @@ $("interfacesFile").onchange = async () => {
     edits(); controls();
   } catch (e) {
     if (rev !== interfaceRead) return;
-    $("interfacesSummary").textContent = "Replacement evidence is unavailable; binding is disabled until corrected or cleared.";
+    $("interfacesSummary").textContent = "Replacement evidence is unavailable; binding and saving a configuration are disabled until corrected or cleared.";
     error(String(e.message || e)); controls();
   }
 };

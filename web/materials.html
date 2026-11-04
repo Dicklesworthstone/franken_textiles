@@ -40,7 +40,7 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <button id="inspect" data-command="inspect">Inspect sources &amp; capabilities</button>
 <label>Optional comparison name <input id="studyCandidateName" type="text" maxlength="80" placeholder="e.g. lightweight shell"></label>
 <button id="addStudyCandidate" disabled>Add inspected material to comparison</button>
-<small><a href="#materialPattern">Load a pattern in section 2</a> to enable the shortlist. Keep up to seven exact inspected selections, then
+<small><a href="#materialPattern">Load a pattern in section 2</a> to enable the shortlist. Keep up to seven individual materials or saved configurations, then
 <a href="#materialComparison">compare them on your pattern</a>.</small>
 <div id="capabilities"></div><details><summary>Original observations, normalized units and sources</summary><pre id="detail"></pre></details>
 <details><summary>Prepare a bounded membrane approximation from published fabric stiffness</summary>
@@ -260,6 +260,12 @@ An empty list <code>[]</code> explicitly removes all pairs; omitting a replaceme
 <button id="stageInterface" data-command="stageInterface" disabled>Stage this calibrated contact pair</button>
 <p class="note">Staging preserves the other contact pairs and checks the final assigned material snapshots.
 It does not replace the inspected material selection. Freeze selections &amp; bind to use the staged pair with the current garment.</p>
+<label>Optional configuration name <input id="studyConfigurationName" type="text" maxlength="128" placeholder="e.g. shell with breathable lining"></label>
+<button id="addStudyConfiguration" type="button" disabled>Save current assignments to comparison</button>
+<p class="note">Save the current default, piece assignments and interface choice together as one alternative.
+Later draft edits leave saved configurations unchanged. Add up to seven alternatives, including individual materials,
+then <a href="#materialComparison">compare them below</a>. The unchanged original pattern remains the baseline;
+saving does not certify material or contact readiness.</p>
 <button id="bind" data-command="bind" disabled>Freeze selections &amp; bind</button>
 <div id="boundSummary"></div><div id="bindFiles" class="links"></div>
 <button id="openPatternWorkbench" type="button" disabled>Check or alter this pattern</button>
@@ -505,19 +511,22 @@ Its scalar frontier is not a garment ranking. Original observations and protocol
 <option value="file">Load a complete study request (advanced)</option>
 </select></label>
 <div id="guidedStudy">
-<p>Add eligible discovery results above, or <a href="#materialCatalog">inspect each material in section 1</a> and add it to the shortlist. The original pattern is always included as
-<strong>baseline</strong>. Each material choice changes the assignment you choose below. Optional linked alterations also vary the geometry.</p>
+<p>Add eligible discovery results above, <a href="#materialCatalog">inspect individual materials in section 1</a>, or
+<a href="#materialPattern">save a complete configuration from section 2</a>. The original pattern is always included as
+<strong>baseline</strong>. Individual materials use the shared target below; saved configurations retain their own default,
+piece assignments and interface evidence. Optional linked alterations also vary the geometry.</p>
 <p id="studyCandidateCount" role="status">No comparison materials added.</p>
 <div id="studyCandidates"></div>
 <button id="clearStudyCandidates" disabled>Clear shortlist</button>
-<label>Replace <select id="studyTarget">
+<label>Shared target for individual materials <select id="studyTarget">
 <option value="default">Pattern default; keep explicit piece assignments</option>
 <option value="all">Material on every source piece</option>
 <option value="pieces">Material on selected source pieces</option>
 </select></label>
 <label>Source pieces <select id="studyPieces" multiple size="4" disabled aria-label="Source pieces for material comparison"></select></label>
 <p class="note">Changing the default does not replace an explicit lining or cuff material. Choose every piece or exact pieces
-to replace those assignments. Current section-2 preview edits are not part of the original baseline.</p>
+to replace those assignments. This target is unused when every alternative is a saved configuration.
+Current section-2 preview edits enter a comparison only when saved; they never change the original baseline.</p>
 <fieldset><legend>Fit-driven linked alterations</legend>
 <label><input id="guidedDesign" type="checkbox"> Search linked alterations against the selected body</label>
 <div id="guidedDesignControls" hidden>

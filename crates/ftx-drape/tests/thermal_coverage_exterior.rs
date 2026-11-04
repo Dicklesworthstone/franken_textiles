@@ -358,6 +358,7 @@ fn automatic_faces_resolve_each_region_and_bind_accepted_depth_orientation() {
     let properties = &mut transport_only.record.as_mut().unwrap().properties;
     properties.remove("specific_heat");
     properties.remove("areal_density");
+    properties.get_mut("thermal_resistance").unwrap().bounds = Some([0.18, 0.22]);
     let material = Catalog::builtin()
         .unwrap()
         .resolve(&transport_only)
@@ -384,6 +385,19 @@ fn automatic_faces_resolve_each_region_and_bind_accepted_depth_orientation() {
         near(
             solved.steady.regions[i].power_w,
             steady.regions[i].outside_heat_w,
+        );
+    }
+    // Positive convection can qualify column ranges, but coverage still defers range admission.
+    // Its two copies of each conduction result must retain the same unavailable-range receipt.
+    let bounded = transport
+        .solve_exterior(&cloth, &body, &boundaries, &[environment(3., 5., None)], &[])
+        .unwrap();
+    assert!(bounded.steady.ranges.reported_bounds.is_none());
+    for (exterior, region) in bounded.regions.iter().zip(&bounded.steady.regions) {
+        assert!(exterior.conduction.reported_bounds.is_none());
+        assert_eq!(
+            serde_json::to_value(&exterior.conduction).unwrap(),
+            serde_json::to_value(&region.conduction).unwrap()
         );
     }
     let restored = SteadyCoverage::from_snapshot(&transport.snapshot().unwrap()).unwrap();

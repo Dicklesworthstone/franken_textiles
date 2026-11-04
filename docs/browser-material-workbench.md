@@ -214,7 +214,7 @@ they compare reported observations and do not establish a garment temperature ra
 Each successfully resolved result offers **Inspect … source** and an exact frozen-selection download,
 including excluded results whose evidence may still be useful for another purpose. Eligible results
 also offer **Add … to comparisons** when an original pattern is loaded. The shortlist retains up to
-seven exact materials plus its unchanged baseline, rejects duplicate frozen identities, and feeds the
+seven saved alternatives plus its unchanged baseline, rejects duplicate individual frozen identities, and feeds the
 existing piece/default binding, manufacturing, thermal, motion and design-study paths. No source is
 reconstructed by copying values from the displayed table. The native `selection_json` string keeps
 negative zero, source numbers, evidence consent and digest intact through adoption and replay.
@@ -224,6 +224,39 @@ entries remain independent frozen snapshots. Stale or busy result buttons cannot
 Selecting a screening file switches to the original-file route, which retains its exact bytes.
 Scalar eligibility, compiler readiness and a computed frontier remain separate from measured textile
 behavior and physical garment qualification.
+
+### Compare complete garment material configurations
+
+A guided alternative can retain several material assignments together: for example, one shell,
+a different lining and their exact material-pair contact evidence. No study JSON file is needed.
+
+1. Load the original pattern in section 2. Inspect each material in section 1, then assign it to the
+   pattern default or its exact source pieces. Changing the default preserves explicit piece assignments.
+2. Retain the original interface evidence, supply a complete replacement list, or stage a calibrated pair
+   through the existing contact controls. A replacement list `[]` deliberately removes all original pairs.
+3. Optionally name the alternative and choose **Save current assignments to comparison**.
+   This saves the current default and piece substitutions and the current interface choice as one
+   immutable configuration. A pending or failed interface-file read must finish or be cleared first.
+4. Edit the draft assignments for another configuration and save it under another name. Run the ordinary
+   guided manufacturing, single-scenario, named-scenario or linked-design comparison.
+
+The shortlist shares one limit of seven alternatives across individual materials and configurations.
+The original pattern always supplies the unchanged baseline. Current preview edits affect a saved
+alternative only when explicitly captured; clearing the preview or inspecting another source leaves
+previous alternatives intact. Remove an alternative and save the revised assignments to replace it.
+Replacing or adopting the original pattern clears its shortlist, preventing assignments from being
+reused with unrelated source-piece identities.
+
+Individual material choices continue to use the shared default/all-pieces/selected-pieces target.
+A configuration supplies its own assignments, so that target is disabled and ignored when the list
+contains only configurations. Mixed shortlists apply the shared target only to individual materials.
+
+Each configuration's expandable detail shows the retained assignments, estimate policies and interface
+evidence. The generated `variants[].changes` contains the original source fragments without converting
+their numeric representations. Omitted interface replacement preserves the original table exactly;
+the browser never maps old friction evidence onto new material hashes. The native binding and each
+consumer perform their existing admission checks. Independent outcomes remain available when another
+consumer lacks suitable evidence. Saving an alternative itself does not qualify a material or garment.
 
 ### Continue from an evaluated study candidate
 
@@ -367,9 +400,11 @@ Choose what guides discovery:
 
 For production guidance, every trial must pass the ordinary geometry and selected-body fit gates,
 then the existing comparison's limits, required results and source/protocol admission. Missing or
-refused measurements do not become zero scores. The nominated material guides discovery; selected
-geometries subsequently cross every shortlisted material. Removing or replacing that nominated
-source clears its selection and requires an explicit new choice, even if the same name is reused.
+refused measurements do not become zero scores. The nominated alternative guides discovery; selected
+geometries subsequently cross every shortlisted alternative. A configuration nomination retains its
+complete default, piece and interface changes, so replacing just a lining or a contact policy also
+requires a fresh nomination. Removing or replacing that nominated source clears its selection and
+requires an explicit new choice, even if the same name or default material is reused.
 
 Set **Maximum unique discovery trials** from 1 to 256 and the retained-design capacity separately.
 Adaptive admission reserves the full retained design/material capacity, including both baselines,
@@ -1040,7 +1075,8 @@ To apply the pair:
    final assigned material hashes.
 3. If that exact pair already has evidence, explicitly select **Replace existing evidence for this
    exact material pair** before staging. Replacement consent resets after successful staging.
-4. Use **Freeze selections & bind** to apply the staged pair with the current material assignments.
+4. Use **Freeze selections & bind** to apply the staged pair with the current material assignments,
+   or **Save current assignments to comparison** to retain the complete configuration as a guided alternative.
 
 Successful staging withdraws obsolete bound outputs. A refusal or stale response cannot replace the
 previous pending interface table. Staging retains valid evidence independently of consumer admission:
