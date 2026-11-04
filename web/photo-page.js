@@ -13,6 +13,8 @@ $("returnMaterials").hidden = !materialsTarget;
 $("sectionMaterials").hidden = !materialsTarget;
 let cameraWorker = null, cameraTicket = 0, cameraBusy = false, cameraResult = null, generatedCalibration = null;
 const cameraUrls = [];
+let triangulationWorker = null, triangulationTicket = 0, triangulationBusy = false;
+const triangulationUrls = [];
 const status = text => {$("status").textContent=text;};
 function pointText() {
   const displayed=$("points").value;
@@ -42,6 +44,9 @@ function checkedOptions(text) {
   }
 }
 function controls() {
+  $("triangulationRun").disabled=triangulationBusy || !$("triangulationInput").files.length;
+  $("triangulationCancel").disabled=!triangulationBusy;
+  $("triangulationClearNoise").disabled=!$("triangulationNoise").files.length;
   const charuco=$("referenceMode").value==="charuco", calibrated=charuco && ($("calibration").files.length>0 || generatedCalibration!==null);
   $("plainControls").hidden=charuco; $("charucoControls").hidden=!charuco; $("lensControls").hidden=!calibrated;
   $("paper").disabled=charuco; $("sheet").disabled=!charuco; $("calibration").disabled=!charuco;
@@ -137,6 +142,71 @@ async function readJsonFile(file) {
   // Preserve the exact UTF-8 source, including a BOM (which the Rust JSON parser will reject).
   // Replacing invalid bytes or stripping a BOM would change the source identity before hashing.
   return new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(await file.arrayBuffer());
+}
+function stopTriangulation() {
+  triangulationWorker?.terminate(); triangulationWorker=null; triangulationBusy=false; controls();
+}
+function withdrawTriangulation() {
+  ++triangulationTicket; stopTriangulation(); revoke(triangulationUrls);
+  $("triangulationDownloads").replaceChildren(); $("triangulationResult").hidden=true;
+  for(const id of ["triangulationReport","triangulationSummary","triangulationPoint","triangulationPrecision","triangulationFlags","triangulationError"]) $(id).textContent="";
+}
+function publishTriangulation(text, input, noise) {
+  // Parsed values are display-only. Original input and complete native report text are downloaded
+  // unchanged, so full-width frame timestamps never pass through JavaScript serialization.
+  const report=JSON.parse(text), uncertainty=report.conditional_click_uncertainty;
+  if(report.schema!=="ftx-triangulation/1" || !Array.isArray(report.flags) || !Array.isArray(report.reprojection)) {
+    throw Error("The engine did not return an ordinary triangulation report.");
+  }
+  $("triangulationReport").textContent=text;
+  $("triangulationSummary").textContent=`${report.status}: ${report.fit_views} FIT views, ${report.held_out_views} held-out views.`;
+  $("triangulationPoint").textContent=report.point_m?`World point [m, z up]: ${report.point_m.join(", ")}`:"No usable point was published.";
+  $("triangulationPrecision").textContent=uncertainty?
+    `Conditional click uncertainty: ${uncertainty.status}. `+(uncertainty.sigma_m?`One-sigma x, y, z [m]: ${uncertainty.sigma_m.join(", ")}`:"No covariance estimate is available."):
+    "No click uncertainty was requested; a small pixel residual is not a measurement sigma.";
+  $("triangulationFlags").textContent=[...report.flags,...(report.advisories || []),...(uncertainty?.flags || []),report.no_claim,uncertainty?.no_claim].filter(Boolean).join(" ");
+  link($("triangulationDownloads"),text,"triangulation.json","application/json",triangulationUrls);
+  link($("triangulationDownloads"),input,"triangulation-input.json","application/json",triangulationUrls);
+  if(noise) link($("triangulationDownloads"),noise,"triangulation-click-noise.json","application/json",triangulationUrls);
+  $("triangulationResult").hidden=false;
+  $("triangulationStatus").textContent=report.point_m?
+    (uncertainty && uncertainty.status!=="AVAILABLE"?"Geometry accepted; requested click uncertainty is unavailable. Review diagnostics.":
+      "Conditional geometry available; review calibration, capture and every held-out check."):
+    "Geometry was not accepted. Diagnostics are available; no usable point was published.";
+}
+async function runTriangulation() {
+  if(triangulationBusy) return;
+  const inputFile=$("triangulationInput").files[0], noiseFile=$("triangulationNoise").files[0];
+  withdrawTriangulation(); const id=triangulationTicket;
+  try {
+    if(!inputFile) throw Error("Choose calibrated landmark observations.");
+    if(inputFile.size>256*1024 || noiseFile?.size>256*1024) throw Error("Each triangulation file must be at most 256 KiB; no source was read.");
+    triangulationBusy=true; controls(); $("triangulationStatus").textContent="Reading the local calibrated observations…";
+    const [input,noise]=await Promise.all([readJsonFile(inputFile),readJsonFile(noiseFile)]);
+    if(id!==triangulationTicket) return;
+    if(noiseFile && noise.length===0) throw Error("The selected click-noise file is empty; supply evidence or remove the file explicitly.");
+    const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); triangulationWorker=current;
+    current.onmessage=({data:m})=>{
+      if(current!==triangulationWorker || m.request!==triangulationTicket) return;
+      if(m.type==="progress") {$("triangulationStatus").textContent=m.text; return;}
+      stopTriangulation();
+      if(m.type==="error") {$("triangulationError").textContent=m.message; $("triangulationStatus").textContent="Triangulation failed; no result published."; return;}
+      try {publishTriangulation(m.report,input,noise);} catch(error) {
+        withdrawTriangulation(); $("triangulationError").textContent=String(error.message || error);
+        $("triangulationStatus").textContent="No triangulation report published.";
+      }
+    };
+    current.onerror=error=>{
+      if(current!==triangulationWorker) return;
+      withdrawTriangulation(); $("triangulationError").textContent=error.message;
+      $("triangulationStatus").textContent="Triangulation worker stopped; run the current observations again.";
+    };
+    current.postMessage({request:id,op:"triangulate",input,noise});
+  } catch(error) {
+    if(id!==triangulationTicket) return;
+    stopTriangulation(); $("triangulationError").textContent=String(error.message || error);
+    $("triangulationStatus").textContent="No triangulation report published.";
+  }
 }
 function stopSection() {sectionWorker?.terminate(); sectionWorker=null; sectionBusy=false; controls();}
 function withdrawSection(source=false) {
@@ -482,6 +552,15 @@ for(const id of ["photo","paper","referenceMode","sheet","calibration","rotation
 for(const id of ["lensId","independence"]) $(id).addEventListener("input",()=>{withdraw(true); status("Capture evidence changed; analyze the current photo.");});
 $("clearCalibration").onclick=()=>{generatedCalibration=null; $("calibration").value=""; $("lensId").value=""; $("rotation").value=""; $("independence").value=""; withdraw(true); status("Calibration removed; analyze the current photo.");};
 $("cameraRun").onclick=runCamera;
+$("triangulationRun").onclick=runTriangulation;
+$("triangulationCancel").onclick=()=>{withdrawTriangulation(); $("triangulationStatus").textContent="Triangulation cancelled; no result published.";};
+$("triangulationClearNoise").onclick=()=>{
+  $("triangulationNoise").value=""; withdrawTriangulation();
+  $("triangulationStatus").textContent="Click-noise evidence removed; run the current observations again.";
+};
+for(const id of ["triangulationInput","triangulationNoise"]) $(id).addEventListener("change",()=>{
+  withdrawTriangulation(); $("triangulationStatus").textContent="Triangulation source changed; run the current observations again.";
+});
 $("cameraCancel").onclick=()=>{withdrawCamera(); $("cameraStatus").textContent="Calibration cancelled; no result published.";};
 $("cameraClearNoise").onclick=()=>{$("cameraNoise").value=""; withdrawCamera(); $("cameraStatus").textContent="Separate noise declaration removed; calibrate from the current input.";};
 $("cameraUse").onclick=()=>{
@@ -605,6 +684,6 @@ window.addEventListener("pagehide",()=>{
     materialsTarget.postMessage({type:"ftx-photo-records-cancelled",token:materialsToken},materialsOrigin);
     materialsTarget=null;materialsToken=null;window.opener=null;
   }
-  withdrawSection(true); withdrawCamera(); withdraw(true);
+  withdrawTriangulation(); withdrawSection(true); withdrawCamera(); withdraw(true);
 });
 controls();

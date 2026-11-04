@@ -6,6 +6,12 @@ self.onmessage = async ({data: m}) => {
     self.postMessage({type:"progress",request:m.request,text:"Loading the local measurement engine…"});
     const ftx = await import("./pkg/ftx_wasm.js");
     await ftx.default({module_or_path:new URL("./pkg/ftx_wasm_bg.wasm",import.meta.url)});
+    if(m.op==="triangulate") {
+      self.postMessage({type:"progress",request:m.request,text:"Checking calibrated rays, held-out views and declared click uncertainty…"});
+      const report=ftx.triangulate(m.input,m.noise);
+      self.postMessage({type:"result",request:m.request,report});
+      return;
+    }
     if(m.op==="section") {
       self.postMessage({type:"progress",request:m.request,text:"Checking the photo evidence and propagating section uncertainty…"});
       const report=ftx.photo_section(m.width,m.depth,m.options);

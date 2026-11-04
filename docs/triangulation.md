@@ -20,6 +20,26 @@ Exit codes: **0** accepted conditional geometry, **2** rejected/unobservable geo
 plausible-looking partial estimate. `--out` creates a new file exclusively and refuses to
 replace evidence or an earlier report, including through symlink/hard-link aliases.
 
+## Local browser route
+
+Open `web/photo.html` after building and serving the browser bundle. Under **Reconstruct a landmark
+from calibrated views**, select the same prepared input and, optionally, an `ftx-click-noise/1`
+document declaring an independent positive pixel sigma for every FIT frame. Each file is limited to
+256 KiB. The existing Rust engines run in a disposable local worker; no source is uploaded.
+Download the complete report and exact original input/noise files for native replay:
+
+```sh
+ftx measure triangulate triangulation-input.json --click-noise triangulation-click-noise.json --json
+```
+
+Omit `--click-noise` when none was selected. Conditional click uncertainty differentiates the actual
+pixel-refined estimator with fixed cameras, scale and capture assumptions. Available covariance
+does not include calibration, scale, motion or systematic error. Valid geometry and unavailable
+requested covariance remain separately visible; neither becomes a measurement sigma or fused record.
+Changing either source, removing noise, cancelling or leaving the page withdraws that tool's reports
+and downloads. Other photo evidence is independent. Frame timestamps and original numeric text are
+preserved in downloads; display summaries do not rewrite the report.
+
 ## Input contract
 
 `ftx-triangulation-input/1` describes one landmark with 1–128 observations. At least two
@@ -80,8 +100,8 @@ Choose one capture declaration:
 
 Evidence is a caller assertion/receipt, not a stillness or clock-synchronization detector.
 A moving child across unrelated frames must not be described as a static triangulation.
-Actual still-window detection, decoding, unknown-intrinsic calibration, bundle/factor-graph
-optimization and multi-frame body fitting remain separate unfinished work.
+Still-window detection, decoding, intrinsic calibration, bundle refinement and multi-frame body
+fitting use their separate native workflows; this tool does not execute those stages automatically.
 
 ## Geometry gates and interpretation
 
@@ -109,7 +129,7 @@ weak fitting geometry. With no held-out observations, the report explicitly says
 reprojection check is fitted-only. Inputs, partitions and per-view errors are retained.
 
 A small reprojection residual does not prove an accurate metric point: incorrect but
-self-consistent scale, calibration or timing can still pass. No covariance, camera uncertainty,
-metric-scale uncertainty or garment-fit claim is supplied, and no tape/photo measurement
+self-consistent scale, calibration or timing can still pass. Geometry alone supplies no covariance;
+optional click-only covariance excludes camera and metric-scale uncertainty. No garment-fit claim or tape/photo measurement
 record is generated for fusion. In particular, do not use the pixel residual as a measurement
 sigma. The report is geometry evidence for later validated fitting, not READY status.
