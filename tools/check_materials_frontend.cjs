@@ -17328,7 +17328,7 @@ test('compiled WASM guided transient heat criteria retain complete native histor
       retain(label+'-study.json',sent.studyRequest);retain(label+'-scenario.json',sent.scenarioRequest);
       const output=require('node:child_process').execFileSync(native,['scenario-study',path.join(work,'pattern.json'),
         path.join(work,label+'-study.json'),path.join(work,label+'-scenario.json'),path.join(work,'body-input.json'),path.join(work,'model.ftxbody')],
-        {encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:64*1024*1024});
+        {encoding:'utf8',stdio:['ignore','pipe','inherit'],maxBuffer:64*1024*1024});
       assert.deepEqual(result.result,JSON.parse(output),label+' native/WASM/worker equality');
       for(const [name,raw] of [['original-pattern.json',pattern],['body-input.json',body]]) {
         assert.equal(result.files.find(file=>file.name===name).text,raw,label+' preserves '+name);
