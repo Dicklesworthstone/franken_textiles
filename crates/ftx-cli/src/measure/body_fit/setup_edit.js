@@ -434,7 +434,10 @@
     render(seed);
     status.textContent = 'Reset to the original setup. No edited download remains.';
   });
-  window.addEventListener('pagehide', () => { ++revision; withdraw(); });
+  window.addEventListener('pagehide', () => {
+    markPending();
+    status.textContent = 'Saved-choice reads canceled when leaving this page. Current form retained; check the form or cancel pending edits after returning.';
+  });
   render(seed);
   byId('setupEditor').hidden = false;
   status.textContent = 'Choose frames, age, gender, evidence and explicit fitting controls. Original root choices and model defaults are shown; nothing is inferred from the photographs.';

@@ -1,6 +1,7 @@
 // Actual browser SETUP -> native constructor -> existing CLI target/observation/start pipeline.
 // Later editors are not driven here. Prepare with FTX_CAPTURE_SETUP_DIR and the setup CLI test.
 // Synthetic software acceptance only; no physical/anatomical/real-wearer fit claim.
+// FTX_CAPTURE_SETUP_SOURCE checks exact source JS against a retained review, not a rebuilt CLI.
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const {spawnSync} = require('node:child_process');
@@ -11,6 +12,8 @@ const root = path.resolve(process.argv[2]), out = path.resolve(process.argv[3]),
 const read = file => JSON.parse(fs.readFileSync(file));
 const fixture = name => read(path.join(root, name));
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+const sourceScript = process.env.FTX_CAPTURE_SETUP_SOURCE
+  ? fs.readFileSync(path.resolve(process.env.FTX_CAPTURE_SETUP_SOURCE)) : null;
 const write = (name, value) => fs.writeFileSync(path.join(out, name), JSON.stringify(value, null, 2) + '\n');
 const report = fixture('setup-review/review.json'), setup = fixture('setup-review/setup.json');
 const seed = fixture('setup-review/capture-choices.json'), expected = fixture('expected-choices.json');
@@ -86,6 +89,11 @@ async function saveDownload(page, name) {
   try {
     const context = await browser.newContext({viewport: {width: 1200, height: 900},
       userAgent: 'OpenAI File Downloader, XaiImageApiFetch/1.0'});
+    let sourceLoads = 0;
+    if (sourceScript) await context.route('**/setup-editor.js', route => {
+      ++sourceLoads;
+      return route.fulfill({contentType: 'application/javascript', body: sourceScript});
+    });
     context.on('request', request => requests.push({url: request.url(), method: request.method()}));
     await context.addInitScript(() => {
       globalThis.__revoked = [];
@@ -222,6 +230,22 @@ async function saveDownload(page, name) {
     await load('{'); assert.deepEqual(await form(), incomplete); await hidden(page);
     await page.locator('#cancelSetup').click(); await visible(page);
 
+    for (const incomplete of [false, true]) {
+      await load(JSON.stringify(expected)); await page.locator('#applySetup').click();
+      const appliedForm = await form(), oldUrl = await page.locator('#setupDownload').getAttribute('href');
+      if (incomplete) await page.locator('#setupAge').fill('');
+      const before = await form();
+      await page.evaluate(() => {
+        window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}));
+      });
+      assert.deepEqual(await form(), before); await hidden(page); await revoked(page, oldUrl);
+      assert(await page.locator('#cancelSetup').isEnabled());
+      assert.match(await page.locator('#setupStatus').innerText(), /cancel.*page|page.*cancel/i);
+      await page.locator('#cancelSetup').click(); await visible(page);
+      assert.deepEqual(await form(), appliedForm);
+    }
+
     // Hold the real File read, then resolve it after a newer action. No obsolete read may win.
     await page.evaluate(() => {
       const original = File.prototype.arrayBuffer;
@@ -265,6 +289,7 @@ async function saveDownload(page, name) {
       } else await page.locator('#' + {apply: 'applySetup', cancel: 'cancelSetup', reset: 'resetSetup'}[action]).click();
       const before = await form(), oldUrl = await page.locator('#setupDownload').getAttribute('href');
       const oldStatus = await page.locator('#setupStatus').innerText();
+      assert(!oldStatus.startsWith('Reading saved choices'));
       await page.evaluate(({reject, text}) => {
         const read = globalThis.__choiceRead;
         if (reject) read.reject(new Error('obsolete read error'));
@@ -273,6 +298,10 @@ async function saveDownload(page, name) {
       assert.deepEqual(await form(), before);
       assert.equal(await page.locator('#setupDownload').getAttribute('href'), oldUrl);
       assert.equal(await page.locator('#setupStatus').innerText(), oldStatus);
+      if (action === 'pagehide') {
+        await page.locator('#cancelSetup').click(); await visible(page);
+        assert.deepEqual(await form(), appliedForm);
+      }
     }
     // Opening and cancelling the native chooser also withdraws applied links before any read.
     for (const event of ['focus', 'click', 'cancel']) {
@@ -332,13 +361,16 @@ async function saveDownload(page, name) {
     reference.input_sha256 = fitted.input_sha256;
     reference.capture_input.source = fitted.capture_input.source;
     assert.deepEqual(fitted, reference);
+    if (sourceScript) assert(sourceLoads > 0, 'The setup source override must actually execute.');
     assert.deepEqual(errors, []); assert(requests.every(request => request.method === 'GET' && request.url.startsWith('file:')));
     console.log(JSON.stringify({status: 'PASS', browser_stage: 'capture setup only', subsequent_stage: 'existing native CLI pipeline with independent synthetic truth',
+      editor_script: {mode: sourceScript ? 'source override' : 'compiled review',
+        sha256: sourceScript ? hash(sourceScript) : report.editor.script.sha256, source_loads: sourceLoads},
       fit: fitted.status, initial_construction: 'byte-exact', later_cli_replay: 'semantic equality with independently checked input-byte digests and paths',
       chosen_frames: expected.frame_indices.length, browser_errors: errors.length, local_requests: requests.length,
       exercised: ['source photographs', 'explicit defaults', 'blank choices', 'frame count', 'bounds', 'root choices and rotation-vector limit', 'joint axes', 'tape role', 'UTF-8 evidence budget',
         'duplicate prevention', 'remove', 'fixed controls', 'stale URL withdrawal', 'cancel', 'reset', 'saved file reload/edit', 'invalid files preserve work',
-        'pending/invalid import withdrawal', 'chooser cancellation preserves work', 'late reads versus edits/imports/pagehide',
+        'pending/invalid import withdrawal', 'chooser cancellation preserves work', 'late reads versus edits/imports/pagehide', 'cached-page recovery',
         'byte-exact native construction', 'complete fit report equality']}));
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

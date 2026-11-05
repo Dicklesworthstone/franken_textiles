@@ -69,6 +69,8 @@ file chooser or beginning a replacement read withdraws the previous download. Ca
 unreadable, invalid or different-setup files leave the current form intact; the download stays
 withdrawn until the form is checked again or pending edits are cancelled. Later edits,
 cancellation, reset, a replacement file or leaving the page cancel pending reads.
+A cached-page return keeps entered choices visible and the download withdrawn; use the
+explicit Check/Cancel controls to continue. A canceled read is shown as canceled.
 **Cancel pending edits** returns to the last choices
 applied in this page, or to its original incomplete setup. Native `capture-init` still rechecks
 the original sources, model and camera admission before constructing an input.
