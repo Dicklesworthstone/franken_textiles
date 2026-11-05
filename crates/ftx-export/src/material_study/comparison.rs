@@ -242,6 +242,10 @@ pub enum Metric {
     TextileWaterEvaporatedMassKg,
     /// Liquid remaining on all qualified textile triangles at the final sample, in kilograms.
     TextileWaterRemainingMassKg,
+    /// Actual coupled solver mass at the final sample, including retained liquid and attached mass.
+    TextileWaterFinalInertialMassKg,
+    /// Largest actual coupled solver mass at the initial state or retained mechanical endpoints.
+    TextileWaterMaxSampleInertialMassKg,
     /// Independently sourced liquid delivered to qualified textile reference areas, in kilograms.
     TextileWaterSuppliedMassKg,
     /// Qualified reverse vapor transfer accumulated as textile free liquid, in kilograms.
@@ -363,6 +367,8 @@ impl Metric {
             Self::TransientSurfaceInsideEnergyJ
             | Self::TextileWaterEvaporatedMassKg
             | Self::TextileWaterRemainingMassKg
+            | Self::TextileWaterFinalInertialMassKg
+            | Self::TextileWaterMaxSampleInertialMassKg
             | Self::TextileWaterSuppliedMassKg
             | Self::TextileWaterCondensedMassKg
             | Self::TextileWaterDrainedMassKg
@@ -405,6 +411,8 @@ impl Metric {
             | Self::MotionWetFilmSuppliedMassKg => "kg",
             Self::TextileWaterEvaporatedMassKg
             | Self::TextileWaterRemainingMassKg
+            | Self::TextileWaterFinalInertialMassKg
+            | Self::TextileWaterMaxSampleInertialMassKg
             | Self::TextileWaterSuppliedMassKg
             | Self::TextileWaterCondensedMassKg
             | Self::TextileWaterDrainedMassKg
@@ -634,6 +642,12 @@ impl Metric {
             Self::TextileWaterRemainingMassKg => {
                 admitted.transient_surface.as_ref()?.result["surface_water"]["remaining_liquid_kg"]
                     .as_f64()
+            }
+            Self::TextileWaterFinalInertialMassKg => {
+                Some(admitted.transient_surface.as_ref()?.wet_inertial_mass?.final_kg)
+            }
+            Self::TextileWaterMaxSampleInertialMassKg => {
+                Some(admitted.transient_surface.as_ref()?.wet_inertial_mass?.max_sample_kg)
             }
             Self::TextileWaterSuppliedMassKg => {
                 admitted.transient_surface.as_ref()?.result["surface_water"]["supplied_liquid_kg"]
@@ -1257,6 +1271,8 @@ impl Policy {
                 metric,
                 Metric::TextileWaterEvaporatedMassKg
                     | Metric::TextileWaterRemainingMassKg
+                    | Metric::TextileWaterFinalInertialMassKg
+                    | Metric::TextileWaterMaxSampleInertialMassKg
                     | Metric::TextileWaterSuppliedMassKg
                     | Metric::TextileWaterCondensedMassKg
                     | Metric::TextileWaterDrainedMassKg
@@ -1270,6 +1286,15 @@ impl Policy {
             )
         }) {
             report.notes.push("Textile-water objectives require the source-qualified free-film history, canonical Ret networks and the complete liquid/vapor energy ledger on the admitted motion. Reference material area owns liquid; current area conducts vapor. Version 2 qualifies incoming-liquid delivery and sensible enthalpy. Version 3 additionally qualifies reverse transfer, dry/wet nucleation and the declared incoming-vapor enthalpy model. Version 4 qualifies stock-limited prescribed liquid drainage and its separate exported sensible enthalpy. Evaporative latent removal, condensation latent release and drainage stay separate, including when the same water later re-evaporates. These are nominal conditional computations, not sorption, inferred runoff or wet properties, continuous-time temperature bounds, comfort or measured garment validation.");
+        }
+        if self.metrics().iter().any(|metric| {
+            matches!(
+                metric,
+                Metric::TextileWaterFinalInertialMassKg
+                    | Metric::TextileWaterMaxSampleInertialMassKg
+            )
+        }) {
+            report.notes.push("Wet inertial-mass objectives require independently qualified liquid mechanics and its complete admitted initial, final and sampled mass histories. They use the actual solver mass, including the retained dry substrate, independently attached inventory and current textile liquid. Final mass uses the last accepted sample; maximum sampled mass also includes the initial state. Uncoupled liquid, static assembly mass and omitted components cannot supply these readings. These nominal quantities are not continuous-time maxima, complete wearer loads, propagated uncertainty or empirical garment validation.");
         }
         if self.metrics().iter().any(|metric| {
             matches!(
@@ -2568,6 +2593,7 @@ struct Heat<'a> {
     range_c: [f64; 2],
     final_range_c: [f64; 2],
     vapor_pressure_range_pa: Option<[f64; 2]>,
+    wet_inertial_mass: Option<surface_water::InertialMass>,
 }
 
 fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerical<'_>) -> bool {
@@ -4543,7 +4569,9 @@ fn admit_heat<'a>(
                 finite(&row[stored]).ok_or_else(|| fail("missing source/boundary balance"))?;
             let residual = finite(&row["balance_error_j"])
                 .ok_or_else(|| fail("missing source/boundary balance"))?;
-            let liquid_energy = liquid.as_ref().map_or(0., |terms| terms[i]);
+            let liquid_energy = liquid
+                .as_ref()
+                .map_or(0., |water| water.energy_corrections_j[i]);
             if !heat_near(net, inside - outside)
                 || !heat_near(residual, stored + liquid_energy - net - supplied)
             {
@@ -4559,6 +4587,7 @@ fn admit_heat<'a>(
         final_range_c: final_range
             .ok_or_else(|| fail("missing final sampled temperature range"))?,
         vapor_pressure_range_pa: vapor_pressure_range,
+        wet_inertial_mass: liquid.as_ref().and_then(|water| water.inertial_mass),
     })
 }
 

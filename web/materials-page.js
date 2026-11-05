@@ -1,6 +1,6 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest,
-  buildGuidedDesignAfterOperations, hasTextileWaterPolicy, buildMaterialSurfaceConditions,
+  buildGuidedDesignAfterOperations, hasTextileWaterPolicy, hasTextileWaterMechanicsPolicy, buildMaterialSurfaceConditions,
   buildMaterialVaporSurfaceConditions, buildMaterialCoverageRequest, buildMaterialCoverageTopology,
   buildMaterialExteriorExchange, buildWorkbenchStudyBundle, parseWorkbenchStudyBundle,
   MAX_WORKBENCH_STUDY_BYTES } from "./materials-study-builder.js";
@@ -136,6 +136,8 @@ const guidedTransportMetrics = [
   ["guidedTextileVaporSampleMax", "textile_water_max_sample_vapor_pressure_pa"],
   ["guidedTextileVaporRemaining", "textile_water_remaining_vapor_mass_kg"],
   ["guidedTextileVaporHeatRemoved", "textile_water_isothermal_heat_removed_j"],
+  ["guidedTextileFinalMass", "textile_water_final_inertial_mass_kg"],
+  ["guidedTextilePeakMass", "textile_water_max_sample_inertial_mass_kg"],
   ["guidedTransientSurfaceInsideEnergy", "transient_surface_inside_energy_j"],
   ["guidedTransientSurfaceNetEnergy", "transient_surface_net_boundary_energy_j"],
   ["guidedTransientSurfaceSampleMin", "transient_surface_min_sample_temperature_c"],
@@ -900,7 +902,9 @@ function objectiveComparison(parent, r) {
     textile_water_min_sample_vapor_pressure_pa: "Minimum sampled finite-reservoir vapor pressure",
     textile_water_max_sample_vapor_pressure_pa: "Maximum sampled finite-reservoir vapor pressure",
     textile_water_remaining_vapor_mass_kg: "Remaining finite-reservoir vapor",
-    textile_water_isothermal_heat_removed_j: "Finite-reservoir isothermal heat removed"
+    textile_water_isothermal_heat_removed_j: "Finite-reservoir isothermal heat removed",
+    textile_water_final_inertial_mass_kg: "Final wet-cloth inertial mass",
+    textile_water_max_sample_inertial_mass_kg: "Maximum sampled wet-cloth inertial mass"
   };
   const strainLabels = {};
   for (const [prefix, scope] of [["", "Initial"], ["motion_", "Motion"]]) {
@@ -942,6 +946,13 @@ function objectiveComparison(parent, r) {
       "Isothermal heat removed is signed: positive removes heat from the reservoir; negative supplies heat to hold its declared temperature. " +
       "A missing reservoir leaves these readings unavailable.";
     parent.append(reservoir);
+  }
+  if (metrics.some(o => ["textile_water_final_inertial_mass_kg", "textile_water_max_sample_inertial_mass_kg"].includes(o.metric))) {
+    const wetMass = document.createElement("p");
+    wetMass.textContent = "Wet-cloth mass includes the modeled substrate, attached masses and retained liquid from the admitted mechanical coupling. " +
+      "The sampled maximum includes the initial state and every retained motion endpoint; it is not a continuous-time bound. " +
+      "Omitted garment parts are not counted, so this does not replace a complete assembly inventory.";
+    parent.append(wetMass);
   }
   if (metrics.some(o => Object.hasOwn(threadLabels, o.metric)) ||
       r.policy.required_consumers?.some(name => ["sewing_consumables", "sewing_purchasing", "cut_and_sew_purchasing"].includes(name))) {
@@ -4624,6 +4635,7 @@ function describeScenarioInput(request, original) {
     motionWetFilm: cases.some(item => item?.motion?.vapor_coverage_history?.wet_film != null),
     transientSurface: cases.some(item => item?.motion?.transient_surface != null),
     textileWater: cases.some(item => hasTextileWaterPolicy(item?.motion?.transient_surface)),
+    textileWaterMechanics: cases.some(item => hasTextileWaterMechanicsPolicy(item?.motion?.transient_surface)),
     transientCoverage: cases.some(item => item?.motion?.transient_coverage != null),
     ...(matrix ? { matrix: { maxEvaluations: value.max_evaluations,
       cases: Array.isArray(value.cases) ? value.cases.map(item => ({ key: item?.key,
@@ -4636,6 +4648,7 @@ function describeScenarioInput(request, original) {
         motionWetFilm: item?.scenario?.motion?.vapor_coverage_history?.wet_film != null,
         transientSurface: item?.scenario?.motion?.transient_surface != null,
         textileWater: hasTextileWaterPolicy(item?.scenario?.motion?.transient_surface),
+        textileWaterMechanics: hasTextileWaterMechanicsPolicy(item?.scenario?.motion?.transient_surface),
         transientCoverage: item?.scenario?.motion?.transient_coverage != null,
         ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
 }
@@ -5034,10 +5047,11 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const motionWetFilm = retainedMotion?.vapor_coverage_history?.wet_film != null;
   const transientSurface = retainedMotion?.transient_surface != null;
   const textileWater = input.motionLiquid !== undefined || hasTextileWaterPolicy(retainedMotion?.transient_surface);
+  const textileWaterMechanics = hasTextileWaterMechanicsPolicy(input.motionLiquid ?? retainedMotion?.transient_surface);
   const transientCoverage = retainedMotion?.transient_coverage != null;
   return { request,
     context: { drape: true, surface, motion: motionMode !== "none", materialStrain, contactLoads, ...transport,
-      motionVaporHistory, motionWetFilm, transientSurface, textileWater, transientCoverage },
+      motionVaporHistory, motionWetFilm, transientSurface, textileWater, textileWaterMechanics, transientCoverage },
     ...((comparison ?? authoredComparison) === undefined ? {} : { comparison: comparison ?? authoredComparison }) };
 }
 function showGuidedScenarioDrafts() {

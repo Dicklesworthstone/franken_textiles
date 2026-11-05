@@ -793,9 +793,18 @@ endpoint changes; every supplied phase schedule must still match the saved motio
 | Drained textile water | kg | `textile_water_drained_mass_kg` |
 | Evaporation latent-energy removal | J | `textile_water_latent_energy_j` |
 | Condensation latent-energy release | J | `textile_water_condensation_latent_energy_j` |
+| Final wet-cloth inertial mass | kg | `textile_water_final_inertial_mass_kg` |
+| Maximum sampled wet-cloth inertial mass | kg | `textile_water_max_sample_inertial_mass_kg` |
+
+The two wet-mass controls additionally require direct or paired mechanical water qualification
+in the same named case. They use actual solver mass: modeled substrate, attached inventory and
+retained liquid. The maximum includes the initial state and every retained motion endpoint,
+without claiming a continuous-time maximum or complete garment inventory. Both accept explicit
+minimize/maximize directions and nominal inclusive limits. Uncoupled water keeps its ordinary
+water/heat criteria; it cannot supply these mechanical readings.
 
 Choose each objective's direction explicitly and optional nonnegative inclusive lower/upper limits.
-Limits stay active without their objective. All seven criteria use **nominal values only**; choose
+Limits stay active without their objective. All nine criteria use **nominal values only**; choose
 an explicit nominal limit basis when other objectives use reported bounds. Each selected quantity
 requires the complete admitted water history through the existing `transient_surface` consumer.
 The ordinary **Require a complete independent-sheet heat history** control remains usable without

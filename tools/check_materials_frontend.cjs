@@ -6058,6 +6058,17 @@ const guidedTextileWaterPolicyOriginal=' {"schema":"ftx-textile-surface-water/4"
 const guidedTextileWaterMotionOriginal=guidedMotionOriginal.replace('"transient_surface":null',
   '"transient_surface":{"schema":"ftx-motion-surface-heat/1","initial_temperature_c":-0.0,"cells_per_layer":2,'+
   '"max_cell_steps":18446744073709551615,"surface_water":'+guidedTextileWaterPolicyOriginal+'}');
+const guidedTextileMassReadings=[
+  ['guidedTextileFinalMass','textile_water_final_inertial_mass_kg'],
+  ['guidedTextilePeakMass','textile_water_max_sample_inertial_mass_kg']];
+const guidedTextileMechanicsOriginal=' {"schema":"ftx-coupled-liquid-mechanics/6","source":{"reference":"test:wet mass café 🧵"},'+
+  '"qualification":"Synthetic source transport; no physical garment claim","value":-0.0}\r\n';
+function guidedTextileMassMotion(paired=false) {
+  const water='"surface_water":'+guidedTextileWaterPolicyOriginal;
+  return guidedTextileWaterMotionOriginal.replace(water,paired?
+    '"coupled_water_alternatives":[{'+water+',"mechanical_coupling":'+guidedTextileMechanicsOriginal+'}]':
+    water+',"mechanical_coupling":'+guidedTextileMechanicsOriginal);
+}
 function guidedTextileWaterSource(p,raw=guidedTextileWaterMotionOriginal) {
   guidedMotionSourceControls(p,'file');p.select('guidedMotionFile',raw);p.e.guidedMotionFile.handlers.change();
 }
@@ -7883,6 +7894,87 @@ test('guided paired textile-water qualifications remain source-exact across save
   p.emit(scenarioMatrixReport());
   p.select('guidedMotionFile','{}');p.e.guidedMotionFile.handlers.change();
   await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,named.scenarioRequest);
+});
+
+test('guided wet-mass goals preserve coupled source bytes, sampled scope and saved case decisions',async()=>{
+  for(const paired of [false,true])for(const authored of [false,true]) {
+    const {p}=await guidedScenarioSetup(),motion=guidedTextileMassMotion(paired);
+    if(authored) {
+      guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);await addGuidedMotion(p,0.002,35);
+      const sources=' [{"surface_water":'+guidedTextileWaterPolicyOriginal+',"mechanical_coupling":'+guidedTextileMechanicsOriginal+'}]';
+      guidedLiquidSource(p,paired?'paired':'direct',paired?sources:guidedTextileWaterPolicyOriginal,!paired);
+      if(!paired) {
+        p.select('guidedMotionWaterMechanicsFile',guidedTextileMechanicsOriginal);p.e.guidedMotionWaterMechanicsFile.handlers.change();
+      }
+    } else guidedTextileWaterSource(p,motion);
+    p.e.guidedDrapeMassGoal.checked=false;p.e.guidedRequireTransientSurface.checked=true;
+    const objectives=[],constraints=[];
+    for(const [prefix,metric] of guidedTextileMassReadings) {
+      assert.equal(p.e[prefix+'Goal'].checked,false);assert.equal(p.e[prefix+'Direction'].value,'');
+      p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value='minimize';
+      p.e[prefix+'MinimumLimit'].value='0';p.e[prefix+'Limit'].value='0.5';
+      objectives.push({metric,direction:'minimize'});constraints.push({metric,minimum:0,maximum:0.5});
+    }
+    await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'scenario',p.e.error.textContent);
+    if(!authored)assert.ok(sent.scenarioRequest.includes(motion));
+    const retained=JSON.parse(sent.scenarioRequest).motion.transient_surface;
+    assert.deepEqual(paired?retained.coupled_water_alternatives[0].mechanical_coupling:retained.mechanical_coupling,JSON.parse(guidedTextileMechanicsOriginal));
+    const policy=JSON.parse(sent.studyRequest).comparison;
+    assert.deepEqual(policy.objectives,objectives);assert.deepEqual(policy.constraints,constraints);
+    const report=scenarioReport();report.comparison={policy,motion_required:true,frontier:['A'],incomparable:[],alternatives:[
+      {key:'A',eligible:true,dominated_by:[],exclusions:[],readings:Object.fromEntries(guidedTextileMassReadings.map(([,metric],i)=>
+        [metric,{value:i?0.4:0.3,unit:'kg',consumer:'transient_surface'}]))},
+      {key:'B',eligible:false,dominated_by:[],exclusions:[{message:'Mechanical water coupling is unavailable'}],readings:{}}]};
+    p.emit(report);const output=section(p,'Fresh drape and heat alternatives');
+    assert.match(visibleText(output),/Final wet-cloth inertial mass/);assert.match(visibleText(output),/Maximum sampled wet-cloth inertial mass/);
+    assert.match(visibleText(output),/modeled substrate, attached masses and retained liquid/);
+    assert.match(visibleText(output),/not a continuous-time bound/);assert.match(visibleText(output),/Mechanical water coupling is unavailable/);
+    guidedNamedCases(p);p.e.guidedScenarioPolicySource.value='snapshot';await saveGuidedCase(p,'wet load');
+    assert.equal(p.e.guidedScenarioCases.children.length,1,p.e.error.textContent);
+    p.e.guidedTextilePeakMassLimit.value='0.9';p.e.guidedTextilePeakMassLimit.handlers.input();
+    await p.e.scenario.onclick();const named=JSON.parse(p.current().messages.at(-1).scenarioRequest);
+    assert.deepEqual(named.cases[0].comparison.objectives,objectives);assert.deepEqual(named.cases[0].comparison.constraints,constraints);
+    p.emit(scenarioReport());
+  }
+});
+
+test('guided wet-mass criteria refuse uncoupled water and reported bounds while ordinary water remains usable',async()=>{
+  for(const [prefix] of guidedTextileMassReadings) {
+    const {p}=await guidedScenarioSetup();guidedTextileWaterSource(p);
+    p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value='minimize';let before=p.current().messages.length;
+    await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/mechanical coupling/);
+    guidedTextileWaterSource(p,guidedTextileMassMotion());p.e.guidedBasis.value='reported_bounds';before=p.current().messages.length;
+    await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/reported-bound comparison/);
+    p.e.guidedBasis.value='nominal';p.e[prefix+'MinimumLimit'].value='-1';before=p.current().messages.length;
+    await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/nonnegative/);
+    p.e[prefix+'MinimumLimit'].value='';p.e[prefix+'Goal'].checked=false;
+    p.e.guidedTextileWaterRemainingGoal.checked=true;p.e.guidedTextileWaterRemainingDirection.value='minimize';
+    guidedTextileWaterSource(p);await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).type,'scenario',p.e.error.textContent);
+    p.emit(scenarioReport());
+    guidedNamedCases(p);p.e.guidedTextileWaterRemainingGoal.checked=false;
+    guidedTextileWaterSource(p,guidedTextileMassMotion());await saveGuidedCase(p,'coupled');
+    guidedTextileWaterSource(p);await saveGuidedCase(p,'uncoupled');
+    p.e[prefix+'Goal'].checked=true;before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/uncoupled.*mechanical coupling/);
+  }
+});
+
+test('editing wet-mass criteria cancels obsolete source reads and late worker results',async()=>{
+  for(const [prefix] of guidedTextileMassReadings) {
+    const {p}=await guidedScenarioSetup(),motion=guidedTextileMassMotion();guidedTextileWaterSource(p,motion);
+    p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value='minimize';
+    const delay=deferred();let reading=false;
+    p.e.guidedMotionFile.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+    const old=p.current(),before=old.messages.length,running=p.e.scenario.onclick();assert.equal(reading,true);
+    p.e[prefix+'Limit'].value='0.5';p.e[prefix+'Limit'].handlers.input();assert.equal(old.dead,true);p.ready();
+    delay.resolve(motion);await running;assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+    guidedTextileWaterSource(p,motion);await p.e.scenario.onclick();const active=p.current(),sent=active.messages.at(-1);
+    assert.equal(sent.type,'scenario',p.e.error.textContent);
+    p.e[prefix+'Direction'].value='maximize';p.e[prefix+'Direction'].handlers.change();assert.equal(active.dead,true);p.ready();
+    active.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete-wet-mass.json',text:'{}'}]});
+    assert.equal(p.live.size,0);assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+  }
 });
 
 test('guided textile-water qualification collections remain source-exact in single and named scenarios',async()=>{

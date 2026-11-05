@@ -767,6 +767,23 @@ continuous-time bound or propagated result interval is added. See the
 [guided controls](browser-material-workbench.md#compare-textile-owned-water-and-latent-heat) and
 [native water model](textile-surface-water.md).
 
+Two nominal mechanical-load criteria use the same fully admitted coupled history:
+
+| Metric | Meaning |
+|---|---|
+| `textile_water_final_inertial_mass_kg` | Actual coupled solver mass at the final accepted sample. |
+| `textile_water_max_sample_inertial_mass_kg` | Largest actual solver mass over the initial state and retained motion endpoints. |
+
+Both include the modeled dry substrate, independently attached inventory and current retained
+liquid. They require direct `mechanical_coupling` or a selected complete
+`coupled_water_alternatives` entry in the same case. An uncoupled thermal water film keeps its
+ordinary heat/water readings but cannot provide these mechanical masses. Complete source,
+inventory and history admission precedes either reading; missing or tampered coupling cannot
+publish a partial maximum. The existing history pass retains both values once for all objectives
+and inclusive guards. Reported bounds remain unsupported, and the sampled maximum is not a
+continuous-time bound. Omitted garment parts are outside this mass scope; complete
+`assembly_mass_kg` inventory remains a separate consumer.
+
 ### Vapor potential on the current sewn geometry
 
 With `scenario.vapor_surface` declared, comparisons can use the actual initial drape's independent

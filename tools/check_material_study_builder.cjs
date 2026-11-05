@@ -2122,6 +2122,7 @@ const namedContext = (cases=[{key:'cold',surface:false},{key:'warm',surface:fals
     motionWetFilm:cases.some(item=>item.motionWetFilm===true),
     transientSurface:cases.some(item=>item.transientSurface===true),transientCoverage:cases.some(item=>item.transientCoverage===true),
     textileWater:cases.some(item=>item.textileWater===true),
+    textileWaterMechanics:cases.some(item=>item.textileWaterMechanics===true),
     matrix:{maxEvaluations,cases}});
 const namedDesign = changes => adaptiveDesignInput({objective:'consumer_comparison',materialKey:'alternative',
   caseKey:'cold',maxEvaluations:2,maxDesigns:1,...changes});
@@ -2943,6 +2944,76 @@ test('named textile-water decisions require same-case water only for inherited w
     required_consumers:['transient_surface'],allow_mixed_protocols:true})}]),before=JSON.stringify(original);
   assert.ok(build(state(),original));assert.equal(JSON.stringify(original),before,
     'An original comparison delegates physical, phase and source admission to the native consumer');
+});
+
+const textileMassMetrics=['textile_water_final_inertial_mass_kg','textile_water_max_sample_inertial_mass_kg'];
+const textileMassContext=()=>({...textileWaterContext(),textileWaterMechanics:true});
+
+test('wet inertial-mass criteria require an explicit direct or paired mechanical policy', async () => {
+  const {hasTextileWaterMechanicsPolicy:mechanical,buildMaterialStudyRequest:build}=await modulePromise;
+  for(const surface of [undefined,null,{}, {surface_water:{}}, {mechanical_coupling:{}},
+    {surface_water_alternatives:[{}]}, {surface_water:{},mechanical_coupling:null}])assert.equal(mechanical(surface),false);
+  for(const surface of [{surface_water:{},mechanical_coupling:{}},{coupled_water_alternatives:[{}]}])assert.equal(mechanical(surface),true);
+  for(const metric of textileMassMetrics)for(const decision of [
+    {objectives:[{metric,direction:'minimize'}]}, {constraints:[{metric,minimum:0,maximum:1}]}]) {
+    const input={...state(),...decision};
+    assert.ok(build(input,textileMassContext()));
+    for(const context of [textileWaterContext(),{...textileMassContext(),textileWaterMechanics:false},
+      Object.assign(Object.create({textileWaterMechanics:true}),textileWaterContext())]) {
+      assert.throws(()=>build(input,context),/Wet inertial-mass criteria/);
+    }
+    for(const key of ['motion','transientSurface','textileWater']) {
+      assert.throws(()=>build(input,{...textileMassContext(),[key]:false}),/transient_surface|Textile-water criteria/);
+    }
+    for(const value of [null,undefined,1,'true']) {
+      assert.throws(()=>build(input,{...textileMassContext(),textileWaterMechanics:value}),/availability must be a boolean/);
+    }
+  }
+});
+
+test('wet inertial-mass goals and inclusive guards stay nominal across named adaptive decisions', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const objectives=textileMassMetrics.map(metric=>({metric,direction:'minimize'}));
+  const constraints=textileMassMetrics.map(metric=>({metric,minimum:0,maximum:0.5}));
+  const input={...state(),objectives,constraints,requiredConsumers:['transient_surface']},before=JSON.stringify(input);
+  const single=JSON.parse(build(input,textileMassContext()));
+  assert.deepEqual(single.comparison.objectives,objectives);assert.deepEqual(single.comparison.constraints,constraints);
+  assert.equal(JSON.stringify(input),before);assert.equal(Object.hasOwn(single,'textileWaterMechanics'),false);
+  const available={surface:false,motion:true,transientSurface:true,textileWater:true,textileWaterMechanics:true};
+  const cases=namedContext([{key:'cold',...available},{key:'warm',...available}]),original=JSON.stringify(cases);
+  for(const objective of ['consumer_comparison','consumer_pareto','consumer_worst_case','consumer_matrix_pareto']) {
+    const design=namedDesign({objective});if(['consumer_worst_case','consumer_matrix_pareto'].includes(objective))delete design.caseKey;
+    const goals=objective.includes('pareto')?objectives:objectives.slice(0,1);
+    const result=JSON.parse(build({...input,objectives:goals,design},cases));
+    assert.equal(result.design_adaptive.objective,objective);assert.deepEqual(result.comparison.objectives,goals);
+    assert.deepEqual(result.comparison.constraints,constraints);
+  }
+  assert.equal(JSON.stringify(cases),original);
+  for(const metric of textileMassMetrics) {
+    assert.throws(()=>build({...state(),basis:'reported_bounds',objectives:[{metric,direction:'minimize'}]},textileMassContext()),/reported-bound comparison/);
+    assert.throws(()=>build({...state(),constraints:[{metric,maximum:1,basis:'reported_bounds'}]},textileMassContext()),/reported-bound comparison/);
+    const mixed={...state(),assemblyMass:mass(),basis:'reported_bounds',objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],
+      constraints:[{metric,minimum:0,maximum:0.5,basis:'nominal'}]};
+    assert.deepEqual(JSON.parse(build(mixed,textileMassContext())).comparison.constraints,mixed.constraints);
+  }
+});
+
+test('wet mass cannot borrow mechanical qualification from another named case', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const coupled={key:'cold',surface:false,motion:true,transientSurface:true,textileWater:true,textileWaterMechanics:true};
+  for(const metric of textileMassMetrics)for(const decision of [
+    {objectives:[{metric,direction:'minimize'}]}, {constraints:[{metric,maximum:1}]}]) {
+    const input={...state(),...decision,design:namedDesign()},uncoupled={...coupled,key:'warm',textileWaterMechanics:false};
+    assert.throws(()=>build(input,namedContext([coupled,uncoupled])),/warm inherits.*mechanical coupling/);
+    const explicit=namedContext([coupled,{...uncoupled,comparison:casePolicy()}]),before=JSON.stringify(explicit);
+    assert.ok(build(input,explicit));assert.equal(JSON.stringify(explicit),before);
+  }
+  const input={...state(),objectives:[{metric:textileMassMetrics[0],direction:'minimize'}]};
+  const split=namedContext([{...coupled,textileWaterMechanics:false},
+    {key:'unrelated mechanics',surface:false,textileWaterMechanics:true,comparison:casePolicy()}]);
+  assert.throws(()=>build(input,split),/Wet inertial-mass criteria/);
+  const context=namedContext([coupled]),missing={...context};delete missing.textileWaterMechanics;
+  assert.throws(()=>build(state(),missing),/textileWaterMechanics availability.*actual cases/);
 });
 
 test('original textile-water and mechanical-coupling sources survive snapshots without inferred source qualification or optional-budget gates', async () => {

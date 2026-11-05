@@ -1665,6 +1665,25 @@ history can also be required below without choosing a water objective.</p>
 <label>Maximum condensation latent-energy release (J) <input id="guidedTextileWaterCondensationLatentLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
 </div>
 </details>
+<details><summary>Wet-cloth mass during movement</summary>
+<p class="note">These nominal criteria require a direct or paired mechanical water qualification in the same case.
+They include the modeled substrate, attached masses and retained liquid. The sampled maximum includes the initial state
+and every retained motion endpoint; it is not a continuous-time bound or a complete garment inventory.</p>
+<label><input id="guidedTextileFinalMassGoal" type="checkbox"> Compare final wet-cloth inertial mass (kg)</label>
+<div class="study-fields">
+<label>Final-mass direction <select id="guidedTextileFinalMassDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize final mass</option><option value="maximize">Maximize final mass</option></select></label>
+<label>Minimum final wet-cloth mass (kg) <input id="guidedTextileFinalMassMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum final wet-cloth mass (kg) <input id="guidedTextileFinalMassLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextilePeakMassGoal" type="checkbox"> Compare maximum sampled wet-cloth inertial mass (kg)</label>
+<div class="study-fields">
+<label>Sampled-mass direction <select id="guidedTextilePeakMassDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize sampled maximum</option><option value="maximize">Maximize sampled maximum</option></select></label>
+<label>Lower limit for maximum sampled mass (kg) <input id="guidedTextilePeakMassMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Upper limit for maximum sampled mass (kg) <input id="guidedTextilePeakMassLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+</details>
 <details><summary>Finite shared vapor reservoir: pressure, remaining vapor and temperature control</summary>
 <p class="note">These five criteria require the selected <code>ftx-textile-surface-water/5</code> policy and its independently
 qualified finite vapor reservoir in this same case. Older water policies leave these readings unavailable. Pressure extrema

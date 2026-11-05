@@ -403,6 +403,19 @@ fn selected_policy<'a>(
 
 // This checks the coupled producer's retained accounting, not its equations of motion. The
 // thermal inventory remains authoritative; bulk transfer energy is never added to latent heat.
+// Retained only after the complete coupled mechanical history has passed admission.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct InertialMass {
+    pub(super) final_kg: f64,
+    pub(super) max_sample_kg: f64,
+}
+
+#[derive(Debug, PartialEq)]
+pub(super) struct Admission {
+    pub(super) energy_corrections_j: Vec<f64>,
+    pub(super) inertial_mass: Option<InertialMass>,
+}
+
 fn admit_mechanics(
     simulation: &Value,
     motion: &Value,
@@ -411,7 +424,7 @@ fn admit_mechanics(
     coverage: bool,
     water_policy: &Value,
     qualification: &Value,
-) -> Result<(), Refusal> {
+) -> Result<Option<InertialMass>, Refusal> {
     let trace = array(heat, "trace")?;
     let initial = &motion["initial_sample"]["liquid_mechanics"];
     let final_report = &motion["liquid_mechanics"];
@@ -420,7 +433,7 @@ fn admit_mechanics(
             && trace.iter().all(|row| row["mechanical_coupling"].is_null())
             && (coverage || (initial.is_null() && final_report.is_null()))
         {
-            Ok(())
+            Ok(None)
         } else {
             Err(fail())
         };
@@ -637,6 +650,10 @@ fn admit_mechanics(
     let mut previous_incoming_potential = 0.;
     let mut previous_incoming_momentum = [0.; 3];
     let mut previous_drained = 0.;
+    let mut inertial_mass = InertialMass {
+        final_kg: 0.,
+        max_sample_kg: 0.,
+    };
     for (index, row) in std::iter::once(&initial)
         .chain(trace.iter().map(|row| &row["mechanical_coupling"]))
         .enumerate()
@@ -658,6 +675,8 @@ fn admit_mechanics(
             0.
         };
         let total = nonnegative(row, "total_inertial_mass_kg")?;
+        inertial_mass.final_kg = total;
+        inertial_mass.max_sample_kg = inertial_mass.max_sample_kg.max(total);
         let energy = nonnegative(row, "exported_kinetic_energy_j")?;
         let incoming = if exchange {
             let flow = &row["exchange"];
@@ -823,7 +842,7 @@ fn admit_mechanics(
         previous_energy = energy;
         previous_drained = drained;
     }
-    Ok(())
+    Ok(Some(inertial_mass))
 }
 
 // This integrates authored delivery, not evaporation or heat. Mechanical endpoints own each
@@ -1190,8 +1209,8 @@ impl Reservoir {
     }
 }
 
-/// Return the additional liquid/vapor energy on each retained sample and the final receipt.
-/// The caller reconciles this with the existing independently admitted mechanical heat sources.
+/// Return additional liquid/vapor energy and admitted coupled mass from the same history passes.
+/// The caller reconciles energy with the existing independently admitted mechanical heat sources.
 pub(super) fn admit(
     alternative: &Alternative,
     simulation: &Value,
@@ -1200,9 +1219,9 @@ pub(super) fn admit(
     heat_request: &Value,
     coverage: bool,
     mechanical_heat: &[f64],
-) -> Result<Option<Vec<f64>>, Refusal> {
+) -> Result<Option<Admission>, Refusal> {
     let (policy, qualification) = selected_policy(heat_request, heat, simulation)?;
-    admit_mechanics(
+    let inertial_mass = admit_mechanics(
         simulation,
         motion,
         heat,
@@ -2067,7 +2086,10 @@ pub(super) fn admit(
             return Err(fail());
         }
     }
-    Ok(Some(corrections))
+    Ok(Some(Admission {
+        energy_corrections_j: corrections,
+        inertial_mass,
+    }))
 }
 
 #[cfg(test)]

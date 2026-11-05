@@ -5502,6 +5502,20 @@ finite-reservoir readings, and unavailable source/domain evidence preserves inde
 Sampled pressure does not imply continuous-time bounds, general uncertainty, humidity, ventilation,
 wet layered coverage or empirical garment qualification.
 
+### 25.184 Compare actual wet-cloth mass through coupled motion
+
+Material and design decisions can now constrain or optimize final inertial mass and the maximum
+sampled inertial mass from the existing admitted liquid-mechanics history. The same initial and
+accepted endpoint pass retains the actual modeled substrate, attached inventory and current
+liquid; no objective reruns the simulation or reconstructs mass from a guessed dry garment.
+
+Native, portable and guided browser requests share nominal-only metrics, inclusive guards and
+same-case source admission. Direct and paired qualifications retain their original bytes; an
+uncoupled water film does not acquire a mechanical-mass claim. Missing or inconsistent histories
+withhold affected readings while independent consumers retain their existing outcomes. This
+advances `ftx-ms2` using the mechanics delivered under `ftx-vc2.3`. Sampled extrema do not establish
+continuous-time limits, complete garment inventory, wearer comfort or empirical wet-garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

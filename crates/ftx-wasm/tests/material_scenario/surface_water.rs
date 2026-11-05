@@ -641,11 +641,17 @@ fn wet_instance_temperatures_conserve_and_replay_direct_and_selected_sources() {
 #[test]
 fn coupled_instance_temperatures_preserve_phase_exchange_selection_and_motion_decisions() {
     let (pattern, mut input, mut raw) = wet_instance_inputs();
+    let inertial_metrics = [
+        "textile_water_final_inertial_mass_kg",
+        "textile_water_max_sample_inertial_mass_kg",
+    ];
     input.comparison = Some(
         serde_json::from_value(json!({"basis":"nominal",
             "required_consumers":["motion","transient_surface"],"objectives":[
                 {"metric":"textile_water_evaporated_mass_kg","direction":"maximize"},
-                {"metric":"motion_max_absolute_edge_strain_pct","direction":"minimize"}]}))
+                {"metric":"motion_max_absolute_edge_strain_pct","direction":"minimize"},
+                {"metric":"textile_water_final_inertial_mass_kg","direction":"minimize"},
+                {"metric":"textile_water_max_sample_inertial_mass_kg","direction":"minimize"}]}))
         .unwrap(),
     );
     raw["motion"]["keyframes"] = json!([
@@ -686,6 +692,15 @@ fn coupled_instance_temperatures_preserve_phase_exchange_selection_and_motion_de
     let uncoupled = study(&raw, &input, &pattern);
     let baseline = &keyed(&uncoupled["simulations"], "qualified")["evaluation"]["result"];
     assert_eq!(baseline["motion"]["status"], "available", "{baseline}");
+    // Thermal-only liquid cannot provide the mass actually used by the mechanical solver.
+    let uncoupled_decision = keyed(&uncoupled["comparison"]["alternatives"], "qualified");
+    assert_eq!(uncoupled_decision["eligible"], false);
+    for metric in inertial_metrics {
+        assert!(uncoupled_decision["readings"].get(metric).is_none());
+    }
+    assert!(
+        uncoupled_decision["readings"]["motion_max_absolute_edge_strain_pct"]["value"].is_number()
+    );
     let binding = json!({"material_sha256":water["bindings"]["band"]["material_sha256"],
         "maximum_liquid_loading_kg_m2":0.2,"temperature_range_c":[-20.,80.],
         "incoming_stream_velocities_world_m_s_by_interval":[
@@ -736,6 +751,33 @@ fn coupled_instance_temperatures_preserve_phase_exchange_selection_and_motion_de
         assert_eq!(mechanics["qualification"], qualification);
         assert_eq!(heat["mechanical_coupling"], *mechanics);
         assert_eq!(mechanics["schema"], "ftx-coupled-liquid-mechanics-result/6");
+        let substrate_mass = simulation["drape"]["mass_kg"].as_f64().unwrap();
+        let initial_mass = motion["initial_sample"]["liquid_mechanics"]["total_inertial_mass_kg"]
+            .as_f64()
+            .unwrap();
+        let final_mass = mechanics["total_inertial_mass_kg"].as_f64().unwrap();
+        let peak_mass = heat["trace"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .fold(initial_mass, |peak, row| {
+                peak.max(
+                    row["mechanical_coupling"]["total_inertial_mass_kg"]
+                        .as_f64()
+                        .unwrap(),
+                )
+            });
+        assert_eq!(mechanics["substrate_and_attached_mass_kg"], substrate_mass);
+        assert!(initial_mass > substrate_mass);
+        assert!(
+            (initial_mass - substrate_mass - water["initial_liquid_kg"].as_f64().unwrap()).abs()
+                < 1e-14
+        );
+        assert!(
+            (final_mass - substrate_mass - water["remaining_liquid_kg"].as_f64().unwrap()).abs()
+                < 1e-14
+        );
+        assert!(peak_mass >= initial_mass && peak_mass >= final_mass);
         for (mechanical, thermal) in [
             ("remaining_liquid_mass_kg", "remaining_liquid_kg"),
             ("evaporated_liquid_mass_kg", "evaporated_liquid_kg"),
@@ -783,6 +825,44 @@ fn coupled_instance_temperatures_preserve_phase_exchange_selection_and_motion_de
             "{}",
             result["comparison"]
         );
+        let decision = keyed(&result["comparison"]["alternatives"], "qualified");
+        for (metric, expected) in inertial_metrics.into_iter().zip([final_mass, peak_mass]) {
+            assert_eq!(decision["readings"][metric]["value"], expected, "{metric}");
+            assert_eq!(decision["readings"][metric]["unit"], "kg");
+            assert!(decision["readings"][metric]["reported_bounds"].is_null());
+        }
+        // Reuse the complete actual producer output to test inclusive guards and violations.
+        // The callback does not solve another trajectory or fabricate a mass history.
+        for violation in 0..3 {
+            let mut policy = serde_json::to_value(input.comparison.as_ref().unwrap()).unwrap();
+            policy["constraints"] = json!([
+                {"metric":inertial_metrics[0],"minimum":final_mass,"maximum":final_mass},
+                {"metric":inertial_metrics[1],"minimum":peak_mass,"maximum":peak_mass}]);
+            if violation == 1 {
+                policy["constraints"][0]["minimum"] = json!(final_mass * 2.);
+                policy["constraints"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("maximum");
+            } else if violation == 2 {
+                policy["constraints"][1]["maximum"] = json!(peak_mass * 0.5);
+                policy["constraints"][1]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("minimum");
+            }
+            let mut guarded = input.clone();
+            guarded.comparison = Some(serde_json::from_value(policy).unwrap());
+            let guarded = serde_json::to_value(
+                guarded
+                    .evaluate_with(&pattern, &result["scenario"], |_, _| Ok(simulation.clone()))
+                    .unwrap(),
+            )
+            .unwrap();
+            let guarded = keyed(&guarded["comparison"]["alternatives"], "qualified");
+            assert_eq!(guarded["eligible"], violation == 0, "{guarded}");
+            assert_eq!(guarded["readings"], decision["readings"]);
+        }
         if let Some(direct) = &direct_motion {
             for field in [
                 "initial_sample",
@@ -816,9 +896,11 @@ fn coupled_instance_temperatures_preserve_phase_exchange_selection_and_motion_de
             keyed(&result["manufacturing"]["alternatives"], "qualified")["frozen_changes"].clone(),
         )
         .unwrap();
+        let replayed = study(&case, &replay, &pattern);
+        assert_eq!(replayed["simulations"], result["simulations"]);
         assert_eq!(
-            study(&case, &replay, &pattern)["simulations"],
-            result["simulations"]
+            replayed["comparison"]["alternatives"],
+            result["comparison"]["alternatives"]
         );
 
         // Even a motion-only decision depends on the full actual coupled initial state.
@@ -858,10 +940,11 @@ fn coupled_instance_temperatures_preserve_phase_exchange_selection_and_motion_de
             keyed(&refused["manufacturing"]["alternatives"], "qualified")["cutting"]["status"],
             "available"
         );
-        assert_eq!(
-            keyed(&refused["comparison"]["alternatives"], "qualified")["eligible"],
-            false
-        );
+        let refused = keyed(&refused["comparison"]["alternatives"], "qualified");
+        assert_eq!(refused["eligible"], false);
+        for metric in inertial_metrics {
+            assert!(refused["readings"].get(metric).is_none());
+        }
     }
 }
 

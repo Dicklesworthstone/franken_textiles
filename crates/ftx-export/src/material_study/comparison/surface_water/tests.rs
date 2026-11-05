@@ -1081,6 +1081,11 @@ fn coupled_motion_protocol_includes_thermal_and_vapor_methods_without_changing_s
 
 #[test]
 fn direct_and_paired_motion_require_complete_heat_and_liquid_receipts() {
+    let wet_mass: Policy = serde_json::from_value(json!({"basis":"nominal",
+        "objectives":[
+            {"metric":"textile_water_final_inertial_mass_kg","direction":"minimize"},
+            {"metric":"textile_water_max_sample_inertial_mass_kg","direction":"minimize"}]}))
+    .unwrap();
     let moving: Policy = serde_json::from_value(json!({"basis":"nominal",
         "objectives":[{"metric":"motion_max_absolute_edge_strain_pct","direction":"minimize"}]}))
     .unwrap();
@@ -1139,6 +1144,20 @@ fn direct_and_paired_motion_require_complete_heat_and_liquid_receipts() {
         );
         let static_before = stationary.candidate(&a, None, &d, &s);
         assert!(static_before.eligible, "{:?}", static_before.exclusions);
+        let mass = wet_mass.candidate(&a, None, &d, &s);
+        assert!(mass.eligible, "{:?}", mass.exclusions);
+        assert_eq!(
+            mass.readings[&Metric::TextileWaterFinalInertialMassKg].value,
+            m["liquid_mechanics"]["total_inertial_mass_kg"]
+                .as_f64()
+                .unwrap()
+        );
+        assert_eq!(
+            mass.readings[&Metric::TextileWaterMaxSampleInertialMassKg].value,
+            m["initial_sample"]["liquid_mechanics"]["total_inertial_mass_kg"]
+                .as_f64()
+                .unwrap()
+        );
         for fault in [
             "unavailable_heat",
             "missing_heat",
@@ -1183,6 +1202,14 @@ fn direct_and_paired_motion_require_complete_heat_and_liquid_receipts() {
                         json!(19.);
                 }
             }
+            let rejected_mass = wet_mass.candidate(&a, None, &d, &changed);
+            assert!(!rejected_mass.eligible, "paired={paired}: {fault}");
+            for metric in [
+                Metric::TextileWaterFinalInertialMassKg,
+                Metric::TextileWaterMaxSampleInertialMassKg,
+            ] {
+                assert!(!rejected_mass.readings.contains_key(&metric), "{fault}");
+            }
             let rejected = moving.candidate(&a, None, &d, &changed);
             assert!(!rejected.eligible, "paired={paired}: {fault}");
             assert!(
@@ -1211,6 +1238,14 @@ fn direct_and_paired_motion_require_complete_heat_and_liquid_receipts() {
             .remove("liquid_mechanics");
         let dry = moving.candidate(&a, None, &dry_descriptor, &s);
         assert!(dry.eligible, "{:?}", dry.exclusions);
+        let dry_mass = wet_mass.candidate(&a, None, &dry_descriptor, &s);
+        assert!(!dry_mass.eligible);
+        for metric in [
+            Metric::TextileWaterFinalInertialMassKg,
+            Metric::TextileWaterMaxSampleInertialMassKg,
+        ] {
+            assert!(!dry_mass.readings.contains_key(&metric));
+        }
     }
 }
 
@@ -1494,10 +1529,208 @@ fn coupled_mass_admission_preserves_the_independent_thermal_energy_objective() {
     let h = &m["transient_surface"]["result"];
     let correction = admit(&a, &s, &m, h, &h["request"], false, &[3., 3.])
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .energy_corrections_j;
     // Exported bulk kinetic/gravitational energy belongs to the mechanical transfer ledger.
     assert!(near(correction[0], 1e-8 * 2500000., 0.025));
     assert_eq!(correction[0], correction[1]);
+}
+
+#[test]
+fn wet_inertial_mass_metrics_keep_the_solver_inventory_and_initial_state() {
+    for (attached, paired) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (a, mut d, mut s, mut m) = coupled_case();
+        let substrate = if attached { 0.0006 } else { 0.0004 };
+        if attached {
+            s["drape"]["attached_mass"] = json!({"total_inertial_mass_kg":substrate});
+            for (path, field) in [
+                (
+                    "/initial_sample/liquid_mechanics",
+                    "remaining_liquid_mass_kg",
+                ),
+                ("/liquid_mechanics", "remaining_liquid_mass_kg"),
+                (
+                    "/transient_surface/result/mechanical_coupling",
+                    "remaining_liquid_mass_kg",
+                ),
+                (
+                    "/transient_surface/result/trace/0/mechanical_coupling",
+                    "remaining_liquid_kg",
+                ),
+            ] {
+                let report = m.pointer_mut(path).unwrap();
+                let remaining = report[field].as_f64().unwrap();
+                report["substrate_and_attached_mass_kg"] = json!(substrate);
+                report["total_inertial_mass_kg"] = json!(substrate + remaining);
+            }
+        }
+        if paired {
+            with_paired_qualifications(&mut d, &mut m);
+        }
+        let initial_liquid = m["initial_sample"]["liquid_mechanics"]["initial_liquid_mass_kg"]
+            .as_f64()
+            .unwrap();
+        let heat = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+        let admitted = numerical_heat(&s, &m, heat);
+        for (metric, expected) in [
+            (Metric::TextileWaterFinalInertialMassKg, substrate),
+            (
+                Metric::TextileWaterMaxSampleInertialMassKg,
+                substrate + initial_liquid,
+            ),
+        ] {
+            assert_eq!(metric.consumer(), Consumer::TransientSurface);
+            assert_eq!(metric.unit(None), "kg");
+            assert!(!metric.signed());
+            assert!(!metric.supports_bounds());
+            assert_eq!(metric.value(&a, &admitted), Some(expected));
+            assert_eq!(
+                serde_json::from_value::<Metric>(serde_json::to_value(metric).unwrap()).unwrap(),
+                metric
+            );
+        }
+        // Complete evaporation does not erase the substrate or independently attached inventory.
+        assert_eq!(
+            Metric::TextileWaterRemainingMassKg.value(&a, &admitted),
+            Some(0.)
+        );
+        assert_eq!(
+            Metric::SimulatedClothMassKg.value(&a, &admitted),
+            Some(0.0004)
+        );
+    }
+}
+
+#[test]
+fn wet_inertial_mass_peak_retains_an_interior_supply_sample_before_evaporation() {
+    let (a, d, s, mut m) = exchanging_case(false);
+    let initial = m["initial_sample"]["liquid_mechanics"]["initial_liquid_mass_kg"]
+        .as_f64()
+        .unwrap();
+    let supplied = 0.75
+        * m["transient_surface"]["result"]["surface_water"]["supplied_liquid_kg"]
+            .as_f64()
+            .unwrap();
+    let remaining = initial + supplied;
+    let mut sample = m["samples"][0].clone();
+    sample["time_s"] = json!(0.75);
+    sample["membrane_relaxation_dissipation_j"] =
+        m["initial_sample"]["membrane_relaxation_dissipation_j"].clone();
+    m["samples"].as_array_mut().unwrap().insert(0, sample);
+    m["keyframes"][0]["sample_index"] = json!(1);
+    let h = &mut m["transient_surface"]["result"];
+    let mut middle = h["trace"][0].clone();
+    middle["time_s"] = json!(0.75);
+    middle["thermal_substeps"] = json!(1);
+    middle["temperature_range_c"] = json!([20., 20.]);
+    for field in [
+        "viscous_dissipation_j",
+        "supplied_heat_j",
+        "unconverted_dissipation_j",
+    ] {
+        middle["relaxation_dissipation_heat"][field] = json!(0.);
+    }
+    let liquid_storage = 4200. * (remaining * 20. - initial * 20.);
+    let incoming_heat = supplied * 4200. * 30.;
+    let net = liquid_storage - incoming_heat;
+    for (field, value) in [
+        ("remaining_liquid_kg", remaining),
+        ("evaporated_liquid_kg", 0.),
+        ("latent_energy_j", 0.),
+        ("exported_vapor_sensible_energy_j", 0.),
+        ("supplied_liquid_kg", supplied),
+        ("supplied_liquid_sensible_energy_j", incoming_heat),
+        ("liquid_stored_change_j", liquid_storage),
+    ] {
+        middle["surface_water"][field] = json!(value);
+    }
+    middle["stored_change_j"] = json!(0.);
+    middle["inside_energy_j"] = json!(0.);
+    middle["outside_energy_j"] = json!(-net);
+    middle["net_boundary_energy_j"] = json!(net);
+    let mechanical = &mut middle["mechanical_coupling"];
+    mechanical["remaining_liquid_kg"] = json!(remaining);
+    mechanical["evaporated_liquid_kg"] = json!(0.);
+    mechanical["total_inertial_mass_kg"] = json!(0.0004 + remaining);
+    mechanical["exported_momentum_kg_m_s"] = json!([0., 0., 0.]);
+    mechanical["exported_kinetic_energy_j"] = json!(0.);
+    mechanical["exported_gravitational_energy_j"] = json!(0.);
+    mechanical["exchange"]["incoming_mass_kg"] = json!(supplied);
+    mechanical["exchange"]["outgoing_mass_kg"] = json!(0.);
+    mechanical["exchange"]["incoming_momentum_kg_m_s"] = json!([supplied, 0., 0.]);
+    mechanical["exchange"]["incoming_kinetic_energy_j"] = json!(0.5 * supplied);
+    mechanical["exchange"]["incoming_gravitational_energy_j"] = json!(3. * supplied);
+    h["trace"][0]["sample_index"] = json!(1);
+    h["trace"][0]["thermal_substeps"] = json!(1);
+    h["trace"].as_array_mut().unwrap().insert(0, middle);
+    let heat = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+    let admitted = numerical_heat(&s, &m, heat);
+    let final_mass = Metric::TextileWaterFinalInertialMassKg
+        .value(&a, &admitted)
+        .unwrap();
+    let peak = Metric::TextileWaterMaxSampleInertialMassKg
+        .value(&a, &admitted)
+        .unwrap();
+    assert_eq!(
+        final_mass,
+        m["liquid_mechanics"]["total_inertial_mass_kg"]
+            .as_f64()
+            .unwrap()
+    );
+    assert_eq!(peak, 0.0004 + remaining);
+    assert!(peak > final_mass);
+    assert!(peak > 0.0004 + initial);
+}
+
+#[test]
+fn uncoupled_water_does_not_supply_a_wet_inertial_mass_reading() {
+    for (a, d, s, m) in [
+        case(),
+        supplied_case(),
+        condensing_case(),
+        finite_reservoir_case(false, false),
+    ] {
+        let heat = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+        let admitted = numerical_heat(&s, &m, heat);
+        for metric in [
+            Metric::TextileWaterFinalInertialMassKg,
+            Metric::TextileWaterMaxSampleInertialMassKg,
+        ] {
+            assert_eq!(metric.value(&a, &admitted), None);
+        }
+        for metric in [
+            Metric::TextileWaterRemainingMassKg,
+            Metric::TextileWaterEvaporatedMassKg,
+            Metric::TransientSurfaceInsideEnergyJ,
+        ] {
+            assert!(metric.value(&a, &admitted).is_some());
+        }
+    }
+}
+
+#[test]
+fn wet_inertial_mass_objectives_and_guards_are_nominal_only() {
+    let request: Request =
+        serde_json::from_value(json!({"schema":"ftx-material-study/1"})).unwrap();
+    for metric in [
+        Metric::TextileWaterFinalInertialMassKg,
+        Metric::TextileWaterMaxSampleInertialMassKg,
+    ] {
+        let mut policy: Policy = serde_json::from_value(json!({"basis":"nominal",
+            "objectives":[{"metric":metric,"direction":"minimize"}]}))
+        .unwrap();
+        policy.validate(&request, true).unwrap();
+        policy.basis = Basis::ReportedBounds;
+        assert!(policy.validate(&request, true).is_err());
+        policy.basis = Basis::Nominal;
+        policy.constraints.push(Constraint {
+            metric,
+            basis: Some(Basis::ReportedBounds),
+            minimum: None,
+            maximum: Some(1.),
+        });
+        assert!(policy.validate(&request, true).is_err());
+    }
 }
 
 #[test]
@@ -3209,7 +3442,10 @@ fn supplied_and_condensed_mechanical_mass_admit_the_same_independent_thermal_obj
         };
         let h = &m["transient_surface"]["result"];
         let expected = admit(&a, &s, &m, h, &h["request"], false, &[3., 3.]).unwrap();
-        assert_eq!(actual, expected);
+        assert_eq!(
+            actual.map(|water| water.energy_corrections_j),
+            expected.map(|water| water.energy_corrections_j)
+        );
     }
 }
 

@@ -9,6 +9,15 @@ export function hasTextileWaterPolicy(surface) {
     surface?.coupled_water_alternatives != null;
 }
 
+// Mechanical mass requires the source-qualified coupling, not just a thermal water film.
+export function hasTextileWaterMechanicsPolicy(surface) {
+  return (surface?.surface_water != null && surface?.mechanical_coupling != null) ||
+    surface?.coupled_water_alternatives != null;
+}
+const TEXTILE_INERTIAL_MASS_METRICS = new Set([
+  "textile_water_final_inertial_mass_kg", "textile_water_max_sample_inertial_mass_kg",
+]);
+
 const METRIC_CONSUMERS = {
   stock_area_m2: "cutting", stock_mass_kg: "cutting", assembly_mass_kg: "assembly_mass",
   cutting_modeled_path_seconds: "cutting_program",
@@ -44,6 +53,7 @@ const METRIC_CONSUMERS = {
   textile_water_final_vapor_pressure_pa: "transient_surface", textile_water_min_sample_vapor_pressure_pa: "transient_surface",
   textile_water_max_sample_vapor_pressure_pa: "transient_surface", textile_water_remaining_vapor_mass_kg: "transient_surface",
   textile_water_isothermal_heat_removed_j: "transient_surface",
+  textile_water_final_inertial_mass_kg: "transient_surface", textile_water_max_sample_inertial_mass_kg: "transient_surface",
   transient_surface_inside_energy_j: "transient_surface", transient_surface_net_boundary_energy_j: "transient_surface",
   transient_surface_min_sample_temperature_c: "transient_surface", transient_surface_max_sample_temperature_c: "transient_surface",
   transient_surface_final_min_temperature_c: "transient_surface", transient_surface_final_max_temperature_c: "transient_surface",
@@ -750,6 +760,7 @@ export function buildMaterialScenarioMatrixRequest(state) {
       motionWetFilm: scenario.motion?.vapor_coverage_history?.wet_film != null,
       transientSurface: scenario.motion?.transient_surface != null, transientCoverage: scenario.motion?.transient_coverage != null,
       textileWater: hasTextileWaterPolicy(scenario.motion?.transient_surface),
+      textileWaterMechanics: hasTextileWaterMechanicsPolicy(scenario.motion?.transient_surface),
       ...(own(item, "comparison") ? { comparison: parse(item.comparison, "Original case comparison") } : {}) });
     append(`${index ? "," : ""}{"key":${JSON.stringify(item.key)},"scenario":`); append(item.scenario);
     if (own(item, "comparison")) { append(',"comparison":'); append(item.comparison); }
@@ -1024,6 +1035,10 @@ function hasTextileWater(value) {
   return value != null && own(value, "textileWater") && value.textileWater === true && scenarioConsumers(value).transient_surface;
 }
 
+function hasTextileWaterMechanics(value) {
+  return hasTextileWater(value) && own(value, "textileWaterMechanics") && value.textileWaterMechanics === true;
+}
+
 function matrixContext(value) {
   const matrix = object(value, ["maxEvaluations", "cases"], ["maxEvaluations", "cases"], "Named scenario context");
   if (!Array.isArray(matrix.cases) || !matrix.cases.length || matrix.cases.length > 8 ||
@@ -1033,14 +1048,14 @@ function matrixContext(value) {
   const keys = new Set();
   for (const item of matrix.cases) {
     object(item, ["key", "surface", "motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage",
-      "motionVaporHistory", "motionWetFilm", "transientSurface", "transientCoverage", "textileWater", "comparison"], ["key", "surface"], "Named scenario case");
+      "motionVaporHistory", "motionWetFilm", "transientSurface", "transientCoverage", "textileWater", "textileWaterMechanics", "comparison"], ["key", "surface"], "Named scenario case");
     name(item.key, "Scenario case key");
     bytes(item.key, 128, "Scenario case keys must not exceed 128 UTF-8 bytes.");
     if (keys.has(item.key)) throw Error("Scenario case keys must be unique.");
     keys.add(item.key);
     if (typeof item.surface !== "boolean") throw Error("Each named case needs an explicit surface-request boolean.");
     for (const key of ["motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory", "motionWetFilm",
-      "transientSurface", "transientCoverage", "textileWater"]) {
+      "transientSurface", "transientCoverage", "textileWater", "textileWaterMechanics"]) {
       if (own(item, key) && typeof item[key] !== "boolean") throw Error(`Named case ${key} availability must be a boolean when supplied.`);
     }
     if (item.comparison != null) {
@@ -1075,6 +1090,7 @@ function matrixContext(value) {
  * Optional consumer flags default to false; motionVaporHistory, motionWetFilm, transientSurface and transientCoverage
  * describe actual requested motion subpolicies, independently of the steady surface/coverage consumers.
  * textileWater describes the actual nested surface-water policy; its metrics share the transient_surface consumer.
+ * textileWaterMechanics additionally describes direct or paired mechanical qualification for wet mass criteria.
  * Its optional matrix retains ordered case
  * keys, consumer availability, original parsed comparison
  * policies and the callback allowance. Only guidance selection and capacity are read here; the
@@ -1089,18 +1105,18 @@ export function buildMaterialStudyRequest(state, scenario) {
   let matrix;
   if (scenario !== undefined) {
     object(scenario, ["drape", "surface", "motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage",
-      "motionVaporHistory", "motionWetFilm", "transientSurface", "transientCoverage", "textileWater", "matrix"], ["drape", "surface"], "Scenario comparison context");
+      "motionVaporHistory", "motionWetFilm", "transientSurface", "transientCoverage", "textileWater", "textileWaterMechanics", "matrix"], ["drape", "surface"], "Scenario comparison context");
     if (scenario.drape !== true || typeof scenario.surface !== "boolean") {
       throw Error("Scenario comparison needs explicit drape: true and a boolean surface request.");
     }
     for (const key of ["motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory", "motionWetFilm",
-      "transientSurface", "transientCoverage", "textileWater"]) {
+      "transientSurface", "transientCoverage", "textileWater", "textileWaterMechanics"]) {
       if (own(scenario, key) && typeof scenario[key] !== "boolean") throw Error(`Scenario ${key} availability must be a boolean when supplied.`);
     }
     if (own(scenario, "matrix")) {
       matrix = matrixContext(scenario.matrix);
       for (const key of ["surface", "motion", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage", "motionVaporHistory", "motionWetFilm",
-        "transientSurface", "transientCoverage", "textileWater"]) {
+        "transientSurface", "transientCoverage", "textileWater", "textileWaterMechanics"]) {
         if ((own(scenario, key) && scenario[key] === true) !== matrix.cases.some(item => own(item, key) && item[key] === true)) {
           throw Error(`Named scenario ${key} availability must describe its actual cases.`);
         }
@@ -1218,11 +1234,15 @@ export function buildMaterialStudyRequest(state, scenario) {
     if (!consumers[consumer]) throw Error(`Comparison requires requested ${consumer} inputs.`);
   };
   const textileWater = matrix ? matrix.cases.some(hasTextileWater) : hasTextileWater(scenario);
+  const textileWaterMechanics = matrix ? matrix.cases.some(hasTextileWaterMechanics) : hasTextileWaterMechanics(scenario);
   const metric = (key, basis) => {
     if (typeof key !== "string" || !own(METRIC_CONSUMERS, key)) throw Error(`Unsupported guided comparison metric: ${key}.`);
     requireConsumer(METRIC_CONSUMERS[key]);
     if (key.startsWith("textile_water_") && !textileWater) {
       throw Error("Textile-water criteria require motion and an original transient-surface water policy in the same case.");
+    }
+    if (TEXTILE_INERTIAL_MASS_METRICS.has(key) && !textileWaterMechanics) {
+      throw Error("Wet inertial-mass criteria require motion, textile water and its direct or paired mechanical coupling in the same case.");
     }
     if (key === "assembly_mass_kg" && !mass.inventory_complete) {
       throw Error("Assembly-mass comparison requires an explicit complete inventory declaration.");
@@ -1268,12 +1288,16 @@ export function buildMaterialStudyRequest(state, scenario) {
   if (matrix) {
     const needed = new Set([...required, ...[...state.objectives, ...constraints].map(item => METRIC_CONSUMERS[item.metric])]);
     const needsTextileWater = [...state.objectives, ...constraints].some(item => item.metric.startsWith("textile_water_"));
+    const needsTextileWaterMechanics = [...state.objectives, ...constraints].some(item => TEXTILE_INERTIAL_MASS_METRICS.has(item.metric));
     for (const item of matrix.cases) {
       if (item.comparison != null) continue;
       const missing = Object.entries(scenarioConsumers(item)).find(([consumer, available]) => needed.has(consumer) && !available);
       if (missing) throw Error(`Named case ${item.key} inherits a comparison requiring ${missing[0]} inputs it does not request.`);
       if (needsTextileWater && !hasTextileWater(item)) {
         throw Error(`Named case ${item.key} inherits a comparison requiring textile-water inputs it does not request.`);
+      }
+      if (needsTextileWaterMechanics && !hasTextileWaterMechanics(item)) {
+        throw Error(`Named case ${item.key} inherits a comparison requiring textile-water mechanical coupling it does not request.`);
       }
     }
   }
