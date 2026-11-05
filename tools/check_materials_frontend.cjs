@@ -16172,6 +16172,194 @@ function removeGuidedDryHeatInstance(p,instance) {
   assert.ok(button,instance);assert.equal(button.disabled,false);button.onclick();
 }
 
+function guidedCoverageHeatControls(p) {
+  for(const [id,value] of Object.entries({guidedMotionCoverageInitial:15,guidedMotionCoverageStep:0.0005,
+    guidedMotionCoverageBudget:100000,guidedMotionCoverageGeometryBudget:2000000}))p.e[id].value=String(value);
+  p.e.guidedMotionCoverage.checked=true;p.e.guidedMotionCoverage.handlers.change();
+}
+function guidedMovingTopology(p) {
+  for(const [id,value] of Object.entries({guidedCoverageTriangles:'4-5, 8',guidedCoverageDistance:0.2,guidedCoverageCosine:0.1,
+    guidedCoverageSeparation:0.00001,guidedCoverageCells:2}))p.e[id].value=String(value);
+  saveCoverageLayer(p,'front.R','shell');saveCoverageLayer(p,'lining.R','lining');
+  saveCoverageInterface(p,'lining','shell',0,'Explicit synthetic interface');
+  return {body_triangle_ids:[4,5,8],instance_layers:{'front.R':'shell','lining.R':'lining'},settings:{max_distance_m:0.2,
+    min_normal_cosine:0.1,separation_tolerance_m:0.00001,cells_per_layer:2,
+    interfaces:[{inner:'lining',outer:'shell',resistance_m2_k_w:0,basis:'Explicit synthetic interface'}]}};
+}
+function guidedCoverageHeatFilm(p,domain='Coverage',inside=35,outside=5,insideFilm=0.1,outsideFilm=0.2) {
+  for(const [suffix,value] of [['Inside',inside],['Outside',outside],['InsideFilm',insideFilm],['OutsideFilm',outsideFilm]])
+    p.e['guidedMotion'+domain+suffix].value=String(value);
+  return {inside_c:inside,outside_c:outside,inside_resistance_m2_k_w:insideFilm,outside_resistance_m2_k_w:outsideFilm};
+}
+function guidedCoverageHeatInstance(p,instance,temperature) {
+  p.e.guidedMotionCoverageInstance.value=instance;p.e.guidedMotionCoverageInstanceInitial.value=String(temperature);
+  p.e.addMotionCoverageInstance.onclick();
+}
+
+test('guided moving coverage authors independent covered and exposed schedules without a steady coverage or sheet policy',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);
+  for(const id of ['guidedMotionCoverageInitial','guidedMotionCoverageInside','guidedMotionCoverageOutside','guidedMotionExposedMode',
+    'guidedMotionExposedInside','guidedMotionExposedOutside','guidedMotionCoverageInstance','guidedMotionCoverageInstanceInitial'])assert.equal(p.e[id].value,'',id);
+  guidedCoverageHeatControls(p);const topology=guidedMovingTopology(p),first=guidedCoverageHeatFilm(p);
+  assert.equal(p.e.guidedCoverage.checked,false);assert.equal(p.e.guidedCoverageSource.value,'file');
+  assert.equal(p.e.guidedCoverageForm.hidden,false);assert.equal(p.e.guidedCoverageSteadyConditions.hidden,true);
+  assert.equal(p.e.guidedCoverageMotionUse.hidden,false);assert.equal(p.e.guidedCoverageInside.disabled,true);
+  p.e.guidedMotionExposedMode.value='adiabatic';p.e.guidedMotionExposedMode.handlers.change();await addGuidedMotion(p,0.002,35);
+  const second=guidedCoverageHeatFilm(p,'Coverage',5,40,0,0.2),exposed=guidedCoverageHeatFilm(p,'Exposed',10,20,0.3,0.4);
+  p.e.guidedMotionExposedMode.value='films';p.e.guidedMotionExposedMode.handlers.change();await addGuidedMotion(p,0.004,35.2);
+  p.e.guidedMotionCoverageInitial.value='999';guidedCoverageHeatInstance(p,'front.R',5);guidedCoverageHeatInstance(p,'lining.R',35);
+  p.e.guidedTransientCoverageNetEnergyGoal.checked=true;p.e.guidedTransientCoverageNetEnergyDirection.value='maximize';
+  p.e.guidedRequireTransientCoverage.checked=true;await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);const request=JSON.parse(sent.scenarioRequest),heat=request.motion.transient_coverage;
+  assert.deepEqual(heat,{schema:'ftx-motion-coverage-heat/1',...topology,initial_temperature_c:999,
+    initial_instance_temperatures_c:{'front.R':5,'lining.R':35},boundaries:[first,second],exposed_boundaries:[null,exposed],
+    max_step_s:0.0005,max_cell_steps:100000,max_geometry_operations:2000000});
+  assert.equal(Object.hasOwn(request,'coverage'),false);assert.equal(Object.hasOwn(request,'surface'),false);
+  assert.equal(Object.hasOwn(request.motion,'transient_surface'),false);
+  assert.deepEqual(request.motion.keyframes,[{time_s:0.002,arm_abduction_deg:35},{time_s:0.004,arm_abduction_deg:35.2}]);
+  assert.ok(JSON.parse(sent.studyRequest).comparison.required_consumers.includes('transient_coverage'));
+  assert.match(visibleText(p.e.guidedMotionKeyframes),/Exposed cloth: adiabatic/);assert.match(visibleText(p.e.guidedMotionKeyframes),/inside 10 °C/);
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const link=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(link.href).text(),sent.scenarioRequest);
+  // A simultaneous original steady policy keeps its own complete source and never overrides moving topology.
+  p.select('guidedCoverageFile',guidedTransportOriginal.coverage);p.e.guidedCoverage.checked=true;p.e.guidedCoverage.handlers.change();
+  await p.e.scenario.onclick();const withSteady=p.current().messages.at(-1);
+  assert.ok(withSteady.scenarioRequest.includes(guidedTransportOriginal.coverage));
+  assert.deepEqual(JSON.parse(withSteady.scenarioRequest).motion.transient_coverage,heat);
+  assert.equal(p.e.guidedCoverageSource.value,'file');assert.equal(p.e.guidedCoverageSteadyConditions.hidden,true);
+});
+
+test('guided moving coverage retains separate sheet temperatures and fills missing intervals through explicit endpoint replacement',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);await addGuidedMotion(p,0.002,35);await addGuidedMotion(p,0.004,35.2);
+  guidedCoverageHeatControls(p);guidedMovingTopology(p);const first=guidedCoverageHeatFilm(p);
+  guidedDryHeatControls(p);guidedDryHeatFilm(p,30,0,0.2,0.4);guidedDryHeatInstance(p,'front.R',-10);
+  guidedCoverageHeatInstance(p,'front.R',25);p.e.guidedMotionCoverageInitial.value='12';
+  await p.e.scenario.onclick();assert.match(p.e.error.textContent,/Keyframe 1.*no saved heat/);
+  guidedMotionDraft(p,0.002,35);await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  assert.match(p.e.error.textContent,/Choose adiabatic/);assert.equal(p.e.guidedMotionKeyframes.children.length,2);
+  p.e.guidedMotionExposedMode.value='adiabatic';p.e.guidedMotionExposedMode.handlers.change();
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  await p.e.scenario.onclick();assert.match(p.e.error.textContent,/Keyframe 2.*no saved heat/);
+  const second=guidedCoverageHeatFilm(p,'Coverage',5,40),exposed=guidedCoverageHeatFilm(p,'Exposed',20,0);
+  p.e.guidedMotionExposedMode.value='films';guidedMotionDraft(p,0.004,35.2);guidedDryHeatFilm(p,0,30,0.4,0.2);
+  await guidedMotionAction(p,'Replace keyframe 2 from current controls');await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);const motion=JSON.parse(sent.scenarioRequest).motion;
+  assert.deepEqual(motion.transient_coverage.boundaries,[first,second]);assert.deepEqual(motion.transient_coverage.exposed_boundaries,[null,exposed]);
+  assert.equal(motion.transient_coverage.initial_temperature_c,12);assert.deepEqual(motion.transient_coverage.initial_instance_temperatures_c,{'front.R':25});
+  assert.equal(motion.transient_surface.initial_temperature_c,18);assert.deepEqual(motion.transient_surface.initial_instance_temperatures_c,{'front.R':-10});
+  assert.notDeepEqual(motion.transient_surface.boundaries,motion.transient_coverage.boundaries);p.emit(scenarioReport());
+  await guidedMotionAction(p,'Remove keyframe 1');p.e.guidedMotionCoverage.checked=false;p.e.guidedMotionCoverage.handlers.change();
+  guidedMotionDraft(p,0.003,36);await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  p.e.guidedMotionCoverage.checked=true;p.e.guidedMotionCoverage.handlers.change();await p.e.scenario.onclick();
+  const retained=JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.transient_coverage;
+  assert.deepEqual(retained.boundaries,[second]);assert.deepEqual(retained.exposed_boundaries,[exposed]);
+  assert.deepEqual(retained.initial_instance_temperatures_c,{'front.R':25});p.emit(scenarioReport());
+  p.e.clearMotionCoverageInstances.onclick();await p.e.scenario.onclick();const cleared=JSON.parse(p.current().messages.at(-1).scenarioRequest).motion;
+  assert.equal(Object.hasOwn(cleared.transient_coverage,'initial_instance_temperatures_c'),false);
+  assert.deepEqual(cleared.transient_surface.initial_instance_temperatures_c,{'front.R':-10});
+});
+
+test('guided moving coverage freezes topology schedules and initial maps in named cases and rejects borrowed readiness',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionSourceControls(p);guidedCoverageHeatControls(p);
+  guidedMovingTopology(p);guidedCoverageHeatFilm(p);p.e.guidedMotionExposedMode.value='adiabatic';
+  guidedCoverageHeatInstance(p,'front.R',5);await addGuidedMotion(p,0.002,35);await saveGuidedCase(p,'cold');
+  const stale=descendants(p.e.guidedMotionCoverageInstances).find(node=>node.tag==='button');
+  guidedCoverageHeatInstance(p,'front.R',35);stale.onclick();assert.equal(p.e.guidedMotionCoverageInstances.children.length,1);
+  p.e.guidedCoverageTriangles.value='9';p.e.guidedCoverageTriangles.handlers.input();guidedCoverageHeatFilm(p,'Coverage',5,40);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');await saveGuidedCase(p,'warm');
+  p.e.guidedRequireTransientCoverage.checked=true;await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases.map(item=>item.scenario.motion.transient_coverage.body_triangle_ids),[[4,5,8],[9]]);
+  assert.deepEqual(cases.map(item=>item.scenario.motion.transient_coverage.initial_instance_temperatures_c),[{'front.R':5},{'front.R':35}]);
+  assert.deepEqual(cases.map(item=>item.scenario.motion.transient_coverage.boundaries[0].inside_c),[35,5]);p.emit(scenarioReport());
+  p.e.clearCoverageTopology.onclick();p.e.clearMotionCoverageInstances.onclick();p.e.guidedMotionCoverageInitial.value='bad';
+  p.e.guidedMotionCoverageInitial.handlers.input();assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false);
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);p.emit(scenarioReport());
+  p.e.guidedMotionCoverage.checked=false;p.e.guidedMotionCoverage.handlers.change();await saveGuidedCase(p,'unheated');
+  const before=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/unheated|transient_coverage/);
+  await p.load();assert.equal(p.e.guidedMotionCoverage.checked,false);assert.equal(p.e.guidedMotionExposedMode.value,'');
+  assert.equal(p.e.guidedMotionCoverageInitial.value,'');assert.equal(p.e.guidedMotionCoverageInstances.children.length,0);
+  guidedMotionSourceControls(p);guidedCoverageHeatControls(p);guidedCoverageHeatInstance(p,'front.R',10);stale.onclick();
+  assert.equal(p.e.guidedMotionCoverageInstances.children.length,1,'An old pattern row cannot remove its replacement');
+});
+
+test('guided moving coverage cancels consumed topology initial-state budget and endpoint edits during reads and dispatch',async()=>{
+  for(const saving of [false,true])for(const change of ['topology','initial','budget','endpoint']) {
+    const {p,sources}=await guidedScenarioSetup();if(saving)guidedNamedCases(p);
+    guidedMotionSourceControls(p);guidedCoverageHeatControls(p);guidedMovingTopology(p);guidedCoverageHeatFilm(p);
+    p.e.guidedMotionExposedMode.value='adiabatic';guidedCoverageHeatInstance(p,'front.R',5);await addGuidedMotion(p,0.002,35);
+    const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),before=old.messages.length,running=saving?saveGuidedCase(p,'obsolete'):p.e.scenario.onclick();
+    if(change==='topology'){p.e.guidedCoverageTriangles.value='9';p.e.guidedCoverageTriangles.handlers.input();}
+    else if(change==='initial')guidedCoverageHeatInstance(p,'front.R',10);
+    else if(change==='budget'){p.e.guidedMotionCoverageGeometryBudget.value='1000';p.e.guidedMotionCoverageGeometryBudget.handlers.input();}
+    else {guidedCoverageHeatFilm(p,'Coverage',5,40);await guidedMotionAction(p,'Replace keyframe 1 from current controls');}
+    assert.equal(old.dead,true,`${saving}/${change}`);p.ready();delay.resolve(sources.fit);await running;
+    assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+    if(saving)assert.equal(p.e.guidedScenarioCases.children.length,0);
+  }
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedCoverageHeatControls(p);guidedMovingTopology(p);
+  guidedCoverageHeatFilm(p);p.e.guidedMotionExposedMode.value='adiabatic';await addGuidedMotion(p,0.002,35);await p.e.scenario.onclick();
+  const old=p.current(),sent=old.messages.at(-1);p.e.clearCoverageTopology.onclick();assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete-coverage.json',text:'{}'}]});
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);assert.equal(p.live.size,0);
+});
+
+test('guided moving coverage snapshots inputs while unsaved exposed films inactive steady choices and original-source drafts stay independent',async()=>{
+  const {p,sources}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedCoverageHeatControls(p);
+  const topology=guidedMovingTopology(p),film=guidedCoverageHeatFilm(p);p.e.guidedMotionExposedMode.value='adiabatic';await addGuidedMotion(p,0.002,35);
+  p.e.guidedRequireTransientCoverage.checked=true;
+  const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const old=p.current(),running=p.e.scenario.onclick();
+  p.e.guidedMotionCoverageInitial.value='99';p.e.guidedCoverageTriangles.value='9'; // No events: the in-flight snapshot already owns its inputs.
+  for(const id of ['guidedMotionCoverageInside','guidedMotionExposedOutside','guidedMotionCoverageInstanceInitial']) {
+    p.e[id].value='invalid';p.e[id].handlers.input();assert.equal(old.dead,false,id+' is an unsaved draft');
+  }
+  p.e.guidedMotionExposedMode.value='';p.e.guidedMotionExposedMode.handlers.change();
+  p.e.guidedCoverageInside.value='invalid';p.e.guidedCoverageInside.handlers.input();p.e.guidedCoverageFile.handlers.change();
+  p.e.guidedCoverageSource.value='form';p.e.guidedCoverageSource.handlers.change();
+  p.e.guidedMotionHeatInitial.value='invalid';p.e.guidedMotionHeatInitial.handlers.input();assert.equal(old.dead,false);
+  delay.resolve(sources.fit);await running;const sent=old.messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const heat=JSON.parse(sent.scenarioRequest).motion.transient_coverage;
+  assert.equal(heat.initial_temperature_c,15);assert.deepEqual(heat.body_triangle_ids,topology.body_triangle_ids);
+  assert.deepEqual(heat.boundaries,[film]);assert.deepEqual(heat.exposed_boundaries,[null]);p.emit(scenarioReport());
+  guidedTransientSource(p);await p.e.scenario.onclick();const fileWorker=p.current(),original=fileWorker.messages.at(-1);
+  assert.equal(original.type,'scenario',p.e.error.textContent);assert.ok(original.scenarioRequest.includes(guidedTransientOriginal));
+  assert.equal(p.e.guidedCoverageForm.hidden,true);
+  for(const id of ['guidedMotionCoverageInitial','guidedMotionCoverageGeometryBudget','guidedCoverageTriangles']) {
+    p.e[id].value='invalid';p.e[id].handlers.input();assert.equal(fileWorker.dead,false,id+' is inactive in original-motion mode');
+  }
+  p.e.addMotionCoverageInstance.onclick();p.e.clearMotionCoverageInstances.onclick();p.e.clearCoverageTopology.onclick();
+  assert.equal(fileWorker.dead,false);assert.ok(original.scenarioRequest.includes('18446744073709551615'));
+});
+
+test('guided moving coverage requires explicit exposed choices physical initial states and bounded independent work',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedCoverageHeatControls(p);guidedMovingTopology(p);guidedCoverageHeatFilm(p);
+  for(const mode of ['', 'unknown', 'films']) {
+    p.e.guidedMotionExposedMode.value=mode;await addGuidedMotion(p,0.002,35);
+    assert.equal(p.e.guidedMotionKeyframes.children.length,0,mode);assert.equal(p.e.error.hidden,false);
+  }
+  guidedCoverageHeatFilm(p,'Exposed',10,20,0.1,-1);await addGuidedMotion(p,0.002,35);
+  assert.equal(p.e.guidedMotionKeyframes.children.length,0);assert.match(p.e.error.textContent,/nonnegative|resistance/);
+  p.e.guidedMotionExposedMode.value='adiabatic';await addGuidedMotion(p,0.002,35);
+  assert.equal(p.e.guidedMotionKeyframes.children.length,1,'Explicit adiabatic choice ignores inactive unsaved exposed films');
+  for(const [instance,temperature] of [['',20],['front.R',''],['front.R',-274]]) {
+    guidedCoverageHeatInstance(p,instance,temperature);assert.equal(p.e.guidedMotionCoverageInstances.children.length,0);
+  }
+  for(const [id,value] of [['guidedMotionCoverageInitial',''],['guidedMotionCoverageInitial','-274'],['guidedMotionCoverageStep','0'],
+    ['guidedMotionCoverageBudget','10000001'],['guidedMotionCoverageGeometryBudget','20000001'],['guidedCoverageTriangles','0-4096']]) {
+    const previous=p.e[id].value;p.e[id].value=value;p.e[id].handlers.input();const before=p.current().messages.length;
+    await p.e.scenario.onclick();assert.equal(p.current().messages.length,before,id);assert.equal(p.e.error.hidden,false,id);p.e[id].value=previous;
+  }
+  p.e.guidedMotionCoverageBudget.value='1';p.e.guidedMotionCoverageGeometryBudget.value='1';await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.equal(JSON.parse(sent.scenarioRequest).motion.transient_coverage.max_cell_steps,1);
+  assert.equal(JSON.parse(sent.scenarioRequest).motion.transient_coverage.max_geometry_operations,1,
+    'Native optional-consumer admission owns exhaustion; the page does not invent a global heat preflight');
+});
+
 test('original moving coverage preserves instance temperature sources and renders only retained coverage owners',async()=>{
   const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p,'file');
   const heat={schema:'ftx-motion-coverage-heat/1',initial_temperature_c:999,
@@ -17050,7 +17238,7 @@ test('compiled WASM guided transient heat criteria retain complete native histor
         assert.equal(result.files.find(file=>file.name===name).text,raw,label+' preserves '+name);
       }
       if(label==='authored-dry')assert.equal(Object.hasOwn(JSON.parse(sent.scenarioRequest),'surface'),false);
-      if(['complete','instance-initial-conditions','authored-dry','authored-coverage','absent-coverage-instance'].includes(label)) {
+      if(['complete','instance-initial-conditions','authored-dry','authored-moving-coverage','authored-coverage','absent-coverage-instance'].includes(label)) {
         const previous=globalThis.ftxProgress,model=new ftx.WebBody(modelBytes);globalThis.ftxProgress=()=>{};
         try{assert.deepEqual(result.result,JSON.parse(ftx.material_scenario_study(model,pattern,sent.studyRequest,sent.scenarioRequest,body)));}
         finally{model.free();if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;}
@@ -17185,6 +17373,55 @@ test('compiled WASM guided transient heat criteria retain complete native histor
     const coverageState={bodyTriangleIds:'4-4',instanceLayers:[{instance:'band',layer:'shell'}],
       settings:original.transient_coverage.settings,boundary:films[0]};
     const coverageRaw=builder.namespace.buildMaterialCoverageRequest(coverageState),coveragePolicy=JSON.parse(coverageRaw);
+    // Author moving coverage alone, preserving the saved sheet schedule for independent reuse afterward.
+    guidedCoverageHeatControls(p);p.e.guidedMotionCoverageInitial.value='999';guidedCoverageHeatInstance(p,'band',5);
+    p.e.guidedMotionHeat.checked=false;p.e.guidedMotionHeat.handlers.change();
+    for(const [id,value] of Object.entries({guidedCoverageTriangles:'4-4',guidedCoverageDistance:0.12,guidedCoverageCosine:0.1,
+      guidedCoverageSeparation:0.00001,guidedCoverageCells:2}))p.e[id].value=String(value);
+    saveCoverageLayer(p,'band','shell');assert.equal(p.e.guidedCoverage.checked,false);assert.equal(p.e.guidedCoverageSource.value,'file');
+    for(const [index,frame] of original.keyframes.entries()) {
+      const values=[films[index].inside_c,films[index].outside_c,films[index].inside_resistance_m2_k_w,films[index].outside_resistance_m2_k_w];
+      guidedCoverageHeatFilm(p,'Coverage',...values);p.e.guidedMotionExposedMode.value=index?'films':'adiabatic';
+      if(index)guidedCoverageHeatFilm(p,'Exposed',...values);
+      guidedMotionDraft(p,frame.time_s,frame.arm_abduction_deg);await guidedMotionAction(p,`Replace keyframe ${index+1} from current controls`);
+    }
+    p.e.guidedRequireTransientSurface.checked=false;p.e.guidedRequireTransientCoverage.checked=true;
+    for(const [prefix,,,consumer] of guidedTransientReadings)p.e[prefix+'Goal'].checked=consumer==='transient_coverage';
+    const {boundary,...topologyState}=coverageState,topology=JSON.parse(builder.namespace.buildMaterialCoverageTopology(topologyState));
+    const movingPolicy={schema:'ftx-motion-coverage-heat/1',...topology,initial_temperature_c:999,
+      initial_instance_temperatures_c:{band:5},boundaries:films,exposed_boundaries:[null,films[1]],
+      max_step_s:0.0005,max_cell_steps:100000,max_geometry_operations:2000000};
+    const moving=structuredClone(authored);delete moving.transient_surface;moving.transient_coverage=movingPolicy;motionRaw=JSON.stringify(moving);
+    const movingCovered=await evaluate('authored-moving-coverage'),movingSent=p.current().messages.at(-1),movingRequest=JSON.parse(movingSent.scenarioRequest);
+    assert.deepEqual(movingRequest.motion.transient_coverage,movingPolicy);assert.equal(Object.hasOwn(movingRequest,'coverage'),false);
+    assert.equal(Object.hasOwn(movingRequest,'surface'),false);assert.equal(Object.hasOwn(movingRequest.motion,'transient_surface'),false);
+    const movingComparison=JSON.parse(movingSent.studyRequest).comparison;
+    assert.ok(movingComparison.objectives.every(goal=>goal.metric.startsWith('transient_coverage_')));
+    assert.ok(movingComparison.required_consumers.includes('transient_coverage'));
+    assert.equal(movingComparison.required_consumers.includes('transient_surface'),false);
+    for(const row of movingCovered.comparison.alternatives) {
+      assert.equal(row.eligible,true,JSON.stringify(row.exclusions));const initial=simulation(movingCovered,row.key),motion=initial.motion.result;
+      assert.deepEqual(initial.drape,simulation(dry,row.key).drape);assert.deepEqual(motion.samples,simulation(dry,row.key).motion.result.samples);
+      assert.equal(motion.transient_coverage.status,'available');const heat=motion.transient_coverage.result,receipt=heat.initial_condition;
+      assert.deepEqual(heat.request,movingPolicy);assert.equal(receipt.schema,'ftx-motion-coverage-initial-condition/1');
+      assert.equal(receipt.model_sha256,heat.checkpoint.frame.source.sha256);assert.equal(receipt.frame_sha256,heat.initial_frame_sha256);
+      assert.deepEqual(receipt.instances,['band']);assert.deepEqual(receipt.instance_temperature_c,[5]);assert.deepEqual(receipt.temperature_range_c,[5,5]);
+      assert.deepEqual(receipt.triangle_instance,initial.drape.thermal_surface.triangle_instance);
+      assert.equal(heat.trace.length,motion.samples.length);assert.equal(heat.path_sha256,motion.path_sha256);
+      assert.ok(Math.abs(heat.balance_error_j)<1e-8);assert.ok(Math.abs(heat.physical_stored_change_j-heat.net_boundary_energy_j)<1e-8);
+      const expected={inside_energy_j:heat.inside_energy_j,net_boundary_energy_j:heat.net_boundary_energy_j,
+        min_sample_temperature_c:Math.min(5,...heat.trace.map(sample=>sample.temperature_range_c[0])),
+        max_sample_temperature_c:Math.max(5,...heat.trace.map(sample=>sample.temperature_range_c[1])),
+        final_min_temperature_c:heat.trace.at(-1).temperature_range_c[0],final_max_temperature_c:heat.trace.at(-1).temperature_range_c[1]};
+      assert.ok(expected.max_sample_temperature_c<100,'Actual covered/exposed extrema exclude the unused 999 C fallback');
+      for(const [name,value] of Object.entries(expected))assert.equal(row.readings['transient_coverage_'+name].value,value);
+      assert.ok(Math.abs(expected.final_min_temperature_c-simulation(complete,row.key).motion.result.transient_coverage.result.trace.at(-1).temperature_range_c[0])>1);
+    }
+    p.e.guidedMotionCoverage.checked=false;p.e.guidedMotionCoverage.handlers.change();
+    p.e.guidedMotionHeat.checked=true;p.e.guidedMotionHeat.handlers.change();
+    p.e.guidedRequireTransientSurface.checked=true;p.e.guidedRequireTransientCoverage.checked=false;
+    for(const [prefix,,,consumer] of guidedTransientReadings)p.e[prefix+'Goal'].checked=consumer==='transient_surface';
+    motionRaw=JSON.stringify(authored);
     p.e.guidedCoverage.checked=true;p.e.guidedCoverage.handlers.change();
     p.e.guidedCoverageSource.value='form';p.e.guidedCoverageSource.handlers.change();
     for(const [id,value] of Object.entries({guidedCoverageTriangles:'4-4',guidedCoverageDistance:0.12,guidedCoverageCosine:0.1,
@@ -17230,6 +17467,7 @@ test('compiled WASM guided transient heat criteria retain complete native histor
       JSON.stringify(values)+' J, maximum '+ceiling+' J admits '+admitted+'. A late sheet-heat refusal preserves coverage, mechanics and steady heat. '+
       'Exact instance maps initialize sheet and body coverage independently at 35 C and 5 C with source-bound receipts and unused 999 C fallbacks. '+
       'Authored dry sheet heat reproduces the original sheet history without a steady-sheet policy. '+
+      'Authored moving coverage retains independent initial states, covered films and explicit adiabatic/exposed films without steady or sheet heat. '+
       'Authored body coverage matches its constructor through native/direct WASM/worker with source-dependent heat; an absent instance refuses only that consumer. '+
       'No empirical garment warmth, comfort, thermal feedback or uncertainty-propagation claim. Replay inputs: '+work);
   });

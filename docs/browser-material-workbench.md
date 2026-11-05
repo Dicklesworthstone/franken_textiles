@@ -796,7 +796,8 @@ properties, wearer cooling or empirical wet-garment performance. See
 
 #### Compare heat storage and temperatures through motion
 
-Enable **Track dry independent-sheet heat through this movement** in the endpoint editor, or choose
+Enable **Track dry independent-sheet heat through this movement** or **Track dry body/layer heat
+and exposed cloth through this movement** in the endpoint editor. Alternatively, choose
 **Retain an original motion request** with an explicitly authored `transient_surface` or
 `transient_coverage` policy. The two heat-history groups expose the existing native results as
 objectives and inclusive lower/upper limits. Each domain has six independent quantities:
@@ -820,7 +821,7 @@ The same case must request motion and its corresponding transient policy. A tran
 not need an unrelated steady-sheet request, and transient coverage carries its own declared layer
 topology without requiring steady coverage. The original motion text retains initial temperatures,
 boundary schedules, source numbers and numerical allowances exactly. Saved cases freeze that text.
-The endpoint form emits a dry sheet history only when explicitly enabled with a complete saved
+The endpoint form emits each heat history only when explicitly enabled with a complete saved
 schedule. These criteria also enter existing linked
 grid and adaptive design comparisons under each case's own admission policy.
 
@@ -831,6 +832,27 @@ zero to the first endpoint; later boundaries apply after the preceding endpoint 
 endpoint. Conditions are constant over each interval. They are not interpolated temperatures,
 inferred weather, skin conditions or an equilibrium result. Negative Celsius values are allowed
 down to absolute zero. Zero film resistance explicitly prescribes the corresponding face temperature.
+
+For guided moving body/layer heat, complete the shared body-region, instance/layer, interface and
+projection editor above. Its cell count also applies to moving coverage. This enables that topology
+editor without requesting steady coverage or changing the selected original steady-policy file.
+Moving coverage has its own default initial temperature, saved instance overrides and work limits;
+its conditions and temperatures remain independent of the sheet-heat controls.
+
+Each saved endpoint needs covered-body reservoir films and an explicit exposed-cloth choice.
+Choose **Adiabatic: no boundary exchange**, or **Declare separate reservoir films** and fill all
+four exposed-face values. Adiabatic exposed cloth retains stored heat through movement; it does
+not reset to an ambient temperature. Separate exposed films use the sheet's original material faces.
+Adding or replacing an endpoint saves both choices. Enabling coverage after poses were saved
+requires replacing each endpoint with its explicit conditions; no earlier interval is filled from
+the current draft. Removing an endpoint preserves the next endpoint's own saved conditions.
+
+Coverage reserves 1–10000000 temperature-cell/body-face advances and 1–20000000 projection/remap
+operations per history. Sheet and coverage histories share a 20000000 thermal allowance across
+alternatives and named cases; coverage geometry shares 40000000 operations. Failed histories can
+consume reservations. These are work limits, not promised runtimes or convergence; an unavailable
+optional history retains independent outcomes. Original-motion mode supports the existing qualified
+exterior, bridge, liquid and dissipation policies without rewriting them into this dry-film editor.
 
 Open **Different initial temperatures for individual garment instances** when, for example, a cold
 outer garment starts separately from a warm inner sheet. Enter an exact retained physical instance
@@ -851,12 +873,12 @@ The native request retains the optional `initial_instance_temperatures_c` map, i
 fallback and the complete original policy. A successful mapped result shows the resolved temperature
 of every retained instance and its source-bound triangle ownership. Initial extrema use the actual
 retained temperatures, excluding an unused fallback. This bounded extension supports dry independent
-sheets, including the original-file exterior policies. Original motion files can also set this map
-on `motion.transient_coverage`: covered layer cells and exposed remainders retain each source
-instance's initial temperature as the garment moves. The page displays that consumer's own resolved
-temperatures, source model and initial frame. Saved cases and replay files retain the complete
-original motion policy.
-The guided sheet controls above author only the sheet policy. Water, mechanical liquid coupling and
+sheets, including the original-file exterior policies. The moving coverage editor separately saves
+the same map on `motion.transient_coverage`; original motion files can retain it there too. Covered
+layer cells and exposed remainders follow each source instance's initial temperature as the garment
+moves. The page displays each consumer's own resolved temperatures, source model and initial frame.
+Saved cases and replay files retain the complete authored or original motion policy.
+Water, mechanical liquid coupling and
 dissipation heating require a separate supported contract and refuse when combined with these maps.
 
 Every saved endpoint owns its four boundary values. Editing the current endpoint or film fields

@@ -5367,6 +5367,18 @@ and replacing a pattern clears its topology. Numeric body IDs refer to the selec
 and require review when that mesh changes. This software increment is tracked by `ftx-ms2.21`;
 geometric region picking, anatomical certification and empirical garment coverage remain separate.
 
+### 25.175 Author moving covered-layer heat without hand-written motion policies
+
+Guided motion now composes the existing body/layer topology editor with dry transient coverage.
+It retains independent sheet and coverage initial states, exact physical-instance overrides,
+covered-body films and an explicit exposed-cloth choice for every saved endpoint. Adiabatic exposed
+cloth is an authored choice; no ambient state, earlier interval or steady consumer is inferred.
+
+The shared topology remains usable without steady coverage, and an original steady-policy file
+keeps its own authority. Saved single/named cases, material alternatives and linked/adaptive design
+comparisons use the same native history contract and budgets. This completes the ordinary authoring
+route tracked by `ftx-ms2.22`; original motion files retain advanced source-qualified policies.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
