@@ -767,10 +767,22 @@ sweating, actual wearer cooling or textile-temperature feedback. See the
 #### Compare textile-owned water and latent heat
 
 The **Textile water and latent heat through motion** group uses the existing conservative
-independent-sheet heat/water history. Retain an original motion file containing
-`transient_surface.surface_water`; the same single or named case must request motion, that transient
+independent-sheet heat/water history. In authored motion, enable **Track independent-sheet heat
+through this movement** and choose a **Qualified liquid policy**. Load the original direct water
+policy, uncoupled qualification array, or paired water/mechanical qualification array separately
+from the movement endpoints. A direct water policy can optionally include a separate mechanical
+qualification file. The full original-motion file route remains available. The same single or named
+case must request motion, that transient
 surface, and its actual water policy. Body-film, steady-heat and standalone vapor policies cannot
 substitute for it. The ordinary dry transient-surface workflow remains independent.
+
+These files contain the existing native field values: one `surface_water` object, an array for
+`surface_water_alternatives`, or an array of complete `{surface_water, mechanical_coupling}` pairs.
+The page preserves each selected file's exact text inside the authored request, including source
+numbers, material locks, initial loading, phase schedules and independent qualification. Continue
+using the ordinary controls for poses, initial textile temperatures, heat boundaries, exterior
+exchange and dissipation heat. No water-source hash or source-bound schedule is rewritten when an
+endpoint changes; every supplied phase schedule must still match the saved motion intervals.
 
 | Guided quantity | Unit | Native metric |
 |---|---|---|
@@ -813,8 +825,9 @@ geometry, reference-area water inventory and current-area transport for every ad
 The native paired comparison also validates its complete coupled history and thermal/vapor source
 protocols when only a motion, strain or contact objective is requested.
 
-Saved cases retain the entire original motion source and comparison policy; active source/criterion
-edits cancel stale work. Water affects mechanical mass or momentum only through an explicitly
+Saved cases retain the complete authored or original motion source and comparison policy; active
+source/criterion edits cancel stale work. Inactive source-mode drafts remain available when switching
+back, while replacing the garment clears these geometry-qualified files. Water affects mechanical mass or momentum only through an explicitly
 requested, independently admitted mechanical-coupling policy. Without that coupling, a late thermal
 refusal preserves independent motion; a failed coupled solve follows the native whole-motion rollback.
 This free-liquid model does not infer sorption, wicking, body-to-textile transfer, wet constitutive
@@ -823,7 +836,7 @@ properties, wearer cooling or empirical wet-garment performance. See
 
 #### Compare heat storage and temperatures through motion
 
-Enable **Track dry independent-sheet heat through this movement** or **Track dry body/layer heat
+Enable **Track independent-sheet heat through this movement** or **Track dry body/layer heat
 and exposed cloth through this movement** in the endpoint editor. Alternatively, choose
 **Retain an original motion request** with an explicitly authored `transient_surface` or
 `transient_coverage` policy. The two heat-history groups expose the existing native results as
@@ -947,8 +960,8 @@ the same map on `motion.transient_coverage`; original motion files can retain it
 layer cells and exposed remainders follow each source instance's initial temperature as the garment
 moves. The page displays each consumer's own resolved temperatures, source model and initial frame.
 Saved cases and replay files retain the complete authored or original motion policy.
-All three dry dissipation-heating channels can use these maps. Original independent-sheet motion
-policies can also combine them with direct or material-selected uncoupled textile water, including
+All three dry dissipation-heating channels can use these maps. Authored or original independent-sheet
+motion policies can also combine them with direct or material-selected uncoupled textile water, including
 qualified supply, condensation, drainage and a finite shared vapor reservoir. Each patch's liquid
 starts at its own inner-cell temperature and retains that initial sensible energy in the balance.
 Direct mechanical liquid coupling and paired water/mechanics alternatives can use the same mapped
@@ -970,9 +983,9 @@ sheet's source-bound heat storage and transport, enforces its temperature domain
 history allowance against its case's shared thermal budget. Larger allocations can leave fewer
 optional histories available across material alternatives; the authoring form does not reject the
 whole comparison when an optional heat consumer may exhaust its budget. Heat refusals preserve
-independent manufacturing and mechanical outcomes. This form authors dry independent sheets;
-the adjacent controls also author moving coverage, exterior exchange and dissipation heating.
-Water and thermal bridges use the original-motion route.
+independent manufacturing and mechanical outcomes. This form authors independent sheets with
+optional original water qualifications; the adjacent controls also author moving dry coverage,
+exterior exchange and dissipation heating. Thermal bridges retain the original-motion route.
 
 Native comparison requires a complete, source-bound history. Missing heat capacity, failed motion
 or refused thermal work cannot become zero energy or a qualifying temperature. Independent available

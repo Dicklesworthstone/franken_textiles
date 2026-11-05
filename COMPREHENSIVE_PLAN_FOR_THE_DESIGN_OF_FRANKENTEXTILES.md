@@ -5475,6 +5475,19 @@ state; neither a partial trajectory nor an uncoupled substitute becomes availabl
 tracks direct/paired admission, distinct-piece integration and rollback/replay coverage. Moving body
 coverage retains its dry contract, and empirical material and garment acceptance remain separate.
 
+### 25.182 Compose qualified wet-material policies with ordinary motion authoring
+
+The guided workbench accepts original direct water and independent mechanical qualifications,
+uncoupled water collections, or complete paired collections alongside authored movement. Exact
+source text reaches the existing native policies while poses, mapped temperatures, heat boundaries,
+exterior exchange and dissipation remain ordinary controls. Source schedules must still match the
+saved intervals; editing motion never rewrites qualification or material identity.
+
+Immutable named cases, cancellation, disabled drafts and source reset follow the existing scenario
+workflow. `ftx-ms2.29` tracks this usable composition. Native source/domain admission, conservative
+thermal and mechanical evolution, and whole-motion rollback retain their existing authorities.
+Moving wet layers and independently measured garment qualification remain separate work.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

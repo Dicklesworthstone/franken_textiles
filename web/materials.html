@@ -1188,8 +1188,8 @@ Choose numerical force limits explicitly; no safe-fit threshold is supplied.</p>
 <div id="guidedMotionForm">
 <p>Save 1–16 endpoints on the selected body shape. Times are cumulative seconds after the initial drape.
 Each endpoint gives an absolute arm and leg pose; selecting standing explicitly returns the legs to standing.</p>
-<label><input id="guidedMotionHeat" type="checkbox"> Track dry independent-sheet heat through this movement</label>
-<fieldset id="guidedMotionHeatSettings" hidden><legend>Dry sheet heat initial state and work limits</legend>
+<label><input id="guidedMotionHeat" type="checkbox"> Track independent-sheet heat through this movement</label>
+<fieldset id="guidedMotionHeatSettings" hidden><legend>Sheet heat initial state and work limits</legend>
 <div class="study-fields">
 <label>Default initial textile temperature (°C) <input id="guidedMotionHeatInitial" type="number" min="-273.15" step="any" placeholder="Explicit initial condition"></label>
 <label>Cells through each sheet <input id="guidedMotionHeatCells" type="number" min="1" max="64" step="1" value="4"></label>
@@ -1221,6 +1221,34 @@ retained garment, not a material ID or source-piece shortcut. The engine checks 
 <p class="note">Only saved overrides run. Editing these two fields prepares a change; use Add or replace to save it.
 Each sheet starts uniformly through its thickness. Disabling heat retains this draft; saved named cases keep their own temperatures.</p>
 </details>
+<fieldset><legend>Textile-owned liquid</legend>
+<label>Qualified liquid policy <select id="guidedMotionWaterMode">
+<option value="none">No textile liquid</option>
+<option value="direct">One source-qualified water policy</option>
+<option value="alternatives">Uncoupled qualifications for alternative materials</option>
+<option value="paired">Paired water and mechanical qualifications for alternative materials</option>
+</select></label>
+<label id="guidedMotionWaterFileField" hidden>Original textile-water policy JSON
+<input id="guidedMotionWaterFile" type="file" accept=".json,application/json" disabled></label>
+<label id="guidedMotionWaterAlternativesFileField" hidden>Original array of water qualifications
+<input id="guidedMotionWaterAlternativesFile" type="file" accept=".json,application/json" disabled></label>
+<label id="guidedMotionWaterPairedFileField" hidden>Original array of water/mechanical pairs
+<input id="guidedMotionWaterPairedFile" type="file" accept=".json,application/json" disabled></label>
+<label id="guidedMotionWaterMechanicalField" hidden><input id="guidedMotionWaterMechanical" type="checkbox" disabled>
+Include a separately qualified mechanical liquid policy</label>
+<label id="guidedMotionWaterMechanicsFileField" hidden>Original mechanical liquid qualification JSON
+<input id="guidedMotionWaterMechanicsFile" type="file" accept=".json,application/json" disabled></label>
+<p class="note">Load the original water policy or qualification collection independently of motion. Keep authoring poses,
+initial textile temperatures, heat boundaries, exterior exchange and deformation heat here. The liquid files retain their exact
+material locks, initial loading, vapor environment, phase schedules and independent source evidence.</p>
+<p class="note">A direct file contains the <code>surface_water</code> object; an uncoupled collection contains an array of those
+objects. Each paired entry contains <code>surface_water</code> and <code>mechanical_coupling</code>. Supply one schedule entry
+per saved motion interval in the original policies. Adding, removing or reordering endpoints does not rewrite these sources.
+The engine rechecks the complete source, domain and interval contract for every material alternative.</p>
+<p class="note">Uncoupled water can preserve independent motion when its heat history is refused. A mechanical liquid failure
+refuses and restores the whole motion. Disabling a source retains its draft; named cases and replay downloads keep their own
+exact policy bytes. Replacing the garment clears these geometry-qualified sources.</p>
+</fieldset>
 </fieldset>
 <label><input id="guidedMotionCoverage" type="checkbox"> Track dry body/layer heat and exposed cloth through this movement</label>
 <fieldset id="guidedMotionCoverageSettings" hidden><legend>Moving body/layer heat initial state and work limits</legend>
@@ -1405,9 +1433,9 @@ active named cases share at most 32768 attempts. Budgets bound work without guar
 <p class="note">The same sewn cloth continues with its velocities and material history. Use short pose increments: the solver follows checked
 body-vertex chords between endpoints, with a fixed root and no chair or floor support. These prescribed model poses do not establish
 anatomical movement accuracy or physical garment fit. A failed movement publishes no partial trajectory. Optional sheet heat is recomputed
-at endpoints as independent steady snapshots. The dry heat option above separately carries textile temperature through the saved
+at endpoints as independent steady snapshots. The sheet heat option above separately carries textile temperature through the saved
 interval conditions, without a steady-sheet request. Moving body/layer heat separately follows covered and exposed reference material.
-Use the original motion request for thermal bridges and water policies. It retains complete requests
+Use the original motion request for thermal bridges and other complete motion policies. It retains complete requests
 verbatim, including their source values and work policies; native admission still checks their compatibility.</p>
 </fieldset>
 <fieldset id="guidedScenarioCasePolicy" hidden><legend>Comparison policy for this case</legend>
@@ -1576,9 +1604,9 @@ it does not provide textile-temperature feedback, bare-body evaporation, physiol
 Textile-owned water and its thermal/mechanical coupling are separate policies.</p>
 </fieldset>
 <fieldset><legend>Textile water and latent heat through motion</legend>
-<p class="note">Retain an original motion request with <code>transient_surface.surface_water</code>, or a
-<code>surface_water_alternatives</code> collection of independently qualified material assignments.
-For liquid-dependent motion, retain <code>coupled_water_alternatives</code> with complete water and mechanical qualifications for each assignment.
+<p class="note">Under the authored sheet-heat controls, load a source-qualified water policy, an uncoupled alternative collection,
+or paired water/mechanical qualifications. An original motion request can also retain <code>transient_surface.surface_water</code>,
+<code>surface_water_alternatives</code> or <code>coupled_water_alternatives</code> unchanged.
 The collection selects the qualification matching every retained physical instance while keeping the same water loading, operating conditions and imposed phase velocities.
 These criteria require the complete motion and independent-sheet heat/water history
 in the same case. Steady heat, independent vapor and finite body-water requests are separate.</p>

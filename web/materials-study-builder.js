@@ -343,8 +343,38 @@ export function buildMaterialVaporSurfaceConditions(boundary) {
   return JSON.stringify({ schema: "ftx-vapor-surface-conditions/1", boundaries: [boundary] });
 }
 
-/** Author prescribed source-model endpoints; Rust owns their geometry and numerical continuation. */
-export function buildMaterialMotionRequest(state) {
+function motionLiquidSources(sources) {
+  const fields = ["surface_water", "surface_water_alternatives", "coupled_water_alternatives"];
+  object(sources, [...fields, "mechanical_coupling"], [], "Original textile-water policies");
+  const active = fields.filter(key => own(sources, key));
+  if (active.length !== 1 || (own(sources, "mechanical_coupling") && active[0] !== "surface_water")) {
+    throw Error("Choose one direct water policy, one uncoupled alternative collection or one paired collection; separate mechanics requires direct water.");
+  }
+  for (const [field, raw] of Object.entries(sources)) {
+    if (field === "surface_water" || field === "mechanical_coupling") {
+      sourceObject(raw, `Original ${field} policy`);
+    } else {
+      const entries = parse(raw, `Original ${field} collection`);
+      if (!Array.isArray(entries) || !entries.length || entries.length > 64 ||
+        entries.some(entry => !entry || typeof entry !== "object" || Array.isArray(entry))) {
+        throw Error(`Original ${field} must be a collection of 1–64 complete qualifications.`);
+      }
+      if (field === "coupled_water_alternatives") for (const entry of entries) {
+        object(entry, ["surface_water", "mechanical_coupling"], ["surface_water", "mechanical_coupling"], "Paired water qualification");
+        for (const key of ["surface_water", "mechanical_coupling"]) {
+          if (!entry[key] || typeof entry[key] !== "object" || Array.isArray(entry[key])) {
+            throw Error("Each paired qualification needs complete water and mechanical objects.");
+          }
+        }
+      }
+    }
+  }
+  // Material locks, source evidence, physical domains and interval schedules remain native checks.
+  // Parsed objects are never serialized back over the original qualification text.
+}
+
+/** Author prescribed endpoints around exact liquid policies; Rust owns physical admission and evolution. */
+export function buildMaterialMotionRequest(state, liquid = undefined) {
   object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "transient_surface", "transient_coverage"],
     ["keyframes", "max_step_s", "max_trials", "max_pairs"], "Guided motion");
   if (!Array.isArray(state.keyframes) || !state.keyframes.length || state.keyframes.length > 16) {
@@ -385,7 +415,7 @@ export function buildMaterialMotionRequest(state) {
   const heatingFields = ["plastic_dissipation_heat", "relaxation_dissipation_heat", "bending_plastic_dissipation_heat"];
   for (const [consumer, coverage] of [["transient_surface", false], ["transient_coverage", true]]) {
     if (!own(state, consumer)) continue;
-    const label = coverage ? "Guided moving coverage heat" : "Guided dry sheet heat";
+    const label = coverage ? "Guided moving coverage heat" : "Guided sheet heat";
     const fields = ["schema", "initial_temperature_c", "boundaries", "max_step_s", "max_cell_steps",
       ...(coverage ? ["body_triangle_ids", "instance_layers", "settings", "exposed_boundaries", "max_geometry_operations"] : ["cells_per_layer"])];
     const heat = object(state[consumer], [...fields, ...heatingFields, "initial_instance_temperatures_c", "exterior_exchange",
@@ -478,7 +508,16 @@ export function buildMaterialMotionRequest(state) {
       }
     }
   }
-  const request = JSON.stringify({ schema: "ftx-drape-motion/1", ...state });
+  let request;
+  if (liquid === undefined) request = JSON.stringify({ schema: "ftx-drape-motion/1", ...state });
+  else {
+    if (!own(state, "transient_surface")) throw Error("Original textile-water policies require authored independent-sheet heat.");
+    motionLiquidSources(liquid);
+    const heat = JSON.stringify(state.transient_surface).slice(0, -1) +
+      Object.entries(liquid).map(([key, raw]) => `,${JSON.stringify(key)}:${raw}`).join("") + "}";
+    request = "{" + Object.entries({ schema: "ftx-drape-motion/1", ...state }).map(([key, value]) =>
+      `${JSON.stringify(key)}:${key === "transient_surface" ? heat : JSON.stringify(value)}`).join(",") + "}";
+  }
   bytes(request, MAX_REQUEST_BYTES, "Guided motion request exceeds 16 MiB.");
   return request;
 }
@@ -571,7 +610,7 @@ function coveragePolicy(value, label, thermal = false) {
 /** Author one fresh drape with authored or original motion; source files remain verbatim and Rust owns numerical admission. */
 export function buildMaterialScenarioRequest(state) {
   object(state, ["fitSpec", "allowNoFit", "options", "maxMeshPoints", "maxVertexFrames", "surface",
-    "motion", "maxMotionTrials", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage"],
+    "motion", "motionLiquid", "maxMotionTrials", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage"],
     ["allowNoFit", "options", "maxMeshPoints", "maxVertexFrames"], "Guided scenario");
   if (typeof state.allowNoFit !== "boolean") throw Error("Declare the numerical-only study without a fit contract explicitly.");
   let fitSpec = "{}";
@@ -632,9 +671,10 @@ export function buildMaterialScenarioRequest(state) {
   let motion;
   if (own(state, "motion")) {
     if (typeof state.motion === "string") {
+      if (own(state, "motionLiquid")) throw Error("Original motion requests retain their complete policies; choose authored motion to compose separate liquid sources.");
       motionPolicy(sourceObject(state.motion, "Prescribed motion"));
       motion = state.motion;
-    } else motion = buildMaterialMotionRequest(state.motion);
+    } else motion = buildMaterialMotionRequest(state.motion, state.motionLiquid);
     if (!own(state, "maxMotionTrials")) {
       throw Error("Prescribed motion and its explicit integer scenario motion-trial budget must be supplied together.");
     }
@@ -644,6 +684,7 @@ export function buildMaterialScenarioRequest(state) {
   } else if (own(state, "maxMotionTrials")) {
     throw Error("A scenario motion-trial budget requires a prescribed motion request; both must be supplied together.");
   }
+  if (own(state, "motionLiquid") && motion === undefined) throw Error("Original textile-water policies require authored motion and independent-sheet heat.");
   if (own(state, "materialStrain")) materialStrainPolicy(sourceObject(state.materialStrain, "Material strain"));
   if (own(state, "contactLoads")) contactLoadsPolicy(sourceObject(state.contactLoads, "Body contact loads"));
   const parts = ['{"schema":"ftx-drape-scenario/1","options":', JSON.stringify(options), ',"fit_spec":', fitSpec,

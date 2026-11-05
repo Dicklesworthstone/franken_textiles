@@ -57,6 +57,11 @@ const guidedMotionHeatInitials = new Map(), guidedMotionHeatInitialButtons = [];
 const guidedMotionCoverageInitials = new Map(), guidedMotionCoverageInitialButtons = [];
 const guidedMotionHeating = [["Plastic", "plastic_dissipation_heat"], ["Relaxation", "relaxation_dissipation_heat"],
   ["Bending", "bending_plastic_dissipation_heat"]];
+const guidedMotionLiquidSources = [
+  ["direct", "surface_water", "guidedMotionWaterFile", "the original textile-water policy"],
+  ["alternatives", "surface_water_alternatives", "guidedMotionWaterAlternativesFile", "the original uncoupled water qualification collection"],
+  ["paired", "coupled_water_alternatives", "guidedMotionWaterPairedFile", "the original paired water/mechanical qualification collection"],
+];
 const guidedCoverageLayers = new Map(), guidedCoverageInterfaces = new Map(), guidedCoverageButtons = [];
 const guidedCoverageTopologyFields = ["guidedCoverageTriangles", "guidedCoverageDistance", "guidedCoverageCosine", "guidedCoverageSeparation", "guidedCoverageCells"];
 const guidedCoverageBoundaryFields = ["guidedCoverageInside", "guidedCoverageOutside", "guidedCoverageInsideFilm", "guidedCoverageOutsideFilm"];
@@ -313,6 +318,18 @@ function controls() {
     $(`clearMotion${domain}Instances`).disabled = !editInitials || !initials.size;
     for (const button of buttons) button.disabled = !editInitials;
   }
+  const editLiquid = !!source && guidedScenarioMode() && motionMode === "form" && $("guidedMotionHeat").checked;
+  const liquidMode = $("guidedMotionWaterMode").value || "none";
+  $("guidedMotionWaterMode").disabled = !editLiquid;
+  for (const [mode, , file] of guidedMotionLiquidSources) {
+    $(file + "Field").hidden = liquidMode !== mode;
+    $(file).disabled = !editLiquid || liquidMode !== mode;
+  }
+  $("guidedMotionWaterMechanicalField").hidden = liquidMode !== "direct";
+  $("guidedMotionWaterMechanical").disabled = !editLiquid || liquidMode !== "direct";
+  const directMechanics = liquidMode === "direct" && $("guidedMotionWaterMechanical").checked;
+  $("guidedMotionWaterMechanicsFileField").hidden = !directMechanics;
+  $("guidedMotionWaterMechanicsFile").disabled = !editLiquid || !directMechanics;
   const exposedFilms = guidedMotionCoverageActive() && $("guidedMotionExposedMode").value === "films";
   $("guidedMotionExposedMode").disabled = !guidedMotionCoverageActive(); $("guidedMotionExposedFilms").hidden = !exposedFilms;
   for (const suffix of ["Inside", "Outside", "InsideFilm", "OutsideFilm"]) $("guidedMotionExposed" + suffix).disabled = !exposedFilms;
@@ -4892,6 +4909,10 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const designFit = guidedStudyMode() && $("guidedDesign").checked;
   const surface = $("guidedScenarioHeat").checked;
   const motionMode = guidedMotionMode(), materialStrain = $("guidedMaterialStrain").checked;
+  const liquidMode = motionMode === "form" && $("guidedMotionHeat").checked ? ($("guidedMotionWaterMode").value || "none") : "none";
+  if (!["none", ...guidedMotionLiquidSources.map(([mode]) => mode)].includes(liquidMode)) {
+    throw Error("Choose no textile water, a direct policy, uncoupled alternatives or paired qualifications.");
+  }
   const contactLoads = $("guidedContactLoads").checked;
   const transport = Object.fromEntries(guidedTransportSources.map(([key, id]) => [key, $(id).checked]));
   const coverageSource = guidedCoverageMode();
@@ -4940,6 +4961,9 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const entries = [...(fitSource === "file" ? [["fitSpec", "fit", "the original section-3 fit contract"]] : []),
     ...(surface ? [["surface", "heatConditions", "the selected section-3 sheet heat conditions"]] : []),
     ...(motionMode === "file" ? [["motion", "guidedMotionFile", "the original prescribed-motion request"]] : []),
+    ...guidedMotionLiquidSources.filter(([mode]) => liquidMode === mode).map(([, key, id, label]) => [key, id, label]),
+    ...(liquidMode === "direct" && $("guidedMotionWaterMechanical").checked ?
+      [["mechanical_coupling", "guidedMotionWaterMechanicsFile", "the independent mechanical liquid qualification"]] : []),
     ...guidedTransportSources.filter(([key]) => transport[key] && (key !== "coverage" || coverageSource === "file")).map(([key, , file, label]) =>
       [key, key === "vaporSurface" && vaporSource === "workbench" ? "vaporSurfaceConditions" : file, label]),
     ...(includeCasePolicy && policy === "file" ? [["comparison", "guidedScenarioComparison", "the original case comparison policy"]] : [])];
@@ -4960,13 +4984,15 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     if (decodedBytes > budget) throw Error("Guided scenario sources exceed 16 MiB combined.");
     return [key, raw];
   }));
-  const { comparison, ...fragments } = Object.fromEntries(sources);
+  const liquidFields = [...guidedMotionLiquidSources.map(([, key]) => key), "mechanical_coupling"];
+  const { comparison, ...fragments } = Object.fromEntries(sources.filter(([key]) => !liquidFields.includes(key)));
+  if (liquidMode !== "none") input.motionLiquid = Object.fromEntries(sources.filter(([key]) => liquidFields.includes(key)));
   const request = buildMaterialScenarioRequest({ ...input, ...fragments });
   const retainedMotion = motionMode === "file" ? JSON.parse(fragments.motion) : input.motion;
   const motionVaporHistory = retainedMotion?.vapor_coverage_history != null;
   const motionWetFilm = retainedMotion?.vapor_coverage_history?.wet_film != null;
   const transientSurface = retainedMotion?.transient_surface != null;
-  const textileWater = hasTextileWaterPolicy(retainedMotion?.transient_surface);
+  const textileWater = input.motionLiquid !== undefined || hasTextileWaterPolicy(retainedMotion?.transient_surface);
   const transientCoverage = retainedMotion?.transient_coverage != null;
   return { request,
     context: { drape: true, surface, motion: motionMode !== "none", materialStrain, contactLoads, ...transport,
@@ -5390,6 +5416,15 @@ $("guidedMotionSource").addEventListener("change", () => {
 $("guidedMotionFile").addEventListener("change", () => {
   if (guidedMotionMode() === "file") changedGuidedScenarioDraft(); else controls();
 });
+for (const [id, active] of [
+  ["guidedMotionWaterMode", () => true],
+  ...guidedMotionLiquidSources.map(([mode, , file]) => [file, () => $("guidedMotionWaterMode").value === mode]),
+  ["guidedMotionWaterMechanical", () => $("guidedMotionWaterMode").value === "direct"],
+  ["guidedMotionWaterMechanicsFile", () => $("guidedMotionWaterMode").value === "direct" && $("guidedMotionWaterMechanical").checked],
+]) $(id).addEventListener("change", () => {
+  if (guidedMotionMode() === "form" && $("guidedMotionHeat").checked && active()) changedGuidedScenarioDraft();
+  else controls();
+});
 $("addMotionKeyframe").onclick = () => saveGuidedMotionKeyframe();
 $("clearMotionKeyframes").onclick = () => {
   if (guidedMotionMode() !== "form") return;
@@ -5781,6 +5816,10 @@ function resetGuidedScenarios() {
     const prefix = "guidedMotion" + domain; $(prefix).checked = false; initials.clear(); showGuidedMotionHeatInitials(domain);
     for (const [suffix] of guidedMotionHeating) $(prefix + suffix).checked = false;
     for (const suffix of ["Initial", "Instance", "InstanceInitial", "Inside", "Outside", "InsideFilm", "OutsideFilm"]) $(prefix + suffix).value = "";
+  }
+  $("guidedMotionWaterMode").value = "none"; $("guidedMotionWaterMechanical").checked = false;
+  for (const id of [...guidedMotionLiquidSources.map(([, , file]) => file), "guidedMotionWaterMechanicsFile"]) {
+    $(id).value = ""; roundFiles.delete(id);
   }
   $("guidedMotionExposedMode").value = "";
   for (const suffix of ["Inside", "Outside", "InsideFilm", "OutsideFilm"]) $("guidedMotionExposed" + suffix).value = "";

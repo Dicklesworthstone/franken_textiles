@@ -721,6 +721,58 @@ test('guided dry heat authors one explicit film per endpoint and enables same-ca
     'Native optional consumer reservations may refuse individual histories without blocking independent study outcomes');
 });
 
+test('guided wet-source composition retains original direct and selected policies beside authored heat', async () => {
+  const {buildMaterialMotionRequest:build,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const water=' {\r\n"schema":"ftx-textile-surface-water/5","bindings":{"front.R":{"material_sha256":"'+'a'.repeat(64)+
+    '","initial_liquid_kg_m2":1.25000e-2}},"enthalpy_reference_c":-0.0,"latent_heat_j_kg":18446744073709551615,'+
+    '"source":{"reference":"test:café 🧵"},"vapor_reservoir":{"initial_vapor_mass_kg":1.0}}\r\n';
+  const mechanics=' {"schema":"ftx-coupled-liquid-mechanics/6","material_report_sha256":"'+'b'.repeat(64)+'"}\r\n';
+  const alternatives=' [\r\n'+water+','+water.replace('a'.repeat(64),'c'.repeat(64))+']\r\n';
+  const paired=' [ {"surface_water":'+water+',"mechanical_coupling":'+mechanics+'} ]\r\n';
+  const heat={...dryMotionHeat(),initial_instance_temperatures_c:{'front.R':5},
+    exterior_exchange:[exteriorPolicy()],plastic_dissipation_heat:'uniform_reference_thickness'};
+  const input={...motionState(),transient_surface:heat},before=JSON.stringify(input);
+  const choices=[...[1,2,3,4,5].map(version=>({surface_water:water.replace('/5','/'+version)})),
+    {surface_water:water,mechanical_coupling:mechanics},{surface_water_alternatives:alternatives},{coupled_water_alternatives:paired}];
+  for(const liquid of choices) {
+    const sourceBefore=JSON.stringify(liquid),raw=build(input,liquid),value=JSON.parse(raw);
+    for(const [key,original] of Object.entries(liquid)) {
+      assert.ok(raw.includes(original));assert.deepEqual(value.transient_surface[key],JSON.parse(original));
+    }
+    for(const [key,value] of Object.entries(heat))assert.deepEqual(JSON.parse(raw).transient_surface[key],value);
+    assert.equal(Object.hasOwn(value,'motionLiquid'),false);assert.equal(JSON.stringify(input),before);assert.equal(JSON.stringify(liquid),sourceBefore);
+    const saved=single({...scenarioState(),motion:input,motionLiquid:liquid,maxMotionTrials:1024,maxVertexFrames:16000000});
+    assert.ok(saved.includes(raw));assert.match(saved,/18446744073709551615/);assert.match(saved,/1\.25000e-2/);assert.match(saved,/"enthalpy_reference_c":-0\.0/);
+    const named=matrix({maxEvaluations:2,cases:[{key:'wet',scenario:saved}]});assert.ok(named.includes(saved));
+    heat.initial_temperature_c=22;
+    assert.equal(JSON.parse(saved).motion.transient_surface.initial_temperature_c,18);
+    heat.initial_temperature_c=18;
+  }
+});
+
+test('guided wet-source composition requires one complete source mode and never overwrites original motion', async () => {
+  const {buildMaterialMotionRequest:build,buildMaterialScenarioRequest:single}=await modulePromise;
+  const motion={...motionState(),transient_surface:dryMotionHeat()},direct={surface_water:'{}'};
+  for(const liquid of [null,{},[],{mechanical_coupling:'{}'},{surface_water:{schema:'water'}},
+    {surface_water:'null'},{surface_water:'[]'},{surface_water:'{bad'},
+    {surface_water:'{}',surface_water_alternatives:'[{}]'},{surface_water_alternatives:'[{}]',mechanical_coupling:'{}'},
+    {coupled_water_alternatives:'[{"surface_water":{},"mechanical_coupling":{}}]',mechanical_coupling:'{}'},
+    {surface_water:'{}',unexpected:'{}'}])assert.throws(()=>build(motion,liquid));
+  for(const field of ['surface_water_alternatives','coupled_water_alternatives']) {
+    for(const raw of ['{}','[]','[null]','[[]]','[1]','['+Array(65).fill('{}').join(',')+']'])assert.throws(()=>build(motion,{[field]:raw}));
+  }
+  for(const raw of ['[{}]','[{"surface_water":{}}]','[{"surface_water":{},"mechanical_coupling":null}]']) {
+    assert.throws(()=>build(motion,{coupled_water_alternatives:raw}));
+  }
+  assert.throws(()=>build(motionState(),direct),/independent-sheet heat/);
+  assert.throws(()=>single({...scenarioState(),motionLiquid:direct}),/authored motion/);
+  const original=' \r\n'+build(motion)+'\r\n';
+  assert.throws(()=>single({...scenarioState(),motion:original,motionLiquid:direct,maxMotionTrials:1}),/Original motion/);
+  assert.ok(single({...scenarioState(),motion:original,maxMotionTrials:1}).includes(original));
+  const full='{}'+' '.repeat(16*1024*1024-2);
+  assert.throws(()=>build(motion,{surface_water:full}),/16 MiB/,'Source bytes and authored framing share the complete request limit');
+});
+
 test('guided dry heat rejects missing conditions and invalid physical or work limits without admitting advanced policies', async () => {
   const {buildMaterialMotionRequest:build}=await modulePromise;
   const run=transient_surface=>build({...motionState(),transient_surface});

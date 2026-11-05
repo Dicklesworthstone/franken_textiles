@@ -16391,6 +16391,127 @@ function removeGuidedDryHeatInstance(p,instance) {
   assert.ok(button,instance);assert.equal(button.disabled,false);button.onclick();
 }
 
+const guidedLiquidMechanicsOriginal=' {"schema":"ftx-coupled-liquid-mechanics/6","material_report_sha256":"'+'c'.repeat(64)+
+  '","source":{"reference":"test:independent mechanics 🧵","sample":18446744073709551615}}\r\n';
+const guidedLiquidModeFiles={direct:['surface_water','guidedMotionWaterFile',guidedTextileWaterPolicyOriginal],
+  alternatives:['surface_water_alternatives','guidedMotionWaterAlternativesFile',' [\r\n'+guidedTextileWaterPolicyOriginal+']\r\n'],
+  paired:['coupled_water_alternatives','guidedMotionWaterPairedFile',' [{"surface_water":'+guidedTextileWaterPolicyOriginal+
+    ',"mechanical_coupling":'+guidedLiquidMechanicsOriginal+'}]\r\n']};
+function guidedLiquidSource(p,mode='direct',raw=guidedLiquidModeFiles[mode][2],mechanics=false) {
+  p.e.guidedMotionWaterMode.value=mode;p.e.guidedMotionWaterMode.handlers.change();
+  const [,file]=guidedLiquidModeFiles[mode];p.select(file,raw);p.e[file].handlers.change();
+  if(mechanics) {
+    p.e.guidedMotionWaterMechanical.checked=true;p.e.guidedMotionWaterMechanical.handlers.change();
+    p.select('guidedMotionWaterMechanicsFile',guidedLiquidMechanicsOriginal);p.e.guidedMotionWaterMechanicsFile.handlers.change();
+  }
+}
+
+test('guided wet-source composition joins exact qualifications to authored motion and ordinary water decisions',async()=>{
+  for(const [mode,mechanics] of [['direct',false],['direct',true],['alternatives',false],['paired',false]]) {
+    const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+    await addGuidedMotion(p,0.002,35);guidedDryHeatInstance(p,'front.R',5);
+    p.e.guidedMotionHeatPlastic.checked=true;p.e.guidedMotionHeatPlastic.handlers.change();
+    guidedLiquidSource(p,mode,undefined,mechanics);
+    p.e.guidedTextileWaterEvaporatedGoal.checked=true;p.e.guidedTextileWaterEvaporatedDirection.value='maximize';
+    p.e.guidedTextileWaterRemainingMinimumLimit.value='0';p.e.guidedRequireTransientSurface.checked=true;
+    await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'scenario',p.e.error.textContent);const heat=JSON.parse(sent.scenarioRequest).motion.transient_surface;
+    const [field,,raw]=guidedLiquidModeFiles[mode];assert.ok(sent.scenarioRequest.includes(raw));assert.deepEqual(heat[field],JSON.parse(raw));
+    assert.deepEqual(heat.initial_instance_temperatures_c,{'front.R':5});assert.equal(heat.plastic_dissipation_heat,'uniform_reference_thickness');
+    assert.deepEqual(heat.boundaries,[{inside_c:35,outside_c:-5,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0}]);
+    for(const other of ['surface_water','surface_water_alternatives','coupled_water_alternatives','mechanical_coupling']) {
+      assert.equal(Object.hasOwn(heat,other),other===field||(other==='mechanical_coupling'&&mechanics),other);
+    }
+    if(mechanics)assert.ok(sent.scenarioRequest.includes(guidedLiquidMechanicsOriginal));
+    assert.ok(JSON.parse(sent.studyRequest).comparison.objectives.some(o=>o.metric==='textile_water_evaporated_mass_kg'));
+    assert.match(sent.scenarioRequest,/18446744073709551615/);assert.match(sent.scenarioRequest,/1\.000e-2/);assert.match(sent.scenarioRequest,/"initial_liquid_kg_m2":-0\.0/);
+    p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+    const link=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.download==='scenario-request.json');
+    assert.equal(await p.blobs.get(link.href).text(),sent.scenarioRequest);
+    guidedMotionDraft(p,0.002,36);await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+    assert.equal(p.live.size,0);await p.e.scenario.onclick();const changed=p.current().messages.at(-1);
+    assert.ok(changed.scenarioRequest.includes(raw));assert.equal(JSON.parse(changed.scenarioRequest).motion.keyframes[0].arm_abduction_deg,36);
+    p.current().emit({type:'error',request:changed.request,message:'Synthetic native qualification refusal'});
+    assert.match(p.e.error.textContent,/native qualification refusal/);await p.e.scenario.onclick();
+    assert.equal(p.current().messages.at(-1).scenarioRequest,changed.scenarioRequest,'Native refusal does not modify source files or erase the authored motion');
+    p.emit(scenarioReport());
+  }
+});
+
+test('guided wet-source composition freezes named cases and preserves independent inactive drafts',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  await addGuidedMotion(p,0.002,35);guidedLiquidSource(p,'direct',undefined,true);await saveGuidedCase(p,'coupled');
+  guidedLiquidSource(p,'alternatives');await saveGuidedCase(p,'thermal');
+  p.e.guidedMotionWaterMode.value='none';p.e.guidedMotionWaterMode.handlers.change();await saveGuidedCase(p,'dry');
+  await p.e.scenario.onclick();const original=p.current().messages.at(-1).scenarioRequest,cases=JSON.parse(original).cases;
+  assert.ok(original.includes(guidedLiquidMechanicsOriginal));assert.ok(original.includes(guidedLiquidModeFiles.alternatives[2]));
+  assert.ok(cases[0].scenario.motion.transient_surface.mechanical_coupling);
+  assert.ok(cases[1].scenario.motion.transient_surface.surface_water_alternatives);
+  assert.equal(Object.hasOwn(cases[2].scenario.motion.transient_surface,'surface_water'),false);p.emit(scenarioReport());
+  p.select('guidedMotionWaterFile','{bad');p.e.guidedMotionWaterFile.handlers.change();
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false);await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,original,'Draft changes cannot alter a frozen named case');p.emit(scenarioReport());
+  p.e.scenarioMode.value='guided';p.e.scenarioMode.handlers.change();
+  guidedLiquidSource(p,'direct',undefined,true);p.e.guidedMotionHeat.checked=false;p.e.guidedMotionHeat.handlers.change();
+  p.e.guidedMotionWaterFile.files[0].arrayBuffer=async()=>{throw Error('Inactive source must not be read');};
+  await p.e.scenario.onclick();assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion,'transient_surface'),false);p.emit(scenarioReport());
+  guidedTextileWaterSource(p);await p.e.scenario.onclick();const fileRequest=p.current().messages.at(-1);
+  assert.ok(fileRequest.scenarioRequest.includes(guidedTextileWaterMotionOriginal));
+  p.e.guidedMotionWaterMode.value='paired';p.e.guidedMotionWaterMode.handlers.change();assert.equal(p.current().dead,false);
+  p.emit(scenarioReport());
+  for(const id of [...Object.values(guidedLiquidModeFiles).map(([,file])=>file),'guidedMotionWaterMechanicsFile'])p.e[id].value='retained-source.json';
+  await p.load();assert.equal(p.e.guidedMotionWaterMode.value,'none');assert.equal(p.e.guidedMotionWaterMechanical.checked,false);
+  for(const id of [...Object.values(guidedLiquidModeFiles).map(([,file])=>file),'guidedMotionWaterMechanicsFile']) {
+    assert.equal(p.e[id].value,'');assert.equal(p.e[id].disabled,true);
+  }
+});
+
+test('guided wet-source composition captures original handles and cancels stale reads and dispatched work',async()=>{
+  for(const saving of [false,true])for(const change of ['file','mode','mechanics','heat']) {
+    const {p}=await guidedScenarioSetup();if(saving)guidedNamedCases(p);
+    guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);await addGuidedMotion(p,0.002,35);guidedLiquidSource(p);
+    const delay=deferred();p.e.guidedMotionWaterFile.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),before=old.messages.length,running=saving?saveGuidedCase(p,'obsolete'):p.e.scenario.onclick();
+    if(change==='file')guidedLiquidSource(p,'direct','{"schema":"changed"}');
+    else if(change==='mode'){p.e.guidedMotionWaterMode.value='none';p.e.guidedMotionWaterMode.handlers.change();}
+    else if(change==='mechanics'){p.e.guidedMotionWaterMechanical.checked=true;p.e.guidedMotionWaterMechanical.handlers.change();}
+    else{p.e.guidedMotionHeat.checked=false;p.e.guidedMotionHeat.handlers.change();}
+    assert.equal(old.dead,true,change);p.ready();delay.resolve(guidedTextileWaterPolicyOriginal);await running;
+    assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+    if(saving)assert.equal(p.e.guidedScenarioCases.children.length,0);
+  }
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  await addGuidedMotion(p,0.002,35);guidedLiquidSource(p);
+  const delay=deferred();p.e.guidedMotionWaterFile.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const running=p.e.scenario.onclick();p.e.guidedMotionWaterMode.value='paired'; // No event: the captured source wins.
+  delay.resolve(guidedTextileWaterPolicyOriginal);await running;const old=p.current(),sent=old.messages.at(-1);
+  assert.ok(sent.scenarioRequest.includes(guidedTextileWaterPolicyOriginal));assert.ok(JSON.parse(sent.scenarioRequest).motion.transient_surface.surface_water);
+  p.e.guidedMotionWaterMode.handlers.change();assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete-water.json',text:'{}'}]});
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);assert.equal(p.live.size,0);
+});
+
+test('guided wet-source composition rejects missing malformed and oversized active files before dispatch',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);await addGuidedMotion(p,0.002,35);
+  for(const mode of Object.keys(guidedLiquidModeFiles)) {
+    p.e.guidedMotionWaterMode.value=mode;p.e.guidedMotionWaterMode.handlers.change();const [,file]=guidedLiquidModeFiles[mode];
+    p.e[file].files=[];let before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/Choose.*original/);
+    for(const raw of ['{bad','null',mode==='direct'?'[]':'{}']) {
+      guidedLiquidSource(p,mode,raw);before=p.current().messages.length;await p.e.scenario.onclick();
+      assert.equal(p.current().messages.length,before);assert.equal(p.e.error.hidden,false);
+    }
+  }
+  guidedLiquidSource(p,'direct',undefined,true);p.e.guidedMotionWaterMechanicsFile.files=[];
+  let before=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/independent mechanical/);
+  p.e.guidedMotionWaterMechanical.checked=false;p.e.guidedMotionWaterMechanical.handlers.change();
+  for(const declared of [true,false]) {
+    let reads=0;p.e.guidedMotionWaterFile.files=[{size:declared?16*1024*1024+1:2,arrayBuffer:async()=>{reads++;return new ArrayBuffer(16*1024*1024+1);}}];
+    p.e.guidedMotionWaterFile.handlers.change();before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before);assert.equal(reads,declared?0:1);assert.match(p.e.error.textContent,/16 MiB/);
+  }
+});
+
 test('compiled WASM guided dry instance temperatures preserve native owners, fallback, cases and independent motion',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_SCENARIO_BODY||!process.env.FTX_GUIDED_SCENARIO_NATIVE},async t=>{
     const source=path.resolve(process.env.FTX_GUIDED_SCENARIO_BODY),load=name=>fs.readFileSync(path.join(source,name));
