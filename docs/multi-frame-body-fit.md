@@ -230,7 +230,10 @@ Use **Save applied target draft** to keep a nonempty partial target map as
 resume it. Drafts use the existing `ftx-body-targets/1` annotation format and retain exact
 source-path, source-byte and model bindings. The local reader accepts at most 256 KiB of strict
 UTF-8 JSON and checks every definition against this page's mesh and rig before replacing any
-work. Invalid or unrelated files leave current definitions intact. Later edits, cancellation,
+work. Choosing a file, a pending read, a canceled chooser or an invalid file withdraws both
+downloads. Selecting another target or changing the preview does not restore them; choose
+**Apply target** or **Cancel pending edit** to resolve the import for retained definitions.
+Invalid or unrelated files leave current definitions intact. Later edits, cancellation,
 reset, another file choice or leaving the page cancel a pending read. After reopening, inspect
 the definitions and apply a target; the completed download requires every observed name. The
 native command continues to refuse incomplete maps. Saving a draft does not validate anatomy

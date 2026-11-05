@@ -19,7 +19,7 @@
       throw Error("Invalid native preview geometry");
     }
     let edited = structuredClone(original), selected = "", candidate = null, pending = false;
-    let revision = 0, reading = false, needsReview = false;
+    let revision = 0, reading = false, needsReview = false, importPending = false;
     const canvas = byId("targetCanvas"), context = canvas.getContext("2d");
     if (!context) throw Error("This browser cannot display the local model canvas");
     const width = canvas.width, height = canvas.height;
@@ -77,7 +77,7 @@
     }
     function updateDownload() {
       withdraw();
-      if (pending) return;
+      if (pending || importPending) return;
       try {
         checkTargets(edited.keypoints, false);
       } catch (error) {
@@ -220,7 +220,7 @@
         const proposed = Object.fromEntries([...Object.entries(edited.keypoints).filter(([n]) => n !== name), [name, candidate]]);
         // A draft may lack observed names; the completed handoff and native command require them all.
         checkTargets(proposed, false);
-        putTarget(name, candidate); selected = name; pending = false; needsReview = false; fillOptions(); select(name);
+        putTarget(name, candidate); selected = name; pending = false; needsReview = false; importPending = false; fillOptions(); select(name);
         status.textContent = "Applied " + name + ". " + Object.keys(edited.keypoints).length + " target(s).";
         updateDownload();
       } catch (error) { pending = true; status.textContent = error.message + ". No target or download published."; }
@@ -233,10 +233,11 @@
       status.textContent = "Removed the unobserved target."; updateDownload();
     });
     byId("cancelTarget").addEventListener("click", () => {
+      importPending = false;
       select(selected); status.textContent = "Pending target edit cancelled; applied definitions are unchanged."; updateDownload();
     });
     byId("resetTargets").addEventListener("click", () => {
-      withdraw(); edited = structuredClone(original); selected = ""; pending = false; needsReview = false; fillOptions(); select("");
+      withdraw(); edited = structuredClone(original); selected = ""; pending = false; needsReview = false; importPending = false; fillOptions(); select("");
       status.textContent = "All target changes reset to the original declaration.";
     });
     // A file read cannot replace later edits, another file choice or a closed page.
@@ -248,11 +249,13 @@
       }, true);
     }
     const saved = byId("targetDraftFile");
-    saved.addEventListener("focus", withdraw);
-    saved.addEventListener("click", withdraw);
+    for (const event of ["focus", "click", "cancel"]) saved.addEventListener(event, () => {
+      ++revision; reading = false; importPending = true; withdraw();
+      status.textContent = "Current definitions retained. Choose saved targets, or Apply a target or Cancel pending edit to restore downloads.";
+    });
     saved.addEventListener("change", async () => {
       const ticket = ++revision, file = saved.files[0];
-      saved.value = ""; withdraw();
+      saved.value = ""; reading = false; importPending = true; withdraw();
       if (!file) { status.textContent = "No saved targets selected; current definitions retained."; return; }
       reading = true;
       status.textContent = "Reading saved targets; current definitions remain unchanged until the file is checked.";
@@ -268,7 +271,7 @@
         }
         checkTargets(proposed.keypoints, false);
         edited = {...structuredClone(original), keypoints: structuredClone(proposed.keypoints)};
-        pending = false; needsReview = true; selected = Object.keys(edited.keypoints).sort()[0];
+        pending = false; needsReview = true; importPending = false; selected = Object.keys(edited.keypoints).sort()[0];
         fillOptions(); select(selected);
         const missing = [...observed].filter(name => !own(edited.keypoints, name));
         status.textContent = Object.keys(edited.keypoints).length + " applied targets restored. Review the definitions, then Apply a target before downloading completed annotations." +
@@ -317,8 +320,8 @@
     status.textContent = "Choose a required or existing name, or name a new target. Inspect the unfitted surface before selecting a location.";
     window.addEventListener("pagehide", () => {
       ++revision;
-      if (reading) status.textContent = "Saved-target read cancelled when leaving the page; current definitions retained.";
-      reading = false; withdraw();
+      status.textContent = "Saved-target reads cancelled when leaving the page. Current definitions retained; Apply a target or Cancel pending edit to restore downloads after returning.";
+      reading = false; importPending = true; withdraw();
     });
   } catch (error) {
     withdraw(); status.textContent = error.message + ". No annotations were published.";

@@ -1,5 +1,6 @@
 // Actual offline model picker -> native target annotation document. No renderer doubles.
 // Prepare with FTX_BODY_TARGET_DIR and targets_editor_fixture_ in body_fit_workflow.
+// FTX_BODY_TARGET_SOURCE tests exact source JS against a retained review, not a rebuilt CLI.
 const assert = require("node:assert/strict");
 const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
 const {pathToFileURL} = require("node:url");
@@ -8,6 +9,8 @@ if (process.argv.length !== 4) throw Error("Usage: node tools/check_body_targets
 const root = path.resolve(process.argv[2]), out = path.resolve(process.argv[3]);
 const review = path.join(root, "review"), read = name => JSON.parse(fs.readFileSync(path.join(root, name)));
 const hash = b => crypto.createHash("sha256").update(b).digest("hex");
+const sourceScript = process.env.FTX_BODY_TARGET_SOURCE
+  ? fs.readFileSync(path.resolve(process.env.FTX_BODY_TARGET_SOURCE)) : null;
 const report = read("review/review.json"), geometry = read("review/model.json");
 const seed = read("review/body-targets.json"), good = read("good.json");
 const original = fs.readFileSync(path.join(root, "input.json"));
@@ -102,6 +105,11 @@ async function addP0(page, zoom) {
   try {
     const context = await browser.newContext({viewport: {width: 1400, height: 850},
       userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0"});
+    let sourceLoads = 0;
+    if (sourceScript) await context.route(pathToFileURL(path.join(review, report.editor.file)).href, route => {
+      ++sourceLoads;
+      return route.fulfill({contentType: 'application/javascript', body: sourceScript});
+    });
     context.on("request", request => requests.push({url: request.url(), method: request.method()}));
     await context.addInitScript(() => {
       globalThis.__revoked = [];
@@ -114,6 +122,7 @@ async function addP0(page, zoom) {
         if (!this.name.startsWith("slow-")) return bytes;
         return new Promise((resolve, reject) => {
           globalThis.__releaseTargetRead = () => bytes.then(resolve, reject);
+          globalThis.__rejectTargetRead = () => reject(new Error("Synthetic file read failure"));
         });
       };
     });
@@ -122,6 +131,7 @@ async function addP0(page, zoom) {
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     await page.goto(pathToFileURL(path.join(review, "index.html")).href);
     await page.waitForFunction(() => !document.getElementById("targetEditor").hidden);
+    if (sourceScript) assert(sourceLoads > 0, 'The target source override must actually execute.');
     assert.equal(await page.evaluate(() => globalThis.targetInjection), undefined);
     assert.equal(await page.locator("script").count(), 2);
     await hidden(page);
@@ -228,6 +238,53 @@ async function addP0(page, zoom) {
       assert.deepEqual(await targetNames(page), names);
       await page.locator("#targetList").selectOption("p0");
       assert.deepEqual(await candidate(page), {kind: "vertex", index: 0});
+      await allHidden(page);
+      await page.locator("#cancelTarget").click();
+      assert(await page.locator("#targetDownload").isVisible());
+    }
+    // Choosing, cancelling or failing to read a replacement must not republish old applied maps
+    // merely because an existing target is selected. Explicit Apply/Cancel resolves the import.
+    for (const event of ["focus", "click", "cancel", "empty"]) {
+      const oldUrl = await page.locator("#targetDownload").getAttribute("href");
+      if (event === "empty") await page.locator("#targetDraftFile").setInputFiles([]);
+      else await page.locator("#targetDraftFile").dispatchEvent(event);
+      await allHidden(page);
+      assert((await page.evaluate(() => globalThis.__revoked)).includes(oldUrl));
+      await page.locator("#targetList").selectOption("p0");
+      await allHidden(page);
+      assert.deepEqual(await candidate(page), {kind: "vertex", index: 0});
+      await page.locator("#cancelTarget").click();
+      assert(await page.locator("#targetDownload").isVisible());
+    }
+    for (const reject of [false, true]) {
+      await loadTargets(page, complete, "slow-unresolved.json");
+      await page.waitForFunction(() => typeof globalThis.__releaseTargetRead === "function");
+      await allHidden(page);
+      if (reject) {
+        await page.evaluate(() => globalThis.__rejectTargetRead());
+        await page.waitForFunction(() => document.getElementById("targetStatus").textContent.startsWith("Saved targets not loaded:"));
+      }
+      await page.locator("#targetList").selectOption("p0");
+      await allHidden(page);
+      if (!reject) await page.evaluate(async () => { await globalThis.__releaseTargetRead(); });
+      await allHidden(page);
+      await page.locator("#applyTarget").click();
+      assert(await page.locator("#targetDownload").isVisible());
+      await page.evaluate(() => { globalThis.__releaseTargetRead = null; globalThis.__rejectTargetRead = null; });
+    }
+    for (const pendingEdit of [false, true]) {
+      if (pendingEdit) await page.locator("#targetKind").selectOption("surface");
+      const before = await page.locator("#targetDefinition").innerText();
+      await page.evaluate(() => {
+        window.dispatchEvent(new PageTransitionEvent("pagehide", {persisted: true}));
+        window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: true}));
+      });
+      await allHidden(page);
+      assert.equal(await page.locator("#targetDefinition").innerText(), before);
+      assert.match(await page.locator("#targetStatus").innerText(), /cancel.*page|page.*cancel/i);
+      await page.locator("#targetList").selectOption("p0");
+      await allHidden(page);
+      await page.locator("#cancelTarget").click();
       assert(await page.locator("#targetDownload").isVisible());
     }
     const completeBytes = Buffer.from(JSON.stringify(complete));
@@ -280,11 +337,14 @@ async function addP0(page, zoom) {
     const annotation = JSON.parse(fs.readFileSync(destination));
     assert.deepEqual(annotation, {...seed, keypoints: good.model.keypoints});
     assert.deepEqual(fs.readFileSync(path.join(root, "input.json")), original);
+    if (sourceScript) assert(sourceLoads > 0, 'The target source override must actually execute.');
     assert.deepEqual(errors, []);
     assert(requests.every(r => r.method === "GET" && r.url.startsWith("file:")));
     console.log(JSON.stringify({status: "PASS", authored_targets: Object.keys(annotation.keypoints).length,
+      editor_script: {mode: sourceScript ? 'source override' : 'compiled review',
+        sha256: sourceScript ? hash(sourceScript) : report.editor.sha256, source_loads: sourceLoads},
       draft: partialPath, invalid_drafts: invalid.length, read_races: races,
-      exercised: ["vertex", "surface", "bone_head", "bone_tail", "pending", "cancel", "reset", "observed-name lock", "two viewport sizes"],
+      exercised: ["vertex", "surface", "bone_head", "bone_tail", "pending", "cancel", "reset", "observed-name lock", "two viewport sizes", "unresolved-import link withdrawal", "read failure preserves work", "cached-page recovery"],
       download: destination, browser_errors: errors.length, local_requests: requests.length}));
   } finally {
     await browser.close();
