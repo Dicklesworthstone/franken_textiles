@@ -14892,7 +14892,7 @@ test('compiled WASM paired wet qualifications preserve native selection, changed
       assert.equal(stale.surface.status,'available');assert.equal(report.comparison.alternatives.find(row=>row.key==='stale').eligible,false);
       for(const row of report.manufacturing.alternatives)assert.equal(row.cutting.status,'available');
     };
-    const evaluate=async(label,expected)=>{
+    const evaluate=async(label,expected,inspect=check)=>{
       await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',label+': '+p.e.error.textContent);
       const result=await w.send(sent);assert.equal(result.type,'result',label+': '+result.message);p.current().emit(result);
       for(const [name,raw] of [['study-request.json',sent.studyRequest],['scenario-request.json',sent.scenarioRequest],['original-pattern.json',pattern],['body-input.json',body]]) {
@@ -14906,7 +14906,7 @@ test('compiled WASM paired wet qualifications preserve native selection, changed
           path.join(source,'body-input.json'),path.join(source,'model.ftxbody')],{encoding:'utf8',stdio:['ignore','pipe','inherit'],maxBuffer:64*1024*1024});
       assert.deepEqual(result.result,JSON.parse(native),label+' complete native/WASM/page-worker equality');retain(label+'-report.json',native);
       if(expected)assert.deepEqual(result.result,JSON.parse(load(expected)));
-      for(const report of result.result.cases||[result.result])check(report);
+      for(const report of result.result.cases||[result.result])inspect(report);
       return {sent,report:result.result};
     };
     for(const name of ['single','matrix']) {
@@ -14942,6 +14942,23 @@ test('compiled WASM paired wet qualifications preserve native selection, changed
     guidedTextileWaterSource(p,'{}');const named=await evaluate('guided-named');
     assert.ok(named.sent.scenarioRequest.includes(motionRaw));assert.ok(named.sent.scenarioRequest.includes(changedRaw));
     assert.deepEqual(named.report.cases[0].simulations,guided.report.simulations);
+    for(const fault of ['missing-pair','ambiguous-pair','mixed-velocities','loading-domain']) {
+      const broken=structuredClone(single),choices=broken.motion.transient_surface.coupled_water_alternatives;
+      if(fault==='missing-pair')choices.splice(0,1);
+      else if(fault==='ambiguous-pair')choices.push(structuredClone(choices[0]));
+      else if(fault==='mixed-velocities')choices[1].mechanical_coupling.bindings.band
+        .outgoing_stream_velocities_relative_to_cloth_m_s_by_interval[0].evaporation[0]=0.1;
+      else for(const pair of choices)pair.surface_water.maximum_liquid_loading_kg_m2=0.06;
+      p.select('scenarioRequest',JSON.stringify(broken));p.e.scenarioRequest.handlers.change();
+      p.e.scenarioMode.value='file';p.e.scenarioMode.handlers.change();
+      await evaluate(fault,null,report=>{
+        const motion=simulation(report,'qualified').motion;assert.equal(motion.status,'refused');assert.ok(motion.result==null);
+        assert.equal(report.comparison.alternatives.find(row=>row.key==='qualified').eligible,false);
+        assert.equal(simulation(report,'qualified').surface.status,'available');
+        for(const row of report.manufacturing.alternatives)assert.equal(row.cutting.status,'available');
+        if(fault==='missing-pair')assert.equal(simulation(report,'slower').motion.status,'available');
+      });
+    }
     t.diagnostic('Actual captured single/matrix and guided single/frozen named paired-source reports match native. Ret-only alternatives change cooling, evaporation, recoil and actual motion; same-ID stale sources refuse the whole motion while cutting and steady heat survive. Synthetic software evidence only. Replay: '+work);
   });
 

@@ -1289,6 +1289,26 @@ not freshly fitted body drapes. The existing `tools/check_web.cjs --model PATH.f
 necessary for successful model-backed browser draping; no model asset or private wearer record is
 bundled by this feature.
 
+The paired wet-material lane reuses the existing synthetic accepted-body CLI capture. Choose a
+fresh capture directory, build the matching native binaries and `web/pkg`, then run:
+
+```sh
+CAPTURE=$(mktemp -d "${TMPDIR:-/tmp}/ftx-paired-water.XXXXXX")
+FTX_COUPLED_WATER_ALTERNATIVES_REPLAY="$CAPTURE" cargo test -p ftx-cli --test accepted_body_workflow source_selected_coupled_water_replays_native_portable_and_named_material_comparisons
+FTX_REAL_WASM=1 FTX_COUPLED_WATER_ALTERNATIVES_REPLAY="$CAPTURE" FTX_GUIDED_SCENARIO_NATIVE=target/debug/ftx-materials node --experimental-vm-modules --test --test-name-pattern '^compiled WASM paired wet qualifications ' tools/check_materials_frontend.cjs
+node tools/check_materials_web.cjs --native target/debug/ftx-materials --paired-water-proof "$CAPTURE"
+```
+
+The compiled lane compares complete native, WASM, worker and page results for original requests,
+guided selections and frozen named cases. The Chromium lane operates the actual file, shortlist and
+case controls, including a mobile viewport, and checks the selected water/mechanical source tables
+and exact downloads. Only vapor resistance differs between the two qualified synthetic materials:
+the lower resistance produces more evaporation, greater cooling and a different coupled trajectory.
+Same-name stale material revisions cannot inherit a pair. Missing, ambiguous or incompatible pairs
+and loading-domain failures must retain the native refusal rather than publish an uncoupled fallback.
+These are numerical and integration checks on a tiny synthetic body, not measured wet-textile laws,
+gravity-equilibrium qualification, anatomical accuracy or physical garment fit.
+
 This delivers the local operator integration slice of plan §25.9, including source-bearing mechanical
 calibration, named scenario comparisons, transient heat and motion histories, and potential vapor and
 finite body water histories through the shared native engines. Each result retains its own evidence,

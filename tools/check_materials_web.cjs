@@ -16,6 +16,7 @@
 // --guided-manufacturing-proof DIR uses the small synthetic inputs emitted by the focused guided WASM test.
 // --guided-scenario-proof DIR uses the synthetic sewing-only body inputs emitted by the guided scenario test.
 // --instance-temperature-proof DIR replays authored dry initial conditions against the native runtime.
+// --paired-water-proof DIR replays the existing paired-qualification native capture and guided cases.
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
@@ -46,6 +47,9 @@ const guidedScenarioProof = guidedScenarioIndex < 0 ? null : path.resolve(proces
 const instanceTemperatureIndex = process.argv.indexOf('--instance-temperature-proof');
 if (instanceTemperatureIndex >= 0 && !process.argv[instanceTemperatureIndex + 1]) throw Error('--instance-temperature-proof requires the synthetic replay input directory');
 const instanceTemperatureProof = instanceTemperatureIndex < 0 ? null : path.resolve(process.argv[instanceTemperatureIndex + 1]);
+const pairedWaterIndex = process.argv.indexOf('--paired-water-proof');
+if (pairedWaterIndex >= 0 && !process.argv[pairedWaterIndex + 1]) throw Error('--paired-water-proof requires the synthetic native capture directory');
+const pairedWaterProof = pairedWaterIndex < 0 ? null : path.resolve(process.argv[pairedWaterIndex + 1]);
 const areaIndex = process.argv.indexOf('--area-proof');
 if (areaIndex >= 0 && !process.argv[areaIndex + 1]) throw Error('--area-proof requires a native capture directory');
 const areaProof = areaIndex < 0 ? null : path.resolve(process.argv[areaIndex + 1]);
@@ -64,7 +68,7 @@ const sewingSelectionProof = sewingSelectionIndex < 0 ? null : path.resolve(proc
 const mixedCuttingIndex = process.argv.indexOf('--mixed-cutting-proof');
 if (mixedCuttingIndex >= 0 && !process.argv[mixedCuttingIndex + 1]) throw Error('--mixed-cutting-proof requires the native finite-knife capture directory');
 const mixedCuttingProof = mixedCuttingIndex < 0 ? null : path.resolve(process.argv[mixedCuttingIndex + 1]);
-assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,guidedStudyProof,guidedManufacturingProof,guidedScenarioProof,instanceTemperatureProof,areaProof,swatchAreaProof,fitProof,adaptiveProof,sewingSelectionProof,mixedCuttingProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
+assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,guidedStudyProof,guidedManufacturingProof,guidedScenarioProof,instanceTemperatureProof,pairedWaterProof,areaProof,swatchAreaProof,fitProof,adaptiveProof,sewingSelectionProof,mixedCuttingProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -112,9 +116,90 @@ const server = http.createServer((req, res) => {
     assert.equal(await run('bind'), ''); return JSON.parse(await download('pattern.json'));
   };
   try {
-    if (instanceTemperatureProof) await page.goto(origin+'/materials.html');
+    if (instanceTemperatureProof || pairedWaterProof) await page.goto(origin+'/materials.html');
     else { await page.goto(origin); await page.click('a[href="materials.html"]'); }
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (pairedWaterProof) {
+      const retained=name=>fs.readFileSync(path.join(pairedWaterProof,name),'utf8');
+      const single=JSON.parse(retained('single-scenario.json')),study=JSON.parse(retained('study.json'));
+      const pairs=single.motion.transient_surface.coupled_water_alternatives;
+      await page.setInputFiles('#patternFile',path.join(pairedWaterProof,'pattern.json'));
+      await page.selectOption('#studyBodySource','request');await page.setInputFiles('#body',path.join(pairedWaterProof,'model.ftxbody'));
+      await page.setInputFiles('#scenarioBody',path.join(pairedWaterProof,'body-input.json'));
+      await page.selectOption('#studyMode','file');await page.setInputFiles('#studyRequest',path.join(pairedWaterProof,'study.json'));
+      const verify=async(label,matrix=false,capture=null)=>{
+        assert.equal(await run('scenario'),'');
+        const report=JSON.parse(await download(matrix?'material-scenario-matrix-study.json':'material-scenario-study.json'));
+        const request=await download('study-request.json'),scenario=await download('scenario-request.json');
+        assert.equal(await download('original-pattern.json'),retained('pattern.json'));
+        assert.equal(await download('body-input.json'),retained('body-input.json'));
+        const requestFile=path.join(work,label+'-study.json'),scenarioFile=path.join(work,label+'-scenario.json');
+        fs.writeFileSync(requestFile,request,{flag:'wx'});fs.writeFileSync(scenarioFile,scenario,{flag:'wx'});
+        const nativeReport=execFileSync(native,['scenario-study',path.join(pairedWaterProof,'pattern.json'),requestFile,scenarioFile,
+          path.join(pairedWaterProof,'body-input.json'),path.join(pairedWaterProof,'model.ftxbody')],
+          {encoding:'utf8',stdio:['ignore','pipe','inherit'],maxBuffer:64*1024*1024});
+        assert.deepEqual(report,JSON.parse(nativeReport),label+' complete native/browser equality');
+        if(capture) {
+          assert.equal(request,retained('study.json'));assert.equal(scenario,retained(capture+'-scenario.json'));
+          assert.deepEqual(report,JSON.parse(retained(capture+'-report.json')));
+        }
+        for(const result of report.cases||[report]) {
+          const motion=key=>result.simulations.find(row=>row.key===key).evaluation.result.motion;
+          const fast=motion('qualified').result,slow=motion('slower').result;
+          for(const [index,item] of [fast,slow].entries()) {
+            const heat=item.transient_surface.result;assert.deepEqual(item.liquid_mechanics,heat.mechanical_coupling);
+            assert.deepEqual(heat.surface_water.request,pairs[index].surface_water);
+            assert.deepEqual(item.liquid_mechanics.qualification,pairs[index].mechanical_coupling);
+            assert.equal(heat.coupled_water_selection.index,index);assert.ok(item.liquid_mechanics.exchange.outgoing_separation_work_j>0);
+          }
+          assert.ok(fast.transient_surface.result.surface_water.evaporated_liquid_kg>slow.transient_surface.result.surface_water.evaporated_liquid_kg);
+          assert.ok(fast.transient_surface.result.final.temperature_c[0][0]<slow.transient_surface.result.final.temperature_c[0][0]);
+          assert.notEqual(fast.final_positions_sha256,slow.final_positions_sha256);
+          assert.equal(motion('stale').status,'refused');assert.ok(motion('stale').result==null);
+          for(const row of result.manufacturing.alternatives)assert.equal(row.cutting.status,'available');
+        }
+        return {report,scenario};
+      };
+      for(const name of ['single','matrix']) {
+        await page.selectOption('#scenarioMode','file');await page.setInputFiles('#scenarioRequest',path.join(pairedWaterProof,name+'-scenario.json'));
+        const result=await verify('retained-'+name,name==='matrix',name);
+        if(name==='single')for(const [index,key] of ['qualified','slower'].entries()) {
+          const caption=page.getByText(key+': selected water and mechanics qualification',{exact:true});assert.equal(await caption.isVisible(),true);
+          const text=await caption.locator('..').textContent();
+          assert.ok(text.includes(pairs[index].surface_water.source.reference));assert.ok(text.includes(pairs[index].mechanical_coupling.source.reference));
+          assert.ok(text.includes(result.report.simulations.find(row=>row.key===key).evaluation.result.motion.result.transient_surface.result.coupled_water_selection.pair_sha256));
+        }
+      }
+      for(const variant of study.variants) {
+        await page.fill('#selection',JSON.stringify(variant.changes.default));assert.equal(await run('inspect'),'');
+        await page.fill('#studyCandidateName',variant.key);await page.click('#addStudyCandidate');
+      }
+      await page.selectOption('#scenarioMode','guided');await page.selectOption('#guidedScenarioFitSource','none');
+      for(const [id,value] of Object.entries({guidedScenarioSpacing:single.options.spacing,guidedScenarioSewSteps:single.options.sew_steps,
+        guidedScenarioDrapeSteps:single.options.drape_steps,guidedScenarioStep:single.options.step,guidedScenarioSettle:single.options.max_settle_steps??0,
+        guidedScenarioMeshBudget:single.max_mesh_points,guidedScenarioFrameBudget:single.max_vertex_frames,
+        guidedCopies:1,guidedGap:1,guidedEdge:0,guidedEnd:0}))await page.fill('#'+id,String(value));
+      for(const id of ['guidedCutting','guidedRequireDrape','guidedScenarioHeat','guidedScenarioMotion','guidedRequireTransientSurface'])await page.check('#'+id);
+      await page.uncheck('#guidedAreaGoal');await page.uncheck('#guidedDrapeMassGoal');
+      await input('heatConditions',single.surface);await page.selectOption('#guidedMotionSource','file');
+      const motionRaw=' \r\n'+JSON.stringify(single.motion)+'\r\n';
+      await page.setInputFiles('#guidedMotionFile',{name:'paired-motion.json',mimeType:'application/json',buffer:Buffer.from(motionRaw)});
+      await page.check('#guidedTextileWaterEvaporatedGoal');await page.selectOption('#guidedTextileWaterEvaporatedDirection','maximize');
+      const guided=await verify('guided-single');assert.ok(guided.scenario.includes(motionRaw));
+      await page.setViewportSize({width:390,height:844});await page.selectOption('#scenarioMode','guided_matrix');
+      await page.fill('#guidedScenarioCaseName','paired sources');await page.click('#addScenarioCase');
+      const changed=structuredClone(single.motion);changed.transient_surface.boundaries[0].outside_c=25;
+      const changedRaw=' \r\n'+JSON.stringify(changed)+'\r\n';
+      await page.setInputFiles('#guidedMotionFile',{name:'warm-paired-motion.json',mimeType:'application/json',buffer:Buffer.from(changedRaw)});
+      await page.fill('#guidedScenarioCaseName','warm outside');await page.click('#addScenarioCase');
+      await page.setInputFiles('#guidedMotionFile',{name:'invalid-active-draft.json',mimeType:'application/json',buffer:Buffer.from('{}')});
+      const named=await verify('guided-named',true);assert.ok(named.scenario.includes(motionRaw));assert.ok(named.scenario.includes(changedRaw));
+      assert.deepEqual(named.report.cases[0].simulations,guided.report.simulations);
+      assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(methods.every(method=>method==='GET'));
+      assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
+      console.log('PASS: four complete native/browser paired-water reports, Ret-dependent cooling and motion, exact source qualification tables/downloads, stale-source refusal and immutable mobile named cases. Synthetic numerical evidence only. Artifacts:',work);
+      return;
+    }
     if (instanceTemperatureProof) {
       const retained=name=>fs.readFileSync(path.join(instanceTemperatureProof,name),'utf8');
       await page.setInputFiles('#patternFile',path.join(instanceTemperatureProof,'pattern.json'));
