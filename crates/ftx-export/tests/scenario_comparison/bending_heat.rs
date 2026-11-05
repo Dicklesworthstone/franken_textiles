@@ -49,8 +49,8 @@ fn outcome(p: &Pattern, d: &Value) -> Value {
         .unwrap()
         .fingerprint();
     let mut result = synthetic_heat(p, -8., 0.);
+    synthetic_dissipation_source(&material, d, &mut result);
     let m = &mut result["motion"]["result"];
-    m["triangles"] = json!([[0, 1, 2]]);
     m["initial_sample"] = json!({"time_s":0.,"bending_plastic_dissipation_j":[2.]});
     let patch = json!({"triangle":0,"vertices":[0,1,2,3,4,5],"reference_area_m2":0.5,
         "law_sha256":law,"plastic_dissipation_j":2.});

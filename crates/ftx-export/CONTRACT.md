@@ -682,7 +682,8 @@ full original request, actual model digest, owner order and resolved temperature
 Coverage uses the original source model retained in `checkpoint.frame.source` and binds its
 initial-state receipt to `initial_frame_sha256`, independently of the final overlap partition.
 Missing/stale receipts and unknown or unretained overrides refuse only the affected heat consumer;
-independent heat and manufacturing remain available. Water and dissipation heating do not support
+independent heat and manufacturing remain available. Requested dissipation heating qualifies the
+actual initial temperatures against each source material's conversion domain; water does not support
 these overrides. Regressions: `scenario_comparison` initial-sheet and coverage extrema and
 source/receipt refusal groups.
 Radiative comparisons retain the methods, conditions, units and evidence of the actual requested
@@ -701,6 +702,11 @@ work, excluded initial dissipation and complete source-energy accounting at ever
 uses physical storage, never remap residual, in the balance. Conversion protocols participate only
 when that thermal domain is consumed. A refusal preserves independent domain and manufacturing
 outputs; neither a boundary total nor the other thermal model can substitute for supplied heat.
+Conversion receipts are keyed by the complete material identity and reconciled with each source
+triangle's retained material and frozen piece assignment. Distinct materials may share a Maxwell
+relaxation-law fingerprint while carrying different qualified conversion fractions; each triangle
+uses its own material's fraction. Missing, duplicate, unused or borrowed material receipts refuse
+the affected thermal comparison, including active materials with zero accepted work.
 The separately requested bending-yield source uses the same conservation admission, with its own
 qualified observation and accepted per-triangle work. Initial and final patch records must retain
 the same law, source-triangle prefix, six-node stencil and reference area, and reconcile with captured

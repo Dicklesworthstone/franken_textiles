@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::Refusal;
 use ftx_pattern::{
-    material_catalog::{Selection, property_unit},
+    material_catalog::{ResolvedMaterial, Selection, property_unit},
     material_screen::Direction,
     materials::{CATALOG_SCHEMA, Catalog},
 };
@@ -3912,6 +3912,157 @@ fn finite(value: &Value) -> Option<f64> {
     value.as_f64().filter(|x| x.is_finite())
 }
 
+// Bind every source triangle to the same canonical material and physical owner as the
+// admitted initial drape. Moving coverage retains this original source beneath its remapped cells.
+fn admit_heat_source(
+    alternative: &Alternative,
+    simulation: &Value,
+    motion: &Value,
+    heat: &Value,
+    request: &Value,
+    coverage: bool,
+) -> Result<Vec<ResolvedMaterial>, Refusal> {
+    let fail = || {
+        invalid(
+            "transient heat needs canonical source materials and exact retained drape assignments",
+        )
+    };
+    let frame = &simulation["drape"]["thermal_surface"];
+    let model = if coverage {
+        &heat["checkpoint"]["frame"]["source"]
+    } else {
+        &heat["model"]
+    };
+    let report = &simulation["drape"]["material"];
+    let patches = vapor_array(model, "patches")?;
+    let columns = vapor_array(model, "columns")?;
+    let source_columns = vapor_array(&frame["model"], "columns")?;
+    let owners = vapor_array(frame, "triangle_instance")?;
+    let instances = vapor_array(frame, "instances")?;
+    let triangles = vapor_array(simulation, "triangles")?;
+    let positions = vapor_array(simulation, "positions_m")?;
+    let requested_cells = if coverage {
+        &request["settings"]["cells_per_layer"]
+    } else {
+        &request["cells_per_layer"]
+    };
+    let cells = vapor_index(requested_cells)?;
+    if frame["available"] != true
+        || frame["schema"] != "ftx-drape-thermal-surface/1"
+        || model["schema"] != "ftx-thermal-surface/1"
+        || frame["model"]["schema"] != model["schema"]
+        || frame["material_report_sha256"] != json!(hash(report)?)
+        || frame["positions_m"] != simulation["positions_m"]
+        || !same_identity(
+            &simulation["positions_sha256"],
+            &json!(hash(&frame["positions_m"])?),
+        )
+        || frame["model"]["patches"] != model["patches"]
+        || frame["model"]["vertex_count"] != model["vertex_count"]
+        || motion["triangles"] != simulation["triangles"]
+        || patches.is_empty()
+        || patches.len() > 65_536
+        || owners.len() != patches.len()
+        || triangles.len() != patches.len()
+        || columns.is_empty()
+        || columns.len() > patches.len()
+        || columns.len() != source_columns.len()
+        || instances.is_empty()
+        || instances.len() > 196_608
+        || positions.is_empty()
+        || positions.len() > 196_608
+        || vapor_index(&model["vertex_count"])? != positions.len()
+        || !(1..=64).contains(&cells)
+        || patches.len().saturating_mul(cells) > 1_000_000
+    {
+        return Err(fail());
+    }
+    let names: BTreeSet<_> = instances.iter().filter_map(Value::as_str).collect();
+    if names.len() != instances.len() || names.iter().any(|name| name.is_empty()) {
+        return Err(fail());
+    }
+    for value in [frame, &frame["model"], model] {
+        let mut input = value.clone();
+        input.as_object_mut().ok_or_else(fail)?.remove("sha256");
+        if !same_identity(&value["sha256"], &json!(hash(&input)?)) {
+            return Err(fail());
+        }
+    }
+    let instance_hashes = match report["basis"].as_str() {
+        Some("characterized_record") => {
+            vec![report["record_sha256"].as_str().ok_or_else(fail)?; instances.len()]
+        }
+        Some("per_piece_characterization") => {
+            let receipts = vapor_array(report, "instances")?;
+            if receipts.len() != instances.len()
+                || report["triangle_instance"] != frame["triangle_instance"]
+                || receipts
+                    .iter()
+                    .zip(instances)
+                    .any(|(r, id)| r["instance"] != *id)
+            {
+                return Err(fail());
+            }
+            receipts
+                .iter()
+                .map(|r| r["record_sha256"].as_str().ok_or_else(fail))
+                .collect::<Result<Vec<_>, _>>()?
+        }
+        _ => return Err(fail()),
+    };
+    let catalog = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    };
+    let mut selections = Vec::with_capacity(columns.len());
+    let mut materials = Vec::with_capacity(columns.len());
+    for (column, source) in columns.iter().zip(source_columns) {
+        let layers = vapor_array(column, "layers")?;
+        if layers.len() != 1
+            || column["layers"] != source["layers"]
+            || &column["cells_per_layer"] != requested_cells
+            || !vapor_array(column, "interface_resistance_m2_k_w")?.is_empty()
+        {
+            return Err(fail());
+        }
+        let retained = &layers[0];
+        let material = catalog.resolve(&Selection {
+            id: retained["authored"]["id"].as_str().ok_or_else(fail)?.into(),
+            record: Some(serde_json::from_value(retained["authored"].clone()).map_err(|_| fail())?),
+            allow_estimates: retained["allow_estimates"].as_bool().ok_or_else(fail)?,
+            expected_sha256: Some(retained["sha256"].as_str().ok_or_else(fail)?.into()),
+            ..Selection::default()
+        })?;
+        let record = if report["basis"] == "characterized_record" {
+            &report["record"]
+        } else {
+            &report["records"][material.sha256()]["record"]
+        };
+        if serde_json::to_value(&material).map_err(|_| fail())? != *retained || record != retained {
+            return Err(fail());
+        }
+        selections.push(json!(material.frozen_selection()));
+        materials.push(material);
+    }
+    admit_vapor_assignments(alternative, instances, owners, patches, &selections)?;
+    let mut used = BTreeSet::new();
+    for ((owner, patch), triangle) in owners.iter().zip(patches).zip(triangles) {
+        let column = vapor_index(&patch["column"])?;
+        let material = materials.get(column).ok_or_else(fail)?;
+        if instance_hashes.get(vapor_index(owner)?).copied() != Some(material.sha256())
+            || patch["vertices"] != *triangle
+            || !finite(&patch["reference_area_m2"]).is_some_and(|area| area > 0.)
+        {
+            return Err(fail());
+        }
+        used.insert(column);
+    }
+    if used.len() != materials.len() {
+        return Err(fail());
+    }
+    Ok(materials)
+}
+
 // Reconstruct authored initial temperatures from the retained physical owners. Material columns
 // can be shared by differently conditioned pieces; neither their order nor an unused fallback
 // temperature defines the initial extrema. The production thermal solver still owns evolution.
@@ -3955,91 +4106,20 @@ fn initial_heat_range(
     {
         return Err(fail());
     }
+    let materials = admit_heat_source(alternative, simulation, motion, heat, request, coverage)?;
     let frame = &simulation["drape"]["thermal_surface"];
-    // The coverage checkpoint keeps the original source mesh/material columns while its frame
-    // geometry moves. Its initial condition belongs to that source, not the final overlap cells.
     let model = if coverage {
         &heat["checkpoint"]["frame"]["source"]
     } else {
         &heat["model"]
     };
     let patches = vapor_array(model, "patches")?;
-    let columns = vapor_array(model, "columns")?;
-    let source_columns = vapor_array(&frame["model"], "columns")?;
     let owners = vapor_array(frame, "triangle_instance")?;
     let instances = vapor_array(frame, "instances")?;
     let triangles = vapor_array(simulation, "triangles")?;
-    let positions = vapor_array(simulation, "positions_m")?;
-    let requested_cells = if coverage {
-        &request["settings"]["cells_per_layer"]
-    } else {
-        &request["cells_per_layer"]
-    };
-    let cells = vapor_index(requested_cells)?;
-    if frame["available"] != true
-        || frame["schema"] != "ftx-drape-thermal-surface/1"
-        || model["schema"] != "ftx-thermal-surface/1"
-        || frame["model"]["schema"] != model["schema"]
-        || frame["material_report_sha256"] != json!(hash(&simulation["drape"]["material"])?)
-        || frame["positions_m"] != simulation["positions_m"]
-        || !same_identity(
-            &simulation["positions_sha256"],
-            &json!(hash(&frame["positions_m"])?),
-        )
-        || frame["model"]["patches"] != model["patches"]
-        || frame["model"]["vertex_count"] != model["vertex_count"]
-        || motion["triangles"] != simulation["triangles"]
-        || patches.is_empty()
-        || patches.len() > 65_536
-        || owners.len() != patches.len()
-        || triangles.len() != patches.len()
-        || columns.is_empty()
-        || columns.len() > patches.len()
-        || columns.len() != source_columns.len()
-        || instances.is_empty()
-        || instances.len() > 196_608
-        || positions.is_empty()
-        || positions.len() > 196_608
-        || vapor_index(&model["vertex_count"])? != positions.len()
-        || !(1..=64).contains(&cells)
-        || patches.len().saturating_mul(cells) > 1_000_000
-    {
-        return Err(fail());
-    }
-    for value in [frame, &frame["model"], model] {
-        let mut input = value.clone();
-        input.as_object_mut().ok_or_else(fail)?.remove("sha256");
-        if !same_identity(&value["sha256"], &json!(hash(&input)?)) {
-            return Err(fail());
-        }
-    }
-    let catalog = Catalog {
-        schema: CATALOG_SCHEMA.into(),
-        materials: vec![],
-    };
-    let mut selections = Vec::with_capacity(columns.len());
-    let mut laws = Vec::with_capacity(columns.len());
-    let mut heating_domains = Vec::with_capacity(columns.len());
-    for (column, source) in columns.iter().zip(source_columns) {
-        let layers = vapor_array(column, "layers")?;
-        if layers.len() != 1
-            || column["layers"] != source["layers"]
-            || &column["cells_per_layer"] != requested_cells
-            || !vapor_array(column, "interface_resistance_m2_k_w")?.is_empty()
-        {
-            return Err(fail());
-        }
-        let retained = &layers[0];
-        let material = catalog.resolve(&Selection {
-            id: retained["authored"]["id"].as_str().ok_or_else(fail)?.into(),
-            record: Some(serde_json::from_value(retained["authored"].clone()).map_err(|_| fail())?),
-            allow_estimates: retained["allow_estimates"].as_bool().ok_or_else(fail)?,
-            expected_sha256: Some(retained["sha256"].as_str().ok_or_else(fail)?.into()),
-            ..Selection::default()
-        })?;
-        if serde_json::to_value(&material).map_err(|_| fail())? != *retained {
-            return Err(fail());
-        }
+    let mut laws = Vec::with_capacity(materials.len());
+    let mut heating_domains = Vec::with_capacity(materials.len());
+    for material in &materials {
         laws.push(ftx_pattern::material_thermal::ThermalLaw::from_material(
             material.material(),
             material.allows_estimates(),
@@ -4066,9 +4146,7 @@ fn initial_heat_range(
             }
         }
         heating_domains.push(domain);
-        selections.push(json!(material.frozen_selection()));
     }
-    admit_vapor_assignments(alternative, instances, owners, patches, &selections)?;
     let mut ids = BTreeSet::new();
     let temperatures = instances
         .iter()
@@ -4285,11 +4363,30 @@ fn admit_heat<'a>(
     // source may borrow the other's evidence or make its own full-temperature energy claim.
     let mut supplied = vec![0.; trace.len() + 1];
     let mut heated = false;
+    let mut materials = None;
     for channel in [HeatWork::Plastic, HeatWork::Relaxation, HeatWork::Bending] {
         let field = channel.policy();
         match request.get(field).filter(|v| !v.is_null()) {
             Some(policy) if policy.as_str() == Some("uniform_reference_thickness") => {
-                let source = admit_dissipation_heat(alternative, motion, h, consumer, channel)?;
+                if materials.is_none() {
+                    materials = Some(admit_heat_source(
+                        alternative,
+                        simulation,
+                        motion,
+                        h,
+                        request,
+                        coverage,
+                    )?);
+                }
+                let source = admit_dissipation_heat(
+                    materials
+                        .as_deref()
+                        .ok_or_else(|| fail("missing admitted thermal material sources"))?,
+                    motion,
+                    h,
+                    consumer,
+                    channel,
+                )?;
                 for (sum, value) in supplied.iter_mut().zip(source) {
                     *sum += value;
                     if !sum.is_finite() {
@@ -4396,13 +4493,12 @@ fn heat_near(a: f64, b: f64) -> bool {
 }
 
 fn admit_dissipation_heat(
-    alternative: &Alternative,
+    materials: &[ResolvedMaterial],
     motion: &Value,
     heat: &Value,
     consumer: Consumer,
     channel: HeatWork,
 ) -> Result<Vec<f64>, Refusal> {
-    use ftx_pattern::materials::{CATALOG_SCHEMA, Catalog};
     let policy = channel.policy();
     let (property, array, initial_history, final_history, history_total, work_total, initial_work) =
         match channel {
@@ -4439,25 +4535,17 @@ fn admit_dissipation_heat(
             "{consumer:?}: {policy} needs source-matched accepted work and complete supplied-energy accounting"
         ))
     };
-    let frozen = alternative.frozen_changes.as_ref().ok_or_else(fail)?;
     let receipts = heat[policy]["material_fractions"]
         .as_array()
         .filter(|v| !v.is_empty())
         .ok_or_else(fail)?;
-    let catalog = Catalog {
-        schema: CATALOG_SCHEMA.into(),
-        materials: vec![],
-    };
-    let mut laws = BTreeMap::new();
+    let mut conversions = BTreeMap::new();
     for receipt in receipts {
         let identity = receipt["material_sha256"].as_str().ok_or_else(fail)?;
-        let selection = frozen
-            .pieces
-            .values()
-            .chain(frozen.default.iter())
-            .find(|s| s.expected_sha256.as_deref() == Some(identity))
+        let material = materials
+            .iter()
+            .find(|material| material.sha256() == identity)
             .ok_or_else(fail)?;
-        let material = catalog.resolve(selection)?;
         let (fraction, temperature_range_c, law) = match channel {
             HeatWork::Plastic => {
                 let f = material
@@ -4501,7 +4589,18 @@ fn admit_dissipation_heat(
         let expected = json!({"material_sha256":material.sha256(),"law_sha256":law,
             "fraction":fraction,"temperature_range_c":temperature_range_c,
             "observation":material.authored().properties[property]});
-        if receipt != &expected || laws.insert(law, fraction).is_some() {
+        if receipt != &expected || conversions.insert(identity, (law, fraction)).is_some() {
+            return Err(fail());
+        }
+    }
+    // An active source needs its own qualification even if its accepted work happens to be zero.
+    for material in materials {
+        let active = match channel {
+            HeatWork::Plastic => material.membrane_plastic_heat_fraction()?.is_some(),
+            HeatWork::Relaxation => material.membrane_relaxation_heat_fraction()?.is_some(),
+            HeatWork::Bending => material.bending_plastic_heat_fraction()?.is_some(),
+        };
+        if active != conversions.contains_key(material.sha256()) {
             return Err(fail());
         }
     }
@@ -4526,6 +4625,12 @@ fn admit_dissipation_heat(
     {
         return Err(fail());
     }
+    let model = if consumer == Consumer::TransientCoverage {
+        &heat["checkpoint"]["frame"]["source"]
+    } else {
+        &heat["model"]
+    };
+    let patches = vapor_array(model, "patches")?;
     let mut fractions = vec![None; triangles.len()];
     let mut bending_patches = vec![None; triangles.len()];
     let mut used = BTreeSet::new();
@@ -4544,8 +4649,13 @@ fn admit_dissipation_heat(
             .filter(|&i| i < triangles.len())
             .ok_or_else(fail)?;
         let law = element["law_sha256"].as_str().ok_or_else(fail)?;
-        let fraction = *laws.get(law).ok_or_else(fail)?;
-        if fractions[index].replace(fraction).is_some()
+        let patch = patches.get(index).ok_or_else(fail)?;
+        let material = materials
+            .get(vapor_index(&patch["column"])?)
+            .ok_or_else(fail)?;
+        let (expected_law, fraction) = conversions.get(material.sha256()).ok_or_else(fail)?;
+        if law != expected_law.as_str()
+            || fractions[index].replace(*fraction).is_some()
             || (channel == HeatWork::Plastic
                 && (element["vertices"] != triangles[index]
                     || !finite(&element["plastic_dissipation_j"])
@@ -4567,15 +4677,23 @@ fn admit_dissipation_heat(
             }
             bending_patches[index] = Some(element);
         }
-        used.insert(law);
+        used.insert(material.sha256());
     }
-    if used.len() != laws.len()
+    if used.len() != conversions.len()
         || fractions
             .iter()
             .zip(&previous)
             .any(|(f, &j)| f.is_none() && j != 0.)
     {
         return Err(fail());
+    }
+    for (patch, fraction) in patches.iter().zip(&fractions) {
+        let material = materials
+            .get(vapor_index(&patch["column"])?)
+            .ok_or_else(fail)?;
+        if conversions.contains_key(material.sha256()) != fraction.is_some() {
+            return Err(fail());
+        }
     }
     let check = |row: &Value, dissipated: f64, supplied: f64| -> Result<(), Refusal> {
         let work = &row[policy];
