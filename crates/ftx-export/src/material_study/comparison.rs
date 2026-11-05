@@ -252,6 +252,17 @@ pub enum Metric {
     TextileWaterLatentEnergyJ,
     /// Latent energy released by qualified condensation into the textile/liquid system, in joules.
     TextileWaterCondensationLatentEnergyJ,
+    /// Final pressure of the independently qualified finite shared vapor reservoir, in pascals.
+    TextileWaterFinalVaporPressurePa,
+    /// Lowest reservoir pressure at the initial state or retained mechanical sample endpoints.
+    TextileWaterMinSampleVaporPressurePa,
+    /// Highest reservoir pressure at the initial state or retained mechanical sample endpoints.
+    TextileWaterMaxSampleVaporPressurePa,
+    /// Vapor remaining in the finite shared reservoir at the final sample, in kilograms.
+    TextileWaterRemainingVaporMassKg,
+    /// Signed heat removed to maintain the qualified reservoir temperature, in joules.
+    /// Negative values mean heat was supplied; this is separate from textile latent heat.
+    TextileWaterIsothermalHeatRemovedJ,
     /// Signed incoming-side energy (J) for all independent sheets over the whole requested motion.
     TransientSurfaceInsideEnergyJ,
     /// Signed incoming-side energy (J) of declared body paths AND exposed-cloth films, not wearer loss.
@@ -357,6 +368,11 @@ impl Metric {
             | Self::TextileWaterDrainedMassKg
             | Self::TextileWaterLatentEnergyJ
             | Self::TextileWaterCondensationLatentEnergyJ
+            | Self::TextileWaterFinalVaporPressurePa
+            | Self::TextileWaterMinSampleVaporPressurePa
+            | Self::TextileWaterMaxSampleVaporPressurePa
+            | Self::TextileWaterRemainingVaporMassKg
+            | Self::TextileWaterIsothermalHeatRemovedJ
             | Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
             | Self::TransientSurfaceNetBoundaryEnergyJ
@@ -392,7 +408,11 @@ impl Metric {
             | Self::TextileWaterSuppliedMassKg
             | Self::TextileWaterCondensedMassKg
             | Self::TextileWaterDrainedMassKg
+            | Self::TextileWaterRemainingVaporMassKg
             | Self::ThreadRequiredMassKg => "kg",
+            Self::TextileWaterFinalVaporPressurePa
+            | Self::TextileWaterMinSampleVaporPressurePa
+            | Self::TextileWaterMaxSampleVaporPressurePa => "Pa",
             Self::ObservedOrderCost
             | Self::SelectedObservedOrderCost
             | Self::CuttingJobObservedOrderCost
@@ -447,7 +467,9 @@ impl Metric {
             | Self::TransientCoverageNetBoundaryEnergyJ
             | Self::MotionCoveredVaporPotentialEnergyJ
             | Self::MotionWetFilmBodyReservoirLatentEnergyJ => "J",
-            Self::TextileWaterLatentEnergyJ | Self::TextileWaterCondensationLatentEnergyJ => "J",
+            Self::TextileWaterLatentEnergyJ
+            | Self::TextileWaterCondensationLatentEnergyJ
+            | Self::TextileWaterIsothermalHeatRemovedJ => "J",
             Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
             | Self::TransientCoverageMinSampleTemperatureC
@@ -634,6 +656,27 @@ impl Metric {
                 .as_ref()?
                 .result["surface_water"]["condensation_latent_energy_j"]
                 .as_f64(),
+            Self::TextileWaterFinalVaporPressurePa => admitted
+                .transient_surface
+                .as_ref()?
+                .result["surface_water"]["vapor_reservoir"]["vapor_pressure_pa"]
+                .as_f64(),
+            Self::TextileWaterMinSampleVaporPressurePa => {
+                Some(admitted.transient_surface.as_ref()?.vapor_pressure_range_pa?[0])
+            }
+            Self::TextileWaterMaxSampleVaporPressurePa => {
+                Some(admitted.transient_surface.as_ref()?.vapor_pressure_range_pa?[1])
+            }
+            Self::TextileWaterRemainingVaporMassKg => admitted
+                .transient_surface
+                .as_ref()?
+                .result["surface_water"]["vapor_reservoir"]["remaining_vapor_mass_kg"]
+                .as_f64(),
+            Self::TextileWaterIsothermalHeatRemovedJ => admitted
+                .transient_surface
+                .as_ref()?
+                .result["surface_water"]["vapor_reservoir"]["isothermal_heat_removed_j"]
+                .as_f64(),
             Self::TransientSurfaceInsideEnergyJ => {
                 admitted.transient_surface.as_ref()?.result["inside_energy_j"].as_f64()
             }
@@ -724,6 +767,7 @@ impl Metric {
                 | Self::TransientSurfaceFinalMaxTemperatureC
                 | Self::TransientCoverageFinalMinTemperatureC
                 | Self::TransientCoverageFinalMaxTemperatureC
+                | Self::TextileWaterIsothermalHeatRemovedJ
         )
     }
 
@@ -1218,9 +1262,26 @@ impl Policy {
                     | Metric::TextileWaterDrainedMassKg
                     | Metric::TextileWaterLatentEnergyJ
                     | Metric::TextileWaterCondensationLatentEnergyJ
+                    | Metric::TextileWaterFinalVaporPressurePa
+                    | Metric::TextileWaterMinSampleVaporPressurePa
+                    | Metric::TextileWaterMaxSampleVaporPressurePa
+                    | Metric::TextileWaterRemainingVaporMassKg
+                    | Metric::TextileWaterIsothermalHeatRemovedJ
             )
         }) {
             report.notes.push("Textile-water objectives require the source-qualified free-film history, canonical Ret networks and the complete liquid/vapor energy ledger on the admitted motion. Reference material area owns liquid; current area conducts vapor. Version 2 qualifies incoming-liquid delivery and sensible enthalpy. Version 3 additionally qualifies reverse transfer, dry/wet nucleation and the declared incoming-vapor enthalpy model. Version 4 qualifies stock-limited prescribed liquid drainage and its separate exported sensible enthalpy. Evaporative latent removal, condensation latent release and drainage stay separate, including when the same water later re-evaporates. These are nominal conditional computations, not sorption, inferred runoff or wet properties, continuous-time temperature bounds, comfort or measured garment validation.");
+        }
+        if self.metrics().iter().any(|metric| {
+            matches!(
+                metric,
+                Metric::TextileWaterFinalVaporPressurePa
+                    | Metric::TextileWaterMinSampleVaporPressurePa
+                    | Metric::TextileWaterMaxSampleVaporPressurePa
+                    | Metric::TextileWaterRemainingVaporMassKg
+                    | Metric::TextileWaterIsothermalHeatRemovedJ
+            )
+        }) {
+            report.notes.push("Finite-reservoir objectives require water version 5 and its independently qualified shared isothermal vapor inventory. Pressure extrema include the initial state and retained mechanical sample endpoints, not unreported thermal substeps or continuous-time bounds. Final vapor mass and pressure retain the same conserved inventory; signed isothermal heat removal belongs to the reservoir thermostat, with negative values indicating heat supplied. Prescribed infinite ambient pressure and body-water potentials cannot substitute for these outcomes. These nominal values do not provide propagated uncertainty, humidity, ventilation, wearer comfort or empirical garment validation.");
         }
         if self.consumers().contains(&Consumer::VaporSurface) {
             report.notes.push("Independent draped-sheet vapor objectives use the admitted initial geometry, retained source Ret and declared pressure/film/latent-heat conditions. Overlapping sheets remain independent; these potentials are not covered-body evaporation, water supply, latent cooling, continuous motion totals or comfort. Consumed column protocols require separate cross-alternative admission.");
@@ -2506,6 +2567,7 @@ struct Heat<'a> {
     result: &'a Value,
     range_c: [f64; 2],
     final_range_c: [f64; 2],
+    vapor_pressure_range_pa: Option<[f64; 2]>,
 }
 
 fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerical<'_>) -> bool {
@@ -4287,6 +4349,12 @@ fn admit_heat<'a>(
     }
     let mut range = initial_heat_range(alternative, simulation, motion, h, request, coverage)?;
     let mut final_range = None;
+    // Reuse this complete-history pass for every pressure criterion. The independent water
+    // admission below must still reconcile every sampled inventory and enthalpy before these
+    // values become available; a prescribed ambient pressure is never a finite-reservoir result.
+    let mut vapor_pressure_range =
+        finite(&h["surface_water"]["vapor_reservoir"]["initial_vapor_pressure_pa"])
+            .map(|pressure| [pressure, pressure]);
     let mut steps = 0_u64;
     let mut interval = 0;
     for (i, (row, sample)) in trace.iter().zip(samples).enumerate() {
@@ -4328,6 +4396,12 @@ fn admit_heat<'a>(
                     "sampled temperatures must be finite, ordered and physical",
                 ));
             }
+        }
+        if let Some(range) = &mut vapor_pressure_range {
+            let pressure = finite(&row["surface_water"]["vapor_reservoir"]["vapor_pressure_pa"])
+                .ok_or_else(|| fail("missing finite shared-reservoir sample pressure"))?;
+            range[0] = range[0].min(pressure);
+            range[1] = range[1].max(pressure);
         }
         steps = row["thermal_substeps"]
             .as_u64()
@@ -4484,6 +4558,7 @@ fn admit_heat<'a>(
         range_c: range,
         final_range_c: final_range
             .ok_or_else(|| fail("missing final sampled temperature range"))?,
+        vapor_pressure_range_pa: vapor_pressure_range,
     })
 }
 

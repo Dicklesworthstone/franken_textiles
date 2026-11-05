@@ -1610,7 +1610,7 @@ or paired water/mechanical qualifications. An original motion request can also r
 The collection selects the qualification matching every retained physical instance while keeping the same water loading, operating conditions and imposed phase velocities.
 These criteria require the complete motion and independent-sheet heat/water history
 in the same case. Steady heat, independent vapor and finite body-water requests are separate.</p>
-<p class="note">All seven quantities use <strong>nominal values only</strong>. Select each objective's direction explicitly;
+<p class="note">Textile-water and finite-vapor quantities use <strong>nominal values only</strong>. Select each objective's direction explicitly;
 inclusive limits apply independently of its goal checkbox. Use an explicit nominal limit basis when other objectives use
 source-reported ranges. Every selected water criterion requires an admitted water history; the ordinary independent-sheet heat
 history can also be required below without choosing a water objective.</p>
@@ -1665,26 +1665,68 @@ history can also be required below without choosing a water objective.</p>
 <label>Maximum condensation latent-energy release (J) <input id="guidedTextileWaterCondensationLatentLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
 </div>
 </details>
+<details><summary>Finite shared vapor reservoir: pressure, remaining vapor and temperature control</summary>
+<p class="note">These five criteria require the selected <code>ftx-textile-surface-water/5</code> policy and its independently
+qualified finite vapor reservoir in this same case. Older water policies leave these readings unavailable. Pressure extrema
+include the initial reservoir and retained mechanical endpoints; they do not bound thermal substeps or continuous time.</p>
+<label><input id="guidedTextileVaporFinalPressureGoal" type="checkbox"> Compare final vapor pressure (Pa)</label>
+<div class="study-fields">
+<label>Final-pressure direction <select id="guidedTextileVaporFinalPressureDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize pressure</option><option value="maximize">Maximize pressure</option></select></label>
+<label>Minimum final vapor pressure (Pa) <input id="guidedTextileVaporFinalPressureMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum final vapor pressure (Pa) <input id="guidedTextileVaporFinalPressureLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileVaporSampleMinGoal" type="checkbox"> Compare minimum sampled vapor pressure (Pa)</label>
+<div class="study-fields">
+<label>Minimum-pressure direction <select id="guidedTextileVaporSampleMinDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize pressure</option><option value="maximize">Maximize pressure</option></select></label>
+<label>Lower limit for minimum sampled pressure (Pa) <input id="guidedTextileVaporSampleMinMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Upper limit for minimum sampled pressure (Pa) <input id="guidedTextileVaporSampleMinLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileVaporSampleMaxGoal" type="checkbox"> Compare maximum sampled vapor pressure (Pa)</label>
+<div class="study-fields">
+<label>Maximum-pressure direction <select id="guidedTextileVaporSampleMaxDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize pressure</option><option value="maximize">Maximize pressure</option></select></label>
+<label>Lower limit for maximum sampled pressure (Pa) <input id="guidedTextileVaporSampleMaxMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Upper limit for maximum sampled pressure (Pa) <input id="guidedTextileVaporSampleMaxLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileVaporRemainingGoal" type="checkbox"> Compare remaining reservoir vapor (kg)</label>
+<div class="study-fields">
+<label>Remaining-vapor direction <select id="guidedTextileVaporRemainingDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize vapor mass</option><option value="maximize">Maximize vapor mass</option></select></label>
+<label>Minimum remaining vapor (kg) <input id="guidedTextileVaporRemainingMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum remaining vapor (kg) <input id="guidedTextileVaporRemainingLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileVaporHeatRemovedGoal" type="checkbox"> Compare isothermal heat removed from the reservoir (J)</label>
+<div class="study-fields">
+<label>Reservoir-heat direction <select id="guidedTextileVaporHeatRemovedDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize signed heat removed</option><option value="maximize">Maximize signed heat removed</option></select></label>
+<label>Minimum signed heat removed (J) <input id="guidedTextileVaporHeatRemovedMinimumLimit" type="number" step="any" placeholder="No minimum"></label>
+<label>Maximum signed heat removed (J) <input id="guidedTextileVaporHeatRemovedLimit" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<p class="note">Positive isothermal heat removes energy from the reservoir; negative heat supplies energy to hold its declared
+temperature. This is separate from the textile boundary-energy ledger. Minimizing its signed value does not minimize its magnitude.</p>
+</details>
 <p class="note">Initial liquid, supply, condensation and drainage need their own declared policies and qualification.
 Supply, condensation and drainage criteria remain unavailable when their supporting policy is absent. An admitted phase can
 legitimately report zero transfer. Evaporation removes latent energy, condensation releases it, and drainage
 exports sensible energy without a latent term. The native history reconciles these with retained liquid and textile temperature.</p>
 <p class="note">Each instance's water policy names one exact qualified material. Same-material design changes recompute water
-and heat on the new geometry; an incompatible material substitution refuses the wet result. The current shared scenario does not
-select a separate water qualification for each material alternative. No source hash is replaced automatically.</p>
+and heat on the new geometry. Qualification collections select the exact independently sourced material assignment; a missing or
+ambiguous match refuses the affected result. No source hash is replaced automatically.</p>
 <p class="note">Textile water changes mechanical mass or momentum only when the original request explicitly supplies an admitted
 mechanical-coupling policy. This free-liquid model does not infer sorption, wicking, body-to-textile transfer, wet material laws,
 wearer cooling or empirical wet-garment performance.</p>
 </fieldset>
 <fieldset><legend>Heat and temperature through motion</legend>
-<p class="note">Enable dry sheet heat in the motion editor, or retain an original motion request with the corresponding heat history. These criteria need complete motion
+<p class="note">Enable sheet heat in the motion editor, or retain an original motion request with the corresponding heat history. These criteria need complete motion
 and nominal values. Choose an explicit nominal limit basis when other objectives use source-reported bounds.
 Energy and temperature limits preserve their signs; minimizing signed energy does not minimize its magnitude.
 Limits and required histories apply independently of goal checkboxes.</p>
 <p class="note">Sampled extrema include the initial state and retained motion samples. Final extrema use only the final
 sample. These values do not establish continuous-time temperature bounds or wearer comfort.</p>
 <details><summary>Independent sheet heat history</summary>
-<p class="note">Use the saved dry sheet-heat schedule or the independent-sheet heat policy in an original motion request. No steady-sheet request is needed.</p>
+<p class="note">Use the saved sheet-heat schedule or the independent-sheet heat policy in an original motion request. No steady-sheet request is needed.</p>
 <label><input id="guidedTransientSurfaceInsideEnergyGoal" type="checkbox"> Compare inside-side energy (J)</label>
 <div class="study-fields">
 <label>Direction <select id="guidedTransientSurfaceInsideEnergyDirection"><option value="">Choose a direction</option><option value="minimize">Minimize signed energy</option><option value="maximize">Maximize signed energy</option></select></label>

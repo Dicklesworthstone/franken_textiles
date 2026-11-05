@@ -129,6 +129,11 @@ const guidedTransportMetrics = [
   ["guidedTextileWaterDrained", "textile_water_drained_mass_kg"],
   ["guidedTextileWaterLatent", "textile_water_latent_energy_j"],
   ["guidedTextileWaterCondensationLatent", "textile_water_condensation_latent_energy_j"],
+  ["guidedTextileVaporFinalPressure", "textile_water_final_vapor_pressure_pa"],
+  ["guidedTextileVaporSampleMin", "textile_water_min_sample_vapor_pressure_pa"],
+  ["guidedTextileVaporSampleMax", "textile_water_max_sample_vapor_pressure_pa"],
+  ["guidedTextileVaporRemaining", "textile_water_remaining_vapor_mass_kg"],
+  ["guidedTextileVaporHeatRemoved", "textile_water_isothermal_heat_removed_j"],
   ["guidedTransientSurfaceInsideEnergy", "transient_surface_inside_energy_j"],
   ["guidedTransientSurfaceNetEnergy", "transient_surface_net_boundary_energy_j"],
   ["guidedTransientSurfaceSampleMin", "transient_surface_min_sample_temperature_c"],
@@ -879,7 +884,12 @@ function objectiveComparison(parent, r) {
     textile_water_condensed_mass_kg: "Condensed textile water",
     textile_water_drained_mass_kg: "Drained textile water",
     textile_water_latent_energy_j: "Textile evaporation latent energy",
-    textile_water_condensation_latent_energy_j: "Textile condensation latent release"
+    textile_water_condensation_latent_energy_j: "Textile condensation latent release",
+    textile_water_final_vapor_pressure_pa: "Final finite-reservoir vapor pressure",
+    textile_water_min_sample_vapor_pressure_pa: "Minimum sampled finite-reservoir vapor pressure",
+    textile_water_max_sample_vapor_pressure_pa: "Maximum sampled finite-reservoir vapor pressure",
+    textile_water_remaining_vapor_mass_kg: "Remaining finite-reservoir vapor",
+    textile_water_isothermal_heat_removed_j: "Finite-reservoir isothermal heat removed"
   };
   const strainLabels = {};
   for (const [prefix, scope] of [["", "Initial"], ["motion_", "Motion"]]) {
@@ -911,6 +921,16 @@ function objectiveComparison(parent, r) {
       "These nominal quantities account for textile-owned liquid; body-reservoir water has separate objectives. " +
       "Source uncertainty, physical garment validation and a globally optimal design are not established.";
     parent.append(textileWater);
+  }
+  if (metrics.some(o => ["textile_water_final_vapor_pressure_pa", "textile_water_min_sample_vapor_pressure_pa",
+    "textile_water_max_sample_vapor_pressure_pa", "textile_water_remaining_vapor_mass_kg",
+    "textile_water_isothermal_heat_removed_j"].includes(o.metric))) {
+    const reservoir = document.createElement("p");
+    reservoir.textContent = "Finite-vapor criteria require an admitted textile-water /5 reservoir in the same case. " +
+      "Pressure extrema include the initial reservoir and retained mechanical endpoints, without continuous-time or substep bounds. " +
+      "Isothermal heat removed is signed: positive removes heat from the reservoir; negative supplies heat to hold its declared temperature. " +
+      "A missing reservoir leaves these readings unavailable.";
+    parent.append(reservoir);
   }
   if (metrics.some(o => Object.hasOwn(threadLabels, o.metric)) ||
       r.policy.required_consumers?.some(name => ["sewing_consumables", "sewing_purchasing", "cut_and_sew_purchasing"].includes(name))) {
@@ -4443,7 +4463,8 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
     }
   }
   for (const [id, metric] of guidedTransportMetrics) {
-    const signed = metric === "body_coverage_power_w" || metric.startsWith("transient_");
+    const signed = metric === "body_coverage_power_w" || metric.startsWith("transient_") ||
+      metric === "textile_water_isothermal_heat_removed_j";
     for (const suffix of ["MinimumLimit", "Limit"]) {
       const input = $(`${id}${suffix}`);
       if (input.validity?.badInput) throw Error(`Supply a finite limit for ${metric}.`);

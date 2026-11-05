@@ -5488,6 +5488,20 @@ workflow. `ftx-ms2.29` tracks this usable composition. Native source/domain admi
 thermal and mechanical evolution, and whole-motion rollback retain their existing authorities.
 Moving wet layers and independently measured garment qualification remain separate work.
 
+### 25.183 Compare conserved finite-vapor outcomes in material and design studies
+
+The existing source-qualified finite vapor reservoir now contributes nominal final pressure,
+remaining vapor, signed thermostat energy and initial-plus-sampled pressure extrema to ordinary
+material/design decisions. Inclusive guards and named cases use the same independently admitted
+liquid/vapor inventory and energy history. Extrema accumulate during the existing history pass;
+neither another physical solve nor per-objective rescanning is required.
+
+The guided workbench exposes all five criteria alongside separate original wet-policy inputs.
+`ftx-ms2.30` tracks this consumer integration. Older prescribed atmospheres cannot supply missing
+finite-reservoir readings, and unavailable source/domain evidence preserves independent outcomes.
+Sampled pressure does not imply continuous-time bounds, general uncertainty, humidity, ventilation,
+wet layered coverage or empirical garment qualification.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

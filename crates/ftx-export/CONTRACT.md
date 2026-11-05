@@ -722,6 +722,12 @@ per-patch final water and final dry/liquid sensible storage. Every retained samp
 water inventory, latent energy, source-domain enthalpy and the combined boundary/mechanical balance.
 Missing, changed, unsupported or unrequested water cannot become zero or a feasible alternative.
 Consumed Ret protocols and the explicit coupling policy participate in protocol comparability.
+Finite shared vapor outcomes use the same admitted version-5 source and complete history. Final
+pressure, remaining vapor mass and signed isothermal heat removal retain the reservoir's separate
+inventory and thermostat ledger. Minimum/maximum pressure include the initial state and retained
+mechanical endpoints, accumulated once during heat admission. Older prescribed-pressure histories
+retain existing readings but cannot substitute ambient pressure or zero for a finite-reservoir
+outcome. These five metrics support nominal objectives and inclusive constraints only.
 No wet-property characterization, propagated thermal/water intervals or continuous-time extrema
 are inferred. Version 1 preserves initial-only ownership. Version 2 independently qualifies incoming
 liquid evidence and integrates each instance's reference-area delivery and incoming sensible enthalpy

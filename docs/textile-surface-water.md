@@ -783,6 +783,17 @@ energy account closed; it is separate from textile boundary heat and bulk mechan
 The browser displays both reservoir ledgers. Comparison admission checks the source, inventory,
 pressure, enthalpy, elapsed time and work receipts before admitting any dependent objective.
 
+The same admitted finite inventory supports nominal material/design objectives and inclusive
+constraints for final vapor pressure (`textile_water_final_vapor_pressure_pa`), remaining vapor mass
+(`textile_water_remaining_vapor_mass_kg`) and signed thermostat energy
+(`textile_water_isothermal_heat_removed_j`). The pressure metrics
+`textile_water_min_sample_vapor_pressure_pa` and `textile_water_max_sample_vapor_pressure_pa`
+include the initial pressure and every retained mechanical endpoint. Their extrema are collected
+during the existing complete-history admission pass and shared by all criteria; no transport solve
+or repeated history scan is added. They are sampled extrema, not thermal-substep or continuous-time
+bounds. All five require version 5; an older prescribed atmosphere cannot supply a missing finite
+inventory or an artificial zero. Source-reported uncertainty bounds remain unavailable.
+
 No absorbed moisture, sorption, in-plane wicking, droplet/fog phase, changing wet material law,
 body-to-textile water delivery, thermoregulation or empirical garment qualification is inferred.
 

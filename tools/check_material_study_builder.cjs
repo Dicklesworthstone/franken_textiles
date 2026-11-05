@@ -2837,11 +2837,14 @@ test('finite body-water criteria guide linked grids and all four adaptive modes 
   }
 });
 
+const textileVaporMetrics=['textile_water_final_vapor_pressure_pa','textile_water_min_sample_vapor_pressure_pa',
+  'textile_water_max_sample_vapor_pressure_pa','textile_water_remaining_vapor_mass_kg','textile_water_isothermal_heat_removed_j'];
 const textileWaterMetrics=['textile_water_evaporated_mass_kg','textile_water_remaining_mass_kg','textile_water_supplied_mass_kg',
-  'textile_water_condensed_mass_kg','textile_water_drained_mass_kg','textile_water_latent_energy_j','textile_water_condensation_latent_energy_j'];
+  'textile_water_condensed_mass_kg','textile_water_drained_mass_kg','textile_water_latent_energy_j','textile_water_condensation_latent_energy_j',
+  ...textileVaporMetrics];
 const textileWaterContext=()=>({drape:true,surface:false,motion:true,transientSurface:true,textileWater:true});
 
-test('textile-water criteria retain all seven nominal decisions while sharing the existing transient surface consumer', async () => {
+test('textile-water criteria retain all twelve nominal decisions while sharing the existing transient surface consumer', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input={...state(),objectives:textileWaterMetrics.map((metric,i)=>({metric,direction:i%2?'maximize':'minimize'})),
     constraints:textileWaterMetrics.map(metric=>({metric,minimum:0,maximum:1})),requiredConsumers:['transient_surface']};
@@ -2858,6 +2861,22 @@ test('textile-water criteria retain all seven nominal decisions while sharing th
       'A dry transient heat requirement does not invent or require a water policy');
   }
   assert.throws(()=>build({...input,requiredConsumers:['textile_water']},textileWaterContext()),/Unsupported guided consumer: textile_water/);
+});
+
+test('finite-vapor criteria retain signed reservoir heat and guide existing material and design decisions', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const constraints=[{metric:textileVaporMetrics[4],minimum:-25,maximum:-1}],
+    objectives=textileVaporMetrics.map(metric=>({metric,direction:'minimize'}));
+  const input={...state(),objectives,constraints,requiredConsumers:['transient_surface']};
+  assert.deepEqual(JSON.parse(build(input,textileWaterContext())).comparison.constraints,constraints);
+  const cases=namedContext(['cold','warm'].map(key=>({key,surface:false,motion:true,transientSurface:true,textileWater:true})));
+  for(const objective of ['consumer_comparison','consumer_pareto','consumer_worst_case','consumer_matrix_pareto']) {
+    const design=namedDesign({objective});if(['consumer_worst_case','consumer_matrix_pareto'].includes(objective))delete design.caseKey;
+    const goals=objective.includes('pareto')?objectives:objectives.slice(0,1);
+    const result=JSON.parse(build({...input,objectives:goals,design},cases));
+    assert.equal(result.design_adaptive.objective,objective);assert.deepEqual(result.comparison.objectives,goals);
+    assert.deepEqual(result.comparison.constraints,constraints);
+  }
 });
 
 test('textile-water objectives and limits require actual water, motion and transient heat inputs together', async () => {

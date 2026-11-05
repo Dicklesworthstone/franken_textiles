@@ -834,6 +834,32 @@ This free-liquid model does not infer sorption, wicking, body-to-textile transfe
 properties, wearer cooling or empirical wet-garment performance. See
 [textile-surface-water.md](textile-surface-water.md) for the existing source and phase contracts.
 
+#### Compare a finite shared vapor reservoir
+
+The **Finite shared vapor reservoir** controls use the independently qualified reservoir in a
+selected `ftx-textile-surface-water/5` policy. Direct water, uncoupled material alternatives and
+paired water/mechanical alternatives use the same five native criteria:
+
+| Guided quantity | Unit | Native metric |
+|---|---|---|
+| Final vapor pressure | Pa | `textile_water_final_vapor_pressure_pa` |
+| Minimum sampled vapor pressure | Pa | `textile_water_min_sample_vapor_pressure_pa` |
+| Maximum sampled vapor pressure | Pa | `textile_water_max_sample_vapor_pressure_pa` |
+| Remaining reservoir vapor | kg | `textile_water_remaining_vapor_mass_kg` |
+| Isothermal heat removed | J | `textile_water_isothermal_heat_removed_j` |
+
+Choose each objective's direction and optional inclusive lower/upper limits. The thermostat energy
+is signed: positive removes heat from the reservoir, negative supplies heat to hold its prescribed
+temperature. It is separate from textile latent energy and mechanical work. Pressure extrema include
+the initial reservoir and every retained mechanical sample endpoint; they do not bound unreported
+thermal substeps or continuous time. Final pressure and vapor mass share the same admitted inventory.
+
+These criteria are nominal only and work in single, named, grid and adaptive studies through the
+existing `transient_surface` consumer. Older prescribed-pressure water policies leave the reservoir
+readings unavailable while retaining their supported textile and heat outcomes. The native comparison
+checks the complete reservoir source, pressure domain, liquid/vapor mass and energy ledgers before
+using a value. No humidity conversion, ventilation model or general uncertainty range is supplied.
+
 #### Compare heat storage and temperatures through motion
 
 Enable **Track independent-sheet heat through this movement** or **Track dry body/layer heat

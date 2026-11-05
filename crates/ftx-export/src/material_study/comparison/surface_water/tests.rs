@@ -2057,6 +2057,120 @@ fn finite_vapor_inventory_admits_with_optional_drainage_and_existing_mechanical_
     assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());
 }
 
+fn numerical_heat<'a>(simulation: &'a Value, motion: &'a Value, heat: Heat<'a>) -> Numerical<'a> {
+    Numerical {
+        cutting_program: None,
+        finite_stock_program: None,
+        cutting_job_program: None,
+        drape: simulation,
+        material_strain: None,
+        contact_loads: None,
+        vapor_surface: &Value::Null,
+        vapor_coverage: None,
+        motion,
+        motion_material_strain: None,
+        motion_contact_loads: None,
+        motion_vapor_coverage: None,
+        motion_wet_film: None,
+        transient_surface: Some(heat),
+        transient_coverage: None,
+    }
+}
+
+#[test]
+fn finite_reservoir_objectives_preserve_initial_pressure_and_signed_thermostat_energy() {
+    for selection in 0..3 {
+        let (a, mut d, s, mut m) = finite_reservoir_case(selection == 2, selection == 2);
+        match selection {
+            1 => with_alternative_qualifications(&mut d, &mut m),
+            2 => with_paired_qualifications(&mut d, &mut m),
+            _ => {}
+        }
+        let heat = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+        let gas = &heat.result["surface_water"]["vapor_reservoir"];
+        let initial = gas["initial_vapor_pressure_pa"].as_f64().unwrap();
+        let final_pressure = gas["vapor_pressure_pa"].as_f64().unwrap();
+        let remaining = gas["remaining_vapor_mass_kg"].as_f64().unwrap();
+        let thermostat = gas["isothermal_heat_removed_j"].as_f64().unwrap();
+        assert!(
+            thermostat < 0.,
+            "this synthetic reservoir requires supplied heat"
+        );
+        if selection == 2 {
+            assert!(final_pressure < initial);
+        }
+        let admitted = numerical_heat(&s, &m, heat);
+        for (metric, expected, unit) in [
+            (
+                Metric::TextileWaterFinalVaporPressurePa,
+                final_pressure,
+                "Pa",
+            ),
+            (
+                Metric::TextileWaterMinSampleVaporPressurePa,
+                initial.min(final_pressure),
+                "Pa",
+            ),
+            (
+                Metric::TextileWaterMaxSampleVaporPressurePa,
+                initial.max(final_pressure),
+                "Pa",
+            ),
+            (Metric::TextileWaterRemainingVaporMassKg, remaining, "kg"),
+            (Metric::TextileWaterIsothermalHeatRemovedJ, thermostat, "J"),
+        ] {
+            assert_eq!(metric.consumer(), Consumer::TransientSurface);
+            assert_eq!(metric.unit(None), unit);
+            assert!(!metric.supports_bounds());
+            assert_eq!(
+                metric.signed(),
+                metric == Metric::TextileWaterIsothermalHeatRemovedJ
+            );
+            assert_eq!(metric.value(&a, &admitted), Some(expected));
+            let encoded = serde_json::to_value(metric).unwrap();
+            assert_eq!(serde_json::from_value::<Metric>(encoded).unwrap(), metric);
+        }
+        // The thermostat is a distinct signed boundary ledger, not phase-change latent heat.
+        assert_ne!(
+            Metric::TextileWaterIsothermalHeatRemovedJ.value(&a, &admitted),
+            Metric::TextileWaterLatentEnergyJ.value(&a, &admitted)
+        );
+    }
+}
+
+#[test]
+fn prescribed_ambient_water_cannot_supply_finite_reservoir_objectives() {
+    for (a, d, s, m) in [
+        case(),
+        supplied_case(),
+        condensing_case(),
+        draining_case(true),
+    ] {
+        let heat = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+        let admitted = numerical_heat(&s, &m, heat);
+        // The existing textile and dry-heat results remain available for all older versions.
+        assert!(
+            Metric::TextileWaterEvaporatedMassKg
+                .value(&a, &admitted)
+                .is_some()
+        );
+        assert!(
+            Metric::TransientSurfaceInsideEnergyJ
+                .value(&a, &admitted)
+                .is_some()
+        );
+        for metric in [
+            Metric::TextileWaterFinalVaporPressurePa,
+            Metric::TextileWaterMinSampleVaporPressurePa,
+            Metric::TextileWaterMaxSampleVaporPressurePa,
+            Metric::TextileWaterRemainingVaporMassKg,
+            Metric::TextileWaterIsothermalHeatRemovedJ,
+        ] {
+            assert_eq!(metric.value(&a, &admitted), None);
+        }
+    }
+}
+
 #[test]
 fn finite_vapor_retry_work_remains_admissible_only_when_fully_charged() {
     let (a, mut d, s, mut m) = finite_reservoir_case(false, false);

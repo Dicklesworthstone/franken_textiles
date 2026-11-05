@@ -6042,6 +6042,12 @@ const guidedTextileWaterReadings=[
   ['guidedTextileWaterDrained','textile_water_drained_mass_kg','kg','drained_liquid_kg'],
   ['guidedTextileWaterLatent','textile_water_latent_energy_j','J','latent_energy_j'],
   ['guidedTextileWaterCondensationLatent','textile_water_condensation_latent_energy_j','J','condensation_latent_energy_j']];
+const guidedFiniteVaporReadings=[
+  ['guidedTextileVaporFinalPressure','textile_water_final_vapor_pressure_pa','Pa'],
+  ['guidedTextileVaporSampleMin','textile_water_min_sample_vapor_pressure_pa','Pa'],
+  ['guidedTextileVaporSampleMax','textile_water_max_sample_vapor_pressure_pa','Pa'],
+  ['guidedTextileVaporRemaining','textile_water_remaining_vapor_mass_kg','kg'],
+  ['guidedTextileVaporHeatRemoved','textile_water_isothermal_heat_removed_j','J']];
 // Source-transport double; Rust owns exact material, phase and thermal qualification.
 const guidedTextileWaterPolicyOriginal=' {"schema":"ftx-textile-surface-water/4","bindings":{"front.R":{'+
   '"material_sha256":"'+'b'.repeat(64)+'","initial_liquid_kg_m2":-0.0}},"maximum_liquid_loading_kg_m2":1.000e-2,'+
@@ -16511,6 +16517,149 @@ test('guided wet-source composition rejects missing malformed and oversized acti
     assert.equal(p.current().messages.length,before);assert.equal(reads,declared?0:1);assert.match(p.e.error.textContent,/16 MiB/);
   }
 });
+
+test('guided finite-vapor criteria preserve five explicit nominal goals signed heat limits and immutable case policies',async()=>{
+  const html=read('materials.html'),{p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  await addGuidedMotion(p,0.002,35);guidedLiquidSource(p,'direct',guidedTextileWaterPolicyOriginal.replace('/4','/5'));
+  p.e.guidedDrapeMassGoal.checked=false;p.e.guidedRequireTransientSurface.checked=true;
+  const objectives=[],constraints=[];
+  for(const [index,[prefix,metric]] of guidedFiniteVaporReadings.entries()) {
+    for(const suffix of ['Goal','Direction','MinimumLimit','Limit']) {
+      const tags=[...html.matchAll(new RegExp('<(?:input|select)\\b[^>]*\\bid="'+prefix+suffix+'"[^>]*>','g'))];
+      assert.equal(tags.length,1,prefix+suffix);
+      if(suffix.endsWith('Limit')) {
+        assert.match(tags[0][0],/\bstep="any"/);
+        if(index===4)assert.doesNotMatch(tags[0][0],/\bmin=/);else assert.match(tags[0][0],/\bmin="0"/);
+      }
+    }
+    assert.equal(p.e[prefix+'Goal'].checked,false);assert.equal(p.e[prefix+'Direction'].value,'');
+    const direction=index%2?'maximize':'minimize',minimum=index===4?-20:0,maximum=index===4?-1:2000;
+    p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value=direction;
+    p.e[prefix+'MinimumLimit'].value=String(minimum);p.e[prefix+'Limit'].value=String(maximum);
+    objectives.push({metric,direction});constraints.push({metric,minimum,maximum});
+  }
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1),policy=JSON.parse(sent.studyRequest).comparison;
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.deepEqual(policy.objectives,objectives);assert.deepEqual(policy.constraints,constraints);
+  const report=scenarioReport();report.comparison={policy,motion_required:true,frontier:['A'],incomparable:[],alternatives:[
+    {key:'A',eligible:true,dominated_by:[],exclusions:[],readings:Object.fromEntries(guidedFiniteVaporReadings.map(([,metric,unit],i)=>
+      [metric,{value:i===4?-2:100,unit,consumer:'transient_surface'}]))},
+    {key:'B',eligible:false,dominated_by:[],exclusions:[{message:'Finite vapor reservoir is unavailable'}],readings:{}}]};
+  p.emit(report);const output=section(p,'Fresh drape and heat alternatives');
+  assert.match(visibleText(output),/initial reservoir and retained mechanical endpoints/);assert.match(visibleText(output),/negative supplies heat/);
+  assert.match(visibleText(output),/Finite vapor reservoir is unavailable/);
+  guidedNamedCases(p);p.e.guidedScenarioPolicySource.value='snapshot';await saveGuidedCase(p,'finite atmosphere');
+  assert.equal(p.e.guidedScenarioCases.children.length,1,p.e.error.textContent);
+  p.e.guidedTextileVaporHeatRemovedMinimumLimit.value='-30';p.e.guidedTextileVaporHeatRemovedMinimumLimit.handlers.input();
+  await p.e.scenario.onclick();const named=JSON.parse(p.current().messages.at(-1).scenarioRequest);
+  assert.deepEqual(named.cases[0].comparison.objectives,objectives);assert.deepEqual(named.cases[0].comparison.constraints,constraints);p.emit(scenarioReport());
+});
+
+test('guided finite-vapor criteria require same-case water and cancel dependent work without inventing phase availability',async()=>{
+  for(const [prefix] of guidedFiniteVaporReadings) {
+    const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);await addGuidedMotion(p,0.002,35);
+    p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value='minimize';let before=p.current().messages.length;
+    await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/Textile-water criteria/);
+    guidedLiquidSource(p);p.e.guidedBasis.value='reported_bounds';before=p.current().messages.length;
+    await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/reported-bound comparison/);
+    p.e.guidedBasis.value='nominal';p.e[prefix+'MinimumLimit'].value=prefix.endsWith('HeatRemoved')?'-1':'0';
+    await p.e.scenario.onclick();const old=p.current(),sent=old.messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+    assert.ok(sent.scenarioRequest.includes(guidedTextileWaterPolicyOriginal),'Older source phases still reach native admission unchanged; browser does not synthesize a reservoir');
+    p.e[prefix+'Limit'].value='2';p.e[prefix+'Limit'].handlers.input();assert.equal(old.dead,true);p.ready();
+    old.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete-reservoir.json',text:'{}'}]});
+    assert.equal(p.live.size,0);assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+    if(!prefix.endsWith('HeatRemoved')) {
+      p.e[prefix+'MinimumLimit'].value='-1';before=p.current().messages.length;await p.e.scenario.onclick();
+      assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/nonnegative/);
+    }
+  }
+});
+
+test('compiled WASM guided finite-vapor decisions compose exact liquid sources with authored motion and match native',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY||!process.env.FTX_GUIDED_SCENARIO_NATIVE},async t=>{
+    const source=path.resolve(process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY),load=name=>fs.readFileSync(path.join(source,name),'utf8');
+    const pattern=load('pattern.json'),single=JSON.parse(load('single-scenario.json')),study=JSON.parse(load('study.json'));
+    const body=load('body-input.json'),model=fs.readFileSync(path.join(source,'model.ftxbody'));
+    const motion=single.motion,heat=motion.transient_surface;
+    const waterRaw=' \r\n'+JSON.stringify(heat.surface_water,null,2)+'\r\n',mechanicsRaw=' \r\n'+JSON.stringify(heat.mechanical_coupling,null,2)+'\r\n';
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:{...ftx,default:async()=>{}}}),{p}=await guidedScenarioSetup();
+    p.select('patternFile',pattern);await p.e.patternFile.onchange();
+    const selected=study.variants.find(row=>row.key==='qualified').changes.default;
+    p.e.selection.value=JSON.stringify(selected);p.e.selection.handlers.input();await p.e.inspect.onclick();
+    const inspection=await w.send(p.current().messages.at(-1));assert.equal(inspection.type,'result',inspection.message);p.current().emit(inspection);
+    p.e.studyCandidateName.value='qualified';p.e.addStudyCandidate.onclick();
+    p.e.guidedScenarioFitSource.value='none';p.e.guidedScenarioFitSource.handlers.change();
+    for(const [id,value] of Object.entries({guidedScenarioSpacing:single.options.spacing,guidedScenarioSewSteps:single.options.sew_steps,
+      guidedScenarioDrapeSteps:single.options.drape_steps,guidedScenarioStep:single.options.step,guidedScenarioSettle:single.options.max_settle_steps??0,
+      guidedScenarioMeshBudget:single.max_mesh_points,guidedScenarioFrameBudget:single.max_vertex_frames}))p.e[id].value=String(value);
+    p.select('scenarioBody',body);p.e.scenarioBody.handlers.change();p.e.body.files=[new Blob([model])];p.e.body.handlers.change();
+    p.e.guidedScenarioHeat.checked=true;p.e.guidedScenarioHeat.handlers.change();p.select('heatConditions',JSON.stringify(single.surface));p.e.heatConditions.handlers.change();
+    p.e.guidedCoverage.checked=true;p.e.guidedCoverage.handlers.change();p.select('guidedCoverageFile',JSON.stringify(single.coverage));p.e.guidedCoverageFile.handlers.change();
+    guidedMotionSourceControls(p);guidedDryHeatControls(p);
+    for(const [id,value] of Object.entries({guidedMotionStep:motion.max_step_s,guidedMotionTrials:motion.max_trials,guidedMotionPairs:motion.max_pairs,
+      guidedMotionVertices:motion.max_sample_vertices,guidedScenarioMotionTrials:single.max_motion_trials??4096,
+      guidedMotionHeatInitial:heat.initial_temperature_c,guidedMotionHeatCells:heat.cells_per_layer,
+      guidedMotionHeatStep:heat.max_step_s,guidedMotionHeatBudget:heat.max_cell_steps}))p.e[id].value=String(value);
+    for(const [i,frame] of motion.keyframes.entries()) {
+      const film=heat.boundaries[i];guidedDryHeatFilm(p,film.inside_c,film.outside_c,film.inside_resistance_m2_k_w,film.outside_resistance_m2_k_w);
+      await addGuidedMotion(p,frame.time_s,frame.arm_abduction_deg,frame.leg_pose?.posture??'standing',frame.leg_pose?.fraction??1);
+    }
+    guidedLiquidSource(p,'direct',waterRaw);p.e.guidedMotionWaterMechanical.checked=true;p.e.guidedMotionWaterMechanical.handlers.change();
+    p.select('guidedMotionWaterMechanicsFile',mechanicsRaw);p.e.guidedMotionWaterMechanicsFile.handlers.change();
+    p.e.guidedDrapeMassGoal.checked=false;p.e.guidedHeatPowerGoal.checked=false;p.e.guidedAreaGoal.checked=false;p.e.guidedRequireTransientSurface.checked=true;
+    for(const [prefix] of guidedFiniteVaporReadings){p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value='minimize';}
+    const native=path.resolve(process.env.FTX_GUIDED_SCENARIO_NATIVE),work=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-guided-finite-vapor-'));
+    const retain=(name,raw)=>fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});
+    const evaluate=async(label,originals,available=true)=>{
+      await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',label+': '+p.e.error.textContent);
+      for(const raw of originals)assert.ok(sent.scenarioRequest.includes(raw),label+' preserves original qualification bytes');
+      assert.deepEqual(JSON.parse(sent.scenarioRequest).motion.keyframes,motion.keyframes);
+      assert.deepEqual(JSON.parse(sent.scenarioRequest).motion.transient_surface.boundaries,heat.boundaries);
+      const result=await w.send(sent);assert.equal(result.type,'result',label+': '+result.message);p.current().emit(result);
+      retain(label+'-study.json',sent.studyRequest);retain(label+'-scenario.json',sent.scenarioRequest);
+      const output=require('node:child_process').execFileSync(native,['scenario-study',path.join(source,'pattern.json'),path.join(work,label+'-study.json'),
+        path.join(work,label+'-scenario.json'),path.join(source,'body-input.json'),path.join(source,'model.ftxbody')],
+      {encoding:'utf8',stdio:['ignore','pipe','inherit'],maxBuffer:64*1024*1024});
+      assert.deepEqual(result.result,JSON.parse(output),label+' whole native/WASM/page-worker report equality');retain(label+'-report.json',output);
+      for(const [name,raw] of [['study-request.json',sent.studyRequest],['scenario-request.json',sent.scenarioRequest]]) {
+        assert.equal(result.files.find(file=>file.name===name).text,raw);
+        const link=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.download===name);assert.ok(link,name);assert.equal(await p.blobs.get(link.href).text(),raw);
+      }
+      const report=result.result,selected=report.comparison.alternatives.find(row=>row.key==='qualified');
+      const baseline=report.comparison.alternatives.find(row=>row.key==='baseline');assert.equal(baseline.eligible,false);
+      for(const [,metric] of guidedFiniteVaporReadings)assert.equal(Object.hasOwn(baseline.readings,metric),false,'Missing source cannot become zero');
+      assert.equal(selected.eligible,available,JSON.stringify(selected.exclusions));
+      if(!available) {
+        for(const [,metric] of guidedFiniteVaporReadings)assert.equal(Object.hasOwn(selected.readings,metric),false);
+        return report;
+      }
+      const history=report.simulations.find(row=>row.key==='qualified').evaluation.result.motion.result.transient_surface.result;
+      const gas=history.surface_water.vapor_reservoir,pressures=[gas.initial_vapor_pressure_pa,...history.trace.map(row=>row.surface_water.vapor_reservoir.vapor_pressure_pa)];
+      const expected=[gas.vapor_pressure_pa,Math.min(...pressures),Math.max(...pressures),gas.remaining_vapor_mass_kg,gas.isothermal_heat_removed_j];
+      for(const [i,[,metric,unit]] of guidedFiniteVaporReadings.entries()) {
+        assert.equal(selected.readings[metric].value,expected[i],metric);assert.equal(selected.readings[metric].unit,unit);
+        assert.equal(selected.readings[metric].consumer,'transient_surface');assert.equal(Object.hasOwn(selected.readings[metric],'reported_bounds'),false);
+      }
+      const reservoir=heat.surface_water.vapor_reservoir;
+      assert.equal(expected[2],reservoir.initial_vapor_mass_kg/reservoir.vapor_capacitance_kg_pa);
+      assert.ok(expected[0]<0.001);assert.deepEqual(history.surface_water.request,heat.surface_water);
+      return report;
+    };
+    const direct=await evaluate('direct-mechanics',[waterRaw,mechanicsRaw]);
+    const pairs=' [ {"surface_water":'+waterRaw+',"mechanical_coupling":'+mechanicsRaw+'} ]\r\n';guidedLiquidSource(p,'paired',pairs);
+    const paired=await evaluate('paired-mechanics',[pairs]);
+    const readings=report=>report.comparison.alternatives.find(row=>row.key==='qualified').readings;
+    assert.deepEqual(readings(paired),readings(direct),'Equivalent direct/paired qualification yields the same reservoir metrics');
+    const choices=' [\r\n'+waterRaw+']\r\n';guidedLiquidSource(p,'alternatives',choices);await evaluate('uncoupled-selection',[choices]);
+    const older=structuredClone(heat.surface_water);older.schema='ftx-textile-surface-water/3';older.outside_vapor_pressure_pa=[1000];delete older.vapor_reservoir;
+    const olderRaw=' '+JSON.stringify(older)+'\r\n';guidedLiquidSource(p,'direct',olderRaw);
+    const unsupported=await evaluate('fixed-pressure-atmosphere',[olderRaw,mechanicsRaw],false);
+    assert.equal(unsupported.simulations.find(row=>row.key==='qualified').evaluation.result.motion.result.transient_surface.status,'available',
+      'An admitted older liquid history remains visible without fabricating finite-reservoir readings');
+    t.diagnostic('Actual authored motion with original direct/paired mechanical and selected uncoupled sources preserves five finite-vapor decisions and exact replay. Fixed-pressure histories retain heat but exclude reservoir metrics. Native/WASM/page-worker equality; synthetic numerical evidence only. Replay: '+work);
+  });
 
 test('compiled WASM guided dry instance temperatures preserve native owners, fallback, cases and independent motion',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_SCENARIO_BODY||!process.env.FTX_GUIDED_SCENARIO_NATIVE},async t=>{

@@ -1280,6 +1280,302 @@ fn source_selected_coupled_water_changes_cooling_and_motion_from_ret_alone() {
 }
 
 #[test]
+fn finite_vapor_reservoir_decisions_follow_sampled_pressure_and_conserve_the_whole_system() {
+    let (pattern, mut input, mut raw) = inputs();
+    input.variants.truncate(1);
+    let metrics = [
+        "textile_water_final_vapor_pressure_pa",
+        "textile_water_min_sample_vapor_pressure_pa",
+        "textile_water_max_sample_vapor_pressure_pa",
+        "textile_water_remaining_vapor_mass_kg",
+        "textile_water_isothermal_heat_removed_j",
+    ];
+    let mut objectives: Vec<Value> = metrics
+        .iter()
+        .map(|metric| json!({"metric":metric,"direction":"minimize"}))
+        .collect();
+    for metric in [
+        "motion_max_absolute_edge_strain_pct",
+        "transient_surface_final_min_temperature_c",
+    ] {
+        objectives.push(json!({"metric":metric,"direction":"minimize"}));
+    }
+    let policy = json!({"basis":"nominal","required_consumers":["transient_surface"],
+        "objectives":objectives});
+    input.comparison = Some(serde_json::from_value(policy.clone()).unwrap());
+    raw.as_object_mut().unwrap().remove("coverage");
+    raw["motion"]["keyframes"] = json!([
+        {"time_s":0.001,"arm_abduction_deg":35.},
+        {"time_s":0.002,"arm_abduction_deg":35.}]);
+    raw["motion"]["max_trials"] = json!(16);
+    let sheet = &mut raw["motion"]["transient_surface"];
+    sheet["initial_temperature_c"] = json!(10.);
+    sheet["boundaries"] = json!([sheet["boundaries"][0], sheet["boundaries"][0]]);
+    let water = &mut sheet["surface_water"];
+    water["schema"] = json!("ftx-textile-surface-water/5");
+    water
+        .as_object_mut()
+        .unwrap()
+        .remove("replenishment_kg_m2_s");
+    water
+        .as_object_mut()
+        .unwrap()
+        .remove("outside_vapor_pressure_pa");
+    water["bindings"]["band"]["initial_liquid_kg_m2"] = json!(0.01);
+    water["maximum_liquid_loading_kg_m2"] = json!(0.2);
+    water["qualification"] = json!(
+        "Synthetic invariant thermal and vapor laws over [-20,80] C and [0,0.2] kg/m2; no empirical garment claim"
+    );
+    let provenance = json!({"reference":"test:portable-finite-vapor-storage",
+        "accessed_on":"2026-11-05","note":"Artificial well-mixed storage and prescribed cold feed; no physiological or empirical claim"});
+    // Cold evaporation raises pressure first. Independently prescribed cold liquid then
+    // reduces wet-film pressure and causes condensation: the retained maximum is interior.
+    water["supply"] = json!({"schema":"ftx-textile-liquid-supply/1",
+        "bindings":{"band":{"rate_kg_m2_s":[0.,50.],"temperature_c":[-20.,-20.]}},
+        "source":provenance,"evidence":"estimate","allow_estimates":true,
+        "method":"Synthetic piecewise reference-area liquid delivery"});
+    water["condensation"] = json!({"schema":"ftx-textile-condensation/1",
+        "vapor_temperature_c":[20.,20.],"source":provenance,
+        "evidence":"estimate","allow_estimates":true,"method":"Synthetic reverse vapor transfer",
+        "qualification":"Artificial reverse Ret, nucleation and effective constant-latent/liquid-cp vapor enthalpy over the declared domain"});
+    water["vapor_reservoir"] = json!({"schema":"ftx-textile-vapor-reservoir/1",
+        "model":"isothermal_constant_vapor_capacitance/1",
+        "vapor_capacitance_kg_pa":1e-13,"initial_vapor_mass_kg":1e-10,
+        "temperature_c":20.,"pressure_domain_pa":[0.,10000.],
+        "max_iterations":128,"mass_tolerance_kg":1e-15,
+        "source":provenance,"evidence":"estimate","allow_estimates":true,
+        "method":"Synthetic explicit pressure capacitance and isothermal energy exchange",
+        "qualification":"Constant storage over the complete pressure domain with the declared effective vapor enthalpy; no inferred ideal-gas law"});
+    let water_policy = water.clone();
+    let direct = study(&raw, &input, &pattern);
+    let direct_simulation = &keyed(&direct["simulations"], "qualified")["evaluation"]["result"];
+    assert_eq!(
+        direct_simulation["motion"]["status"], "available",
+        "{direct_simulation}"
+    );
+    let mechanical = json!({"schema":"ftx-coupled-liquid-mechanics/1",
+        "model":"co_moving_mass_exchange_frozen_mechanics/1",
+        "material_report_sha256":ftx_core::receipt::sha256_hex(&serde_json::to_vec(&direct_simulation["drape"]["material"]).unwrap()),
+        "bindings":{"band":{"material_sha256":water_policy["bindings"]["band"]["material_sha256"],
+            "maximum_liquid_loading_kg_m2":0.2,"temperature_range_c":[-20.,80.]}},
+        "source":provenance,"evidence":"estimate","allow_estimates":true,
+        "method":"Synthetic conservative co-moving mass exchange",
+        "qualification":"Exact dry material and interface laws qualified over the complete liquid loading and temperature domains"});
+    let mut decoy = water_policy.clone();
+    decoy["bindings"]["band"]["material_sha256"] = json!("a".repeat(64));
+    let pair = json!({"surface_water":water_policy,"mechanical_coupling":mechanical});
+    let mut decoy_pair = pair.clone();
+    decoy_pair["surface_water"] = decoy.clone();
+    decoy_pair["mechanical_coupling"]["bindings"]["band"]["material_sha256"] =
+        json!("a".repeat(64));
+    decoy_pair["mechanical_coupling"]["material_report_sha256"] = json!("b".repeat(64));
+    for selection in 0..3 {
+        let mut case = raw.clone();
+        let sheet = &mut case["motion"]["transient_surface"];
+        if selection > 0 {
+            sheet.as_object_mut().unwrap().remove("surface_water");
+            if selection == 1 {
+                sheet["surface_water_alternatives"] = json!([decoy, water_policy]);
+            } else {
+                sheet["coupled_water_alternatives"] = json!([decoy_pair, pair]);
+            }
+        }
+        let result = if selection == 0 {
+            direct.clone()
+        } else {
+            study(&case, &input, &pattern)
+        };
+        let simulation = &keyed(&result["simulations"], "qualified")["evaluation"]["result"];
+        let motion = &simulation["motion"]["result"];
+        assert_eq!(simulation["motion"]["status"], "available", "{simulation}");
+        let outcome = &motion["transient_surface"];
+        assert_eq!(outcome["status"], "available", "{outcome}");
+        let heat = &outcome["result"];
+        let water = &heat["surface_water"];
+        let gas = &water["vapor_reservoir"];
+        assert_eq!(water["request"], water_policy);
+        assert_eq!(water["schema"], "ftx-textile-surface-water-result/5");
+        assert!(water["evaporated_liquid_kg"].as_f64().unwrap() > 0.);
+        assert!(water["condensed_liquid_kg"].as_f64().unwrap() > 0.);
+        assert!(gas["isothermal_heat_removed_j"].as_f64().unwrap() < 0.);
+        let initial_pressure = 1e-10 / 1e-13;
+        let final_pressure = gas["vapor_pressure_pa"].as_f64().unwrap();
+        let mut minimum = initial_pressure;
+        let mut maximum = initial_pressure;
+        let area: f64 = heat["model"]["patches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|patch| patch["reference_area_m2"].as_f64().unwrap())
+            .sum();
+        let samples = heat["trace"].as_array().unwrap();
+        assert!(samples.len() >= 2);
+        for sample in samples {
+            let w = &sample["surface_water"];
+            let g = &w["vapor_reservoir"];
+            let pressure = g["vapor_pressure_pa"].as_f64().unwrap();
+            minimum = f64::min(minimum, pressure);
+            maximum = f64::max(maximum, pressure);
+            let supplied = area * 50. * (sample["time_s"].as_f64().unwrap() - 0.001).max(0.);
+            assert!((w["supplied_liquid_kg"].as_f64().unwrap() - supplied).abs() < 1e-14);
+            let gas_mass = g["remaining_vapor_mass_kg"].as_f64().unwrap();
+            let evaporated = w["evaporated_liquid_kg"].as_f64().unwrap();
+            let condensed = w["condensed_liquid_kg"].as_f64().unwrap();
+            assert!((gas_mass - (1e-10 + evaporated - condensed)).abs() < 1e-20);
+            assert!((pressure - gas_mass / 1e-13).abs() < 1e-10);
+            let mass_error = w["remaining_liquid_kg"].as_f64().unwrap() + gas_mass
+                - (area * 0.01 + 1e-10 + supplied);
+            assert!(
+                mass_error.abs() < 1e-13,
+                "whole-system mass error {mass_error}"
+            );
+            let vapor_energy = g["vapor_enthalpy_change_j"].as_f64().unwrap();
+            let removed = g["isothermal_heat_removed_j"].as_f64().unwrap();
+            assert!((vapor_energy - (2500000. + 4200. * 20.) * (gas_mass - 1e-10)).abs() < 1e-12);
+            let energy_error = sample["stored_change_j"].as_f64().unwrap()
+                + w["liquid_stored_change_j"].as_f64().unwrap()
+                + vapor_energy
+                + removed
+                - supplied * 4200. * -20.
+                - sample["net_boundary_energy_j"].as_f64().unwrap();
+            assert!(
+                energy_error.abs() < 1e-8,
+                "whole-system energy error {energy_error}"
+            );
+        }
+        assert!(maximum > initial_pressure && maximum > final_pressure);
+        let values = [
+            final_pressure,
+            minimum,
+            maximum,
+            gas["remaining_vapor_mass_kg"].as_f64().unwrap(),
+            gas["isothermal_heat_removed_j"].as_f64().unwrap(),
+        ];
+        let row = keyed(&result["comparison"]["alternatives"], "qualified");
+        assert_eq!(row["eligible"], true, "{row}");
+        for ((metric, expected), unit) in metrics
+            .iter()
+            .zip(values)
+            .zip(["Pa", "Pa", "Pa", "kg", "J"])
+        {
+            assert_eq!(row["readings"][metric]["value"], expected, "{metric}");
+            assert_eq!(row["readings"][metric]["unit"], unit);
+            assert!(row["readings"][metric]["reported_bounds"].is_null());
+        }
+        if selection == 1 {
+            assert_eq!(heat["surface_water_selection"]["index"], 1);
+            assert_eq!(
+                water,
+                &direct_simulation["motion"]["result"]["transient_surface"]["result"]["surface_water"]
+            );
+        } else if selection == 2 {
+            assert_eq!(heat["coupled_water_selection"]["index"], 1);
+            assert_eq!(motion["liquid_mechanics"]["qualification"], mechanical);
+            assert!(
+                motion["liquid_mechanics"]["mass_balance_residual_kg"]
+                    .as_f64()
+                    .unwrap()
+                    .abs()
+                    < 1e-12
+            );
+        }
+        // Re-admit the complete actual result for exact inclusive limits and both directions
+        // of violation. This tests decision policy without a second fabricated physics trace.
+        let constraints: Vec<Value> = metrics
+            .iter()
+            .zip(values)
+            .map(|(metric, value)| json!({"metric":metric,"minimum":value,"maximum":value}))
+            .collect();
+        for violation in 0..3 {
+            let mut guarded = policy.clone();
+            guarded["constraints"] = json!(constraints);
+            if violation == 1 {
+                guarded["constraints"][0]["minimum"] = json!(final_pressure + 1.);
+                guarded["constraints"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("maximum");
+            } else if violation == 2 {
+                guarded["constraints"][2]["maximum"] = json!(maximum - 1.);
+                guarded["constraints"][2]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("minimum");
+            }
+            let mut guarded_input = input.clone();
+            guarded_input.comparison = Some(serde_json::from_value(guarded).unwrap());
+            let guarded = serde_json::to_value(
+                guarded_input
+                    .evaluate_with(&pattern, &result["scenario"], |_, _| Ok(simulation.clone()))
+                    .unwrap(),
+            )
+            .unwrap();
+            let guarded_row = keyed(&guarded["comparison"]["alternatives"], "qualified");
+            assert_eq!(guarded_row["eligible"], violation == 0, "{guarded_row}");
+            assert_eq!(guarded_row["readings"], row["readings"]);
+        }
+        let mut replay = input.clone();
+        replay.variants[0].changes = serde_json::from_value(
+            keyed(&result["manufacturing"]["alternatives"], "qualified")["frozen_changes"].clone(),
+        )
+        .unwrap();
+        let replayed = study(&case, &replay, &pattern);
+        assert_eq!(replayed["simulations"], result["simulations"]);
+        assert_eq!(
+            replayed["comparison"]["alternatives"],
+            result["comparison"]["alternatives"]
+        );
+        assert_eq!(
+            keyed(&result["manufacturing"]["alternatives"], "qualified")["cutting"]["status"],
+            "available"
+        );
+    }
+    let mut older = raw.clone();
+    let water = &mut older["motion"]["transient_surface"]["surface_water"];
+    water["schema"] = json!("ftx-textile-surface-water/3");
+    water.as_object_mut().unwrap().remove("vapor_reservoir");
+    water["outside_vapor_pressure_pa"] = json!([1000., 1000.]);
+    let result = study(&older, &input, &pattern);
+    let simulation = &keyed(&result["simulations"], "qualified")["evaluation"]["result"];
+    assert_eq!(
+        simulation["motion"]["result"]["transient_surface"]["status"],
+        "available"
+    );
+    let row = keyed(&result["comparison"]["alternatives"], "qualified");
+    assert_eq!(row["eligible"], false);
+    for metric in metrics {
+        assert!(row["readings"].get(metric).is_none(), "{metric}");
+    }
+    assert!(row["readings"]["transient_surface_final_min_temperature_c"]["value"].is_number());
+    let mut refused = raw.clone();
+    refused["motion"]["transient_surface"]["surface_water"]["vapor_reservoir"]["allow_estimates"] =
+        json!(false);
+    let result = study(&refused, &input, &pattern);
+    let simulation = &keyed(&result["simulations"], "qualified")["evaluation"]["result"];
+    assert_eq!(simulation["motion"]["status"], "available");
+    assert_eq!(
+        simulation["motion"]["result"]["transient_surface"]["status"],
+        "refused"
+    );
+    assert_eq!(simulation["surface"]["status"], "available");
+    assert_eq!(simulation["drape"], direct_simulation["drape"]);
+    assert_eq!(
+        simulation["motion"]["result"]["final_positions_sha256"],
+        direct_simulation["motion"]["result"]["final_positions_sha256"]
+    );
+    let row = keyed(&result["comparison"]["alternatives"], "qualified");
+    assert_eq!(row["eligible"], false);
+    for metric in metrics {
+        assert!(row["readings"].get(metric).is_none());
+    }
+    assert!(row["readings"]["motion_max_absolute_edge_strain_pct"]["value"].is_number());
+    assert_eq!(
+        keyed(&result["manufacturing"]["alternatives"], "qualified")["cutting"]["status"],
+        "available"
+    );
+}
+
+#[test]
 fn portable_surface_water_scenario_preserves_actual_cooling_replay_and_independent_readiness() {
     let (pattern, input, raw) = inputs();
     let evaluate = |scenario: &Value, request: &Request| study(scenario, request, &pattern);

@@ -750,11 +750,20 @@ declaration and canonical balances through the ordinary coverage API. See
 The guided workbench exposes all seven existing textile-water quantities: evaporated, remaining,
 supplied, condensed and drained mass, plus separate evaporation and condensation latent energies.
 They remain nominal `transient_surface` criteria with explicit directions and inclusive guards.
-The same case must retain `motion.transient_surface.surface_water`; an ordinary dry transient
-history does not supply missing water evidence. No extra consumer name or result interval is added.
-Exact per-instance material qualification remains native authority, so the current shared policy
-supports same-material design changes and refuses incompatible material substitutions. Original
-sources, phase availability and complete-history admission remain unchanged. See the
+The same case must retain a direct water policy, `surface_water_alternatives`, or complete
+`coupled_water_alternatives` under `motion.transient_surface`; an ordinary dry transient history
+does not supply missing water evidence. Original qualifications can be loaded separately alongside
+guided movement, or retained inside a complete original motion file. Exact per-instance material
+qualification remains native authority: source-selected collections admit the independently qualified
+material assignment, while missing or incompatible assignments refuse their affected consumer.
+
+Five additional nominal criteria consume a qualified finite shared vapor reservoir: final pressure,
+minimum and maximum sampled pressure, remaining vapor mass, and signed isothermal heat removed.
+Pressure extrema include the initial state and retained mechanical endpoints. Thermostat energy is
+independent of textile latent energy; negative values mean supplied heat. All five use complete
+version-5 inventory and enthalpy admission, support inclusive guards and named-case comparisons,
+and remain unavailable for older prescribed-pressure water policies. No extra consumer name,
+continuous-time bound or propagated result interval is added. See the
 [guided controls](browser-material-workbench.md#compare-textile-owned-water-and-latent-heat) and
 [native water model](textile-surface-water.md).
 
