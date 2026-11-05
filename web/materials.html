@@ -1255,8 +1255,35 @@ The engine checks exact retained ownership and each material's thermal domain.</
 <label>Outside film resistance (m² K/W) <input id="guidedMotionHeatOutsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
 </div>
 <p class="note">These spatially uniform conditions apply after the preceding endpoint through this endpoint; the first interval
-starts at time zero. Zero film resistance prescribes the face temperature. Add or replace an endpoint to save its four conditions.
+starts at time zero. In film mode, zero resistance prescribes the face temperature. Add or replace an endpoint to save its conditions.
 Every endpoint needs its own saved conditions before heat can run, including endpoints saved before heat was enabled.</p>
+<label><input id="guidedMotionHeatExteriorEnabled" type="checkbox"> Use qualified convection and optional radiation for this sheet interval</label>
+<fieldset id="guidedMotionHeatExteriorControls" hidden><legend>Sheet exterior exchange for this interval</legend>
+<p class="note">Air temperature replaces the outside reservoir and its outside film becomes zero. The film-mode draft remains available.
+When any sheet interval uses exterior exchange, every sheet interval must have its own saved exterior policy; sources and values may differ.</p>
+<div class="study-fields">
+<label>Air temperature (°C) <input id="guidedMotionHeatExteriorAir" type="number" min="-273.15" step="any"></label>
+<label>Convection coefficient (W/m² K) <input id="guidedMotionHeatExteriorCoefficient" type="number" min="0" step="any"></label>
+<label>Lowest qualified surface temperature (°C) <input id="guidedMotionHeatExteriorMin" type="number" min="-273.15" step="any"></label>
+<label>Highest qualified surface temperature (°C) <input id="guidedMotionHeatExteriorMax" type="number" min="-273.15" step="any"></label>
+<label>Coefficient evidence <select id="guidedMotionHeatExteriorEvidence"><option value="">Choose evidence</option><option value="measured">Measured</option><option value="published">Published</option><option value="estimate">Estimate</option></select></label>
+<label>Source reference <input id="guidedMotionHeatExteriorReference" type="text" maxlength="4096"></label>
+<label>Source access or measurement date <input id="guidedMotionHeatExteriorDate" type="date"></label>
+</div>
+<label>Source note <textarea id="guidedMotionHeatExteriorNote" rows="2" maxlength="4096"></textarea></label>
+<label>Applicable air, geometry, orientation and movement conditions <textarea id="guidedMotionHeatExteriorConditions" rows="2" maxlength="4096"></textarea></label>
+<label><input id="guidedMotionHeatExteriorAllowEstimates" type="checkbox"> I explicitly allow this estimated convection coefficient</label>
+<label>Ambient radiation <select id="guidedMotionHeatExteriorRadiation"><option value="none">Omit radiation</option><option value="explicit">Use an exact material face and property</option><option value="automatic">Use each material's qualified optical face mapping</option></select></label>
+<div id="guidedMotionHeatExteriorRadiationFields" hidden>
+<label>Radiant enclosure temperature (°C) <input id="guidedMotionHeatExteriorRadiant" type="number" min="-273.15" step="any"></label>
+<div id="guidedMotionHeatExteriorExplicitFields" class="study-fields" hidden>
+<label>Exact emissivity property key <input id="guidedMotionHeatExteriorProperty" type="text" maxlength="4096"></label>
+<label>Exact exposed material face <input id="guidedMotionHeatExteriorFace" type="text" maxlength="4096"></label>
+</div>
+<label><input id="guidedMotionHeatExteriorGrayConsent" type="checkbox"> I accept opaque, diffuse, gray exchange with one full enclosure and unit view factor</label>
+</div>
+<p class="note">The selected material supplies source-qualified emissivity. The convection coefficient is prescribed, never inferred from wind or body speed.</p>
+</fieldset>
 </fieldset>
 <fieldset id="guidedMotionCoverageBoundary" hidden><legend>Body/layer heat conditions for the interval ending at this endpoint</legend>
 <div class="study-fields">
@@ -1265,17 +1292,80 @@ Every endpoint needs its own saved conditions before heat can run, including end
 <label>Body-side film resistance (m² K/W) <input id="guidedMotionCoverageInsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
 <label>Exterior film resistance (m² K/W) <input id="guidedMotionCoverageOutsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
 </div>
+<label><input id="guidedMotionCoverageExteriorEnabled" type="checkbox"> Use qualified convection and optional radiation on outer covered cloth for this interval</label>
+<fieldset id="guidedMotionCoverageExteriorControls" hidden><legend>Covered-cloth exterior exchange for this interval</legend>
+<p class="note">Air temperature replaces the covered outside reservoir and its outside film becomes zero. Other intervals may retain their saved film conditions.</p>
+<div class="study-fields">
+<label>Air temperature (°C) <input id="guidedMotionCoverageExteriorAir" type="number" min="-273.15" step="any"></label>
+<label>Convection coefficient (W/m² K) <input id="guidedMotionCoverageExteriorCoefficient" type="number" min="0" step="any"></label>
+<label>Lowest qualified surface temperature (°C) <input id="guidedMotionCoverageExteriorMin" type="number" min="-273.15" step="any"></label>
+<label>Highest qualified surface temperature (°C) <input id="guidedMotionCoverageExteriorMax" type="number" min="-273.15" step="any"></label>
+<label>Coefficient evidence <select id="guidedMotionCoverageExteriorEvidence"><option value="">Choose evidence</option><option value="measured">Measured</option><option value="published">Published</option><option value="estimate">Estimate</option></select></label>
+<label>Source reference <input id="guidedMotionCoverageExteriorReference" type="text" maxlength="4096"></label>
+<label>Source access or measurement date <input id="guidedMotionCoverageExteriorDate" type="date"></label>
+</div>
+<label>Source note <textarea id="guidedMotionCoverageExteriorNote" rows="2" maxlength="4096"></textarea></label>
+<label>Applicable air, geometry, orientation and movement conditions <textarea id="guidedMotionCoverageExteriorConditions" rows="2" maxlength="4096"></textarea></label>
+<label><input id="guidedMotionCoverageExteriorAllowEstimates" type="checkbox"> I explicitly allow this estimated convection coefficient</label>
+<label>Ambient radiation <select id="guidedMotionCoverageExteriorRadiation"><option value="none">Omit radiation</option><option value="explicit">Use an exact material face and property</option><option value="automatic">Use each material's qualified optical face mapping</option></select></label>
+<div id="guidedMotionCoverageExteriorRadiationFields" hidden>
+<label>Radiant enclosure temperature (°C) <input id="guidedMotionCoverageExteriorRadiant" type="number" min="-273.15" step="any"></label>
+<div id="guidedMotionCoverageExteriorExplicitFields" class="study-fields" hidden>
+<label>Exact emissivity property key <input id="guidedMotionCoverageExteriorProperty" type="text" maxlength="4096"></label>
+<label>Exact exposed material face <input id="guidedMotionCoverageExteriorFace" type="text" maxlength="4096"></label>
+</div>
+<label><input id="guidedMotionCoverageExteriorGrayConsent" type="checkbox"> I accept opaque, diffuse, gray exchange with one full enclosure and unit view factor</label>
+</div>
+<p class="note">The current outer material supplies emissivity from its qualified face. The coefficient applies per current outer cloth area and is not inferred from movement.</p>
+</fieldset>
+<fieldset id="guidedMotionCoverageBareControls" hidden><legend>Separate bare-body films for this interval</legend>
+<p class="note">Save these independently whenever covered exterior exchange is enabled, including when full coverage is expected.</p>
+<div class="study-fields">
+<label>Bare inside reservoir (°C) <input id="guidedMotionCoverageBareInside" type="number" min="-273.15" step="any"></label>
+<label>Bare outside reservoir (°C) <input id="guidedMotionCoverageBareOutside" type="number" min="-273.15" step="any"></label>
+<label>Bare inside film resistance (m² K/W) <input id="guidedMotionCoverageBareInsideFilm" type="number" min="0" step="any"></label>
+<label>Bare outside film resistance (m² K/W) <input id="guidedMotionCoverageBareOutsideFilm" type="number" min="0" step="any"></label>
+</div>
+</fieldset>
 <label>Exchange on currently exposed cloth <select id="guidedMotionExposedMode"><option value="">Choose exposed-cloth conditions</option>
 <option value="adiabatic">Adiabatic: no boundary exchange</option><option value="films">Declare separate reservoir films</option></select></label>
-<div id="guidedMotionExposedFilms" class="study-fields" hidden>
+<div id="guidedMotionExposedFilms" hidden>
+<div class="study-fields">
 <label>Inside material-face reservoir (°C) <input id="guidedMotionExposedInside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
 <label>Outside material-face reservoir (°C) <input id="guidedMotionExposedOutside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
 <label>Inside material-face film resistance (m² K/W) <input id="guidedMotionExposedInsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
 <label>Outside material-face film resistance (m² K/W) <input id="guidedMotionExposedOutsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
 </div>
-<p class="note">The covered-body films apply over the declared body domain, including bare paths. Exposed-cloth films follow each sheet's
+<label><input id="guidedMotionExposedExteriorEnabled" type="checkbox"> Use qualified convection and optional radiation on exposed cloth for this interval</label>
+<fieldset id="guidedMotionExposedExteriorControls" hidden><legend>Exposed-cloth exterior exchange for this interval</legend>
+<p class="note">This independent environment replaces the exposed outside reservoir and sets its outside film to zero. Adiabatic mode ignores these draft values.</p>
+<div class="study-fields">
+<label>Air temperature (°C) <input id="guidedMotionExposedExteriorAir" type="number" min="-273.15" step="any"></label>
+<label>Convection coefficient (W/m² K) <input id="guidedMotionExposedExteriorCoefficient" type="number" min="0" step="any"></label>
+<label>Lowest qualified surface temperature (°C) <input id="guidedMotionExposedExteriorMin" type="number" min="-273.15" step="any"></label>
+<label>Highest qualified surface temperature (°C) <input id="guidedMotionExposedExteriorMax" type="number" min="-273.15" step="any"></label>
+<label>Coefficient evidence <select id="guidedMotionExposedExteriorEvidence"><option value="">Choose evidence</option><option value="measured">Measured</option><option value="published">Published</option><option value="estimate">Estimate</option></select></label>
+<label>Source reference <input id="guidedMotionExposedExteriorReference" type="text" maxlength="4096"></label>
+<label>Source access or measurement date <input id="guidedMotionExposedExteriorDate" type="date"></label>
+</div>
+<label>Source note <textarea id="guidedMotionExposedExteriorNote" rows="2" maxlength="4096"></textarea></label>
+<label>Applicable air, geometry, orientation and movement conditions <textarea id="guidedMotionExposedExteriorConditions" rows="2" maxlength="4096"></textarea></label>
+<label><input id="guidedMotionExposedExteriorAllowEstimates" type="checkbox"> I explicitly allow this estimated convection coefficient</label>
+<label>Ambient radiation <select id="guidedMotionExposedExteriorRadiation"><option value="none">Omit radiation</option><option value="explicit">Use an exact material face and property</option><option value="automatic">Use each material's qualified optical face mapping</option></select></label>
+<div id="guidedMotionExposedExteriorRadiationFields" hidden>
+<label>Radiant enclosure temperature (°C) <input id="guidedMotionExposedExteriorRadiant" type="number" min="-273.15" step="any"></label>
+<div id="guidedMotionExposedExteriorExplicitFields" class="study-fields" hidden>
+<label>Exact emissivity property key <input id="guidedMotionExposedExteriorProperty" type="text" maxlength="4096"></label>
+<label>Exact exposed material face <input id="guidedMotionExposedExteriorFace" type="text" maxlength="4096"></label>
+</div>
+<label><input id="guidedMotionExposedExteriorGrayConsent" type="checkbox"> I accept opaque, diffuse, gray exchange with one full enclosure and unit view factor</label>
+</div>
+<p class="note">Exposed sheets retain their original material orientation and their own source-qualified optical properties.</p>
+</fieldset>
+</div>
+<p class="note">In film mode, covered-body conditions apply over the declared body domain, including bare paths. Covered exterior exchange uses the separate bare-body films above. Exposed-cloth conditions follow each sheet's
 original material faces; adiabatic cloth retains stored heat as coverage changes. Save both choices with each endpoint.
-Conditions are constant over that interval. Zero film resistance prescribes the face temperature.</p>
+Conditions are constant over that interval. In film mode, zero resistance prescribes the face temperature.</p>
 </fieldset>
 <button id="addMotionKeyframe" type="button" disabled>Add motion keyframe</button>
 <p id="guidedMotionSummary" class="note" role="status">No motion keyframes saved.</p>
@@ -1301,7 +1391,7 @@ body-vertex chords between endpoints, with a fixed root and no chair or floor su
 anatomical movement accuracy or physical garment fit. A failed movement publishes no partial trajectory. Optional sheet heat is recomputed
 at endpoints as independent steady snapshots. The dry heat option above separately carries textile temperature through the saved
 interval conditions, without a steady-sheet request. Moving body/layer heat separately follows covered and exposed reference material.
-Use the original motion request for qualified exterior exchange, thermal bridges, water and dissipation policies. It retains complete requests
+Use the original motion request for thermal bridges, water and dissipation policies. It retains complete requests
 verbatim, including their source values and work policies; native admission still checks their compatibility.</p>
 </fieldset>
 <fieldset id="guidedScenarioCasePolicy" hidden><legend>Comparison policy for this case</legend>

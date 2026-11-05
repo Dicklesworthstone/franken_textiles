@@ -16502,6 +16502,93 @@ function guidedCoverageHeatInstance(p,instance,temperature) {
   p.e.addMotionCoverageInstance.onclick();
 }
 
+test('authored moving exterior snapshots independent sheet covered and exposed environments by interval',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedCoverageHeatControls(p);
+  guidedMovingTopology(p);guidedDryHeatFilm(p,35,999,0.1,0.2);
+  const firstCoveredFilm=guidedCoverageHeatFilm(p,'Coverage',30,999,0.2,0.4),
+    firstSheet=authorExterior(p,'guidedMotionHeatExterior',{air:4,coefficient:6,radiation:'explicit'}),
+    firstCovered=authorExterior(p,'guidedMotionCoverageExterior',{air:7,coefficient:8,radiation:'automatic',radiant:12}),
+    bare=authorBareFilms(p,'guidedMotionCoverageBare',[31,8,0.3,0.5]);
+  authorExterior(p,'guidedMotionExposedExterior');p.e.guidedMotionExposedExteriorReference.value='';
+  p.e.guidedMotionExposedMode.value='adiabatic';p.e.guidedMotionExposedMode.handlers.change();await addGuidedMotion(p,0.002,35);
+  assert.equal(p.e.guidedMotionKeyframes.children.length,1,p.e.error.textContent);
+  const secondSheet=authorExterior(p,'guidedMotionHeatExterior',{air:20,coefficient:3}),
+    secondCoveredFilm=guidedCoverageHeatFilm(p,'Coverage',5,40,0.4,0.2);
+  p.e.guidedMotionCoverageExteriorEnabled.checked=false;p.e.guidedMotionCoverageExteriorEnabled.handlers.change();
+  p.e.guidedMotionCoverageBareInside.value='inactive invalid';
+  p.e.guidedMotionExposedMode.value='films';p.e.guidedMotionExposedMode.handlers.change();
+  guidedCoverageHeatFilm(p,'Exposed',25,999,0.2,0.4);
+  const exposed=authorExterior(p,'guidedMotionExposedExterior',{air:10,coefficient:0,radiation:'explicit',radiant:18});
+  await addGuidedMotion(p,0.004,35.2);await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);const scenario=JSON.parse(sent.scenarioRequest),motion=scenario.motion;
+  assert.deepEqual(motion.transient_surface.exterior_exchange,[firstSheet,secondSheet]);
+  assert.deepEqual(motion.transient_surface.boundaries,[{inside_c:35,outside_c:4,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0},
+    {inside_c:35,outside_c:20,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0}]);
+  assert.deepEqual(motion.transient_coverage.boundaries,[{...firstCoveredFilm,outside_c:7,outside_resistance_m2_k_w:0},secondCoveredFilm]);
+  assert.deepEqual(motion.transient_coverage.exterior_exchange,[firstCovered,null]);
+  assert.deepEqual(motion.transient_coverage.bare_boundaries,[bare,null]);
+  assert.deepEqual(motion.transient_coverage.exposed_exterior_exchange,[null,exposed]);
+  assert.deepEqual(motion.transient_coverage.exposed_boundaries,[null,
+    {inside_c:25,outside_c:10,inside_resistance_m2_k_w:0.2,outside_resistance_m2_k_w:0}]);
+  assert.equal(Object.hasOwn(scenario,'surface'),false);assert.equal(Object.hasOwn(scenario,'coverage'),false);
+});
+
+test('authored moving exterior repairs mixed sheet intervals explicitly and preserves disabled saved consumers',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  await addGuidedMotion(p,0.002,35);const exterior=authorExterior(p,'guidedMotionHeatExterior');await addGuidedMotion(p,0.004,35.2);
+  assert.equal(p.e.guidedMotionKeyframes.children.length,2,p.e.error.textContent);
+  const before=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/sheet|every.*interval|exterior/i);
+  guidedMotionDraft(p,0.002,35);await guidedMotionAction(p,'Replace keyframe 1 from current controls');await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const saved=JSON.parse(sent.scenarioRequest).motion.transient_surface;assert.deepEqual(saved.exterior_exchange,[exterior,exterior]);p.emit(scenarioReport());
+  p.e.guidedMotionHeat.checked=false;p.e.guidedMotionHeat.handlers.change();
+  p.e.guidedMotionHeatExteriorReference.value='inactive';p.e.guidedMotionHeatExteriorCoefficient.value='bad';
+  guidedMotionDraft(p,0.003,35.1);await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  p.e.guidedMotionHeat.checked=true;p.e.guidedMotionHeat.handlers.change();await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.transient_surface,saved);
+});
+
+test('authored moving exterior drafts cannot replace saved cases or supersede exact original motion',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionSourceControls(p);guidedCoverageHeatControls(p);
+  guidedMovingTopology(p);guidedCoverageHeatFilm(p);p.e.guidedMotionExposedMode.value='adiabatic';
+  const first=authorExterior(p,'guidedMotionCoverageExterior');authorBareFilms(p,'guidedMotionCoverageBare');
+  await addGuidedMotion(p,0.002,35);await saveGuidedCase(p,'cool');
+  const second=authorExterior(p,'guidedMotionCoverageExterior',{air:30,coefficient:4,radiation:'explicit',radiant:35});
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');await saveGuidedCase(p,'warm');await p.e.scenario.onclick();
+  const saved=p.current().messages.at(-1).scenarioRequest;
+  assert.deepEqual(JSON.parse(saved).cases.map(row=>row.scenario.motion.transient_coverage.exterior_exchange),[[first],[second]]);p.emit(scenarioReport());
+  for(const id of ['guidedMotionCoverageExteriorReference','guidedMotionCoverageBareInside','guidedMotionExposedExteriorCoefficient']) {
+    p.e[id].value='invalid unsaved draft';p.e[id].handlers.input();assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false,id);
+  }
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,saved);p.emit(scenarioReport());
+  p.e.scenarioMode.value='guided';p.e.scenarioMode.handlers.change();guidedMotionSourceControls(p,'file');
+  const original=guidedMotionOriginal.replace('"transient_surface":null','"transient_surface":{"exterior_exchange":[{"unmodified":18446744073709551615,"x":-0.0}]}');
+  p.select('guidedMotionFile',original);p.e.guidedMotionFile.handlers.change();await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(original));
+  p.emit(scenarioReport());await p.load();for(const prefix of ['guidedMotionHeatExterior','guidedMotionCoverageExterior','guidedMotionExposedExterior'])
+    assert.equal(p.e[prefix+'Enabled'].checked,false);
+});
+
+test('authored moving exterior keeps unsaved drafts independent and cancels source reads only on endpoint replacement',async()=>{
+  for(const replace of [false,true]) {
+    const {p,sources}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedCoverageHeatControls(p);guidedMovingTopology(p);
+    guidedCoverageHeatFilm(p);p.e.guidedMotionExposedMode.value='adiabatic';
+    const exterior=authorExterior(p,'guidedMotionCoverageExterior');authorBareFilms(p,'guidedMotionCoverageBare');await addGuidedMotion(p,0.002,35);
+    const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),before=old.messages.length,running=p.e.scenario.onclick();
+    p.e.guidedMotionCoverageExteriorCoefficient.value='9';p.e.guidedMotionCoverageExteriorCoefficient.handlers.input();
+    p.e.guidedMotionCoverageBareOutside.value='20';p.e.guidedMotionCoverageBareOutside.handlers.input();
+    assert.equal(old.dead,false,'Draft environment fields do not alter saved keyframes');
+    if(replace){await guidedMotionAction(p,'Replace keyframe 1 from current controls');assert.equal(old.dead,true);p.ready();}
+    delay.resolve(sources.fit);await running;
+    if(replace){assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);}
+    else {const sent=old.messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+      assert.deepEqual(JSON.parse(sent.scenarioRequest).motion.transient_coverage.exterior_exchange,[exterior]);}
+  }
+});
+
 test('guided moving coverage authors independent covered and exposed schedules without a steady coverage or sheet policy',async()=>{
   const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);
   for(const id of ['guidedMotionCoverageInitial','guidedMotionCoverageInside','guidedMotionCoverageOutside','guidedMotionExposedMode',

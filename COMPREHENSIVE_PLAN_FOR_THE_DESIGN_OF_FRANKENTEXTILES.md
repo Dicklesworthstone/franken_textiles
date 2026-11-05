@@ -5428,6 +5428,14 @@ exact bytes, and replacing a garment clears these geometry-qualified declaration
 tracks this operator-facing delivery; empirical exchange, full wearer physiology and broader
 uncertainty propagation remain separate.
 
+Saved movement endpoints now carry independent sheet, covered-outer-cloth and exposed-cloth
+environments through the same native consumers. Add/Replace freezes complete source declarations;
+unsaved draft edits cannot alter the path, and disabling a consumer while replacing a pose preserves
+its saved policy. Covered exterior intervals require separate bare-body films. Exposed adiabatic
+intervals retain no active exterior policy. Sheet histories require exterior exchange in every
+interval or none; coverage retains explicit nullable interval schedules without borrowing conditions
+from another consumer or interval. Original motion text and immutable named cases remain authoritative.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

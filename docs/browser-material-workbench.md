@@ -866,7 +866,7 @@ editor without requesting steady coverage or changing the selected original stea
 Moving coverage has its own default initial temperature, saved instance overrides and work limits;
 its conditions and temperatures remain independent of the sheet-heat controls.
 
-Each saved endpoint needs covered-body reservoir films and an explicit exposed-cloth choice.
+Each saved endpoint needs covered-body conditions and an explicit exposed-cloth choice.
 Choose **Adiabatic: no boundary exchange**, or **Declare separate reservoir films** and fill all
 four exposed-face values. Adiabatic exposed cloth retains stored heat through movement; it does
 not reset to an ambient temperature. Separate exposed films use the sheet's original material faces.
@@ -874,12 +874,36 @@ Adding or replacing an endpoint saves both choices. Enabling coverage after pose
 requires replacing each endpoint with its explicit conditions; no earlier interval is filled from
 the current draft. Removing an endpoint preserves the next endpoint's own saved conditions.
 
+#### Save convection and radiation with each movement interval
+
+The endpoint editor can replace the outside film independently for sheet heat, covered outer cloth,
+and exposed cloth. Each enabled environment needs the complete source-qualified convection inputs
+described above, plus an explicit radiation selection when used. Covered exterior exchange also
+needs its own four bare-body film values. These do not reuse steady coverage, sheet conditions or
+the exposed-cloth environment. Exposed exterior controls are active only when separate exposed
+conditions are selected; choosing adiabatic ignores their saved draft values.
+
+**Add motion keyframe** or **Replace keyframe … from current controls** freezes the complete source,
+temperature domain, radiation policy and corresponding films for that interval. Editing an
+environment field prepares a new endpoint without changing any saved interval. Replacing a pose
+while a heat consumer is disabled preserves all of that consumer's saved thermal conditions, ready
+for re-enabling. Endpoint summaries identify the saved air temperature, coefficient, source and
+radiation mode. Named operating cases freeze these interval declarations independently.
+
+Independent-sheet schedules use either films for every interval or qualified exterior exchange for
+every interval. A mixed sheet schedule refuses the run and identifies the endpoint to replace;
+the editor still permits one-at-a-time replacement while preparing the complete schedule. Moving
+coverage permits film and exterior intervals in one history, with explicit null entries for the
+inactive covered/exposed policies. Every covered exterior interval retains its separately declared
+bare-body films. Native admission resolves each actual exposed material face and its optical source;
+no coefficient, emissivity, skin property or past interval is inferred.
+
 Coverage reserves 1–10000000 temperature-cell/body-face advances and 1–20000000 projection/remap
 operations per history. Sheet and coverage histories share a 20000000 thermal allowance across
 alternatives and named cases; coverage geometry shares 40000000 operations. Failed histories can
 consume reservations. These are work limits, not promised runtimes or convergence; an unavailable
-optional history retains independent outcomes. Original-motion mode supports the existing qualified
-exterior, bridge, liquid and dissipation policies without rewriting them into this dry-film editor.
+optional history retains independent outcomes. Original-motion mode supports complete exterior,
+bridge, liquid and dissipation policies without rewriting their source text into the guided editor.
 
 Open **Different initial temperatures for individual garment instances** when, for example, a cold
 outer garment starts separately from a warm inner sheet. Enter an exact retained physical instance
