@@ -55,6 +55,8 @@ const guidedScenarioDrafts = [], guidedScenarioButtons = [];
 const guidedMotionKeyframes = [], guidedMotionButtons = [];
 const guidedMotionHeatInitials = new Map(), guidedMotionHeatInitialButtons = [];
 const guidedMotionCoverageInitials = new Map(), guidedMotionCoverageInitialButtons = [];
+const guidedMotionHeating = [["Plastic", "plastic_dissipation_heat"], ["Relaxation", "relaxation_dissipation_heat"],
+  ["Bending", "bending_plastic_dissipation_heat"]];
 const guidedCoverageLayers = new Map(), guidedCoverageInterfaces = new Map(), guidedCoverageButtons = [];
 const guidedCoverageTopologyFields = ["guidedCoverageTriangles", "guidedCoverageDistance", "guidedCoverageCosine", "guidedCoverageSeparation", "guidedCoverageCells"];
 const guidedCoverageBoundaryFields = ["guidedCoverageInside", "guidedCoverageOutside", "guidedCoverageInsideFilm", "guidedCoverageOutsideFilm"];
@@ -305,7 +307,7 @@ function controls() {
     const prefix = `guidedMotion${domain}`, enabled = motionMode === "form" && $(prefix).checked;
     $(prefix + "Settings").hidden = !enabled; $(prefix + "Boundary").hidden = !enabled;
     for (const suffix of ["Initial", "Step", "Budget", ...(domain === "Heat" ? ["Cells"] : ["GeometryBudget"]),
-      "Inside", "Outside", "InsideFilm", "OutsideFilm"]) $(prefix + suffix).disabled = !enabled;
+      "Inside", "Outside", "InsideFilm", "OutsideFilm", ...guidedMotionHeating.map(([suffix]) => suffix)]) $(prefix + suffix).disabled = !enabled;
     const editInitials = !!source && guidedScenarioMode() && enabled;
     for (const id of [prefix + "Instance", prefix + "InstanceInitial", `addMotion${domain}Instance`]) $(id).disabled = !editInitials;
     $(`clearMotion${domain}Instances`).disabled = !editInitials || !initials.size;
@@ -4662,6 +4664,10 @@ async function scenarioInput() {
   }
   return guidedScenarioInput();
 }
+function guidedMotionHeatingInput(domain) {
+  return Object.fromEntries(guidedMotionHeating.filter(([suffix]) => $("guidedMotion" + domain + suffix).checked)
+    .map(([, field]) => [field, "uniform_reference_thickness"]));
+}
 function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true) {
   const number = (id, label) => {
     const raw = $(id).value.trim();
@@ -4678,7 +4684,7 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
     max_sample_vertices: number("guidedMotionVertices", "retained motion vertex allowance"),
   };
   if (includeHeat && $("guidedMotionHeat").checked) {
-    motion.transient_surface = { schema: "ftx-motion-surface-heat/1",
+    motion.transient_surface = { schema: "ftx-motion-surface-heat/1", ...guidedMotionHeatingInput("Heat"),
       initial_temperature_c: number("guidedMotionHeatInitial", "initial textile temperature"),
       ...(guidedMotionHeatInitials.size ? { initial_instance_temperatures_c:
         Object.fromEntries([...guidedMotionHeatInitials].map(([instance, entry]) => [instance, entry.temperature_c])) } : {}),
@@ -4700,7 +4706,7 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
     }
   }
   if (includeHeat && $("guidedMotionCoverage").checked) {
-    motion.transient_coverage = { schema: "ftx-motion-coverage-heat/1",
+    motion.transient_coverage = { schema: "ftx-motion-coverage-heat/1", ...guidedMotionHeatingInput("Coverage"),
       ...JSON.parse(buildMaterialCoverageTopology(guidedCoverageTopologyInput(number))),
       initial_temperature_c: number("guidedMotionCoverageInitial", "initial coverage textile temperature"),
       ...(guidedMotionCoverageInitials.size ? { initial_instance_temperatures_c:
@@ -5399,13 +5405,14 @@ for (const [domain, initials] of [["Heat", guidedMotionHeatInitials], ["Coverage
 $("guidedScenarioMotion").addEventListener("change", changedGuidedMotionDraft);
 for (const domain of ["Heat", "Coverage"]) {
   const prefix = "guidedMotion" + domain;
-  for (const suffix of ["", "Initial", "Step", "Budget", ...(domain === "Heat" ? ["Cells"] : ["GeometryBudget"])]) {
+  for (const suffix of ["", "Initial", "Step", "Budget", ...(domain === "Heat" ? ["Cells"] : ["GeometryBudget"]),
+    ...guidedMotionHeating.map(([suffix]) => suffix)]) {
     const changed = () => {
       if (guidedMotionMode() === "form" && (!suffix || $(prefix).checked)) changedGuidedMotionDraft();
       else controls();
     };
     $(prefix + suffix).addEventListener("change", changed);
-    if (suffix) $(prefix + suffix).addEventListener("input", changed);
+    if (suffix && !guidedMotionHeating.some(([id]) => id === suffix)) $(prefix + suffix).addEventListener("input", changed);
   }
 }
 for (const id of ["guidedMotionStep", "guidedMotionTrials", "guidedMotionPairs", "guidedMotionVertices", "guidedScenarioMotionTrials"]) {
@@ -5772,6 +5779,7 @@ function resetGuidedScenarios() {
   guidedMotionKeyframes.length = 0; $("guidedScenarioMotion").checked = false; $("guidedMotionSource").value = "form";
   for (const [domain, initials] of [["Heat", guidedMotionHeatInitials], ["Coverage", guidedMotionCoverageInitials]]) {
     const prefix = "guidedMotion" + domain; $(prefix).checked = false; initials.clear(); showGuidedMotionHeatInitials(domain);
+    for (const [suffix] of guidedMotionHeating) $(prefix + suffix).checked = false;
     for (const suffix of ["Initial", "Instance", "InstanceInitial", "Inside", "Outside", "InsideFilm", "OutsideFilm"]) $(prefix + suffix).value = "";
   }
   $("guidedMotionExposedMode").value = "";

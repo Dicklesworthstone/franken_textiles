@@ -902,8 +902,26 @@ Coverage reserves 1–10000000 temperature-cell/body-face advances and 1–20000
 operations per history. Sheet and coverage histories share a 20000000 thermal allowance across
 alternatives and named cases; coverage geometry shares 40000000 operations. Failed histories can
 consume reservations. These are work limits, not promised runtimes or convergence; an unavailable
-optional history retains independent outcomes. Original-motion mode supports complete exterior,
-bridge, liquid and dissipation policies without rewriting their source text into the guided editor.
+optional history retains independent outcomes. Original-motion mode preserves complete policies,
+including thermal bridges and liquid histories, without rewriting their source text into the editor.
+
+#### Convert material dissipation to heat
+
+Sheet heat and moving body/layer heat each have independent switches for permanent membrane
+deformation, Maxwell relaxation and irreversible bending. Select any combination for either
+history. Each switch requests the existing `uniform_reference_thickness` distribution; the engine
+uses accepted mechanical work and the selected material's independently sourced conversion fraction
+and qualified temperature range. The editor supplies no fraction or material coefficient. Missing
+conversion evidence or an unsupported actual temperature refuses the affected heat consumer.
+
+These choices apply to the complete motion history, including when exact initial instance
+temperatures are saved. Changing a switch updates the active request and cancels obsolete work;
+it does not require replacing the saved movement endpoints. Disabled histories retain their own
+choices for reactivation. Named cases freeze independent snapshots, and original-motion mode keeps
+its complete source bytes. Results retain separate mechanical dissipation, supplied heat and
+unconverted energy for every requested channel, with the initial drape's work excluded.
+
+#### Set individual starting temperatures
 
 Open **Different initial temperatures for individual garment instances** when, for example, a cold
 outer garment starts separately from a warm inner sheet. Enter an exact retained physical instance
@@ -929,8 +947,8 @@ the same map on `motion.transient_coverage`; original motion files can retain it
 layer cells and exposed remainders follow each source instance's initial temperature as the garment
 moves. The page displays each consumer's own resolved temperatures, source model and initial frame.
 Saved cases and replay files retain the complete authored or original motion policy.
-Water, mechanical liquid coupling and
-dissipation heating require a separate supported contract and refuse when combined with these maps.
+All three dry dissipation-heating channels can use these maps. Water and mechanical liquid coupling
+still require separate supported contracts for nonuniform initial temperatures.
 
 Every saved endpoint owns its four boundary values. Editing the current endpoint or film fields
 prepares a draft; only adding or replacing an endpoint changes the saved schedule. Removing an
@@ -947,7 +965,8 @@ history allowance against its case's shared thermal budget. Larger allocations c
 optional histories available across material alternatives; the authoring form does not reject the
 whole comparison when an optional heat consumer may exhaust its budget. Heat refusals preserve
 independent manufacturing and mechanical outcomes. This form authors dry independent sheets;
-coverage topology, water, exterior exchange and dissipation heating use the original-motion route.
+the adjacent controls also author moving coverage, exterior exchange and dissipation heating.
+Water and thermal bridges use the original-motion route.
 
 Native comparison requires a complete, source-bound history. Missing heat capacity, failed motion
 or refused thermal work cannot become zero energy or a qualifying temperature. Independent available

@@ -382,15 +382,23 @@ export function buildMaterialMotionRequest(state) {
     previous = frame.time_s;
   }
   if (minimumTrials > state.max_trials) throw Error("Motion requires more nominal substeps than max_trials.");
+  const heatingFields = ["plastic_dissipation_heat", "relaxation_dissipation_heat", "bending_plastic_dissipation_heat"];
   for (const [consumer, coverage] of [["transient_surface", false], ["transient_coverage", true]]) {
     if (!own(state, consumer)) continue;
     const label = coverage ? "Guided moving coverage heat" : "Guided dry sheet heat";
     const fields = ["schema", "initial_temperature_c", "boundaries", "max_step_s", "max_cell_steps",
       ...(coverage ? ["body_triangle_ids", "instance_layers", "settings", "exposed_boundaries", "max_geometry_operations"] : ["cells_per_layer"])];
-    const heat = object(state[consumer], [...fields, "initial_instance_temperatures_c", "exterior_exchange",
+    const heat = object(state[consumer], [...fields, ...heatingFields, "initial_instance_temperatures_c", "exterior_exchange",
       ...(coverage ? ["bare_boundaries", "exposed_exterior_exchange"] : [])], fields, label);
     const schema = coverage ? "ftx-motion-coverage-heat/1" : "ftx-motion-surface-heat/1";
     if (heat.schema !== schema) throw Error(`${label} needs ${schema}.`);
+    for (const field of heatingFields) {
+      if (own(heat, field) && heat[field] !== null && heat[field] !== "uniform_reference_thickness") {
+        throw Error(`${label} ${field} needs uniform_reference_thickness, null or omission.`);
+      }
+    }
+    // The engine qualifies each selected material law, conversion observation and actual temperature.
+    // These opt-ins never author a fraction or replace material-source admission.
     if (coverage) {
       if (!Array.isArray(heat.body_triangle_ids) || !heat.body_triangle_ids.length || heat.body_triangle_ids.length > 4096 ||
         heat.body_triangle_ids.some(id => !Number.isSafeInteger(id) || id < 0)) {
@@ -402,7 +410,7 @@ export function buildMaterialMotionRequest(state) {
       const entries = Object.entries(heat.instance_layers);
       if (!entries.length || entries.length > 65536) throw Error("Save 1–65536 exact physical-instance layer assignments.");
       // Both consumers use the same authored geometry contract. Original motion files bypass
-      // this guided subset and retain advanced source-qualified interfaces and heating policies.
+      // this guided subset and retain advanced source-qualified interfaces, bridges and liquid policies.
       buildMaterialCoverageTopology({ bodyTriangleIds: heat.body_triangle_ids.join(","),
         instanceLayers: entries.map(([instance, layer]) => ({ instance, layer })), settings: heat.settings });
     }

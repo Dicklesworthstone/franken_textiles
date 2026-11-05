@@ -16502,6 +16502,119 @@ function guidedCoverageHeatInstance(p,instance,temperature) {
   p.e.addMotionCoverageInstance.onclick();
 }
 
+const guidedDissipationChannels=[['Plastic','plastic_dissipation_heat'],['Relaxation','relaxation_dissipation_heat'],
+  ['Bending','bending_plastic_dissipation_heat']];
+const guidedDissipationDomains=[['Heat','transient_surface'],['Coverage','transient_coverage']];
+async function guidedDissipationHistories(p) {
+  guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);guidedDryHeatInstance(p,'front.R',5);
+  guidedCoverageHeatControls(p);guidedMovingTopology(p);guidedCoverageHeatFilm(p);guidedCoverageHeatInstance(p,'front.R',35);
+  p.e.guidedMotionExposedMode.value='adiabatic';p.e.guidedMotionExposedMode.handlers.change();await addGuidedMotion(p,0.002,35);
+}
+function guidedDissipationChoice(p,domain,suffix,checked) {
+  const field=p.e['guidedMotion'+domain+suffix];field.checked=checked;field.handlers.change();
+}
+
+test('guided dissipation heat authors every independent channel subset with distinct source instance temperatures',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);
+  for(const [domain] of guidedDissipationDomains)for(const [suffix] of guidedDissipationChannels) {
+    const field=p.e['guidedMotion'+domain+suffix];assert.equal(field.checked,false);assert.equal(field.disabled,true);
+  }
+  await guidedDissipationHistories(p);
+  for(let variant=0;variant<9;variant++) {
+    const masks=[variant===8?7:variant,variant===8?7:7^variant];
+    for(const [d,[domain]] of guidedDissipationDomains.entries())for(const [i,[suffix]] of guidedDissipationChannels.entries()) {
+      assert.equal(p.e['guidedMotion'+domain+suffix].disabled,false);
+      guidedDissipationChoice(p,domain,suffix,!!(masks[d]&(1<<i)));
+    }
+    await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+    const request=JSON.parse(sent.scenarioRequest);
+    for(const [d,[,consumer]] of guidedDissipationDomains.entries()) {
+      const heat=request.motion[consumer];
+      assert.equal(heat.initial_instance_temperatures_c['front.R'],d?35:5);
+      for(const [i,[,field]] of guidedDissipationChannels.entries()) {
+        assert.equal(Object.hasOwn(heat,field),!!(masks[d]&(1<<i)),consumer+' '+field);
+        if(Object.hasOwn(heat,field))assert.equal(heat[field],'uniform_reference_thickness');
+      }
+      assert.equal(Object.hasOwn(heat,'heat_fraction'),false,'Only material observations may supply conversion fractions');
+    }
+    p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+    const link=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.download==='scenario-request.json');
+    assert.equal(await p.blobs.get(link.href).text(),sent.scenarioRequest);
+  }
+  p.e.guidedMotionHeat.checked=false;p.e.guidedMotionHeat.handlers.change();await p.e.scenario.onclick();
+  const withoutSheet=JSON.parse(p.current().messages.at(-1).scenarioRequest).motion;
+  assert.equal(Object.hasOwn(withoutSheet,'transient_surface'),false);
+  for(const [suffix,field] of guidedDissipationChannels) {
+    assert.equal(p.e['guidedMotionHeat'+suffix].checked,true);assert.equal(p.e['guidedMotionHeat'+suffix].disabled,true);
+    assert.equal(withoutSheet.transient_coverage[field],'uniform_reference_thickness');
+  }
+  p.emit(scenarioReport());p.e.guidedMotionHeat.checked=true;p.e.guidedMotionHeat.handlers.change();await p.e.scenario.onclick();
+  for(const [,field] of guidedDissipationChannels)assert.equal(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.transient_surface[field],'uniform_reference_thickness');
+  p.emit(scenarioReport());await p.load();
+  for(const [domain] of guidedDissipationDomains)for(const [suffix] of guidedDissipationChannels) {
+    assert.equal(p.e['guidedMotion'+domain+suffix].checked,false,'Replacing the pattern clears heating choices');
+  }
+});
+
+test('guided dissipation heat freezes independent named-case choices while current drafts remain editable',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);await guidedDissipationHistories(p);
+  guidedDissipationChoice(p,'Heat','Plastic',true);guidedDissipationChoice(p,'Coverage','Bending',true);await saveGuidedCase(p,'yield');
+  guidedDissipationChoice(p,'Heat','Plastic',false);guidedDissipationChoice(p,'Heat','Relaxation',true);
+  guidedDissipationChoice(p,'Coverage','Bending',false);guidedDissipationChoice(p,'Coverage','Plastic',true);await saveGuidedCase(p,'relaxation');
+  await p.e.scenario.onclick();const original=p.current().messages.at(-1).scenarioRequest,cases=JSON.parse(original).cases;
+  const first=cases[0].scenario.motion,second=cases[1].scenario.motion;
+  assert.equal(first.transient_surface.plastic_dissipation_heat,'uniform_reference_thickness');
+  assert.equal(first.transient_coverage.bending_plastic_dissipation_heat,'uniform_reference_thickness');
+  assert.equal(Object.hasOwn(first.transient_surface,'relaxation_dissipation_heat'),false);
+  assert.equal(second.transient_surface.relaxation_dissipation_heat,'uniform_reference_thickness');
+  assert.equal(second.transient_coverage.plastic_dissipation_heat,'uniform_reference_thickness');
+  assert.equal(Object.hasOwn(second.transient_coverage,'bending_plastic_dissipation_heat'),false);
+  p.emit(scenarioReport());guidedDissipationChoice(p,'Heat','Bending',true);guidedDissipationChoice(p,'Coverage','Relaxation',true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false,'Unsaved case draft changes cannot erase a completed matrix');
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,original);
+});
+
+test('guided dissipation heat edits cancel consumed reads pending case saves and dispatched work in both domains',async()=>{
+  for(const [domain] of guidedDissipationDomains)for(const [mode,suffix] of [['read','Plastic'],['save','Relaxation'],['dispatched','Bending']]) {
+    const {p,sources}=await guidedScenarioSetup();if(mode==='save')guidedNamedCases(p);await guidedDissipationHistories(p);
+    const old=p.current(),before=old.messages.length,delay=deferred();
+    if(mode!=='dispatched')p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const running=mode==='save'?saveGuidedCase(p,'obsolete'):p.e.scenario.onclick();
+    if(mode==='dispatched')await running;
+    const sent=mode==='dispatched'?old.messages.at(-1):null;
+    guidedDissipationChoice(p,domain,suffix,true);assert.equal(old.dead,true,domain+' '+mode);p.ready();
+    if(mode!=='dispatched') {delay.resolve(sources.fit);await running;assert.equal(old.messages.length,before);}
+    else old.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete-heating.json',text:'{}'}]});
+    assert.equal(p.current().messages.length,0);assert.equal(p.live.size,0);
+    if(mode==='save')assert.equal(p.e.guidedScenarioCases.children.length,0);
+  }
+});
+
+test('guided dissipation heat snapshots before reads and leaves disabled domains and original policies independent',async()=>{
+  const {p,sources}=await guidedScenarioSetup();await guidedDissipationHistories(p);
+  guidedDissipationChoice(p,'Heat','Plastic',true);guidedDissipationChoice(p,'Coverage','Relaxation',true);
+  const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const running=p.e.scenario.onclick();
+  // No input event: retained requests must own their choices before asynchronous source reads.
+  p.e.guidedMotionHeatPlastic.checked=false;p.e.guidedMotionCoverageRelaxation.checked=false;
+  delay.resolve(sources.fit);await running;
+  const captured=JSON.parse(p.current().messages.at(-1).scenarioRequest).motion;
+  assert.equal(captured.transient_surface.plastic_dissipation_heat,'uniform_reference_thickness');
+  assert.equal(captured.transient_coverage.relaxation_dissipation_heat,'uniform_reference_thickness');p.emit(scenarioReport());
+  p.e.guidedMotionHeat.checked=false;p.e.guidedMotionHeat.handlers.change();await p.e.scenario.onclick();const coverageWorker=p.current();
+  guidedDissipationChoice(p,'Heat','Bending',true);assert.equal(coverageWorker.dead,false,'A disabled sheet draft does not cancel coverage work');
+  p.emit(scenarioReport());
+  const original=' \r\n'+JSON.stringify({...JSON.parse(guidedTransientOriginal),transient_surface:{
+    ...JSON.parse(guidedTransientOriginal).transient_surface,initial_instance_temperatures_c:{'front.R':5},
+    ...Object.fromEntries(guidedDissipationChannels.map(([,field])=>[field,'uniform_reference_thickness']))}})
+    .replace('"initial_temperature_c":18','"initial_temperature_c":18.00')+'\r\n';
+  guidedTransientSource(p,original);await p.e.scenario.onclick();const fileWorker=p.current(),sent=fileWorker.messages.at(-1);
+  assert.ok(sent.scenarioRequest.includes(original));assert.equal(p.e.guidedMotionCoverageBending.disabled,true);
+  for(const [domain] of guidedDissipationDomains)for(const [suffix] of guidedDissipationChannels)guidedDissipationChoice(p,domain,suffix,true);
+  assert.equal(fileWorker.dead,false,'Inactive guided opt-ins do not cancel or rewrite original-file work');
+  assert.ok(sent.scenarioRequest.includes(original));
+});
+
 test('authored moving exterior snapshots independent sheet covered and exposed environments by interval',async()=>{
   const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedCoverageHeatControls(p);
   guidedMovingTopology(p);guidedDryHeatFilm(p,35,999,0.1,0.2);

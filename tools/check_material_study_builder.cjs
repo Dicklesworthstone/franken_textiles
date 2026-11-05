@@ -725,7 +725,7 @@ test('guided dry heat rejects missing conditions and invalid physical or work li
   const {buildMaterialMotionRequest:build}=await modulePromise;
   const run=transient_surface=>build({...motionState(),transient_surface});
   for(const changes of [{schema:'wrong'},{boundaries:[]},{boundaries:[dryMotionHeat().boundaries[0],dryMotionHeat().boundaries[0]]},
-    {boundaries:[null]},{surface_water:{}},{mechanical_coupling:{}},{exterior_exchange:[]},{plastic_dissipation_heat:'uniform_reference_thickness'}]) {
+    {boundaries:[null]},{surface_water:{}},{mechanical_coupling:{}},{exterior_exchange:[]}]) {
     assert.throws(()=>run({...dryMotionHeat(),...changes}));
   }
   for(const key of Object.keys(dryMotionHeat())) {const heat=dryMotionHeat();delete heat[key];assert.throws(()=>run(heat),key);}
@@ -806,7 +806,7 @@ test('guided dry instance temperatures reject ambiguous maps and nonphysical val
   const long='unaliased physical instance '+ 'β'.repeat(2000);
   assert.equal(JSON.parse(run({[long]:0})).transient_surface.initial_instance_temperatures_c[long],0,
     'The builder neither invents a key-length restriction nor substitutes a source-piece or material alias');
-  for(const extra of [{surface_water:{}},{mechanical_coupling:{}},{plastic_dissipation_heat:'uniform_reference_thickness'}]) {
+  for(const extra of [{surface_water:{}},{mechanical_coupling:{}}]) {
     assert.throws(()=>build({...motionState(),transient_surface:{...dryMotionHeat(),initial_instance_temperatures_c:{'front.R':20},...extra}}),/unsupported/);
   }
 });
@@ -1190,6 +1190,58 @@ test('guided moving coverage keeps independent temperatures and covered or adiab
   assert.deepEqual(cases.map(c=>c.scenario.motion.transient_surface.initial_instance_temperatures_c['front.R']),[25,25]);
 });
 
+test('guided dissipation heat preserves independent channel choices and mapped initial states through named cases', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const channels=['plastic_dissipation_heat','relaxation_dissipation_heat','bending_plastic_dissipation_heat'];
+  for(const consumer of ['transient_surface','transient_coverage'])for(let mask=0;mask<8;mask++) {
+    const heat=consumer==='transient_surface'?dryMotionHeat():await guidedMovingCoverageHeat();
+    heat.initial_temperature_c=999;heat.initial_instance_temperatures_c={'front.R':5,'lining.R':35};
+    for(const [i,field] of channels.entries())if(mask&(1<<i))heat[field]='uniform_reference_thickness';
+    const input={...motionState(),[consumer]:heat},before=JSON.stringify(input),raw=motion(input);
+    assert.equal(JSON.stringify(input),before);assert.deepEqual(JSON.parse(raw)[consumer],heat);
+    assert.equal(Object.hasOwn(JSON.parse(raw),consumer==='transient_surface'?'transient_coverage':'transient_surface'),false);
+  }
+  const sheet={...dryMotionHeat(),initial_instance_temperatures_c:{'front.R':5},
+    plastic_dissipation_heat:'uniform_reference_thickness',relaxation_dissipation_heat:'uniform_reference_thickness'},
+    coverage={...await guidedMovingCoverageHeat(),initial_instance_temperatures_c:{'front.R':35},
+      bending_plastic_dissipation_heat:'uniform_reference_thickness',plastic_dissipation_heat:null};
+  const input={...motionState(),transient_surface:sheet,transient_coverage:coverage};
+  const first=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:16000000});
+  sheet.bending_plastic_dissipation_heat='uniform_reference_thickness';delete sheet.plastic_dissipation_heat;
+  coverage.relaxation_dissipation_heat='uniform_reference_thickness';coverage.initial_instance_temperatures_c['front.R']=25;
+  const second=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:16000000});
+  const cases=JSON.parse(matrix({maxEvaluations:4,cases:[{key:'original heating',scenario:first},{key:'changed heating',scenario:second}]})).cases;
+  assert.equal(cases[0].scenario.motion.transient_surface.plastic_dissipation_heat,'uniform_reference_thickness');
+  assert.equal(Object.hasOwn(cases[0].scenario.motion.transient_surface,'bending_plastic_dissipation_heat'),false);
+  assert.equal(cases[0].scenario.motion.transient_coverage.plastic_dissipation_heat,null);
+  assert.equal(Object.hasOwn(cases[0].scenario.motion.transient_coverage,'relaxation_dissipation_heat'),false);
+  assert.equal(cases[0].scenario.motion.transient_coverage.initial_instance_temperatures_c['front.R'],35);
+  assert.deepEqual(cases[1].scenario.motion.transient_surface,sheet);assert.deepEqual(cases[1].scenario.motion.transient_coverage,coverage);
+});
+
+test('guided dissipation heat accepts only native opt-ins and never accepts browser conversion fractions', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  const channels=['plastic_dissipation_heat','relaxation_dissipation_heat','bending_plastic_dissipation_heat'];
+  for(const consumer of ['transient_surface','transient_coverage']) {
+    const heat=consumer==='transient_surface'?dryMotionHeat():await guidedMovingCoverageHeat();
+    for(const field of channels) {
+      for(const value of [null,'uniform_reference_thickness']) {
+        assert.equal(JSON.parse(motion({...motionState(),[consumer]:{...heat,[field]:value}}))[consumer][field],value);
+      }
+      for(const value of [undefined,false,true,0,0.5,[],{},'uniform','UNIFORM_REFERENCE_THICKNESS',
+        {distribution:'uniform_reference_thickness',fraction:1}]) {
+        assert.throws(()=>motion({...motionState(),[consumer]:{...heat,[field]:value}}),/uniform_reference_thickness/);
+      }
+    }
+    assert.throws(()=>motion({...motionState(),[consumer]:{...heat,heat_fraction:0.8}}),/unsupported/);
+    const original=' \r\n'+JSON.stringify({schema:'ftx-drape-motion/1',...motionState(),[consumer]:{
+      ...heat,initial_instance_temperatures_c:{'front.R':5},...Object.fromEntries(channels.map(field=>[field,'uniform_reference_thickness']))}})
+      .replace('"initial_temperature_c":18','"initial_temperature_c":18.00')+'\r\n';
+    const raw=single({...scenarioState(),motion:original,maxMotionTrials:1024,maxVertexFrames:16000000});
+    assert.ok(raw.includes(original),'Original policy bytes remain authoritative, including native optional heat channels');
+  }
+});
+
 test('guided moving coverage preserves independent covered, bare and exposed exterior interval choices', async () => {
   const {buildMaterialMotionRequest:build,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
   const coverage=await guidedMovingCoverageHeat(),film=coverage.boundaries[0],covered=exteriorPolicy({air_c:film.outside_c});
@@ -1271,8 +1323,7 @@ test('guided moving coverage retains its actual consumer capability and leaves a
   for(const context of [{drape:true,surface:false,motion:true},{drape:true,surface:false,motion:true,transientSurface:true}]) {
     assert.throws(()=>study({...state(),objectives},context),/transient/i);
   }
-  for(const extra of [{cells_per_layer:2},{conditions:{}},{surface_water:{}},{thermal_bridges:null},
-    {plastic_dissipation_heat:'uniform_reference_thickness'}]) {
+  for(const extra of [{cells_per_layer:2},{conditions:{}},{surface_water:{}},{thermal_bridges:null}]) {
     assert.throws(()=>motion({...input,transient_coverage:{...coverage,...extra}}),/unsupported/);
   }
   const advanced={...coverage,exterior_exchange:[null],bare_boundaries:[null],thermal_bridges:null};
