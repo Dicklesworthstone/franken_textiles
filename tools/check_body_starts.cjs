@@ -1,6 +1,7 @@
 // Actual offline start editor -> native initialization replay -> ordinary body fitter.
 // Prepare with FTX_BODY_START_DIR and start_edits_editor_fixture_ in body_fit_workflow.
 // Synthetic numerical acceptance only; no photograph, anatomical or physical-fit claim.
+// FTX_START_EDITOR_SOURCE tests exact source JS against a retained native review; not a rebuilt CLI.
 const assert = require("node:assert/strict");
 const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
 const {spawnSync} = require("node:child_process");
@@ -10,6 +11,8 @@ if (process.argv.length !== 5) throw Error("Usage: node tools/check_body_starts.
 const root = path.resolve(process.argv[2]), out = path.resolve(process.argv[3]), binary = path.resolve(process.argv[4]);
 const read = name => JSON.parse(fs.readFileSync(path.join(root, name)));
 const hash = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
+const sourceScript = process.env.FTX_START_EDITOR_SOURCE
+  ? fs.readFileSync(path.resolve(process.env.FTX_START_EDITOR_SOURCE)) : null;
 const report = read("review/review.json"), seed = read("review/body-starts.json");
 const expected = read("expected-annotations.json"), original = fs.readFileSync(path.join(root, "input.json"));
 assert.deepEqual(seed.starts, []);
@@ -62,6 +65,11 @@ async function add(page, start) {
   try {
     const context = await browser.newContext({viewport: {width: 1100, height: 900},
       userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0"});
+    let sourceLoads = 0;
+    if (sourceScript) await context.route('**/start-editor.js', route => {
+      ++sourceLoads;
+      return route.fulfill({contentType: 'application/javascript', body: sourceScript});
+    });
     context.on("request", request => requests.push({url: request.url(), method: request.method()}));
     await context.addInitScript(() => {
       globalThis.__revoked = [];
@@ -344,9 +352,12 @@ async function add(page, start) {
     assert.equal(reference.capture_input.source, fs.realpathSync(path.join(root, "authored/input.json")));
     reference.capture_input.source = fitted.capture_input.source;
     assert.deepEqual(fitted, reference);
+    if (sourceScript) assert(sourceLoads > 0, 'The source-script override must actually execute.');
     assert.deepEqual(errors, []);
     assert(requests.every(request => request.method === "GET" && request.url.startsWith("file:")));
     console.log(JSON.stringify({status: "PASS", authored_starts: expected.starts.length, fit: fitted.status,
+      editor_script: {mode: sourceScript ? 'source override' : 'compiled review',
+        sha256: sourceScript ? hash(sourceScript) : report.start_editor.script.sha256, source_loads: sourceLoads},
       exercised: ["empty bootstrap", "named bounded parameters", "midpoint", "copy", "distinctness", "partial edit", "boundary", "cancel", "remove", "maximum starts", "reset", "one-start save/reload/resume", "partial native refusal", "invalid file preservation", "file-choice URL revocation", "slow-read withdrawal", "late-read ownership", "cached-page recovery", "frozen native previews", "exact native frame identities", "download to ordinary fit"],
       download: destination, browser_errors: errors.length, local_requests: requests.length}));
   } finally {
