@@ -414,7 +414,7 @@ impl SteadyCoverage {
         for field in &fields {
             ranges.add(&field.ranges);
         }
-        let mut result = CoverageSolution {
+        let result = CoverageSolution {
             regions,
             body_area_m2: fields.iter().map(|f| f.area_m2).sum(),
             covered_area_m2: fields.iter().map(|f| f.covered_area_m2).sum(),
@@ -438,13 +438,6 @@ impl SteadyCoverage {
             || result.body.iter().any(|f| !f.power_w.is_finite())
         {
             return Err(invalid("steady coverage accumulation overflow"));
-        }
-        if exterior.is_some() {
-            let reason = "source-reported conduction ranges do not cover coupled exterior exchange";
-            result.exclude_reported_bounds(reason);
-            for state in &mut exterior_states {
-                state.conduction.exclude_reported_bounds(reason);
-            }
         }
         Ok((result, exterior_states))
     }

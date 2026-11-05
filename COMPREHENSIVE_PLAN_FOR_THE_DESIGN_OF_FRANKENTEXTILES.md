@@ -5337,6 +5337,63 @@ Liquid, dissipation heating, through-thickness initial profiles and body-coverag
 outside this slice. Authored initial states and numerical conservation do not establish measured
 garment temperature, thermal comfort or physical fit.
 
+### 25.173 Preserve distinct initial temperatures through actual layered body coverage
+
+Moving covered-body heat now accepts exact physical-instance initial temperatures alongside its
+explicit uniform fallback. A warm lining and cold shell enter the actual layered heat network
+with separate states, even when their source triangles share one material column. Covered portions
+and exposed remainders use the same source values; the existing material-coordinate remapper
+preserves reference-mass enthalpy as coverage and pose change.
+
+The initial-state receipt binds source model, initial frame, retained owners and resolved values.
+Ordinary material/design comparisons independently reconcile that receipt and include only used
+initial values in complete-history extrema. Unknown pieces, invalid source domains and unsupported
+dissipation combinations refuse without erasing independent drape or manufacturing consumers.
+Scalar-only requests keep their original serialization and calculations. This software increment
+is tracked by `ftx-ms2.20`; arbitrary initial depth profiles, wet coupling and measured garment
+temperature acceptance remain separate. See [material-scenario-studies.md](docs/material-scenario-studies.md).
+
+### 25.174 Author body and garment-layer heat through ordinary workbench controls
+
+Guided scenarios can now author bounded collision-body triangle IDs and ranges, exact retained
+instance-to-layer assignments, directed interface resistances with explicit source or assumption,
+projection settings and uniform heat reservoirs/films. The native coverage engine still derives
+actual overlap and layer order from each freshly evaluated garment. Original-policy mode retains
+advanced source-qualified boundaries, thermal bridges and exact input bytes.
+
+Single scenarios, immutable named cases and existing material/design comparison objectives share
+the same policy. Saved rows remain separate from unsaved drafts; active changes cancel stale work,
+and replacing a pattern clears its topology. Numeric body IDs refer to the selected collision mesh
+and require review when that mesh changes. This software increment is tracked by `ftx-ms2.21`;
+geometric region picking, anatomical certification and empirical garment coverage remain separate.
+
+### 25.175 Author moving covered-layer heat without hand-written motion policies
+
+Guided motion now composes the existing body/layer topology editor with dry transient coverage.
+It retains independent sheet and coverage initial states, exact physical-instance overrides,
+covered-body films and an explicit exposed-cloth choice for every saved endpoint. Adiabatic exposed
+cloth is an authored choice; no ambient state, earlier interval or steady consumer is inferred.
+
+The shared topology remains usable without steady coverage, and an original steady-policy file
+keeps its own authority. Saved single/named cases, material alternatives and linked/adaptive design
+comparisons use the same native history contract and budgets. This completes the ordinary authoring
+route tracked by `ftx-ms2.22`; original motion files retain advanced source-qualified policies.
+
+### 25.176 Carry qualified convection ranges through layered body coverage comparisons
+
+Layered coverage now preserves the canonical positive prescribed-convection ranges introduced in
+§25.171. Every layer retains its actual body/cloth area factor; exterior resistance uses allocated
+outer-cloth area, and uncovered body paths add independently declared bare-film power. Signed
+endpoint accumulation supports outward, inward and mixed heat flow without changing nominal heat.
+
+Material/design comparisons independently reconcile the original sources, body identity, projected
+layer network, both conduction receipts and complete convection power accounting. Both endpoint
+surface temperatures must remain in the qualified coefficient domain. Missing material endpoints,
+radiation, zero convection, unsupported nonlinear laws, thermal bridges or consumed source-dependent
+stagnant gaps still withhold affected ranges while preserving nominal results. A completely bare
+domain does not consume textile convection. This closes the software gap tracked by `ftx-ms2.23`;
+geometry, interface films and convection inputs remain fixed, with no statistical or empirical claim.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

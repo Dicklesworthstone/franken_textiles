@@ -20,6 +20,18 @@ checks the same active source identities and reconstructs contact coefficients f
 observations. Manufacturing keeps every authored cut piece regardless of the drape-only exclusion.
 Actual sewn-drape regressions and native/portable binding/BOM checks cover these separate consumers.
 
+**Authored initial temperatures on moving body coverage.** Optional
+`motion.transient_coverage.initial_instance_temperatures_c` resolves exact retained physical
+instances against the explicit scalar fallback. Covered layer cells and exposed source remainders
+start at the same source-qualified temperature without merging pieces that share a material.
+The existing reference-mass enthalpy remapper carries those states through coverage, pose and
+depth-discretization changes. Present-only receipts bind source model, initial frame, owner map,
+resolved values and actual extrema; omitted maps preserve the original scalar path and wire output.
+Unknown/unretained names, empty maps, uncharacterized temperatures and dissipation-heating
+combinations refuse independently of other scenario consumers. No initial depth profile, measured
+conditioning, wet law or physical garment validation is inferred. Known-answer checks in
+`thermal_motion`, `study::heat::coverage` and `material_scenario` cover enthalpy, ownership and replay.
+
 **Source-qualified vapor potentials** (`thermal::vapor`, `ftx-vc1`). Characterized drapes retain an
 independent material/ownership/geometry frame without requiring dry conductivity or heat capacity.
 Explicit vapor conditions reuse `ftx-pattern::material_vapor` per source-locked material column,
@@ -841,10 +853,15 @@ through the existing series-network authority, using the fixed outside film `(mo
 cloth area) / h`. Both endpoint surface temperatures must remain in the coefficient's qualified
 domain. Missing intervals, unsupported laws, endpoint escape, radiation or zero convection retain
 the nominal exterior solution with an explicit unavailable-range reason. Current-area sheet powers
-reuse ordinary range accumulation; coverage continues to withhold exterior ranges. Boundary values,
-coefficient and geometry stay fixed: these are material-source intervals, not weather uncertainty,
-confidence intervals or measured garment performance. `tests/thermal_exterior.rs` checks fixed-film
-equivalence in both heat-flow directions and at equal reservoirs, plus independent range refusal.
+and layered covered-body powers use ordinary signed range accumulation. Coverage refers each layer
+to its covered body area, applies convection only to allocated outer cloth area, and adds uncovered
+body power through separately declared bare films as fixed contributions. A completely bare domain
+does not consume textile-convection ranges. Consumed thickness-dependent stagnant gaps withhold
+ranges in both retained conduction copies; unused gap declarations do not. Thermal-bridge totals
+remain outside these ranges. Boundary values, coefficient, interfaces and geometry stay fixed:
+these are material-source intervals, not weather uncertainty, confidence intervals or measured
+garment performance. `tests/thermal_exterior.rs` checks fixed-film equivalence in both heat-flow
+directions and at equal reservoirs, plus independent range refusal.
 
 **Qualified centerline thermal bridges** (`thermal::steady::coverage::bridges`).
 

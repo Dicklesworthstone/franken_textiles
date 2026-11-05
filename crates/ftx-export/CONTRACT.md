@@ -161,11 +161,14 @@ alternative's frozen selections, retained solver triangle geometry, exact surfac
 prescribed coverage-body identity, explicit interface policy, local area factors, all canonical
 component ranges and complete power accumulation. Coverage includes explicit film-only bare paths
 and retained unassigned-cloth accounting; material ranges do not require complete textile coverage.
-Independent-sheet positive prescribed convection without radiation uses the same source intervals
-with the fixed outside resistance 1/h. The exact source-qualified exterior request, endpoint surface
-temperature domains, source-column assignment and complete convection receipts must agree; signed
-power bounds participate in ordinary objectives and mixed-basis guards. Radiation, zero convection
-and covered exterior ranges remain unsupported.
+Positive prescribed convection without radiation uses the same source intervals, with fixed outside
+resistance 1/h for independent sheets and `(covered body area / outer cloth area) / h` for layered
+coverage. The exact source-qualified exterior request, endpoint surface-temperature domains,
+source-column assignment and complete component/aggregate convection receipts must agree; signed
+power bounds participate in ordinary objectives and mixed-basis guards. Coverage retains separate
+explicit bare films, requires the original body identity for nonuniform exterior or bare conditions,
+and admits a completely bare domain's fixed film-only range without consuming textile exchange.
+Radiation and zero-convection ranges remain unsupported on covered paths.
 Missing bounds, unsupported nonlinear/bridge/consumed stagnant-gap coupling, stale inputs,
 changed component ranges or unrepresentable arithmetic exclude bounded decisions while the ordinary
 nominal reading remains visible. Source-dependent gap thickness cannot vary while its derived gap
@@ -665,15 +668,18 @@ extrema. `motion_required` exposes whether the comparison policy requires moveme
 for transient comparisons. Required motion/history failures never borrow initial static outputs;
 existing static metric names and default consumer requirements keep their original meaning.
 See `docs/material-scenario-studies.md`; geometric settledness is not stress equilibrium or fit.
-Dry independent-sheet histories may start with explicit `initial_instance_temperatures_c`
+Dry independent-sheet and body-coverage histories may start with explicit `initial_instance_temperatures_c`
 overrides. Admission reconstructs their complete `initial_condition` from the source-bound initial
 drape frame, exact physical-instance ownership and the alternative's frozen material assignments.
 Each applied temperature must lie in its own material domain. Shared material columns do not
 merge initial temperatures, and an unused scalar fallback does not enter sampled extrema. The
-full original request, actual model digest, owner order and resolved temperatures must agree;
-missing/stale receipts and unknown or unretained overrides refuse independently of coverage and
-manufacturing. Water, dissipation heating and body coverage do not support these overrides.
-Regressions: `scenario_comparison` initial-sheet extrema and source/receipt refusal groups.
+full original request, actual model digest, owner order and resolved temperatures must agree.
+Coverage uses the original source model retained in `checkpoint.frame.source` and binds its
+initial-state receipt to `initial_frame_sha256`, independently of the final overlap partition.
+Missing/stale receipts and unknown or unretained overrides refuse only the affected heat consumer;
+independent heat and manufacturing remain available. Water and dissipation heating do not support
+these overrides. Regressions: `scenario_comparison` initial-sheet and coverage extrema and
+source/receipt refusal groups.
 Radiative comparisons retain the methods, conditions, units and evidence of the actual requested
 emissivity observations by source piece, including arbitrary property names and source-bearing
 automatic optical mappings. Independent sheets use only their positive mapped face; steady

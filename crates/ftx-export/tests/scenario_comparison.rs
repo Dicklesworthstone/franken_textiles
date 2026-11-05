@@ -813,6 +813,10 @@ fn initial_sheet_pattern() -> Pattern {
 // Both physical pieces deliberately share one material column, and the initial frame uses a
 // different discretization from the requested history, as ordinary drape receipts do.
 fn synthetic_initial_sheet_heat(p: &Pattern, d: &Value) -> Value {
+    synthetic_initial_heat(p, d, false)
+}
+
+fn synthetic_initial_heat(p: &Pattern, d: &Value, coverage: bool) -> Value {
     let mut s = synthetic_heat(p, 0., 0.);
     let material = frozen_vapor_material(&p.raw()["fabric"]["material"]);
     let x = json!([
@@ -867,14 +871,19 @@ fn synthetic_initial_sheet_heat(p: &Pattern, d: &Value) -> Value {
             row["positions_sha256"] = json!(digest(&x));
         }
     }
-    let request = &d["scenario"]["motion"]["transient_surface"];
+    let name = if coverage {
+        "transient_coverage"
+    } else {
+        "transient_surface"
+    };
+    let request = &d["scenario"]["motion"][name];
     let fallback = request["initial_temperature_c"].as_f64().unwrap();
     let temperatures = ["band", "lining"].map(|id| {
         request["initial_instance_temperatures_c"][id]
             .as_f64()
             .unwrap_or(fallback)
     });
-    let h = &mut m["transient_surface"]["result"];
+    let h = &mut m[name]["result"];
     h["request"] = request.clone();
     h["initial_temperature_c"] = json!(fallback);
     h["model"] = model(2);
@@ -882,7 +891,140 @@ fn synthetic_initial_sheet_heat(p: &Pattern, d: &Value) -> Value {
         "model_sha256":h["model"]["sha256"],"instances":["band","lining"],
         "triangle_instance":[0,1],"instance_temperature_c":temperatures,
         "temperature_range_c":[temperatures[0].min(temperatures[1]),temperatures[0].max(temperatures[1])]});
+    if coverage {
+        let source = h.as_object_mut().unwrap().remove("model").unwrap();
+        h["checkpoint"] = json!({"frame":{"source":source}});
+        h["initial_frame_sha256"] = json!(digest(&json!({"fixture":"initial coverage frame"})));
+        h["initial_condition"]["schema"] = json!("ftx-motion-coverage-initial-condition/1");
+        h["initial_condition"]["frame_sha256"] = h["initial_frame_sha256"].clone();
+        h.as_object_mut().unwrap().remove("initial_temperature_c");
+    }
     s
+}
+
+#[test]
+fn covered_instance_initial_temperatures_keep_real_extrema_and_final_state_separate() {
+    let mut r = heat_request();
+    r.comparison.as_mut().unwrap().constraints.clear();
+    r.comparison.as_mut().unwrap().objectives = serde_json::from_value(json!([
+        {"metric":"transient_coverage_min_sample_temperature_c","direction":"maximize"},
+        {"metric":"transient_coverage_max_sample_temperature_c","direction":"minimize"},
+        {"metric":"transient_coverage_final_max_temperature_c","direction":"minimize"}]))
+    .unwrap();
+    for (overrides, fallback, maximum) in [
+        (json!({"band":-20.}), 10., 10.),
+        (json!({"band":-20.,"lining":30.}), 250., 30.),
+    ] {
+        let mut d = heat_descriptor();
+        let policy = &mut d["scenario"]["motion"]["transient_coverage"];
+        policy["initial_instance_temperatures_c"] = overrides;
+        policy["initial_temperature_c"] = json!(fallback);
+        policy["settings"] = json!({"cells_per_layer":2});
+        let result = serde_json::to_value(
+            r.evaluate_with(&initial_sheet_pattern(), &d, |_, p| {
+                Ok(synthetic_initial_heat(p, &d, true))
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["comparison"]["frontier"], json!(["a", "b"]));
+        let readings = &result["comparison"]["alternatives"][0]["readings"];
+        assert_eq!(
+            readings["transient_coverage_min_sample_temperature_c"]["value"],
+            -20.
+        );
+        assert_eq!(
+            readings["transient_coverage_max_sample_temperature_c"]["value"],
+            maximum
+        );
+        assert_eq!(
+            readings["transient_coverage_final_max_temperature_c"]["value"],
+            -2.
+        );
+    }
+}
+
+#[test]
+fn covered_initial_source_or_owner_faults_preserve_independent_sheet_heat_and_cutting() {
+    let mut r = heat_request();
+    r.comparison.as_mut().unwrap().constraints.clear();
+    for fault in [
+        "temperature",
+        "range",
+        "owner",
+        "model",
+        "frame",
+        "missing",
+        "unknown",
+        "unphysical",
+        "empty",
+        "dissipation",
+        "material",
+        "initial_geometry",
+        "unrequested",
+    ] {
+        let mut d = heat_descriptor();
+        let policy = &mut d["scenario"]["motion"]["transient_coverage"];
+        policy["initial_instance_temperatures_c"] = json!({"band":-20.,"lining":30.});
+        policy["settings"] = json!({"cells_per_layer":2});
+        match fault {
+            "unknown" => policy["initial_instance_temperatures_c"]["missing"] = json!(0.),
+            "unphysical" => policy["initial_instance_temperatures_c"]["band"] = json!(-274.),
+            "empty" => policy["initial_instance_temperatures_c"] = json!({}),
+            "dissipation" => {
+                policy["relaxation_dissipation_heat"] = json!("uniform_reference_thickness")
+            }
+            "unrequested" => {
+                policy
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("initial_instance_temperatures_c");
+            }
+            _ => {}
+        }
+        let result = serde_json::to_value(
+            r.evaluate_with(&initial_sheet_pattern(), &d, |_, p| {
+                let mut s = synthetic_initial_heat(p, &d, true);
+                let h = &mut s["motion"]["result"]["transient_coverage"]["result"];
+                match fault {
+                    "temperature" => h["initial_condition"]["instance_temperature_c"][0] = json!(-19.),
+                    "range" => h["initial_condition"]["temperature_range_c"][1] = json!(29.),
+                    "owner" => h["initial_condition"]["triangle_instance"] = json!([1, 0]),
+                    "model" => h["initial_condition"]["model_sha256"] = json!("0".repeat(64)),
+                    "frame" => h["initial_condition"]["frame_sha256"] = json!("0".repeat(64)),
+                    "missing" => { h.as_object_mut().unwrap().remove("initial_condition"); }
+                    "material" => {
+                        h["checkpoint"]["frame"]["source"]["columns"][0]["layers"][0]["allow_estimates"] = json!(false)
+                    }
+                    _ => {}
+                }
+                if fault == "initial_geometry" {
+                    s["positions_m"][0][2] = json!(0.1);
+                    let positions = s["positions_m"].clone();
+                    let frame = &mut s["drape"]["thermal_surface"];
+                    frame["positions_m"] = positions;
+                    frame.as_object_mut().unwrap().remove("sha256");
+                    frame["sha256"] = json!(digest(frame));
+                }
+                Ok(s)
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let readings = &result["comparison"]["alternatives"][0]["readings"];
+        assert!(
+            readings["transient_coverage_inside_energy_j"].is_null(),
+            "{fault}"
+        );
+        assert_eq!(
+            readings["transient_surface_inside_energy_j"]["value"], 0.,
+            "{fault}"
+        );
+        assert_eq!(
+            result["manufacturing"]["alternatives"][0]["cutting"]["status"], "available",
+            "{fault}"
+        );
+    }
 }
 
 #[test]

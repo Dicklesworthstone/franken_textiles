@@ -553,6 +553,163 @@ fn different_materials_keep_their_own_enthalpy_laws_during_a_layered_remap() {
     }
 }
 
+fn layered_frame(body_offset: f64, width: f64, cells: usize) -> Frame {
+    use ftx_drape::thermal::surface::projection::Interface;
+    let material = Catalog::builtin().unwrap().resolve(&selection()).unwrap();
+    let source = Surface::new(
+        vec![DryThermalModel::new(vec![material], vec![], 1).unwrap()],
+        6,
+        vec![
+            Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+            Patch {
+                vertices: [3, 4, 5],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+        ],
+    )
+    .unwrap();
+    let mut cloth = tri(0.04);
+    cloth.extend(tri(0.08));
+    for point in &mut cloth {
+        point.x *= width;
+    }
+    let body = vec![
+        v(body_offset, 0., 0.),
+        v(body_offset + width, 0., 0.),
+        v(body_offset, 1., 0.),
+    ];
+    Frame::new(
+        source,
+        cloth,
+        body,
+        &[[0, 1, 2]],
+        Request {
+            schema: "ftx-thermal-projection/1".into(),
+            cloth_layers: vec!["lining".into(), "shell".into()],
+            settings: Settings {
+                max_distance_m: 0.2,
+                min_normal_cosine: 0.2,
+                separation_tolerance_m: 1e-8,
+                cells_per_layer: cells,
+                interfaces: vec![Interface {
+                    inner: "lining".into(),
+                    outer: "shell".into(),
+                    resistance_m2_k_w: 0.05,
+                    basis: "synthetic".into(),
+                    stagnant_gap: None,
+                }],
+            },
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn different_initial_layer_temperatures_preserve_reference_enthalpy_through_exposure_and_stretch() {
+    let mut current = layered_frame(0., 1., 2);
+    let mut state = current.initial_patches(&[35., 5.]).unwrap();
+    assert_eq!(state.temperature_c(), &[vec![35., 35., 5., 5.]]);
+    assert!(state.exposed_temperature_c().iter().all(Vec::is_empty));
+    // Both physical sheets share one canonical material, but their initial energy is separate.
+    let energy = |frame: &Frame, state: &ftx_drape::thermal::surface::coverage::motion::State| {
+        let mut allocated = [0.; 2];
+        let mut energy = 0.;
+        let cells = frame.projection().layout.cells_per_layer;
+        for (region, row) in frame
+            .projection()
+            .layout
+            .regions
+            .iter()
+            .zip(state.temperature_c())
+        {
+            for (layer, temperatures) in region.layers.iter().zip(row.chunks_exact(cells)) {
+                allocated[layer.cloth_triangle] += layer.fraction;
+                energy += 0.5 * layer.fraction * temperatures.iter().copied().map(h).sum::<f64>()
+                    / cells as f64;
+            }
+        }
+        for (i, temperatures) in state.exposed_temperature_c().iter().enumerate() {
+            if !temperatures.is_empty() {
+                energy +=
+                    0.5 * (1. - allocated[i]) * temperatures.iter().copied().map(h).sum::<f64>()
+                        / temperatures.len() as f64;
+            }
+        }
+        energy
+    };
+    let initial_energy = 0.5 * (h(35.) + h(5.));
+    near(energy(&current, &state), initial_energy);
+    for (offset, width, cells) in [(0.5, 1., 3), (2., 1., 2), (0., 2., 4), (0., 1., 2)] {
+        let next = layered_frame(offset, width, cells);
+        let transfer = next.remap(&current, &state).unwrap();
+        near(energy(&next, &transfer.state), initial_energy);
+        near(transfer.balance.absolute_residual_j, 0.);
+        near(transfer.balance.reference_area_m2, 1.);
+        for (region, row) in next
+            .projection()
+            .layout
+            .regions
+            .iter()
+            .zip(transfer.state.temperature_c())
+        {
+            for (layer, temperatures) in region.layers.iter().zip(row.chunks_exact(cells)) {
+                for &value in temperatures {
+                    near(value, [35., 5.][layer.cloth_triangle]);
+                }
+            }
+        }
+        for (i, temperatures) in transfer.state.exposed_temperature_c().iter().enumerate() {
+            for &value in temperatures {
+                near(value, [35., 5.][i]);
+            }
+        }
+        state = transfer.state;
+        current = next;
+    }
+    let saved = current.checkpoint(&state).unwrap();
+    let (restored, replay) = Frame::from_checkpoint(&saved).unwrap();
+    assert_eq!(saved, restored.checkpoint(&replay).unwrap());
+    let step = current.advance(&state, 0.1, &[boundary(20.)]).unwrap();
+    near(
+        energy(&current, &step.clone().into_state()) - initial_energy,
+        step.stored_change_j(),
+    );
+    near(step.stored_change_j(), 0.1 * step.net_heat_w());
+    near(step.balance_error_j(), 0.);
+}
+
+#[test]
+fn patch_initialization_qualifies_covered_and_exposed_sources_and_preserves_uniform_behavior() {
+    for offset in [0., 0.5, 2.] {
+        let frame = layered_frame(offset, 1., 2);
+        let uniform = frame.initial(20.).unwrap();
+        let per_patch = frame.initial_patches(&[20., 20.]).unwrap();
+        assert_eq!(
+            frame.checkpoint(&uniform).unwrap(),
+            frame.checkpoint(&per_patch).unwrap()
+        );
+        for bad in [
+            vec![],
+            vec![20.],
+            vec![20.; 3],
+            vec![-1., 20.],
+            vec![20., 61.],
+            vec![f64::NAN, 20.],
+            vec![20., -274.],
+        ] {
+            assert!(
+                frame.initial_patches(&bad).is_err(),
+                "offset={offset}, {bad:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn nonuniform_identity_retains_cell_order_at_non_binary_depth_boundaries() {
     for n in [3, 7, 11, 31] {

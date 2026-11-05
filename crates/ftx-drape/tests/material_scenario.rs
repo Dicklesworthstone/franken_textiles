@@ -1557,6 +1557,125 @@ fn moving_body_coverage_heat_matches_direct_conservative_remap_and_physical_step
 }
 
 #[test]
+fn moving_coverage_instance_temperatures_replay_and_fail_independently_of_motion() {
+    use std::collections::BTreeMap;
+    let assert_same_sheet = |left_s: &Scenario, left: &Value, right_s: &Scenario, right: &Value| {
+        let form = form();
+        let body = body(&form);
+        for (scenario, result) in [(left_s, left), (right_s, right)] {
+            let motion = &result["motion"]["result"];
+            let sheet = &motion["transient_surface"];
+            assert_eq!(sheet["status"], "available");
+            assert_eq!(motion["path_sha256"], path(scenario, &body).sha256());
+            assert_eq!(sheet["result"]["path_sha256"], motion["path_sha256"]);
+            assert_eq!(
+                sheet["result"]["request"],
+                json!(
+                    scenario
+                        .motion
+                        .as_ref()
+                        .unwrap()
+                        .transient_surface
+                        .as_ref()
+                        .unwrap()
+                )
+            );
+        }
+        // The complete motion policy includes coverage initialization, so its independently
+        // checked identity changes. Compare every sheet field exactly after rebinding only it.
+        let expected = &left["motion"]["result"]["transient_surface"];
+        let mut normalized = right["motion"]["result"]["transient_surface"].clone();
+        normalized["result"]["path_sha256"] = expected["result"]["path_sha256"].clone();
+        assert_eq!(normalized, *expected);
+    };
+    let p = heat_pattern();
+    let mut s = coverage_heat_scenario();
+    let baseline_s = s.clone();
+    let baseline = moving(&s, &p);
+    let policy = s
+        .motion
+        .as_mut()
+        .unwrap()
+        .transient_coverage
+        .as_mut()
+        .unwrap();
+    policy.initial_temperature_c = 999.; // Physical fallback is unused by the retained band.
+    policy.initial_instance_temperatures_c = Some(BTreeMap::from([("band".into(), 5.)]));
+    let actual = moving(&s, &p);
+    let motion = &actual["motion"]["result"];
+    let outcome = &motion["transient_coverage"];
+    assert_eq!(outcome["status"], "available", "{outcome:#}");
+    assert_eq!(motion["samples"], baseline["motion"]["result"]["samples"]);
+    assert_same_sheet(&baseline_s, &baseline, &s, &actual);
+    let heat = &outcome["result"];
+    let receipt = &heat["initial_condition"];
+    assert_eq!(receipt["schema"], "ftx-motion-coverage-initial-condition/1");
+    assert_eq!(receipt["temperature_range_c"], json!([5., 5.]));
+    assert_eq!(
+        receipt["model_sha256"],
+        heat["checkpoint"]["frame"]["source"]["sha256"]
+    );
+    assert_eq!(receipt["frame_sha256"], heat["initial_frame_sha256"]);
+    assert_eq!(
+        receipt["instances"],
+        actual["drape"]["thermal_surface"]["instances"]
+    );
+    assert_eq!(
+        receipt["triangle_instance"],
+        actual["drape"]["thermal_surface"]["triangle_instance"]
+    );
+    assert_eq!(receipt["instance_temperature_c"], json!([5.]));
+    assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-9);
+    assert!(heat["absolute_remap_residual_j"].as_f64().unwrap() < 1e-9);
+    assert_eq!(moving(&s, &p), actual);
+
+    let mut uniform_s = s.clone();
+    let uniform = uniform_s
+        .motion
+        .as_mut()
+        .unwrap()
+        .transient_coverage
+        .as_mut()
+        .unwrap();
+    uniform.initial_temperature_c = 5.;
+    uniform.initial_instance_temperatures_c = None;
+    let uniform = moving(&uniform_s, &p);
+    let uniform_heat = &uniform["motion"]["result"]["transient_coverage"]["result"];
+    for field in [
+        "checkpoint",
+        "trace",
+        "physical_stored_change_j",
+        "net_boundary_energy_j",
+    ] {
+        assert_eq!(heat[field], uniform_heat[field], "{field}");
+    }
+    assert!(uniform_heat.get("initial_condition").is_none());
+    assert!(
+        uniform_heat["request"]
+            .get("initial_instance_temperatures_c")
+            .is_none()
+    );
+
+    for bad_map in [BTreeMap::new(), BTreeMap::from([("missing".into(), 5.)])] {
+        let mut bad = s.clone();
+        bad.motion
+            .as_mut()
+            .unwrap()
+            .transient_coverage
+            .as_mut()
+            .unwrap()
+            .initial_instance_temperatures_c = Some(bad_map);
+        let refused = moving(&bad, &p);
+        let refused_motion = &refused["motion"]["result"];
+        assert_eq!(refused["motion"]["status"], "available");
+        assert_eq!(refused_motion["samples"], motion["samples"]);
+        assert_same_sheet(&s, &actual, &bad, &refused);
+        assert_eq!(refused_motion["transient_coverage"]["status"], "refused");
+        assert!(refused_motion["transient_coverage"]["result"].is_null());
+    }
+}
+
+#[test]
 fn exposed_heat_and_coverage_refusals_are_independent_of_motion_and_other_consumers() {
     let mut s = coverage_heat_scenario();
     let p = heat_pattern();

@@ -940,6 +940,161 @@ test('guided covered heat and vapor retain every original fragment without inven
   assert.equal(Object.hasOwn(result.vapor_coverage.conditions,'required_method'),false,'Native optional defaults are not inserted into source files');
 });
 
+const authoredCoverage = () => ({bodyTriangleIds:'4-6, 2\n9',
+  instanceLayers:[{instance:'front.R',layer:'shell'},{instance:'lining.R',layer:'lining'}],
+  settings:{max_distance_m:0.2,min_normal_cosine:0.1,separation_tolerance_m:0.00001,cells_per_layer:2,
+    interfaces:[{inner:'lining',outer:'shell',resistance_m2_k_w:0,basis:'Explicit zero-resistance synthetic assumption'}]},
+  boundary:{inside_c:30,outside_c:5,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0.2}});
+
+test('authored coverage expands bounded body ranges and preserves exact physical layer ownership through single and named cases', async () => {
+  const {buildMaterialCoverageRequest:build,buildMaterialScenarioRequest:scenario,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const input=authoredCoverage();input.instanceLayers.push({instance:'__proto__',layer:'shell'},{instance:' front.R ',layer:'shell'});
+  input.settings.interfaces[0].basis='Declared interface <café 🧵>';const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(result.body_triangle_ids,[4,5,6,2,9]);
+  assert.deepEqual(result.instance_layers,JSON.parse('{"front.R":"shell","lining.R":"lining","__proto__":"shell"," front.R ":"shell"}'));
+  assert.deepEqual(result.settings,input.settings);assert.deepEqual(result.conditions,{boundaries:[input.boundary]});
+  assert.equal(Object.hasOwn(result,'schema'),false);assert.equal(Object.hasOwn(result,'thermal_bridges'),false);
+  const first=scenario({...scenarioState(),maxVertexFrames:32000000,coverage:raw});assert.ok(first.includes(raw));
+  input.boundary.outside_c=-10;input.settings.interfaces[0].resistance_m2_k_w=0.05;
+  const second=scenario({...scenarioState(),maxVertexFrames:32000000,coverage:build(input)});
+  const cases=JSON.parse(matrix({maxEvaluations:4,cases:[{key:'first',scenario:first},{key:'second',scenario:second}]})).cases;
+  assert.deepEqual(cases.map(c=>c.scenario.coverage.conditions.boundaries[0].outside_c),[5,-10]);
+  assert.deepEqual(cases.map(c=>c.scenario.coverage.settings.interfaces[0].resistance_m2_k_w),[0,0.05]);
+});
+
+test('authored coverage refuses ambiguous or oversized body ranges before expansion', async () => {
+  const {buildMaterialCoverageRequest:build}=await modulePromise;
+  for(const bodyTriangleIds of ['',null,[],[1],'-1','1.5','1e2','1--2','3-1','1 - 2','1,1','1-3 3-5',
+    '0-4096','0-4095,4096',Array.from({length:4097},(_,i)=>i).join(','),'9007199254740992','0-9007199254740991','0,',' '.repeat(16*1024*1024)+'0']) {
+    assert.throws(()=>build({...authoredCoverage(),bodyTriangleIds}),String(bodyTriangleIds).slice(0,100));
+  }
+  const ids=JSON.parse(build({...authoredCoverage(),bodyTriangleIds:'0-4095'})).body_triangle_ids;
+  assert.equal(ids.length,4096);assert.equal(ids[0],0);assert.equal(ids.at(-1),4095);
+  assert.deepEqual(JSON.parse(build({...authoredCoverage(),bodyTriangleIds:'9007199254740991'})).body_triangle_ids,[Number.MAX_SAFE_INTEGER],
+    'Actual body topology remains a native-consumer check');
+});
+
+test('authored coverage requires explicit complete geometry, physical assignments and sourced directed interfaces', async () => {
+  const {buildMaterialCoverageRequest:build}=await modulePromise;
+  const input=authoredCoverage();
+  for(const instanceLayers of [null,[],{},[{instance:'front.R',layer:''}],
+    [{instance:'front.R',layer:'shell'},{instance:'front.R',layer:'lining'}],
+    [{instance:'front.R',layer:1}],[{instance:'front.R',layer:'shell',extra:1}],
+    [{instance:'é'.repeat(2049),layer:'shell'}]])assert.throws(()=>build({...input,instanceLayers}));
+  for(const [key,values] of Object.entries({max_distance_m:[0,-1,Infinity,'1'],min_normal_cosine:[0,1.01,NaN,'0.5'],
+    separation_tolerance_m:[0,-1,0.2,1],cells_per_layer:[0,65,1.5,'1'],interfaces:[null,{},Array(4097).fill(input.settings.interfaces[0])]})) {
+    for(const value of values)assert.throws(()=>build({...input,settings:{...input.settings,[key]:value}}),key+':'+value);
+  }
+  const interfaceRow=input.settings.interfaces[0];
+  for(const row of [{...interfaceRow,inner:'missing'},{...interfaceRow,outer:'lining'},
+    {...interfaceRow,basis:''},{...interfaceRow,resistance_m2_k_w:-0.1},{...interfaceRow,resistance_m2_k_w:'0'},
+    {...interfaceRow,stagnant_gap:{}},{...interfaceRow,basis:'x'.repeat(4097)}]) {
+    assert.throws(()=>build({...input,settings:{...input.settings,interfaces:[row]}}));
+  }
+  assert.throws(()=>build({...input,settings:{...input.settings,interfaces:[interfaceRow,interfaceRow]}}),/uniquely/);
+  for(const key of Object.keys(input)) {const missing={...input};delete missing[key];assert.throws(()=>build(missing),/missing/);}
+  for(const key of Object.keys(input.settings)) {const settings={...input.settings};delete settings[key];assert.throws(()=>build({...input,settings}),/missing/);}
+  assert.throws(()=>build({...input,thermal_bridges:{}}),/unsupported/);
+  assert.throws(()=>build({...input,boundary:{...input.boundary,outside_c:-273.151}}));
+  assert.throws(()=>build({...input,boundary:{...input.boundary,inside_resistance_m2_k_w:-1}}));
+  const oneLayer=JSON.parse(build({...input,instanceLayers:[{instance:'front.R',layer:'shell'}],settings:{...input.settings,interfaces:[]}}));
+  assert.deepEqual(oneLayer.settings.interfaces,[],'An empty table declares no cross-layer resistance; actual adjacent paths remain native-owned');
+});
+
+test('moving coverage topology is independent of steady conditions and preserves the existing steady request', async () => {
+  const {buildMaterialCoverageTopology:topology,buildMaterialCoverageRequest:steady}=await modulePromise;
+  const {boundary,...input}=authoredCoverage(),before=JSON.stringify(input),raw=topology(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(Object.keys(result),['body_triangle_ids','instance_layers','settings']);
+  assert.equal(steady({...input,boundary}),JSON.stringify({...result,conditions:{boundaries:[boundary]}}));
+  for(const extra of [{boundary},{conditions:{boundaries:[boundary]}},{schema:'ftx-motion-coverage-heat/1'}]) {
+    assert.throws(()=>topology({...input,...extra}),/unsupported/);
+  }
+  for(const key of Object.keys(input)) {const missing={...input};delete missing[key];assert.throws(()=>topology(missing),/missing/);}
+});
+
+async function guidedMovingCoverageHeat() {
+  const {buildMaterialCoverageTopology:topology}=await modulePromise;
+  const {boundary,...input}=authoredCoverage();
+  return {schema:'ftx-motion-coverage-heat/1',...JSON.parse(topology(input)),initial_temperature_c:18,
+    boundaries:[boundary],exposed_boundaries:[null],max_step_s:0.01,max_cell_steps:100000,max_geometry_operations:1000000};
+}
+
+test('guided moving coverage keeps independent temperatures and covered or adiabatic exposed intervals through saved cases', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const coverage=await guidedMovingCoverageHeat(),sheet=dryMotionHeat();
+  coverage.initial_temperature_c=999;coverage.initial_instance_temperatures_c={'front.R':5,'lining.R':35};
+  coverage.boundaries.push({...coverage.boundaries[0],inside_c:-5,outside_c:40});
+  coverage.exposed_boundaries.push({inside_c:12,outside_c:-2,inside_resistance_m2_k_w:0,outside_resistance_m2_k_w:0.3});
+  sheet.initial_instance_temperatures_c={'front.R':25};sheet.boundaries.push({...sheet.boundaries[0],inside_c:15});
+  const input={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:30},{time_s:0.5,arm_abduction_deg:40}],
+    transient_surface:sheet,transient_coverage:coverage},before=JSON.stringify(input),raw=motion(input);
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(JSON.parse(raw).transient_coverage,coverage);
+  assert.deepEqual(JSON.parse(raw).transient_surface,sheet);
+  assert.deepEqual(JSON.parse(raw).transient_coverage.exposed_boundaries,[null,coverage.exposed_boundaries[1]]);
+  const first=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:16000000});
+  assert.ok(first.includes(raw));assert.equal(Object.hasOwn(JSON.parse(first),'coverage'),false);
+  assert.equal(Object.hasOwn(JSON.parse(first),'surface'),false,'Moving histories do not request either steady heat consumer');
+  const comparison=JSON.stringify({basis:'nominal',objectives:[{metric:'transient_coverage_final_min_temperature_c',direction:'maximize'}],
+    required_consumers:['transient_coverage']});
+  coverage.initial_instance_temperatures_c['front.R']=-10;coverage.exposed_boundaries[0]={...coverage.boundaries[0]};
+  const second=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:16000000});
+  const cases=JSON.parse(matrix({maxEvaluations:4,cases:[{key:'warm lining',scenario:first,comparison},{key:'cold shell',scenario:second,comparison}]})).cases;
+  assert.deepEqual(cases.map(c=>c.scenario.motion.transient_coverage.initial_instance_temperatures_c['front.R']),[5,-10]);
+  assert.equal(cases[0].scenario.motion.transient_coverage.exposed_boundaries[0],null);
+  assert.deepEqual(cases.map(c=>c.scenario.motion.transient_surface.initial_instance_temperatures_c['front.R']),[25,25]);
+});
+
+test('guided moving coverage requires complete saved topology and independent explicit interval choices', async () => {
+  const {buildMaterialMotionRequest:build}=await modulePromise,coverage=await guidedMovingCoverageHeat();
+  const run=transient_coverage=>build({...motionState(),transient_coverage});
+  for(const key of Object.keys(coverage)) {const missing={...coverage};delete missing[key];assert.throws(()=>run(missing),/missing/,key);}
+  for(const changes of [{schema:'other'},{body_triangle_ids:[]},{body_triangle_ids:[1,1]},{body_triangle_ids:['1']},
+    {body_triangle_ids:[-1]},{body_triangle_ids:[Number.MAX_SAFE_INTEGER+1]},{body_triangle_ids:Array.from({length:4097},(_,i)=>i)},
+    {instance_layers:null},{instance_layers:[]},{instance_layers:{}},{instance_layers:{'front.R':1}},
+    {settings:{...coverage.settings,cells_per_layer:65}},{settings:{...coverage.settings,min_normal_cosine:0}},
+    {boundaries:[]},{boundaries:[null]},{boundaries:[coverage.boundaries[0],coverage.boundaries[0]]},
+    {exposed_boundaries:[]},{exposed_boundaries:[undefined]},{exposed_boundaries:[{}]},{exposed_boundaries:[null,null]},
+    {initial_instance_temperatures_c:{}},{initial_instance_temperatures_c:{'front.R':-274}},
+    {initial_instance_temperatures_c:{'front.R':'5'}}])assert.throws(()=>run({...coverage,...changes}),JSON.stringify(changes));
+  for(const field of ['boundaries','exposed_boundaries'])for(const changes of [{inside_c:-274},{outside_c:Infinity},
+    {inside_resistance_m2_k_w:-0.1},{outside_resistance_m2_k_w:'0'},{extra:0}]) {
+    assert.throws(()=>run({...coverage,[field]:[{...coverage.boundaries[0],...changes}]}));
+  }
+  const maximum={...coverage,body_triangle_ids:Array.from({length:4096},(_,i)=>i),
+    settings:{...coverage.settings,cells_per_layer:64},max_step_s:1,max_cell_steps:10000000,max_geometry_operations:20000000};
+  assert.deepEqual(JSON.parse(run(maximum)).transient_coverage,maximum);
+  for(const [key,maximum] of [['max_cell_steps',10000000],['max_geometry_operations',20000000]]) {
+    for(const value of [0,-1,1.5,maximum+1,NaN,Infinity,'1'])assert.throws(()=>run({...coverage,[key]:value}),key);
+  }
+  for(const value of [0,5e-10,1.001,NaN,Infinity,'0.01'])assert.throws(()=>run({...coverage,max_step_s:value}));
+  for(const value of [-273.150001,NaN,Infinity,'18',null])assert.throws(()=>run({...coverage,initial_temperature_c:value}));
+});
+
+test('guided moving coverage retains its actual consumer capability and leaves advanced original motion policies untouched', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialStudyRequest:study}=await modulePromise;
+  const coverage=await guidedMovingCoverageHeat(),input={...motionState(),transient_coverage:coverage};
+  const objectives=[{metric:'transient_coverage_inside_energy_j',direction:'minimize'},
+    {metric:'transient_coverage_final_min_temperature_c',direction:'maximize'}];
+  const constraints=[{metric:'transient_coverage_max_sample_temperature_c',maximum:40}];
+  const result=JSON.parse(study({...state(),objectives,constraints,requiredConsumers:['transient_coverage']},
+    {drape:true,surface:false,motion:true,transientCoverage:true}));
+  assert.deepEqual(result.comparison.objectives,objectives);assert.deepEqual(result.comparison.constraints,constraints);
+  for(const context of [{drape:true,surface:false,motion:true},{drape:true,surface:false,motion:true,transientSurface:true}]) {
+    assert.throws(()=>study({...state(),objectives},context),/transient/i);
+  }
+  for(const extra of [{cells_per_layer:2},{conditions:{}},{surface_water:{}},{thermal_bridges:null},
+    {exterior_exchange:[null]},{plastic_dissipation_heat:'uniform_reference_thickness'}]) {
+    assert.throws(()=>motion({...input,transient_coverage:{...coverage,...extra}}),/unsupported/);
+  }
+  const advanced={...coverage,exterior_exchange:[null],bare_boundaries:[null],thermal_bridges:null};
+  const original=' \r\n'+JSON.stringify({schema:'ftx-drape-motion/1',...input,transient_coverage:advanced})
+    .replace('"initial_temperature_c":18','"initial_temperature_c":18.00')+'\r\n';
+  const raw=single({...scenarioState(),motion:original,maxMotionTrials:1024,maxVertexFrames:16000000});
+  assert.ok(raw.includes(original));assert.deepEqual(JSON.parse(raw).motion.transient_coverage,advanced);
+  assert.equal(motion(motionState()),JSON.stringify({schema:'ftx-drape-motion/1',...motionState()}));
+});
+
 test('guided coverage envelopes refuse source coercion and wrappers while Rust retains physical admission', async () => {
   const {buildMaterialScenarioRequest:build}=await modulePromise;
   for(const [field,policy] of [['coverage',coveragePolicy],['vaporCoverage',vaporCoveragePolicy]]) {

@@ -162,6 +162,90 @@ export function buildMaterialSurfaceConditions(boundary) {
   return JSON.stringify({ schema: "ftx-steady-surface-conditions/1", boundaries: [boundary] });
 }
 
+/** Author shared coverage topology without requiring or inferring a steady heat boundary. */
+export function buildMaterialCoverageTopology(state) {
+  const fields = ["bodyTriangleIds", "instanceLayers", "settings"];
+  object(state, fields, fields, "Guided body/layer topology");
+  if (typeof state.bodyTriangleIds !== "string" || !state.bodyTriangleIds.trim()) {
+    throw Error("Declare body triangle IDs or inclusive ranges, such as 0-15, 22, 31-33.");
+  }
+  let size = bytes(state.bodyTriangleIds);
+  const ids = [], seen = new Set();
+  const tokens = state.bodyTriangleIds.trim().split(/[,\s]+/, 4097);
+  if (tokens.length > 4096) throw Error("Declare at most 4096 body triangle IDs or ranges.");
+  for (const token of tokens) {
+    const match = /^(\d+)(?:-(\d+))?$/.exec(token);
+    if (!match) throw Error("Body triangle entries must be nonnegative integer IDs or inclusive ranges without spaces around the hyphen.");
+    const first = Number(match[1]), last = Number(match[2] ?? match[1]), count = last - first + 1;
+    if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || first < 0 || last < first || count > 4096 - ids.length) {
+      throw Error("Declare at most 4096 body triangle IDs, using increasing safe-integer ranges.");
+    }
+    for (let offset = 0; offset < count; offset++) {
+      const id = first + offset;
+      if (seen.has(id)) throw Error("Body triangle IDs and ranges must not overlap or repeat.");
+      seen.add(id); ids.push(id);
+    }
+  }
+  const retainName = (value, label) => {
+    name(value, label);
+    bytes(value, 4096, `${label} must not exceed 4096 UTF-8 bytes.`);
+    size += bytes(JSON.stringify(value));
+    if (size > MAX_REQUEST_BYTES) throw Error("Guided body/layer heat exceeds 16 MiB.");
+    return value;
+  };
+  if (!Array.isArray(state.instanceLayers) || !state.instanceLayers.length || state.instanceLayers.length > 65536) {
+    throw Error("Save 1–65536 exact physical-instance layer assignments.");
+  }
+  const layers = new Map();
+  for (const row of state.instanceLayers) {
+    object(row, ["instance", "layer"], ["instance", "layer"], "Coverage layer assignment");
+    retainName(row.instance, "Physical instance name"); retainName(row.layer, "Physical layer name");
+    if (layers.has(row.instance)) throw Error("Each physical instance needs exactly one layer assignment.");
+    layers.set(row.instance, row.layer);
+  }
+  const settingFields = ["max_distance_m", "min_normal_cosine", "separation_tolerance_m", "cells_per_layer", "interfaces"];
+  const settings = object(state.settings, settingFields, settingFields, "Coverage geometry settings");
+  for (const key of ["max_distance_m", "min_normal_cosine", "separation_tolerance_m"]) {
+    if (typeof settings[key] !== "number" || !Number.isFinite(settings[key]) || settings[key] <= 0) {
+      throw Error(`Coverage ${key} must be finite and positive.`);
+    }
+  }
+  if (settings.min_normal_cosine > 1 || settings.separation_tolerance_m >= settings.max_distance_m) {
+    throw Error("Coverage normal cosine must not exceed 1; separation tolerance must be smaller than the search distance.");
+  }
+  if (!Number.isSafeInteger(settings.cells_per_layer) || settings.cells_per_layer < 1 || settings.cells_per_layer > 64) {
+    throw Error("Coverage needs 1–64 through-thickness cells per layer.");
+  }
+  if (!Array.isArray(settings.interfaces) || settings.interfaces.length > 4096) throw Error("Coverage permits at most 4096 directed interfaces.");
+  const names = new Set(layers.values()), pairs = new Set();
+  for (const item of settings.interfaces) {
+    const fields = ["inner", "outer", "resistance_m2_k_w", "basis"];
+    object(item, fields, fields, "Coverage interface");
+    for (const key of ["inner", "outer", "basis"]) retainName(item[key], `Interface ${key}`);
+    nonnegative(item.resistance_m2_k_w, "Interface resistance");
+    const key = JSON.stringify([item.inner, item.outer]);
+    if (item.inner === item.outer || !names.has(item.inner) || !names.has(item.outer) || pairs.has(key)) {
+      throw Error("Each directed interface must uniquely join two different saved layer names.");
+    }
+    pairs.add(key);
+  }
+  const request = JSON.stringify({ body_triangle_ids: ids, instance_layers: Object.fromEntries(layers), settings });
+  bytes(request, MAX_REQUEST_BYTES, "Guided body/layer heat exceeds 16 MiB.");
+  return request;
+}
+
+/** Author steady coverage inputs; the native projection determines actual overlap and layer order. */
+export function buildMaterialCoverageRequest(state) {
+  const fields = ["bodyTriangleIds", "instanceLayers", "settings", "boundary"];
+  object(state, fields, fields, "Guided body/layer heat");
+  const topology = JSON.parse(buildMaterialCoverageTopology({ bodyTriangleIds: state.bodyTriangleIds,
+    instanceLayers: state.instanceLayers, settings: state.settings }));
+  const { boundaries } = JSON.parse(buildMaterialSurfaceConditions(state.boundary));
+  const request = JSON.stringify({ ...topology, conditions: { boundaries } });
+  bytes(request, MAX_REQUEST_BYTES, "Guided body/layer heat exceeds 16 MiB.");
+  return request;
+}
+
 /** Author the existing forward vapor-potential boundary, independently of dry heat or available water. */
 export function buildMaterialVaporSurfaceConditions(boundary) {
   const fields = ["inside_vapor_pressure_pa", "outside_vapor_pressure_pa", "inside_film_resistance_m2_pa_w",
@@ -181,7 +265,7 @@ export function buildMaterialVaporSurfaceConditions(boundary) {
 
 /** Author prescribed source-model endpoints; Rust owns their geometry and numerical continuation. */
 export function buildMaterialMotionRequest(state) {
-  object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "transient_surface"],
+  object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "transient_surface", "transient_coverage"],
     ["keyframes", "max_step_s", "max_trials", "max_pairs"], "Guided motion");
   if (!Array.isArray(state.keyframes) || !state.keyframes.length || state.keyframes.length > 16) {
     throw Error("Motion needs 1–16 explicitly authored endpoints.");
@@ -218,16 +302,35 @@ export function buildMaterialMotionRequest(state) {
     previous = frame.time_s;
   }
   if (minimumTrials > state.max_trials) throw Error("Motion requires more nominal substeps than max_trials.");
-  if (own(state, "transient_surface")) {
-    const fields = ["schema", "initial_temperature_c", "cells_per_layer", "boundaries", "max_step_s", "max_cell_steps"];
-    const heat = object(state.transient_surface, [...fields, "initial_instance_temperatures_c"], fields, "Guided dry sheet heat");
-    if (heat.schema !== "ftx-motion-surface-heat/1") throw Error("Guided dry sheet heat needs ftx-motion-surface-heat/1.");
+  for (const [consumer, coverage] of [["transient_surface", false], ["transient_coverage", true]]) {
+    if (!own(state, consumer)) continue;
+    const label = coverage ? "Guided moving coverage heat" : "Guided dry sheet heat";
+    const fields = ["schema", "initial_temperature_c", "boundaries", "max_step_s", "max_cell_steps",
+      ...(coverage ? ["body_triangle_ids", "instance_layers", "settings", "exposed_boundaries", "max_geometry_operations"] : ["cells_per_layer"])];
+    const heat = object(state[consumer], [...fields, "initial_instance_temperatures_c"], fields, label);
+    const schema = coverage ? "ftx-motion-coverage-heat/1" : "ftx-motion-surface-heat/1";
+    if (heat.schema !== schema) throw Error(`${label} needs ${schema}.`);
+    if (coverage) {
+      if (!Array.isArray(heat.body_triangle_ids) || !heat.body_triangle_ids.length || heat.body_triangle_ids.length > 4096 ||
+        heat.body_triangle_ids.some(id => !Number.isSafeInteger(id) || id < 0)) {
+        throw Error("Moving coverage needs 1–4096 distinct nonnegative safe-integer body triangle IDs.");
+      }
+      if (!heat.instance_layers || typeof heat.instance_layers !== "object" || Array.isArray(heat.instance_layers)) {
+        throw Error("Moving coverage needs an object of exact physical-instance layer assignments.");
+      }
+      const entries = Object.entries(heat.instance_layers);
+      if (!entries.length || entries.length > 65536) throw Error("Save 1–65536 exact physical-instance layer assignments.");
+      // Both consumers use the same authored geometry contract. Original motion files bypass
+      // this guided subset and retain advanced source-qualified interfaces and exterior policies.
+      buildMaterialCoverageTopology({ bodyTriangleIds: heat.body_triangle_ids.join(","),
+        instanceLayers: entries.map(([instance, layer]) => ({ instance, layer })), settings: heat.settings });
+    }
     const temperature = (value, label) => {
       if (typeof value !== "number" || !Number.isFinite(value) || value < -273.15) {
         throw Error(`${label} must be finite and at least -273.15 °C.`);
       }
     };
-    temperature(heat.initial_temperature_c, "Initial sheet temperature");
+    temperature(heat.initial_temperature_c, coverage ? "Initial coverage temperature" : "Initial sheet temperature");
     if (own(heat, "initial_instance_temperatures_c")) {
       const values = heat.initial_instance_temperatures_c;
       if (!values || typeof values !== "object" || Array.isArray(values)) {
@@ -244,23 +347,27 @@ export function buildMaterialMotionRequest(state) {
       // Native retained-instance ownership and each material's temperature domain decide admission.
       // The scalar remains an explicit fallback; neither source-piece IDs nor material IDs are expanded.
     }
-    for (const [key, maximum] of [["cells_per_layer", 64], ["max_cell_steps", 10000000]]) {
+    for (const [key, maximum] of [["max_cell_steps", 10000000],
+      ...(coverage ? [["max_geometry_operations", 20000000]] : [["cells_per_layer", 64]])]) {
       if (!Number.isSafeInteger(heat[key]) || heat[key] < 1 || heat[key] > maximum) {
-        throw Error(`Guided dry sheet heat ${key} must be an integer from 1 to ${maximum}.`);
+        throw Error(`${label} ${key} must be an integer from 1 to ${maximum}.`);
       }
     }
     if (typeof heat.max_step_s !== "number" || !Number.isFinite(heat.max_step_s) || heat.max_step_s < 1e-9 || heat.max_step_s > 1) {
       throw Error("Maximum thermal substep must be finite and from 1e-9 to 1 second.");
     }
-    if (!Array.isArray(heat.boundaries) || heat.boundaries.length !== state.keyframes.length) {
-      throw Error("Save one complete sheet-heat boundary for each motion endpoint interval.");
-    }
     const filmFields = ["inside_c", "outside_c", "inside_resistance_m2_k_w", "outside_resistance_m2_k_w"];
-    for (const film of heat.boundaries) {
-      object(film, filmFields, filmFields, "Saved sheet-heat boundary");
-      temperature(film.inside_c, "Inside reservoir temperature"); temperature(film.outside_c, "Outside reservoir temperature");
-      nonnegative(film.inside_resistance_m2_k_w, "Inside film resistance");
-      nonnegative(film.outside_resistance_m2_k_w, "Outside film resistance");
+    for (const field of coverage ? ["boundaries", "exposed_boundaries"] : ["boundaries"]) {
+      if (!Array.isArray(heat[field]) || heat[field].length !== state.keyframes.length) {
+        throw Error(`${label} needs one saved ${field} entry for each motion endpoint interval.`);
+      }
+      for (const film of heat[field]) {
+        if (field === "exposed_boundaries" && film === null) continue;
+        object(film, filmFields, filmFields, `Saved ${label} ${field}`);
+        temperature(film.inside_c, "Inside reservoir temperature"); temperature(film.outside_c, "Outside reservoir temperature");
+        nonnegative(film.inside_resistance_m2_k_w, "Inside film resistance");
+        nonnegative(film.outside_resistance_m2_k_w, "Outside film resistance");
+      }
     }
   }
   const request = JSON.stringify({ schema: "ftx-drape-motion/1", ...state });

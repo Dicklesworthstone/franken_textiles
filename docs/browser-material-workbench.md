@@ -630,12 +630,34 @@ policies; its exact request remains authoritative.
 
 The **Layered heat and potential vapor transfer** controls keep three independent consumers:
 
-- **Body/layer heat** takes the original `scenario.coverage` fragment: `body_triangle_ids`,
-  `instance_layers`, `settings`, `conditions` and optional qualified `thermal_bridges`.
+- **Body/layer heat** can be authored in the form or retained as the original `scenario.coverage`
+  fragment: `body_triangle_ids`, `instance_layers`, `settings`, `conditions` and optional qualified
+  `thermal_bridges`.
 - **Independent-sheet vapor** takes original `ftx-vapor-surface-conditions/1` conditions or the
   explicitly selected section-3 uniform/form or original-file conditions.
 - **Covered-body vapor** takes the original `scenario.vapor_coverage` fragment with
   `body_triangle_ids`, `instance_layers`, `settings` and `conditions`.
+
+For authored heat, choose **Declare body regions, garment layers and uniform heat conditions here**.
+Enter up to 4,096 unique collision-body triangle IDs, using individual IDs or inclusive ranges such
+as `0-15, 22, 31-33`. These are indices in the selected body's collision mesh, not inferred anatomical
+regions. Saved cases share the selected body; changing that mesh retains the numeric declaration,
+so review its intended physical region before rerunning.
+
+Save each exact retained physical-instance name with its physical layer, then declare every needed
+directed interface with its resistance and a measurement source or explicit assumption. Zero
+resistance must be entered explicitly. Save/replace/remove acts on individual rows; typing a row
+only prepares a draft. Renaming a layer does not silently repair an older interface. Declare the
+search distance, normal cosine, separation tolerance and depth resolution, followed by uniform
+inside/outside reservoir temperatures and film resistances. The native projection still determines
+actual overlap and layer order and rejects ambiguous or unsupported geometry.
+
+Named cases freeze the complete saved topology and conditions. Active control edits withdraw stale
+work; inactive original files and unsaved rows do not change an authored request. Pattern replacement
+clears this garment's topology. The original-policy mode preserves advanced input bytes for
+nonuniform boundaries, source-qualified convection/radiation, stagnant-gap interfaces and thermal
+bridges. This authoring increment is tracked by `ftx-ms2.21`; it does not add a thermal law or prove
+physical garment coverage.
 
 Coverage fragments have no separate schema field. Supply scenario projection policies, not a
 previously computed coverage map: every material/design alternative projects its declared layers
@@ -774,7 +796,8 @@ properties, wearer cooling or empirical wet-garment performance. See
 
 #### Compare heat storage and temperatures through motion
 
-Enable **Track dry independent-sheet heat through this movement** in the endpoint editor, or choose
+Enable **Track dry independent-sheet heat through this movement** or **Track dry body/layer heat
+and exposed cloth through this movement** in the endpoint editor. Alternatively, choose
 **Retain an original motion request** with an explicitly authored `transient_surface` or
 `transient_coverage` policy. The two heat-history groups expose the existing native results as
 objectives and inclusive lower/upper limits. Each domain has six independent quantities:
@@ -798,7 +821,7 @@ The same case must request motion and its corresponding transient policy. A tran
 not need an unrelated steady-sheet request, and transient coverage carries its own declared layer
 topology without requiring steady coverage. The original motion text retains initial temperatures,
 boundary schedules, source numbers and numerical allowances exactly. Saved cases freeze that text.
-The endpoint form emits a dry sheet history only when explicitly enabled with a complete saved
+The endpoint form emits each heat history only when explicitly enabled with a complete saved
 schedule. These criteria also enter existing linked
 grid and adaptive design comparisons under each case's own admission policy.
 
@@ -809,6 +832,27 @@ zero to the first endpoint; later boundaries apply after the preceding endpoint 
 endpoint. Conditions are constant over each interval. They are not interpolated temperatures,
 inferred weather, skin conditions or an equilibrium result. Negative Celsius values are allowed
 down to absolute zero. Zero film resistance explicitly prescribes the corresponding face temperature.
+
+For guided moving body/layer heat, complete the shared body-region, instance/layer, interface and
+projection editor above. Its cell count also applies to moving coverage. This enables that topology
+editor without requesting steady coverage or changing the selected original steady-policy file.
+Moving coverage has its own default initial temperature, saved instance overrides and work limits;
+its conditions and temperatures remain independent of the sheet-heat controls.
+
+Each saved endpoint needs covered-body reservoir films and an explicit exposed-cloth choice.
+Choose **Adiabatic: no boundary exchange**, or **Declare separate reservoir films** and fill all
+four exposed-face values. Adiabatic exposed cloth retains stored heat through movement; it does
+not reset to an ambient temperature. Separate exposed films use the sheet's original material faces.
+Adding or replacing an endpoint saves both choices. Enabling coverage after poses were saved
+requires replacing each endpoint with its explicit conditions; no earlier interval is filled from
+the current draft. Removing an endpoint preserves the next endpoint's own saved conditions.
+
+Coverage reserves 1–10000000 temperature-cell/body-face advances and 1–20000000 projection/remap
+operations per history. Sheet and coverage histories share a 20000000 thermal allowance across
+alternatives and named cases; coverage geometry shares 40000000 operations. Failed histories can
+consume reservations. These are work limits, not promised runtimes or convergence; an unavailable
+optional history retains independent outcomes. Original-motion mode supports the existing qualified
+exterior, bridge, liquid and dissipation policies without rewriting them into this dry-film editor.
 
 Open **Different initial temperatures for individual garment instances** when, for example, a cold
 outer garment starts separately from a warm inner sheet. Enter an exact retained physical instance
@@ -829,8 +873,13 @@ The native request retains the optional `initial_instance_temperatures_c` map, i
 fallback and the complete original policy. A successful mapped result shows the resolved temperature
 of every retained instance and its source-bound triangle ownership. Initial extrema use the actual
 retained temperatures, excluding an unused fallback. This bounded extension supports dry independent
-sheets, including the original-file exterior policies; water, mechanical liquid coupling and
-dissipation heating require a separate supported contract and refuse when combined with this map.
+sheets, including the original-file exterior policies. The moving coverage editor separately saves
+the same map on `motion.transient_coverage`; original motion files can retain it there too. Covered
+layer cells and exposed remainders follow each source instance's initial temperature as the garment
+moves. The page displays each consumer's own resolved temperatures, source model and initial frame.
+Saved cases and replay files retain the complete authored or original motion policy.
+Water, mechanical liquid coupling and
+dissipation heating require a separate supported contract and refuse when combined with these maps.
 
 Every saved endpoint owns its four boundary values. Editing the current endpoint or film fields
 prepares a draft; only adding or replacing an endpoint changes the saved schedule. Removing an
@@ -1244,5 +1293,6 @@ This delivers the local operator integration slice of plan §25.9, including sou
 calibration, named scenario comparisons, transient heat and motion histories, and potential vapor and
 finite body water histories through the shared native engines. Each result retains its own evidence,
 physical scope and refusals. It does not close the full empirical linen/leather/knit garment gate,
-acquire new measured records, qualify live supplier coverage, or provide interactive body/layer-map
-editing or robot execution. Those remain distinct follow-on capabilities.
+acquire new measured records, qualify live supplier coverage, or provide geometric body/layer-map
+painting or robot execution. Declared numeric coverage policies are editable through the controls
+above; geometric region picking and physical qualification remain separate capabilities.

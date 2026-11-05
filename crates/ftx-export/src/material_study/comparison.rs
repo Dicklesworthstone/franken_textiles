@@ -3924,7 +3924,7 @@ fn initial_heat_range(
 ) -> Result<[f64; 2], Refusal> {
     let fail = || {
         invalid(
-            "initial sheet temperatures need the exact dry source, retained physical owners and complete authored-state receipt",
+            "initial cloth temperatures need the exact dry source, retained physical owners and complete authored-state receipt",
         )
     };
     let initial = finite(&request["initial_temperature_c"])
@@ -3940,8 +3940,7 @@ fn initial_heat_range(
         return Ok([initial, initial]);
     };
     let overrides = overrides.as_object().ok_or_else(fail)?;
-    if coverage
-        || overrides.is_empty()
+    if overrides.is_empty()
         || overrides.len() > 65_536
         || [
             "surface_water",
@@ -3954,12 +3953,18 @@ fn initial_heat_range(
         ]
         .iter()
         .any(|key| !request[key].is_null())
-        || heat["initial_temperature_c"] != request["initial_temperature_c"]
+        || (!coverage && heat["initial_temperature_c"] != request["initial_temperature_c"])
     {
         return Err(fail());
     }
     let frame = &simulation["drape"]["thermal_surface"];
-    let model = &heat["model"];
+    // The coverage checkpoint keeps the original source mesh/material columns while its frame
+    // geometry moves. Its initial condition belongs to that source, not the final overlap cells.
+    let model = if coverage {
+        &heat["checkpoint"]["frame"]["source"]
+    } else {
+        &heat["model"]
+    };
     let patches = vapor_array(model, "patches")?;
     let columns = vapor_array(model, "columns")?;
     let source_columns = vapor_array(&frame["model"], "columns")?;
@@ -3967,7 +3972,12 @@ fn initial_heat_range(
     let instances = vapor_array(frame, "instances")?;
     let triangles = vapor_array(simulation, "triangles")?;
     let positions = vapor_array(simulation, "positions_m")?;
-    let cells = vapor_index(&request["cells_per_layer"])?;
+    let requested_cells = if coverage {
+        &request["settings"]["cells_per_layer"]
+    } else {
+        &request["cells_per_layer"]
+    };
+    let cells = vapor_index(requested_cells)?;
     if frame["available"] != true
         || frame["schema"] != "ftx-drape-thermal-surface/1"
         || model["schema"] != "ftx-thermal-surface/1"
@@ -4015,7 +4025,7 @@ fn initial_heat_range(
         let layers = vapor_array(column, "layers")?;
         if layers.len() != 1
             || column["layers"] != source["layers"]
-            || column["cells_per_layer"] != request["cells_per_layer"]
+            || &column["cells_per_layer"] != requested_cells
             || !vapor_array(column, "interface_resistance_m2_k_w")?.is_empty()
         {
             return Err(fail());
@@ -4071,12 +4081,22 @@ fn initial_heat_range(
         range[0] = range[0].min(t);
         range[1] = range[1].max(t);
     }
+    let mut receipt = json!({
+        "schema":if coverage {"ftx-motion-coverage-initial-condition/1"}
+            else {"ftx-motion-surface-initial-condition/1"},
+        "model_sha256":model["sha256"], "instances":instances, "triangle_instance":owners,
+        "instance_temperature_c":temperatures, "temperature_range_c":range});
+    if coverage {
+        if !same_identity(
+            &heat["initial_condition"]["frame_sha256"],
+            &heat["initial_frame_sha256"],
+        ) {
+            return Err(fail());
+        }
+        receipt["frame_sha256"] = heat["initial_frame_sha256"].clone();
+    }
     if overrides.keys().any(|id| !used.contains(id.as_str()))
-        || heat["initial_condition"]
-            != json!({
-            "schema":"ftx-motion-surface-initial-condition/1", "model_sha256":model["sha256"],
-            "instances":instances, "triangle_instance":owners,
-            "instance_temperature_c":temperatures, "temperature_range_c":range})
+        || heat["initial_condition"] != receipt
     {
         return Err(fail());
     }

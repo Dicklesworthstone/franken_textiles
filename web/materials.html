@@ -999,8 +999,60 @@ qualify a drape-based comparison. Zero gravity steps describe a sewing-only expe
 <p class="note">Uses each alternative's fresh geometry and qualified thermal observations with the declared reservoir temperatures
 and boundary films. Independent sheet power is not layered body coverage, whole-wearer heat loss or a comfort score.</p>
 <fieldset><legend>Layered heat and potential vapor transfer</legend>
-<label><input id="guidedCoverage" type="checkbox"> Evaluate body/layer heat with an original coverage policy</label>
-<label>Original scenario coverage policy JSON <input id="guidedCoverageFile" type="file" accept=".json,application/json" disabled></label>
+<label><input id="guidedCoverage" type="checkbox"> Evaluate steady body/layer heat on the selected body</label>
+<label>Steady body/layer heat source <select id="guidedCoverageSource"><option value="file">Retain an original coverage policy</option>
+<option value="form">Declare body regions, garment layers and uniform heat conditions here</option></select></label>
+<label id="guidedCoverageFileField">Original scenario coverage policy JSON <input id="guidedCoverageFile" type="file" accept=".json,application/json" disabled></label>
+<div id="guidedCoverageForm" hidden>
+<fieldset id="guidedCoverageTopology"><legend>Declared body region and garment layers</legend>
+<p id="guidedCoverageMotionUse" class="note" hidden>The authored moving body/layer heat history uses these saved declarations.
+Steady heat has its own source choice and conditions.</p>
+<label>Body triangle IDs or inclusive ranges <textarea id="guidedCoverageTriangles" rows="2" placeholder="For example: 0-15, 22, 31-33"></textarea></label>
+<small>Use the selected collision body's triangle indices. Separate entries with commas or whitespace; write ranges without spaces around the hyphen.
+At most 4,096 distinct IDs. No body region or anatomy is inferred. Saved cases share the currently selected body.
+Changing that body reuses these numeric IDs on its collision mesh; confirm they still describe the intended region before recomputing.</small>
+<div class="study-fields">
+<label>Outward search distance (m) <input id="guidedCoverageDistance" type="number" min="0" step="any"></label>
+<label>Minimum absolute normal cosine (0–1] <input id="guidedCoverageCosine" type="number" min="0" max="1" step="any"></label>
+<label>Layer separation tolerance (m) <input id="guidedCoverageSeparation" type="number" min="0" step="any"></label>
+<label>Through-thickness cells per layer <input id="guidedCoverageCells" type="number" min="1" max="64" step="1" value="1"></label>
+</div>
+<p class="note">Distances are positive, with separation tolerance smaller than the search distance. The engine computes actual overlap and layer order
+from each fresh drape. It refuses ambiguous, unqualified or incomplete geometry; these controls do not create coverage.</p>
+<div class="study-fields">
+<label>Exact physical instance name <input id="guidedCoverageInstance" type="text" placeholder="For example: front.R"></label>
+<label>Physical layer name <input id="guidedCoverageLayer" type="text" placeholder="For example: shell"></label>
+</div>
+<button id="saveCoverageLayer" type="button">Save or replace this instance's layer</button>
+<div id="guidedCoverageLayers" class="study-choices"></div>
+<p class="note">Assign every retained physical instance exactly once, using names from the drape report. Several pieces may share one layer.
+Names preserve spaces and case. Source-piece names are not expanded into physical instances.</p>
+<div class="study-fields">
+<label>Inner physical layer <input id="guidedCoverageInner" type="text" placeholder="For example: lining"></label>
+<label>Outer physical layer <input id="guidedCoverageOuter" type="text" placeholder="For example: shell"></label>
+<label>Interface resistance (m² K/W of covered body area) <input id="guidedCoverageResistance" type="number" min="0" step="any"></label>
+</div>
+<label>Interface measurement source or explicit assumption <textarea id="guidedCoverageBasis" rows="2"></textarea></label>
+<button id="saveCoverageInterface" type="button">Save or replace this directed interface</button>
+<div id="guidedCoverageInterfaces" class="study-choices"></div>
+<p id="guidedCoverageTopologySummary">0 saved instance assignments, 0 directed interfaces.</p>
+<button id="clearCoverageTopology" type="button">Clear saved layer assignments and interfaces</button>
+<p class="note">Declare a resistance and basis for every adjacent layer pair that occurs, including an explicit zero when intended.
+An empty interface table is suitable only when no cross-layer interface is needed. Layer edits may require updating saved interfaces.
+The fields above are drafts until saved; each name or basis is limited to 4,096 UTF-8 bytes.</p>
+</fieldset>
+<fieldset id="guidedCoverageSteadyConditions"><legend>Steady heat conditions</legend>
+<div class="study-fields">
+<label>Inside reservoir (°C) <input id="guidedCoverageInside" type="number" min="-273.15" step="any"></label>
+<label>Outside reservoir (°C) <input id="guidedCoverageOutside" type="number" min="-273.15" step="any"></label>
+<label>Inside film resistance (m² K/W) <input id="guidedCoverageInsideFilm" type="number" min="0" step="any"></label>
+<label>Outside film resistance (m² K/W) <input id="guidedCoverageOutsideFilm" type="number" min="0" step="any"></label>
+</div>
+<p class="note">These uniform reservoir and film conditions apply over the declared body domain, including bare paths.
+Use the original-policy option for nonuniform boundaries, qualified convection/radiation, stagnant-gas interfaces or seam/closure heat paths.
+Saving a named case retains its complete current topology and conditions; later draft edits do not change it.</p>
+</fieldset>
+</div>
 <label><input id="guidedVaporSurface" type="checkbox"> Evaluate independent-sheet vapor potential</label>
 <label>Sheet vapor source for this case <select id="guidedVaporSurfaceSource"><option value="file">Retain original case JSON</option><option value="workbench">Use the selected section-3 sheet vapor conditions</option></select></label>
 <label id="guidedVaporSurfaceFileField">Original vapor conditions JSON (<code>ftx-vapor-surface-conditions/1</code>)
@@ -1096,6 +1148,33 @@ retained garment, not a material ID or source-piece shortcut. The engine checks 
 Each sheet starts uniformly through its thickness. Disabling heat retains this draft; saved named cases keep their own temperatures.</p>
 </details>
 </fieldset>
+<label><input id="guidedMotionCoverage" type="checkbox"> Track dry body/layer heat and exposed cloth through this movement</label>
+<fieldset id="guidedMotionCoverageSettings" hidden><legend>Moving body/layer heat initial state and work limits</legend>
+<p class="note">Complete the <a href="#guidedCoverageTopology">declared body region, garment layers and interfaces above</a>.
+Moving coverage uses that topology and cell count, with its own initial state and interval conditions. Steady heat remains optional.</p>
+<div class="study-fields">
+<label>Default initial textile temperature (°C) <input id="guidedMotionCoverageInitial" type="number" min="-273.15" step="any" placeholder="Explicit initial condition"></label>
+<label>Maximum thermal substep (s) <input id="guidedMotionCoverageStep" type="number" min="0.000000001" max="1" step="any" value="0.01"></label>
+<label>Temperature-cell and body-face advances per history <input id="guidedMotionCoverageBudget" type="number" min="1" max="10000000" step="1" value="100000"></label>
+<label>Projection and remap operations per history <input id="guidedMotionCoverageGeometryBudget" type="number" min="1" max="20000000" step="1" value="2000000"></label>
+</div>
+<p class="note">Each history reserves its allowances from shared totals of 20,000,000 thermal advances and 40,000,000 coverage geometry operations
+across alternatives and named cases. Exhausted optional heat histories refuse independently; other available results remain visible.</p>
+<details><summary>Different initial temperatures for individual covered or exposed garment instances</summary>
+<p class="note">Unlisted retained instances use the explicit default above. Each saved override follows the exact physical instance
+through its covered and exposed portions, uniformly through its thickness. These temperatures are independent of the sheet-heat controls.</p>
+<div class="study-fields">
+<label>Exact physical instance <input id="guidedMotionCoverageInstance" type="text" placeholder="e.g. lining.R" spellcheck="false"></label>
+<label>Initial instance temperature (°C) <input id="guidedMotionCoverageInstanceInitial" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
+</div>
+<button id="addMotionCoverageInstance" type="button" disabled>Add or replace initial instance temperature</button>
+<p id="guidedMotionCoverageInstancesSummary" class="note" role="status">No instance overrides saved. Every retained instance uses the explicit default above.</p>
+<div id="guidedMotionCoverageInstances"></div>
+<button id="clearMotionCoverageInstances" type="button" disabled>Use default for every instance</button>
+<p class="note">Only saved overrides run. Editing these fields prepares a change; use Add or replace to save it.
+The engine checks exact retained ownership and each material's thermal domain.</p>
+</details>
+</fieldset>
 <div class="study-fields">
 <label>Endpoint time (s) <input id="guidedMotionTime" type="number" min="0.000000001" max="60" step="any" placeholder="Cumulative time"></label>
 <label>Arm angle from vertical (°) <input id="guidedMotionArm" type="number" min="0" max="180" step="any" placeholder="0–180"></label>
@@ -1112,6 +1191,25 @@ Each sheet starts uniformly through its thickness. Disabling heat retains this d
 <p class="note">These spatially uniform conditions apply after the preceding endpoint through this endpoint; the first interval
 starts at time zero. Zero film resistance prescribes the face temperature. Add or replace an endpoint to save its four conditions.
 Every endpoint needs its own saved conditions before heat can run, including endpoints saved before heat was enabled.</p>
+</fieldset>
+<fieldset id="guidedMotionCoverageBoundary" hidden><legend>Body/layer heat conditions for the interval ending at this endpoint</legend>
+<div class="study-fields">
+<label>Body-side reservoir temperature (°C) <input id="guidedMotionCoverageInside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
+<label>Exterior reservoir temperature (°C) <input id="guidedMotionCoverageOutside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
+<label>Body-side film resistance (m² K/W) <input id="guidedMotionCoverageInsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
+<label>Exterior film resistance (m² K/W) <input id="guidedMotionCoverageOutsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
+</div>
+<label>Exchange on currently exposed cloth <select id="guidedMotionExposedMode"><option value="">Choose exposed-cloth conditions</option>
+<option value="adiabatic">Adiabatic: no boundary exchange</option><option value="films">Declare separate reservoir films</option></select></label>
+<div id="guidedMotionExposedFilms" class="study-fields" hidden>
+<label>Inside material-face reservoir (°C) <input id="guidedMotionExposedInside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
+<label>Outside material-face reservoir (°C) <input id="guidedMotionExposedOutside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
+<label>Inside material-face film resistance (m² K/W) <input id="guidedMotionExposedInsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
+<label>Outside material-face film resistance (m² K/W) <input id="guidedMotionExposedOutsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
+</div>
+<p class="note">The covered-body films apply over the declared body domain, including bare paths. Exposed-cloth films follow each sheet's
+original material faces; adiabatic cloth retains stored heat as coverage changes. Save both choices with each endpoint.
+Conditions are constant over that interval. Zero film resistance prescribes the face temperature.</p>
 </fieldset>
 <button id="addMotionKeyframe" type="button" disabled>Add motion keyframe</button>
 <p id="guidedMotionSummary" class="note" role="status">No motion keyframes saved.</p>
@@ -1136,8 +1234,9 @@ active named cases share at most 32768 attempts. Budgets bound work without guar
 body-vertex chords between endpoints, with a fixed root and no chair or floor support. These prescribed model poses do not establish
 anatomical movement accuracy or physical garment fit. A failed movement publishes no partial trajectory. Optional sheet heat is recomputed
 at endpoints as independent steady snapshots. The dry heat option above separately carries textile temperature through the saved
-interval conditions, without a steady-sheet request. The original motion request option retains complete transient thermal and water
-requests verbatim, including their source values and work policies; native admission still checks their compatibility.</p>
+interval conditions, without a steady-sheet request. Moving body/layer heat separately follows covered and exposed reference material.
+Use the original motion request for qualified exterior exchange, thermal bridges, water and dissipation policies. It retains complete requests
+verbatim, including their source values and work policies; native admission still checks their compatibility.</p>
 </fieldset>
 <fieldset id="guidedScenarioCasePolicy" hidden><legend>Comparison policy for this case</legend>
 <label>Use <select id="guidedScenarioPolicySource">
@@ -1424,7 +1523,7 @@ sample. These values do not establish continuous-time temperature bounds or wear
 </div>
 </details>
 <details><summary>Body and layer heat history</summary>
-<p class="note">Use the body-coverage heat policy and layer topology in the original motion request.
+<p class="note">Author moving body/layer heat with saved topology and endpoint conditions, or retain its original motion request.
 An independent steady-coverage policy is not required.</p>
 <label><input id="guidedTransientCoverageInsideEnergyGoal" type="checkbox"> Compare inside-side energy (J)</label>
 <div class="study-fields">

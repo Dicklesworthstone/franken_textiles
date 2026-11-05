@@ -159,8 +159,13 @@ fn source<'a>(alternative: &Alternative, simulation: &'a Value) -> Result<Source
     })
 }
 
-fn boundary(conditions: &Value, count: usize, i: usize) -> Result<&Value, Refusal> {
-    let values = array(conditions, "boundaries")?;
+fn condition<'a>(
+    conditions: &'a Value,
+    key: &str,
+    count: usize,
+    i: usize,
+) -> Result<&'a Value, Refusal> {
+    let values = array(conditions, key)?;
     if values.len() == 1 {
         Ok(&values[0])
     } else if values.len() == count {
@@ -218,7 +223,9 @@ struct Convection {
 }
 
 fn convection_network(
-    law: &ConductionLaw,
+    laws: &[ConductionLaw],
+    factors: &[f64],
+    interfaces: &Value,
     boundary: &Value,
     environment: &Value,
     state: &Value,
@@ -252,16 +259,12 @@ fn convection_network(
     {
         return Err(fail());
     }
-    let film = positive(&json!(1. / h))?;
+    let factor = factors.last().copied().ok_or_else(fail)?;
+    let film = positive(&json!(factor / h))?;
+    let outer_area_per_model_area = positive(&json!(1. / factor))?;
     let mut effective = boundary.clone();
     effective["outside_resistance_m2_k_w"] = json!(film);
-    let bounds = network(
-        std::slice::from_ref(law),
-        &[1.],
-        &json!([]),
-        &effective,
-        state,
-    )?;
+    let bounds = network(laws, factors, interfaces, &effective, state)?;
     for q in bounds.flux_w_m2 {
         let drop = q * film;
         let temperature = input.air_c + drop;
@@ -277,16 +280,19 @@ fn convection_network(
     }
     let surface = number(&exterior["surface_c"])?;
     let q = number(&state["flux_w_m2"])?;
+    let convective = number(&exterior["convective_flux_w_m2"])?;
+    let faces = array(state, "layer_faces_c")?;
     if surface < lo
         || surface > hi
-        || q != h * (surface - input.air_c)
+        || convective != h * (surface - input.air_c)
+        || q != convective / factor
         || exterior["conduction"] != *state
-        || state["layer_faces_c"][0][1] != exterior["surface_c"]
+        || faces.len() != laws.len()
+        || faces.last().ok_or_else(fail)?[1] != exterior["surface_c"]
         || exterior["radiation_enabled"] != false
         || !exterior["material_face"].is_null()
-        || number(&exterior["convective_flux_w_m2"])? != q
         || number(&exterior["radiative_flux_w_m2"])? != 0.
-        || number(&exterior["outer_area_per_model_area"])? != 1.
+        || number(&exterior["outer_area_per_model_area"])? != outer_area_per_model_area
         || number(&exterior["balance_residual_w_m2"])? != 0.
     {
         return Err(fail());
@@ -319,20 +325,8 @@ pub(super) fn bounds(
     };
     let policy = &descriptor["scenario"][name];
     let result = &simulation[name]["result"];
-    let conditions = if consumer == Consumer::Surface {
-        policy
-    } else {
-        &policy["conditions"]
-    };
     if !policy.is_object() || simulation[name]["status"] != "available" {
         return Err(fail());
-    }
-    if consumer == Consumer::Coverage
-        && (!conditions["exterior_exchange"].is_null() || !result["exterior_exchange"].is_null())
-    {
-        return Err(invalid(
-            "steady coverage source ranges do not cover exterior exchange; nominal heat remains available",
-        ));
     }
     if consumer == Consumer::Coverage
         && (!policy["thermal_bridges"].is_null()
@@ -408,10 +402,12 @@ fn surface(policy: &Value, result: &Value, source: &Source<'_>) -> Result<[f64; 
     };
     let mut column_bounds = Vec::new();
     for (i, law) in source.laws.iter().enumerate() {
-        let boundary = boundary(policy, columns.len(), i)?;
+        let boundary = condition(policy, "boundaries", columns.len(), i)?;
         column_bounds.push(if let Some((environments, exchanges)) = exterior {
             convection_network(
-                law,
+                std::slice::from_ref(law),
+                &[1.],
+                &json!([]),
                 boundary,
                 &environments[if environments.len() == 1 { 0 } else { i }],
                 &columns[i],
@@ -473,7 +469,6 @@ fn coverage(
         || map["instance_layers"] != policy["instance_layers"]
         || map["settings"] != policy["settings"]
         || request["conditions"] != conditions
-        || !conditions["bare_boundaries"].is_null()
         || !same_identity(&result["body_mesh_sha256"], body_identity)
         || !same_identity(
             body_identity,
@@ -483,8 +478,6 @@ fn coverage(
         )
         || (!policy["conditions"]["body_mesh_sha256"].is_null()
             && policy["conditions"]["body_mesh_sha256"] != *body_identity)
-        || (array(&conditions, "boundaries")?.len() != 1
-            && policy["conditions"]["body_mesh_sha256"].is_null())
         || layout["body_triangles"] != map["body_triangles"]
         || index(&layout["body_vertex_count"])? != array(map, "body_positions_m")?.len()
     {
@@ -499,6 +492,17 @@ fn coverage(
         || mappings.len() != source.instances.len()
     {
         return Err(fail());
+    }
+    for key in ["boundaries", "exterior_exchange", "bare_boundaries"] {
+        if key == "boundaries" || !conditions[key].is_null() {
+            let values = array(&conditions, key)?;
+            if values.len() != 1
+                && (values.len() != body_triangles.len()
+                    || policy["conditions"]["body_mesh_sha256"].is_null())
+            {
+                return Err(fail());
+            }
+        }
     }
     let cloth_layers = source
         .owners
@@ -534,6 +538,21 @@ fn coverage(
     {
         return Err(fail());
     }
+    let exchanges = if conditions["exterior_exchange"].is_null() {
+        if !conditions["bare_boundaries"].is_null() || !result["exterior_exchange"].is_null() {
+            return Err(fail());
+        }
+        None
+    } else {
+        let exchanges = array(&result["exterior_exchange"], "regions")?;
+        if exchanges.len() != regions.len()
+            || result["exterior_exchange"]["bare_policy"]
+                != "separate explicitly prescribed films; no inferred skin emissivity"
+        {
+            return Err(fail());
+        }
+        Some(exchanges)
+    };
     let areas = body_triangles
         .iter()
         .map(|face| vapor_triangle_area(&map["body_positions_m"], face))
@@ -597,7 +616,7 @@ fn coverage(
     let mut ranges = Vec::new();
     let mut bare_total = 0.;
     for (i, ((&area, &covered), field)) in areas.iter().zip(&covered).zip(fields).enumerate() {
-        let b = boundary(&conditions, areas.len(), i)?;
+        let b = condition(&conditions, "boundaries", areas.len(), i)?;
         let temperatures = [number(&b["inside_c"])?, number(&b["outside_c"])?];
         let films = [
             number(&b["inside_resistance_m2_k_w"])?,
@@ -609,6 +628,23 @@ fn coverage(
             return Err(fail());
         }
         let bare = if covered < 1. {
+            let (temperatures, films) = if exchanges.is_some() {
+                let bare = condition(&conditions, "bare_boundaries", areas.len(), i)?;
+                let temperatures = [number(&bare["inside_c"])?, number(&bare["outside_c"])?];
+                let films = [
+                    number(&bare["inside_resistance_m2_k_w"])?,
+                    number(&bare["outside_resistance_m2_k_w"])?,
+                ];
+                if temperatures[0] != number(&b["inside_c"])?
+                    || temperatures.iter().any(|value| *value < -273.15)
+                    || films.iter().any(|value| *value < 0.)
+                {
+                    return Err(fail());
+                }
+                (temperatures, films)
+            } else {
+                (temperatures, films)
+            };
             let resistance = films[0] + films[1];
             if !resistance.is_finite() || resistance <= 0. {
                 return Err(fail());
@@ -640,7 +676,10 @@ fn coverage(
         ranges.push([bare; 2]);
         bare_total += bare;
     }
-    for (region, reading) in regions.iter().zip(readings) {
+    let mut convective_power = 0.;
+    let mut radiative_power = 0.;
+    let mut exterior_residual = 0.;
+    for (i, (region, reading)) in regions.iter().zip(readings).enumerate() {
         let body = index(&region["body_triangle"])?;
         let area = areas[body] * fraction(&region["body_fraction"])?;
         let mut laws = Vec::new();
@@ -654,13 +693,26 @@ fn coverage(
             .iter()
             .map(|layer_area| area / layer_area)
             .collect();
-        let conduction = network(
-            &laws,
-            &factors,
-            &region["interface_resistance_m2_k_w"],
-            boundary(&conditions, areas.len(), body)?,
-            &reading["conduction"],
-        )?;
+        let b = condition(&conditions, "boundaries", areas.len(), body)?;
+        let conduction = if let Some(exchanges) = exchanges {
+            convection_network(
+                &laws,
+                &factors,
+                &region["interface_resistance_m2_k_w"],
+                b,
+                condition(&conditions, "exterior_exchange", areas.len(), body)?,
+                &reading["conduction"],
+                &exchanges[i],
+            )?
+        } else {
+            network(
+                &laws,
+                &factors,
+                &region["interface_resistance_m2_k_w"],
+                b,
+                &reading["conduction"],
+            )?
+        };
         let range = conduction.power_bounds(area)?;
         let power = area * number(&reading["conduction"]["flux_w_m2"])?;
         if reading["id"] != region["id"]
@@ -672,8 +724,35 @@ fn coverage(
             return Err(fail());
         }
         match_power(reading, range)?;
+        if let Some(exchanges) = exchanges {
+            let outer_area = *layer_areas.last().ok_or_else(fail)?;
+            let convective_flux = number(&exchanges[i]["convective_flux_w_m2"])?;
+            let radiative_flux = number(&exchanges[i]["radiative_flux_w_m2"])?;
+            let convective = outer_area * convective_flux;
+            let radiative = outer_area * radiative_flux;
+            let residual = (power - convective) - radiative;
+            if !convective.is_finite()
+                || !radiative.is_finite()
+                || (convective_flux != 0. && convective == 0.)
+                || (radiative_flux != 0. && radiative == 0.)
+                || !residual.is_finite()
+                || residual.abs() > 1e-9 * power.abs().max(convective.abs()).max(radiative.abs())
+            {
+                return Err(fail());
+            }
+            convective_power += convective;
+            radiative_power += radiative;
+            exterior_residual += residual;
+        }
         powers[body] += power;
         ReportedConductionBounds::add_power_bounds(&mut ranges[body], range)?;
+    }
+    if exchanges.is_some()
+        && (number(&result["exterior_exchange"]["convective_power_w"])? != convective_power
+            || number(&result["exterior_exchange"]["radiative_power_w"])? != radiative_power
+            || number(&result["exterior_exchange"]["balance_residual_w"])? != exterior_residual)
+    {
+        return Err(fail());
     }
     let mut total = [0.; 2];
     for ((field, &power), range) in fields.iter().zip(&powers).zip(ranges) {

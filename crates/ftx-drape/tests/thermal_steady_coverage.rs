@@ -564,40 +564,209 @@ fn complete_reported_ranges_follow_body_cloth_areas_and_fixed_bare_paths() {
 }
 
 #[test]
-fn complete_material_ranges_do_not_claim_coupled_exterior_or_bridge_total_bounds() {
-    let assembly = SteadyCoverage::new(
+fn covered_convection_ranges_preserve_layer_areas_signs_and_separate_bare_films() {
+    for covered in [1., 0.5] {
+        let mut layout = layout();
+        layout.regions[0].body_fraction = covered;
+        for portion in &mut layout.regions[0].layers {
+            portion.fraction = covered;
+        }
+        let assembly = SteadyCoverage::new(
+            source_with(
+                bounded_selection(0.2, [0.1, 0.3]),
+                bounded_selection(0.4, [0.3, 0.5]),
+            ),
+            layout.clone(),
+        )
+        .unwrap();
+        let unbounded = SteadyCoverage::new(source(), layout).unwrap();
+        for (inside, outside, bare_outside) in [(30., 0., 45.), (0., 30., 45.), (10., 10., 10.)] {
+            let b = Boundary {
+                inside_c: inside,
+                outside_c: outside,
+                ..exterior_boundary()
+            };
+            let mut e = environment(false);
+            e.air_c = outside;
+            let bare = if covered < 1. {
+                vec![Boundary {
+                    inside_c: inside,
+                    outside_c: bare_outside,
+                    inside_resistance: 0.2,
+                    outside_resistance: 0.4,
+                }]
+            } else {
+                vec![]
+            };
+            let solved = assembly
+                .solve_exterior(&cloth(), &body(), &[b], std::slice::from_ref(&e), &bare)
+                .unwrap();
+            let nominal = unbounded
+                .solve_exterior(&cloth(), &body(), &[b], &[e], &bare)
+                .unwrap();
+            assert_eq!(solved.steady.power_w, nominal.steady.power_w);
+            assert_eq!(solved.convective_power_w, nominal.convective_power_w);
+            assert_eq!(
+                solved.regions[0].conduction.layer_faces_c,
+                nominal.regions[0].conduction.layer_faces_c
+            );
+            // A_body/A_cloth = [1, .5]. Fixed films/interface contribute .1+.1+.5/5;
+            // independent material endpoints contribute [.1+.5*.3, .3+.5*.5].
+            let delta = inside - outside;
+            let endpoints = [0.5 * covered * delta / 0.55, 0.5 * covered * delta / 0.85];
+            let expected = [
+                endpoints[0].min(endpoints[1]),
+                endpoints[0].max(endpoints[1]),
+            ];
+            let bare_power = 0.5 * (1. - covered) * (inside - bare_outside) / (0.2 + 0.4);
+            let region = &solved.steady.regions[0];
+            let range = region.ranges.reported_bounds.unwrap().power_w;
+            let total = solved.steady.ranges.reported_bounds.unwrap().power_w;
+            for i in 0..2 {
+                near(range[i], expected[i]);
+                near(total[i], bare_power + expected[i]);
+            }
+            near(solved.steady.bare_power_w, bare_power);
+            assert_eq!(
+                total,
+                solved.steady.body[0]
+                    .ranges
+                    .reported_bounds
+                    .unwrap()
+                    .power_w
+            );
+            assert_eq!(
+                json!(region.conduction),
+                json!(solved.regions[0].conduction)
+            );
+            assert_eq!(solved.regions[0].outer_area_per_model_area, 2.);
+            assert!(solved.steady.ranges.bounds_unavailable.is_empty());
+        }
+    }
+}
+
+#[test]
+fn covered_convection_unqualified_ranges_keep_nominal_and_consistent_region_receipts() {
+    for fault in ["missing", "domain", "radiation", "zero-h", "nonlinear"] {
+        let mut inner = bounded_selection(0.2, [0.1, 0.3]);
+        let mut outer = bounded_selection(0.4, [0.3, 0.5]);
+        let mut e = environment(false);
+        let reason = match fault {
+            "missing" => {
+                outer = selection(0.4);
+                "source-reported endpoints"
+            }
+            "domain" => {
+                // Nominal T_surface = 30/7 remains qualified; [3/.85, 3/.55] does not.
+                e.surface_temperature_range_c = [4.2, 4.4];
+                "endpoints"
+            }
+            "radiation" => {
+                outer = exterior_selection(0.4, 0.8);
+                outer
+                    .record
+                    .as_mut()
+                    .unwrap()
+                    .properties
+                    .get_mut("thermal_resistance")
+                    .unwrap()
+                    .bounds = Some([0.3, 0.5]);
+                e = environment(true);
+                "without radiation"
+            }
+            "zero-h" => {
+                e.convection_w_m2_k = 0.;
+                "positive prescribed convection"
+            }
+            "nonlinear" => {
+                let input: Value = serde_json::from_str(include_str!(
+                    "../../../tests/fixtures/materials/synthetic-variable-thermal.json"
+                ))
+                .unwrap();
+                inner = serde_json::from_value(input["layers"][0].clone()).unwrap();
+                let material = inner.record.as_mut().unwrap();
+                material.properties.remove("areal_density");
+                material.thermal_response.as_mut().unwrap().specific_heat = None;
+                "temperature-dependent"
+            }
+            _ => unreachable!(),
+        };
+        let solved = SteadyCoverage::new(source_with(inner, outer), layout())
+            .unwrap()
+            .solve_exterior(&cloth(), &body(), &[exterior_boundary()], &[e], &[])
+            .unwrap();
+        assert!(solved.steady.power_w.is_finite(), "{fault}");
+        assert!(solved.steady.ranges.reported_bounds.is_none(), "{fault}");
+        assert!(
+            solved
+                .steady
+                .ranges
+                .bounds_unavailable
+                .iter()
+                .any(|r| r.contains(reason)),
+            "{fault}: {:?}",
+            solved.steady.ranges.bounds_unavailable
+        );
+        assert!(solved.steady.body[0].ranges.reported_bounds.is_none());
+        assert!(solved.steady.regions[0].ranges.reported_bounds.is_none());
+        assert!(
+            solved.steady.regions[0]
+                .conduction
+                .reported_bounds
+                .is_none()
+        );
+        assert_eq!(
+            json!(solved.steady.regions[0].conduction),
+            json!(solved.regions[0].conduction)
+        );
+    }
+}
+
+#[test]
+fn covered_convection_range_qualification_is_local_and_never_publishes_a_partial_total() {
+    let mut layout = layout();
+    layout.body_vertex_count = 6;
+    layout.body_triangles.push([3, 4, 5]);
+    for layer in &mut layout.regions[0].layers {
+        layer.fraction = 0.5;
+    }
+    let mut second = layout.regions[0].clone();
+    second.id = "second".into();
+    second.body_triangle = 1;
+    layout.regions.push(second);
+    let mut positions = body();
+    positions.extend(body().into_iter().map(|p| p + Vec3::new(2., 0., 0.)));
+    let mut limited = environment(false);
+    // Each region now has area factors [2,1]. Nominal surface is 5 C; endpoint surfaces are 4..6.67 C.
+    limited.surface_temperature_range_c = [4.9, 5.1];
+    let solved = SteadyCoverage::new(
         source_with(
             bounded_selection(0.2, [0.1, 0.3]),
             bounded_selection(0.4, [0.3, 0.5]),
         ),
-        layout(),
+        layout,
+    )
+    .unwrap()
+    .solve_exterior(
+        &cloth(),
+        &positions,
+        &[exterior_boundary(); 2],
+        &[environment(false), limited],
+        &[],
     )
     .unwrap();
-    assert!(
-        assembly
-            .solve(&cloth(), &body(), &[boundary()])
-            .unwrap()
-            .ranges
-            .reported_bounds
-            .is_some()
-    );
-    let exterior = assembly
-        .solve_exterior(
-            &cloth(),
-            &body(),
-            &[exterior_boundary()],
-            &[environment(false)],
-            &[],
-        )
-        .unwrap();
-    assert!(exterior.steady.ranges.reported_bounds.is_none());
-    assert!(exterior.steady.ranges.bounds_unavailable[0].contains("exterior exchange"));
-    assert!(
-        exterior.steady.regions[0]
-            .conduction
-            .reported_bounds
-            .is_none()
-    );
+    assert!(solved.steady.regions[0].ranges.reported_bounds.is_some());
+    assert!(solved.steady.body[0].ranges.reported_bounds.is_some());
+    assert!(solved.steady.regions[1].ranges.reported_bounds.is_none());
+    assert!(solved.steady.body[1].ranges.reported_bounds.is_none());
+    assert!(solved.steady.ranges.reported_bounds.is_none());
+    for (region, exterior) in solved.steady.regions.iter().zip(&solved.regions) {
+        assert_eq!(json!(region.conduction), json!(exterior.conduction));
+    }
+}
+
+#[test]
+fn complete_material_ranges_do_not_claim_bridge_total_bounds() {
     let plain = bridge_input_with(bounded_selection(0.4, [0.3, 0.5]));
     let baseline = bridge_evaluate(&plain).unwrap();
     assert!(baseline["steady"]["reported_bounds"]["power_w"].is_array());
@@ -703,6 +872,31 @@ fn only_consumed_thickness_dependent_gaps_disable_reported_coverage_ranges() {
             .contains("stagnant-gap")
     );
     assert_eq!(bridge_evaluate(&consumed["request"]).unwrap(), consumed);
+    input["conditions"]["boundaries"][0]["outside_resistance_m2_k_w"] = json!(0.);
+    input["conditions"]["exterior_exchange"] = json!([environment(false)]);
+    let exterior = bridge_evaluate(&input).unwrap();
+    assert!(exterior["steady"]["reported_bounds"].is_null());
+    for (region, exchange) in exterior["steady"]["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(exterior["exterior_exchange"]["regions"].as_array().unwrap())
+    {
+        assert!(region["reported_bounds"].is_null());
+        assert!(region["conduction"]["reported_bounds"].is_null());
+        assert_eq!(region["conduction"], exchange["conduction"]);
+    }
+    assert_eq!(bridge_evaluate(&exterior["request"]).unwrap(), exterior);
+    input["map"]["settings"]["interfaces"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("stagnant_gap");
+    let fixed_exterior = bridge_evaluate(&input).unwrap();
+    assert!(fixed_exterior["steady"]["reported_bounds"].is_object());
+    assert_eq!(
+        bridge_evaluate(&fixed_exterior["request"]).unwrap(),
+        fixed_exterior
+    );
 }
 
 #[test]
@@ -1090,6 +1284,16 @@ fn partial_exterior_coverage_requires_separate_bare_films_and_one_body_temperatu
     assert!(solved.regions.is_empty());
     near(solved.steady.power_w, 25.);
     near(solved.convective_power_w, 0.);
+    assert_eq!(
+        solved.steady.ranges.reported_bounds.unwrap().power_w,
+        [solved.steady.power_w; 2]
+    );
+    let mut unused = environment(true);
+    unused.convection_w_m2_k = 0.;
+    let bare_only = a
+        .solve_exterior(&cloth(), &body(), &b, &[unused], &bare)
+        .unwrap();
+    assert_eq!(json!(bare_only), json!(solved));
 }
 
 #[test]

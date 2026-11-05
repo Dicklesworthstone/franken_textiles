@@ -327,8 +327,9 @@ attached source path refuses requested motion rather than pretending its body mo
 
 Optional `motion.transient_surface` and `motion.transient_coverage` now execute the existing
 transient solvers on **every accepted mechanical sample**, instead of restarting at each endpoint
-or treating steady power as a temperature history. Both start at an explicitly authored uniform
-cloth temperature at motion time zero, after the initial drape. They do not infer that temperature
+or treating steady power as a temperature history. Both start at an explicitly authored cloth
+temperature at motion time zero, after the initial drape, with optional exact-instance overrides
+for dry heat. They do not infer that temperature
 from the static result or integrate heat during initial sewing/settling. Source heat capacity and
 areal mass are required; conductivity-only data remain usable by the independent steady consumers.
 
@@ -376,6 +377,36 @@ inferred. At each new accepted pose, actual clipped overlap is rebuilt, and the 
 enthalpy remapper transfers covered/exposed cloth storage without elapsed time. Material entering
 or leaving body coverage therefore keeps its heat rather than resetting to the initial temperature.
 Bare body fractions remain single-counted parallel paths with no textile heat storage.
+
+Both dry policies accept an optional nonempty `initial_instance_temperatures_c` map. For example,
+an explicitly warm lining and cold shell can use:
+
+```json
+{
+  "initial_temperature_c": 20.0,
+  "initial_instance_temperatures_c": {
+    "lining.front": 30.0,
+    "shell.front": 5.0
+  }
+}
+```
+
+These are illustrative authored states, not measured temperatures. Keys must be exact retained
+physical-instance names from this drape; source-piece aliases and excluded or unknown instances
+refuse. Every unlisted instance uses the explicit scalar fallback. Each actual starting value must
+qualify against its source material, and covered stacks retain their common characterized domain.
+Pieces sharing one material column keep separate temperatures. Each value is uniform through its
+own sheet thickness; arbitrary initial depth profiles are not inferred.
+
+For `transient_coverage`, each covered layer and its exposed remainder start at the same retained
+source-piece temperature. Subsequent movement uses the existing reference-mass enthalpy remap, so
+entering or leaving body coverage does not reset that temperature or lose stored heat. The result's
+`initial_condition` retains exact owners, resolved values, the source model and initial frame
+identities. Material/design comparisons include only actually applied initial temperatures in
+sample extrema; an unused fallback cannot create a false maximum or minimum. Final-temperature
+metrics continue to describe the final sample alone. Original motion-file input preserves these
+fields in the browser and named-case replay. Dissipation heating and wet-sheet combinations remain
+outside the per-instance initialization contract and refuse when requested together.
 
 `motion.transient_coverage.thermal_bridges` adds source-qualified instantaneous seam/closure excess
 to the actual incoming and outgoing history energies. It requires the exact steady reference
@@ -570,6 +601,16 @@ right-endpoint or composite-trapezoid rule. Missing endpoints preserve nominal r
 robust ranking. Additional required consumers keep their ordinary gates. See
 `docs/material-screening-and-studies.md`.
 
+The same comparison basis supports `independent_surface_power_w` and `body_coverage_power_w`
+from complete constant material-resistance endpoints. Positive prescribed convection without
+radiation uses the fixed exterior resistance `(model area / outer cloth area) / h`, including
+layered coverage with different allocated cloth areas. Both endpoint surface temperatures must
+remain in the coefficient's qualified domain. Coverage adds separately declared bare-film power
+as a fixed contribution and reconciles every covered region and body total; uncovered area does
+not require textile exchange. Missing source endpoints, unsupported temperature-dependent laws,
+radiation, zero convection, thermal bridges or consumed thickness-dependent stagnant gaps exclude
+the affected bounded decision while preserving an available nominal reading.
+
 Every scenario objective requires this bound pattern's identity, the retained body/scenario identities,
 `drape.settled == true`, empty drape gating and `simulation_gating_clear == true`. Successful thermal
 output on an unfinished frame is still excluded. Thermal consumers enforce their existing source,
@@ -581,10 +622,12 @@ request identity; there is no misleading manufacturing-only frontier nested bene
 Relevant reported methods, full conditions and evidence must match by source piece unless explicitly
 relaxed. Different nonlinear/relaxation/temperature records and constitutive-model selectors use
 conservative exact-record comparison. Protocol override never bypasses freshness, settledness or
-missing-value checks. Nominal comparison requires explicit consent. Source ranges do not establish
-mechanical or dry-thermal objective intervals. Reported assembly-mass bounds hold authored geometry
-and inventory fixed; vapor bounds hold geometry, boundaries and integration policy fixed. Neither
-establishes general scenario uncertainty. Geometric settledness is not viscoelastic equilibrium, measured fit, thermal
+missing-value checks. Nominal comparison requires explicit consent. Range admission is specific
+to each declared consumer. Reported assembly-mass bounds hold authored geometry and
+inventory fixed; vapor bounds hold geometry, boundaries and integration policy fixed. Steady heat
+bounds hold geometry, interfaces, films, reservoirs and the prescribed convection coefficient fixed.
+These are conditional reported-input ranges, not confidence intervals, general scenario uncertainty
+or empirical validation. Geometric settledness is not viscoelastic equilibrium, measured fit, thermal
 comfort or proof that the requested run duration was physically sufficient. Positive admission tests
 use synthetic callback outcomes and an actual production sewing-only band after 120 sewing steps;
 the latter explicitly reports that gravity was not simulated. The short cylinder integration also
