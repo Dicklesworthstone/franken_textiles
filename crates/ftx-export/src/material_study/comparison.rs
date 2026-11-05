@@ -4126,9 +4126,15 @@ fn initial_heat_range(
     let overrides = overrides.as_object().ok_or_else(fail)?;
     if overrides.is_empty()
         || overrides.len() > 65_536
-        || ["coupled_water_alternatives", "mechanical_coupling"]
+        || (coverage
+            && [
+                "surface_water",
+                "surface_water_alternatives",
+                "coupled_water_alternatives",
+                "mechanical_coupling",
+            ]
             .iter()
-            .any(|key| !request[key].is_null())
+            .any(|key| !request[key].is_null()))
         || (!coverage && heat["initial_temperature_c"] != request["initial_temperature_c"])
     {
         return Err(fail());

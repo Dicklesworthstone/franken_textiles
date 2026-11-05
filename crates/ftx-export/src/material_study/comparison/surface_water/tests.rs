@@ -664,7 +664,12 @@ fn textile_water_and_maxwell_heat_share_one_conserved_decision_ledger() {
 }
 
 fn coupled_case() -> (Alternative, Value, Value, Value) {
-    let (a, mut d, mut s, mut m) = case();
+    with_coupled_mechanics(case())
+}
+
+fn with_coupled_mechanics(
+    (a, mut d, mut s, mut m): (Alternative, Value, Value, Value),
+) -> (Alternative, Value, Value, Value) {
     let h = &mut m["transient_surface"]["result"];
     let mut bindings = serde_json::Map::new();
     for (id, binding) in h["request"]["surface_water"]["bindings"]
@@ -715,6 +720,59 @@ fn coupled_case() -> (Alternative, Value, Value, Value) {
     m["initial_sample"]["liquid_mechanics"] = initial_report;
     m["liquid_mechanics"] = final_report;
     (a, d, s, m)
+}
+
+#[test]
+fn coupled_wet_initial_states_require_exact_mapped_sources_for_direct_and_paired_decisions() {
+    for variable in [false, true] {
+        for paired in [false, true] {
+            let (a, mut d, s, mut m) =
+                with_coupled_mechanics(instance_initial_case(variable, [10., 30.]));
+            if paired {
+                with_paired_qualifications(&mut d, &mut m);
+            }
+            let admitted = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface)
+                .unwrap_or_else(|r| panic!("variable={variable}, paired={paired}: {r:?}"));
+            assert_eq!(admitted.range_c, [10., 30.]);
+            assert_eq!(admitted.final_range_c, [21., 21.]);
+            assert_eq!(admitted.result["initial_temperature_c"], 100.);
+            assert_eq!(
+                admitted.result["mechanical_coupling"],
+                m["liquid_mechanics"]
+            );
+            for fault in 0..6 {
+                let (a, mut d, s, mut m) =
+                    with_coupled_mechanics(instance_initial_case(variable, [10., 30.]));
+                if fault < 4 {
+                    let h = &mut m["transient_surface"]["result"];
+                    match fault {
+                        0 => h["initial_condition"] = Value::Null,
+                        1 => h["initial_condition"]["triangle_instance"] = json!([1, 0]),
+                        2 => h["initial_condition"]["instance_temperature_c"] = json!([30., 10.]),
+                        _ => h["request"]["initial_instance_temperatures_c"]["front"] = json!(12.),
+                    }
+                    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+                } else {
+                    let mut qualification = m["liquid_mechanics"]["qualification"].clone();
+                    if fault == 4 {
+                        qualification["material_report_sha256"] = json!("f".repeat(64));
+                    } else {
+                        // Covering the initial values alone cannot qualify the full water domain.
+                        qualification["bindings"]["front"]["temperature_range_c"] =
+                            json!([10., 30.]);
+                    }
+                    replace_mechanical_qualification(&mut d, &mut m, qualification);
+                }
+                if paired {
+                    with_paired_qualifications(&mut d, &mut m);
+                }
+                assert!(
+                    admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+                    "variable={variable}, paired={paired}, fault={fault}"
+                );
+            }
+        }
+    }
 }
 
 fn with_paired_qualifications(descriptor: &mut Value, motion: &mut Value) {
@@ -1029,8 +1087,12 @@ fn direct_and_paired_motion_require_complete_heat_and_liquid_receipts() {
     let stationary: Policy = serde_json::from_value(json!({"basis":"nominal",
         "objectives":[{"metric":"max_absolute_edge_strain_pct","direction":"minimize"}]}))
     .unwrap();
-    for paired in [false, true] {
-        let (a, mut d, mut s, mut m) = coupled_case();
+    for (paired, mapped) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (a, mut d, mut s, mut m) = if mapped {
+            with_coupled_mechanics(instance_initial_case(false, [10., 30.]))
+        } else {
+            coupled_case()
+        };
         if paired {
             with_paired_qualifications(&mut d, &mut m);
         }
@@ -1068,7 +1130,7 @@ fn direct_and_paired_motion_require_complete_heat_and_liquid_receipts() {
         let admitted = moving.candidate(&a, None, &d, &s);
         assert!(
             admitted.eligible,
-            "paired={paired}: {:?}",
+            "paired={paired}, mapped={mapped}: {:?}",
             admitted.exclusions
         );
         assert_eq!(
@@ -1086,6 +1148,7 @@ fn direct_and_paired_motion_require_complete_heat_and_liquid_receipts() {
             "missing_sample_mass",
             "changed_water_source",
             "changed_mass",
+            "changed_initial_receipt",
             "changed_heat_request",
         ] {
             let mut changed = s.clone();
@@ -1110,6 +1173,10 @@ fn direct_and_paired_motion_require_complete_heat_and_liquid_receipts() {
                 }
                 "changed_mass" => {
                     motion["liquid_mechanics"]["remaining_liquid_mass_kg"] = json!(1e-9);
+                }
+                "changed_initial_receipt" => {
+                    motion["transient_surface"]["result"]["initial_condition"]["instance_temperature_c"] =
+                        json!([30., 10.]);
                 }
                 _ => {
                     motion["transient_surface"]["result"]["request"]["initial_temperature_c"] =

@@ -419,14 +419,27 @@ drainage and reservoir exchange then use the same existing transport and thermal
 
 Material/scenario comparison independently reconstructs the exact initial ownership and liquid
 enthalpy. Dry storage uses each source material's enthalpy integral from that patch's own starting
-temperature. Sample bounds aggregate initial enthalpy by material column, keeping admission work
-linear in patches plus material columns times retained samples; no per-sample scan of all starting
-patch states is needed. A forged map, owner, domain or initial-energy balance refuses admission.
+temperature. Sample bounds aggregate initial enthalpy by material column once: one pass over source
+patches, then one pass over material columns for each retained sample. The enthalpy audit therefore
+avoids a per-sample scan of all starting patch states. A forged map, owner, domain or initial-energy
+balance refuses admission.
 
-Direct `mechanical_coupling` and `coupled_water_alternatives` still exclude this initial-temperature
-map. This extension does not supply wet constitutive laws, arbitrary initial depth profiles or
-empirical garment qualification. It composes existing thermal and water contracts without changing
-their schemas, source authority or transactional failure behavior.
+Direct `mechanical_coupling` and `coupled_water_alternatives` can use the same initial-temperature
+map. The mechanical binder checks every actual source cell against its exact owner's independently
+qualified mechanical domain. Each domain must contain the complete water temperature and loading
+domain, and the full dry material/interface report hash must match. Different starts do not relax
+those requirements or change the prescribed incoming/outgoing phase velocities.
+
+Accepted liquid exchange continues to update the next mechanical interval's mass and momentum.
+Thermal sensible/latent energy remains separate from mechanical mixing dissipation and outgoing
+separation work. Direct and material-selected pairs use the same initialization and integrator.
+The complete initial-state receipt is also required when a comparison scores only motion, strain
+or contact. A late coupled failure restores the whole original solver and publishes no partial
+trajectory or uncoupled fallback. Independent static and manufacturing results remain available.
+
+Moving body-coverage heat retains its dry contract. This sheet extension does not supply wet
+constitutive laws, arbitrary initial depth profiles or empirical garment qualification. It composes
+existing thermal, water and mechanical contracts without changing their schemas or source authority.
 
 ### Temperature-dependent textile storage and transport
 

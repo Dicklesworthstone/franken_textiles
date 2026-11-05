@@ -5461,6 +5461,20 @@ column so complete-history admission does not rescan every patch for every sampl
 tracks this composition. Mapped starts with mechanical liquid coupling, arbitrary initial depth
 profiles and empirical garment qualification remain separate.
 
+### 25.181 Carry independently conditioned wet pieces through coupled motion
+
+Mapped independent-sheet starting temperatures can also enter directly qualified or material-selected
+liquid mechanics. The existing binder admits actual cell temperatures against each exact owner's
+mechanical source domain, which must contain the complete water domain. Material/interface hashes,
+phase-specific mass exchange, incoming mixing, outgoing recoil and accepted-step conservation retain
+their existing authorities. No new wet constitutive law or temperature coefficient is inferred.
+
+Motion-only comparisons still require the complete initial thermal, water and mechanical evidence.
+Failures after accepted phase transfer restore the whole original solver and its liquid/attached-mass
+state; neither a partial trajectory nor an uncoupled substitute becomes available. `ftx-ms2.28`
+tracks direct/paired admission, distinct-piece integration and rollback/replay coverage. Moving body
+coverage retains its dry contract, and empirical material and garment acceptance remain separate.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

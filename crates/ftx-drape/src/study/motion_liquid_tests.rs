@@ -24,47 +24,57 @@ impl PartFrames for Form {
 
 #[test]
 fn late_evaporation_budget_failure_restores_whole_solver_and_replays_identically() {
-    rollback_after_liquid_transfer(false, false, false, false, false, false);
+    rollback_after_liquid_transfer(false, false, false, false, false, false, false);
 }
 
 #[test]
 fn late_supply_budget_failure_rolls_back_liquid_and_attached_mass_together() {
-    rollback_after_liquid_transfer(true, false, false, false, false, false);
+    rollback_after_liquid_transfer(true, false, false, false, false, false, false);
 }
 
 #[test]
 fn prescribed_supply_impulse_and_mixing_roll_back_and_replay_with_attached_mass() {
-    rollback_after_liquid_transfer(true, true, false, false, false, false);
+    rollback_after_liquid_transfer(true, true, false, false, false, false, false);
 }
 
 #[test]
 fn phase_specific_supply_impulse_rolls_back_and_replays_with_attached_mass() {
-    rollback_after_liquid_transfer(true, true, true, false, false, false);
+    rollback_after_liquid_transfer(true, true, true, false, false, false, false);
 }
 
 #[test]
 fn scheduled_supply_follows_keyframes_and_rolls_back_with_attached_mass() {
-    rollback_after_liquid_transfer(true, true, false, true, false, false);
+    rollback_after_liquid_transfer(true, true, false, true, false, false, false);
 }
 
 #[test]
 fn scheduled_incoming_water_and_drainage_roll_back_and_replay_together() {
-    rollback_after_liquid_transfer(true, true, false, true, true, false);
+    rollback_after_liquid_transfer(true, true, false, true, true, false, false);
 }
 
 #[test]
 fn phase_specific_incoming_water_and_drainage_roll_back_and_replay_together() {
-    rollback_after_liquid_transfer(true, true, true, false, true, false);
+    rollback_after_liquid_transfer(true, true, true, false, true, false, false);
 }
 
 #[test]
 fn paired_water_scheduled_phase_velocities_roll_back_and_replay() {
-    rollback_after_liquid_transfer(true, true, true, true, true, false);
+    rollback_after_liquid_transfer(true, true, true, true, true, false, false);
 }
 
 #[test]
 fn paired_water_outgoing_recoil_rolls_back_and_replays() {
-    rollback_after_liquid_transfer(true, true, true, true, true, true);
+    rollback_after_liquid_transfer(true, true, true, true, true, true, false);
+}
+
+#[test]
+fn mapped_initial_evaporation_restores_whole_solver_and_replays_identically() {
+    rollback_after_liquid_transfer(false, false, false, false, false, false, true);
+}
+
+#[test]
+fn mapped_initial_phase_recoil_restores_whole_solver_and_replays_identically() {
+    rollback_after_liquid_transfer(true, true, true, true, true, true, true);
 }
 
 fn rollback_after_liquid_transfer(
@@ -74,6 +84,7 @@ fn rollback_after_liquid_transfer(
     scheduled: bool,
     drainage: bool,
     recoil: bool,
+    mapped_initial: bool,
 ) {
     let mut raw: Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
@@ -175,6 +186,14 @@ fn rollback_after_liquid_transfer(
                 "method":"Whole-solver transactional replay",
                 "qualification":"Exact synthetic membrane, bending and contact laws retained over the complete thermal domain"}}}))
     .unwrap();
+    if mapped_initial {
+        let heat = request.transient_surface.as_mut().unwrap();
+        // Preserve the fixture's actual 15 C state. Only the exact physical owner is applied;
+        // this unused fallback lies outside both the liquid and mechanical qualifications.
+        heat.initial_temperature_c = 999.;
+        heat.initial_instance_temperatures_c =
+            Some(std::collections::BTreeMap::from([("band".into(), 15.)]));
+    }
     if exchange {
         let heat = request.transient_surface.as_mut().unwrap();
         let q = heat.mechanical_coupling.as_mut().unwrap();
@@ -286,6 +305,9 @@ fn rollback_after_liquid_transfer(
     .unwrap();
     let complete_debug = format!("{:?}", run.scene.solver);
     assert_ne!(run.scene.solver.x, original.x);
+    if mapped_initial {
+        assert_ne!(run.scene.solver.v, original.v);
+    }
     if exchange {
         let old = original.model.attached_mass_report().unwrap().unwrap();
         let current = run
@@ -356,6 +378,19 @@ fn rollback_after_liquid_transfer(
         );
     }
     let thermal = &complete["transient_surface"]["result"];
+    if mapped_initial {
+        assert_eq!(thermal["initial_temperature_c"], json!(999.));
+        assert_eq!(
+            thermal["request"]["initial_instance_temperatures_c"],
+            json!({"band":15.})
+        );
+        let initial = &thermal["initial_condition"];
+        assert_eq!(initial["schema"], "ftx-motion-surface-initial-condition/1");
+        assert_eq!(initial["model_sha256"], thermal["model"]["sha256"]);
+        assert_eq!(initial["instances"], json!(["band"]));
+        assert_eq!(initial["instance_temperature_c"], json!([15.]));
+        assert_eq!(initial["temperature_range_c"], json!([15., 15.]));
+    }
     if drainage {
         let water = &thermal["surface_water"];
         let mechanics = &complete["liquid_mechanics"];
@@ -377,6 +412,17 @@ fn rollback_after_liquid_transfer(
     let trace = thermal["trace"].as_array().unwrap();
     let first_interval: Vec<_> = trace.iter().filter(|r| r["interval_index"] == 0).collect();
     assert_eq!(first_interval.len(), 2);
+    if mapped_initial && recoil {
+        let flow = &first_interval.last().unwrap()["mechanical_coupling"]["exchange"];
+        for field in [
+            "incoming_mass_kg",
+            "outgoing_mass_kg",
+            "mixing_dissipation_j",
+            "outgoing_separation_work_j",
+        ] {
+            assert!(flow[field].as_f64().unwrap() > 0., "{field}: {flow}");
+        }
+    }
     if scheduled {
         let first_incoming =
             first_interval.last().unwrap()["mechanical_coupling"]["exchange"]["incoming_mass_kg"]
@@ -467,6 +513,8 @@ fn rollback_after_liquid_transfer(
             .contains("motion heat cell-step budget exhausted"),
         "{refusal:?}"
     );
+    // The full snapshot covers velocities, material memory, contact, attached mass and the
+    // liquid binder after accepted transfers, not just the visible positions.
     assert_eq!(format!("{:?}", run.scene.solver), original_debug);
     assert!(run.scene.solver.liquid_mass_report().unwrap().is_none());
     let replay = evaluate(
@@ -532,6 +580,10 @@ fn rollback_after_liquid_transfer(
     assert_eq!(paired["samples"], complete["samples"]);
     let paired_heat = &paired["transient_surface"]["result"];
     assert_eq!(paired_heat["request"], authored["transient_surface"]);
+    assert_eq!(
+        paired_heat["initial_condition"],
+        thermal["initial_condition"]
+    );
     assert_eq!(paired_heat["surface_water"], thermal["surface_water"]);
     assert_eq!(paired_heat["trace"], thermal["trace"]);
     assert_eq!(paired_heat["final"], thermal["final"]);
