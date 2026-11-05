@@ -853,8 +853,7 @@ fn direct_and_paired_motion_require_complete_heat_and_liquid_receipts() {
         m["initial_drape_gating"] = json!([]);
         m["trials"] = json!(1);
         m["body_triangles"] = json!([[0, 1, 2]]);
-        m["samples"][0]["body_positions_m"] =
-            json!([[0., 0., -1.], [1., 0., -1.], [0., 1., -1.]]);
+        m["samples"][0]["body_positions_m"] = json!([[0., 0., -1.], [1., 0., -1.], [0., 1., -1.]]);
         m["samples"][0]["solve"] = json!({"converged":true});
         m["metrics"] = json!({"max_absolute_edge_strain_pct":3.});
         m["keyframes"] = json!([{"sample_index":0,"time_s":1.,"arm_abduction_deg":35.,
@@ -872,7 +871,11 @@ fn direct_and_paired_motion_require_complete_heat_and_liquid_receipts() {
         s["metrics"] = json!({"simulation_gating_clear":true});
         s["motion"] = json!({"status":"available","result":m});
         let admitted = moving.candidate(&a, None, &d, &s);
-        assert!(admitted.eligible, "paired={paired}: {:?}", admitted.exclusions);
+        assert!(
+            admitted.eligible,
+            "paired={paired}: {:?}",
+            admitted.exclusions
+        );
         assert_eq!(
             admitted.readings[&Metric::MotionMaxAbsoluteEdgeStrainPct].value,
             3.

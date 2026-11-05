@@ -14890,7 +14890,6 @@ test('compiled WASM paired wet qualifications preserve native selection, changed
       assert.notDeepEqual(results[0].mechanics.exported_momentum_kg_m_s,results[1].mechanics.exported_momentum_kg_m_s);
       const stale=simulation(report,'stale');assert.equal(stale.motion.status,'refused');assert.ok(stale.motion.result==null);
       assert.equal(stale.surface.status,'available');assert.equal(report.comparison.alternatives.find(row=>row.key==='stale').eligible,false);
-      for(const row of report.manufacturing.alternatives)assert.equal(row.cutting.status,'available');
     };
     const evaluate=async(label,expected,inspect=check)=>{
       await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',label+': '+p.e.error.textContent);
@@ -14906,6 +14905,7 @@ test('compiled WASM paired wet qualifications preserve native selection, changed
           path.join(source,'body-input.json'),path.join(source,'model.ftxbody')],{encoding:'utf8',stdio:['ignore','pipe','inherit'],maxBuffer:64*1024*1024});
       assert.deepEqual(result.result,JSON.parse(native),label+' complete native/WASM/page-worker equality');retain(label+'-report.json',native);
       if(expected)assert.deepEqual(result.result,JSON.parse(load(expected)));
+      for(const row of result.result.manufacturing.alternatives)assert.equal(row.cutting.status,'available');
       for(const report of result.result.cases||[result.result])inspect(report);
       return {sent,report:result.result};
     };
@@ -14951,6 +14951,7 @@ test('compiled WASM paired wet qualifications preserve native selection, changed
       else for(const pair of choices)pair.surface_water.maximum_liquid_loading_kg_m2=0.06;
       p.select('scenarioRequest',JSON.stringify(broken));p.e.scenarioRequest.handlers.change();
       p.e.scenarioMode.value='file';p.e.scenarioMode.handlers.change();
+      const progressStart=w.sent.length;
       await evaluate(fault,null,report=>{
         const motion=simulation(report,'qualified').motion;assert.equal(motion.status,'refused');assert.ok(motion.result==null);
         assert.equal(report.comparison.alternatives.find(row=>row.key==='qualified').eligible,false);
@@ -14958,6 +14959,8 @@ test('compiled WASM paired wet qualifications preserve native selection, changed
         for(const row of report.manufacturing.alternatives)assert.equal(row.cutting.status,'available');
         if(fault==='missing-pair')assert.equal(simulation(report,'slower').motion.status,'available');
       });
+      if(fault==='loading-domain')assert.ok(w.sent.slice(progressStart).some(message=>
+        message.type==='progress'&&message.text==='qualified: motion endpoint 2/2'),'A completed first interval cannot publish a partial coupled trajectory');
     }
     t.diagnostic('Actual captured single/matrix and guided single/frozen named paired-source reports match native. Ret-only alternatives change cooling, evaporation, recoil and actual motion; same-ID stale sources refuse the whole motion while cutting and steady heat survive. Synthetic software evidence only. Replay: '+work);
   });

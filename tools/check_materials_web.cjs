@@ -156,8 +156,8 @@ const server = http.createServer((req, res) => {
           assert.ok(fast.transient_surface.result.final.temperature_c[0][0]<slow.transient_surface.result.final.temperature_c[0][0]);
           assert.notEqual(fast.final_positions_sha256,slow.final_positions_sha256);
           assert.equal(motion('stale').status,'refused');assert.ok(motion('stale').result==null);
-          for(const row of result.manufacturing.alternatives)assert.equal(row.cutting.status,'available');
         }
+        for(const row of report.manufacturing.alternatives)assert.equal(row.cutting.status,'available');
         return {report,scenario};
       };
       for(const name of ['single','matrix']) {
