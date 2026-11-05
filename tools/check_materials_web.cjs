@@ -15,6 +15,7 @@
 // --guided-study-proof checks shortlist authoring, actual native/WASM studies and generated-request replay.
 // --guided-manufacturing-proof DIR uses the small synthetic inputs emitted by the focused guided WASM test.
 // --guided-scenario-proof DIR uses the synthetic sewing-only body inputs emitted by the guided scenario test.
+// --instance-temperature-proof DIR replays authored dry initial conditions against the native runtime.
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
@@ -42,6 +43,9 @@ const guidedManufacturingProof = guidedManufacturingIndex < 0 ? null : path.reso
 const guidedScenarioIndex = process.argv.indexOf('--guided-scenario-proof');
 if (guidedScenarioIndex >= 0 && !process.argv[guidedScenarioIndex + 1]) throw Error('--guided-scenario-proof requires the synthetic replay input directory');
 const guidedScenarioProof = guidedScenarioIndex < 0 ? null : path.resolve(process.argv[guidedScenarioIndex + 1]);
+const instanceTemperatureIndex = process.argv.indexOf('--instance-temperature-proof');
+if (instanceTemperatureIndex >= 0 && !process.argv[instanceTemperatureIndex + 1]) throw Error('--instance-temperature-proof requires the synthetic replay input directory');
+const instanceTemperatureProof = instanceTemperatureIndex < 0 ? null : path.resolve(process.argv[instanceTemperatureIndex + 1]);
 const areaIndex = process.argv.indexOf('--area-proof');
 if (areaIndex >= 0 && !process.argv[areaIndex + 1]) throw Error('--area-proof requires a native capture directory');
 const areaProof = areaIndex < 0 ? null : path.resolve(process.argv[areaIndex + 1]);
@@ -60,7 +64,7 @@ const sewingSelectionProof = sewingSelectionIndex < 0 ? null : path.resolve(proc
 const mixedCuttingIndex = process.argv.indexOf('--mixed-cutting-proof');
 if (mixedCuttingIndex >= 0 && !process.argv[mixedCuttingIndex + 1]) throw Error('--mixed-cutting-proof requires the native finite-knife capture directory');
 const mixedCuttingProof = mixedCuttingIndex < 0 ? null : path.resolve(process.argv[mixedCuttingIndex + 1]);
-assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,guidedStudyProof,guidedManufacturingProof,guidedScenarioProof,areaProof,swatchAreaProof,fitProof,adaptiveProof,sewingSelectionProof,mixedCuttingProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
+assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,guidedStudyProof,guidedManufacturingProof,guidedScenarioProof,instanceTemperatureProof,areaProof,swatchAreaProof,fitProof,adaptiveProof,sewingSelectionProof,mixedCuttingProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -108,8 +112,87 @@ const server = http.createServer((req, res) => {
     assert.equal(await run('bind'), ''); return JSON.parse(await download('pattern.json'));
   };
   try {
-    await page.goto(origin); await page.click('a[href="materials.html"]');
+    if (instanceTemperatureProof) await page.goto(origin+'/materials.html');
+    else { await page.goto(origin); await page.click('a[href="materials.html"]'); }
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (instanceTemperatureProof) {
+      const retained=name=>fs.readFileSync(path.join(instanceTemperatureProof,name),'utf8');
+      await page.setInputFiles('#patternFile',path.join(instanceTemperatureProof,'pattern.json'));
+      await page.selectOption('#studyBodySource','request');await page.setInputFiles('#body',path.join(instanceTemperatureProof,'model.ftxbody'));
+      await page.setInputFiles('#scenarioBody',path.join(instanceTemperatureProof,'body-input.json'));
+      await page.fill('#selection',retained('selection.json'));assert.equal(await run('inspect'),'');
+      await page.fill('#studyCandidateName','same-source');await page.click('#addStudyCandidate');
+      await page.uncheck('#guidedCutting');await page.uncheck('#guidedAreaGoal');
+      for(const id of ['guidedMass','guidedInventoryComplete','guidedRequireMass','guidedRequireDrape'])await page.check('#'+id);
+      await page.selectOption('#scenarioMode','guided');await page.selectOption('#guidedScenarioFitSource','none');
+      for(const [id,value] of Object.entries({guidedScenarioSpacing:'100',guidedScenarioStep:'0.001',guidedScenarioSewSteps:'120',
+        guidedScenarioDrapeSteps:'0',guidedScenarioSettle:'0',guidedScenarioMeshBudget:'4096',guidedScenarioFrameBudget:'2000000'}))await page.fill('#'+id,value);
+      await page.check('#guidedScenarioMotion');await page.check('#guidedMotionHeat');
+      for(const [id,value] of Object.entries({guidedMotionHeatInitial:'20',guidedMotionHeatCells:'2',guidedMotionHeatStep:'0.0005',
+        guidedMotionHeatBudget:'100000',guidedMotionStep:'0.001',guidedMotionTrials:'16',guidedMotionPairs:'100000',
+        guidedMotionVertices:'10000',guidedMotionTime:'0.002',guidedMotionArm:'35.1',guidedMotionHeatInside:'20',
+        guidedMotionHeatOutside:'20',guidedMotionHeatInsideFilm:'1',guidedMotionHeatOutsideFilm:'1'}))await page.fill('#'+id,value);
+      await page.getByText('Different initial temperatures for individual garment instances',{exact:true}).click();
+      const override=async(name,temperature)=>{
+        await page.fill('#guidedMotionHeatInstance',name);await page.fill('#guidedMotionHeatInstanceInitial',String(temperature));
+        await page.click('#addMotionHeatInstance');
+      };
+      await override('band',5);await page.click('#addMotionKeyframe');
+      await page.getByText('Independent sheet heat history',{exact:true}).click();
+      for(const prefix of ['guidedTransientSurfaceSampleMin','guidedTransientSurfaceSampleMax']) {
+        await page.check('#'+prefix+'Goal');await page.selectOption('#'+prefix+'Direction','minimize');
+      }
+      await page.check('#guidedRequireTransientSurface');
+      const verify=async(label,matrix=false)=>{
+        assert.equal(await run('scenario'),'');
+        const report=JSON.parse(await download(matrix?'material-scenario-matrix-study.json':'material-scenario-study.json'));
+        assert.equal(report.schema,matrix?'ftx-material-scenario-matrix-study/1':'ftx-material-scenario-study/1');
+        const request=await download('study-request.json'),scenario=await download('scenario-request.json');
+        assert.equal(await download('original-pattern.json'),retained('pattern.json'));
+        assert.equal(await download('body-input.json'),retained('body-input.json'));
+        const requestFile=path.join(work,label+'-study.json'),scenarioFile=path.join(work,label+'-scenario.json');
+        fs.writeFileSync(requestFile,request,{flag:'wx'});fs.writeFileSync(scenarioFile,scenario,{flag:'wx'});
+        const nativeReport=execFileSync(native,['scenario-study',path.join(instanceTemperatureProof,'pattern.json'),requestFile,
+          scenarioFile,path.join(instanceTemperatureProof,'body-input.json'),path.join(instanceTemperatureProof,'model.ftxbody')],
+          {encoding:'utf8',stdio:['ignore','pipe','inherit'],maxBuffer:64*1024*1024});
+        assert.deepEqual(report,JSON.parse(nativeReport),label+' complete original native/browser equality');
+        return {report,scenario:JSON.parse(scenario)};
+      };
+      const fallback=await verify('browser-fallback');
+      await override('upper',30);await page.fill('#guidedMotionHeatInitial','999');
+      const mapped=await verify('browser-mapped');
+      for(const [result,range] of [[fallback,[5,20]],[mapped,[5,30]]])for(const row of result.report.simulations) {
+        const heat=row.evaluation.result.motion.result.transient_surface;
+        assert.equal(heat.status,'available');assert.deepEqual(heat.result.initial_condition.instances,['band','upper']);
+        assert.deepEqual(heat.result.initial_condition.instance_temperature_c,range);assert.equal(heat.result.model.columns.length,1);
+      }
+      assert.equal(await page.getByText('baseline: resolved initial dry sheet temperatures',{exact:true}).isVisible(),true);
+      await page.setViewportSize({width:390,height:844});await page.selectOption('#scenarioMode','guided_matrix');
+      for(const [name,temperature] of [['cold shell',5],['warmer shell',10]]) {
+        await override('band',temperature);await page.fill('#guidedScenarioCaseName',name);await page.click('#addScenarioCase');
+      }
+      const named=await verify('browser-named',true);
+      assert.deepEqual(named.scenario.cases.map(item=>item.scenario.motion.transient_surface.initial_instance_temperatures_c),[{band:5,upper:30},{band:10,upper:30}]);
+      for(const [index,item] of named.report.cases.entries())for(const row of item.simulations)
+        assert.deepEqual(row.evaluation.result.motion.result.transient_surface.result.initial_condition.instance_temperature_c,[index===0?5:10,30]);
+      await page.selectOption('#scenarioMode','guided');await override('unretained',5);
+      const refused=await verify('browser-unknown');
+      for(const row of refused.report.simulations) {
+        assert.equal(row.evaluation.result.motion.status,'available');
+        assert.equal(row.evaluation.result.motion.result.transient_surface.status,'refused');
+        assert.deepEqual(row.evaluation.result.motion.result.samples,mapped.report.simulations.find(prior=>prior.key===row.key).evaluation.result.motion.result.samples);
+      }
+      await page.click('#clearMotionHeatInstances');await override('band',70);await override('upper',30);
+      const outside=await verify('browser-outside-domain');
+      for(const row of outside.report.simulations) {
+        assert.equal(row.evaluation.result.motion.status,'available');assert.equal(row.evaluation.result.motion.result.transient_surface.status,'refused');
+        assert.deepEqual(row.evaluation.result.motion.result.samples,mapped.report.simulations.find(prior=>prior.key===row.key).evaluation.result.motion.result.samples);
+      }
+      assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(methods.every(method=>method==='GET'));
+      assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
+      console.log('PASS: dry instance temperatures match five complete native/browser reports, exact sources, shared-material ownership, explicit/unused fallback, immutable mobile named cases and independent motion after unknown-owner/domain refusals. Synthetic numerical evidence only. Artifacts:',work);
+      return;
+    }
     if (guidedScenarioProof) {
       const retained=name=>fs.readFileSync(path.join(guidedScenarioProof,name),'utf8');
       const originalPattern=retained('pattern.json'),originalBody=retained('body-input.json');

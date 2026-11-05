@@ -16061,6 +16061,93 @@ function removeGuidedDryHeatInstance(p,instance) {
   assert.ok(button,instance);assert.equal(button.disabled,false);button.onclick();
 }
 
+test('compiled WASM guided dry instance temperatures preserve native owners, fallback, cases and independent motion',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_SCENARIO_BODY||!process.env.FTX_GUIDED_SCENARIO_NATIVE},async t=>{
+    const source=path.resolve(process.env.FTX_GUIDED_SCENARIO_BODY),load=name=>fs.readFileSync(path.join(source,name));
+    const fixture=JSON.parse(load('pattern.json')),body=load('body-input.json').toString('utf8'),modelBytes=load('model.ftxbody');
+    delete fixture.fabric.material.expected_sha256;
+    const thermal=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-variable-thermal.json'),'utf8')).layers[0].record;
+    const record=fixture.fabric.material.record;record.thermal_response=structuredClone(thermal.thermal_response);
+    record.sources.temperature_series=structuredClone(thermal.sources.test);
+    for(const property of ['conductivity','specific_heat'])record.thermal_response[property].source='temperature_series';
+    for(const property of ['areal_density','thickness'])record.properties[property].conditions=structuredClone(thermal.properties[property].conditions);
+    delete record.properties.thermal_conductivity;delete record.properties.specific_heat;
+    const upper=structuredClone(fixture.pieces[0]);upper.id='upper';upper.placement.y0=-50;fixture.pieces.push(upper);
+    fixture.seams.push({id:'join-upper',a:'upper/right',b:'upper/left'});
+    const pattern=JSON.stringify(fixture),pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:{...ftx,default:async()=>{}}}),{p}=await guidedScenarioSetup();
+    p.select('patternFile',pattern);await p.e.patternFile.onchange();
+    p.e.selection.value=JSON.stringify(fixture.fabric.material);p.e.selection.handlers.input();await p.e.inspect.onclick();
+    const inspection=await w.send(p.current().messages.at(-1));assert.equal(inspection.type,'result',inspection.message);
+    p.current().emit(inspection);p.e.studyCandidateName.value='same-source';p.e.addStudyCandidate.onclick();
+    p.e.guidedScenarioFitSource.value='none';p.e.guidedScenarioFitSource.handlers.change();
+    p.select('scenarioBody',body);p.e.scenarioBody.handlers.change();p.e.body.files=[new Blob([modelBytes])];p.e.body.handlers.change();
+    p.e.guidedMass.checked=true;p.e.guidedInventoryComplete.checked=true;p.e.guidedRequireMass.checked=true;
+    p.e.guidedScenarioFrameBudget.value='2000000';guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p,20,20,1,1);
+    p.e.guidedMotionHeatInitial.value='20';p.e.guidedMotionHeatCells.value='2';guidedDryHeatInstance(p,'band',5);
+    await addGuidedMotion(p,0.002,35.1);p.e.guidedDrapeMassGoal.checked=false;p.e.guidedRequireTransientSurface.checked=true;
+    for(const prefix of ['guidedTransientSurfaceSampleMin','guidedTransientSurfaceSampleMax']) {
+      p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value='minimize';
+    }
+    const replay=process.env.FTX_GUIDED_SCENARIO_REPLAY?path.join(path.resolve(process.env.FTX_GUIDED_SCENARIO_REPLAY),'instance-temperatures'):null;
+    const work=replay||fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-instance-temperatures-'));
+    if(replay)fs.mkdirSync(replay,{recursive:true});
+    const retain=(name,raw)=>fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});
+    assert.equal(typeof inspection.result.selection_json,'string');
+    for(const [name,raw] of Object.entries({'pattern.json':pattern,'body-input.json':body,'model.ftxbody':modelBytes,
+      'selection.json':inspection.result.selection_json}))retain(name,raw);
+    const evaluate=async label=>{
+      await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',label+': '+p.e.error.textContent);
+      const output=await w.send(sent);assert.equal(output.type,'result',label+': '+output.message);p.current().emit(output);
+      for(const [name,raw] of [['original-pattern.json',pattern],['study-request.json',sent.studyRequest],['scenario-request.json',sent.scenarioRequest],['body-input.json',body]])
+        assert.equal(output.files.find(file=>file.name===name).text,raw);
+      for(const [name,raw] of [['study',sent.studyRequest],['scenario',sent.scenarioRequest]])retain(label+'-'+name+'.json',raw);
+      const native=require('node:child_process').execFileSync(path.resolve(process.env.FTX_GUIDED_SCENARIO_NATIVE),
+        ['scenario-study',path.join(work,'pattern.json'),path.join(work,label+'-study.json'),path.join(work,label+'-scenario.json'),
+          path.join(work,'body-input.json'),path.join(work,'model.ftxbody')],{encoding:'utf8',stdio:['ignore','pipe','inherit'],maxBuffer:64*1024*1024});
+      assert.deepEqual(output.result,JSON.parse(native),label+' complete original native/WASM/worker equality');retain(label+'-native.json',native);
+      return output.result;
+    };
+    const simulation=(report,key)=>report.simulations.find(row=>row.key===key).evaluation.result;
+    const heat=(report,key)=>simulation(report,key).motion.result.transient_surface;
+    const check=(report,range)=>{
+      for(const row of report.comparison.alternatives) {
+        assert.equal(row.eligible,true,JSON.stringify(row.exclusions));const outcome=heat(report,row.key);
+        assert.equal(outcome.status,'available');const result=outcome.result,initial=result.initial_condition;
+        assert.deepEqual(initial.instances,['band','upper']);assert.equal(result.model.columns.length,1);
+        assert.deepEqual(initial.temperature_range_c,range);assert.deepEqual(initial.instance_temperature_c,range);
+        assert.equal(initial.model_sha256,result.model.sha256);assert.ok(result.balance_error_j<1e-8&&result.balance_error_j>-1e-8);
+        assert.equal(row.readings.transient_surface_min_sample_temperature_c.value,range[0]);
+        assert.ok(row.readings.transient_surface_max_sample_temperature_c.value<=range[1]+1e-8);
+      }
+    };
+    const fallback=await evaluate('fallback');check(fallback,[5,20]);
+    guidedDryHeatInstance(p,'upper',30);p.e.guidedMotionHeatInitial.value='999';
+    const mapped=await evaluate('mapped');check(mapped,[5,30]);
+    const table=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.tag==='table'&&node.children[0].textContent==='baseline: resolved initial dry sheet temperatures');
+    assert.ok(table);assert.deepEqual(plain(table.children.slice(2).map(row=>row.children.map(node=>node.textContent))),[['band','5'],['upper','30']]);
+    assert.doesNotMatch(visibleText(table),/999/);
+    guidedNamedCases(p);await saveGuidedCase(p,'cold shell');guidedDryHeatInstance(p,'band',10);await saveGuidedCase(p,'warmer shell');
+    const named=await evaluate('named');assert.deepEqual(named.cases.map(item=>item.scenario.scenario.motion.transient_surface.initial_instance_temperatures_c),[{band:5,upper:30},{band:10,upper:30}]);
+    for(const [index,item] of named.cases.entries())check(item,[index===0?5:10,30]);
+    p.e.scenarioMode.value='guided';p.e.scenarioMode.handlers.change();
+    guidedDryHeatInstance(p,'unretained',5);const refused=await evaluate('unknown');
+    for(const row of refused.simulations) {
+      assert.equal(row.evaluation.result.motion.status,'available');assert.equal(heat(refused,row.key).status,'refused');
+      assert.deepEqual(simulation(refused,row.key).motion.result.samples,simulation(mapped,row.key).motion.result.samples);
+      assert.equal(refused.manufacturing.alternatives.find(item=>item.key===row.key).assembly_mass.status,'available');
+    }
+    p.e.clearMotionHeatInstances.onclick();guidedDryHeatInstance(p,'band',70);guidedDryHeatInstance(p,'upper',30);
+    const outside=await evaluate('outside-domain');
+    for(const row of outside.simulations) {
+      assert.equal(row.evaluation.result.motion.status,'available');assert.equal(heat(outside,row.key).status,'refused');
+      assert.deepEqual(simulation(outside,row.key).motion.result.samples,simulation(mapped,row.key).motion.result.samples);
+    }
+    t.diagnostic('Complete native/WASM/page-worker reports match for two shared-material owners, explicit fallback, fully mapped unused fallback outside the source domain, immutable named cases and independent motion after unknown-owner/domain refusals. Synthetic numerical evidence only. Inputs: '+work);
+  });
+
 test('guided dry instance temperatures retain explicit overrides, uniform fallback and actual resolved source receipts',async()=>{
   const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
   for(const id of ['guidedMotionHeatInstance','guidedMotionHeatInstanceInitial'])assert.equal(p.e[id].value,'');
