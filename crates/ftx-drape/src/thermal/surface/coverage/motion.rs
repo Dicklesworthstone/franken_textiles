@@ -670,6 +670,66 @@ impl Frame {
         })
     }
 
+    /// Initialize each retained source cloth triangle at its own explicit temperature, uniform
+    /// through that sheet's thickness. Every covered portion and exposed remainder retains its
+    /// source value, including when multiple triangles share one material column.
+    ///
+    /// # Errors
+    /// Missing or extra source temperatures, nonphysical values, or a value outside its source
+    /// material's domain or the existing covered stack's common characterized interval.
+    pub fn initial_patches(&self, temperature_c: &[f64]) -> Result<State, Refusal> {
+        if temperature_c.len() != self.cloth_triangle_count() {
+            return Err(invalid(
+                "initial coverage temperatures must cover every retained source cloth triangle",
+            ));
+        }
+        let exposed = self
+            .exposed_fractions()
+            .into_iter()
+            .zip(&self.exposed_models)
+            .zip(temperature_c)
+            .map(|((fraction, model), &value)| {
+                // Qualify every source, including a wholly covered triangle whose exposed row
+                // is empty. Source validity cannot depend on the initial overlap partition.
+                model.check_temperature(value)?;
+                Ok(if fraction > 0. {
+                    vec![value; model.cells()]
+                } else {
+                    Vec::new()
+                })
+            })
+            .collect::<Result<Vec<_>, Refusal>>()?;
+        let temperatures = self
+            .coverage
+            .layout
+            .regions
+            .iter()
+            .map(|region| {
+                region
+                    .layers
+                    .iter()
+                    .flat_map(|portion| {
+                        std::iter::repeat_n(
+                            temperature_c[portion.cloth_triangle],
+                            self.coverage.layout.cells_per_layer,
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let state = State {
+            frame_sha256: self.sha256.clone(),
+            inner: CoverageState {
+                sha256: self.coverage.sha256.clone(),
+                temperatures,
+                orientation: None,
+            },
+            exposed,
+        };
+        self.check(&state)?;
+        Ok(state)
+    }
+
     fn check(&self, state: &State) -> Result<(), Refusal> {
         if state.frame_sha256 != self.sha256 || state.inner.sha256 != self.coverage.sha256 {
             return Err(invalid(

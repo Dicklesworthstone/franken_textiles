@@ -216,6 +216,139 @@ fn portable_dry_instance_temperatures_preserve_owners_fallback_replay_and_indepe
 }
 
 #[test]
+fn portable_covered_instance_temperatures_keep_source_replay_and_independent_consumers() {
+    let (pattern, mut input, mut raw) = inputs();
+    let mut pattern = pattern.raw().clone();
+    let mut upper = pattern["pieces"][0].clone();
+    upper["id"] = json!("upper");
+    upper["placement"]["y0"] = json!(-50.);
+    pattern["pieces"].as_array_mut().unwrap().push(upper);
+    pattern["seams"].as_array_mut().unwrap().push(json!({
+        "id":"join-upper","a":"upper/right","b":"upper/left"}));
+    let pattern = Pattern::new(pattern);
+    input.variants.truncate(1);
+    input.comparison = Some(
+        serde_json::from_value(json!({"basis":"nominal",
+        "required_consumers":["transient_coverage"],"objectives":[
+            {"metric":"transient_coverage_min_sample_temperature_c","direction":"maximize"},
+            {"metric":"transient_coverage_max_sample_temperature_c","direction":"minimize"}]}))
+        .unwrap(),
+    );
+    let coverage = raw.as_object_mut().unwrap().remove("coverage").unwrap();
+    let sheet = &mut raw["motion"]["transient_surface"];
+    sheet.as_object_mut().unwrap().remove("surface_water");
+    let boundary = sheet["boundaries"][0].clone();
+    let mut settings = coverage["settings"].clone();
+    settings["cells_per_layer"] = json!(2);
+    raw["motion"]["transient_coverage"] = json!({
+        "schema":"ftx-motion-coverage-heat/1",
+        "body_triangle_ids":(0..form().triangles.len()).collect::<Vec<_>>(),
+        "instance_layers":{"band":"shell","upper":"shell"},"settings":settings,
+        "initial_temperature_c":999.,"initial_instance_temperatures_c":{"band":5.,"upper":30.},
+        "boundaries":[boundary],"exposed_boundaries":[boundary],
+        "max_step_s":0.00025,"max_cell_steps":1000000,"max_geometry_operations":1000000});
+    let result = study(&raw, &input, &pattern);
+    let simulation = &keyed(&result["simulations"], "qualified")["evaluation"]["result"];
+    let motion = &simulation["motion"]["result"];
+    let outcome = &motion["transient_coverage"];
+    assert_eq!(outcome["status"], "available", "{outcome}");
+    let heat = &outcome["result"];
+    let initial = &heat["initial_condition"];
+    let source = &heat["checkpoint"]["frame"]["source"];
+    assert_eq!(heat["request"], raw["motion"]["transient_coverage"]);
+    assert_eq!(initial["model_sha256"], source["sha256"]);
+    assert_eq!(initial["frame_sha256"], heat["initial_frame_sha256"]);
+    assert_eq!(source["columns"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        initial["instances"],
+        simulation["drape"]["thermal_surface"]["instances"]
+    );
+    assert_eq!(
+        initial["triangle_instance"],
+        simulation["drape"]["thermal_surface"]["triangle_instance"]
+    );
+    assert_eq!(initial["temperature_range_c"], json!([5., 30.]));
+    assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+    assert!(heat["absolute_remap_residual_j"].as_f64().unwrap().abs() < 1e-8);
+    assert_eq!(
+        result["comparison"]["frontier"],
+        json!(["qualified"]),
+        "{}",
+        result["comparison"]
+    );
+    let readings = &keyed(&result["comparison"]["alternatives"], "qualified")["readings"];
+    assert_eq!(
+        readings["transient_coverage_min_sample_temperature_c"]["value"],
+        5.
+    );
+    assert_eq!(
+        readings["transient_coverage_max_sample_temperature_c"]["value"],
+        30.
+    );
+    assert_eq!(motion["transient_surface"]["status"], "available");
+    let mut replay = input.clone();
+    replay.variants[0].changes = serde_json::from_value(
+        keyed(&result["manufacturing"]["alternatives"], "qualified")["frozen_changes"].clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        study(&raw, &replay, &pattern)["simulations"],
+        result["simulations"]
+    );
+    let mut unknown = raw.clone();
+    unknown["motion"]["transient_coverage"]["initial_instance_temperatures_c"] =
+        json!({"unretained":5.});
+    let refused = study(&unknown, &input, &pattern);
+    let independent = &keyed(&refused["simulations"], "qualified")["evaluation"]["result"];
+    assert_eq!(independent["motion"]["status"], "available");
+    assert_eq!(
+        independent["motion"]["result"]["transient_coverage"]["status"],
+        "refused"
+    );
+    assert_eq!(
+        independent["motion"]["result"]["samples"],
+        motion["samples"]
+    );
+    for (scenario, evaluation) in [(&raw, simulation), (&unknown, independent)] {
+        let policy: ftx_drape::study::motion::Request =
+            serde_json::from_value(scenario["motion"].clone()).unwrap();
+        let form = form();
+        let endpoints = policy
+            .keyframes
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                form.vertices
+                    .iter()
+                    .map(|p| *p + Vec3::new(0., 0., 0.00005 * (i + 1) as f64))
+                    .collect()
+            })
+            .collect();
+        let path = ftx_drape::study::motion::Path::new(
+            &policy,
+            (&form.vertices, &form.triangles),
+            endpoints,
+        )
+        .unwrap();
+        let motion = &evaluation["motion"]["result"];
+        let sheet = &motion["transient_surface"]["result"];
+        assert_eq!(motion["path_sha256"], path.sha256());
+        assert_eq!(sheet["path_sha256"], path.sha256());
+        assert_eq!(sheet["request"], scenario["motion"]["transient_surface"]);
+    }
+    // The complete motion request changes its verified identity, while every physical sheet
+    // result must remain exactly the same when only independent coverage is refused.
+    let mut normalized = independent["motion"]["result"]["transient_surface"].clone();
+    normalized["result"]["path_sha256"] =
+        motion["transient_surface"]["result"]["path_sha256"].clone();
+    assert_eq!(normalized, motion["transient_surface"]);
+    assert_eq!(
+        keyed(&refused["manufacturing"]["alternatives"], "qualified")["cutting"]["status"],
+        "available"
+    );
+}
+
+#[test]
 fn source_selected_water_cools_two_materials_under_one_unchanged_scenario() {
     let (pattern, input, mut raw) = inputs();
     let original_pattern = pattern.raw().clone();

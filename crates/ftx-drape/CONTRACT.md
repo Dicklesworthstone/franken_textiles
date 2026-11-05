@@ -20,6 +20,18 @@ checks the same active source identities and reconstructs contact coefficients f
 observations. Manufacturing keeps every authored cut piece regardless of the drape-only exclusion.
 Actual sewn-drape regressions and native/portable binding/BOM checks cover these separate consumers.
 
+**Authored initial temperatures on moving body coverage.** Optional
+`motion.transient_coverage.initial_instance_temperatures_c` resolves exact retained physical
+instances against the explicit scalar fallback. Covered layer cells and exposed source remainders
+start at the same source-qualified temperature without merging pieces that share a material.
+The existing reference-mass enthalpy remapper carries those states through coverage, pose and
+depth-discretization changes. Present-only receipts bind source model, initial frame, owner map,
+resolved values and actual extrema; omitted maps preserve the original scalar path and wire output.
+Unknown/unretained names, empty maps, uncharacterized temperatures and dissipation-heating
+combinations refuse independently of other scenario consumers. No initial depth profile, measured
+conditioning, wet law or physical garment validation is inferred. Known-answer checks in
+`thermal_motion`, `study::heat::coverage` and `material_scenario` cover enthalpy, ownership and replay.
+
 **Source-qualified vapor potentials** (`thermal::vapor`, `ftx-vc1`). Characterized drapes retain an
 independent material/ownership/geometry frame without requiring dry conductivity or heat capacity.
 Explicit vapor conditions reuse `ftx-pattern::material_vapor` per source-locked material column,

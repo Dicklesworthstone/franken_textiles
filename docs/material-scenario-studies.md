@@ -327,8 +327,9 @@ attached source path refuses requested motion rather than pretending its body mo
 
 Optional `motion.transient_surface` and `motion.transient_coverage` now execute the existing
 transient solvers on **every accepted mechanical sample**, instead of restarting at each endpoint
-or treating steady power as a temperature history. Both start at an explicitly authored uniform
-cloth temperature at motion time zero, after the initial drape. They do not infer that temperature
+or treating steady power as a temperature history. Both start at an explicitly authored cloth
+temperature at motion time zero, after the initial drape, with optional exact-instance overrides
+for dry heat. They do not infer that temperature
 from the static result or integrate heat during initial sewing/settling. Source heat capacity and
 areal mass are required; conductivity-only data remain usable by the independent steady consumers.
 
@@ -376,6 +377,36 @@ inferred. At each new accepted pose, actual clipped overlap is rebuilt, and the 
 enthalpy remapper transfers covered/exposed cloth storage without elapsed time. Material entering
 or leaving body coverage therefore keeps its heat rather than resetting to the initial temperature.
 Bare body fractions remain single-counted parallel paths with no textile heat storage.
+
+Both dry policies accept an optional nonempty `initial_instance_temperatures_c` map. For example,
+an explicitly warm lining and cold shell can use:
+
+```json
+{
+  "initial_temperature_c": 20.0,
+  "initial_instance_temperatures_c": {
+    "lining.front": 30.0,
+    "shell.front": 5.0
+  }
+}
+```
+
+These are illustrative authored states, not measured temperatures. Keys must be exact retained
+physical-instance names from this drape; source-piece aliases and excluded or unknown instances
+refuse. Every unlisted instance uses the explicit scalar fallback. Each actual starting value must
+qualify against its source material, and covered stacks retain their common characterized domain.
+Pieces sharing one material column keep separate temperatures. Each value is uniform through its
+own sheet thickness; arbitrary initial depth profiles are not inferred.
+
+For `transient_coverage`, each covered layer and its exposed remainder start at the same retained
+source-piece temperature. Subsequent movement uses the existing reference-mass enthalpy remap, so
+entering or leaving body coverage does not reset that temperature or lose stored heat. The result's
+`initial_condition` retains exact owners, resolved values, the source model and initial frame
+identities. Material/design comparisons include only actually applied initial temperatures in
+sample extrema; an unused fallback cannot create a false maximum or minimum. Final-temperature
+metrics continue to describe the final sample alone. Original motion-file input preserves these
+fields in the browser and named-case replay. Dissipation heating and wet-sheet combinations remain
+outside the per-instance initialization contract and refuse when requested together.
 
 `motion.transient_coverage.thermal_bridges` adds source-qualified instantaneous seam/closure excess
 to the actual incoming and outgoing history energies. It requires the exact steady reference

@@ -73,6 +73,7 @@ fn history() -> (History, Vec<Vec3>) {
         instance_layers: BTreeMap::from([("sheet".into(), "shell".into())]),
         settings: projection.settings.clone(),
         initial_temperature_c: 10.,
+        initial_instance_temperatures_c: None,
         boundaries: vec![film; 4],
         exterior_exchange: None,
         bare_boundaries: None,
@@ -92,6 +93,7 @@ fn history() -> (History, Vec<Vec3>) {
         triangles,
         projection,
         initial_frame_sha256: frame.sha256().to_owned(),
+        initial_condition: None,
         geometry_operations: frame.projection().geometry_operations,
         state: frame.initial(10.).unwrap(),
         frame,
@@ -119,6 +121,228 @@ fn history() -> (History, Vec<Vec3>) {
         bridge_j: 0.,
     };
     (history, cloth)
+}
+
+fn two_instance_history() -> (History, Vec<Vec3>) {
+    let (mut history, mut cloth) = history();
+    let mut source = history.source.snapshot();
+    source["vertex_count"] = json!(6);
+    source["patches"].as_array_mut().unwrap().push(json!({
+        "vertices":[3,4,5],"reference_area_m2":0.5,"column":0}));
+    source.as_object_mut().unwrap().remove("sha256");
+    source["sha256"] = json!(hash(&source).unwrap());
+    history.source = Surface::from_snapshot(&source).unwrap();
+    let shell = cloth
+        .iter()
+        .map(|p| Vec3::new(p.x, p.y, 0.02))
+        .collect::<Vec<_>>();
+    cloth.extend(shell);
+    history.projection.cloth_layers = vec!["lining".into(), "shell".into()];
+    history.projection.settings.interfaces = vec![projection::Interface {
+        inner: "lining".into(),
+        outer: "shell".into(),
+        resistance_m2_k_w: 0.05,
+        basis: "synthetic independent layer interface".into(),
+        stagnant_gap: None,
+    }];
+    history.request.settings = history.projection.settings.clone();
+    history.frame = Frame::new(
+        history.source.clone(),
+        cloth.clone(),
+        body(0.),
+        &history.triangles,
+        history.projection.clone(),
+    )
+    .unwrap();
+    history.initial_frame_sha256 = history.frame.sha256().to_owned();
+    history.geometry_operations = history.frame.projection().geometry_operations;
+    history.state = history.frame.initial(10.).unwrap();
+    (history, cloth)
+}
+
+#[test]
+fn coverage_instance_initial_temperatures_keep_shared_material_owners_and_reference_mass() {
+    let (mut history, cloth) = two_instance_history();
+    history.request.initial_temperature_c = 999.;
+    history.request.initial_instance_temperatures_c = Some(BTreeMap::from([
+        ("cold:0".into(), 5.),
+        ("hot:0".into(), 35.),
+    ]));
+    history.request.validate_initial_temperatures().unwrap();
+    let instances = ["hot:0".into(), "cold:0".into(), "unused:0".into()];
+    (history.state, history.initial_condition) = history
+        .request
+        .initial_state(&history.frame, &history.source, &instances, &[1, 0])
+        .unwrap();
+    assert_eq!(history.state.temperature_c(), &[vec![5., 35.]]);
+    assert!(
+        history
+            .state
+            .exposed_temperature_c()
+            .iter()
+            .all(Vec::is_empty)
+    );
+    let initial_frame = history.initial_frame_sha256.clone();
+    history
+        .advance(&cloth, &body(0.), 0.25, 0, 0, None, None, None)
+        .unwrap();
+    let row = &history.state.temperature_c()[0];
+    let stored = 100. * (row[0] - 5. + row[1] - 35.);
+    assert!((history.stored_j - stored).abs() < 1e-9);
+    assert!((history.stored_j - history.net_j).abs() < 1e-9);
+    let result = history.finish("path", "initial", 0.25).unwrap();
+    let receipt = &result["initial_condition"];
+    assert_eq!(receipt["schema"], "ftx-motion-coverage-initial-condition/1");
+    assert_eq!(
+        receipt["model_sha256"],
+        result["checkpoint"]["frame"]["source"]["sha256"]
+    );
+    assert_eq!(receipt["frame_sha256"], initial_frame);
+    assert_eq!(receipt["frame_sha256"], result["initial_frame_sha256"]);
+    assert_eq!(receipt["instances"], json!(instances));
+    assert_eq!(receipt["triangle_instance"], json!([1, 0]));
+    assert_eq!(receipt["instance_temperature_c"], json!([35., 5., 999.]));
+    assert_eq!(receipt["temperature_range_c"], json!([5., 35.]));
+    assert_eq!(result["request"]["initial_temperature_c"], 999.);
+}
+
+#[test]
+fn coverage_instance_initial_temperatures_require_retained_owners_and_supported_heating() {
+    let (history, _) = two_instance_history();
+    let instances = ["hot:0".into(), "cold:0".into(), "unused:0".into()];
+    let mut request = history.request.clone();
+    request.initial_instance_temperatures_c = Some(BTreeMap::from([("hot:0".into(), 35.)]));
+    request.validate_initial_temperatures().unwrap();
+    let (state, receipt) = request
+        .initial_state(&history.frame, &history.source, &instances, &[1, 0])
+        .unwrap();
+    assert_eq!(state.temperature_c(), &[vec![10., 35.]]);
+    assert_eq!(receipt.unwrap()["temperature_range_c"], json!([10., 35.]));
+    for name in ["missing:0", "unused:0"] {
+        let mut bad = request.clone();
+        bad.initial_instance_temperatures_c = Some(BTreeMap::from([(name.into(), 20.)]));
+        assert!(
+            bad.initial_state(&history.frame, &history.source, &instances, &[1, 0])
+                .is_err()
+        );
+    }
+    for (names, owners) in [
+        (vec![], vec![1, 0]),
+        (vec!["hot:0".into(), "hot:0".into()], vec![1, 0]),
+        (vec!["hot:0".into(), "".into()], vec![1, 0]),
+        (instances.to_vec(), vec![0]),
+        (instances.to_vec(), vec![1, 3]),
+    ] {
+        assert!(
+            request
+                .initial_state(&history.frame, &history.source, &names, &owners)
+                .is_err()
+        );
+    }
+    for values in [
+        BTreeMap::new(),
+        BTreeMap::from([("".into(), 20.)]),
+        BTreeMap::from([("hot:0".into(), -274.)]),
+        BTreeMap::from([("hot:0".into(), f64::NAN)]),
+    ] {
+        let mut bad = request.clone();
+        bad.initial_instance_temperatures_c = Some(values);
+        assert!(bad.validate_initial_temperatures().is_err());
+    }
+    for channel in [
+        "plastic_dissipation_heat",
+        "relaxation_dissipation_heat",
+        "bending_plastic_dissipation_heat",
+    ] {
+        let mut bad = json!(request);
+        bad[channel] = json!("uniform_reference_thickness");
+        assert!(
+            serde_json::from_value::<Request>(bad)
+                .unwrap()
+                .validate_initial_temperatures()
+                .is_err()
+        );
+    }
+    assert!(
+        !json!(history.request)
+            .as_object()
+            .unwrap()
+            .contains_key("initial_instance_temperatures_c")
+    );
+    let (_, receipt) = history
+        .request
+        .initial_state(&history.frame, &history.source, &[], &[])
+        .unwrap();
+    assert!(receipt.is_none());
+}
+
+#[test]
+fn coverage_initial_temperatures_qualify_applied_values_without_using_an_unused_fallback() {
+    let (mut history, cloth) = two_instance_history();
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../../tests/fixtures/materials/synthetic-variable-thermal.json"
+    ))
+    .unwrap();
+    let selection: Selection = serde_json::from_value(fixture["layers"][0].clone()).unwrap();
+    let material = Catalog::builtin().unwrap().resolve(&selection).unwrap();
+    history.source = Surface::new(
+        vec![DryThermalModel::new(vec![material], vec![], 1).unwrap()],
+        6,
+        history.source.patches().to_vec(),
+    )
+    .unwrap();
+    history.frame = Frame::new(
+        history.source.clone(),
+        cloth,
+        body(0.),
+        &history.triangles,
+        history.projection.clone(),
+    )
+    .unwrap();
+    // This source's characterized interval is [0, 60], but the explicit fallback is not applied.
+    history.request.initial_temperature_c = -20.;
+    history.request.initial_instance_temperatures_c = Some(BTreeMap::from([
+        ("cold:0".into(), 5.),
+        ("hot:0".into(), 35.),
+    ]));
+    let instances = ["hot:0".into(), "cold:0".into()];
+    let (state, receipt) = history
+        .request
+        .initial_state(&history.frame, &history.source, &instances, &[1, 0])
+        .unwrap();
+    assert_eq!(state.temperature_c(), &[vec![5., 35.]]);
+    assert_eq!(receipt.unwrap()["temperature_range_c"], json!([5., 35.]));
+    history
+        .request
+        .initial_instance_temperatures_c
+        .as_mut()
+        .unwrap()
+        .remove("cold:0");
+    assert!(
+        history
+            .request
+            .initial_state(&history.frame, &history.source, &instances, &[1, 0])
+            .is_err()
+    );
+    history
+        .request
+        .initial_instance_temperatures_c
+        .as_mut()
+        .unwrap()
+        .insert("cold:0".into(), 61.);
+    assert!(
+        history
+            .request
+            .initial_state(&history.frame, &history.source, &instances, &[1, 0])
+            .is_err()
+    );
+    history.request.initial_instance_temperatures_c = None;
+    assert!(
+        history
+            .request
+            .initial_state(&history.frame, &history.source, &instances, &[1, 0])
+            .is_err()
+    );
 }
 
 fn bridge_history() -> (History, Vec<Vec3>) {

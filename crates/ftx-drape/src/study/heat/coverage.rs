@@ -42,6 +42,12 @@ pub struct Request {
     pub settings: projection::Settings,
     /// Uniform cloth temperature at motion time zero (degrees Celsius), not a fitted temperature.
     pub initial_temperature_c: f64,
+    /// Optional dry initial temperatures for exact retained physical instances, uniform through
+    /// each sheet's thickness. Unlisted instances use the explicit scalar fallback above.
+    /// Covered portions and exposed remainders retain the same source value. A present map must
+    /// be nonempty; irreversible-material heating remains outside this initial-state contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_instance_temperatures_c: Option<BTreeMap<String, f64>>,
     /// One spatially uniform pair of body-side/exterior films for each keyframe interval.
     pub boundaries: Vec<Film>,
     /// Optional exact interval schedule; null retains that interval's outside film. Each active
@@ -133,6 +139,7 @@ impl Request {
                 "invalid motion coverage heat schema, schedule, initial state or budgets",
             ));
         }
+        self.validate_initial_temperatures()?;
         for &film in self
             .boundaries
             .iter()
@@ -216,7 +223,12 @@ impl Request {
             ));
         }
         let initial_frame_sha256 = frame.sha256().to_owned();
-        let state = frame.initial(self.initial_temperature_c)?;
+        let (state, initial_condition) = self.initial_state(
+            &frame,
+            &source,
+            &run.scene.mesh.instances,
+            &run.scene.triangle_owner,
+        )?;
         let plastic = self
             .plastic_dissipation_heat
             .map(|_| plastic::Heating::new(run, self.initial_temperature_c))
@@ -250,6 +262,7 @@ impl Request {
             frame,
             state,
             initial_frame_sha256,
+            initial_condition,
             geometry_operations,
             time_s: 0.,
             cell_steps: 0,
@@ -275,6 +288,87 @@ impl Request {
             bridge_j: 0.,
         })
     }
+
+    fn validate_initial_temperatures(&self) -> Result<(), Refusal> {
+        if let Some(temperatures) = &self.initial_instance_temperatures_c {
+            if temperatures.is_empty()
+                || temperatures.len() > 65_536
+                || temperatures
+                    .iter()
+                    .any(|(id, value)| id.is_empty() || !value.is_finite() || *value < -273.15)
+            {
+                return Err(invalid(
+                    "initial coverage temperatures need 1..=65536 exact instance names and finite physical values",
+                ));
+            }
+            if self.plastic_dissipation_heat.is_some()
+                || self.relaxation_dissipation_heat.is_some()
+                || self.bending_plastic_dissipation_heat.is_some()
+            {
+                return Err(invalid(
+                    "initial instance temperatures support dry coverage heat without dissipation heating",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn initial_state(
+        &self,
+        frame: &Frame,
+        source: &Surface,
+        instances: &[String],
+        owners: &[usize],
+    ) -> Result<(State, Option<Value>), Refusal> {
+        let Some(overrides) = &self.initial_instance_temperatures_c else {
+            return Ok((frame.initial(self.initial_temperature_c)?, None));
+        };
+        let retained = owners.iter().copied().collect::<BTreeSet<_>>();
+        if instances.is_empty()
+            || instances.len() > 196_608
+            || owners.len() != source.patches().len()
+            || instances.iter().any(String::is_empty)
+            || instances.iter().collect::<BTreeSet<_>>().len() != instances.len()
+            || retained.iter().any(|&owner| owner >= instances.len())
+        {
+            return Err(invalid(
+                "initial coverage temperatures need exact retained instance ownership",
+            ));
+        }
+        let retained_names = retained
+            .iter()
+            .map(|&owner| instances[owner].as_str())
+            .collect::<BTreeSet<_>>();
+        if overrides
+            .keys()
+            .any(|id| !retained_names.contains(id.as_str()))
+        {
+            return Err(invalid(
+                "initial coverage temperature names an unknown or unretained physical instance",
+            ));
+        }
+        let temperatures: Vec<_> = instances
+            .iter()
+            .map(|id| {
+                overrides
+                    .get(id)
+                    .copied()
+                    .unwrap_or(self.initial_temperature_c)
+            })
+            .collect();
+        let patch_temperatures: Vec<_> = owners.iter().map(|&owner| temperatures[owner]).collect();
+        let state = frame.initial_patches(&patch_temperatures)?;
+        let range = patch_temperatures
+            .iter()
+            .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], &value| {
+                [lo.min(value), hi.max(value)]
+            });
+        let receipt = json!({"schema":"ftx-motion-coverage-initial-condition/1",
+            "model_sha256":source.snapshot()["sha256"],"frame_sha256":frame.sha256(),
+            "instances":instances,"triangle_instance":owners,
+            "instance_temperature_c":temperatures,"temperature_range_c":range});
+        Ok((state, Some(receipt)))
+    }
 }
 
 fn exterior_boundary(film: Film, exterior: &Exterior) -> Result<(), Refusal> {
@@ -294,6 +388,7 @@ pub(in crate::study) struct History {
     frame: Frame,
     state: State,
     initial_frame_sha256: String,
+    initial_condition: Option<Value>,
     geometry_operations: usize,
     time_s: f64,
     cell_steps: usize,
@@ -741,6 +836,9 @@ impl History {
             "trace":self.trace,"final_field":self.final_field,"checkpoint":self.frame.checkpoint(&self.state)?,
             "uncertainty_propagated":false,"physical_validation_claim":false,"comfort_claim":false,
             "scope":"One-way transient heat on the explicit collision-body domain with first-order source-material enthalpy remap at each accepted cloth/body sample. Remap has no elapsed time; heat substeps use the sample's right-endpoint geometry. Reference mass and exposed-sheet storage persist. Bare parallel paths store no energy. No anatomical coverage certification, human thermoregulation, mechanical heating, moisture, two-way coupling or empirical warmth claim."});
+        if let Some(initial) = &self.initial_condition {
+            result["initial_condition"] = initial.clone();
+        }
         if let Some(authority) = &self.bridge_authority {
             let mut bridge = self.bridge_accounting()?;
             bridge["schema"] = json!("ftx-motion-thermal-bridge-result/1");
