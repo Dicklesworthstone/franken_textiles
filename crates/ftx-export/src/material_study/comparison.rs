@@ -1069,6 +1069,13 @@ impl Policy {
         })
     }
 
+    fn needs_coupled_heat(&self, descriptor: &Value) -> bool {
+        let heat = &descriptor["scenario"]["motion"]["transient_surface"];
+        self.needs_motion()
+            && (!heat["mechanical_coupling"].is_null()
+                || !heat["coupled_water_alternatives"].is_null())
+    }
+
     pub(super) fn evaluate(
         &self,
         rows: &[Alternative],
@@ -1385,12 +1392,9 @@ impl Policy {
                 Err(e) => result.exclusions.push(e),
             }
         }
-        if !admitted.motion.is_null()
-            && !descriptor["scenario"]["motion"]["transient_surface"]["coupled_water_alternatives"]
-                .is_null()
-        {
-            // This selected pair changes inertia and momentum. Its complete coupled receipt is
-            // mandatory even when the decision requests only a motion/strain/contact metric.
+        if !admitted.motion.is_null() && self.needs_coupled_heat(descriptor) {
+            // Direct and selected-pair liquid coupling both change inertia and momentum. Their
+            // complete heat and transfer receipts are mandatory even for motion-only decisions.
             match admit_heat(
                 row,
                 descriptor,
@@ -1658,9 +1662,7 @@ impl Policy {
         let consumers = self.consumers();
         let scenario = &descriptor["scenario"];
         let heat = &scenario["motion"]["transient_surface"];
-        let coupled_motion = self.needs_motion()
-            && (!heat["mechanical_coupling"].is_null()
-                || !heat["coupled_water_alternatives"].is_null());
+        let coupled_motion = self.needs_coupled_heat(descriptor);
         let mut protocols = BTreeMap::<String, BTreeSet<String>>::new();
         let pattern = ftx_pattern::Pattern::new(
             row.binding
@@ -1807,9 +1809,8 @@ impl Policy {
         }
         let mechanics = self.needs_simulation();
         let surface_policy = &descriptor["scenario"]["motion"]["transient_surface"];
-        let paired_motion =
-            self.needs_motion() && !surface_policy["coupled_water_alternatives"].is_null();
-        let transient = paired_motion
+        let coupled_motion = self.needs_coupled_heat(descriptor);
+        let transient = coupled_motion
             || consumers.contains(&Consumer::TransientSurface)
             || consumers.contains(&Consumer::TransientCoverage);
         let thermal = transient
@@ -1829,7 +1830,7 @@ impl Policy {
             keys.extend(["areal_density", "specific_heat", "thickness"]);
         }
         let mass = keys.contains("areal_density");
-        let textile_water = paired_motion
+        let textile_water = coupled_motion
             || consumers.contains(&Consumer::TransientSurface)
                 && (!surface_policy["surface_water"].is_null()
                     || !surface_policy["surface_water_alternatives"].is_null()
@@ -1844,7 +1845,7 @@ impl Policy {
         .into_iter()
         .any(|(consumer, name)| {
             (consumers.contains(&consumer)
-                || paired_motion && consumer == Consumer::TransientSurface)
+                || coupled_motion && consumer == Consumer::TransientSurface)
                 && descriptor["scenario"]["motion"][name]["plastic_dissipation_heat"]
                     == "uniform_reference_thickness"
         }) {
@@ -1857,7 +1858,7 @@ impl Policy {
         .into_iter()
         .any(|(consumer, name)| {
             (consumers.contains(&consumer)
-                || paired_motion && consumer == Consumer::TransientSurface)
+                || coupled_motion && consumer == Consumer::TransientSurface)
                 && descriptor["scenario"]["motion"][name]["relaxation_dissipation_heat"]
                     == "uniform_reference_thickness"
         }) {
@@ -1870,7 +1871,7 @@ impl Policy {
         .into_iter()
         .any(|(consumer, name)| {
             (consumers.contains(&consumer)
-                || paired_motion && consumer == Consumer::TransientSurface)
+                || coupled_motion && consumer == Consumer::TransientSurface)
                 && descriptor["scenario"]["motion"][name]["bending_plastic_dissipation_heat"]
                     == "uniform_reference_thickness"
         }) {

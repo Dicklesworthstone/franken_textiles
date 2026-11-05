@@ -665,7 +665,12 @@ its path/initial/end geometry links and physical duration. Independent-sheet and
 transient objectives separately admit complete policy/time/geometry-linked histories for signed
 incoming/net boundary energy and separately initial-inclusive sampled or final cloth-cell temperature
 extrema. `motion_required` exposes whether the comparison policy requires movement. Heat-capacity protocols participate only
-for transient comparisons. Required motion/history failures never borrow initial static outputs;
+for transient comparisons. A motion-dependent decision using either direct `mechanical_coupling`
+or `coupled_water_alternatives` also requires the complete admitted sheet-heat and liquid/mechanical
+history, even when heat or water is not itself scored. Its thermal, Ret and requested heat-conversion
+protocols participate because they can change the trajectory. Missing or inconsistent coupled
+evidence excludes the dependent decision; static and manufacturing-only comparisons retain their
+independent inputs. Required motion/history failures never borrow initial static outputs;
 existing static metric names and default consumer requirements keep their original meaning.
 See `docs/material-scenario-studies.md`; geometric settledness is not stress equilibrium or fit.
 Dry independent-sheet and body-coverage histories may start with explicit `initial_instance_temperatures_c`

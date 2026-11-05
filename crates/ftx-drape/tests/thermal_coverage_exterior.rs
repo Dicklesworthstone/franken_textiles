@@ -387,8 +387,12 @@ fn automatic_faces_resolve_each_region_and_bind_accepted_depth_orientation() {
             steady.regions[i].outside_heat_w,
         );
     }
-    // Positive convection can qualify column ranges, but coverage still defers range admission.
-    // Its two copies of each conduction result must retain the same unavailable-range receipt.
+    // Fixed positive convection preserves the source resistance endpoints on both disjoint
+    // half-area paths. Radiation above remains nominal-only; its ranges are not inferred here.
+    assert!(solved.steady.ranges.reported_bounds.is_none());
+    for row in &solved.regions {
+        assert!(row.conduction.reported_bounds.is_none());
+    }
     let bounded = transport
         .solve_exterior(
             &cloth,
@@ -398,9 +402,23 @@ fn automatic_faces_resolve_each_region_and_bind_accepted_depth_orientation() {
             &[],
         )
         .unwrap();
-    assert!(bounded.steady.ranges.reported_bounds.is_none());
+    let expected = [
+        30. / (INSIDE_FILM + 0.22 + 1. / 3.),
+        30. / (INSIDE_FILM + 0.18 + 1. / 3.),
+    ];
+    let total = bounded.steady.ranges.reported_bounds.unwrap().power_w;
+    assert!(bounded.steady.ranges.bounds_unavailable.is_empty());
+    for (actual, expected) in total.into_iter().zip(expected) {
+        near(actual, expected);
+    }
     for (exterior, region) in bounded.regions.iter().zip(&bounded.steady.regions) {
-        assert!(exterior.conduction.reported_bounds.is_none());
+        let bounds = exterior.conduction.reported_bounds.unwrap();
+        assert!(exterior.conduction.bounds_unavailable.is_empty());
+        let power = region.ranges.reported_bounds.unwrap().power_w;
+        for ((flux, power), expected) in bounds.flux_w_m2.into_iter().zip(power).zip(expected) {
+            near(flux, expected);
+            near(power, 0.5 * expected);
+        }
         assert_eq!(
             serde_json::to_value(&exterior.conduction).unwrap(),
             serde_json::to_value(&region.conduction).unwrap()

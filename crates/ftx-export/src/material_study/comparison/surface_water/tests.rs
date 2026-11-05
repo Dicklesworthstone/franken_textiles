@@ -753,50 +753,199 @@ fn paired_water_sources_refuse_mixed_domains_operating_inputs_and_forged_receipt
 }
 
 #[test]
-fn paired_motion_protocol_includes_thermal_and_vapor_methods_without_changing_static_protocols() {
-    let (mut a, mut d, s, mut m) = coupled_case();
-    with_paired_qualifications(&mut d, &mut m);
-    let admitted = Numerical {
-        cutting_program: None,
-        finite_stock_program: None,
-        cutting_job_program: None,
-        drape: &s,
-        material_strain: None,
-        contact_loads: None,
-        vapor_surface: &Value::Null,
-        vapor_coverage: None,
-        motion: &m,
-        motion_material_strain: None,
-        motion_contact_loads: None,
-        motion_vapor_coverage: None,
-        motion_wet_film: None,
-        transient_surface: None,
-        transient_coverage: None,
-    };
-    let selection = a.frozen_changes.as_ref().unwrap().default.clone().unwrap();
-    for (metric, moving) in [
-        ("motion_max_absolute_edge_strain_pct", true),
-        ("max_absolute_edge_strain_pct", false),
-        ("assembly_mass_kg", false),
-    ] {
-        let policy: Policy = serde_json::from_value(json!({"basis":"nominal",
-            "objectives":[{"metric":metric,"direction":"minimize"}]}))
-        .unwrap();
-        let original = policy.protocol(&a, &d, &admitted).unwrap();
-        for property in [
-            "vapor_resistance",
-            "specific_heat",
-            "thermal_resistance",
-            "membrane_relaxation_heat_fraction",
-        ] {
-            // Exercise the protocol projection only; no altered selection is admitted as a receipt.
-            let mut raw = serde_json::to_value(&selection).unwrap();
-            raw["record"]["properties"][property]["method"] = json!("Different test method");
-            a.frozen_changes.as_mut().unwrap().default = Some(serde_json::from_value(raw).unwrap());
-            let changed = policy.protocol(&a, &d, &admitted).unwrap();
-            assert_eq!(original != changed, moving, "{metric}: {property}");
-            a.frozen_changes.as_mut().unwrap().default = Some(selection.clone());
+fn coupled_motion_protocol_includes_thermal_and_vapor_methods_without_changing_static_protocols() {
+    for coupling in ["none", "direct", "paired"] {
+        let (mut a, mut d, s, mut m) = if coupling == "none" {
+            case()
+        } else {
+            coupled_case()
+        };
+        if coupling == "paired" {
+            with_paired_qualifications(&mut d, &mut m);
         }
+        let admitted = Numerical {
+            cutting_program: None,
+            finite_stock_program: None,
+            cutting_job_program: None,
+            drape: &s,
+            material_strain: None,
+            contact_loads: None,
+            vapor_surface: &Value::Null,
+            vapor_coverage: None,
+            motion: &m,
+            motion_material_strain: None,
+            motion_contact_loads: None,
+            motion_vapor_coverage: None,
+            motion_wet_film: None,
+            transient_surface: None,
+            transient_coverage: None,
+        };
+        let selection = a.frozen_changes.as_ref().unwrap().default.clone().unwrap();
+        for (metric, moving) in [
+            ("motion_max_absolute_edge_strain_pct", true),
+            ("max_absolute_edge_strain_pct", false),
+            ("assembly_mass_kg", false),
+        ] {
+            let policy: Policy = serde_json::from_value(json!({"basis":"nominal",
+                "objectives":[{"metric":metric,"direction":"minimize"}]}))
+            .unwrap();
+            let original = policy.protocol(&a, &d, &admitted).unwrap();
+            for property in [
+                "vapor_resistance",
+                "specific_heat",
+                "thermal_resistance",
+                "membrane_relaxation_heat_fraction",
+            ] {
+                // Project qualifiers only; altered selections are not admitted as valid receipts.
+                let mut raw = serde_json::to_value(&selection).unwrap();
+                raw["record"]["properties"][property]["method"] = json!("Different test method");
+                a.frozen_changes.as_mut().unwrap().default =
+                    Some(serde_json::from_value(raw).unwrap());
+                let changed = policy.protocol(&a, &d, &admitted).unwrap();
+                assert_eq!(
+                    original != changed,
+                    moving && coupling != "none",
+                    "{coupling}: {metric}: {property}"
+                );
+                a.frozen_changes.as_mut().unwrap().default = Some(selection.clone());
+            }
+            let mut changed = d.clone();
+            let heat = &mut changed["scenario"]["motion"]["transient_surface"];
+            let water = if coupling == "paired" {
+                &mut heat["coupled_water_alternatives"][1]["surface_water"]
+            } else {
+                &mut heat["surface_water"]
+            };
+            water["source"]["reference"] = json!("test:changed-water-qualification");
+            assert_eq!(
+                original != policy.protocol(&a, &changed, &admitted).unwrap(),
+                moving && coupling != "none",
+                "{coupling}: {metric}: water source"
+            );
+        }
+    }
+}
+
+#[test]
+fn direct_and_paired_motion_require_complete_heat_and_liquid_receipts() {
+    let moving: Policy = serde_json::from_value(json!({"basis":"nominal",
+        "objectives":[{"metric":"motion_max_absolute_edge_strain_pct","direction":"minimize"}]}))
+    .unwrap();
+    let stationary: Policy = serde_json::from_value(json!({"basis":"nominal",
+        "objectives":[{"metric":"max_absolute_edge_strain_pct","direction":"minimize"}]}))
+    .unwrap();
+    for paired in [false, true] {
+        let (a, mut d, mut s, mut m) = coupled_case();
+        if paired {
+            with_paired_qualifications(&mut d, &mut m);
+        }
+        // Complete only the enclosing trajectory metadata around the existing conservative
+        // synthetic heat/liquid receipt. No numerical solver or physical fit claim is made here.
+        d["scenario_sha256"] = json!("c".repeat(64));
+        d["body_geometry_sha256"] = json!("d".repeat(64));
+        d["motion_path"] = json!({"sha256":m["path_sha256"]});
+        d["scenario"]["motion"]["schema"] = json!("ftx-drape-motion/1");
+        d["scenario"]["motion"]["max_trials"] = json!(1);
+        d["scenario"]["motion"]["keyframes"] = json!([{"time_s":1.,"arm_abduction_deg":35.}]);
+        m["schema"] = json!("ftx-drape-motion-result/1");
+        m["continuous_contact_checked"] = json!(true);
+        m["initial_drape_settled"] = json!(true);
+        m["initial_drape_gating"] = json!([]);
+        m["trials"] = json!(1);
+        m["body_triangles"] = json!([[0, 1, 2]]);
+        m["samples"][0]["body_positions_m"] =
+            json!([[0., 0., -1.], [1., 0., -1.], [0., 1., -1.]]);
+        m["samples"][0]["solve"] = json!({"converged":true});
+        m["metrics"] = json!({"max_absolute_edge_strain_pct":3.});
+        m["keyframes"] = json!([{"sample_index":0,"time_s":1.,"arm_abduction_deg":35.,
+            "positions_sha256":hash(&m["samples"][0]["positions_m"]).unwrap(),
+            "body_collision_sha256":hash(&(&m["samples"][0]["body_positions_m"],
+                &m["body_triangles"])).unwrap()}]);
+        s["schema"] = json!("ftx-drape-scenario-result/1");
+        s["pattern_sha256"] = a.binding.value().unwrap()["pattern_sha256"].clone();
+        s["scenario_sha256"] = d["scenario_sha256"].clone();
+        s["body_geometry_sha256"] = d["body_geometry_sha256"].clone();
+        s["positions_sha256"] = m["initial_positions_sha256"].clone();
+        s["drape"]["settled"] = json!(true);
+        s["drape"]["gating"] = json!([]);
+        s["drape"]["global_strain_pct"] = json!({"min":-2.,"max":3.});
+        s["metrics"] = json!({"simulation_gating_clear":true});
+        s["motion"] = json!({"status":"available","result":m});
+        let admitted = moving.candidate(&a, None, &d, &s);
+        assert!(admitted.eligible, "paired={paired}: {:?}", admitted.exclusions);
+        assert_eq!(
+            admitted.readings[&Metric::MotionMaxAbsoluteEdgeStrainPct].value,
+            3.
+        );
+        let static_before = stationary.candidate(&a, None, &d, &s);
+        assert!(static_before.eligible, "{:?}", static_before.exclusions);
+        for fault in [
+            "unavailable_heat",
+            "missing_heat",
+            "missing_water",
+            "missing_initial_mass",
+            "missing_final_mass",
+            "missing_sample_mass",
+            "changed_water_source",
+            "changed_mass",
+            "changed_heat_request",
+        ] {
+            let mut changed = s.clone();
+            let motion = &mut changed["motion"]["result"];
+            match fault {
+                "unavailable_heat" => motion["transient_surface"]["status"] = json!("refused"),
+                "missing_heat" => motion["transient_surface"] = Value::Null,
+                "missing_water" => {
+                    motion["transient_surface"]["result"]["surface_water"] = Value::Null;
+                }
+                "missing_initial_mass" => {
+                    motion["initial_sample"]["liquid_mechanics"] = Value::Null;
+                }
+                "missing_final_mass" => motion["liquid_mechanics"] = Value::Null,
+                "missing_sample_mass" => {
+                    motion["transient_surface"]["result"]["trace"][0]["mechanical_coupling"] =
+                        Value::Null;
+                }
+                "changed_water_source" => {
+                    motion["transient_surface"]["result"]["surface_water"]["request"]["bindings"]
+                        ["front"]["material_sha256"] = json!("f".repeat(64));
+                }
+                "changed_mass" => {
+                    motion["liquid_mechanics"]["remaining_liquid_mass_kg"] = json!(1e-9);
+                }
+                _ => {
+                    motion["transient_surface"]["result"]["request"]["initial_temperature_c"] =
+                        json!(19.);
+                }
+            }
+            let rejected = moving.candidate(&a, None, &d, &changed);
+            assert!(!rejected.eligible, "paired={paired}: {fault}");
+            assert!(
+                !rejected
+                    .readings
+                    .contains_key(&Metric::MotionMaxAbsoluteEdgeStrainPct),
+                "paired={paired}: {fault}"
+            );
+            assert_eq!(
+                serde_json::to_value(stationary.candidate(&a, None, &d, &changed)).unwrap(),
+                serde_json::to_value(&static_before).unwrap(),
+                "paired={paired}: {fault}"
+            );
+        }
+        let mut dry_descriptor = d.clone();
+        dry_descriptor["scenario"]["motion"]
+            .as_object_mut()
+            .unwrap()
+            .remove("transient_surface");
+        let motion = &mut s["motion"]["result"];
+        motion.as_object_mut().unwrap().remove("transient_surface");
+        motion.as_object_mut().unwrap().remove("liquid_mechanics");
+        motion["initial_sample"]
+            .as_object_mut()
+            .unwrap()
+            .remove("liquid_mechanics");
+        let dry = moving.candidate(&a, None, &dry_descriptor, &s);
+        assert!(dry.eligible, "{:?}", dry.exclusions);
     }
 }
 
