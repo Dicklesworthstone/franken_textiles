@@ -171,7 +171,10 @@ fn distinct_material_heat_fractions_share_one_maxwell_law_in_comparison() {
         assert_eq!(heating, &coverage["relaxation_dissipation_heat"]);
         let materials = heating["material_fractions"].as_array().unwrap();
         assert_eq!(materials.len(), 2, "{heating}");
-        assert_ne!(materials[0]["material_sha256"], materials[1]["material_sha256"]);
+        assert_ne!(
+            materials[0]["material_sha256"],
+            materials[1]["material_sha256"]
+        );
         assert_eq!(materials[0]["law_sha256"], materials[1]["law_sha256"]);
         for instance in instances {
             let receipt = materials
