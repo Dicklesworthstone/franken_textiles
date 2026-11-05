@@ -630,12 +630,34 @@ policies; its exact request remains authoritative.
 
 The **Layered heat and potential vapor transfer** controls keep three independent consumers:
 
-- **Body/layer heat** takes the original `scenario.coverage` fragment: `body_triangle_ids`,
-  `instance_layers`, `settings`, `conditions` and optional qualified `thermal_bridges`.
+- **Body/layer heat** can be authored in the form or retained as the original `scenario.coverage`
+  fragment: `body_triangle_ids`, `instance_layers`, `settings`, `conditions` and optional qualified
+  `thermal_bridges`.
 - **Independent-sheet vapor** takes original `ftx-vapor-surface-conditions/1` conditions or the
   explicitly selected section-3 uniform/form or original-file conditions.
 - **Covered-body vapor** takes the original `scenario.vapor_coverage` fragment with
   `body_triangle_ids`, `instance_layers`, `settings` and `conditions`.
+
+For authored heat, choose **Declare body regions, garment layers and uniform heat conditions here**.
+Enter up to 4,096 unique collision-body triangle IDs, using individual IDs or inclusive ranges such
+as `0-15, 22, 31-33`. These are indices in the selected body's collision mesh, not inferred anatomical
+regions. Saved cases share the selected body; changing that mesh retains the numeric declaration,
+so review its intended physical region before rerunning.
+
+Save each exact retained physical-instance name with its physical layer, then declare every needed
+directed interface with its resistance and a measurement source or explicit assumption. Zero
+resistance must be entered explicitly. Save/replace/remove acts on individual rows; typing a row
+only prepares a draft. Renaming a layer does not silently repair an older interface. Declare the
+search distance, normal cosine, separation tolerance and depth resolution, followed by uniform
+inside/outside reservoir temperatures and film resistances. The native projection still determines
+actual overlap and layer order and rejects ambiguous or unsupported geometry.
+
+Named cases freeze the complete saved topology and conditions. Active control edits withdraw stale
+work; inactive original files and unsaved rows do not change an authored request. Pattern replacement
+clears this garment's topology. The original-policy mode preserves advanced input bytes for
+nonuniform boundaries, source-qualified convection/radiation, stagnant-gap interfaces and thermal
+bridges. This authoring increment is tracked by `ftx-ms2.21`; it does not add a thermal law or prove
+physical garment coverage.
 
 Coverage fragments have no separate schema field. Supply scenario projection policies, not a
 previously computed coverage map: every material/design alternative projects its declared layers
@@ -1244,5 +1266,6 @@ This delivers the local operator integration slice of plan §25.9, including sou
 calibration, named scenario comparisons, transient heat and motion histories, and potential vapor and
 finite body water histories through the shared native engines. Each result retains its own evidence,
 physical scope and refusals. It does not close the full empirical linen/leather/knit garment gate,
-acquire new measured records, qualify live supplier coverage, or provide interactive body/layer-map
-editing or robot execution. Those remain distinct follow-on capabilities.
+acquire new measured records, qualify live supplier coverage, or provide geometric body/layer-map
+painting or robot execution. Declared numeric coverage policies are editable through the controls
+above; geometric region picking and physical qualification remain separate capabilities.

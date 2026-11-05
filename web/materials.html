@@ -999,8 +999,54 @@ qualify a drape-based comparison. Zero gravity steps describe a sewing-only expe
 <p class="note">Uses each alternative's fresh geometry and qualified thermal observations with the declared reservoir temperatures
 and boundary films. Independent sheet power is not layered body coverage, whole-wearer heat loss or a comfort score.</p>
 <fieldset><legend>Layered heat and potential vapor transfer</legend>
-<label><input id="guidedCoverage" type="checkbox"> Evaluate body/layer heat with an original coverage policy</label>
-<label>Original scenario coverage policy JSON <input id="guidedCoverageFile" type="file" accept=".json,application/json" disabled></label>
+<label><input id="guidedCoverage" type="checkbox"> Evaluate body/layer heat on the selected body</label>
+<label>Body/layer heat source <select id="guidedCoverageSource"><option value="file">Retain an original coverage policy</option>
+<option value="form">Declare body regions, garment layers and uniform heat conditions here</option></select></label>
+<label id="guidedCoverageFileField">Original scenario coverage policy JSON <input id="guidedCoverageFile" type="file" accept=".json,application/json" disabled></label>
+<div id="guidedCoverageForm" hidden>
+<label>Body triangle IDs or inclusive ranges <textarea id="guidedCoverageTriangles" rows="2" placeholder="For example: 0-15, 22, 31-33"></textarea></label>
+<small>Use the selected collision body's triangle indices. Separate entries with commas or whitespace; write ranges without spaces around the hyphen.
+At most 4,096 distinct IDs. No body region or anatomy is inferred. Saved cases share the currently selected body.
+Changing that body reuses these numeric IDs on its collision mesh; confirm they still describe the intended region before recomputing.</small>
+<div class="study-fields">
+<label>Outward search distance (m) <input id="guidedCoverageDistance" type="number" min="0" step="any"></label>
+<label>Minimum absolute normal cosine (0–1] <input id="guidedCoverageCosine" type="number" min="0" max="1" step="any"></label>
+<label>Layer separation tolerance (m) <input id="guidedCoverageSeparation" type="number" min="0" step="any"></label>
+<label>Through-thickness cells per layer <input id="guidedCoverageCells" type="number" min="1" max="64" step="1" value="1"></label>
+</div>
+<p class="note">Distances are positive, with separation tolerance smaller than the search distance. The engine computes actual overlap and layer order
+from each fresh drape. It refuses ambiguous, unqualified or incomplete geometry; these controls do not create coverage.</p>
+<div class="study-fields">
+<label>Exact physical instance name <input id="guidedCoverageInstance" type="text" placeholder="For example: front.R"></label>
+<label>Physical layer name <input id="guidedCoverageLayer" type="text" placeholder="For example: shell"></label>
+</div>
+<button id="saveCoverageLayer" type="button">Save or replace this instance's layer</button>
+<div id="guidedCoverageLayers" class="study-choices"></div>
+<p class="note">Assign every retained physical instance exactly once, using names from the drape report. Several pieces may share one layer.
+Names preserve spaces and case. Source-piece names are not expanded into physical instances.</p>
+<div class="study-fields">
+<label>Inner physical layer <input id="guidedCoverageInner" type="text" placeholder="For example: lining"></label>
+<label>Outer physical layer <input id="guidedCoverageOuter" type="text" placeholder="For example: shell"></label>
+<label>Interface resistance (m² K/W of covered body area) <input id="guidedCoverageResistance" type="number" min="0" step="any"></label>
+</div>
+<label>Interface measurement source or explicit assumption <textarea id="guidedCoverageBasis" rows="2"></textarea></label>
+<button id="saveCoverageInterface" type="button">Save or replace this directed interface</button>
+<div id="guidedCoverageInterfaces" class="study-choices"></div>
+<p id="guidedCoverageTopologySummary">0 saved instance assignments, 0 directed interfaces.</p>
+<button id="clearCoverageTopology" type="button">Clear saved layer assignments and interfaces</button>
+<p class="note">Declare a resistance and basis for every adjacent layer pair that occurs, including an explicit zero when intended.
+An empty interface table is suitable only when no cross-layer interface is needed. Layer edits may require updating saved interfaces.
+The fields above are drafts until saved; each name or basis is limited to 4,096 UTF-8 bytes.</p>
+<div class="study-fields">
+<label>Inside reservoir (°C) <input id="guidedCoverageInside" type="number" min="-273.15" step="any"></label>
+<label>Outside reservoir (°C) <input id="guidedCoverageOutside" type="number" min="-273.15" step="any"></label>
+<label>Inside film resistance (m² K/W) <input id="guidedCoverageInsideFilm" type="number" min="0" step="any"></label>
+<label>Outside film resistance (m² K/W) <input id="guidedCoverageOutsideFilm" type="number" min="0" step="any"></label>
+</div>
+<p class="note">These uniform reservoir and film conditions apply over the declared body domain, including bare paths.
+Use the original-policy option for nonuniform boundaries, qualified convection/radiation, stagnant-gas interfaces or seam/closure heat paths.
+Saving a named case retains its complete current topology and conditions; later draft edits do not change it.</p>
+</div>
 <label><input id="guidedVaporSurface" type="checkbox"> Evaluate independent-sheet vapor potential</label>
 <label>Sheet vapor source for this case <select id="guidedVaporSurfaceSource"><option value="file">Retain original case JSON</option><option value="workbench">Use the selected section-3 sheet vapor conditions</option></select></label>
 <label id="guidedVaporSurfaceFileField">Original vapor conditions JSON (<code>ftx-vapor-surface-conditions/1</code>)

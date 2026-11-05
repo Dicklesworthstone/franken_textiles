@@ -940,6 +940,67 @@ test('guided covered heat and vapor retain every original fragment without inven
   assert.equal(Object.hasOwn(result.vapor_coverage.conditions,'required_method'),false,'Native optional defaults are not inserted into source files');
 });
 
+const authoredCoverage = () => ({bodyTriangleIds:'4-6, 2\n9',
+  instanceLayers:[{instance:'front.R',layer:'shell'},{instance:'lining.R',layer:'lining'}],
+  settings:{max_distance_m:0.2,min_normal_cosine:0.1,separation_tolerance_m:0.00001,cells_per_layer:2,
+    interfaces:[{inner:'lining',outer:'shell',resistance_m2_k_w:0,basis:'Explicit zero-resistance synthetic assumption'}]},
+  boundary:{inside_c:30,outside_c:5,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0.2}});
+
+test('authored coverage expands bounded body ranges and preserves exact physical layer ownership through single and named cases', async () => {
+  const {buildMaterialCoverageRequest:build,buildMaterialScenarioRequest:scenario,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const input=authoredCoverage();input.instanceLayers.push({instance:'__proto__',layer:'shell'},{instance:' front.R ',layer:'shell'});
+  input.settings.interfaces[0].basis='Declared interface <café 🧵>';const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(result.body_triangle_ids,[4,5,6,2,9]);
+  assert.deepEqual(result.instance_layers,JSON.parse('{"front.R":"shell","lining.R":"lining","__proto__":"shell"," front.R ":"shell"}'));
+  assert.deepEqual(result.settings,input.settings);assert.deepEqual(result.conditions,{boundaries:[input.boundary]});
+  assert.equal(Object.hasOwn(result,'schema'),false);assert.equal(Object.hasOwn(result,'thermal_bridges'),false);
+  const first=scenario({...scenarioState(),maxVertexFrames:32000000,coverage:raw});assert.ok(first.includes(raw));
+  input.boundary.outside_c=-10;input.settings.interfaces[0].resistance_m2_k_w=0.05;
+  const second=scenario({...scenarioState(),maxVertexFrames:32000000,coverage:build(input)});
+  const cases=JSON.parse(matrix({maxEvaluations:4,cases:[{key:'first',scenario:first},{key:'second',scenario:second}]})).cases;
+  assert.deepEqual(cases.map(c=>c.scenario.coverage.conditions.boundaries[0].outside_c),[5,-10]);
+  assert.deepEqual(cases.map(c=>c.scenario.coverage.settings.interfaces[0].resistance_m2_k_w),[0,0.05]);
+});
+
+test('authored coverage refuses ambiguous or oversized body ranges before expansion', async () => {
+  const {buildMaterialCoverageRequest:build}=await modulePromise;
+  for(const bodyTriangleIds of ['',null,[],[1],'-1','1.5','1e2','1--2','3-1','1 - 2','1,1','1-3 3-5',
+    '0-4096','0-4095,4096',Array.from({length:4097},(_,i)=>i).join(','),'9007199254740992','0-9007199254740991','0,',' '.repeat(16*1024*1024)+'0']) {
+    assert.throws(()=>build({...authoredCoverage(),bodyTriangleIds}),String(bodyTriangleIds).slice(0,100));
+  }
+  const ids=JSON.parse(build({...authoredCoverage(),bodyTriangleIds:'0-4095'})).body_triangle_ids;
+  assert.equal(ids.length,4096);assert.equal(ids[0],0);assert.equal(ids.at(-1),4095);
+  assert.deepEqual(JSON.parse(build({...authoredCoverage(),bodyTriangleIds:'9007199254740991'})).body_triangle_ids,[Number.MAX_SAFE_INTEGER],
+    'Actual body topology remains a native-consumer check');
+});
+
+test('authored coverage requires explicit complete geometry, physical assignments and sourced directed interfaces', async () => {
+  const {buildMaterialCoverageRequest:build}=await modulePromise;
+  const input=authoredCoverage();
+  for(const instanceLayers of [null,[],{},[{instance:'front.R',layer:''}],
+    [{instance:'front.R',layer:'shell'},{instance:'front.R',layer:'lining'}],
+    [{instance:'front.R',layer:1}],[{instance:'front.R',layer:'shell',extra:1}],
+    [{instance:'é'.repeat(2049),layer:'shell'}]])assert.throws(()=>build({...input,instanceLayers}));
+  for(const [key,values] of Object.entries({max_distance_m:[0,-1,Infinity,'1'],min_normal_cosine:[0,1.01,NaN,'0.5'],
+    separation_tolerance_m:[0,-1,0.2,1],cells_per_layer:[0,65,1.5,'1'],interfaces:[null,{},Array(4097).fill(input.settings.interfaces[0])]})) {
+    for(const value of values)assert.throws(()=>build({...input,settings:{...input.settings,[key]:value}}),key+':'+value);
+  }
+  const interfaceRow=input.settings.interfaces[0];
+  for(const row of [{...interfaceRow,inner:'missing'},{...interfaceRow,outer:'lining'},
+    {...interfaceRow,basis:''},{...interfaceRow,resistance_m2_k_w:-0.1},{...interfaceRow,resistance_m2_k_w:'0'},
+    {...interfaceRow,stagnant_gap:{}},{...interfaceRow,basis:'x'.repeat(4097)}]) {
+    assert.throws(()=>build({...input,settings:{...input.settings,interfaces:[row]}}));
+  }
+  assert.throws(()=>build({...input,settings:{...input.settings,interfaces:[interfaceRow,interfaceRow]}}),/uniquely/);
+  for(const key of Object.keys(input)) {const missing={...input};delete missing[key];assert.throws(()=>build(missing),/missing/);}
+  for(const key of Object.keys(input.settings)) {const settings={...input.settings};delete settings[key];assert.throws(()=>build({...input,settings}),/missing/);}
+  assert.throws(()=>build({...input,thermal_bridges:{}}),/unsupported/);
+  assert.throws(()=>build({...input,boundary:{...input.boundary,outside_c:-273.151}}));
+  assert.throws(()=>build({...input,boundary:{...input.boundary,inside_resistance_m2_k_w:-1}}));
+  const oneLayer=JSON.parse(build({...input,instanceLayers:[{instance:'front.R',layer:'shell'}],settings:{...input.settings,interfaces:[]}}));
+  assert.deepEqual(oneLayer.settings.interfaces,[],'An empty table declares no cross-layer resistance; actual adjacent paths remain native-owned');
+});
+
 test('guided coverage envelopes refuse source coercion and wrappers while Rust retains physical admission', async () => {
   const {buildMaterialScenarioRequest:build}=await modulePromise;
   for(const [field,policy] of [['coverage',coveragePolicy],['vaporCoverage',vaporCoveragePolicy]]) {

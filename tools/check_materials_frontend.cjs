@@ -6089,6 +6089,117 @@ function useWorkbenchVapor(p) {
   p.e.guidedVaporSurfaceSource.value='workbench';p.e.guidedVaporSurfaceSource.handlers.change();
 }
 
+function saveCoverageLayer(p,instance,layer) {
+  p.e.guidedCoverageInstance.value=instance;p.e.guidedCoverageLayer.value=layer;p.e.saveCoverageLayer.onclick();
+}
+function saveCoverageInterface(p,inner,outer,resistance,basis) {
+  p.e.guidedCoverageInner.value=inner;p.e.guidedCoverageOuter.value=outer;
+  p.e.guidedCoverageResistance.value=String(resistance);p.e.guidedCoverageBasis.value=basis;p.e.saveCoverageInterface.onclick();
+}
+function authorBodyCoverage(p,outside=5) {
+  p.e.guidedCoverage.checked=true;p.e.guidedCoverage.handlers.change();
+  p.e.guidedCoverageSource.value='form';p.e.guidedCoverageSource.handlers.change();
+  for(const [id,value] of Object.entries({guidedCoverageTriangles:'4-6, 2\n9',guidedCoverageDistance:'0.2',guidedCoverageCosine:'0.1',
+    guidedCoverageSeparation:'0.00001',guidedCoverageCells:'2',guidedCoverageInside:'30',guidedCoverageOutside:String(outside),
+    guidedCoverageInsideFilm:'0.1',guidedCoverageOutsideFilm:'0.2'}))p.e[id].value=value;
+  saveCoverageLayer(p,'front.R','shell');saveCoverageLayer(p,'lining.R','lining <β>');
+  saveCoverageInterface(p,'lining <β>','shell',0,'Explicit synthetic assumption <café 🧵>');
+  return {body_triangle_ids:[4,5,6,2,9],instance_layers:{'front.R':'shell','lining.R':'lining <β>'},
+    settings:{max_distance_m:0.2,min_normal_cosine:0.1,separation_tolerance_m:0.00001,cells_per_layer:2,
+      interfaces:[{inner:'lining <β>',outer:'shell',resistance_m2_k_w:0,basis:'Explicit synthetic assumption <café 🧵>'}]},
+    conditions:{boundaries:[{inside_c:30,outside_c:outside,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0.2}]}};
+}
+
+test('authored body coverage connects explicit body ranges and saved layer interfaces to ordinary scenario comparisons',async()=>{
+  const {p,sources}=await guidedScenarioSetup();
+  for(const id of ['guidedCoverageTriangles','guidedCoverageDistance','guidedCoverageCosine','guidedCoverageSeparation',
+    'guidedCoverageInside','guidedCoverageOutside','guidedCoverageInsideFilm','guidedCoverageOutsideFilm','guidedCoverageBasis']) {
+    assert.equal(p.e[id].value,'',id+' must not invent geometry, boundary or source evidence');
+  }
+  const coverage=authorBodyCoverage(p);assert.equal(p.e.guidedCoverageForm.hidden,false);assert.equal(p.e.guidedCoverageFile.disabled,true);
+  assert.match(visibleText(p.e.guidedCoverageInterfaces),/Explicit synthetic assumption <café 🧵>/);
+  p.select('guidedCoverageFile','{inactive');p.e.guidedCoverageFile.files[0].arrayBuffer=async()=>{throw Error('Inactive original coverage file read');};
+  p.e.guidedCoveragePowerGoal.checked=true;p.e.guidedCoveragePowerDirection.value='minimize';p.e.guidedRequireCoverage.checked=true;
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const request=JSON.parse(sent.scenarioRequest);assert.deepEqual(request.coverage,coverage);assert.ok(sent.scenarioRequest.includes(sources.fit));
+  for(const key of ['surface','motion','vapor_coverage'])assert.equal(Object.hasOwn(request,key),false);
+  const comparison=JSON.parse(sent.studyRequest).comparison;
+  assert.ok(comparison.objectives.some(item=>item.metric==='body_coverage_power_w'));
+  assert.ok(comparison.required_consumers.includes('coverage'));
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const link=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(link.href).text(),sent.scenarioRequest);
+  p.e.guidedCoverage.checked=false;p.e.guidedCoverage.handlers.change();p.e.guidedCoveragePowerGoal.checked=false;p.e.guidedRequireCoverage.checked=false;
+  p.e.guidedCoverageInside.value='invalid';await p.e.scenario.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).scenarioRequest),'coverage'),false,'An inactive incomplete form cannot block independent consumers');
+});
+
+test('authored body coverage freezes named-case topology and preserves advanced original policies byte for byte',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);const first=authorBodyCoverage(p);await saveGuidedCase(p,'cold');
+  const second=authorBodyCoverage(p,-10);saveCoverageInterface(p,'lining <β>','shell',0.05,'Changed explicit assumption');
+  second.settings.interfaces[0]={inner:'lining <β>',outer:'shell',resistance_m2_k_w:0.05,basis:'Changed explicit assumption'};
+  await saveGuidedCase(p,'colder');await p.e.scenario.onclick();const frozen=p.current().messages.at(-1).scenarioRequest;
+  assert.deepEqual(JSON.parse(frozen).cases.map(item=>item.scenario.coverage),[first,second]);p.emit(scenarioReport());
+  p.e.body.files=[new Blob([new Uint8Array([7,8,9])])];p.e.body.handlers.change();
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true,'A new common body withdraws evaluated coverage');
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,frozen,'Saved cases retain their explicitly declared indices');
+  assert.deepEqual(Array.from(new Uint8Array(p.current().messages.at(-1).bytes)),[7,8,9]);p.emit(scenarioReport());
+  p.e.guidedCoverageTriangles.value='bad';p.e.guidedCoverageTriangles.handlers.input();p.e.clearCoverageTopology.onclick();
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false);await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,frozen);p.emit(scenarioReport());
+  p.e.scenarioMode.value='guided';p.e.scenarioMode.handlers.change();p.e.guidedCoverageSource.value='file';p.e.guidedCoverageSource.handlers.change();
+  const original=guidedTransportOriginal.coverage.replace('}}\r\n','},"thermal_bridges":{"source":"café 🧵","value":-0.0}}\r\n');
+  p.select('guidedCoverageFile',original);p.e.guidedCoverageFile.handlers.change();await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(original));
+  assert.match(sent.scenarioRequest,/18446744073709551615/);assert.match(sent.scenarioRequest,/"value":-0\.0/);
+  assert.equal(p.e.guidedCoverageForm.hidden,true);assert.equal(p.e.guidedCoverageFile.disabled,false);
+});
+
+test('authored body coverage rejects incomplete domains and interfaces before reading asynchronous scenario sources',async()=>{
+  const {p}=await guidedScenarioSetup();authorBodyCoverage(p);let reads=0;
+  p.e.fit.files[0].arrayBuffer=async()=>{reads++;return utf8Buffer('{}');};
+  for(const [id,value] of [['guidedCoverageTriangles','4-6,6'],['guidedCoverageTriangles','0-4096'],['guidedCoverageTriangles',''],
+    ['guidedCoverageDistance',''],['guidedCoverageCosine','1.01'],['guidedCoverageSeparation','0.2'],['guidedCoverageCells','65'],
+    ['guidedCoverageInside','-273.151'],['guidedCoverageOutsideFilm','-1'],['guidedCoverageSource','unknown']]) {
+    const previous=p.e[id].value;p.e[id].value=value;const before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before,id);assert.equal(reads,0,id);assert.equal(p.e.error.hidden,false,id);p.e[id].value=previous;
+  }
+  const before=visibleText(p.e.guidedCoverageInterfaces);
+  for(const values of [['missing','shell',0,'explicit'],['shell','shell',0,'explicit'],['lining <β>','shell',-1,'explicit'],
+    ['lining <β>','shell',0,''],['lining <β>','shell','', 'explicit']]) {
+    saveCoverageInterface(p,...values);assert.equal(visibleText(p.e.guidedCoverageInterfaces),before);
+    assert.equal(p.e.error.hidden,false);
+  }
+  saveCoverageLayer(p,'lining.R','different layer');const sentBefore=p.current().messages.length;await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,sentBefore);assert.match(p.e.error.textContent,/saved layer names/);assert.equal(reads,0);
+  p.e.clearCoverageTopology.onclick();await p.e.scenario.onclick();assert.match(p.e.error.textContent,/physical-instance layer assignments/);assert.equal(reads,0);
+});
+
+test('authored body coverage snapshots active inputs and cancels obsolete reads while draft rows and inactive files stay independent',async()=>{
+  for(const saving of [false,true])for(const change of ['field','assignment',...(saving?[]:['body'])]) {
+    const {p,sources}=await guidedScenarioSetup();authorBodyCoverage(p);if(saving)guidedNamedCases(p);
+    const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),before=old.messages.length,running=saving?saveGuidedCase(p,'obsolete'):p.e.scenario.onclick();
+    if(change==='field'){p.e.guidedCoverageOutside.value='20';p.e.guidedCoverageOutside.handlers.input();}
+    else if(change==='assignment')saveCoverageLayer(p,'front.R','changed');
+    else p.e.body.handlers.change();
+    assert.equal(old.dead,true,`${saving}/${change}`);p.ready();delay.resolve(sources.fit);await running;
+    assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);if(saving)assert.equal(p.e.guidedScenarioCases.children.length,0);
+  }
+  const {p,sources}=await guidedScenarioSetup(),coverage=authorBodyCoverage(p),delay=deferred();
+  p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);const old=p.current(),running=p.e.scenario.onclick();
+  p.e.guidedCoverageOutside.value='100';p.e.guidedCoverageLayer.value='unsaved draft';
+  p.e.guidedCoverageFile.handlers.change();assert.equal(old.dead,false,'Inactive file and unsaved row fields cannot cancel retained form inputs');
+  delay.resolve(sources.fit);await running;const sent=old.messages.at(-1);assert.deepEqual(JSON.parse(sent.scenarioRequest).coverage,coverage);
+  p.e.guidedCoverageSource.value='file';p.e.guidedCoverageSource.handlers.change();assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete.json',text:'{}'}]});
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);assert.equal(p.live.size,0);
+  p.select('guidedCoverageFile',guidedTransportOriginal.coverage);await p.e.scenario.onclick();const current=p.current();
+  p.e.guidedCoverageOutside.value='bad';p.e.guidedCoverageOutside.handlers.input();assert.equal(current.dead,false,'Inactive authored fields cannot cancel original-file work');
+  p.emit(scenarioReport());await p.load();assert.equal(p.e.guidedCoverage.checked,false);assert.equal(p.e.guidedCoverageTriangles.value,'');
+  assert.equal(p.e.guidedCoverageLayers.children.length,0);assert.equal(p.e.guidedCoverageInterfaces.children.length,0);
+});
+
 test('uniform sheet conditions start blank and share exact standalone and guided requests',async()=>{
   const {p,sources}=await guidedScenarioSetup(true);
   for(const id of ['heatConditionsSource','vaporSurfaceConditionsSource','guidedVaporSurfaceSource'])assert.equal(p.e[id].value||'file','file');
@@ -16060,6 +16171,37 @@ function removeGuidedDryHeatInstance(p,instance) {
   const button=descendants(p.e.guidedMotionHeatInstances).find(node=>node.tag==='button'&&node.textContent==='Remove initial temperature for '+instance);
   assert.ok(button,instance);assert.equal(button.disabled,false);button.onclick();
 }
+
+test('original moving coverage preserves instance temperature sources and renders only retained coverage owners',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p,'file');
+  const heat={schema:'ftx-motion-coverage-heat/1',initial_temperature_c:999,
+    initial_instance_temperatures_c:{'front.R':-12.5,'lining.R':33.25},body_triangle_ids:[2],
+    instance_layers:{'front.R':'shell','lining.R':'lining'},settings:{max_distance_m:0.2,min_normal_cosine:0.1,
+      separation_tolerance_m:0.00001,cells_per_layer:1,interfaces:[{inner:'lining',outer:'shell',resistance_m2_k_w:0,basis:'Synthetic explicit interface'}]},
+    boundaries:[{inside_c:30,outside_c:5,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0.2}],
+    exposed_boundaries:[null],max_step_s:0.001,max_cell_steps:100000,max_geometry_operations:2000000};
+  const original=' {"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.0020,"arm_abduction_deg":35.0}],'+
+    '"max_step_s":0.0010,"max_trials":16,"max_pairs":100000,"transient_coverage":'+
+    JSON.stringify(heat).replace('"max_cell_steps":100000','"max_cell_steps":1.00000e5')+'}\r\n';
+  p.select('guidedMotionFile',original);p.e.guidedMotionFile.handlers.change();await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(original));
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).motion.transient_coverage,heat);
+  const initial={schema:'ftx-motion-coverage-initial-condition/1',model_sha256:'coverage-source-lock',frame_sha256:'initial-coverage-frame',
+    instances:['lining.R','unused','front.R'],triangle_instance:[2,0],instance_temperature_c:[33.25,999,-12.5],temperature_range_c:[-12.5,33.25]};
+  const history={request:heat,initial_condition:initial,duration_s:0.002,thermal_steps:2,trace:[{temperature_range_c:[-10,32]}],
+    net_boundary_energy_j:1,physical_stored_change_j:1,balance_error_j:0,signed_remap_residual_j:0};
+  const report=scenarioReport();report.scenario.scenario=JSON.parse(sent.scenarioRequest);
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome({samples:[{}],keyframes:[],transient_coverage:outcome(history)});
+  p.emit(report,[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const output=section(p,'Fresh drape and heat alternatives'),table=descendants(output)
+    .find(node=>node.tag==='table'&&node.children[0].textContent==='A: resolved initial dry coverage cloth temperatures');
+  assert.ok(table);assert.deepEqual(plain(table.children.slice(2).map(row=>row.children.map(node=>node.textContent))),
+    [['lining.R','33.25'],['front.R','-12.5']]);assert.doesNotMatch(visibleText(table),/unused|999/);
+  assert.match(visibleText(output),/Resolved initial range over retained coverage cloth: \[-12.5, 33.25\]/);
+  const receipt=descendants(output).find(node=>node.tag==='details'&&node.children[0].textContent==='A: initial temperature source and retained triangle ownership (display only)');
+  receipt.open=true;receipt.handlers.toggle();assert.match(visibleText(receipt),/coverage-source-lock/);assert.match(visibleText(receipt),/initial-coverage-frame/);
+  const link=descendants(output).find(node=>node.download==='scenario-request.json');assert.equal(await p.blobs.get(link.href).text(),sent.scenarioRequest);
+});
 
 test('guided dry instance temperatures retain explicit overrides, uniform fallback and actual resolved source receipts',async()=>{
   const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);

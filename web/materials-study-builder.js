@@ -162,6 +162,80 @@ export function buildMaterialSurfaceConditions(boundary) {
   return JSON.stringify({ schema: "ftx-steady-surface-conditions/1", boundaries: [boundary] });
 }
 
+/** Author geometric coverage inputs; the native projection determines actual overlap and layer order. */
+export function buildMaterialCoverageRequest(state) {
+  const fields = ["bodyTriangleIds", "instanceLayers", "settings", "boundary"];
+  object(state, fields, fields, "Guided body/layer heat");
+  if (typeof state.bodyTriangleIds !== "string" || !state.bodyTriangleIds.trim()) {
+    throw Error("Declare body triangle IDs or inclusive ranges, such as 0-15, 22, 31-33.");
+  }
+  let size = bytes(state.bodyTriangleIds);
+  const ids = [], seen = new Set();
+  const tokens = state.bodyTriangleIds.trim().split(/[,\s]+/, 4097);
+  if (tokens.length > 4096) throw Error("Declare at most 4096 body triangle IDs or ranges.");
+  for (const token of tokens) {
+    const match = /^(\d+)(?:-(\d+))?$/.exec(token);
+    if (!match) throw Error("Body triangle entries must be nonnegative integer IDs or inclusive ranges without spaces around the hyphen.");
+    const first = Number(match[1]), last = Number(match[2] ?? match[1]), count = last - first + 1;
+    if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || first < 0 || last < first || count > 4096 - ids.length) {
+      throw Error("Declare at most 4096 body triangle IDs, using increasing safe-integer ranges.");
+    }
+    for (let offset = 0; offset < count; offset++) {
+      const id = first + offset;
+      if (seen.has(id)) throw Error("Body triangle IDs and ranges must not overlap or repeat.");
+      seen.add(id); ids.push(id);
+    }
+  }
+  const retainName = (value, label) => {
+    name(value, label);
+    bytes(value, 4096, `${label} must not exceed 4096 UTF-8 bytes.`);
+    size += bytes(JSON.stringify(value));
+    if (size > MAX_REQUEST_BYTES) throw Error("Guided body/layer heat exceeds 16 MiB.");
+    return value;
+  };
+  if (!Array.isArray(state.instanceLayers) || !state.instanceLayers.length || state.instanceLayers.length > 65536) {
+    throw Error("Save 1–65536 exact physical-instance layer assignments.");
+  }
+  const layers = new Map();
+  for (const row of state.instanceLayers) {
+    object(row, ["instance", "layer"], ["instance", "layer"], "Coverage layer assignment");
+    retainName(row.instance, "Physical instance name"); retainName(row.layer, "Physical layer name");
+    if (layers.has(row.instance)) throw Error("Each physical instance needs exactly one layer assignment.");
+    layers.set(row.instance, row.layer);
+  }
+  const settingFields = ["max_distance_m", "min_normal_cosine", "separation_tolerance_m", "cells_per_layer", "interfaces"];
+  const settings = object(state.settings, settingFields, settingFields, "Coverage geometry settings");
+  for (const key of ["max_distance_m", "min_normal_cosine", "separation_tolerance_m"]) {
+    if (typeof settings[key] !== "number" || !Number.isFinite(settings[key]) || settings[key] <= 0) {
+      throw Error(`Coverage ${key} must be finite and positive.`);
+    }
+  }
+  if (settings.min_normal_cosine > 1 || settings.separation_tolerance_m >= settings.max_distance_m) {
+    throw Error("Coverage normal cosine must not exceed 1; separation tolerance must be smaller than the search distance.");
+  }
+  if (!Number.isSafeInteger(settings.cells_per_layer) || settings.cells_per_layer < 1 || settings.cells_per_layer > 64) {
+    throw Error("Coverage needs 1–64 through-thickness cells per layer.");
+  }
+  if (!Array.isArray(settings.interfaces) || settings.interfaces.length > 4096) throw Error("Coverage permits at most 4096 directed interfaces.");
+  const names = new Set(layers.values()), pairs = new Set();
+  for (const item of settings.interfaces) {
+    const fields = ["inner", "outer", "resistance_m2_k_w", "basis"];
+    object(item, fields, fields, "Coverage interface");
+    for (const key of ["inner", "outer", "basis"]) retainName(item[key], `Interface ${key}`);
+    nonnegative(item.resistance_m2_k_w, "Interface resistance");
+    const key = JSON.stringify([item.inner, item.outer]);
+    if (item.inner === item.outer || !names.has(item.inner) || !names.has(item.outer) || pairs.has(key)) {
+      throw Error("Each directed interface must uniquely join two different saved layer names.");
+    }
+    pairs.add(key);
+  }
+  const { boundaries } = JSON.parse(buildMaterialSurfaceConditions(state.boundary));
+  const request = JSON.stringify({ body_triangle_ids: ids, instance_layers: Object.fromEntries(layers), settings,
+    conditions: { boundaries } });
+  bytes(request, MAX_REQUEST_BYTES, "Guided body/layer heat exceeds 16 MiB.");
+  return request;
+}
+
 /** Author the existing forward vapor-potential boundary, independently of dry heat or available water. */
 export function buildMaterialVaporSurfaceConditions(boundary) {
   const fields = ["inside_vapor_pressure_pa", "outside_vapor_pressure_pa", "inside_film_resistance_m2_pa_w",
