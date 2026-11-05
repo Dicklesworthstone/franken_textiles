@@ -127,7 +127,7 @@ const server = http.createServer((req, res) => {
       await page.selectOption('#studyBodySource','request');await page.setInputFiles('#body',path.join(pairedWaterProof,'model.ftxbody'));
       await page.setInputFiles('#scenarioBody',path.join(pairedWaterProof,'body-input.json'));
       await page.selectOption('#studyMode','file');await page.setInputFiles('#studyRequest',path.join(pairedWaterProof,'study.json'));
-      const verify=async(label,matrix=false,capture=null)=>{
+      const verify=async(label,matrix=false,capture=null,refusedKeys=[])=>{
         assert.equal(await run('scenario'),'');
         const report=JSON.parse(await download(matrix?'material-scenario-matrix-study.json':'material-scenario-study.json'));
         const request=await download('study-request.json'),scenario=await download('scenario-request.json');
@@ -145,6 +145,14 @@ const server = http.createServer((req, res) => {
         }
         for(const result of report.cases||[report]) {
           const motion=key=>result.simulations.find(row=>row.key===key).evaluation.result.motion;
+          if(refusedKeys.length) {
+            for(const key of refusedKeys) {
+              assert.equal(motion(key).status,'refused');assert.ok(motion(key).result==null);
+              assert.equal(result.comparison.alternatives.find(row=>row.key===key).eligible,false);
+              assert.equal(result.simulations.find(row=>row.key===key).evaluation.result.surface.status,'available');
+            }
+            continue;
+          }
           const fast=motion('qualified').result,slow=motion('slower').result;
           for(const [index,item] of [fast,slow].entries()) {
             const heat=item.transient_surface.result;assert.deepEqual(item.liquid_mechanics,heat.mechanical_coupling);
@@ -184,6 +192,7 @@ const server = http.createServer((req, res) => {
       await input('heatConditions',single.surface);await page.selectOption('#guidedMotionSource','file');
       const motionRaw=' \r\n'+JSON.stringify(single.motion)+'\r\n';
       await page.setInputFiles('#guidedMotionFile',{name:'paired-motion.json',mimeType:'application/json',buffer:Buffer.from(motionRaw)});
+      await page.getByText('Choose textile-water goals and limits',{exact:true}).click();
       await page.check('#guidedTextileWaterEvaporatedGoal');await page.selectOption('#guidedTextileWaterEvaporatedDirection','maximize');
       const guided=await verify('guided-single');assert.ok(guided.scenario.includes(motionRaw));
       await page.setViewportSize({width:390,height:844});await page.selectOption('#scenarioMode','guided_matrix');
@@ -195,9 +204,19 @@ const server = http.createServer((req, res) => {
       await page.setInputFiles('#guidedMotionFile',{name:'invalid-active-draft.json',mimeType:'application/json',buffer:Buffer.from('{}')});
       const named=await verify('guided-named',true);assert.ok(named.scenario.includes(motionRaw));assert.ok(named.scenario.includes(changedRaw));
       assert.deepEqual(named.report.cases[0].simulations,guided.report.simulations);
+      for(const fault of ['missing-pair','loading-domain']) {
+        const broken=structuredClone(single),choices=broken.motion.transient_surface.coupled_water_alternatives;
+        if(fault==='missing-pair')choices.splice(0,1);
+        else for(const pair of choices)pair.surface_water.maximum_liquid_loading_kg_m2=0.06;
+        await page.selectOption('#scenarioMode','file');await input('scenarioRequest',broken);
+        const result=await verify(fault,false,null,fault==='missing-pair'?['qualified']:['qualified','slower']);
+        const refusal=result.report.simulations.find(row=>row.key==='qualified').evaluation.result.motion.refusal;
+        assert.equal(await page.getByText('Refused: '+refusal.message,{exact:true}).first().isVisible(),true);
+        if(fault==='missing-pair')assert.equal(result.report.simulations.find(row=>row.key==='slower').evaluation.result.motion.status,'available');
+      }
       assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(methods.every(method=>method==='GET'));
       assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
-      console.log('PASS: four complete native/browser paired-water reports, Ret-dependent cooling and motion, exact source qualification tables/downloads, stale-source refusal and immutable mobile named cases. Synthetic numerical evidence only. Artifacts:',work);
+      console.log('PASS: six complete native/browser paired-water reports, Ret-dependent cooling and motion, exact source qualification tables/downloads, missing/stale/loading refusals and immutable mobile named cases. Synthetic numerical evidence only. Artifacts:',work);
       return;
     }
     if (instanceTemperatureProof) {

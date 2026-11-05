@@ -15041,7 +15041,7 @@ test('compiled WASM paired wet qualifications preserve native selection, changed
     const table=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.tag==='table'&&
       node.children[0].textContent==='qualified: selected water and mechanics qualification');assert.ok(table);
     const heat=simulation(guided.report,'qualified').motion.result.transient_surface.result;
-    assert.deepEqual(plain(table.children.slice(2).map(row=>row.children.map(cell=>cell.textContent))),
+    assert.deepEqual(plain(table.children.slice(2).map(row=>row.children.map(cell=>String(cell.textContent)))),
       [['1',pairs[0].surface_water.source.reference,pairs[0].mechanical_coupling.source.reference,heat.coupled_water_selection.pair_sha256]]);
     guidedNamedCases(p);await saveGuidedCase(p,'paired sources');
     const changed=structuredClone(single.motion);changed.transient_surface.boundaries[0].outside_c=25;

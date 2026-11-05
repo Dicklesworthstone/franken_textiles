@@ -78,6 +78,7 @@ jobs:
         env:
           FTX_MOTION_REPLAY: ${{ runner.temp }}/ftx-motion-replay
           FTX_COUPLED_WATER_REPLAY: ${{ runner.temp }}/ftx-coupled-water-replay
+          FTX_COUPLED_WATER_ALTERNATIVES_REPLAY: ${{ runner.temp }}/ftx-paired-water-replay
           FTX_SUPPLIED_WATER_REPLAY: ${{ runner.temp }}/ftx-supplied-water-replay
           FTX_CONDENSED_WATER_REPLAY: ${{ runner.temp }}/ftx-condensed-water-replay
           FTX_VARIABLE_WATER_REPLAY: ${{ runner.temp }}/ftx-variable-water-replay
@@ -107,6 +108,8 @@ jobs:
         env:
           FTX_MOTION_REPLAY: ${{ runner.temp }}/ftx-motion-replay
           FTX_COUPLED_WATER_REPLAY: ${{ runner.temp }}/ftx-coupled-water-replay
+          FTX_COUPLED_WATER_ALTERNATIVES_REPLAY: ${{ runner.temp }}/ftx-paired-water-replay
+          FTX_GUIDED_SCENARIO_NATIVE: ${{ github.workspace }}/target/debug/ftx-materials
           FTX_SUPPLIED_WATER_REPLAY: ${{ runner.temp }}/ftx-supplied-water-replay
           FTX_CONDENSED_WATER_REPLAY: ${{ runner.temp }}/ftx-condensed-water-replay
           FTX_VARIABLE_WATER_REPLAY: ${{ runner.temp }}/ftx-variable-water-replay
