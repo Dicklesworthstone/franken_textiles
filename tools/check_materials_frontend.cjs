@@ -17046,8 +17046,11 @@ test('compiled WASM guided transient heat criteria retain complete native histor
         path.join(work,label+'-study.json'),path.join(work,label+'-scenario.json'),path.join(work,'body-input.json'),path.join(work,'model.ftxbody')],
         {encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:64*1024*1024});
       assert.deepEqual(result.result,JSON.parse(output),label+' native/WASM/worker equality');
+      for(const [name,raw] of [['original-pattern.json',pattern],['body-input.json',body]]) {
+        assert.equal(result.files.find(file=>file.name===name).text,raw,label+' preserves '+name);
+      }
       if(label==='authored-dry')assert.equal(Object.hasOwn(JSON.parse(sent.scenarioRequest),'surface'),false);
-      if(label==='complete'||label==='authored-dry') {
+      if(['complete','instance-initial-conditions','authored-dry','authored-coverage','absent-coverage-instance'].includes(label)) {
         const previous=globalThis.ftxProgress,model=new ftx.WebBody(modelBytes);globalThis.ftxProgress=()=>{};
         try{assert.deepEqual(result.result,JSON.parse(ftx.material_scenario_study(model,pattern,sent.studyRequest,sent.scenarioRequest,body)));}
         finally{model.free();if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;}
@@ -17112,6 +17115,48 @@ test('compiled WASM guided transient heat criteria retain complete native histor
       }
     }
     assert.match(visibleText(section(p,'Fresh drape and heat alternatives')),/no partial history published/);
+    // Retained physical owners, rather than an unused fallback, initialize each independent heat domain.
+    const conditioned=structuredClone(original),starts={transient_surface:35,transient_coverage:5};
+    for(const [consumer,temperature] of Object.entries(starts))Object.assign(conditioned[consumer],
+      {initial_temperature_c:999,initial_instance_temperatures_c:{band:temperature}});
+    motionRaw=' \r\n'+JSON.stringify(conditioned).replace('"band":5','"band":5.00').replace('"band":35','"band":35.0')+'\r\n';
+    guidedTransientSource(p,motionRaw);p.e.guidedTransientSurfaceInsideEnergyLimit.value='';
+    p.e.guidedTransientSurfaceInsideEnergyLimit.handlers.input();
+    const initialized=await evaluate('instance-initial-conditions');
+    assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion,conditioned);
+    assert.deepEqual(initialized.manufacturing,complete.manufacturing);
+    for(const row of initialized.comparison.alternatives) {
+      assert.equal(row.eligible,true,JSON.stringify(row.exclusions));const initial=simulation(initialized,row.key),before=simulation(complete,row.key);
+      assert.deepEqual(initial.drape,before.drape);assert.deepEqual(initial.surface,before.surface);
+      const motion=initial.motion.result;assert.deepEqual(motion.samples,before.motion.result.samples);
+      assert.notEqual(motion.path_sha256,before.motion.result.path_sha256);
+      for(const [consumer,temperature] of Object.entries(starts)) {
+        assert.equal(motion[consumer].status,'available');const heat=motion[consumer].result,receipt=heat.initial_condition,trace=heat.trace;
+        const coverage=consumer==='transient_coverage',domain=coverage?'coverage':'surface';
+        assert.deepEqual(heat.request,conditioned[consumer]);assert.equal(heat.path_sha256,motion.path_sha256);
+        assert.equal(receipt.schema,'ftx-motion-'+domain+'-initial-condition/1');
+        assert.equal(receipt.model_sha256,coverage?heat.checkpoint.frame.source.sha256:heat.model.sha256);
+        if(coverage)assert.equal(receipt.frame_sha256,heat.initial_frame_sha256);
+        assert.deepEqual(receipt.instances,initial.drape.thermal_surface.instances);
+        assert.deepEqual(receipt.triangle_instance,initial.drape.thermal_surface.triangle_instance);
+        assert.deepEqual(receipt.instances,['band']);assert.deepEqual(receipt.instance_temperature_c,[temperature]);
+        assert.deepEqual(receipt.temperature_range_c,[temperature,temperature]);assert.ok(Math.abs(heat.balance_error_j)<1e-8);
+        const expected={inside_energy_j:heat.inside_energy_j,net_boundary_energy_j:heat.net_boundary_energy_j,
+          min_sample_temperature_c:Math.min(temperature,...trace.map(sample=>sample.temperature_range_c[0])),
+          max_sample_temperature_c:Math.max(temperature,...trace.map(sample=>sample.temperature_range_c[1])),
+          final_min_temperature_c:trace.at(-1).temperature_range_c[0],final_max_temperature_c:trace.at(-1).temperature_range_c[1]};
+        assert.ok(expected.max_sample_temperature_c<100,'The unused 999 C fallback is absent from actual history and extrema');
+        assert.ok(Math.abs(expected.final_min_temperature_c-before.motion.result[consumer].result.trace.at(-1).temperature_range_c[0])>1,
+          'Each domain evolves from its own explicit initial temperature');
+        for(const [,metric,unit,domain] of guidedTransientReadings.filter(item=>item[3]===consumer)) {
+          assert.equal(row.readings[metric].value,expected[metric.slice(consumer.length+1)]);
+          assert.equal(row.readings[metric].unit,unit);assert.equal(row.readings[metric].consumer,domain);
+        }
+      }
+    }
+    const initializedTable=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.tag==='table'&&
+      node.children[0].textContent==='baseline: resolved initial dry coverage cloth temperatures');
+    assert.ok(initializedTable);assert.doesNotMatch(visibleText(initializedTable),/999/);
     // Author the same dry sheet schedule through the page, independently of steady heat or a source file.
     guidedMotionSourceControls(p);p.e.guidedMotionHeat.checked=true;p.e.guidedMotionHeat.handlers.change();
     for(const [id,value] of Object.entries({guidedMotionHeatInitial:15,guidedMotionHeatCells:2,
@@ -17134,9 +17179,58 @@ test('compiled WASM guided transient heat criteria retain complete native histor
       assert.equal(heat.status,'available');assert.deepEqual(heat.result.request,original.transient_surface);
       assert.deepEqual(heat.result.trace,prior.trace);assert.deepEqual(heat.result.final,prior.final);
     }
+    // The new coverage form uses the same authored constructor, then reaches real projection on this body.
+    const builder=new vm.SourceTextModule(read('materials-study-builder.js'));
+    await builder.link(()=>{throw Error('Unexpected guided-builder import');});await builder.evaluate();
+    const coverageState={bodyTriangleIds:'4-4',instanceLayers:[{instance:'band',layer:'shell'}],
+      settings:original.transient_coverage.settings,boundary:films[0]};
+    const coverageRaw=builder.namespace.buildMaterialCoverageRequest(coverageState),coveragePolicy=JSON.parse(coverageRaw);
+    p.e.guidedCoverage.checked=true;p.e.guidedCoverage.handlers.change();
+    p.e.guidedCoverageSource.value='form';p.e.guidedCoverageSource.handlers.change();
+    for(const [id,value] of Object.entries({guidedCoverageTriangles:'4-4',guidedCoverageDistance:0.12,guidedCoverageCosine:0.1,
+      guidedCoverageSeparation:0.00001,guidedCoverageCells:2,guidedCoverageInside:40,guidedCoverageOutside:5,
+      guidedCoverageInsideFilm:0.1,guidedCoverageOutsideFilm:0.2}))p.e[id].value=String(value);
+    saveCoverageLayer(p,'band','shell');p.e.guidedRequireCoverage.checked=true;
+    p.e.guidedCoveragePowerGoal.checked=true;p.e.guidedCoveragePowerDirection.value='minimize';
+    const covered=await evaluate('authored-coverage'),coverageSent=p.current().messages.at(-1);
+    assert.ok(coverageSent.scenarioRequest.includes(coverageRaw),'The page retains its complete authored policy exactly');
+    assert.deepEqual(JSON.parse(coverageSent.scenarioRequest).coverage,coveragePolicy);
+    for(const row of covered.comparison.alternatives) {
+      assert.equal(row.eligible,true,JSON.stringify(row.exclusions));const initial=simulation(covered,row.key),heat=initial.coverage;
+      assert.equal(heat.status,'available');assert.ok(heat.result.steady.covered_area_m2>0);
+      assert.ok(heat.result.steady.power_w>0);assert.equal(row.readings.body_coverage_power_w.value,heat.result.steady.power_w);
+      assert.equal(heat.result.drape_steady_frame_sha256,initial.drape.steady_thermal_surface.sha256);
+      assert.deepEqual(heat.result.request.map.instance_layers,coveragePolicy.instance_layers);
+      assert.deepEqual(heat.result.request.map.settings,coveragePolicy.settings);
+      assert.deepEqual(heat.result.request.conditions.boundaries,coveragePolicy.conditions.boundaries);
+      assert.deepEqual(initial.drape,simulation(dry,row.key).drape);
+      assert.deepEqual(initial.motion.result.transient_surface.result.trace,simulation(dry,row.key).motion.result.transient_surface.result.trace);
+    }
+    const powers=covered.comparison.alternatives.map(row=>row.readings.body_coverage_power_w.value);
+    assert.ok(Math.abs(powers[0]-powers[1])>1e-10,'Source conductivity changes actual covered heat');
+    saveCoverageLayer(p,'absent-instance','shell');
+    const refused=await evaluate('absent-coverage-instance'),refusedSent=p.current().messages.at(-1);
+    const refusedRaw=builder.namespace.buildMaterialCoverageRequest({...coverageState,
+      instanceLayers:[...coverageState.instanceLayers,{instance:'absent-instance',layer:'shell'}]});
+    assert.ok(refusedSent.scenarioRequest.includes(refusedRaw));assert.deepEqual(refused.comparison.frontier,[]);
+    assert.deepEqual(refused.manufacturing,covered.manufacturing,'A coverage-only refusal preserves independent manufacturing');
+    for(const row of refused.comparison.alternatives) {
+      assert.equal(row.eligible,false);assert.equal(Object.hasOwn(row.readings,'body_coverage_power_w'),false);
+      const before=simulation(covered,row.key),after=simulation(refused,row.key);
+      assert.equal(after.coverage.status,'refused');assert.equal(after.coverage.result,undefined);
+      assert.match(after.coverage.refusal.message,/absent drape instance/);
+      assert.deepEqual(after.drape,before.drape);assert.deepEqual(after.motion.result.samples,before.motion.result.samples);
+      assert.equal(after.motion.result.transient_surface.status,'available');
+      assert.deepEqual(after.motion.result.transient_surface.result.trace,before.motion.result.transient_surface.result.trace);
+      for(const [,metric,,consumer] of guidedTransientReadings)if(consumer==='transient_surface') {
+        assert.deepEqual(row.readings[metric],covered.comparison.alternatives.find(item=>item.key===row.key).readings[metric]);
+      }
+    }
     t.diagnostic('Existing settled synthetic band: all twelve complete-history energy/temperature readings match native, public WASM and worker; '+
       JSON.stringify(values)+' J, maximum '+ceiling+' J admits '+admitted+'. A late sheet-heat refusal preserves coverage, mechanics and steady heat. '+
+      'Exact instance maps initialize sheet and body coverage independently at 35 C and 5 C with source-bound receipts and unused 999 C fallbacks. '+
       'Authored dry sheet heat reproduces the original sheet history without a steady-sheet policy. '+
+      'Authored body coverage matches its constructor through native/direct WASM/worker with source-dependent heat; an absent instance refuses only that consumer. '+
       'No empirical garment warmth, comfort, thermal feedback or uncertainty-propagation claim. Replay inputs: '+work);
   });
 

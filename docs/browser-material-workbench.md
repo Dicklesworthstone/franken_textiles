@@ -851,8 +851,13 @@ The native request retains the optional `initial_instance_temperatures_c` map, i
 fallback and the complete original policy. A successful mapped result shows the resolved temperature
 of every retained instance and its source-bound triangle ownership. Initial extrema use the actual
 retained temperatures, excluding an unused fallback. This bounded extension supports dry independent
-sheets, including the original-file exterior policies; water, mechanical liquid coupling and
-dissipation heating require a separate supported contract and refuse when combined with this map.
+sheets, including the original-file exterior policies. Original motion files can also set this map
+on `motion.transient_coverage`: covered layer cells and exposed remainders retain each source
+instance's initial temperature as the garment moves. The page displays that consumer's own resolved
+temperatures, source model and initial frame. Saved cases and replay files retain the complete
+original motion policy.
+The guided sheet controls above author only the sheet policy. Water, mechanical liquid coupling and
+dissipation heating require a separate supported contract and refuse when combined with these maps.
 
 Every saved endpoint owns its four boundary values. Editing the current endpoint or film fields
 prepares a draft; only adding or replacing an endpoint changes the saved schedule. Removing an
