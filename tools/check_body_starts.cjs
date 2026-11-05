@@ -194,6 +194,23 @@ async function add(page, start) {
     assert(await page.locator('#startDraftDownload').isHidden());
     await page.locator('#cancelStart').click(); await visible(page);
 
+    for (const pendingEdit of [false, true]) {
+      await load(JSON.stringify(expected)); await page.locator('#applyStart').click();
+      const oldUrl = await page.locator('#startDownload').getAttribute('href');
+      if (pendingEdit) await control(page, 'shape', 0).fill('');
+      const before = await form();
+      await page.evaluate(() => {
+        window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}));
+      });
+      await hidden(page); assert(await page.locator('#startDraftDownload').isHidden());
+      await revoked(page, oldUrl); assert.deepEqual(await form(), before);
+      assert(await page.locator('#cancelStart').isEnabled());
+      assert.match(await page.locator('#startStatus').innerText(), /cancel.*page|page.*cancel/i);
+      await page.locator('#cancelStart').click(); await visible(page);
+      assert.equal(Number(await control(page, 'shape', 0).inputValue()), expected.starts[0].shape[0]);
+    }
+
     await page.evaluate(() => {
       const original = File.prototype.arrayBuffer;
       globalThis.__holdStartRead = false; globalThis.__startRead = null;
@@ -239,7 +256,8 @@ async function add(page, start) {
       else await page.locator('#' + {new: 'newStart', duplicate: 'duplicateStart', midpoint: 'midpointStart', apply: 'applyStart',
         remove: 'removeStart', cancel: 'cancelStart', reset: 'resetStarts'}[action]).click();
       const before = await form(), count = await appliedCount(page), message = await page.locator('#startStatus').innerText();
-      if (action !== 'pagehide') assert(!message.startsWith('Reading saved starts'));
+      assert(!message.startsWith('Reading saved starts'));
+      if (action === 'pagehide') assert(await page.locator('#cancelStart').isEnabled());
       const links = await page.locator('#startDownload,#startDraftDownload').evaluateAll(nodes => nodes.map(node => [node.hidden, node.getAttribute('href')]));
       await page.evaluate(({reject, text}) => {
         if (reject) globalThis.__startRead.reject(new Error('obsolete read error'));
@@ -329,7 +347,7 @@ async function add(page, start) {
     assert.deepEqual(errors, []);
     assert(requests.every(request => request.method === "GET" && request.url.startsWith("file:")));
     console.log(JSON.stringify({status: "PASS", authored_starts: expected.starts.length, fit: fitted.status,
-      exercised: ["empty bootstrap", "named bounded parameters", "midpoint", "copy", "distinctness", "partial edit", "boundary", "cancel", "remove", "maximum starts", "reset", "one-start save/reload/resume", "partial native refusal", "invalid file preservation", "file-choice URL revocation", "slow-read withdrawal", "late-read ownership", "frozen native previews", "exact native frame identities", "download to ordinary fit"],
+      exercised: ["empty bootstrap", "named bounded parameters", "midpoint", "copy", "distinctness", "partial edit", "boundary", "cancel", "remove", "maximum starts", "reset", "one-start save/reload/resume", "partial native refusal", "invalid file preservation", "file-choice URL revocation", "slow-read withdrawal", "late-read ownership", "cached-page recovery", "frozen native previews", "exact native frame identities", "download to ordinary fit"],
       download: destination, browser_errors: errors.length, local_requests: requests.length}));
   } finally {
     await browser.close();

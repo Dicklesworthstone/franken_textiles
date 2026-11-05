@@ -281,9 +281,11 @@ and refuses different bindings without replacing current work. Opening the file 
 both downloads, including during a slow read or after an invalid or canceled file selection.
 Choose **Apply this start** or **Cancel pending edit** to restore downloads for retained values.
 Pending edits also withdraw both downloads; only applied values are saved. After loading, review
-the starts and choose **Apply this start** before preparing completed annotations. A one-start draft still refuses native
-materialization; add a distinct second start to use the ordinary commands below. Original
-previews stay unchanged, and later editor actions cancel pending file reads.
+the starts and choose **Apply this start** before preparing completed annotations. A one-start
+draft still refuses native materialization; add a distinct second start to use the ordinary
+commands below. Original previews stay unchanged, and later editor actions cancel pending file
+reads. Leaving the page cancels reads and withdraws downloads; a cached-page return retains
+entered values and exposes the same explicit Apply/Cancel recovery controls.
 
 The existing mesh and image overlays remain the **original** preview while values are edited. To
 evaluate an edited initialization through the real model, download `body-starts.json`, materialize

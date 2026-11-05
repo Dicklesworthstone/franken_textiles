@@ -346,7 +346,11 @@
     render();
     status.textContent = 'All start changes reset to the original input. No completed edited download remains.';
   });
-  window.addEventListener('pagehide', () => { ++revision; importPending = true; withdraw(); });
+  window.addEventListener('pagehide', () => {
+    ++revision; importPending = true; withdraw();
+    updateButtons();
+    status.textContent = 'Saved-start reads canceled when leaving this page. Applied starts retained; Apply this start or Cancel pending edit to restore downloads after returning.';
+  });
   render();
   byId('startEditor').hidden = false;
   status.textContent = `${starts.length} original start${starts.length === 1 ? '' : 's'}. Add or edit explicit values; a download needs 2–4 distinct starts.`;
