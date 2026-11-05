@@ -3031,3 +3031,117 @@ test('textile-water criteria guide linked grids and all four adaptive modes whil
     assert.deepEqual(result.comparison.required_consumers,['transient_surface']);assert.equal(JSON.stringify(cases),before);
   }
 });
+
+const workbenchPattern = ' {"schema":"fabric-pattern/1","pieces":[],"source":{"seed":18446744073709551615,"x":-0.0,"scale":1.0,"label":"é 🧵"}}\n';
+const workbenchModel = () => ({sha256:'a'.repeat(64),byte_length:3});
+const workbenchBody = ' {"schema":"fabric-measurements/1","source":{"seed":18446744073709551615,"x":-0.0,"label":"🧵"}}\n';
+const workbenchRequest = () => ({type:'study',pattern:workbenchPattern,
+  studyRequest:' {"schema":"ftx-material-study/1","source":{"scale":1.0,"seed":18446744073709551615}}\n',onBody:false});
+
+test('saved workbench studies round-trip exact original source text without results or model bytes', async () => {
+  const {buildWorkbenchStudyBundle:build,parseWorkbenchStudyBundle:parse,MAX_WORKBENCH_STUDY_BYTES}=await modulePromise;
+  const input=workbenchRequest(),before=JSON.stringify(input),raw=build(input),saved=parse(raw);
+  assert.equal(MAX_WORKBENCH_STUDY_BYTES,128*1024*1024);
+  assert.equal(JSON.stringify(input),before);assert.equal(Object.isFrozen(input),false);
+  assert.deepEqual(JSON.parse(raw),{schema:'ftx-workbench-study/1',request:input});
+  assert.equal(saved.request.pattern,input.pattern);assert.equal(saved.request.studyRequest,input.studyRequest);
+  assert.equal(Object.isFrozen(saved),true);assert.equal(Object.isFrozen(saved.request),true);
+  assert.throws(()=>Object.defineProperty(saved.request,'pattern',{value:'replacement'}));
+  input.pattern='later edit';assert.equal(saved.request.pattern,workbenchPattern);
+  for(const key of ['request','bytes','result','report'])assert.equal(Object.hasOwn(saved.request,key),false,key);
+  assert.equal(Object.hasOwn(saved,'body_model'),false);
+});
+
+test('saved body-dependent manufacturing, design and named scenario studies require a bounded exact model identity', async () => {
+  const {buildWorkbenchStudyBundle:build,parseWorkbenchStudyBundle:parse}=await modulePromise;
+  const design=workbenchRequest().studyRequest.replace('ftx-material-study/1','ftx-design-study/1');
+  const requests=[{...workbenchRequest(),onBody:true,studyRequest:design,measurements:workbenchBody},
+    ...['ftx-drape-scenario/1','ftx-drape-scenario-matrix/1'].map(schema=>({type:'scenario',pattern:workbenchPattern,
+      studyRequest:design,scenarioRequest:' {"schema":"'+schema+'","source":1.0}\n',measurements:'{}'}))];
+  for(const request of requests) {
+    assert.throws(()=>build(request),/body model identity/i);
+    const model=workbenchModel(),saved=parse(build(request,model));
+    assert.deepEqual(JSON.parse(JSON.stringify(saved.request)),request);
+    assert.deepEqual(JSON.parse(JSON.stringify(saved.body_model)),model);assert.ok(Object.isFrozen(saved.body_model));
+    model.sha256='b'.repeat(64);assert.equal(saved.body_model.sha256,'a'.repeat(64));
+    for(const invalid of [{...model,sha256:'A'.repeat(64)},{...model,sha256:'a'},
+      {...model,byte_length:0},{...model,byte_length:1.5},{...model,byte_length:256*1024*1024+1},
+      {...model,bytes:[1,2,3]}])assert.throws(()=>build(request,invalid),/body model identity/i);
+  }
+  assert.throws(()=>build({...requests[1],onBody:false},workbenchModel()),/Only manufacturing/);
+  assert.throws(()=>build(workbenchRequest(),workbenchModel()),/unused body/);
+});
+
+test('saved study supplemental fusion, preview pose, accepted fit and outfit provenance retain unfused originals', async () => {
+  const {buildWorkbenchStudyBundle:build,parseWorkbenchStudyBundle:parse}=await modulePromise;
+  const extra=' {"schema":"fabric-measurements/1","source":{"value":1.0,"seed":18446744073709551615}}\n';
+  const outfit={request_json:' {"schema":"ftx-outfit-drape/1","source":-0.0}\n',
+    composition_json:' {"schema":"ftx-outfit-composition/1","source":1.0}\n'};
+  const request={...workbenchRequest(),onBody:true,measurements:workbenchBody,measurementSources:JSON.stringify([extra]),
+    measurementConsent:true,measurementPrimary:workbenchBody,outfit};
+  const pose={arm_abduction_deg:35,legs:'squat',leg_fraction:0.25};
+  const accepted=' {"schema":"ftx-body-fit/1","source":{"seed":18446744073709551615,"scale":1.0}}\n';
+  for(const metadata of [{},{measurementPose:pose},{measurementAcceptedFit:accepted,measurementArmDeg:35}]) {
+    const input={...request,...metadata},saved=parse(build(input,workbenchModel()));
+    assert.deepEqual(JSON.parse(JSON.stringify(saved.request)),input);
+    assert.equal(saved.request.measurementSources,JSON.stringify([extra]));
+    assert.equal(JSON.parse(saved.request.measurementSources)[0],extra);
+    assert.ok(Object.isFrozen(saved.request.outfit));
+    if(saved.request.measurementPose)assert.ok(Object.isFrozen(saved.request.measurementPose));
+  }
+  const saved=parse(build({...request,measurementPose:pose},workbenchModel()));
+  pose.legs='seated';outfit.request_json='later edit';
+  assert.equal(saved.request.measurementPose.legs,'squat');assert.match(saved.request.outfit.request_json,/ftx-outfit-drape\/1/);
+});
+
+test('saved study imports refuse unknown transport fields, malformed sources, unrelated bodies and unsupported schemas', async () => {
+  const {buildWorkbenchStudyBundle:build,parseWorkbenchStudyBundle:parse}=await modulePromise;
+  const input=workbenchRequest(),raw=build(input);
+  for(const invalid of ['',null,'\ufeff'+raw,'[]','null','{"schema":"ftx-workbench-study/2"}',
+    JSON.stringify({...JSON.parse(raw),report:{}})])assert.throws(()=>parse(invalid));
+  for(const extension of [{type:'exports'},{request:99},{bytes:[1,2,3]},{result:{}},{onBody:'true'},
+    {measurements:'{}'},{scenarioRequest:'{"schema":"ftx-drape-scenario/1"}'},
+    {pattern:'{}'},{pattern:'[]'},{pattern:'{broken'},{studyRequest:'{"schema":"other/1"}'},
+    {outfit:{request_json:'{}',composition_json:'{}'}},{outfit:{request_json:'{}',composition_json:'{}',report:{}}}]) {
+    assert.throws(()=>build({...input,...extension}));
+  }
+  assert.throws(()=>build({type:'scenario',pattern:workbenchPattern,studyRequest:input.studyRequest,
+    scenarioRequest:'{"schema":"ftx-material-scenario/1"}',measurements:'{}'},workbenchModel()),/scenario request.*schema/);
+  assert.equal(parse(raw).request.pattern,workbenchPattern,'A refused import cannot mutate an earlier replay');
+});
+
+test('saved supplemental replay requires consent and keeps preview and accepted-fit metadata mutually exclusive', async () => {
+  const {buildWorkbenchStudyBundle:build}=await modulePromise;
+  const pose={arm_abduction_deg:35,legs:'standing',leg_fraction:1};
+  const request={...workbenchRequest(),onBody:true,measurements:workbenchBody,measurementSources:JSON.stringify([workbenchBody]),
+    measurementConsent:true,measurementPrimary:workbenchBody};
+  const fit='{"schema":"ftx-body-fit/1"}';
+  for(const extension of [{measurementConsent:false},{measurementSources:'[]'},
+    {measurementSources:JSON.stringify(Array(9).fill('{}'))},{measurementSources:'[{}]'},
+    {measurementSources:'["null"]'},{measurementSources:'[broken'},
+    {measurementPose:{...pose,legs:'unknown'}},{measurementPose:{...pose,arm_abduction_deg:181}},
+    {measurementPose:{...pose,leg_fraction:-1}},{measurementPose:{...pose,unexpected:true}},
+    {measurementPose:pose,measurementAcceptedFit:fit,measurementArmDeg:35},
+    {measurementAcceptedFit:fit},{measurementAcceptedFit:'{}',measurementArmDeg:35},
+    {measurementArmDeg:35}])assert.throws(()=>build({...request,...extension},workbenchModel()));
+  const noPrimary={...request,measurementPose:pose};delete noPrimary.measurementPrimary;
+  assert.throws(()=>build(noPrimary,workbenchModel()),/primary measurements/);
+  const noSources={...request};delete noSources.measurementSources;
+  assert.throws(()=>build(noSources,workbenchModel()),/requires original additional/);
+});
+
+test('saved study limits count UTF-8 source bytes and encoded files while retaining large original-file requests', async () => {
+  const {buildWorkbenchStudyBundle:build,parseWorkbenchStudyBundle:parse,MAX_WORKBENCH_STUDY_BYTES}=await modulePromise;
+  const input=workbenchRequest();
+  const largeStudy='{"schema":"ftx-material-study/1","source":"'+'x'.repeat(16*1024*1024)+'"}';
+  assert.equal(parse(build({...input,studyRequest:largeStudy})).request.studyRequest,largeStudy,
+    'The guided 16 MiB authoring cap must not restrict an existing original-file request within the worker budget');
+  const utf8='é'.repeat(16*1024*1024);
+  const largePattern='{"schema":"fabric-pattern/1","source":"'+utf8+'"}';
+  const combined='{"schema":"ftx-material-study/1","source":"'+utf8+'"}';
+  assert.throws(()=>build({...input,pattern:largePattern,studyRequest:combined}),/64 MiB/);
+  const extra='{"schema":"fabric-measurements/1","source":"'+'é'.repeat(8*1024*1024)+'"}';
+  assert.throws(()=>build({...input,onBody:true,measurements:'{}',measurementConsent:true,
+    measurementSources:JSON.stringify([extra])},workbenchModel()),/Additional measurements exceed 16 MiB/);
+  assert.throws(()=>parse(' '.repeat(MAX_WORKBENCH_STUDY_BYTES+1)),/128 MiB/);
+});

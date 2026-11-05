@@ -1334,3 +1334,114 @@ export function buildMaterialStudyRequest(state, scenario) {
     constraints, required_consumers: required, allow_mixed_protocols: false })}}`);
   return parts.join("");
 }
+
+// Saved workbench inputs are a local replay envelope, not an admission or evaluation report.
+export const MAX_WORKBENCH_STUDY_BYTES = 128 * 1024 * 1024;
+const MAX_WORKBENCH_SOURCE_BYTES = 64 * 1024 * 1024;
+
+function workbenchSource(raw, label, schemas) {
+  if (typeof raw !== "string") throw Error(`${label} must retain its original JSON text.`);
+  let value;
+  try { value = JSON.parse(raw); }
+  catch { throw Error(`${label} must be valid JSON.`); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw Error(`${label} must be a JSON object.`);
+  if (schemas && !schemas.includes(value.schema)) throw Error(`${label} has an unsupported schema.`);
+  return value;
+}
+
+function workbenchStudyBundle(value) {
+  object(value, ["schema", "request", "body_model"], ["schema", "request"], "Saved study");
+  if (value.schema !== "ftx-workbench-study/1") throw Error("Choose an ftx-workbench-study/1 saved study.");
+  const request = object(value.request, ["type", "pattern", "studyRequest", "onBody", "scenarioRequest",
+    "measurements", "measurementSources", "measurementConsent", "measurementPrimary", "measurementAcceptedFit",
+    "measurementArmDeg", "measurementPose", "outfit"], ["type", "pattern", "studyRequest"], "Saved study request");
+  if (!["study", "scenario"].includes(request.type)) throw Error("Saved inputs must describe a manufacturing or scenario study.");
+  if (own(request, "onBody") && (request.type !== "study" || typeof request.onBody !== "boolean")) {
+    throw Error("Only manufacturing studies declare onBody, as a boolean.");
+  }
+  if (own(request, "outfit")) object(request.outfit, ["request_json", "composition_json"],
+    ["request_json", "composition_json"], "Saved outfit");
+  let total = 0;
+  for (const raw of [...Object.values(request), ...Object.values(request.outfit || {})]) {
+    if (typeof raw === "string") total += bytes(raw, MAX_WORKBENCH_SOURCE_BYTES, "Combined saved study inputs exceed 64 MiB.");
+    if (total > MAX_WORKBENCH_SOURCE_BYTES) throw Error("Combined saved study inputs exceed 64 MiB.");
+  }
+  workbenchSource(request.pattern, "Original pattern", ["fabric-pattern/1"]);
+  workbenchSource(request.studyRequest, "Original study request", ["ftx-material-study/1", "ftx-design-study/1"]);
+  if (request.type === "scenario") {
+    workbenchSource(request.scenarioRequest, "Original scenario request", ["ftx-drape-scenario/1", "ftx-drape-scenario-matrix/1"]);
+  } else if (own(request, "scenarioRequest")) throw Error("Manufacturing studies cannot contain an unused scenario request.");
+  const onBody = request.type === "scenario" || request.onBody === true;
+  if (onBody) {
+    workbenchSource(request.measurements, "Original body input");
+    const model = object(value.body_model, ["sha256", "byte_length"], ["sha256", "byte_length"], "Saved body model identity");
+    if (typeof model.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(model.sha256) || !Number.isSafeInteger(model.byte_length)
+      || model.byte_length < 1 || model.byte_length > 256 * 1024 * 1024) {
+      throw Error("Saved body model identity needs a lowercase SHA-256 and a byte length from 1 to 256 MiB.");
+    }
+  } else if (own(value, "body_model") || Object.keys(request).some(key => key.startsWith("measurement"))) {
+    throw Error("Body-independent manufacturing studies cannot contain unused body inputs.");
+  }
+  if (own(request, "measurementSources")) {
+    if (request.measurementConsent !== true) throw Error("Associate additional measurements with this same wearer explicitly.");
+    if (typeof request.measurementSources !== "string") throw Error("Additional measurements must retain their original JSON text strings.");
+    let sources;
+    try { sources = JSON.parse(request.measurementSources); }
+    catch { throw Error("Additional measurement sources must be valid JSON."); }
+    if (!Array.isArray(sources) || !sources.length || sources.length > 8) throw Error("Choose 1–8 additional measurement sources.");
+    let size = 0;
+    for (const raw of sources) {
+      if (typeof raw !== "string") throw Error("Additional measurements must retain their original JSON text strings.");
+      size += bytes(raw, MAX_REQUEST_BYTES, "Additional measurements exceed 16 MiB.");
+      if (size > MAX_REQUEST_BYTES) throw Error("Additional measurements exceed 16 MiB.");
+      workbenchSource(raw, "Additional measurement source");
+    }
+    if (own(request, "measurementPrimary")) workbenchSource(request.measurementPrimary, "Original primary measurements");
+    if (own(request, "measurementAcceptedFit")) {
+      workbenchSource(request.measurementAcceptedFit, "Original accepted body fit", ["ftx-body-fit/1"]);
+      bytes(request.measurementAcceptedFit, MAX_REQUEST_BYTES, "Accepted body-fit report exceeds 16 MiB.");
+      if (!own(request, "measurementPrimary") || !Number.isFinite(request.measurementArmDeg)
+        || request.measurementArmDeg < 0 || request.measurementArmDeg > 180) {
+        throw Error("Supplemental accepted-fit replay requires original primary measurements and a valid arm angle.");
+      }
+    } else if (own(request, "measurementArmDeg")) throw Error("Supplemental arm metadata requires an accepted body-fit source.");
+    if (own(request, "measurementPose")) {
+      const pose = object(request.measurementPose, ["arm_abduction_deg", "legs", "leg_fraction"],
+        ["arm_abduction_deg", "legs", "leg_fraction"], "Supplemental preview pose");
+      if (!own(request, "measurementPrimary") || own(request, "measurementAcceptedFit")
+        || !Number.isFinite(pose.arm_abduction_deg) || pose.arm_abduction_deg < 0 || pose.arm_abduction_deg > 180
+        || !["standing", "seated", "squat"].includes(pose.legs) || !Number.isFinite(pose.leg_fraction)
+        || pose.leg_fraction < 0 || pose.leg_fraction > 1) {
+        throw Error("Supplemental preview pose needs original primary measurements, valid arm and leg settings, and no accepted fit.");
+      }
+    }
+  } else if (["measurementConsent", "measurementPrimary", "measurementAcceptedFit", "measurementArmDeg", "measurementPose"].some(key => own(request, key))) {
+    throw Error("Supplemental replay metadata requires original additional measurement sources.");
+  }
+  if (own(request, "outfit")) {
+    workbenchSource(request.outfit.request_json, "Original outfit request", ["ftx-outfit-drape/1"]);
+    workbenchSource(request.outfit.composition_json, "Original outfit composition", ["ftx-outfit-composition/1"]);
+  }
+  const frozenRequest = { ...request };
+  if (request.measurementPose) frozenRequest.measurementPose = Object.freeze({ ...request.measurementPose });
+  if (request.outfit) frozenRequest.outfit = Object.freeze({ ...request.outfit });
+  return Object.freeze({ schema: value.schema, request: Object.freeze(frozenRequest),
+    ...(onBody ? { body_model: Object.freeze({ ...value.body_model }) } : {}) });
+}
+
+export function buildWorkbenchStudyBundle(request, bodyModel) {
+  const saved = workbenchStudyBundle({ schema: "ftx-workbench-study/1", request,
+    ...(bodyModel !== undefined ? { body_model: bodyModel } : {}) });
+  const raw = JSON.stringify(saved);
+  bytes(raw, MAX_WORKBENCH_STUDY_BYTES, "Saved study exceeds 128 MiB.");
+  return raw;
+}
+
+export function parseWorkbenchStudyBundle(raw) {
+  if (typeof raw !== "string") throw Error("Saved study must be original JSON text.");
+  bytes(raw, MAX_WORKBENCH_STUDY_BYTES, "Saved study exceeds 128 MiB.");
+  let saved;
+  try { saved = JSON.parse(raw); }
+  catch { throw Error("Saved study must be valid JSON."); }
+  return workbenchStudyBundle(saved);
+}
