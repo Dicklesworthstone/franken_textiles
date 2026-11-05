@@ -51,6 +51,7 @@ let guidedDesignAfterSource = null, guidedDesignAfterProblem = "";
 let guidedDesignCurrent = 0;
 let guidedDesignVertexSource = null, guidedDesignVertexProblem = "";
 let guidedDesignNomination = null;
+const guidedDesignNominations = new Map();
 let guidedScenarioCases = null, guidedScenarioCasesRead = 0;
 let guidedDesignCaseNomination = null;
 const guidedScenarioDrafts = [], guidedScenarioButtons = [];
@@ -347,7 +348,7 @@ function controls() {
   $("guidedDesign").disabled = !source;
   $("guidedDesignControls").hidden = !$("guidedDesign").checked;
   for (const id of ["guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
-    "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignCase", "guidedDesignEvaluations"]) {
+    "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations"]) {
     $(id).disabled = !source || !$("guidedDesign").checked;
   }
   const adaptiveDesign = $("guidedDesignMode").value === "adaptive";
@@ -356,11 +357,16 @@ function controls() {
   $("guidedDesignAdaptivePolicy").hidden = !adaptiveDesign;
   for (const id of ["guidedDesignValues", "guidedDesignGridBudget"]) $(id).disabled ||= adaptiveDesign;
   for (const id of ["guidedDesignLower", "guidedDesignUpper", "guidedDesignInitial", "guidedDesignInitialStep", "guidedDesignMinimumStep",
-    "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignCase", "guidedDesignEvaluations"]) $(id).disabled ||= !adaptiveDesign;
+    "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations"]) $(id).disabled ||= !adaptiveDesign;
   const objective = $("guidedDesignObjective").value;
   const consumerDesign = ["consumer_comparison", "consumer_pareto", "consumer_worst_case", "consumer_matrix_pareto"].includes(objective);
-  $("guidedDesignMaterialField").hidden = !consumerDesign; $("guidedDesignMaterial").disabled ||= !consumerDesign;
-  $("guidedDesignMaterialStatus").hidden = !consumerDesign || !guidedDesignNomination?.invalidated;
+  const materialPareto = ["consumer_pareto", "consumer_matrix_pareto"].includes(objective);
+  const severalMaterials = materialPareto && $("guidedDesignMultiple").checked;
+  $("guidedDesignMultipleField").hidden = !materialPareto; $("guidedDesignMultiple").disabled ||= !materialPareto;
+  $("guidedDesignMaterialsField").hidden = !severalMaterials; $("guidedDesignMaterials").disabled ||= !severalMaterials;
+  $("guidedDesignMaterialField").hidden = !consumerDesign || severalMaterials;
+  $("guidedDesignMaterial").disabled ||= !consumerDesign || severalMaterials;
+  $("guidedDesignMaterialStatus").hidden = !consumerDesign || severalMaterials || !guidedDesignNomination?.invalidated;
   const nominatedCase = ["consumer_comparison", "consumer_pareto"].includes(objective) && (!guidedScenarioMode() || guidedMatrixMode());
   $("guidedDesignCaseField").hidden = !nominatedCase;
   $("guidedDesignCaseStatus").hidden = !nominatedCase;
@@ -1772,6 +1778,7 @@ function designComparison(op, parent, study, casePolicies = {}) {
     if (grid.schema === "ftx-design-adaptive-search/1") {
       const guidance = grid.consumer_guidance;
       const pareto = guidance?.pareto_frontier;
+      const severalMaterials = guidance?.material_aggregation === "union_of_material_frontiers/1";
       const matrixPareto = pareto && guidance.case_aggregation === "pareto";
       const policies = matrixPareto ? (guidance.case_order || []).map(key =>
         ({ key, policy: guidance.case_policies?.[key] })) : [];
@@ -1792,7 +1799,8 @@ function designComparison(op, parent, study, casePolicies = {}) {
         return `${metric(reading.value)} ${reading.unit || ""}${range}`;
       };
       if (guidance) {
-        const search = table(parent, matrixPareto ? "Multi-case Pareto adaptive alteration search" :
+        const search = table(parent, severalMaterials ? "Multi-material Pareto adaptive alteration search" :
+          matrixPareto ? "Multi-case Pareto adaptive alteration search" :
           pareto ? "Pareto-guided adaptive alteration search" : "Consumer-guided adaptive alteration search", ["Fit evaluations", "Consumer probes",
           "Planned callback slots (upper bound)", "Selected geometries", "Stop reason",
           ...(pareto ? ["Evaluated nondominated trials", "Retained trials", "Omitted by capacity"] :
@@ -1806,13 +1814,17 @@ function designComparison(op, parent, study, casePolicies = {}) {
             [guidance.best_trial_key ?? "Unknown", readingText(reading) +
               (worstCase && reading ? limitingCases(guidance.best_case_key, guidance.best_reported_bound_case_keys) : "")])]);
         const objective = document.createElement("p");
-        objective.textContent = `Guidance material: ${guidance.material_key ?? "Unknown"}. ` +
-          (guidance.case_key ? `Guidance case: ${guidance.case_key}. Every declared case must admit a selected trial: ${(guidance.case_order || []).join(", ")}. ` : "") +
+        objective.textContent = (severalMaterials ? `Guidance materials: ${(guidance.material_keys || []).join(", ") || "Unknown"}. ` +
+          "Each material keeps an independent frontier; polling explores their union. A design can remain useful to one material when another material is excluded. " +
+          "Source protocols are compared within each material, and retained material results are reused without repeating their probes. " :
+          `Guidance material: ${guidance.material_key ?? "Unknown"}. `) +
+          (guidance.case_key ? `Guidance case: ${guidance.case_key}. Every declared case must admit ${severalMaterials ? "a material/design pair" : "a selected trial"}: ${(guidance.case_order || []).join(", ")}. ` : "") +
           (worstCase ? `Case aggregation: worst case. Every declared case must admit a selected trial: ${(guidance.case_order || []).join(", ")}. ` +
             (bounded ? "Reported lower and upper endpoints each retain their own limiting case; they may differ from the nominal limiting case. " : "") : "") +
           (matrixPareto ? `Guidance covers every named case: ${(guidance.case_order || []).join(", ")}. ` +
-            "Every declared case must admit a selected trial. Each case keeps its own objectives, directions, comparison basis and source protocols. " +
-            "Dominance requires no worse outcomes in every case and a strict improvement in at least one case. " :
+            `Every declared case must admit ${severalMaterials ? "a material/design pair" : "a selected trial"}. Each case keeps its own objectives, directions, comparison basis and source protocols. ` +
+            (severalMaterials ? "Within each material, dominance requires no worse outcomes in every case and a strict improvement in at least one case. " :
+              "Dominance requires no worse outcomes in every case and a strict improvement in at least one case. ") :
             pareto ? `Declared objectives: ${objectives.map(item => `${item.metric} (${item.direction})`).join("; ") || "Unknown"}. ` :
               `Declared objective: ${guidance.objective?.metric ?? "Unknown"} (${guidance.objective?.direction ?? "Unknown"}). `) +
           (pareto ? `Retention capacity: ${metric(pareto.retention_capacity)} geometries. ` +
@@ -1825,10 +1837,21 @@ function designComparison(op, parent, study, casePolicies = {}) {
                 "Search advances only when one range is strictly preferred. Overlapping, touching or equal ranges remain unresolved; retained trials do not form a total ranking. ") :
               "Objective basis: nominal values. ") +
           "Each constraint uses its explicit basis or inherits its case policy; nominal guards do not acquire uncertainty bounds. " +
-          "Rust evaluates the nominated material with the ordinary manufacturing and requested scenario consumers. " +
+          `Rust evaluates the nominated ${severalMaterials ? "materials" : "material"} with the ordinary manufacturing and requested scenario consumers. ` +
           "Existing source admission, required consumers, protocol rules and inclusive constraints govern each probe. " +
           "Callback slots are an upper bound on attempted work, not a preapproved simulation allowance; cumulative consumer budgets still apply.";
         parent.append(objective);
+        if (severalMaterials) {
+          const materials = table(parent, "Adaptive frontiers by guidance material",
+            ["Material", "Consumer probes", "Evaluated frontier", "Retained designs", "Omitted by capacity", "First admitted source protocol"]);
+          for (const item of guidance.material_frontiers || []) {
+            const frontier = item.pareto_frontier || {};
+            cells(materials, [item.material_key, metric(item.evaluations),
+              (frontier.evaluated_trial_keys || []).join(", ") || "None admitted",
+              (frontier.retained_trial_keys || []).join(", ") || "None selected",
+              (frontier.unretained_trial_keys || []).join(", ") || "None", item.input_protocol_sha256 ?? "Not recorded"]);
+          }
+        }
         if (matrixPareto) {
           const cases = table(parent, "Adaptive guidance policies by operating case",
             ["Case", "Objective basis", "Objectives and directions", "Inclusive constraints", "Required consumers", "Protocol comparison"]);
@@ -1869,8 +1892,9 @@ function designComparison(op, parent, study, casePolicies = {}) {
         const reading = worstCase && bounded ? row.consumer_worst_case?.reading :
           candidate?.readings?.[guidance?.objective?.metric];
         const caseDecisions = row.consumer_cases || [];
-        const attempted = matrixPareto ? caseDecisions.length > 0 : !!candidate;
-        const admitted = !row.refusal && (matrixPareto ?
+        const materialDecisions = row.consumer_materials || [];
+        const attempted = severalMaterials ? materialDecisions.length > 0 : matrixPareto ? caseDecisions.length > 0 : !!candidate;
+        const admitted = !row.refusal && (severalMaterials ? materialDecisions.some(item => item.eligible === true) : matrixPareto ?
           policies.length > 0 && policies.every(policy => caseDecisions.some(item =>
             item.key === policy.key && item.comparison?.eligible === true)) :
           candidate?.eligible === true && caseDecisions.every(item => item.comparison?.eligible === true));
@@ -1878,13 +1902,16 @@ function designComparison(op, parent, study, casePolicies = {}) {
           ...(candidate?.exclusions || []).map(e => e.message),
           ...(matrixPareto ? caseDecisions.flatMap(item => [
             ...(item.comparison?.exclusions || []).map(e => `${item.key}: ${e.message}`),
-            item.refusal?.message ? `${item.key}: ${item.refusal.message}` : null]) : [])]
+            item.refusal?.message ? `${item.key}: ${item.refusal.message}` : null]) : []),
+          ...materialDecisions.flatMap(item => [item.admission_refusal?.message, item.refusal?.message]
+            .filter(Boolean).map(message => `${item.material_key}: ${message}`))]
           .filter((message, index, all) => message && all.indexOf(message) === index).join("; ");
         cells(trials, [design.key ?? "Unknown",
           design.variables_mm ? Object.entries(design.variables_mm).map(([key, value]) => `${key}: ${metric(value)}`).join("; ") : "Unknown",
           metric(row.max_fit_band_violation_mm), metric(row.total_fit_band_violation_mm),
           passed ? "Passed declared flat gates" : "Refused",
           ...(guidance ? [attempted ? (admitted ? "Eligible" : "Excluded") : "Not attempted",
+            severalMaterials ? materialDecisions.map(item => `${item.material_key}: ${item.eligible ? "Eligible" : "Excluded"}; inspect material readings below`).join(" | ") || "Not attempted" :
             matrixPareto ? policies.map(({ key, policy }) => {
               const decision = caseDecisions.find(item => item.key === key);
               return `${key} [${basisText(policy.basis)}]: ` + policy.objectives.map(item =>
@@ -1897,6 +1924,21 @@ function designComparison(op, parent, study, casePolicies = {}) {
               "Nondominated among evaluated trials" : "Dominated among evaluated trials") : "Not admitted"] : [])] : []),
           row.selected === true ? "Selected" : "Not selected",
           reasons || (passed ? "Passed declared targets" : "Inspect retained validation")]);
+        if (materialDecisions.length) {
+          const materials = table(parent, `${design.key ?? "Unknown design"}: guidance material admission`,
+            ["Material", "Material admission", "Case", "Readings", "Exclusions or consumer refusal"]);
+          for (const item of materialDecisions) {
+            const decisions = item.cases?.length ? item.cases : [{ comparison: item.comparison, refusal: item.refusal }];
+            for (const decision of decisions) cells(materials, [item.material_key,
+              item.eligible === true ? "Eligible guidance material" : "Excluded guidance material", decision.key ?? "Single study",
+              Object.entries(decision.comparison?.readings || {}).map(([key, value]) =>
+                `${key}: ${readingText(value, policyFor(decision.key) ? metricUsesBounds(policyFor(decision.key), key) :
+                  bounded && objectives.some(objective => objective.metric === key))}`).join("; ") || "Unavailable",
+              [item.admission_refusal?.message, item.refusal?.message, decision.refusal?.message,
+                ...(decision.comparison?.exclusions || []).map(reason => reason.message)]
+                .filter((message, index, all) => message && all.indexOf(message) === index).join("; ") || "None"]);
+          }
+        }
         if (row.consumer_cases?.length) {
           const cases = table(parent, `${design.key ?? "Unknown design"}: operating-case admission`,
             ["Case", "Admission", "Readings", "Exclusions or consumer refusal"]);
@@ -4458,6 +4500,19 @@ function refreshGuidedDesignMaterials() {
   $("guidedDesignMaterialStatus").textContent = guidedDesignNomination?.invalidated ?
     `The nominated source for ${guidedDesignNomination.key} was removed or changed. Choose a current material explicitly, even if that name has been reused.` : "";
   $("guidedDesignMaterialStatus").hidden = !guidedDesignNomination?.invalidated;
+  for (const [key, nomination] of guidedDesignNominations) {
+    if (guidedDesignMaterialSource(key) !== nomination.source) nomination.invalidated = true;
+  }
+  const several = $("guidedDesignMaterials"); several.replaceChildren();
+  for (const [key, label] of choices.slice(1)) {
+    const option = document.createElement("option"), nomination = guidedDesignNominations.get(key);
+    option.value = key; option.textContent = label; option.selected = !!nomination && !nomination.invalidated;
+    several.append(option);
+  }
+  const invalid = [...guidedDesignNominations].filter(([, nomination]) => nomination.invalidated).map(([key]) => key);
+  $("guidedDesignMaterialsStatus").textContent = invalid.length ?
+    `Guidance sources were removed or changed: ${invalid.join(", ")}. Review and explicitly select the current materials again.` : "";
+  $("guidedDesignMaterialsStatus").hidden = !invalid.length;
 }
 function scenarioSourceFile() {
   return roundFiles.has("scenarioRequest") ? roundFiles.get("scenarioRequest") : $("scenarioRequest").files[0];
@@ -5704,7 +5759,7 @@ $("clearGuidedInventory").onclick = () => {
 $("clearStockRequest").onclick = () => selectStockRequest(null);
 for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
   "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
-  "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignCase", "guidedDesignEvaluations",
+  "guidedDesignMode", "guidedDesignObjective", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations",
   "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis", "guidedHeatDirection", "guidedHeatMinimumLimit",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
   ...[...guidedMetrics, ...guidedDirectionalMetrics].flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]),
@@ -5715,6 +5770,15 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
     if (id === "guidedDesignMaterial") {
       const key = $(id).value, original = guidedDesignMaterialSource(key);
       guidedDesignNomination = key && original !== null ? { key, source: original, invalidated: false } : null;
+      refreshGuidedDesignMaterials();
+    }
+    if (id === "guidedDesignMaterials") {
+      const keys = Array.from($(id).selectedOptions, option => option.value);
+      guidedDesignNominations.clear();
+      for (const key of keys) {
+        const original = guidedDesignMaterialSource(key);
+        if (original !== null) guidedDesignNominations.set(key, { source: original, invalidated: false });
+      }
       refreshGuidedDesignMaterials();
     }
     if (id === "guidedDesignCase") {
@@ -5993,7 +6057,14 @@ function guidedDesignInput(number, inScenario) {
     ...(optionalNumberPresent("guidedDesignGridBudget", "grid screening allowance") ? { maxCandidates: number("guidedDesignGridBudget", "grid screening allowance") } : {}) };
   const objective = $("guidedDesignObjective").value;
   const materialKey = $("guidedDesignMaterial").value;
-  if (objective !== "fit_band_violation_mm" && (!guidedDesignNomination || guidedDesignNomination.invalidated ||
+  const severalMaterials = ["consumer_pareto", "consumer_matrix_pareto"].includes(objective) && $("guidedDesignMultiple").checked;
+  const materialKeys = severalMaterials ? Array.from($("guidedDesignMaterials").selectedOptions, option => option.value) : [];
+  if (severalMaterials && (materialKeys.length < 2 || materialKeys.length > 16 ||
+    [...guidedDesignNominations.values()].some(nomination => nomination.invalidated) ||
+    materialKeys.some(key => guidedDesignNominations.get(key)?.source !== guidedDesignMaterialSource(key)))) {
+    throw Error("Explicitly select 2–16 current frozen materials to guide tradeoff discovery.");
+  }
+  if (objective !== "fit_band_violation_mm" && !severalMaterials && (!guidedDesignNomination || guidedDesignNomination.invalidated ||
     guidedDesignNomination.key !== materialKey || guidedDesignNomination.source !== guidedDesignMaterialSource(materialKey))) {
     throw Error("Choose a current frozen material explicitly to guide adaptive discovery.");
   }
@@ -6003,7 +6074,7 @@ function guidedDesignInput(number, inScenario) {
     throw Error("Choose a current named scenario explicitly to guide adaptive discovery.");
   }
   return { ...common, mode, objective, maxEvaluations: number("guidedDesignEvaluations", "unique discovery trial allowance"),
-    ...(objective === "fit_band_violation_mm" ? {} : { materialKey }), ...(caseKey ? { caseKey } : {}) };
+    ...(objective === "fit_band_violation_mm" ? {} : severalMaterials ? { materialKeys } : { materialKey }), ...(caseKey ? { caseKey } : {}) };
 }
 function resetGuidedDesign() {
   $("guidedDesign").checked = false;
@@ -6018,6 +6089,7 @@ function resetGuidedDesign() {
   guidedDesignVariables.length = 0; guidedDesignVariables.push(newGuidedDesignVariable()); guidedDesignCurrent = 0;
   $("guidedDesignMode").value = "grid"; $("guidedDesignObjective").value = "fit_band_violation_mm";
   guidedDesignNomination = null;
+  guidedDesignNominations.clear(); $("guidedDesignMultiple").checked = false;
   guidedDesignCaseNomination = null; refreshGuidedDesignCases();
   $("guidedDesignMaterial").value = ""; $("guidedDesignEvaluations").value = ""; refreshGuidedDesignMaterials();
   $("guidedDesignMax").value = "1"; $("guidedDesignGridBudget").value = ""; loadGuidedDesignVariable();

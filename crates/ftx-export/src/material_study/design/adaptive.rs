@@ -1512,8 +1512,7 @@ impl<T> Discovery<'_, '_, '_, T> {
 
     fn retain_material_pareto(&mut self, index: usize, row: &mut Trial) {
         let mut nominated = false;
-        for material_index in 0..row.consumer_materials.len() {
-            let decision = &row.consumer_materials[material_index];
+        for (material_index, decision) in row.consumer_materials.iter().enumerate() {
             if !decision.eligible
                 || self.material_frontiers[material_index]
                     .iter()

@@ -2071,6 +2071,57 @@ test('adaptive consumer guidance nominates an exact material and retains ordinar
   assert.equal(JSON.parse(build({...pareto,design:fitOnly})).comparison.objectives.length,2,'Fit discovery keeps independent downstream objectives');
 });
 
+test('multi-material adaptive authoring preserves explicit order and exact sources with one or several goals', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),design:adaptiveDesignInput({objective:'consumer_pareto',materialKeys:['alternative','baseline']})};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(result.design_adaptive.material_keys,['alternative','baseline']);
+  assert.equal(Object.hasOwn(result.design_adaptive,'material_key'),false);
+  assert.deepEqual(result.comparison.objectives,input.objectives);
+  assert.ok(raw.includes(input.candidates[0].selection));assert.ok(raw.includes(input.design.fitSpec));
+  assert.equal(result.design_adaptive.max_evaluations,96,'The allowance still counts unique geometries');
+  const several={...input,objectives:[...input.objectives,{metric:'stock_mass_kg',direction:'minimize'}]};
+  assert.equal(JSON.parse(build(several)).comparison.objectives.length,2);
+  assert.throws(()=>build({...input,objectives:[]}),/1–16/);
+  assert.throws(()=>build({...input,objectives:Array(17).fill(input.objectives[0])}),/1–16/);
+});
+
+test('multi-material adaptive authoring refuses ambiguous stale or unsupported nominations', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const design=adaptiveDesignInput({objective:'consumer_pareto',materialKeys:['baseline','alternative']});
+  for(const materialKeys of [[],['baseline'],['baseline','baseline'],['baseline','removed'],['baseline',''],
+    null,'baseline',Array.from({length:17},(_,i)=>'choice-'+i)]) {
+    assert.throws(()=>build({...state(),design:{...design,materialKeys}}),/material|Material|names/);
+  }
+  for(const materialKey of ['baseline',null,undefined])assert.throws(()=>build({...state(),design:{...design,materialKey}}),/cannot also/);
+  for(const objective of ['fit_band_violation_mm','consumer_comparison','consumer_worst_case']) {
+    assert.throws(()=>build({...state(),design:{...design,objective}}),/does not accept|require Pareto/);
+  }
+  const legacy={...design,materialKey:'baseline'};delete legacy.materialKeys;
+  assert.throws(()=>build({...state(),design:legacy}),/2–16/,'One nominated material retains its existing Pareto contract');
+});
+
+test('multi-material adaptive matrices reserve every material and case probe before source reads', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const design=adaptiveDesignInput({objective:'consumer_pareto',materialKeys:['alternative','baseline'],caseKey:'cold',
+    maxEvaluations:3,maxDesigns:1}),input={...state(),design};
+  // (three geometries * two guidance materials + two retained designs * two materials) * two cases.
+  const context=namedContext(undefined,20),result=JSON.parse(build(input,context));
+  assert.deepEqual(result.design_adaptive.material_keys,['alternative','baseline']);
+  assert.equal(result.design_adaptive.case_key,'cold');
+  let reads=0;const candidates=[{key:'alternative',get selection(){reads++;throw Error('Source should not be read');}}];
+  assert.throws(()=>build({...input,candidates},namedContext(undefined,19)),/20 reserved case evaluations/);
+  assert.equal(reads,0);
+  const allCases={...design,objective:'consumer_matrix_pareto'};delete allCases.caseKey;
+  const all=JSON.parse(build({...input,design:allCases},context));
+  assert.equal(all.design_adaptive.objective,'consumer_matrix_pareto');
+  assert.equal(Object.hasOwn(all.design_adaptive,'case_key'),false);
+  assert.equal(JSON.parse(build({...input,design:allCases},namedContext([{key:'one',surface:false}],10)))
+    .design_adaptive.objective,'consumer_matrix_pareto','Each nominated material may have a single case/objective coordinate');
+  assert.throws(()=>build({...input,design:{...allCases,caseKey:'cold'}},context),/does not accept a caseKey/);
+});
+
 test('adaptive retention reserves all declared output slots before snapshots and preserves independent probe allowance', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   let reads=0;

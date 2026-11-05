@@ -1386,7 +1386,7 @@ class Element {
 async function pageModule({roundToken=null,traceToken=null}={}) {
   const html = read('materials.html');
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
-  for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices','guidedDesignAfterSeams'])
+  for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices','guidedDesignAfterSeams','guidedDesignMaterials'])
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
@@ -8860,6 +8860,93 @@ test('guided adaptive consumer guidance keeps an explicit material and refuses s
   assert.equal(request.design_adaptive.material_key,'baseline');assert.deepEqual(request.variants.map(v=>v.key),['baseline','material-1','alternate']);
 });
 
+function selectAdaptiveMaterials(p, keys) {
+  for(const option of p.e.guidedDesignMaterials.children)option.selected=keys.includes(option.value);
+  p.e.guidedDesignMaterials.handlers.change();
+}
+
+test('guided multi-material adaptive discovery freezes explicit choices and refuses changed source nominations',async()=>{
+  const {p}=await adaptiveDesignSetup(false);await addGuidedSelection(p,guidedSelection('b'),'alternate');
+  guidedDesignField(p,'guidedDesignObjective','consumer_pareto','change');
+  p.e.guidedDesignMultiple.checked=true;p.e.guidedDesignMultiple.handlers.change();
+  assert.equal(p.e.guidedDesignMaterialsField.hidden,false);assert.equal(p.e.guidedDesignMaterial.disabled,true);
+  let before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/2–16/);
+  selectAdaptiveMaterials(p,['baseline','alternate']);await p.e.study.onclick();
+  let sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+  let request=JSON.parse(sent.studyRequest);
+  assert.deepEqual(request.design_adaptive.material_keys,['baseline','alternate']);
+  assert.equal(Object.hasOwn(request.design_adaptive,'material_key'),false);
+  assert.equal(request.comparison.objectives.length,1,'Each material may guide by its own one-goal frontier');
+  p.emit(studyReport(),[{name:'study-request.json',text:sent.studyRequest}]);assert.ok(p.live.size>0);
+  descendants(p.e.studyCandidates).find(n=>n.tag==='button'&&n.textContent==='Remove alternate').onclick();
+  assert.equal(p.live.size,0);assert.match(p.e.guidedDesignMaterialsStatus.textContent,/alternate/);
+  const replacement=guidedSelection('c');await addGuidedSelection(p,replacement,'alternate');
+  assert.equal(p.e.guidedDesignMaterials.children.find(n=>n.value==='alternate').selected,false);
+  before=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+  selectAdaptiveMaterials(p,['baseline','alternate']);await p.e.study.onclick();sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);assert.ok(sent.studyRequest.includes(replacement));p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignObjective','fit_band_violation_mm','change');await p.e.study.onclick();
+  request=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.equal(Object.hasOwn(request.design_adaptive,'material_keys'),false);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignObjective','consumer_pareto','change');
+  assert.deepEqual(plain(p.e.guidedDesignMaterials.selectedOptions.map(o=>o.value)),['baseline','alternate']);
+  p.select('patternFile',coupledDesignPattern);await p.e.patternFile.onchange();
+  assert.equal(p.e.guidedDesignMultiple.checked,false);assert.equal(p.e.guidedDesignMaterials.selectedOptions.length,0);
+});
+
+test('guided multi-material adaptive edits cancel pending reads and submitted nominees stay frozen',async()=>{
+  for(const change of ['materials','mode']) {
+    const {p,fit}=await adaptiveDesignSetup(false),delay=deferred();let reading=false;
+    guidedDesignField(p,'guidedDesignObjective','consumer_pareto','change');
+    p.e.guidedDesignMultiple.checked=true;p.e.guidedDesignMultiple.handlers.change();
+    selectAdaptiveMaterials(p,['baseline','material-1']);
+    p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();assert.equal(reading,true);
+    if(change==='materials')selectAdaptiveMaterials(p,['material-1']);
+    else {p.e.guidedDesignMultiple.checked=false;p.e.guidedDesignMultiple.handlers.change();}
+    assert.equal(old.dead,true);p.ready();delay.resolve(fit);await running;
+    assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+    old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});assert.equal(p.live.size,0);
+  }
+  const {p,fit}=await adaptiveDesignSetup(false),delay=deferred();
+  guidedDesignField(p,'guidedDesignObjective','consumer_pareto','change');
+  p.e.guidedDesignMultiple.checked=true;p.e.guidedDesignMultiple.handlers.change();selectAdaptiveMaterials(p,['baseline','material-1']);
+  p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const running=p.e.study.onclick();for(const option of p.e.guidedDesignMaterials.children)option.selected=false;
+  p.e.guidedDesignMultiple.checked=false;delay.resolve(fit);await running;
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.studyRequest).design_adaptive.material_keys,['baseline','material-1']);
+});
+
+test('guided multi-material adaptive matrices reserve every probe and preserve original case bytes through the worker',async()=>{
+  const {p,body}=await adaptiveDesignSetup(false);
+  guidedDesignField(p,'guidedDesignObjective','consumer_matrix_pareto','change');
+  guidedDesignField(p,'guidedDesignEvaluations','3');
+  p.e.guidedDesignMultiple.checked=true;p.e.guidedDesignMultiple.handlers.change();selectAdaptiveMaterials(p,['baseline','material-1']);
+  const single=' {"schema":"ftx-drape-scenario/1","options":{"spacing":20.0,"sew_steps":12,"drape_steps":0,"step":0.001},"fit_spec":{"points":[]}}\r\n';
+  const matrix=budget=>' {"schema":"ftx-drape-scenario-matrix/1","max_evaluations":'+budget+',"cases":[{"key":"cold <source>","scenario":'+single+'},{"key":"warm β","scenario":'+single+'}]}\r\n';
+  p.select('scenarioRequest',matrix(19));await p.e.scenarioRequest.handlers.change();
+  let before=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/20 reserved case evaluations/);
+  const original=matrix(20);p.select('scenarioRequest',original);await p.e.scenarioRequest.handlers.change();
+  const worker=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){}},
+    material_scenario_study:(_model,pattern,study,scenario,measurements)=>{
+      assert.equal(pattern,coupledDesignPattern);assert.equal(scenario,original);assert.equal(measurements,body);
+      assert.deepEqual(JSON.parse(study).design_adaptive.material_keys,['baseline','material-1']);
+      return JSON.stringify(scenarioReport());
+    }}});
+  for(const objective of ['consumer_matrix_pareto','consumer_pareto']) {
+    guidedDesignField(p,'guidedDesignObjective',objective,'change');
+    if(objective==='consumer_pareto')guidedDesignField(p,'guidedDesignCase','cold <source>','change');
+    await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+    assert.equal(JSON.parse(sent.studyRequest).design_adaptive.case_key,objective==='consumer_pareto'?'cold <source>':undefined);
+    const response=await worker.send(sent);assert.equal(response.type,'result',response.message);p.current().emit(response);
+    const download=descendants(section(p,'Fresh drape and heat alternatives')).find(n=>n.download==='scenario-request.json');
+    assert.equal(await p.blobs.get(download.href).text(),original);
+  }
+});
+
 test('guided adaptive policy edits cancel pending work while submitted domains and nominees stay immutable',async()=>{
   for(const change of ['bounds','step','evaluations','mode','objective','nominee','other-variable']) {
     const {p,fit}=await adaptiveDesignSetup(),delay=deferred();let reading=false;
@@ -14222,6 +14309,59 @@ test('adaptive design search displays raw violations and exact trials without de
   await p.e.study.onclick(); p.emit(report);
   assert.match(visibleText(s),/evaluation budget/);
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('multi-material adaptive results preserve independent frontiers refusals ranges and exact geometry downloads',async()=>{
+  const p=await pageModule();await p.load();p.select('studyRequest','{}');
+  const report=designReport(),source=' {"schema":"fabric-pattern/1","label":"<exact material frontier>","x":-0.0}\n';
+  const frontier=(evaluated,retained)=>({evaluated_trial_keys:evaluated,retained_trial_keys:retained,
+    unretained_trial_keys:evaluated.filter(key=>!retained.includes(key)),retention_capacity:1});
+  const decision=(material_key,value,eligible)=>({material_key,eligible,comparison:{eligible,
+    readings:{assembly_mass_kg:{value,reported_bounds:[value-0.01,value+0.01],unit:'kg',consumer:'assembly_mass'}},
+    exclusions:eligible?[]:[{message:'<source domain unavailable>'}],input_protocol_sha256:`protocol:${material_key}`},
+    ...(!eligible?{admission_refusal:{message:'<material admission refused>'},refusal:{message:'<original consumer refusal>'}}:{})});
+  const row=(key,selected,a,b)=>({selected,max_fit_band_violation_mm:0,total_fit_band_violation_mm:0,
+    design:{key,variables_mm:{length:10},altered_pattern_json:source,validation:{passed:true},fit:outcome({passed:true})},
+    consumer_materials:[decision('<linen>',a,true),decision('<knit>',b,key==='adaptive:0001')]});
+  const rows=[row('adaptive:0000',true,0.1,0.5),row('adaptive:0001',false,0.2,0.05)];
+  rows[0].consumer_materials[0].comparison.readings.assembly_mass_kg.reported_bounds=[0.09,0.11];
+  report.design_search={schema:'ftx-design-adaptive-search/1',evaluations:2,qualified_designs:2,selected_designs:1,
+    stop_reason:'evaluation_budget',budget_exhausted:true,complete_search:false,global_optimum_claim:false,
+    consumer_guidance:{material_keys:['<linen>','<knit>'],material_aggregation:'union_of_material_frontiers/1',
+      objectives:[{metric:'assembly_mass_kg',direction:'minimize'}],basis:'reported_bounds',evaluations:4,reserved_evaluations:8,
+      pareto_frontier:frontier(rows.map(r=>r.design.key),['adaptive:0000']),
+      material_frontiers:[{material_key:'<linen>',evaluations:2,input_protocol_sha256:'protocol:<linen>',
+        pareto_frontier:frontier(['adaptive:0000'],['adaptive:0000'])},
+        {material_key:'<knit>',evaluations:2,input_protocol_sha256:'protocol:<knit>',pareto_frontier:frontier(['adaptive:0001'],[])}]},rows};
+  await p.e.study.onclick();p.emit(report);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+  assert.ok(table('Multi-material Pareto adaptive alteration search'));
+  assert.deepEqual(plain(table('Adaptive frontiers by guidance material').children.slice(2).map(r=>r.children.map(n=>n.textContent))),[
+    ['<linen>','2','adaptive:0000','adaptive:0000','None','protocol:<linen>'],
+    ['<knit>','2','adaptive:0001','None selected','adaptive:0001','protocol:<knit>']]);
+  const trials=table('Adaptive alteration trials').children.slice(2);
+  assert.equal(trials[0].children[5].textContent,'Eligible','One material refusal does not hide the other frontier');
+  assert.equal(trials[1].children[8].textContent,'Not selected','Observed frontier membership does not imply retained output');
+  const materials=table('adaptive:0000: guidance material admission').children.slice(2);
+  assert.equal(materials[0].children[3].textContent,'assembly_mass_kg: 0.1 kg; reported range [0.09, 0.11] kg');
+  assert.match(materials[1].children[4].textContent,/<original consumer refusal>/);
+  assert.match(materials[1].children[4].textContent,/<source domain unavailable>/);
+  assert.match(visibleText(s),/Each material keeps an independent frontier/);
+  assert.match(visibleText(s),/Source protocols are compared within each material/);
+  const replay=descendants(s).find(n=>n.download==='adaptive-design-1-pattern.json');
+  assert.equal(await p.blobs.get(replay.href).text(),source);assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  const guidance=report.design_search.consumer_guidance;
+  guidance.case_aggregation='pareto';guidance.case_order=['<warm>'];
+  guidance.case_policies={'<warm>':{basis:'reported_bounds',objectives:guidance.objectives}};
+  for(const trial of rows)for(const item of trial.consumer_materials){
+    item.cases=[{key:'<warm>',comparison:item.comparison,...(item.refusal?{refusal:item.refusal}:{})}];delete item.comparison;
+  }
+  await p.e.study.onclick();p.emit(report);
+  assert.equal(table('adaptive:0000: guidance material admission').children[2].children[2].textContent,'<warm>');
+  assert.match(visibleText(s),/Every declared case must admit a material\/design pair/);
+  assert.equal(table('Adaptive alteration trials').children[2].children[5].textContent,'Eligible');
+  p.e.studyRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
 });
 
 test('consumer-guided adaptive search shows authoritative readings, displaced trials and exclusions without browser ranking', async () => {

@@ -652,21 +652,31 @@ qualified combinations in grid order before downstream comparison.</p>
 <option value="consumer_worst_case">Improving the worst named case for one shared goal</option>
 <option value="consumer_matrix_pareto">Exploring tradeoffs across all named cases</option>
 </select></label>
+<label id="guidedDesignMultipleField" hidden><input id="guidedDesignMultiple" type="checkbox">Let several materials guide tradeoff discovery</label>
 <label id="guidedDesignMaterialField">Material whose outcomes guide discovery <select id="guidedDesignMaterial">
 <option value="">Choose an explicit material</option></select></label>
 <p id="guidedDesignMaterialStatus" class="note" role="status" hidden></p>
+<div id="guidedDesignMaterialsField" hidden>
+<label>Materials whose outcomes guide discovery <select id="guidedDesignMaterials" multiple size="5"></select></label>
+<p class="note">Choose at least two current material choices. Each keeps its own frontier and source qualifications;
+the search explores designs useful to any selected material. An unavailable result for one material does not erase another material's admitted design.
+Each unique design probes every selected material, so the same trial allowance can require more work.</p>
+<p id="guidedDesignMaterialsStatus" class="note" role="status" hidden></p>
+</div>
 <label id="guidedDesignCaseField" hidden>Named case whose goals guide discovery
 <select id="guidedDesignCase"><option value="">Choose an explicit named case</option></select></label>
 <p id="guidedDesignCaseStatus" class="note" role="status" hidden></p>
 <label>Maximum unique discovery trials <input id="guidedDesignEvaluations" type="number" min="1" max="256" step="1"></label>
 <p class="note">Fit discovery uses the declared body-fit bands and stops when enough qualifying designs are retained.
-Single-goal guidance requires exactly one comparison goal; tradeoff guidance requires at least two. Both require an explicit
-material choice and retain ordinary limits, required results and source qualifications. Selected geometries are subsequently
-compared with every shortlisted material, but those other materials do not guide discovery.</p>
+Single-goal guidance requires exactly one comparison goal. Tradeoff guidance requires at least two goals for one nominated material,
+or at least one goal per material when several materials guide discovery. Explicit material choices retain ordinary limits,
+required results and source qualifications. Selected geometries are subsequently compared with every shortlisted material;
+only the nominated materials guide discovery.</p>
 <p class="note">For a loaded named-case matrix, choose one case for single-goal or within-case tradeoff guidance.
 Its original comparison policy takes precedence over the goals below. Every case's limits and required results still apply.
 Worst-case guidance requires one shared goal, direction and comparison basis in every case. All-case tradeoff guidance keeps
-each case's own goals and basis, with at least two case–goal coordinates; it does not combine them into a score.</p>
+each case's own goals and basis, with at least two case–goal coordinates for one nominated material or one per material for several;
+it does not combine them into a score.</p>
 <p class="note">Adaptive search polls bounded coordinates using the existing engine and reuses retained evaluated results.
 The trial allowance and smallest steps limit discovery; successful results remain conditional on explored coordinates.
 A named matrix must reserve every discovery trial and every retained design/material combination for every case, up to

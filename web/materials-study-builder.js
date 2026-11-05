@@ -863,12 +863,19 @@ function adaptiveGuidance(design, candidates, comparison, matrix) {
     throw Error("Choose fit-band, nominated-case, worst-case or Pareto adaptive guidance.");
   }
   if (design.objective === "fit_band_violation_mm") {
-    if (own(design, "materialKey") || own(design, "caseKey")) throw Error("Fit-band discovery does not accept a guidance materialKey or caseKey.");
+    if (own(design, "materialKey") || own(design, "materialKeys") || own(design, "caseKey")) throw Error("Fit-band discovery does not accept guidance material keys or a caseKey.");
     return;
   }
-  name(design.materialKey, "Adaptive guidance materialKey");
-  if (design.materialKey !== "baseline" && !candidates.some(candidate => candidate?.key === design.materialKey)) {
-    throw Error("Adaptive materialKey must identify the unchanged baseline or an existing material choice.");
+  const severalMaterials = own(design, "materialKeys");
+  if (severalMaterials && (own(design, "materialKey") ||
+    !["consumer_pareto", "consumer_matrix_pareto"].includes(design.objective))) {
+    throw Error("Multiple guidance materials require Pareto guidance and cannot also nominate materialKey.");
+  }
+  const materials = severalMaterials ? [...uniqueNames(design.materialKeys, "Adaptive guidance materialKeys", 16)] :
+    [name(design.materialKey, "Adaptive guidance materialKey")];
+  if (severalMaterials && materials.length < 2) throw Error("Choose 2–16 distinct materials to guide discovery.");
+  if (materials.some(key => key !== "baseline" && !candidates.some(candidate => candidate?.key === key))) {
+    throw Error("Adaptive materialKey/materialKeys must identify the unchanged baseline or existing material choices.");
   }
   const allCases = ["consumer_worst_case", "consumer_matrix_pareto"].includes(design.objective);
   if (!matrix && (allCases || own(design, "caseKey"))) {
@@ -881,7 +888,7 @@ function adaptiveGuidance(design, candidates, comparison, matrix) {
       if (own(design, "caseKey")) throw Error("All-case adaptive guidance does not accept a caseKey.");
       if (design.objective === "consumer_matrix_pareto") {
         if (policies.some(policy => !Array.isArray(policy?.objectives) || !policy.objectives.length || policy.objectives.length > 16) ||
-          policies.reduce((count, policy) => count + policy.objectives.length, 0) < 2) {
+          policies.reduce((count, policy) => count + policy.objectives.length, 0) < (severalMaterials ? 1 : 2)) {
           throw Error("All-case Pareto guidance needs 1–16 objectives per case and at least two case/objective coordinates.");
         }
         return;
@@ -900,7 +907,8 @@ function adaptiveGuidance(design, candidates, comparison, matrix) {
     effective = policies[index];
   }
   const count = Array.isArray(effective?.objectives) ? effective.objectives.length : 0;
-  if (design.objective === "consumer_comparison" ? count !== 1 : count < 2 || count > 16) {
+  if (design.objective === "consumer_comparison" ? count !== 1 : count < (severalMaterials ? 1 : 2) || count > 16) {
+    if (severalMaterials) throw Error("Multiple-material Pareto guidance needs 1–16 comparison objectives per material.");
     throw Error("Single-consumer guidance needs exactly one comparison objective; Pareto guidance needs 2–16.");
   }
 }
@@ -950,7 +958,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
   const fields = multiple ? ["variables", "maxDesigns", "fitSpec"] :
     ["pieceIds", "axis", "atMm", "multiplier", "values", "maxDesigns", "fitSpec"];
   const required = adaptive ? [...fields, "mode", "objective", "maxEvaluations"] : fields;
-  const allowed = adaptive ? [...required, "materialKey", "caseKey"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
+  const allowed = adaptive ? [...required, "materialKey", "materialKeys", "caseKey"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
   const design = object(value, [...allowed, "after"], required, "Linked design");
   const after = own(design, "after") ? buildGuidedDesignAfterOperations(design.after, [...pieces], seamIds) : undefined;
   if (adaptive) {
@@ -1010,13 +1018,14 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
   }
   const search = JSON.stringify(adaptive ? { objective: design.objective,
     ...(own(design, "materialKey") ? { material_key: design.materialKey } : {}),
+    ...(own(design, "materialKeys") ? { material_keys: [...design.materialKeys] } : {}),
     ...(own(design, "caseKey") ? { case_key: design.caseKey } : {}), variables,
     ...(after === undefined ? {} : { after }),
     max_evaluations: design.maxEvaluations, max_designs: design.maxDesigns } :
     { variables, ...(after === undefined ? {} : { after }), max_designs: design.maxDesigns, fit_screening: { max_candidates: maxCandidates } });
   bytes(search, 256 * 1024, `Linked design ${mode} exceeds 256 KiB of authored domain data.`);
   return { [adaptive ? "adaptive" : "grid"]: search, fitSpec: design.fitSpec, retainedDesigns: retained + 1,
-    probes: adaptive && design.objective !== "fit_band_violation_mm" ? design.maxEvaluations : 0 };
+    probes: adaptive && design.objective !== "fit_band_violation_mm" ? design.maxEvaluations * (design.materialKeys?.length ?? 1) : 0 };
 }
 
 function scenarioConsumers(value) {
