@@ -800,8 +800,9 @@ seam sides, including partial operations split across cells, and preserve all or
 By default every cell has its own independently qualified attending worker. Loading, setup, feed and
 unloading occupy that cell and worker consecutively; **feed does not release the worker**. Unloading releases
 the cell while the garment waits in staging or moves elsewhere. Needle/thread setup persists until
-the cell's next operation. All copies start in the first cell's unloaded staging, and the declared
-`staging_capacity` applies at **every used cell** and must be at least the complete copy count.
+the cell's next operation. Without `bounded_staging`, all copies start in the first cell's unloaded
+staging, and the declared `staging_capacity` applies at **every used cell** and must be at least the
+complete copy count. The explicit finite-buffer policy below changes that entry/exit boundary.
 
 Without explicit worker ownership, one separately qualified resource performs all inter-cell handoffs
 without overlap. Each directed row includes complete positioning, pickup, movement and deposit work
@@ -815,8 +816,8 @@ unloading and complete handoffs. A cell can finish one garment while another wai
 Optional cell `workholding` policies admit fixtures confined to one complete operation or, under
 the explicit retained protocol below, reserved at their owning cell across several operations.
 Separately qualified common pools and existing per-operation planar access checks still apply.
-Moving an occupied fixture, autonomous feed and insufficient staging require separately qualified
-extensions. Explicit worker sharing is described below. Eligible-machine domains retain the
+Moving an occupied fixture and autonomous feed require separately qualified extensions. Explicit
+finite staging and worker sharing are described below. Eligible-machine domains retain the
 selected cell's fixture obligations.
 
 The bounded search appends a copy's next handoff and cell operation at their earliest admitted
@@ -850,6 +851,62 @@ windows, bounded incumbents, actual stitches, purchasing, selection and study re
 Rust regressions pass. The separate real-command workflow and current compiled-WASM
 acceptance remain distinct checks. No measured factory timing, physical seam quality or hardware
 permission is established.
+
+### Finite staging buffers and explicit batch entry/exit
+
+Optional `routing.bounded_staging` with model `finite_unloaded_cell_buffers/1` schedules the
+existing uniform `staging_capacity` as a finite slot resource at every cell. Capacity may be
+smaller than the garment batch, but must be in `1..=4096`. The new policy requires its own
+`source`, `method`, optional `conditions`, `evidence`, and separate `allow_estimates` consent.
+Omission preserves the original complete-batch admission, schemas and timing arithmetic.
+
+The policy qualifies a different modeled boundary: each copy enters directly at its first actual
+cell's loading start and leaves at its final unloading finish. External input queues, delivery and
+finished-output storage are outside these buffers. Their transport or handling costs are not
+inferred. Each intermediate unloaded garment reserves a slot until its next admitted loading or
+handoff; the source qualification must support this entry/exit and reservation convention.
+
+Handoff reservations respect the existing transfer model:
+
+| Transfer model | Source reservation ends | Destination reservation begins |
+|---|---|---|
+| `serialized_unloaded_handoffs/1` | Complete handoff finishes | Complete handoff starts |
+| `attended_source_to_destination_handoffs/1` | Qualified pickup starts | Qualified deposit finishes |
+
+The independent mover's duration includes positioning and return, so its internal pickup/deposit
+times are unknown. Reserving both buffers throughout that interval conservatively covers them.
+The worker-owned model has explicit pickup/deposit boundaries and uses those actual boundaries.
+Destination reservations end when loading starts. Same-cell continuation releases the previous
+output slot at loading, without inventing a transfer. Intervals are half-open: a release at an
+instant permits reuse at that same instant, and zero-duration stays consume no positive-time slot.
+
+Finite staging can delay an incoming handoff or shift a complete operation until its output fits.
+Loading, setup, feed and unloading remain one nonpreemptive interval; the scheduler does not add
+an unqualified pause inside an operation. Every timing shift rechecks the existing cell, worker,
+fixture, transfer and calendar constraints from the unchanged dispatch prefix. Closed historical
+reservations remain relevant because dispatch construction is not chronological across cells.
+
+An undispatched next operation leaves an open output reservation. Search can extend another copy
+to close a blocking reservation, but never guesses its release. This conservative
+`coupled_bounded_staging_append_dispatch/1` scope can exclude schedules requiring a release that
+has not yet been constructed. A failed bounded search returns `not_converged`, not a general
+deadlock or factory-infeasibility proof. A complete feasible incumbent survives search exhaustion;
+the existing independent mandatory-work bound still governs makespan optimality.
+
+Bounded staging uses plan `/26`, production `/14` and routing `/9`. The nested
+`ftx-sewing-routing-staging/1` report retains the exact policy, capacity, entry/exit protocol and
+handoff reservation convention. Baseline and selected timelines are independently reconstructed
+and swept for capacity, with positive-duration per-copy/per-cell reservations, peak reserved slots
+and final zero reservations at every admitted cell. Each row identifies its actual selected cell,
+copy-scoped operation, `before_loading` or `after_unloading` boundary, and exact integer-millisecond
+interval. These are slot reservations; the independent mover can reserve two cells for one garment
+while it is in transit.
+
+Fixed and eligible routes, retained fixtures, shared workers, worker-owned handoffs, finite
+calendars and complete-order cost selection retain their existing authorities. Actual selected
+operations still determine stitches, thread demand and modeled completion. Synthetic scheduling
+checks do not establish measured factory timing, geometric staging access, physical seam quality
+or hardware authorization; `physical_staging_validated` remains false.
 
 ### Finite fixtures during routed operations
 

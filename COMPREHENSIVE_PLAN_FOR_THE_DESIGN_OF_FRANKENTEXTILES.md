@@ -5516,6 +5516,20 @@ withhold affected readings while independent consumers retain their existing out
 advances `ftx-ms2` using the mechanics delivered under `ftx-vc2.3`. Sampled extrema do not establish
 continuous-time limits, complete garment inventory, wearer comfort or empirical wet-garment fit.
 
+### 25.185 Schedule finite staging buffers through specialist sewing routes
+
+An explicit source-qualified finite-buffer policy allows production batches larger than each
+cell's unloaded staging capacity. Copies enter at first loading and leave at final unloading;
+external queues and delivery remain outside this modeled boundary. Timed slot reservations
+cover intermediate output, incoming waits and actual selected cells. Independent movers retain
+both cell slots through their complete qualified handoff, while worker-owned transfers use their
+explicit pickup/deposit boundaries.
+
+Buffer delays recheck complete operation, fixture, worker, transfer and calendar constraints.
+Bounded dispatch retains complete incumbents and independently reconstructs capacity histories;
+undispatched releases remain conservative open tails. This advances `ftx-pb2.2` without claiming
+unrestricted scheduling completeness, measured factory timing, physical access or seam quality.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
