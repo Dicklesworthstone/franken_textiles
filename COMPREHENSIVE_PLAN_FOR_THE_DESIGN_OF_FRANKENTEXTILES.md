@@ -5379,6 +5379,21 @@ keeps its own authority. Saved single/named cases, material alternatives and lin
 comparisons use the same native history contract and budgets. This completes the ordinary authoring
 route tracked by `ftx-ms2.22`; original motion files retain advanced source-qualified policies.
 
+### 25.176 Carry qualified convection ranges through layered body coverage comparisons
+
+Layered coverage now preserves the canonical positive prescribed-convection ranges introduced in
+§25.171. Every layer retains its actual body/cloth area factor; exterior resistance uses allocated
+outer-cloth area, and uncovered body paths add independently declared bare-film power. Signed
+endpoint accumulation supports outward, inward and mixed heat flow without changing nominal heat.
+
+Material/design comparisons independently reconcile the original sources, body identity, projected
+layer network, both conduction receipts and complete convection power accounting. Both endpoint
+surface temperatures must remain in the qualified coefficient domain. Missing material endpoints,
+radiation, zero convection, unsupported nonlinear laws, thermal bridges or consumed source-dependent
+stagnant gaps still withhold affected ranges while preserving nominal results. A completely bare
+domain does not consume textile convection. This closes the software gap tracked by `ftx-ms2.23`;
+geometry, interface films and convection inputs remain fixed, with no statistical or empirical claim.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

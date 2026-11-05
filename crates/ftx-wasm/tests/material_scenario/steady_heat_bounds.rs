@@ -50,11 +50,32 @@ fn production_surface_and_coverage_ranges_admit_signed_decisions_and_frozen_repl
         )
         .unwrap()
     };
-    for reverse in [false, true] {
+    for (reverse, convection) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut scenario = scenario.clone();
         for path in ["/surface/boundaries/0", "/coverage/conditions/boundaries/0"] {
             let boundary = scenario.pointer_mut(path).unwrap();
             boundary["inside_c"] = json!(if reverse { 10. } else { 30. });
             boundary["outside_c"] = json!(if reverse { 30. } else { 10. });
+        }
+        if convection {
+            let conditions = &mut scenario["coverage"]["conditions"];
+            let boundary = conditions["boundaries"][0].clone();
+            conditions["boundaries"][0]["outside_resistance_m2_k_w"] = json!(0.);
+            let exterior: ftx_drape::thermal::steady::exterior::Exterior =
+                serde_json::from_value(json!({
+                    "air_c":boundary["outside_c"],"convection_w_m2_k":5.,
+                    "surface_temperature_range_c":[-20.,80.],
+                    "convection_source":{"reference":"test:portable-covered-convection",
+                        "accessed_on":"2026-11-05","note":"Synthetic boundary; no empirical garment claim"},
+                    "convection_evidence":"estimate","allow_estimates":true,
+                    "convection_conditions":"Prescribed constant coefficient on the sewn fixture's outer cloth"
+                }))
+                .unwrap();
+            conditions["exterior_exchange"] = json!([exterior]);
+            conditions["bare_boundaries"] = json!([{
+                "inside_c":boundary["inside_c"],"outside_c":boundary["outside_c"],
+                "inside_resistance_m2_k_w":0.2,"outside_resistance_m2_k_w":0.4
+            }]);
         }
         let result = evaluate(&request, &scenario);
         assert_eq!(
@@ -102,6 +123,50 @@ fn production_surface_and_coverage_ranges_admit_signed_decisions_and_frozen_repl
                     .as_array()
                     .is_some_and(|regions| !regions.is_empty())
             );
+            if convection {
+                let heat = &outcome["coverage"]["result"];
+                let steady = &heat["steady"];
+                assert_eq!(steady["bounds_unavailable"], json!([]));
+                for field in ["boundaries", "exterior_exchange", "bare_boundaries"] {
+                    assert_eq!(
+                        heat["request"]["conditions"][field],
+                        scenario["coverage"]["conditions"][field]
+                    );
+                }
+                let regions = steady["regions"].as_array().unwrap();
+                let exchanges = heat["exterior_exchange"]["regions"].as_array().unwrap();
+                assert_eq!(regions.len(), exchanges.len());
+                for (region, exchange) in regions.iter().zip(exchanges) {
+                    assert_eq!(region["conduction"], exchange["conduction"]);
+                    assert!(region["conduction"]["reported_bounds"].is_object());
+                    assert!(region["reported_bounds"]["power_w"].is_array());
+                    assert_eq!(exchange["radiation_enabled"], false);
+                    assert_eq!(exchange["radiative_flux_w_m2"].as_f64(), Some(0.));
+                    let outer_area = region["layer_area_m2"]
+                        .as_array()
+                        .unwrap()
+                        .last()
+                        .unwrap()
+                        .as_f64()
+                        .unwrap();
+                    let convective = exchange["convective_flux_w_m2"].as_f64().unwrap();
+                    assert!(
+                        (region["power_w"].as_f64().unwrap() - outer_area * convective).abs()
+                            < 1e-10
+                    );
+                }
+                let convective = heat["exterior_exchange"]["convective_power_w"]
+                    .as_f64()
+                    .unwrap();
+                let power = steady["power_w"].as_f64().unwrap();
+                let bare = steady["bare_power_w"].as_f64().unwrap();
+                assert!((power - bare - convective).abs() < 1e-10);
+                let replay: Value = serde_json::from_str(
+                    &ftx_wasm::thermal::steady_coverage(&heat["request"].to_string()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(&replay, heat);
+            }
         }
         let mut frozen = request.clone();
         for (variant, row) in frozen

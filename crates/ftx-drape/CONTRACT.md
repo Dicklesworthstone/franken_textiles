@@ -853,10 +853,15 @@ through the existing series-network authority, using the fixed outside film `(mo
 cloth area) / h`. Both endpoint surface temperatures must remain in the coefficient's qualified
 domain. Missing intervals, unsupported laws, endpoint escape, radiation or zero convection retain
 the nominal exterior solution with an explicit unavailable-range reason. Current-area sheet powers
-reuse ordinary range accumulation; coverage continues to withhold exterior ranges. Boundary values,
-coefficient and geometry stay fixed: these are material-source intervals, not weather uncertainty,
-confidence intervals or measured garment performance. `tests/thermal_exterior.rs` checks fixed-film
-equivalence in both heat-flow directions and at equal reservoirs, plus independent range refusal.
+and layered covered-body powers use ordinary signed range accumulation. Coverage refers each layer
+to its covered body area, applies convection only to allocated outer cloth area, and adds uncovered
+body power through separately declared bare films as fixed contributions. A completely bare domain
+does not consume textile-convection ranges. Consumed thickness-dependent stagnant gaps withhold
+ranges in both retained conduction copies; unused gap declarations do not. Thermal-bridge totals
+remain outside these ranges. Boundary values, coefficient, interfaces and geometry stay fixed:
+these are material-source intervals, not weather uncertainty, confidence intervals or measured
+garment performance. `tests/thermal_exterior.rs` checks fixed-film equivalence in both heat-flow
+directions and at equal reservoirs, plus independent range refusal.
 
 **Qualified centerline thermal bridges** (`thermal::steady::coverage::bridges`).
 

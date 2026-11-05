@@ -601,6 +601,16 @@ right-endpoint or composite-trapezoid rule. Missing endpoints preserve nominal r
 robust ranking. Additional required consumers keep their ordinary gates. See
 `docs/material-screening-and-studies.md`.
 
+The same comparison basis supports `independent_surface_power_w` and `body_coverage_power_w`
+from complete constant material-resistance endpoints. Positive prescribed convection without
+radiation uses the fixed exterior resistance `(model area / outer cloth area) / h`, including
+layered coverage with different allocated cloth areas. Both endpoint surface temperatures must
+remain in the coefficient's qualified domain. Coverage adds separately declared bare-film power
+as a fixed contribution and reconciles every covered region and body total; uncovered area does
+not require textile exchange. Missing source endpoints, unsupported temperature-dependent laws,
+radiation, zero convection, thermal bridges or consumed thickness-dependent stagnant gaps exclude
+the affected bounded decision while preserving an available nominal reading.
+
 Every scenario objective requires this bound pattern's identity, the retained body/scenario identities,
 `drape.settled == true`, empty drape gating and `simulation_gating_clear == true`. Successful thermal
 output on an unfinished frame is still excluded. Thermal consumers enforce their existing source,
@@ -612,10 +622,12 @@ request identity; there is no misleading manufacturing-only frontier nested bene
 Relevant reported methods, full conditions and evidence must match by source piece unless explicitly
 relaxed. Different nonlinear/relaxation/temperature records and constitutive-model selectors use
 conservative exact-record comparison. Protocol override never bypasses freshness, settledness or
-missing-value checks. Nominal comparison requires explicit consent. Source ranges do not establish
-mechanical or dry-thermal objective intervals. Reported assembly-mass bounds hold authored geometry
-and inventory fixed; vapor bounds hold geometry, boundaries and integration policy fixed. Neither
-establishes general scenario uncertainty. Geometric settledness is not viscoelastic equilibrium, measured fit, thermal
+missing-value checks. Nominal comparison requires explicit consent. Range admission is specific
+to each declared consumer. Reported assembly-mass bounds hold authored geometry and
+inventory fixed; vapor bounds hold geometry, boundaries and integration policy fixed. Steady heat
+bounds hold geometry, interfaces, films, reservoirs and the prescribed convection coefficient fixed.
+These are conditional reported-input ranges, not confidence intervals, general scenario uncertainty
+or empirical validation. Geometric settledness is not viscoelastic equilibrium, measured fit, thermal
 comfort or proof that the requested run duration was physically sufficient. Positive admission tests
 use synthetic callback outcomes and an actual production sewing-only band after 120 sewing steps;
 the latter explicitly reports that gravity was not simulated. The short cylinder integration also

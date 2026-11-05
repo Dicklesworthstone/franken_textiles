@@ -185,7 +185,7 @@ impl Request {
             },
         )?;
         let assembly = SteadyCoverage::new(source, projection.layout.clone())?;
-        let (mut solution, exterior) = if let Some(e) = &self.conditions.exterior_exchange {
+        let (mut solution, mut exterior) = if let Some(e) = &self.conditions.exterior_exchange {
             let e = broadcast(e, boundaries.len())?;
             let bare = self
                 .conditions
@@ -218,6 +218,16 @@ impl Request {
             solution.exclude_reported_bounds(
                 "source-reported conduction ranges do not cover thickness-dependent stagnant-gap interfaces",
             );
+            if let Some(details) = &mut exterior {
+                for (exchange, region) in details["regions"]
+                    .as_array_mut()
+                    .expect("computed exterior regions")
+                    .iter_mut()
+                    .zip(&solution.regions)
+                {
+                    exchange["conduction"] = json!(region.conduction);
+                }
+            }
         }
         let bridges = self
             .thermal_bridges
