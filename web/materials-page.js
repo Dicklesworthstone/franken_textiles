@@ -62,6 +62,7 @@ const guidedCoverageFields = [...guidedCoverageTopologyFields, ...guidedCoverage
 const filmSuffixes = ["Inside", "Outside", "InsideFilm", "OutsideFilm"];
 const exteriorSuffixes = ["Enabled", "Air", "Coefficient", "Min", "Max", "Reference", "Date", "Note", "Conditions",
   "Evidence", "AllowEstimates", "Radiation", "Radiant", "Property", "Face", "GrayConsent"];
+const motionExteriorPrefixes = ["guidedMotionHeatExterior", "guidedMotionCoverageExterior", "guidedMotionExposedExterior"];
 const guidedCoverageDraftFields = ["guidedCoverageInstance", "guidedCoverageLayer", "guidedCoverageInner", "guidedCoverageOuter",
   "guidedCoverageResistance", "guidedCoverageBasis"];
 let guidedScenarioDraftSource = {};
@@ -443,6 +444,11 @@ function controls() {
   exteriorControls("heatExterior", sheetConditionsMode("heatConditions") === "form", "heat");
   exteriorControls("guidedCoverageExterior", !!source && guidedScenarioMode() && steadyCoverageForm,
     "guidedCoverage", "guidedCoverageBare");
+  const editMotion = !!source && guidedScenarioMode() && motionMode === "form";
+  exteriorControls("guidedMotionHeatExterior", editMotion && $("guidedMotionHeat").checked, "guidedMotionHeat");
+  exteriorControls("guidedMotionCoverageExterior", editMotion && $("guidedMotionCoverage").checked,
+    "guidedMotionCoverage", "guidedMotionCoverageBare");
+  exteriorControls("guidedMotionExposedExterior", editMotion && exposedFilms, "guidedMotionExposed");
   $("coverage").disabled ||= !drape || !has("map") || !has("coverageConditions");
   $("clearCoverageBridges").disabled = !has("coverageBridges");
   $("cancel").disabled = !pending;
@@ -4663,7 +4669,8 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
     return Number(raw);
   };
   const motion = {
-    keyframes: keyframes.map(({ heat_boundary, coverage_boundary, coverage_exposed_boundary, ...frame }) =>
+    keyframes: keyframes.map(({ heat_boundary, heat_exterior, coverage_boundary, coverage_exterior,
+      coverage_bare_boundary, coverage_exposed_boundary, coverage_exposed_exterior, ...frame }) =>
       ({ ...frame, ...(frame.leg_pose ? { leg_pose: { ...frame.leg_pose } } : {}) })),
     max_step_s: number("guidedMotionStep", "maximum motion substep in seconds"),
     max_trials: number("guidedMotionTrials", "trajectory substep allowance"),
@@ -4683,6 +4690,14 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
       max_step_s: number("guidedMotionHeatStep", "maximum thermal substep in seconds"),
       max_cell_steps: number("guidedMotionHeatBudget", "temperature-cell advance allowance"),
     };
+    if (keyframes.some(frame => frame.heat_exterior)) {
+      motion.transient_surface.exterior_exchange = keyframes.map((frame, index) => {
+        if (!frame.heat_exterior) {
+          throw Error(`Keyframe ${index + 1} has film-only sheet heat. Replace it with qualified exterior conditions, or replace all sheet intervals to use films.`);
+        }
+        return buildMaterialExteriorExchange(frame.heat_exterior);
+      });
+    }
   }
   if (includeHeat && $("guidedMotionCoverage").checked) {
     motion.transient_coverage = { schema: "ftx-motion-coverage-heat/1",
@@ -4702,6 +4717,16 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
       max_cell_steps: number("guidedMotionCoverageBudget", "coverage temperature-cell advance allowance"),
       max_geometry_operations: number("guidedMotionCoverageGeometryBudget", "coverage geometry-operation allowance"),
     };
+    if (keyframes.some(frame => frame.coverage_exterior || frame.coverage_bare_boundary)) {
+      motion.transient_coverage.exterior_exchange = keyframes.map(frame =>
+        frame.coverage_exterior ? buildMaterialExteriorExchange(frame.coverage_exterior) : null);
+      motion.transient_coverage.bare_boundaries = keyframes.map(frame =>
+        frame.coverage_bare_boundary ? { ...frame.coverage_bare_boundary } : null);
+    }
+    if (keyframes.some(frame => frame.coverage_exposed_exterior)) {
+      motion.transient_coverage.exposed_exterior_exchange = keyframes.map(frame =>
+        frame.coverage_exposed_exterior ? buildMaterialExteriorExchange(frame.coverage_exposed_exterior) : null);
+    }
   }
   return { motion, maxMotionTrials: number("guidedScenarioMotionTrials", "case motion-attempt allowance") };
 }
@@ -4741,6 +4766,14 @@ function saveGuidedMotionHeatInitial(domain = "Heat") {
     showGuidedMotionHeatInitials(domain); changedGuidedMotionDraft();
   } catch (e) { error(String(e.message || e)); }
 }
+function motionExteriorSummary(exterior) {
+  const radiation = exterior.radiation;
+  return `qualified exterior: air ${exterior.air_c} °C; convection ${exterior.convection_w_m2_k} W/m² K ` +
+    `(${exterior.convection_evidence}; source ${exterior.convection_source.reference}, ${exterior.convection_source.accessed_on}); ` +
+    (radiation ? `radiation at ${radiation.ambient_c} °C from ` + (radiation.automatic_material_face ?
+      "each material's qualified optical face mapping" : `material property ${radiation.emissivity_property} on face ${radiation.exposed_face}`) :
+      "radiation omitted");
+}
 function showGuidedMotionKeyframes() {
   const parent = $("guidedMotionKeyframes"); parent.replaceChildren(); guidedMotionButtons.length = 0;
   for (const [index, frame] of guidedMotionKeyframes.entries()) {
@@ -4750,15 +4783,24 @@ function showGuidedMotionKeyframes() {
     if (frame.heat_boundary) {
       const film = frame.heat_boundary, start = index ? guidedMotionKeyframes[index - 1].time_s : 0;
       label.textContent += ` Saved heat for ${start}–${frame.time_s} s: inside ${film.inside_c} °C / ${film.inside_resistance_m2_k_w} m² K/W; ` +
-        `outside ${film.outside_c} °C / ${film.outside_resistance_m2_k_w} m² K/W.`;
+        (frame.heat_exterior ? `${motionExteriorSummary(frame.heat_exterior)}.` :
+          `outside ${film.outside_c} °C / ${film.outside_resistance_m2_k_w} m² K/W.`);
     } else if ($("guidedMotionHeat").checked) label.textContent += " Heat conditions not saved; replace this endpoint to add them.";
     if (frame.coverage_boundary) {
       const film = frame.coverage_boundary, exposed = frame.coverage_exposed_boundary;
       label.textContent += ` Saved body/layer heat: inside ${film.inside_c} °C / ${film.inside_resistance_m2_k_w} m² K/W; ` +
-        `outside ${film.outside_c} °C / ${film.outside_resistance_m2_k_w} m² K/W. ` +
+        (frame.coverage_exterior ? `${motionExteriorSummary(frame.coverage_exterior)}. ` :
+          `outside ${film.outside_c} °C / ${film.outside_resistance_m2_k_w} m² K/W. `) +
         (exposed === null ? "Exposed cloth: adiabatic." : exposed ?
-          `Exposed cloth: inside ${exposed.inside_c} °C / ${exposed.inside_resistance_m2_k_w} m² K/W; outside ${exposed.outside_c} °C / ${exposed.outside_resistance_m2_k_w} m² K/W.` :
+          `Exposed cloth: inside ${exposed.inside_c} °C / ${exposed.inside_resistance_m2_k_w} m² K/W; ` +
+            (frame.coverage_exposed_exterior ? `${motionExteriorSummary(frame.coverage_exposed_exterior)}.` :
+              `outside ${exposed.outside_c} °C / ${exposed.outside_resistance_m2_k_w} m² K/W.`) :
           "Exposed-cloth conditions not saved.");
+      if (frame.coverage_bare_boundary) {
+        const bare = frame.coverage_bare_boundary;
+        label.textContent += ` Bare-body films: inside ${bare.inside_c} °C / ${bare.inside_resistance_m2_k_w} m² K/W; ` +
+          `outside ${bare.outside_c} °C / ${bare.outside_resistance_m2_k_w} m² K/W.`;
+      }
     } else if ($("guidedMotionCoverage").checked) label.textContent += " Body/layer heat conditions not saved; replace this endpoint to add them.";
     row.append(label);
     const replace = document.createElement("button"); replace.type = "button";
@@ -4795,24 +4837,33 @@ function saveGuidedMotionKeyframe(replacing = null) {
       arm_abduction_deg: number("guidedMotionArm", "arm angle in degrees"),
       ...(legs === "standing" ? {} : { leg_pose: { posture: legs, fraction: number("guidedMotionLegFraction", "leg-pose fraction") } }) };
     if ($("guidedMotionHeat").checked) {
-      frame.heat_boundary = { inside_c: number("guidedMotionHeatInside", "inside reservoir temperature"),
-        outside_c: number("guidedMotionHeatOutside", "outside reservoir temperature"),
-        inside_resistance_m2_k_w: number("guidedMotionHeatInsideFilm", "inside film resistance"),
-        outside_resistance_m2_k_w: number("guidedMotionHeatOutsideFilm", "outside film resistance") };
-    } else if (replacing?.heat_boundary) frame.heat_boundary = { ...replacing.heat_boundary };
+      const exterior = exteriorInput("guidedMotionHeatExterior", number);
+      frame.heat_boundary = filmInput("guidedMotionHeat", number, exterior);
+      if (exterior) frame.heat_exterior = exterior;
+    } else if (replacing?.heat_boundary) {
+      frame.heat_boundary = { ...replacing.heat_boundary };
+      if (replacing.heat_exterior) frame.heat_exterior = buildMaterialExteriorExchange(replacing.heat_exterior);
+    }
     if ($("guidedMotionCoverage").checked) {
-      const film = (prefix, domain) => ({ inside_c: number(prefix + "Inside", `${domain} inside reservoir temperature`),
-        outside_c: number(prefix + "Outside", `${domain} outside reservoir temperature`),
-        inside_resistance_m2_k_w: number(prefix + "InsideFilm", `${domain} inside film resistance`),
-        outside_resistance_m2_k_w: number(prefix + "OutsideFilm", `${domain} outside film resistance`) });
       const exposed = $("guidedMotionExposedMode").value;
       if (!["adiabatic", "films"].includes(exposed)) throw Error("Choose adiabatic exposed cloth or declare its separate reservoir films for this endpoint.");
-      frame.coverage_boundary = film("guidedMotionCoverage", "covered-body");
-      frame.coverage_exposed_boundary = exposed === "adiabatic" ? null : film("guidedMotionExposed", "exposed-cloth");
+      const exterior = exteriorInput("guidedMotionCoverageExterior", number);
+      const exposedExterior = exposed === "adiabatic" ? null : exteriorInput("guidedMotionExposedExterior", number);
+      frame.coverage_boundary = filmInput("guidedMotionCoverage", number, exterior);
+      frame.coverage_exposed_boundary = exposed === "adiabatic" ? null : filmInput("guidedMotionExposed", number, exposedExterior);
+      if (exterior) {
+        frame.coverage_exterior = exterior;
+        frame.coverage_bare_boundary = filmInput("guidedMotionCoverageBare", number);
+      }
+      if (exposedExterior) frame.coverage_exposed_exterior = exposedExterior;
     } else if (replacing?.coverage_boundary) {
       frame.coverage_boundary = { ...replacing.coverage_boundary };
       if (Object.hasOwn(replacing, "coverage_exposed_boundary")) frame.coverage_exposed_boundary =
         replacing.coverage_exposed_boundary === null ? null : { ...replacing.coverage_exposed_boundary };
+      for (const key of ["coverage_exterior", "coverage_exposed_exterior"]) {
+        if (replacing[key]) frame[key] = buildMaterialExteriorExchange(replacing[key]);
+      }
+      if (replacing.coverage_bare_boundary) frame.coverage_bare_boundary = { ...replacing.coverage_bare_boundary };
     }
     const keyframes = guidedMotionKeyframes.slice(), index = replacing ? keyframes.indexOf(replacing) : -1;
     if (replacing && index < 0) throw Error("Choose a current keyframe to replace.");
@@ -5367,7 +5418,8 @@ for (const id of ["guidedMotionStep", "guidedMotionTrials", "guidedMotionPairs",
 for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "guidedMotionLegFraction",
   "guidedMotionHeatInside", "guidedMotionHeatOutside", "guidedMotionHeatInsideFilm", "guidedMotionHeatOutsideFilm",
   "guidedMotionHeatInstance", "guidedMotionHeatInstanceInitial", "guidedMotionCoverageInstance", "guidedMotionCoverageInstanceInitial",
-  ...["guidedMotionCoverage", "guidedMotionExposed"].flatMap(prefix => ["Inside", "Outside", "InsideFilm", "OutsideFilm"].map(suffix => prefix + suffix)),
+  ...["guidedMotionCoverage", "guidedMotionExposed", "guidedMotionCoverageBare"].flatMap(prefix => filmSuffixes.map(suffix => prefix + suffix)),
+  ...motionExteriorPrefixes.flatMap(prefix => exteriorSuffixes.map(suffix => prefix + suffix)),
   "guidedMotionExposedMode"]) {
   $(id).addEventListener("change", controls);
   if (!["guidedMotionLegs", "guidedMotionExposedMode"].includes(id)) $(id).addEventListener("input", controls);
@@ -5732,12 +5784,12 @@ function resetGuidedScenarios() {
   $("guidedContactLoadsInstances").value = "";
   guidedCoverageLayers.clear(); guidedCoverageInterfaces.clear(); showGuidedCoverageTopology();
   for (const id of [...guidedCoverageFields, ...guidedCoverageDraftFields]) $(id).value = "";
-  for (const prefix of ["heatExterior", "guidedCoverageExterior"]) for (const suffix of exteriorSuffixes) {
+  for (const prefix of ["heatExterior", "guidedCoverageExterior", ...motionExteriorPrefixes]) for (const suffix of exteriorSuffixes) {
     const field = $(prefix + suffix);
     if (["Enabled", "AllowEstimates", "GrayConsent"].includes(suffix)) field.checked = false;
     else field.value = suffix === "Radiation" ? "none" : "";
   }
-  for (const suffix of filmSuffixes) $("guidedCoverageBare" + suffix).value = "";
+  for (const prefix of ["guidedCoverageBare", "guidedMotionCoverageBare"]) for (const suffix of filmSuffixes) $(prefix + suffix).value = "";
   $("guidedCoverageCells").value = "1"; $("guidedCoverageSource").value = "file";
   for (const [, id] of guidedTransportSources) $(id).checked = false;
 }
