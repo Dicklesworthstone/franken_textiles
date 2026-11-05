@@ -3948,9 +3948,6 @@ fn initial_heat_range(
             "surface_water_alternatives",
             "coupled_water_alternatives",
             "mechanical_coupling",
-            "plastic_dissipation_heat",
-            "relaxation_dissipation_heat",
-            "bending_plastic_dissipation_heat",
         ]
         .iter()
         .any(|key| !request[key].is_null())
@@ -4022,6 +4019,7 @@ fn initial_heat_range(
     };
     let mut selections = Vec::with_capacity(columns.len());
     let mut laws = Vec::with_capacity(columns.len());
+    let mut heating_domains = Vec::with_capacity(columns.len());
     for (column, source) in columns.iter().zip(source_columns) {
         let layers = vapor_array(column, "layers")?;
         if layers.len() != 1
@@ -4046,6 +4044,28 @@ fn initial_heat_range(
             material.material(),
             material.allows_estimates(),
         )?);
+        let mut domain = [-273.15_f64, f64::INFINITY];
+        for channel in [HeatWork::Plastic, HeatWork::Relaxation, HeatWork::Bending] {
+            if request[channel.policy()].is_null() {
+                continue;
+            }
+            let qualified = match channel {
+                HeatWork::Plastic => material
+                    .membrane_plastic_heat_fraction()?
+                    .map(|f| f.temperature_range_c),
+                HeatWork::Relaxation => material
+                    .membrane_relaxation_heat_fraction()?
+                    .map(|f| f.temperature_range_c),
+                HeatWork::Bending => material
+                    .bending_plastic_heat_fraction()?
+                    .map(|f| f.temperature_range_c),
+            };
+            if let Some([lo, hi]) = qualified {
+                domain[0] = domain[0].max(lo);
+                domain[1] = domain[1].min(hi);
+            }
+        }
+        heating_domains.push(domain);
         selections.push(json!(material.frozen_selection()));
     }
     admit_vapor_assignments(alternative, instances, owners, patches, &selections)?;
@@ -4075,9 +4095,12 @@ fn initial_heat_range(
         {
             return Err(fail());
         }
-        laws.get(vapor_index(&patch["column"])?)
-            .ok_or_else(fail)?
-            .check_temperature(t)?;
+        let column = vapor_index(&patch["column"])?;
+        laws.get(column).ok_or_else(fail)?.check_temperature(t)?;
+        let [lo, hi] = *heating_domains.get(column).ok_or_else(fail)?;
+        if t < lo || t > hi {
+            return Err(fail());
+        }
         used.insert(instances[owner].as_str().ok_or_else(fail)?);
         range[0] = range[0].min(t);
         range[1] = range[1].max(t);

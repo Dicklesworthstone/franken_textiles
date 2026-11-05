@@ -105,6 +105,119 @@ fn study(raw: &Value, request: &Request, pattern: &Pattern) -> Value {
 }
 
 #[test]
+fn distinct_initial_temperatures_reach_heated_sheet_and_coverage_decisions() {
+    let (pattern, mut input, mut raw) = inputs();
+    let mut pattern = pattern.raw().clone();
+    let mut upper = pattern["pieces"][0].clone();
+    upper["id"] = json!("upper");
+    upper["placement"]["y0"] = json!(-50.);
+    pattern["pieces"].as_array_mut().unwrap().push(upper);
+    pattern["seams"].as_array_mut().unwrap().push(json!({
+        "id":"join-upper","a":"upper/right","b":"upper/left"}));
+    let pattern = Pattern::new(pattern);
+    input.variants.truncate(1);
+    input.variants[0].changes.default = Some(
+        serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-relaxation-heat.json"
+        ))
+        .unwrap(),
+    );
+    input.comparison = Some(
+        serde_json::from_value(json!({"basis":"nominal",
+        "required_consumers":["transient_surface","transient_coverage"],
+        "objectives":[
+            {"metric":"transient_surface_min_sample_temperature_c","direction":"maximize"},
+            {"metric":"transient_coverage_max_sample_temperature_c","direction":"minimize"}]}))
+        .unwrap(),
+    );
+    let coverage = raw.as_object_mut().unwrap().remove("coverage").unwrap();
+    let sheet = &mut raw["motion"]["transient_surface"];
+    sheet.as_object_mut().unwrap().remove("surface_water");
+    sheet["initial_temperature_c"] = json!(999.);
+    sheet["initial_instance_temperatures_c"] = json!({"band":5.,"upper":35.});
+    sheet["relaxation_dissipation_heat"] = json!("uniform_reference_thickness");
+    sheet["max_cell_steps"] = json!(5000000);
+    let boundary = sheet["boundaries"][0].clone();
+    raw["motion"]["transient_coverage"] = json!({
+        "schema":"ftx-motion-coverage-heat/1",
+        "body_triangle_ids":(0..form().triangles.len()).collect::<Vec<_>>(),
+        "instance_layers":{"band":"shell","upper":"shell"},"settings":coverage["settings"],
+        "initial_temperature_c":999.,"initial_instance_temperatures_c":{"band":5.,"upper":35.},
+        "relaxation_dissipation_heat":"uniform_reference_thickness",
+        "boundaries":[boundary],"exposed_boundaries":[boundary],
+        "max_step_s":0.00025,"max_cell_steps":5000000,"max_geometry_operations":1000000});
+    let result = study(&raw, &input, &pattern);
+    let simulation = &keyed(&result["simulations"], "qualified")["evaluation"]["result"];
+    let motion = &simulation["motion"]["result"];
+    assert_eq!(simulation["motion"]["status"], "available", "{simulation}");
+    for name in ["transient_surface", "transient_coverage"] {
+        let outcome = &motion[name];
+        assert_eq!(outcome["status"], "available", "{outcome}");
+        let heat = &outcome["result"];
+        assert_eq!(
+            heat["initial_condition"]["temperature_range_c"],
+            json!([5., 35.])
+        );
+        assert_eq!(heat["request"], raw["motion"][name]);
+        assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+        let work = &heat["relaxation_dissipation_heat"];
+        let dissipated = work["viscous_dissipation_j"].as_f64().unwrap();
+        assert!(dissipated > 0., "{work}");
+        assert!((work["supplied_heat_j"].as_f64().unwrap() - 0.75 * dissipated).abs() < 1e-10);
+    }
+    assert_eq!(
+        result["comparison"]["frontier"],
+        json!(["qualified"]),
+        "{}",
+        result["comparison"]
+    );
+    let readings = &keyed(&result["comparison"]["alternatives"], "qualified")["readings"];
+    assert_eq!(
+        readings["transient_surface_min_sample_temperature_c"]["value"],
+        5.
+    );
+    assert_eq!(
+        readings["transient_coverage_max_sample_temperature_c"]["value"],
+        motion["transient_coverage"]["result"]["trace"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .fold(35_f64, |high, row| high
+                .max(row["temperature_range_c"][1].as_f64().unwrap()))
+    );
+    let replay: Value = serde_json::to_value(
+        input
+            .evaluate_with(&pattern, &result["scenario"], |_, _| Ok(simulation.clone()))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(replay["comparison"], result["comparison"]);
+
+    // Each independently requested consumer qualifies its own actual initial temperatures.
+    // A refused conversion domain must leave the other thermal path and mechanics available.
+    raw["motion"]["transient_surface"]["initial_instance_temperatures_c"]["upper"] = json!(90.);
+    let refused = study(&raw, &input, &pattern);
+    let independent = &keyed(&refused["simulations"], "qualified")["evaluation"]["result"];
+    assert_eq!(independent["motion"]["status"], "available");
+    assert_eq!(
+        independent["motion"]["result"]["transient_surface"]["status"],
+        "refused"
+    );
+    assert_eq!(
+        independent["motion"]["result"]["transient_coverage"]["status"],
+        "available"
+    );
+    assert_eq!(
+        independent["motion"]["result"]["samples"],
+        motion["samples"]
+    );
+    assert_eq!(
+        keyed(&refused["comparison"]["alternatives"], "qualified")["eligible"],
+        false
+    );
+}
+
+#[test]
 fn portable_dry_instance_temperatures_preserve_owners_fallback_replay_and_independent_motion() {
     let (pattern, mut input, mut raw) = inputs();
     let mut pattern = pattern.raw().clone();

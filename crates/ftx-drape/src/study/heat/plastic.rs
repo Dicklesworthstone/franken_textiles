@@ -44,13 +44,13 @@ pub(super) struct Heating {
 impl Heating {
     // Preserve the covered-layer plastic consumer's constructor while selecting new sources
     // explicitly. Both consumers retain the same accepted-work and conversion authority.
-    pub(super) fn new(run: &DrapeRun, temperature_c: f64) -> Result<Self, Refusal> {
-        Self::new_kind(run, temperature_c, Kind::Plastic)
+    pub(super) fn new(run: &DrapeRun, temperatures_c: &[f64]) -> Result<Self, Refusal> {
+        Self::new_kind(run, temperatures_c, Kind::Plastic)
     }
 
     pub(super) fn new_kind(
         run: &DrapeRun,
-        temperature_c: f64,
+        temperatures_c: &[f64],
         kind: Kind,
     ) -> Result<Self, Refusal> {
         let (previous_j, history) = match kind {
@@ -80,9 +80,9 @@ impl Heating {
             &run.scene.mesh.instances,
             &run.scene.triangle_owner,
         )?;
-        if assignment.len() != previous_j.len() {
+        if assignment.len() != previous_j.len() || temperatures_c.len() != previous_j.len() {
             return Err(invalid(
-                "dissipation heat must retain every material triangle exactly once",
+                "dissipation heat must retain every material triangle and its initial temperature exactly once",
             ));
         }
         let mut fractions = Vec::with_capacity(records.len());
@@ -183,7 +183,16 @@ impl Heating {
             supplied_j: 0.,
             materials,
         };
-        result.check_temperatures(&vec![vec![temperature_c]; result.fractions.len()])?;
+        for (&temperature, fraction) in temperatures_c.iter().zip(&result.fractions) {
+            if let Some(fraction) = fraction {
+                let [lo, hi] = fraction.temperature_range_c;
+                if !temperature.is_finite() || temperature < lo || temperature > hi {
+                    return Err(invalid(
+                        "dissipation heat temperature exceeds the conversion observation's qualified domain",
+                    ));
+                }
+            }
+        }
         Ok(result)
     }
 

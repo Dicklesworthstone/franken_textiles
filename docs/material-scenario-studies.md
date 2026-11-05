@@ -405,8 +405,17 @@ entering or leaving body coverage does not reset that temperature or lose stored
 identities. Material/design comparisons include only actually applied initial temperatures in
 sample extrema; an unused fallback cannot create a false maximum or minimum. Final-temperature
 metrics continue to describe the final sample alone. Original motion-file input preserves these
-fields in the browser and named-case replay. Dissipation heating and wet-sheet combinations remain
-outside the per-instance initialization contract and refuse when requested together.
+fields in the browser and named-case replay.
+
+The same initialization supports separately requested plastic, Maxwell and irreversible bending
+heating in both sheet and coverage histories. Every active conversion observation qualifies the
+actual starting temperature of its retained source triangles, including covered and exposed
+portions; a fully overridden fallback is not substituted into that check. Accepted mechanical
+work is deposited through the existing source fractions and reference-mass enthalpy authority.
+Initial preparation work remains excluded. Material/design comparisons reconcile the initial
+owners and conversion domains before using the complete heat history. A refused sheet conversion
+does not erase an independently supported coverage history or mechanical motion, and vice versa.
+Wet-sheet combinations remain outside the per-instance initialization contract.
 
 `motion.transient_coverage.thermal_bridges` adds source-qualified instantaneous seam/closure excess
 to the actual incoming and outgoing history energies. It requires the exact steady reference

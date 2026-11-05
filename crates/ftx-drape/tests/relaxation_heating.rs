@@ -153,6 +153,12 @@ fn coverage_heat(result: &Value) -> &Value {
 // Independently integrate constant-capacity reference mass across covered portions and remaining
 // exposed cloth, without using solver-reported heat/storage or treating current area as mass.
 fn checkpoint_enthalpy_change(checkpoint: &Value) -> f64 {
+    checkpoint_enthalpy_change_from(checkpoint, |_| 20.)
+}
+fn checkpoint_enthalpy_change_from(
+    checkpoint: &Value,
+    initial_temperature: impl Fn(usize) -> f64,
+) -> f64 {
     let source = &checkpoint["frame"]["source"];
     let patches = source["patches"].as_array().unwrap();
     let capacities: Vec<_> = patches
@@ -181,7 +187,8 @@ fn checkpoint_enthalpy_change(checkpoint: &Value) -> f64 {
             allocated[i] += fraction;
             for cell in 0..cells {
                 stored += capacities[i] * fraction / cells as f64
-                    * (temperatures[layer * cells + cell].as_f64().unwrap() - 20.);
+                    * (temperatures[layer * cells + cell].as_f64().unwrap()
+                        - initial_temperature(i));
             }
         }
     }
@@ -192,8 +199,8 @@ fn checkpoint_enthalpy_change(checkpoint: &Value) -> f64 {
         .enumerate()
     {
         for t in temperatures.as_array().unwrap() {
-            stored +=
-                capacities[i] * (1. - allocated[i]) / cells as f64 * (t.as_f64().unwrap() - 20.);
+            stored += capacities[i] * (1. - allocated[i]) / cells as f64
+                * (t.as_f64().unwrap() - initial_temperature(i));
         }
     }
     stored
@@ -253,6 +260,173 @@ fn bending_scenario() -> Scenario {
     coverage.bending_plastic_dissipation_heat = Some(UniformReferenceThickness);
     coverage.boundaries = surface.boundaries.clone();
     s
+}
+
+#[test]
+fn distinct_piece_temperatures_qualify_and_conserve_each_material_heating_channel() {
+    for (channel, property, work_field, mut front, mut back) in [
+        (
+            "relaxation_dissipation_heat",
+            "membrane_relaxation_heat_fraction",
+            "membrane_relaxation_dissipation_j",
+            maxwell(0.75),
+            maxwell(0.5),
+        ),
+        (
+            "plastic_dissipation_heat",
+            "membrane_plastic_heat_fraction",
+            "membrane_plastic_dissipation_j",
+            plastic(),
+            plastic(),
+        ),
+        (
+            "bending_plastic_dissipation_heat",
+            "bending_plastic_heat_fraction",
+            "bending_plastic_dissipation_j",
+            bending(0.75),
+            bending(0.5),
+        ),
+    ] {
+        // Disjoint conversion domains distinguish source ownership from material display names.
+        for (selection, lo, hi) in [(&mut front, "30", "60"), (&mut back, "-10", "15")] {
+            selection["record"]["properties"][property]["conditions"]["temperature_min_c"] =
+                json!(lo);
+            selection["record"]["properties"][property]["conditions"]["temperature_max_c"] =
+                json!(hi);
+        }
+        let fractions = [
+            front["record"]["properties"][property]["value"]
+                .as_f64()
+                .unwrap(),
+            back["record"]["properties"][property]["value"]
+                .as_f64()
+                .unwrap(),
+        ];
+        let mut raw = garment(back).raw().clone();
+        raw["fabric"]["material"] = front;
+        let pattern = Pattern::new(raw);
+        let mut request = json!(bending_scenario());
+        for consumer in ["transient_surface", "transient_coverage"] {
+            let heat = &mut request["motion"][consumer];
+            heat["bending_plastic_dissipation_heat"] = Value::Null;
+            heat[channel] = json!("uniform_reference_thickness");
+            // No retained piece uses this fallback; it must not enter conversion qualification.
+            heat["initial_temperature_c"] = json!(999.);
+            heat["initial_instance_temperatures_c"] = json!({"front":35.,"back":5.});
+        }
+        let scenario: Scenario = serde_json::from_value(request.clone()).unwrap();
+        let result = evaluate(&scenario, &pattern);
+        let sheet = heat(&result);
+        let covered = coverage_heat(&result);
+        assert_eq!(sheet[channel], covered[channel], "{channel}");
+        for report in [sheet, covered] {
+            assert_eq!(
+                report["initial_condition"]["temperature_range_c"],
+                json!([5., 35.])
+            );
+        }
+        let mechanics = &result["motion"]["result"];
+        let initial_work = &mechanics["initial_sample"][work_field];
+        let final_work = &mechanics["samples"].as_array().unwrap().last().unwrap()[work_field];
+        let owners = result["drape"]["material"]["triangle_instance"]
+            .as_array()
+            .unwrap();
+        let piece = |triangle: usize| {
+            result["drape"]["material"]["instances"][owners[triangle].as_u64().unwrap() as usize]
+                ["piece_index"].as_u64().unwrap() as usize
+        };
+        let initial_temperature = |triangle| [35., 5.][piece(triangle)];
+        let mut expected_heat = 0.;
+        for (i, patch) in sheet["model"]["patches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            let delta = final_work[i].as_f64().unwrap() - initial_work[i].as_f64().unwrap();
+            let supplied = fractions[piece(i)] * delta;
+            expected_heat += supplied;
+            let properties = &sheet["model"]["columns"][patch["column"].as_u64().unwrap() as usize]
+                ["layers"][0]["normalized"]["properties"];
+            let capacity = patch["reference_area_m2"].as_f64().unwrap()
+                * properties["areal_density"]["value"].as_f64().unwrap()
+                * properties["specific_heat"]["value"].as_f64().unwrap();
+            for temperature in sheet["final"]["temperature_c"][i].as_array().unwrap() {
+                assert!(
+                    (temperature.as_f64().unwrap() - initial_temperature(i) - supplied / capacity)
+                        .abs()
+                        < 1e-8,
+                    "{channel}, triangle {i}"
+                );
+            }
+        }
+        assert!(expected_heat > 0., "{channel}");
+        assert!(
+            (sheet[channel]["supplied_heat_j"].as_f64().unwrap() - expected_heat).abs() < 1e-12
+        );
+        for (report, stored) in [
+            (sheet, "stored_change_j"),
+            (covered, "physical_stored_change_j"),
+        ] {
+            assert!(
+                (report[stored].as_f64().unwrap()
+                    - report["net_boundary_energy_j"].as_f64().unwrap()
+                    - expected_heat)
+                    .abs()
+                    < 1e-10
+            );
+        }
+        let stored = checkpoint_enthalpy_change_from(&covered["checkpoint"], initial_temperature);
+        assert!(
+            (stored
+                - covered["physical_stored_change_j"].as_f64().unwrap()
+                - covered["signed_remap_residual_j"].as_f64().unwrap())
+            .abs()
+                < 1e-10
+        );
+
+        // A bad temperature in either consumer cannot erase the other complete heat history.
+        for consumer in ["transient_surface", "transient_coverage"] {
+            let mut invalid = request.clone();
+            invalid["motion"][consumer]["initial_instance_temperatures_c"]["front"] = json!(10.);
+            let invalid: Scenario = serde_json::from_value(invalid).unwrap();
+            let failed = evaluate(&invalid, &pattern);
+            unchanged_mechanics(&result, &failed);
+            let refused = &failed["motion"]["result"][consumer];
+            assert_eq!(refused["status"], "refused", "{channel}: {refused}");
+            assert!(
+                refused["refusal"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("conversion")
+            );
+            assert!(refused.get("result").is_none());
+            let other = if consumer == "transient_surface" {
+                "transient_coverage"
+            } else {
+                "transient_surface"
+            };
+            assert_eq!(failed["motion"]["result"][other]["status"], "available");
+            for field in [
+                channel,
+                "request",
+                "initial_condition",
+                "stored_change_j",
+                "physical_stored_change_j",
+                "net_boundary_energy_j",
+                "balance_error_j",
+                "final",
+                "checkpoint",
+                "trace",
+            ] {
+                assert_eq!(
+                    failed["motion"]["result"][other]["result"][field],
+                    result["motion"]["result"][other]["result"][field],
+                    "{channel}: unaffected {other}.{field}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
