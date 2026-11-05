@@ -1198,6 +1198,14 @@ Each endpoint gives an absolute arm and leg pose; selecting standing explicitly 
 </div>
 <p class="note">Each retained material must supply admitted conductivity, thickness and heat capacity. The initial temperature
 is an authored condition after the initial drape. Work limits bound computation; an unavailable heat result leaves independent results visible.</p>
+<fieldset><legend>Heat from textile deformation</legend>
+<label><input id="guidedMotionHeatPlastic" type="checkbox"> Convert permanent in-plane deformation (plastic yield) to heat</label>
+<label><input id="guidedMotionHeatRelaxation" type="checkbox"> Convert time-dependent relaxation (Maxwell dashpots) to heat</label>
+<label><input id="guidedMotionHeatBending" type="checkbox"> Convert permanent bending (bending yield) to heat</label>
+<p class="note">The engine uses each active material law’s qualified conversion fraction and temperature range.
+The engine distributes converted work uniformly through reference thickness over each accepted motion interval.
+Initial drape work, recoverable energy and numerical loss are excluded. Choices apply to this whole history and freeze with each saved named case.</p>
+</fieldset>
 <details><summary>Different initial temperatures for individual garment instances</summary>
 <p class="note">The default above applies to every unlisted retained instance. Save an override for each instance that starts
 at a different temperature, even if two instances use the same material. Use its exact physical instance name from the
@@ -1226,6 +1234,14 @@ Moving coverage uses that topology and cell count, with its own initial state an
 </div>
 <p class="note">Each history reserves its allowances from shared totals of 20,000,000 thermal advances and 40,000,000 coverage geometry operations
 across alternatives and named cases. Exhausted optional heat histories refuse independently; other available results remain visible.</p>
+<fieldset><legend>Heat from textile deformation</legend>
+<label><input id="guidedMotionCoveragePlastic" type="checkbox"> Convert permanent in-plane deformation (plastic yield) to heat</label>
+<label><input id="guidedMotionCoverageRelaxation" type="checkbox"> Convert time-dependent relaxation (Maxwell dashpots) to heat</label>
+<label><input id="guidedMotionCoverageBending" type="checkbox"> Convert permanent bending (bending yield) to heat</label>
+<p class="note">The engine uses each active material law’s qualified conversion fraction and temperature range. Converted work follows
+covered and exposed cloth, uniformly through reference thickness; bare body receives no internal heat.
+Initial drape work, recoverable energy and numerical loss are excluded. These whole-history choices are independent of sheet heat and freeze with each saved named case.</p>
+</fieldset>
 <details><summary>Different initial temperatures for individual covered or exposed garment instances</summary>
 <p class="note">Unlisted retained instances use the explicit default above. Each saved override follows the exact physical instance
 through its covered and exposed portions, uniformly through its thickness. These temperatures are independent of the sheet-heat controls.</p>
@@ -1391,7 +1407,7 @@ body-vertex chords between endpoints, with a fixed root and no chair or floor su
 anatomical movement accuracy or physical garment fit. A failed movement publishes no partial trajectory. Optional sheet heat is recomputed
 at endpoints as independent steady snapshots. The dry heat option above separately carries textile temperature through the saved
 interval conditions, without a steady-sheet request. Moving body/layer heat separately follows covered and exposed reference material.
-Use the original motion request for thermal bridges, water and dissipation policies. It retains complete requests
+Use the original motion request for thermal bridges and water policies. It retains complete requests
 verbatim, including their source values and work policies; native admission still checks their compatibility.</p>
 </fieldset>
 <fieldset id="guidedScenarioCasePolicy" hidden><legend>Comparison policy for this case</legend>
