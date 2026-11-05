@@ -8,6 +8,7 @@
   let starts = copy(original), selected = starts.length ? 0 : null;
   let draft = selected === null ? null : copy(starts[selected]);
   let adding = false, pending = false, downloadUrl = null, revision = 0, needsReview = false;
+  let importPending = false;
   let shapeInputs = [], poseInputs = [];
   const list = byId('startList'), status = byId('startStatus');
   const download = byId('startDownload');
@@ -25,7 +26,7 @@
 
   function updateDownload() {
     withdraw();
-    if (pending || !starts.length) return;
+    if (pending || importPending || !starts.length) return;
     const annotations = { ...copy(data.annotations), starts: copy(starts) };
     downloadUrl = URL.createObjectURL(new Blob([JSON.stringify(annotations, null, 2) + '\n'],
       { type: 'application/json' }));
@@ -44,7 +45,7 @@
     byId('removeStart').disabled = pending || selected === null;
     byId('midpointStart').disabled = draft === null;
     byId('applyStart').disabled = draft === null;
-    byId('cancelStart').disabled = !pending;
+    byId('cancelStart').disabled = !pending && !importPending;
     byId('startPreviewNotice').textContent = (pending || changed()
       ? 'Edited values have no updated preview. '
       : '') + 'All photographs, projections and meshes below show the original input. '
@@ -209,11 +210,22 @@
     return annotations.starts;
   }
 
-  byId('startDraftFile').addEventListener('change', async () => {
+  const savedFile = byId('startDraftFile');
+  for (const event of ['focus', 'click']) savedFile.addEventListener(event, () => {
+    ++revision;
+    importPending = true;
+    withdraw();
+    updateButtons();
+    status.textContent = 'Choose saved starts, or Apply this start or Cancel pending edit to restore downloads for retained values.';
+  });
+  savedFile.addEventListener('change', async () => {
     const ticket = ++revision, file = byId('startDraftFile').files[0];
     byId('startDraftFile').value = '';
+    // A replacement file is unresolved evidence, even if the read fails or the chooser is canceled.
+    importPending = true;
+    withdraw();
+    updateButtons();
     if (!file) { updateButtons(); status.textContent = 'No draft selected; current starts retained.'; return; }
-    byId('cancelStart').disabled = false;
     status.textContent = 'Reading saved starts. Current values remain unchanged until the draft is checked.';
     try {
       if (file.size > 256 * 1024) throw new Error('The draft exceeds the 256 KiB limit.');
@@ -223,7 +235,7 @@
       starts = proposed;
       selected = starts.length ? 0 : null;
       draft = selected === null ? null : copy(starts[selected]);
-      adding = false; pending = false; needsReview = true;
+      adding = false; pending = false; needsReview = true; importPending = false;
       render();
       status.textContent = `${starts.length} applied starts restored. Review every start, then Apply this start to prepare completed annotations. Original previews remain unchanged.`;
     } catch (error) {
@@ -281,6 +293,7 @@
       adding = false;
       pending = false;
       needsReview = false;
+      importPending = false;
       draft = copy(starts[selected]);
       render();
       status.textContent = `${starts.length} applied start${starts.length === 1 ? '' : 's'}. `
@@ -317,6 +330,7 @@
   byId('cancelStart').addEventListener('click', () => {
     adding = false;
     pending = false;
+    importPending = false;
     draft = selected === null ? null : copy(starts[selected]);
     render();
     status.textContent = 'Pending edit canceled. Applied starts are unchanged.';
@@ -328,10 +342,11 @@
     adding = false;
     pending = false;
     needsReview = false;
+    importPending = false;
     render();
     status.textContent = 'All start changes reset to the original input. No completed edited download remains.';
   });
-  window.addEventListener('pagehide', () => { ++revision; withdraw(); });
+  window.addEventListener('pagehide', () => { ++revision; importPending = true; withdraw(); });
   render();
   byId('startEditor').hidden = false;
   status.textContent = `${starts.length} original start${starts.length === 1 ? '' : 's'}. Add or edit explicit values; a download needs 2–4 distinct starts.`;

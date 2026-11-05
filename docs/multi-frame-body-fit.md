@@ -277,9 +277,11 @@ After applying a valid first start, **Save applied start draft** preserves it in
 choose that file under **Reopen an applied start draft for this source** to continue. The
 existing annotation format retains the exact source/model/capture/silhouette bindings and
 native frame ordinals. The local loader accepts UTF-8 files up to 256 KiB, checks every value
-and refuses different bindings without replacing current work. Pending edits withdraw both
-downloads; only applied values are saved. After loading, review the starts and choose **Apply
-this start** before preparing completed annotations. A one-start draft still refuses native
+and refuses different bindings without replacing current work. Opening the file chooser withdraws
+both downloads, including during a slow read or after an invalid or canceled file selection.
+Choose **Apply this start** or **Cancel pending edit** to restore downloads for retained values.
+Pending edits also withdraw both downloads; only applied values are saved. After loading, review
+the starts and choose **Apply this start** before preparing completed annotations. A one-start draft still refuses native
 materialization; add a distinct second start to use the ordinary commands below. Original
 previews stay unchanged, and later editor actions cancel pending file reads.
 

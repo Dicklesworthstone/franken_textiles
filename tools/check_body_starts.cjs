@@ -171,8 +171,23 @@ async function add(page, start) {
       const oldDraft = await page.locator('#startDraftDownload').getAttribute('href');
       await load(bytes); assert.match(await page.locator('#startStatus').innerText(), /Draft not loaded/);
       assert.deepEqual(await form(), before); assert.equal(await appliedCount(page), 2);
-      assert.equal(await page.locator('#startDownload').getAttribute('href'), oldUrl);
-      assert.equal(await page.locator('#startDraftDownload').getAttribute('href'), oldDraft);
+      await hidden(page); assert(await page.locator('#startDraftDownload').isHidden());
+      await revoked(page, oldUrl); await revoked(page, oldDraft);
+      await page.locator('#cancelStart').click(); await visible(page);
+    }
+    for (const action of ['focus', 'chooser', 'empty']) {
+      const before = await form(), oldUrl = await page.locator('#startDownload').getAttribute('href');
+      if (action === 'focus') await page.locator('#startDraftFile').focus();
+      else if (action === 'chooser') {
+        const chooser = page.waitForEvent('filechooser');
+        await page.locator('#startDraftFile').click(); await chooser;
+      } else await page.locator('#startDraftFile').setInputFiles([]);
+      await hidden(page); assert(await page.locator('#startDraftDownload').isHidden());
+      await revoked(page, oldUrl); assert.deepEqual(await form(), before);
+      // Selecting an applied start must not silently restore the unresolved download.
+      await page.locator('#startList').selectOption('1'); await hidden(page);
+      assert(await page.locator('#startDraftDownload').isHidden());
+      await page.locator('#cancelStart').click(); await visible(page);
     }
     await control(page, 'shape', 0).fill(''); const incomplete = await form();
     await load('{'); assert.deepEqual(await form(), incomplete); await hidden(page);
@@ -188,19 +203,43 @@ async function add(page, start) {
         return new Promise((resolve, reject) => { globalThis.__startRead = {resolve, reject}; });
       };
     });
-    for (const reject of [false, true]) for (const action of ['edit', 'focus', 'select', 'new', 'duplicate', 'midpoint', 'apply', 'remove', 'cancel', 'reset', 'replace']) {
+    for (const reject of [false, true]) {
+      await load(JSON.stringify(expected)); await page.locator('#applyStart').click();
+      const before = await form(), oldUrl = await page.locator('#startDownload').getAttribute('href');
+      await page.evaluate(() => { globalThis.__holdStartRead = true; globalThis.__startRead = null; });
+      await page.locator('#startDraftFile').setInputFiles({name: 'delayed.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(partial))});
+      await page.waitForFunction(() => globalThis.__startRead !== null);
+      await hidden(page); assert(await page.locator('#startDraftDownload').isHidden()); await revoked(page, oldUrl);
+      await page.evaluate(({reject, text}) => {
+        if (reject) globalThis.__startRead.reject(new Error('current read failed'));
+        else globalThis.__startRead.resolve(new TextEncoder().encode(text).buffer);
+      }, {reject, text: JSON.stringify(partial)});
+      await page.waitForFunction(() => !document.getElementById('startStatus').textContent.startsWith('Reading saved starts'));
+      await hidden(page);
+      if (reject) {
+        assert.match(await page.locator('#startStatus').innerText(), /Draft not loaded: current read failed/);
+        assert.deepEqual(await form(), before); assert.equal(await appliedCount(page), 2);
+        assert(await page.locator('#startDraftDownload').isHidden());
+        await page.locator('#cancelStart').click(); await visible(page);
+      } else {
+        assert.equal(await appliedCount(page), 1); assert(await page.locator('#startDraftDownload').isVisible());
+      }
+    }
+    for (const reject of [false, true]) for (const action of ['edit', 'focus', 'select', 'new', 'duplicate', 'midpoint', 'apply', 'remove', 'cancel', 'reset', 'replace', 'pagehide']) {
       await load(JSON.stringify(expected)); await page.locator('#applyStart').click();
       await page.evaluate(() => { globalThis.__holdStartRead = true; globalThis.__startRead = null; });
       await page.locator('#startDraftFile').setInputFiles({name: 'delayed.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(partial))});
       await page.waitForFunction(() => globalThis.__startRead !== null);
+      await hidden(page); assert(await page.locator('#startDraftDownload').isHidden());
       if (action === 'edit') await control(page, 'shape', 0).fill('');
       else if (action === 'focus') await page.locator('#startParameters label').first().click();
       else if (action === 'select') await page.locator('#startList').selectOption('1');
       else if (action === 'replace') await load(JSON.stringify(partial));
+      else if (action === 'pagehide') await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
       else await page.locator('#' + {new: 'newStart', duplicate: 'duplicateStart', midpoint: 'midpointStart', apply: 'applyStart',
         remove: 'removeStart', cancel: 'cancelStart', reset: 'resetStarts'}[action]).click();
       const before = await form(), count = await appliedCount(page), message = await page.locator('#startStatus').innerText();
-      assert(!message.startsWith('Reading saved starts'));
+      if (action !== 'pagehide') assert(!message.startsWith('Reading saved starts'));
       const links = await page.locator('#startDownload,#startDraftDownload').evaluateAll(nodes => nodes.map(node => [node.hidden, node.getAttribute('href')]));
       await page.evaluate(({reject, text}) => {
         if (reject) globalThis.__startRead.reject(new Error('obsolete read error'));
@@ -290,7 +329,7 @@ async function add(page, start) {
     assert.deepEqual(errors, []);
     assert(requests.every(request => request.method === "GET" && request.url.startsWith("file:")));
     console.log(JSON.stringify({status: "PASS", authored_starts: expected.starts.length, fit: fitted.status,
-      exercised: ["empty bootstrap", "named bounded parameters", "midpoint", "copy", "distinctness", "partial edit", "boundary", "cancel", "remove", "maximum starts", "reset", "one-start save/reload/resume", "partial native refusal", "invalid file preservation", "late-read ownership", "frozen native previews", "exact native frame identities", "download to ordinary fit"],
+      exercised: ["empty bootstrap", "named bounded parameters", "midpoint", "copy", "distinctness", "partial edit", "boundary", "cancel", "remove", "maximum starts", "reset", "one-start save/reload/resume", "partial native refusal", "invalid file preservation", "file-choice URL revocation", "slow-read withdrawal", "late-read ownership", "frozen native previews", "exact native frame identities", "download to ordinary fit"],
       download: destination, browser_errors: errors.length, local_requests: requests.length}));
   } finally {
     await browser.close();
