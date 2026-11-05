@@ -3268,6 +3268,8 @@ test('routed specialist cells show actual operations, serialized garment transfe
       ['1','reinforce','finish','10.3','10.4','10.4','12.4','12.6']);
     assert.deepEqual(plain(table('qualified routing availability').children.at(-1).children.map(n=>n.textContent)),
       ['one-mover','0','10.3']);
+    assert.equal(table('finite unloaded-garment staging'),undefined);
+    assert.equal(table('selected staging reservations'),undefined);
     assert.match(visibleText(s),/Minimum completion time proved within the declared fixed-route dispatch search/);
     assert.match(visibleText(s),/Each specialist cell qualifies only its assigned operations/);
     assert.doesNotMatch(visibleText(s),/Every garment stays in one physical cell|Minimum declared setup|Selected cross-garment sewing order/);
@@ -3280,6 +3282,7 @@ test('routed specialist cells show actual operations, serialized garment transfe
       const summary=JSON.parse(s.children[1].textContent);
       assert.equal(summary.routed_makespan_seconds,12.6); assert.equal(summary.routed_optimality_proven,true);
       assert.equal(summary.garment_transfers,2); assert.equal(summary.transfer_seconds,1.4);
+      assert.equal(Object.hasOwn(summary,'bounded_staging_enforced'),false);
       assert.equal(Object.hasOwn(summary,'ordering_optimality_proven'),false);
       assert.equal(Object.hasOwn(summary,'modeled_production_seconds'),false);
       routing.optimality_proven=false; routing.budget_exhausted=true; routing.baseline_replaced=true;
@@ -3444,6 +3447,59 @@ test('routed specialist cells show actual operations, serialized garment transfe
     assert.doesNotMatch(visibleText(s),/Garment handoffs retain their separate qualified resource|One separately qualified transfer resource/);
     const ownedDetail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('attending worker sources, cell locks and complete replay'));
     ownedDetail.open=true;ownedDetail.handlers.toggle();assert.match(visibleText(ownedDetail),/<qualified pickup, carry and deposit>/);
+    // Native reservations remain authoritative in every view. The independent mover reserves
+    // both cells during each handoff; immediate worker-owned pickup/deposit needs no timed slot.
+    for(const [owned,stagingReport] of [[false,plain(report)],[true,plain(ownedReport)]]) {
+      const stagingPlan=op==='sew'?stagingReport.plan:op==='study'?stagingReport.alternatives[0].sewing.result:
+        stagingReport.manufacturing.alternatives[0].sewing.result;
+      const stagingRoute=stagingPlan.production.routing;
+      stagingPlan.schema='ftx-sewing-plan/26';stagingPlan.production.schema='ftx-sewing-production/14';
+      stagingRoute.schema='ftx-sewing-routing/9';
+      const stagingPolicy={model:'finite_unloaded_cell_buffers/1',source:{note:'<qualified staging source café 🧵>'},
+        method:'Synthetic buffer replay; no measured factory performance',conditions:{scope:'<unloaded garments>'},
+        evidence:'estimated',allow_estimates:true};
+      stagingPlan.options.production.routing.staging_capacity=1;
+      stagingPlan.options.production.routing.bounded_staging=stagingPolicy;
+      const reservations=owned?[]:[
+        {copy:0,cell:'straight',operation:'0/join',kind:'after_unloading',start_milliseconds:5300,finish_milliseconds:6000},
+        {copy:0,cell:'finish',operation:'0/reinforce',kind:'before_loading',start_milliseconds:5300,finish_milliseconds:6000},
+        {copy:1,cell:'straight',operation:'1/join',kind:'after_unloading',start_milliseconds:9600,finish_milliseconds:10300},
+        {copy:1,cell:'finish',operation:'1/reinforce',kind:'before_loading',start_milliseconds:9600,finish_milliseconds:10300}];
+      const stagingTimeline={reservations,peak_reserved_slots:{straight:owned?0:1,finish:owned?0:1},
+        final_reserved_slots:{straight:0,finish:0}};
+      stagingRoute.bounded_staging={schema:'ftx-sewing-routing-staging/1',policy:stagingPolicy,capacity:1,
+        entry_exit_protocol:'first_loading_entry_final_unloading_exit/1',
+        handoff_reservations:owned?'source_until_pickup_destination_from_deposit/1':
+          'source_until_handoff_finish_destination_from_handoff_start/1',
+        baseline:stagingTimeline,selected:stagingTimeline,physical_staging_validated:false};
+      const stagingRaw=' '+JSON.stringify(stagingReport)+'\n';
+      await p.e[op].onclick();p.emit(stagingReport,[{name:'bounded-staging-report.json',text:stagingRaw,mime:'application/json'}]);
+      assert.deepEqual(plain(table('finite unloaded-garment staging').children.slice(2).map(row=>row.children.map(n=>n.textContent))),
+        ['straight','finish'].map(cell=>[cell,'1',owned?'0':'1',owned?'0':'1','0','0']));
+      assert.deepEqual(plain(table('selected staging reservations').children.slice(2).map(row=>row.children.map(n=>n.textContent))),owned?[]:[
+        ['straight','0','0/join','After unloading','5.3','6'],['finish','0','0/reinforce','Before loading','5.3','6'],
+        ['straight','1','1/join','After unloading','9.6','10.3'],['finish','1','1/reinforce','Before loading','9.6','10.3']]);
+      assert.match(visibleText(s),/first loading and leaves for external storage at its final unloading/);
+      assert.match(visibleText(s),/No inbound or outbound transport time is inferred/);
+      assert.match(visibleText(s),/enforced at 1 garment slots per cell/);
+      assert.match(visibleText(s),/Physical staging access, factory performance, seam quality and hardware execution require separate qualification/);
+      if(owned) {
+        assert.match(visibleText(s),/release the source slot at pickup and reserve a destination slot from deposit/);
+        assert.match(visibleText(s),/No positive-duration staging reservations/);
+        assert.doesNotMatch(visibleText(s),/independent mover conservatively reserves/);
+      } else {
+        assert.match(visibleText(s),/source slot until the handoff finishes and a destination slot from the handoff's start/);
+        assert.doesNotMatch(visibleText(s),/Worker-owned handoffs release|No positive-duration staging reservations/);
+      }
+      if(op==='sew')assert.equal(JSON.parse(s.children[1].textContent).bounded_staging_enforced,true);
+      const stagingDetail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('staging source, policy and complete reservation histories'));
+      stagingDetail.open=true;stagingDetail.handlers.toggle();
+      assert.deepEqual(JSON.parse(stagingDetail.children[1].textContent),stagingRoute.bounded_staging);
+      assert.match(visibleText(stagingDetail),/<qualified staging source café 🧵>/);
+      const stagingDownload=descendants(s).find(n=>n.download==='bounded-staging-report.json');
+      assert.equal(await p.blobs.get(stagingDownload.href).text(),stagingRaw);
+      assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    }
     delete routing.attending_labor;
     delete routing.workholding;routing.schema='ftx-sewing-routing/1';plan.schema='ftx-sewing-plan/18';
   }

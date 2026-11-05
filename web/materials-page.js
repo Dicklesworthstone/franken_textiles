@@ -2924,6 +2924,32 @@ function sewingSharedWorkholding(parent, plan, label) {
   detail(parent, `${label}: shared pool source, exact cell locks and both reservation histories`, {
     policy: plan.options?.production?.parallel?.shared_workholding, report });
 }
+function sewingRoutedStaging(parent, routing, label) {
+  const report = routing.bounded_staging;
+  if (!report) return;
+  const seconds = value => typeof value === "number" ? value / 1000 : null;
+  const capacity = table(parent, `${label}: finite unloaded-garment staging`,
+    ["Cell", "Capacity (garment slots)", "Baseline peak", "Selected peak", "Baseline final", "Selected final"]);
+  for (const [cell, peak] of Object.entries(report.selected?.peak_reserved_slots || {})) cells(capacity, [cell,
+    metric(report.capacity), metric(report.baseline?.peak_reserved_slots?.[cell]), metric(peak),
+    metric(report.baseline?.final_reserved_slots?.[cell]), metric(report.selected?.final_reserved_slots?.[cell])]);
+  const reservations = table(parent, `${label}: selected staging reservations`,
+    ["Cell", "Garment copy", "Operation", "Reservation", "Reserved from (s)", "Available again (s)"]);
+  for (const row of report.selected?.reservations || []) cells(reservations, [row.cell, metric(row.copy), row.operation,
+    ({ after_unloading: "After unloading", before_loading: "Before loading" })[row.kind] || row.kind,
+    metric(seconds(row.start_milliseconds)), metric(seconds(row.finish_milliseconds))]);
+  const note = document.createElement("p");
+  note.textContent = "Each garment enters the modeled route at its first loading and leaves for external storage at its final unloading. " +
+    "No inbound or outbound transport time is inferred. " +
+    (report.handoff_reservations === "source_until_handoff_finish_destination_from_handoff_start/1" ?
+      "The independent mover conservatively reserves a source slot until the handoff finishes and a destination slot from the handoff's start. " :
+      report.handoff_reservations === "source_until_pickup_destination_from_deposit/1" ?
+        "Worker-owned handoffs release the source slot at pickup and reserve a destination slot from deposit. " : "") +
+    ((report.selected?.reservations || []).length ? "" : "No positive-duration staging reservations are reported for the selected schedule. ") +
+    "Physical staging access, factory performance, seam quality and hardware execution require separate qualification.";
+  parent.append(note);
+  detail(parent, `${label}: staging source, policy and complete reservation histories`, report);
+}
 function sewingRoutedWorkholding(parent, routing, label) {
   const report = routing.workholding;
   if (!report) return;
@@ -3081,6 +3107,7 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     parent.append(scope);
     detail(parent, `${label}: operating calendar source and exact windows`, calendars);
   }
+  sewingRoutedStaging(parent, report, label);
   sewingRoutedWorkholding(parent, report, label);
   sewingRoutedLabor(parent, report, label);
   for (const source of report.cell_plans || []) {
@@ -3106,7 +3133,8 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
       `Worker ${policy.transfer.attending_worker} and the qualified transfer resource are both reserved from pickup through deposit; ` +
       "empty approach uses the worker's travel qualification. " :
       "One separately qualified transfer resource serializes unloaded garment handoffs; its source duration includes positioning, pickup, movement and deposit. ") +
-    `Qualified staging has ${metric(policy?.staging_capacity)} garment slots. ` +
+    (report.bounded_staging ? `Finite unloaded staging is enforced at ${metric(report.bounded_staging.capacity)} garment slots per cell. ` :
+      `Qualified staging has ${metric(policy?.staging_capacity)} garment slots. `) +
     "Stitch geometry and thread demand come from the actual assigned cell. Elapsed completion is distinct from summed machine and transfer work. " +
     "The proof covers the supplied route and dispatch model; it does not establish unrestricted factory optimality, measured seam quality or hardware authorization.";
   parent.append(note);
@@ -3399,6 +3427,7 @@ function sewingResult(parent, r) {
     routed_optimality_proven: routing?.optimality_proven,
     routed_search_work: routing?.search_nodes,
     routed_calendar_resources: routing?.availability_calendars ? Object.keys(routing.availability_calendars.resources).length : undefined,
+    bounded_staging_enforced: routing?.bounded_staging ? true : undefined,
     garment_transfers: routing?.selected?.transfers?.length,
     transfer_seconds: routing ? routing.selected.transfer_milliseconds / 1000 : undefined,
     setup_changes: order?.selected_changes,
