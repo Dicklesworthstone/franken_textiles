@@ -951,7 +951,10 @@ All three dry dissipation-heating channels can use these maps. Original independ
 policies can also combine them with direct or material-selected uncoupled textile water, including
 qualified supply, condensation, drainage and a finite shared vapor reservoir. Each patch's liquid
 starts at its own inner-cell temperature and retains that initial sensible energy in the balance.
-Direct mechanical liquid coupling and paired water/mechanics alternatives still exclude these maps.
+Direct mechanical liquid coupling and paired water/mechanics alternatives can use the same mapped
+sheet starts when each actual owner has the independent mechanical source qualification. Its domain
+must contain the complete water temperature/loading domain. A coupled failure refuses and restores
+the whole motion; it cannot publish an uncoupled replacement. Moving coverage retains its dry contract.
 
 Every saved endpoint owns its four boundary values. Editing the current endpoint or film fields
 prepares a draft; only adding or replacing an endpoint changes the saved schedule. Removing an

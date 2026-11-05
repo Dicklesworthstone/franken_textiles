@@ -286,7 +286,7 @@ fn water_initial_temperatures_require_every_patch_and_the_qualified_domain() {
 }
 
 #[test]
-fn mapped_water_starts_admit_qualifications_but_keep_mechanical_coupling_excluded() {
+fn mapped_water_starts_admit_direct_and_paired_mechanical_qualifications() {
     let mut request = fixture(0.01, 0.1).request;
     request.initial_instance_temperatures_c = Some(BTreeMap::from([("sheet".into(), 35.)]));
     request.validate(1).unwrap();
@@ -296,13 +296,7 @@ fn mapped_water_starts_admit_qualifications_but_keep_mechanical_coupling_exclude
     request.surface_water_alternatives = None;
     request.surface_water = Some(water);
     let paired = coupled_alternatives_fixture(request);
-    assert!(
-        paired
-            .validate(1)
-            .unwrap_err()
-            .message
-            .contains("uncoupled liquid only")
-    );
+    paired.validate(1).unwrap();
     let mut direct = paired.clone();
     let pair = direct
         .coupled_water_alternatives
@@ -312,13 +306,35 @@ fn mapped_water_starts_admit_qualifications_but_keep_mechanical_coupling_exclude
         .unwrap();
     direct.surface_water = Some(pair.surface_water);
     direct.mechanical_coupling = Some(pair.mechanical_coupling);
-    assert!(
-        direct
-            .validate(1)
-            .unwrap_err()
-            .message
-            .contains("uncoupled liquid only")
-    );
+    direct.validate(1).unwrap();
+    for mut policy in [direct, paired] {
+        policy.initial_instance_temperatures_c = Some(BTreeMap::from([("sheet".into(), -274.)]));
+        assert!(policy.validate(1).is_err());
+    }
+}
+
+#[test]
+fn mapped_coverage_still_refuses_every_liquid_policy_family() {
+    let dry = json!({"schema":"ftx-motion-coverage-heat/1",
+        "body_triangle_ids":[0],"instance_layers":{"sheet":"shell"},
+        "settings":{"max_distance_m":0.1,"min_normal_cosine":0.9,
+            "separation_tolerance_m":1e-9,"cells_per_layer":1,"interfaces":[]},
+        "initial_temperature_c":20.,"initial_instance_temperatures_c":{"sheet":35.},
+        "boundaries":[{"inside_c":35.,"outside_c":5.,
+            "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}],
+        "exposed_boundaries":[null],"max_step_s":0.1,
+        "max_cell_steps":100000,"max_geometry_operations":100000});
+    serde_json::from_value::<crate::study::heat::coverage::Request>(dry.clone()).unwrap();
+    for field in [
+        "surface_water",
+        "surface_water_alternatives",
+        "coupled_water_alternatives",
+        "mechanical_coupling",
+    ] {
+        let mut wet = dry.clone();
+        wet[field] = json!({});
+        assert!(serde_json::from_value::<crate::study::heat::coverage::Request>(wet).is_err());
+    }
 }
 
 fn coupled_alternatives_fixture(mut surface: SurfaceRequest) -> SurfaceRequest {

@@ -55,8 +55,8 @@ pub struct SurfaceRequest {
     /// Optional initial temperatures for exact retained physical instance IDs. Unlisted
     /// instances use the explicit scalar above; each patch starts uniform through thickness.
     /// A present map must be nonempty. Each enabled dissipation law qualifies the actual initial
-    /// temperature of its source triangle. Uncoupled free liquid starts at its source patch's
-    /// inner-cell temperature within the qualified water domain; liquid mechanics are excluded.
+    /// temperature of its source triangle. Free liquid starts at its source patch's inner-cell
+    /// temperature; any mechanical coupling separately qualifies the complete water domain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_instance_temperatures_c: Option<BTreeMap<String, f64>>,
     /// Through-thickness cells per retained material sheet, in 1..=64.
@@ -283,22 +283,16 @@ impl SurfaceRequest {
                 "invalid motion surface heat schema, interval count, initial state or work policy",
             ));
         }
-        if let Some(temperatures) = &self.initial_instance_temperatures_c {
-            if temperatures.is_empty()
+        if let Some(temperatures) = &self.initial_instance_temperatures_c
+            && (temperatures.is_empty()
                 || temperatures.len() > 65_536
                 || temperatures
                     .iter()
-                    .any(|(id, value)| id.is_empty() || !value.is_finite() || *value < -273.15)
-            {
-                return Err(invalid(
-                    "initial instance temperatures need 1..=65536 exact names and finite physical values",
-                ));
-            }
-            if self.has_mechanical_coupling() {
-                return Err(invalid(
-                    "initial instance temperatures support sheet heat with uncoupled liquid only",
-                ));
-            }
+                    .any(|(id, value)| id.is_empty() || !value.is_finite() || *value < -273.15))
+        {
+            return Err(invalid(
+                "initial instance temperatures need 1..=65536 exact names and finite physical values",
+            ));
         }
         for &film in &self.boundaries {
             boundary(film)?;
