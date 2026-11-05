@@ -4063,6 +4063,38 @@ fn admit_heat_source(
     Ok(materials)
 }
 
+// Resolve one authored temperature per retained physical instance. Both the initial-state receipt
+// and water's independent enthalpy audit use this mapping; a shared material column is not an owner.
+fn initial_heat_temperatures(request: &Value, instances: &[Value]) -> Result<Vec<f64>, Refusal> {
+    let fail = || invalid("initial cloth temperatures need complete retained physical instances");
+    let initial = finite(&request["initial_temperature_c"])
+        .filter(|t| *t >= -273.15)
+        .ok_or_else(fail)?;
+    let overrides = request
+        .get("initial_instance_temperatures_c")
+        .filter(|value| !value.is_null())
+        .map(|value| value.as_object().ok_or_else(fail))
+        .transpose()?;
+    let mut ids = BTreeSet::new();
+    instances
+        .iter()
+        .map(|value| {
+            let id = value
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(fail)?;
+            if !ids.insert(id) {
+                return Err(fail());
+            }
+            overrides
+                .and_then(|values| values.get(id))
+                .map_or(Ok(initial), |value| {
+                    finite(value).filter(|t| *t >= -273.15).ok_or_else(fail)
+                })
+        })
+        .collect()
+}
+
 // Reconstruct authored initial temperatures from the retained physical owners. Material columns
 // can be shared by differently conditioned pieces; neither their order nor an unused fallback
 // temperature defines the initial extrema. The production thermal solver still owns evolution.
@@ -4076,7 +4108,7 @@ fn initial_heat_range(
 ) -> Result<[f64; 2], Refusal> {
     let fail = || {
         invalid(
-            "initial cloth temperatures need the exact dry source, retained physical owners and complete authored-state receipt",
+            "initial cloth temperatures need the exact source, retained physical owners and complete authored-state receipt",
         )
     };
     let initial = finite(&request["initial_temperature_c"])
@@ -4094,14 +4126,9 @@ fn initial_heat_range(
     let overrides = overrides.as_object().ok_or_else(fail)?;
     if overrides.is_empty()
         || overrides.len() > 65_536
-        || [
-            "surface_water",
-            "surface_water_alternatives",
-            "coupled_water_alternatives",
-            "mechanical_coupling",
-        ]
-        .iter()
-        .any(|key| !request[key].is_null())
+        || ["coupled_water_alternatives", "mechanical_coupling"]
+            .iter()
+            .any(|key| !request[key].is_null())
         || (!coverage && heat["initial_temperature_c"] != request["initial_temperature_c"])
     {
         return Err(fail());
@@ -4147,22 +4174,7 @@ fn initial_heat_range(
         }
         heating_domains.push(domain);
     }
-    let mut ids = BTreeSet::new();
-    let temperatures = instances
-        .iter()
-        .map(|value| {
-            let id = value
-                .as_str()
-                .filter(|id| !id.is_empty())
-                .ok_or_else(fail)?;
-            if !ids.insert(id) {
-                return Err(fail());
-            }
-            overrides.get(id).map_or(Ok(initial), |value| {
-                finite(value).filter(|t| *t >= -273.15).ok_or_else(fail)
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let temperatures = initial_heat_temperatures(request, instances)?;
     let mut used = BTreeSet::new();
     let mut range = [f64::INFINITY, f64::NEG_INFINITY];
     for ((owner, patch), triangle) in owners.iter().zip(patches).zip(triangles) {

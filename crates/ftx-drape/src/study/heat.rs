@@ -52,10 +52,11 @@ pub struct SurfaceRequest {
     /// Uniform material temperature at the end of the initial mechanical drape (degrees Celsius).
     /// This is an authored initial condition, not a measured or equilibrated garment temperature.
     pub initial_temperature_c: f64,
-    /// Optional dry initial temperatures for exact retained physical instance IDs. Unlisted
+    /// Optional initial temperatures for exact retained physical instance IDs. Unlisted
     /// instances use the explicit scalar above; each patch starts uniform through thickness.
     /// A present map must be nonempty. Each enabled dissipation law qualifies the actual initial
-    /// temperature of its source triangle; water and liquid mechanics are excluded.
+    /// temperature of its source triangle. Uncoupled free liquid starts at its source patch's
+    /// inner-cell temperature within the qualified water domain; liquid mechanics are excluded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_instance_temperatures_c: Option<BTreeMap<String, f64>>,
     /// Through-thickness cells per retained material sheet, in 1..=64.
@@ -197,6 +198,9 @@ impl SurfaceRequest {
         let initial_patch_temperatures = if self.plastic_dissipation_heat.is_some()
             || self.relaxation_dissipation_heat.is_some()
             || self.bending_plastic_dissipation_heat.is_some()
+            || self.surface_water.is_some()
+            || self.surface_water_alternatives.is_some()
+            || self.coupled_water_alternatives.is_some()
         {
             history
                 .state
@@ -233,14 +237,14 @@ impl SurfaceRequest {
                 request.clone(),
                 &history.model,
                 run,
-                self.initial_temperature_c,
+                &initial_patch_temperatures,
             )?);
         } else if let Some(alternatives) = &self.surface_water_alternatives {
             let (water, index) = surface_water::Water::from_alternatives(
                 alternatives,
                 &history.model,
                 run,
-                self.initial_temperature_c,
+                &initial_patch_temperatures,
             )?;
             let selected = serde_json::to_value(&alternatives[index])
                 .map_err(|error| invalid(error.to_string()))?;
@@ -252,7 +256,7 @@ impl SurfaceRequest {
                 alternatives.iter().map(|pair| &pair.surface_water),
                 &history.model,
                 run,
-                self.initial_temperature_c,
+                &initial_patch_temperatures,
             )?;
             history.coupled_water_index = Some(index);
             history.water = Some(water);
@@ -290,12 +294,9 @@ impl SurfaceRequest {
                     "initial instance temperatures need 1..=65536 exact names and finite physical values",
                 ));
             }
-            if self.surface_water.is_some()
-                || self.surface_water_alternatives.is_some()
-                || self.has_mechanical_coupling()
-            {
+            if self.has_mechanical_coupling() {
                 return Err(invalid(
-                    "initial instance temperatures support dry sheet heat without liquid coupling",
+                    "initial instance temperatures support sheet heat with uncoupled liquid only",
                 ));
             }
         }

@@ -214,6 +214,200 @@ fn with_alternative_qualifications(descriptor: &mut Value, motion: &mut Value) {
     descriptor["scenario"]["motion"]["transient_surface"] = heat["request"].clone();
 }
 
+fn instance_initial_case(variable: bool, starts: [f64; 2]) -> (Alternative, Value, Value, Value) {
+    let (a, mut d, s, mut m) = case_with_variable_heat(variable);
+    let h = &mut m["transient_surface"]["result"];
+    // Both physical owners share one material column. Their unequal water masses make the
+    // initial liquid enthalpy different from either the scalar fallback or an unweighted mean.
+    let masses = [1e-5 * 0.001, 5e-6 * 0.001];
+    let initial = masses.iter().sum::<f64>();
+    let sensible = masses[0] * 4200. * starts[0] + masses[1] * 4200. * starts[1];
+    let storage = if variable {
+        // Independent integral of synthetic Cp(T)=1000+20*T over each retained reference mass.
+        starts
+            .iter()
+            .map(|&t| 0.001 * 0.2 * (1000. * (21. - t) + 10. * (21_f64.powi(2) - t.powi(2))))
+            .sum::<f64>()
+    } else {
+        let capacity = h["model"]["columns"][0]["cell_capacity_j_m2_k"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_f64().unwrap())
+            .sum::<f64>();
+        starts.iter().map(|t| 0.001 * capacity * (21. - t)).sum()
+    };
+    h["request"]["initial_temperature_c"] = json!(100.);
+    h["initial_temperature_c"] = json!(100.);
+    h["request"]["initial_instance_temperatures_c"] = json!({"front":starts[0],"back":starts[1]});
+    h["initial_condition"] = json!({"schema":"ftx-motion-surface-initial-condition/1",
+        "model_sha256":h["model"]["sha256"],"instances":s["drape"]["thermal_surface"]["instances"],
+        "triangle_instance":s["drape"]["thermal_surface"]["triangle_instance"],
+        "instance_temperature_c":starts,
+        "temperature_range_c":[starts[0].min(starts[1]),starts[0].max(starts[1])]});
+    h["request"]["surface_water"]["bindings"]["back"]["initial_liquid_kg_m2"] = json!(5e-6);
+    h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+    for (index, mass) in masses.into_iter().enumerate() {
+        h["surface_water"]["patches"][index]["initial_liquid_kg"] = json!(mass);
+        h["surface_water"]["patches"][index]["evaporated_liquid_kg"] = json!(mass);
+    }
+    for (field, value) in [
+        ("initial_liquid_kg", initial),
+        ("evaporated_liquid_kg", initial),
+        ("latent_energy_j", initial * 2500000.),
+        ("exported_vapor_sensible_energy_j", sensible),
+        ("liquid_stored_change_j", -sensible),
+    ] {
+        h["surface_water"][field] = json!(value);
+        h["trace"][0]["surface_water"][field] = json!(value);
+    }
+    h["surface_water"]["dryout_events"] = json!(2);
+    h["trace"][0]["surface_water"]["dryout_events"] = json!(2);
+    let net = storage + initial * 2500000. - 3.;
+    for (field, value) in [
+        ("stored_change_j", storage),
+        ("outside_energy_j", -net),
+        ("net_boundary_energy_j", net),
+    ] {
+        h[field] = json!(value);
+        h["trace"][0][field] = json!(value);
+    }
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    (a, d, s, m)
+}
+
+#[test]
+fn independent_wet_starts_preserve_physical_owners_and_integrated_enthalpy() {
+    for variable in [false, true] {
+        for alternative in [false, true] {
+            let (a, mut d, s, mut m) = instance_initial_case(variable, [10., 30.]);
+            if alternative {
+                with_alternative_qualifications(&mut d, &mut m);
+            }
+            let h = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap_or_else(|r| {
+                panic!("variable={variable}, alternative={alternative}: {r:?}")
+            });
+            assert_eq!(h.range_c, [10., 30.]);
+            assert_eq!(h.final_range_c, [21., 21.]);
+            if variable {
+                assert!((h.result["stored_change_j"].as_f64().unwrap() - 0.164).abs() < 1e-14);
+            }
+            assert!(
+                (h.result["surface_water"]["liquid_stored_change_j"]
+                    .as_f64()
+                    .unwrap()
+                    + 0.00105)
+                    .abs()
+                    < 1e-16
+            );
+        }
+    }
+}
+
+#[test]
+fn wet_starts_follow_retained_names_and_apply_partial_fallbacks() {
+    let (a, mut d, mut s, mut m) = instance_initial_case(true, [10., 30.]);
+    let h = &mut m["transient_surface"]["result"];
+    // Reordering the retained names and their owner indices preserves the same physical starts.
+    let frame = &mut s["drape"]["thermal_surface"];
+    frame["instances"] = json!(["back", "front"]);
+    frame["triangle_instance"] = json!([1, 0]);
+    frame.as_object_mut().unwrap().remove("sha256");
+    frame["sha256"] = json!(hash(frame).unwrap());
+    h["initial_condition"]["instances"] = frame["instances"].clone();
+    h["initial_condition"]["triangle_instance"] = frame["triangle_instance"].clone();
+    h["initial_condition"]["instance_temperature_c"] = json!([30., 10.]);
+    h["request"]["initial_temperature_c"] = json!(30.);
+    h["initial_temperature_c"] = json!(30.);
+    h["request"]["initial_instance_temperatures_c"] = json!({"front":10.});
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    let admitted =
+        admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap_or_else(|r| panic!("{r:?}"));
+    assert_eq!(admitted.range_c, [10., 30.]);
+}
+
+#[test]
+fn wet_initial_receipts_refuse_changed_maps_owners_and_applied_domains() {
+    for fault in 0..12 {
+        // Fault 6 keeps the full liquid/dry ledger and initial receipt consistent at 61 C;
+        // the characterized dry law itself must refuse that applied state.
+        let starts = if fault == 6 { [10., 61.] } else { [10., 30.] };
+        let (a, mut d, mut s, mut m) = instance_initial_case(true, starts);
+        let h = &mut m["transient_surface"]["result"];
+        match fault {
+            0 => h["initial_condition"] = Value::Null,
+            1 => h["initial_condition"]["instance_temperature_c"] = json!([30., 10.]),
+            2 => h["initial_condition"]["triangle_instance"] = json!([1, 0]),
+            3 => h["initial_condition"]["model_sha256"] = json!("f".repeat(64)),
+            4 => h["request"]["initial_instance_temperatures_c"]["unknown"] = json!(20.),
+            5 => {
+                h["request"]["initial_instance_temperatures_c"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("back");
+            }
+            6 => {}
+            7 => {
+                // Water pressure must qualify every applied start.
+                h["request"]["surface_water"]["wet_vapor_pressure_pa"] =
+                    json!([[15., 0.], [80., 10000.]]);
+                h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+            }
+            8 => {
+                // Only the warm owner exceeds ambient; a global maximum cannot qualify both.
+                h["request"]["surface_water"]["outside_vapor_pressure_pa"] = json!([4000.]);
+                h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+            }
+            9 => {
+                let frame = &mut s["drape"]["thermal_surface"];
+                frame["triangle_instance"] = json!([1, 0]);
+                frame.as_object_mut().unwrap().remove("sha256");
+                frame["sha256"] = json!(hash(frame).unwrap());
+            }
+            10 => h["request"]["mechanical_coupling"] = json!({}),
+            _ => h["request"]["coupled_water_alternatives"] = json!([]),
+        }
+        d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
+#[test]
+fn wet_initial_enthalpy_cannot_be_replaced_by_a_scalar_even_with_balanced_receipts() {
+    for trace_only in [false, true] {
+        for dry in [false, true] {
+            let (a, d, s, mut m) = instance_initial_case(true, [10., 30.]);
+            let h = &mut m["transient_surface"]["result"];
+            let row = if trace_only { &mut h["trace"][0] } else { h };
+            if dry {
+                // Uniform 20 C has the same unweighted mean as the authored 10/30 C starts,
+                // but a different integral for temperature-dependent heat capacity.
+                let wrong = 0.564;
+                let increment = wrong - row["stored_change_j"].as_f64().unwrap();
+                row["stored_change_j"] = json!(wrong);
+                row["net_boundary_energy_j"] =
+                    json!(row["net_boundary_energy_j"].as_f64().unwrap() + increment);
+                row["outside_energy_j"] =
+                    json!(row["outside_energy_j"].as_f64().unwrap() - increment);
+            } else {
+                // Equal and opposite forged liquid/vapor energies leave the total balance
+                // intact. Their initial inventory still requires the mass-weighted starts.
+                let wrong =
+                    row["surface_water"]["initial_liquid_kg"].as_f64().unwrap() * 4200. * 20.;
+                row["surface_water"]["liquid_stored_change_j"] = json!(-wrong);
+                row["surface_water"]["exported_vapor_sensible_energy_j"] = json!(wrong);
+            }
+            assert!(
+                admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+                "trace_only={trace_only}, dry={dry}"
+            );
+        }
+    }
+}
+
 #[test]
 fn alternative_water_sources_admit_the_exact_selected_policy_through_every_independent_phase() {
     let (drain_a, mut drain_d, drain_s, mut drain_m) = draining_case(true);

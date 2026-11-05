@@ -947,8 +947,11 @@ the same map on `motion.transient_coverage`; original motion files can retain it
 layer cells and exposed remainders follow each source instance's initial temperature as the garment
 moves. The page displays each consumer's own resolved temperatures, source model and initial frame.
 Saved cases and replay files retain the complete authored or original motion policy.
-All three dry dissipation-heating channels can use these maps. Water and mechanical liquid coupling
-still require separate supported contracts for nonuniform initial temperatures.
+All three dry dissipation-heating channels can use these maps. Original independent-sheet motion
+policies can also combine them with direct or material-selected uncoupled textile water, including
+qualified supply, condensation, drainage and a finite shared vapor reservoir. Each patch's liquid
+starts at its own inner-cell temperature and retains that initial sensible energy in the balance.
+Direct mechanical liquid coupling and paired water/mechanics alternatives still exclude these maps.
 
 Every saved endpoint owns its four boundary values. Editing the current endpoint or film fields
 prepares a draft; only adding or replacing an endpoint changes the saved schedule. Removing an

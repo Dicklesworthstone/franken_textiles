@@ -48,27 +48,36 @@ fn inside(value: f64, lo: f64, hi: f64, scale: f64, steps: u64) -> bool {
         && (value <= hi || accumulated_near(value, hi, scale, steps))
 }
 
+struct DryInitialColumn {
+    area_m2: f64,
+    anchor_c: f64,
+    offset_j: f64,
+}
+
 // Positive source heat capacity makes enthalpy monotone. A global temperature range bounds each
-// column only inside that column's own characterized domain; no endpoint is extrapolated.
+// column only inside that column's own characterized domain; no endpoint is extrapolated. Its
+// initial enthalpy is aggregated once relative to a valid applied anchor, so different owners of
+// one material keep their own starts without revisiting every patch at every retained sample.
 fn dry_heat_bounds(
     laws: &[ThermalLaw],
-    areas: &[f64],
-    initial: f64,
+    initial: &[DryInitialColumn],
     range: [f64; 2],
 ) -> Result<[f64; 2], Refusal> {
     if range.iter().any(|t| !t.is_finite()) || range[0] > range[1] {
         return Err(fail());
     }
     let mut bounds = [0.0; 2];
-    for (law, &area) in laws.iter().zip(areas) {
+    for (law, initial) in laws.iter().zip(initial) {
         let [lo, hi] = law
             .domain()
             .map_or(range, |[lo, hi]| [range[0].max(lo), range[1].min(hi)]);
         if lo > hi {
             return Err(fail());
         }
-        bounds[0] += area * law.sensible_change(initial, lo)?;
-        bounds[1] += area * law.sensible_change(initial, hi)?;
+        bounds[0] +=
+            initial.area_m2 * law.sensible_change(initial.anchor_c, lo)? - initial.offset_j;
+        bounds[1] +=
+            initial.area_m2 * law.sensible_change(initial.anchor_c, hi)? - initial.offset_j;
     }
     if bounds.iter().any(|v| !v.is_finite()) {
         return Err(fail());
@@ -1248,7 +1257,6 @@ pub(super) fn admit(
     let latent = number(policy, "latent_heat_j_kg")?;
     let maximum = number(policy, "maximum_liquid_loading_kg_m2")?;
     let reference = number(policy, "enthalpy_reference_c")?;
-    let initial_temperature = number(heat_request, "initial_temperature_c")?;
     if cp <= 0. || latent <= 0. || maximum <= 0. || reference < -273.15 {
         return Err(fail());
     }
@@ -1277,9 +1285,6 @@ pub(super) fn admit(
         table[0][0].as_f64().ok_or_else(fail)?,
         table[table.len() - 1][0].as_f64().ok_or_else(fail)?,
     ];
-    if initial_temperature < domain[0] || initial_temperature > domain[1] {
-        return Err(fail());
-    }
     let pressure = |temperature: f64| -> Result<f64, Refusal> {
         if !temperature.is_finite() || temperature < domain[0] || temperature > domain[1] {
             return Err(fail());
@@ -1389,6 +1394,20 @@ pub(super) fn admit(
     }
     hashed(frame)?;
     hashed(model)?;
+    let initial_temperatures = initial_heat_temperatures(heat_request, instances)?;
+    let mut anchors = vec![None; columns.len()];
+    for (patch, owner) in patches.iter().zip(owners) {
+        let initial = *initial_temperatures
+            .get(vapor_index(owner)?)
+            .ok_or_else(fail)?;
+        if initial < domain[0] || initial > domain[1] {
+            return Err(fail());
+        }
+        anchors
+            .get_mut(vapor_index(&patch["column"])?)
+            .ok_or_else(fail)?
+            .get_or_insert(initial);
+    }
     let catalog = Catalog {
         schema: CATALOG_SCHEMA.into(),
         materials: vec![],
@@ -1400,7 +1419,7 @@ pub(super) fn admit(
     }
     let mut selections = Vec::with_capacity(columns.len());
     let mut laws = Vec::with_capacity(columns.len());
-    let mut dry_areas = vec![0.0; columns.len()];
+    let mut dry_initial = Vec::with_capacity(columns.len());
     for (i, column) in columns.iter().enumerate() {
         let layers = array(column, "layers")?;
         if layers.len() != 1
@@ -1423,7 +1442,8 @@ pub(super) fn admit(
             return Err(fail());
         }
         let law = ThermalLaw::from_material(material.material(), material.allows_estimates())?;
-        law.check_temperature(initial_temperature)?;
+        let anchor_c = anchors[i].ok_or_else(fail)?;
+        law.check_temperature(anchor_c)?;
         if material.material().thermal_response.is_some() {
             if column["schema"] != "ftx-dry-thermal-model/2"
                 || column["temperature_domain_c"]
@@ -1434,7 +1454,7 @@ pub(super) fn admit(
                 return Err(fail());
             }
         } else {
-            let c = law.capacity_at(initial_temperature)? / cells as f64;
+            let c = law.capacity_at(anchor_c)? / cells as f64;
             let r = material.thermal_resistance()? / cells as f64;
             if column["schema"] != "ftx-dry-thermal-model/1"
                 || !c.is_finite()
@@ -1471,6 +1491,11 @@ pub(super) fn admit(
         }
         selections.push(serde_json::to_value(material.frozen_selection()).map_err(|_| fail())?);
         laws.push(law);
+        dry_initial.push(DryInitialColumn {
+            area_m2: 0.,
+            anchor_c,
+            offset_j: 0.,
+        });
     }
     admit_vapor_assignments(alternative, instances, owners, patches, &selections)?;
     admit_vapor_material(
@@ -1483,12 +1508,15 @@ pub(super) fn admit(
     let mut dryouts = 0_u64;
     let mut used = BTreeSet::new();
     let mut areas = BTreeMap::new();
+    let mut initial_liquid_sensible_j = 0.;
     let mut liquid_storage = 0.;
     let mut dry_storage = 0.;
     let mut final_range = [f64::INFINITY, f64::NEG_INFINITY];
     for (i, patch) in patches.iter().enumerate() {
+        let owner = vapor_index(&owners[i])?;
+        let initial_temperature = *initial_temperatures.get(owner).ok_or_else(fail)?;
         let instance = instances
-            .get(vapor_index(&owners[i])?)
+            .get(owner)
             .and_then(Value::as_str)
             .ok_or_else(fail)?;
         let binding = bindings.get(instance).ok_or_else(fail)?;
@@ -1596,7 +1624,11 @@ pub(super) fn admit(
         }
         used.insert(instance);
         *areas.entry(instance).or_insert(0.) += area;
-        dry_areas[column] += area;
+        let dry_column = &mut dry_initial[column];
+        dry_column.area_m2 += area;
+        dry_column.offset_j +=
+            area * laws[column].sensible_change(dry_column.anchor_c, initial_temperature)?;
+        initial_liquid_sensible_j += initial * cp * (initial_temperature - reference);
         dryouts += u64::from(initial > 0. && remaining == 0.);
         for (total, value) in totals.iter_mut().zip([
             initial,
@@ -1641,6 +1673,7 @@ pub(super) fn admit(
     }
     if used.len() != bindings.len()
         || totals.iter().any(|v| !v.is_finite())
+        || !initial_liquid_sensible_j.is_finite()
         || !heat_near(dry_storage, number(heat, "stored_change_j")?)
         || !accumulated_near(
             liquid_storage,
@@ -1721,7 +1754,7 @@ pub(super) fn admit(
         }
     }
 
-    let dry_domain_bounds = dry_heat_bounds(&laws, &dry_areas, initial_temperature, domain)?;
+    let dry_domain_bounds = dry_heat_bounds(&laws, &dry_initial, domain)?;
     let dry_enthalpy_span = dry_domain_bounds[1] - dry_domain_bounds[0];
     let mut previous = [totals[0], 0., 0., 0.];
     let mut previous_incoming_j = 0.;
@@ -1796,7 +1829,7 @@ pub(super) fn admit(
         };
         // Bound the sum of the producer's per-substep 1e-8 energy tolerances, including
         // temperature excursions that cancel in a cumulative receipt. No substep is solved here.
-        let dry_bounds = dry_heat_bounds(&laws, &dry_areas, initial_temperature, range)?;
+        let dry_bounds = dry_heat_bounds(&laws, &dry_initial, range)?;
         let energy_scale = steps as f64
             * (1. + dry_enthalpy_span + cp * available_mass * (domain[1] - domain[0]))
             + 2. * enthalpy_scale(evaporated + drained + supplied_mass + condensed)
@@ -1937,10 +1970,8 @@ pub(super) fn admit(
             )
             || !inside(
                 stored_j,
-                cp * (remaining * (range[0] - reference)
-                    - initial * (initial_temperature - reference)),
-                cp * (remaining * (range[1] - reference)
-                    - initial * (initial_temperature - reference)),
+                cp * remaining * (range[0] - reference) - initial_liquid_sensible_j,
+                cp * remaining * (range[1] - reference) - initial_liquid_sensible_j,
                 enthalpy_scale(available_mass),
                 steps,
             )
