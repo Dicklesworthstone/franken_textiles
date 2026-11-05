@@ -1324,6 +1324,17 @@ engine. It compares binding (including negative-zero coordinates), stock, SVG, s
 and source-locked thermal surface/coverage results against the native executable. This is runtime
 WASM/native agreement on those cases, not browser navigation, fitted-body or empirical validation.
 
+The transient-criteria test in `tools/check_materials_frontend.cjs` also exercises authored exterior
+conditions through the actual page, worker, public WASM API and native CLI. With its existing
+`FTX_REAL_WASM=1`, `FTX_GUIDED_SCENARIO_BODY` capture and `FTX_GUIDED_SCENARIO_NATIVE` inputs,
+set `FTX_GUIDED_EXTERIOR_ONLY=1` to run just the four exterior phases: source-bounded convection,
+explicit/automatic radiation, isolated missing-optics refusal, and saved moving sheet/covered/exposed
+intervals. Each compares two complete material-alternative reports and preserves replay inputs;
+the radiation phase also replays the exact frozen coverage request. The default test continues to
+run its preceding heat-history phases. Use matching native and WASM builds for the checkout being
+qualified; the focused exterior lane uses scalar initial temperatures and does not validate wet,
+dissipation-heating or mapped-initial-temperature admission.
+
 `tools/check_materials_web.cjs` is the separate real Chromium/WASM lane:
 
 ```sh

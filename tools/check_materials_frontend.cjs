@@ -17629,9 +17629,11 @@ test('compiled WASM guided transient heat criteria retain complete native histor
     const retain=(name,raw)=>fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});
     for(const [name,raw] of Object.entries({'pattern.json':pattern,'body-input.json':body,'model.ftxbody':modelBytes}))retain(name,raw);
     const frozenCoverageRequests=new Map();
-    const evaluate=async label=>{
+    const evaluate=async (label,expectedMotion=null)=>{
       await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',label+': '+p.e.error.textContent);
-      assert.equal(sent.pattern,pattern);assert.equal(sent.measurements,body);assert.ok(sent.scenarioRequest.includes(motionRaw));
+      assert.equal(sent.pattern,pattern);assert.equal(sent.measurements,body);
+      if(expectedMotion)assert.deepEqual(JSON.parse(sent.scenarioRequest).motion,expectedMotion,label+' authored interval policies');
+      else assert.ok(sent.scenarioRequest.includes(motionRaw));
       const result=await w.send(sent);assert.equal(result.type,'result',label+': '+result.message);p.current().emit(result);
       for(const [name,raw] of [['study-request.json',sent.studyRequest],['scenario-request.json',sent.scenarioRequest]]) {
         assert.equal(result.files.find(file=>file.name===name).text,raw);
@@ -17648,7 +17650,7 @@ test('compiled WASM guided transient heat criteria retain complete native histor
       }
       if(label==='authored-dry')assert.equal(Object.hasOwn(JSON.parse(sent.scenarioRequest),'surface'),false);
       if(['complete','instance-initial-conditions','authored-dry','authored-moving-coverage','authored-coverage','absent-coverage-instance','bounded-covered-convection'].includes(label)
-        ||label.startsWith('authored-steady-')) {
+        ||label.startsWith('authored-steady-')||label==='authored-moving-exterior') {
         const previous=globalThis.ftxProgress,model=new ftx.WebBody(modelBytes);globalThis.ftxProgress=()=>{};
         try{assert.deepEqual(result.result,JSON.parse(ftx.material_scenario_study(model,pattern,sent.studyRequest,sent.scenarioRequest,body)));}
         finally{model.free();if(previous===undefined)delete globalThis.ftxProgress;else globalThis.ftxProgress=previous;}
@@ -17662,6 +17664,11 @@ test('compiled WASM guided transient heat criteria retain complete native histor
       return result.result;
     };
     const simulation=(report,key)=>report.simulations.find(row=>row.key===key).evaluation.result;
+    if(process.env.FTX_GUIDED_EXTERIOR_ONLY==='1') {
+      await evaluateAuthoredExterior();
+      t.diagnostic('Focused qualified exterior acceptance: four complete native/direct-WASM/page-worker reports cover source-bounded convection, explicit and automatic radiation, isolated missing-optics refusal, and authored moving sheet/covered/exposed intervals. Synthetic numerical evidence only. Inputs: '+work);
+      return;
+    }
     const complete=await evaluate('complete');assert.equal(complete.comparison.motion_required,true);
     assert.equal(complete.comparison.alternatives.length,2);
     for(const row of complete.comparison.alternatives) {
@@ -17912,9 +17919,19 @@ test('compiled WASM guided transient heat criteria retain complete native histor
       const frozenRequest=frozenCoverageRequests.get(row.key);assert.deepEqual(JSON.parse(frozenRequest),heat.request);
       assert.deepEqual(JSON.parse(ftx.thermal_steady_coverage(frozenRequest)),heat,'Frozen coverage replay retains bounded component receipts');
     }
+    async function evaluateAuthoredExterior() {
+    // The focused lane uses the same fixture, controls and full-report replay without preceding unrelated phases.
+    for(const [prefix] of guidedTransientReadings)p.e[prefix+'Goal'].checked=false;
+    p.e.guidedRequireTransientSurface.checked=false;p.e.guidedRequireTransientCoverage.checked=false;
+    p.e.guidedCoverage.checked=true;p.e.guidedCoverage.handlers.change();
+    p.e.guidedRequireCoverage.checked=true;p.e.guidedCoveragePowerGoal.checked=true;p.e.guidedCoveragePowerDirection.value='minimize';
+    p.e.guidedBasis.value='reported_bounds';p.e.guidedBasis.handlers.change();
+    for(const [id,value] of Object.entries({guidedCoverageTriangles:'4-4',guidedCoverageDistance:0.12,guidedCoverageCosine:0.1,
+      guidedCoverageSeparation:0.00001,guidedCoverageCells:2,guidedCoverageInside:40,guidedCoverageOutside:5,
+      guidedCoverageInsideFilm:0.1,guidedCoverageOutsideFilm:0.2}))p.e[id].value=String(value);
     // Author the qualified exterior directly from ordinary controls, with a separate bare-body film.
-    p.e.clearCoverageTopology.onclick();saveCoverageLayer(p,'band','shell');
     p.e.guidedCoverageSource.value='form';p.e.guidedCoverageSource.handlers.change();
+    p.e.clearCoverageTopology.onclick();saveCoverageLayer(p,'band','shell');
     p.e.guidedScenarioHeat.checked=true;p.e.guidedScenarioHeat.handlers.change();
     const authoredSheet=JSON.parse(authorUniformSheetConditions(p,'heat',[40,5,0.1,0.2]));
     const sheetExterior=authorExterior(p,'heatExterior'),coveredExterior=authorExterior(p,'guidedCoverageExterior'),
@@ -17963,6 +17980,55 @@ test('compiled WASM guided transient heat criteria retain complete native histor
       assert.deepEqual(result.coverage,prior.coverage);assert.deepEqual(result.drape,prior.drape);
       assert.deepEqual(result.motion.result.transient_surface,prior.motion.result.transient_surface);
     }
+    // Each motion endpoint snapshots its own exterior, including explicit film-only and adiabatic intervals.
+    p.e.guidedScenarioHeat.checked=false;p.e.guidedScenarioHeat.handlers.change();
+    p.e.guidedCoverage.checked=false;p.e.guidedCoverage.handlers.change();
+    p.e.guidedHeatPowerGoal.checked=false;p.e.guidedCoveragePowerGoal.checked=false;
+    p.e.guidedRequireSurface.checked=false;p.e.guidedRequireCoverage.checked=false;
+    p.e.guidedRequireTransientSurface.checked=true;p.e.guidedRequireTransientCoverage.checked=true;
+    for(const [prefix] of guidedTransientReadings)p.e[prefix+'Goal'].checked=true;
+    guidedMotionSourceControls(p);p.e.clearMotionKeyframes.onclick();guidedDryHeatControls(p);guidedCoverageHeatControls(p);
+    p.e.clearMotionHeatInstances.onclick();p.e.clearMotionCoverageInstances.onclick();
+    p.e.guidedMotionHeatInitial.value='15';p.e.guidedMotionHeatCells.value='2';p.e.guidedMotionCoverageInitial.value='15';
+    guidedDryHeatFilm(p,40,999,0.1,0.2);guidedCoverageHeatFilm(p,'Coverage',40,999,0.1,0.2);
+    const firstSheet=authorExterior(p,'guidedMotionHeatExterior',{air:5,coefficient:6,radiation:'explicit',radiant:-10}),
+      firstCovered=authorExterior(p,'guidedMotionCoverageExterior',{air:5,coefficient:8,radiation:'automatic',radiant:0}),
+      movingBare=authorBareFilms(p,'guidedMotionCoverageBare',[40,5,0.2,0.4]);
+    p.e.guidedMotionExposedMode.value='adiabatic';p.e.guidedMotionExposedMode.handlers.change();
+    await addGuidedMotion(p,original.keyframes[0].time_s,original.keyframes[0].arm_abduction_deg);
+    guidedDryHeatFilm(p,5,999,0.1,0.2);
+    const secondSheet=authorExterior(p,'guidedMotionHeatExterior',{air:40,coefficient:3,radiation:'explicit',radiant:30});
+    p.e.guidedMotionCoverageExteriorEnabled.checked=false;p.e.guidedMotionCoverageExteriorEnabled.handlers.change();
+    guidedCoverageHeatFilm(p,'Coverage',5,40,0.1,0.2);p.e.guidedMotionExposedMode.value='films';p.e.guidedMotionExposedMode.handlers.change();
+    guidedCoverageHeatFilm(p,'Exposed',10,999,0.2,0.4);
+    const exposed=authorExterior(p,'guidedMotionExposedExterior',{air:20,coefficient:0,radiation:'explicit',radiant:18});
+    await addGuidedMotion(p,original.keyframes[1].time_s,original.keyframes[1].arm_abduction_deg);
+    const expected=structuredClone(original);
+    Object.assign(expected.transient_surface,{boundaries:[{...films[0],outside_resistance_m2_k_w:0},
+      {...films[1],outside_resistance_m2_k_w:0}],exterior_exchange:[firstSheet,secondSheet]});
+    Object.assign(expected.transient_coverage,{boundaries:[{...films[0],outside_resistance_m2_k_w:0},films[1]],
+      exterior_exchange:[firstCovered,null],bare_boundaries:[movingBare,null],
+      exposed_boundaries:[null,{inside_c:10,outside_c:20,inside_resistance_m2_k_w:0.2,outside_resistance_m2_k_w:0}],
+      exposed_exterior_exchange:[null,exposed]});
+    const movingExterior=await evaluate('authored-moving-exterior',expected),movingSent=JSON.parse(p.current().messages.at(-1).scenarioRequest);
+    assert.equal(Object.hasOwn(movingSent,'surface'),false);assert.equal(Object.hasOwn(movingSent,'coverage'),false);
+    for(const row of movingExterior.comparison.alternatives) {
+      assert.equal(row.eligible,true,JSON.stringify(row.exclusions));const result=simulation(movingExterior,row.key),motion=result.motion.result;
+      assert.equal(result.motion.status,'available');assert.deepEqual(motion.samples,simulation(radiation,row.key).motion.result.samples);
+      for(const consumer of ['transient_surface','transient_coverage']) {
+        assert.equal(motion[consumer].status,'available');const heat=motion[consumer].result;
+        assert.deepEqual(heat.request,expected[consumer]);assert.equal(heat.path_sha256,motion.path_sha256);
+        assert.equal(heat.trace.length,motion.samples.length);assert.equal(heat.trace.at(-1).time_s,expected.keyframes.at(-1).time_s);
+        const stored=consumer==='transient_surface'?heat.stored_change_j:heat.physical_stored_change_j;
+        assert.ok(Math.abs(heat.balance_error_j)<1e-8);assert.ok(Math.abs(stored-heat.net_boundary_energy_j)<1e-8);
+        assert.equal(row.readings[consumer+'_inside_energy_j'].value,heat.inside_energy_j);
+        assert.equal(row.readings[consumer+'_net_boundary_energy_j'].value,heat.net_boundary_energy_j);
+        assert.ok(Math.abs(heat.exterior_exchange.radiative_energy_j)>0);
+        if(consumer==='transient_coverage')assert.ok(Math.abs(heat.exposed_exterior_exchange.radiative_energy_j)>0);
+      }
+    }
+    }
+    await evaluateAuthoredExterior();
     t.diagnostic('Existing settled synthetic band: all twelve complete-history energy/temperature readings match native, public WASM and worker; '+
       JSON.stringify(values)+' J, maximum '+ceiling+' J admits '+admitted+'. A late sheet-heat refusal preserves coverage, mechanics and steady heat. '+
       'Exact instance maps initialize sheet and body coverage independently at 35 C and 5 C with source-bound receipts and unused 999 C fallbacks. '+
@@ -17971,6 +18037,7 @@ test('compiled WASM guided transient heat criteria retain complete native histor
       'Authored body coverage matches its constructor through native/direct WASM/worker with source-dependent heat; an absent instance refuses only that consumer. '+
       'Positive prescribed outer convection retains covered source bounds and frozen component receipts. '+
       'Authored steady sheet and covered exteriors reproduce qualified convection and explicit/oriented radiation; a missing sheet optical property preserves covered and transient consumers. '+
+      'Authored moving exteriors retain independent sheet, covered and exposed schedules including null film/adiabatic entries. '+
       'No empirical garment warmth, comfort, thermal feedback or transient uncertainty-propagation claim. Replay inputs: '+work);
   });
 
