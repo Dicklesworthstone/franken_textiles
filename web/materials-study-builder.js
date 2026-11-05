@@ -71,6 +71,11 @@ function name(value, label) {
 function nonnegative(value, label) {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw Error(`${label} must be finite and nonnegative.`);
 }
+function temperature(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < -273.15) {
+    throw Error(`${label} must be finite and at least -273.15 °C.`);
+  }
+}
 function allowance(value, label) {
   if (own(value, "seam_allowance_mm") && value.seam_allowance_mm !== null) nonnegative(value.seam_allowance_mm, label);
   return own(value, "seam_allowance_mm") ? value.seam_allowance_mm : null;
@@ -149,17 +154,85 @@ function configurationChanges(raw, pieces) {
   // Validation never reserializes this fragment: omitted/null interfaces and [] remain distinct.
 }
 
+/** Author a prescribed environment; Rust still admits each selected material's domain and optical face. */
+export function buildMaterialExteriorExchange(exterior) {
+  const fields = ["air_c", "convection_w_m2_k", "surface_temperature_range_c", "convection_source",
+    "convection_evidence", "convection_conditions"];
+  object(exterior, [...fields, "allow_estimates", "radiation"], fields, "Qualified exterior exchange");
+  temperature(exterior.air_c, "Exterior air temperature");
+  nonnegative(exterior.convection_w_m2_k, "Prescribed convection coefficient");
+  const range = exterior.surface_temperature_range_c;
+  if (!Array.isArray(range) || range.length !== 2) throw Error("Declare both limits of the exterior surface-temperature range.");
+  for (const value of range) temperature(value, "Exterior surface-temperature limit");
+  if (range[0] > range[1] || !Number.isFinite(range[1] - range[0])) {
+    throw Error("Exterior surface-temperature limits must be ordered with a finite span.");
+  }
+  const boundedName = (value, label) => {
+    name(value, label);
+    bytes(value, 4096, `${label} must not exceed 4096 UTF-8 bytes.`);
+  };
+  const sourceFields = ["reference", "accessed_on", "note"];
+  const source = object(exterior.convection_source, sourceFields, sourceFields, "Convection source");
+  for (const key of sourceFields) boundedName(source[key], `Convection source ${key}`);
+  const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(source.accessed_on);
+  const year = Number(date?.[1]), month = Number(date?.[2]), day = Number(date?.[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const monthDays = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (!date || year < 1 || month < 1 || month > 12 || day < 1 || day > monthDays[month - 1]) {
+    throw Error("Convection source date must be a valid YYYY-MM-DD calendar date.");
+  }
+  boundedName(exterior.convection_conditions, "Convection applicability conditions");
+  if (!["measured", "published", "estimate"].includes(exterior.convection_evidence)) {
+    throw Error("Convection evidence must be measured, published or estimate.");
+  }
+  if (own(exterior, "allow_estimates") && typeof exterior.allow_estimates !== "boolean") {
+    throw Error("Convection estimate consent must be an explicit boolean.");
+  }
+  if (exterior.convection_evidence === "estimate" && (!own(exterior, "allow_estimates") || exterior.allow_estimates !== true)) {
+    throw Error("Estimated convection requires explicit estimate consent.");
+  }
+  const result = { ...exterior, surface_temperature_range_c: [...range], convection_source: { ...source } };
+  if (own(exterior, "radiation") && exterior.radiation !== null) {
+    const fields = ["ambient_c", "emissivity_property", "exposed_face", "automatic_material_face", "allow_opaque_gray_approximation"];
+    const radiation = object(exterior.radiation, fields, ["ambient_c", "allow_opaque_gray_approximation"], "Ambient radiation");
+    temperature(radiation.ambient_c, "Radiant enclosure temperature");
+    if (radiation.allow_opaque_gray_approximation !== true) throw Error("Radiation requires explicit opaque-gray enclosure consent.");
+    if (own(radiation, "automatic_material_face") && typeof radiation.automatic_material_face !== "boolean") {
+      throw Error("Automatic material-face selection must be an explicit boolean.");
+    }
+    const automatic = own(radiation, "automatic_material_face") && radiation.automatic_material_face;
+    for (const key of ["emissivity_property", "exposed_face"]) {
+      if (automatic) {
+        if (own(radiation, key) && radiation[key] !== "") throw Error("Automatic material-face selection cannot also prescribe an emissivity property or face.");
+      } else {
+        if (!own(radiation, key)) throw Error("Radiation requires an explicit emissivity property and exposed face, or automatic material-face selection.");
+        boundedName(radiation[key], `Radiation ${key}`);
+      }
+    }
+    result.radiation = { ...radiation };
+  }
+  return result;
+}
+
+function exteriorBoundary(boundary, exterior) {
+  if (boundary.outside_resistance_m2_k_w !== 0 || boundary.outside_c !== exterior.air_c) {
+    throw Error("Exterior exchange requires zero outside film resistance and outside_c equal to air_c.");
+  }
+}
+
 /** One explicit boundary broadcasts over the current native material columns; no old model lock is inferred. */
-export function buildMaterialSurfaceConditions(boundary) {
+export function buildMaterialSurfaceConditions(boundary, exterior = null) {
   const fields = ["inside_c", "outside_c", "inside_resistance_m2_k_w", "outside_resistance_m2_k_w"];
   object(boundary, fields, fields, "Uniform sheet heat conditions");
-  for (const key of ["inside_c", "outside_c"]) {
-    if (typeof boundary[key] !== "number" || !Number.isFinite(boundary[key]) || boundary[key] < -273.15) {
-      throw Error(`Sheet heat ${key} must be finite and at least -273.15 °C.`);
-    }
-  }
+  for (const key of ["inside_c", "outside_c"]) temperature(boundary[key], `Sheet heat ${key}`);
   for (const key of ["inside_resistance_m2_k_w", "outside_resistance_m2_k_w"]) nonnegative(boundary[key], `Sheet heat ${key}`);
-  return JSON.stringify({ schema: "ftx-steady-surface-conditions/1", boundaries: [boundary] });
+  const conditions = { schema: "ftx-steady-surface-conditions/1", boundaries: [boundary] };
+  if (exterior !== null) {
+    const qualified = buildMaterialExteriorExchange(exterior);
+    exteriorBoundary(boundary, qualified);
+    conditions.exterior_exchange = [qualified];
+  }
+  return JSON.stringify(conditions);
 }
 
 /** Author shared coverage topology without requiring or inferring a steady heat boundary. */
@@ -237,11 +310,18 @@ export function buildMaterialCoverageTopology(state) {
 /** Author steady coverage inputs; the native projection determines actual overlap and layer order. */
 export function buildMaterialCoverageRequest(state) {
   const fields = ["bodyTriangleIds", "instanceLayers", "settings", "boundary"];
-  object(state, fields, fields, "Guided body/layer heat");
+  object(state, [...fields, "exterior", "bareBoundary"], fields, "Guided body/layer heat");
   const topology = JSON.parse(buildMaterialCoverageTopology({ bodyTriangleIds: state.bodyTriangleIds,
     instanceLayers: state.instanceLayers, settings: state.settings }));
-  const { boundaries } = JSON.parse(buildMaterialSurfaceConditions(state.boundary));
-  const request = JSON.stringify({ ...topology, conditions: { boundaries } });
+  const exterior = own(state, "exterior") ? state.exterior : null;
+  const { schema, ...conditions } = JSON.parse(buildMaterialSurfaceConditions(state.boundary, exterior));
+  if (exterior != null) {
+    if (!own(state, "bareBoundary")) throw Error("Covered exterior exchange requires explicit bare-body film conditions.");
+    conditions.bare_boundaries = JSON.parse(buildMaterialSurfaceConditions(state.bareBoundary)).boundaries;
+  } else if (own(state, "bareBoundary") && state.bareBoundary != null) {
+    throw Error("Separate bare-body films require covered exterior exchange.");
+  }
+  const request = JSON.stringify({ ...topology, conditions });
   bytes(request, MAX_REQUEST_BYTES, "Guided body/layer heat exceeds 16 MiB.");
   return request;
 }
@@ -307,7 +387,8 @@ export function buildMaterialMotionRequest(state) {
     const label = coverage ? "Guided moving coverage heat" : "Guided dry sheet heat";
     const fields = ["schema", "initial_temperature_c", "boundaries", "max_step_s", "max_cell_steps",
       ...(coverage ? ["body_triangle_ids", "instance_layers", "settings", "exposed_boundaries", "max_geometry_operations"] : ["cells_per_layer"])];
-    const heat = object(state[consumer], [...fields, "initial_instance_temperatures_c"], fields, label);
+    const heat = object(state[consumer], [...fields, "initial_instance_temperatures_c", "exterior_exchange",
+      ...(coverage ? ["bare_boundaries", "exposed_exterior_exchange"] : [])], fields, label);
     const schema = coverage ? "ftx-motion-coverage-heat/1" : "ftx-motion-surface-heat/1";
     if (heat.schema !== schema) throw Error(`${label} needs ${schema}.`);
     if (coverage) {
@@ -321,15 +402,10 @@ export function buildMaterialMotionRequest(state) {
       const entries = Object.entries(heat.instance_layers);
       if (!entries.length || entries.length > 65536) throw Error("Save 1–65536 exact physical-instance layer assignments.");
       // Both consumers use the same authored geometry contract. Original motion files bypass
-      // this guided subset and retain advanced source-qualified interfaces and exterior policies.
+      // this guided subset and retain advanced source-qualified interfaces and heating policies.
       buildMaterialCoverageTopology({ bodyTriangleIds: heat.body_triangle_ids.join(","),
         instanceLayers: entries.map(([instance, layer]) => ({ instance, layer })), settings: heat.settings });
     }
-    const temperature = (value, label) => {
-      if (typeof value !== "number" || !Number.isFinite(value) || value < -273.15) {
-        throw Error(`${label} must be finite and at least -273.15 °C.`);
-      }
-    };
     temperature(heat.initial_temperature_c, coverage ? "Initial coverage temperature" : "Initial sheet temperature");
     if (own(heat, "initial_instance_temperatures_c")) {
       const values = heat.initial_instance_temperatures_c;
@@ -357,16 +433,40 @@ export function buildMaterialMotionRequest(state) {
       throw Error("Maximum thermal substep must be finite and from 1e-9 to 1 second.");
     }
     const filmFields = ["inside_c", "outside_c", "inside_resistance_m2_k_w", "outside_resistance_m2_k_w"];
-    for (const field of coverage ? ["boundaries", "exposed_boundaries"] : ["boundaries"]) {
+    const filmSchedules = ["boundaries", ...(coverage ? ["exposed_boundaries"] : [])];
+    if (coverage && own(heat, "bare_boundaries") && heat.bare_boundaries !== null) filmSchedules.push("bare_boundaries");
+    for (const field of filmSchedules) {
       if (!Array.isArray(heat[field]) || heat[field].length !== state.keyframes.length) {
         throw Error(`${label} needs one saved ${field} entry for each motion endpoint interval.`);
       }
       for (const film of heat[field]) {
-        if (field === "exposed_boundaries" && film === null) continue;
+        if (field !== "boundaries" && film === null) continue;
         object(film, filmFields, filmFields, `Saved ${label} ${field}`);
         temperature(film.inside_c, "Inside reservoir temperature"); temperature(film.outside_c, "Outside reservoir temperature");
         nonnegative(film.inside_resistance_m2_k_w, "Inside film resistance");
         nonnegative(film.outside_resistance_m2_k_w, "Outside film resistance");
+      }
+    }
+    for (const field of coverage ? ["exterior_exchange", "exposed_exterior_exchange"] : ["exterior_exchange"]) {
+      if (!own(heat, field) || heat[field] === null) continue;
+      if (!Array.isArray(heat[field]) || heat[field].length !== state.keyframes.length) {
+        throw Error(`${label} needs one saved ${field} entry for each motion endpoint interval.`);
+      }
+      for (const [index, value] of heat[field].entries()) {
+        if (coverage && value === null) continue;
+        const exterior = buildMaterialExteriorExchange(value);
+        const film = field === "exposed_exterior_exchange" ? heat.exposed_boundaries[index] : heat.boundaries[index];
+        if (film === null) throw Error("Exposed exterior exchange requires explicit exposed film conditions in that interval.");
+        exteriorBoundary(film, exterior);
+      }
+    }
+    if (coverage) {
+      const exterior = own(heat, "exterior_exchange") ? heat.exterior_exchange : null;
+      const bare = own(heat, "bare_boundaries") ? heat.bare_boundaries : null;
+      for (let i = 0; i < state.keyframes.length; i++) {
+        if ((exterior?.[i] != null) !== (bare?.[i] != null)) {
+          throw Error("Each covered exterior interval requires explicit bare-body films; film-only intervals must leave bare_boundaries null.");
+        }
       }
     }
   }

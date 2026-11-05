@@ -5408,6 +5408,26 @@ remapping and independent-consumer failure behavior retain their existing author
 composition advances `ftx-ms2` through `ftx-ms2.24`; it adds no material coefficients, temperature
 feedback into dry constitutive laws or empirical garment-heat claim.
 
+### 25.178 Author qualified exterior environments in ordinary material comparisons
+
+The ordinary sheet and body/layer heat forms now author prescribed convection with its original
+source reference, date, evidence class, applicability conditions and surface-temperature domain.
+An estimate requires separate consent. The explicit exterior mode replaces the outside film with
+the qualified air boundary while retaining film-mode drafts for return. No coefficient is inferred
+from wind, geometry or the material family.
+
+Optional opaque-gray ambient radiation uses an explicitly named material property and face, or
+the selected material's independently qualified optical face mapping. The native solver remains
+responsible for emissivity, specimen/conditioning, orientation, domains and the actual face balance.
+Covered-cloth exchange requires separately authored bare-body films; skin optics are never borrowed
+from cloth. Positive convection without radiation retains the existing conditional source ranges.
+
+Single and immutable named operating cases carry the complete authored policy into the existing
+material/design consumers. Source edits cancel dependent work, original-policy files retain their
+exact bytes, and replacing a garment clears these geometry-qualified declarations. `ftx-ms2.25`
+tracks this operator-facing delivery; empirical exchange, full wearer physiology and broader
+uncertainty propagation remain separate.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
